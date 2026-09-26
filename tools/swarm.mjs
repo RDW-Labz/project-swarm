@@ -13,10 +13,10 @@ import { fileURLToPath } from 'node:url';
 import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, parseExtraCli, extraCliDoctor, execViaFile, validateEnvelope, summarizeModels } from './cli-adapters.mjs';
 import { API_AGENTS, apiDoctor, probeLocalProvider, decodeContext, executeApi } from './api-adapters.mjs';
 
-import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
+import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, parseCodexReply, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
 import { scoutPrompt, normalizeScoutReport, renderScoutMarkdown } from './scout.mjs';
 import { parseGoals, extractKnownRepos, gatherAreaCandidates, sweepPrompt, normalizeSweepArea, renderShortlistMarkdown } from './sweep.mjs';
-import { findUncoveredTests, listProjectFiles, suggestIgnoreTests } from './context-check.mjs';
+import { findUncoveredTests, listProjectFiles, suggestIgnoreTests, contextDirectoryWarnings } from './context-check.mjs';
 import { ship, SHIP_DEFAULTS } from './ship.mjs';
 import { go, commitOutputs, goExitCode } from './go.mjs';
 import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary } from './board.mjs';
@@ -42,6 +42,33 @@ function relative(value, internal = false) {
   if (parts.some(p => !p || p === '.' || p === '..')) fail(`Unsafe path: ${value}`);
   if (!internal && parts.some(p => ['.git', '.swarm', '.env', '.ssh', '.aws', '.gnupg'].includes(p.toLowerCase()) || p.toLowerCase().startsWith('.env.'))) fail(`Reserved or secret path: ${value}`);
   return parts;
+}
+
+// A simple glob is exactly one directory plus `*.ext`; no `**`, no mid-path wildcards. This is
+// deliberately narrow: it only needs to catch "everything of this extension in this directory".
+const CONTEXT_GLOB = /^([^*]+)\/\*(\.[A-Za-z0-9]+)$/;
+export function parseContextGlob(pattern) {
+  if (typeof pattern !== 'string' || pattern.includes('**')) fail(`Invalid contextGlob (no ** supported): ${pattern}`);
+  const match = CONTEXT_GLOB.exec(pattern);
+  if (!match) fail(`Invalid contextGlob (expected dir/*.ext): ${pattern}`);
+  relative(match[1]);
+  return { dir: match[1], ext: match[2] };
+}
+
+// Expanded at validate/run time (not at manifest-write time) so a job can pick up files a build
+// step adds to a shared directory (e.g. new screenshot captures) without editing the manifest.
+async function expandJobContext(root, job) {
+  const extra = [];
+  for (const pattern of job.contextGlob ?? []) {
+    const { dir, ext } = parseContextGlob(pattern);
+    const dirPath = await safePath(root, dir, {});
+    let entries = [];
+    try { entries = await fs.readdir(dirPath, { withFileTypes: true }); } catch { /* treated as zero matches below */ }
+    const matches = entries.filter(entry => entry.isFile() && entry.name.endsWith(ext)).map(entry => `${dir}/${entry.name}`).sort();
+    if (!matches.length) fail(`contextGlob matched no files: ${pattern}`);
+    extra.push(...matches);
+  }
+  return [...new Set([...job.context, ...extra])];
 }
 
 async function safePath(root, value, { internal = false, parents = false } = {}) {
@@ -93,6 +120,23 @@ async function jsonWrite(root, value, data) {
   }
 }
 
+// Shared by manifest.mutants and a post-build mutants source (job `mutantsFile` output or
+// `--mutants-file`): the same shape and cap apply regardless of where the mutants came from.
+function validateMutantsArray(mutants) {
+  if (!Array.isArray(mutants) || mutants.length > 32) fail('mutants must be an array of at most 32 mutants');
+  const mutantNames = new Set();
+  for (const mutant of mutants) {
+    if (!mutant || typeof mutant !== 'object') fail('Invalid mutant');
+    for (const key of Object.keys(mutant)) if (!['name', 'file', 'find', 'replace'].includes(key)) fail(`Unknown mutant field: ${key}`);
+    if (typeof mutant.name !== 'string' || !mutant.name.trim() || mutantNames.has(mutant.name)) fail(`Invalid or duplicate mutant name: ${mutant?.name}`);
+    mutantNames.add(mutant.name);
+    relative(mutant.file);
+    if (typeof mutant.find !== 'string' || !mutant.find) fail(`Mutant find must be a non-empty string: ${mutant.name}`);
+    if (typeof mutant.replace !== 'string') fail(`Mutant replace must be a string: ${mutant.name}`);
+  }
+  return mutants;
+}
+
 export function validateManifest(manifest) {
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.jobs) || !manifest.jobs.length || manifest.jobs.length > 256) fail('Manifest requires version: 1 and 1–256 jobs');
   for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract'].includes(key)) fail(`Unknown manifest field: ${key}`);
@@ -115,19 +159,7 @@ export function validateManifest(manifest) {
       if (check.repeat !== undefined && (!Number.isInteger(check.repeat) || check.repeat < 1 || check.repeat > 20)) fail(`Check repeat must be 1–20: ${check.name}`);
     }
   }
-  if (manifest.mutants !== undefined) {
-    if (!Array.isArray(manifest.mutants) || manifest.mutants.length > 32) fail('mutants must be an array of at most 32 mutants');
-    const mutantNames = new Set();
-    for (const mutant of manifest.mutants) {
-      if (!mutant || typeof mutant !== 'object') fail('Invalid mutant');
-      for (const key of Object.keys(mutant)) if (!['name', 'file', 'find', 'replace'].includes(key)) fail(`Unknown mutant field: ${key}`);
-      if (typeof mutant.name !== 'string' || !mutant.name.trim() || mutantNames.has(mutant.name)) fail(`Invalid or duplicate mutant name: ${mutant?.name}`);
-      mutantNames.add(mutant.name);
-      relative(mutant.file);
-      if (typeof mutant.find !== 'string' || !mutant.find) fail(`Mutant find must be a non-empty string: ${mutant.name}`);
-      if (typeof mutant.replace !== 'string') fail(`Mutant replace must be a string: ${mutant.name}`);
-    }
-  }
+  if (manifest.mutants !== undefined) validateMutantsArray(manifest.mutants);
   if (manifest.mutantCheck !== undefined) {
     const check = manifest.mutantCheck;
     if (!check || typeof check !== 'object') fail('Invalid mutantCheck');
@@ -174,6 +206,16 @@ export function validateManifest(manifest) {
       relative(job.resultFile);
     }
     if (job.resultSchema !== undefined && (!Array.isArray(job.resultSchema) || job.resultSchema.some(key => typeof key !== 'string' || !key))) fail(`Job ${job.id}: resultSchema must be a list of keys`);
+    // Names one of this job's own outputs as a post-build mutants source (same shape as
+    // manifest.mutants), used automatically by `integrate --mutants` once that output exists.
+    if (job.mutantsFile !== undefined) {
+      if (typeof job.mutantsFile !== 'string' || !job.outputs.includes(job.mutantsFile)) fail(`Job ${job.id}: mutantsFile must be one of its outputs`);
+    }
+    if (job.contextGlob !== undefined) {
+      if (!Array.isArray(job.contextGlob) || !job.contextGlob.length || job.contextGlob.length > 20) fail(`Job ${job.id}: contextGlob must be a non-empty array of at most 20 globs`);
+      if (new Set(job.contextGlob).size !== job.contextGlob.length) fail(`Job ${job.id}: duplicate contextGlob entry`);
+      for (const pattern of job.contextGlob) parseContextGlob(pattern);
+    }
     for (const file of job.outputs) {
       if (writers.has(file.toLowerCase())) fail(`Output collision (case-insensitive): ${file}`);
       writers.add(file.toLowerCase());
@@ -203,7 +245,7 @@ export function validateManifest(manifest) {
       if (job.outputs.length) fail('a web job must be read-only (no outputs)');
     }
     // Unknown command/provider fields cannot create an execution path.
-    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema'].includes(key)) fail(`Unknown job field: ${key}`);
+    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob'].includes(key)) fail(`Unknown job field: ${key}`);
   }
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
   for (const job of manifest.jobs) for (const afterId of job.after ?? []) if (!ids.has(afterId.toLowerCase())) fail(`Job ${job.id} after names unknown job ${afterId}`);
@@ -325,6 +367,24 @@ export function activityRecorder(flush, intervalMs = PROGRESS_INTERVAL, onError 
   };
 }
 
+const AGENT_LOG_BYTES = 4096;
+// No existing redaction helper is shared across adapters; a narrow generic pattern for
+// provider-key-shaped tokens and Bearer headers, so a captured tail never carries a live credential.
+const SECRET_PATTERN = /(?:sk|ghp|gho|xox[abp])[-_A-Za-z0-9]{8,}|Bearer\s+[A-Za-z0-9._-]{8,}/gi;
+const redactSecrets = text => text.replace(SECRET_PATTERN, '[redacted]');
+const AGENT_ERROR_KEYWORDS = /\b(blocked|out of credits?|insufficient credit|quota|rate[- ]?limit|auth(?:entication|orization)?\s*(?:failed|error|required))\b/i;
+// Field lesson 19: the last 4 KB of stderr/stdout plus a short named cause, so a crash's real
+// reason survives past a later generic "missing output" instead of only living in a rarely-read log.
+function summarizeAgentFailure({ exitCode, stdout, stderr }) {
+  const stderrTail = redactSecrets((stderr ?? '').slice(-AGENT_LOG_BYTES));
+  const stdoutTail = redactSecrets((stdout ?? '').slice(-AGENT_LOG_BYTES));
+  const lines = stderrTail.split('\n').map(line => line.trim()).filter(Boolean);
+  const reason = lines.find(line => AGENT_ERROR_KEYWORDS.test(line)) ?? lines.at(-1) ?? 'no stderr output';
+  const agentError = `exit ${exitCode ?? 'null'}: ${reason}`.slice(0, 300);
+  const tail = `--- stderr (last ${AGENT_LOG_BYTES} bytes) ---\n${stderrTail}\n--- stdout (last ${AGENT_LOG_BYTES} bytes) ---\n${stdoutTail}\n`;
+  return { agentError, tail };
+}
+
 async function execute(job, cwd, message, { spawnImpl, signal, cancelled, killImpl, onOutput = () => {}, codex }) {
   return new Promise(resolve => {
     let child, stdout = '', stderr = '', reason, settled = false, size = 0;
@@ -434,13 +494,22 @@ async function executeCodexJob(root, directory, job, proposalRoot, options) {
     const lastMessage = path.join(worktree, resultRelative);
     result = await execute(job, worktree, message, { ...options, codex: { worktree, profile, lastMessage, resultRelative, env: { ...await codexEnvironment(options.env), ...job.testEnv } } });
     if (result.status === 'complete') {
-      const outputs = [];
+      const outputs = [], missing = [];
       for (const file of job.outputs) {
         const bytes = await bytesAt(worktree, file);
-        if (bytes === null) fail(`Missing output (deletions are never propagated): ${file}`);
+        if (bytes === null) { missing.push(file); continue; }
         outputs.push({ file, bytes, mode: (await fs.stat(await safePath(worktree, file))).mode & 0o777 });
       }
-      for (const output of outputs) await write(proposalRoot, output.file, output.bytes, false, output.mode);
+      if (missing.length) {
+        // Field lesson 19: a worker's own "blocked" envelope is the real reason, reported as
+        // job status blocked with its summary — never masked by a generic missing-output error.
+        const reply = parseCodexReply(result.response);
+        if (reply?.status === 'blocked') {
+          const summary = typeof reply.summary === 'string' && reply.summary.trim() ? reply.summary.trim()
+            : typeof reply.file === 'string' && reply.file.trim() ? `needs ${reply.file.trim()}` : 'no summary given';
+          result = { ...result, status: 'blocked', error: `blocked: ${summary}`.slice(0, 300) };
+        } else fail(`Missing output (deletions are never propagated): ${missing.join(', ')}`);
+      } else for (const output of outputs) await write(proposalRoot, output.file, output.bytes, false, output.mode);
     }
     // Lesson #64: a completed job that only resolved through the result-file or worktree
     // fallback keeps its worktree too, since its envelope was reconstructed, not reported.
@@ -521,6 +590,9 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
     const contractPayload = manifest.contract ? { path: manifest.contract, text: (await bytesAt(root, manifest.contract))?.toString('utf8') ?? '' } : null;
     // Validate/copy every job before spending tokens or starting any workers.
     for (const job of manifest.jobs) {
+      // Expanded once here so every later reference to job.context (workspace copies, the
+      // worker preamble, dependency context) already carries any contextGlob matches.
+      job.context = await expandJobContext(root, job);
       const workspace = `.swarm/workspaces/${id}/${job.id}`;
       await safePath(root, `${workspace}/placeholder`, { internal: true, parents: true });
       const workspaceRoot = path.join(root, workspace);
@@ -623,6 +695,31 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           if (missing.length || (!result.response.trim() && !await outputsChanged(workspaceRoot, record))) {
             result.status = 'failed';
             result.error = missing.length ? `Missing output: ${missing.join(', ')}` : 'Worker encountered permission denials without producing a result';
+          }
+        }
+        // Field lesson 19: a worker's own "blocked" envelope, or the first sign of why it
+        // crashed, is the only evidence of what actually happened; it must survive past a later
+        // generic "missing output" instead of being silently replaced by it. Codex already
+        // resolves its own blocked envelope (result.status is already 'blocked' by here); every
+        // other agent's final message is checked fresh.
+        const finalMessage = job.agent !== 'codex' && ['complete', 'failed'].includes(result.status) ? parseFinalJson(result.response) : null;
+        if (finalMessage?.status === 'blocked') {
+          result.status = 'blocked';
+          const summary = typeof finalMessage.summary === 'string' && finalMessage.summary.trim() ? finalMessage.summary.trim()
+            : typeof finalMessage.file === 'string' && finalMessage.file.trim() ? `needs ${finalMessage.file.trim()}` : 'no summary given';
+          result.error = `blocked: ${summary}`.slice(0, 300);
+        } else if (result.status !== 'blocked' && CLI_AGENTS.includes(job.agent)) {
+          // Additive only: agentError/agent.log are recorded solely from how the agent process
+          // itself ended (non-zero exit, timeout, or a failed spawn), never from whether a
+          // declared output is present. A clean exit (code 0) that still left an output missing
+          // keeps its pre-existing status and error untouched, resolved later at integrate time.
+          const exitFailed = typeof result.exitCode === 'number' && result.exitCode !== 0;
+          const spawnFailed = result.status === 'failed' && !result.cleanupError && result.exitCode == null && result.terminationReason == null;
+          if (exitFailed || result.status === 'timeout' || spawnFailed) {
+            const failure = summarizeAgentFailure(result);
+            await write(root, `${directory}/${job.id}/agent.log`, failure.tail, true);
+            record.agentError = failure.agentError;
+            result.error = result.error ? `${failure.agentError}; ${result.error}` : failure.agentError;
           }
         }
         Object.assign(record, { permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt) });
@@ -907,17 +1004,62 @@ async function runMutant(root, mutant, checkSpec, spawnImpl) {
   }
 }
 
-async function runMutants(root, manifest, spawnImpl) {
-  if (!manifest.mutants?.length) fail('No mutants declared in this manifest; add manifest.mutants to use --mutants');
-  if (!manifest.mutantCheck) fail('No mutantCheck declared in this manifest; add manifest.mutantCheck to use --mutants');
+// A mutants source read as plain JSON, either shape: a bare array or `{mutants:[...]}`.
+function readMutantsSource(label, data) {
+  const mutants = Array.isArray(data) ? data : Array.isArray(data?.mutants) ? data.mutants : null;
+  if (!mutants) fail(`Mutants file must be a JSON array or {mutants:[...]}: ${label}`);
+  return mutants;
+}
+// `--mutants-file` names a coordinator-supplied file, resolved like `ship`'s `--pr` payload: not
+// subject to the in-repo path-safety rules, since it is read locally, never written or copied.
+async function loadMutantsFile(path_) {
+  let raw;
+  try { raw = await fs.readFile(path_, 'utf8'); } catch { fail(`Could not read mutants file: ${path_}`); }
+  let data;
+  try { data = JSON.parse(raw); } catch { fail(`Invalid JSON in mutants file: ${path_}`); }
+  return readMutantsSource(path_, data);
+}
+// A job's own `mutantsFile` output only exists once the run's outputs are integrated, so it is
+// read from the project root (post-integration bytes), the same files a post-build mutant's
+// `find` is checked against.
+async function loadJobMutantsFile(root, relFile) {
+  const bytes = await bytesAt(root, relFile);
+  if (bytes === null) fail(`mutantsFile output missing: ${relFile}`);
+  let data;
+  try { data = JSON.parse(bytes.toString('utf8')); } catch { fail(`Invalid JSON in mutantsFile: ${relFile}`); }
+  return readMutantsSource(relFile, data);
+}
+function parseMutantCheckFlag(value) {
+  let argv;
+  try { argv = JSON.parse(value); } catch { fail('--mutant-check requires a JSON array of argv strings'); }
+  if (!Array.isArray(argv) || !argv.length || argv.some(item => typeof item !== 'string')) fail('--mutant-check requires a JSON array of argv strings');
+  return { argv };
+}
+// Field lesson 18: a mutant whose `find` string only exists in code a build job
+// generates cannot be declared in the manifest before that job runs. Post-build sources close
+// that gap: `--mutants-file` (any JSON file) and a job's own declared `mutantsFile` output
+// (collected automatically), on top of any manifest-declared `mutants` — all validated together
+// under the same cap and shape as manifest.mutants.
+async function collectMutants(root, manifest, mutantsFile) {
+  const mutants = [...(manifest.mutants ?? [])];
+  for (const job of manifest.jobs) if (job.mutantsFile) mutants.push(...await loadJobMutantsFile(root, job.mutantsFile));
+  if (mutantsFile) mutants.push(...await loadMutantsFile(path.resolve(root, mutantsFile)));
+  return validateMutantsArray(mutants);
+}
+
+async function runMutants(root, manifest, spawnImpl, { mutantsFile, mutantCheck: mutantCheckFlag } = {}) {
+  const mutants = await collectMutants(root, manifest, mutantsFile);
+  if (!mutants.length) fail('No mutants declared in this manifest; add manifest.mutants, a job mutantsFile output, or --mutants-file to use --mutants');
+  const checkSpec = manifest.mutantCheck ?? (mutantCheckFlag ? parseMutantCheckFlag(mutantCheckFlag) : null);
+  if (!checkSpec) fail('No mutantCheck declared in this manifest; add manifest.mutantCheck, or pass --mutant-check "<argv json>", to use --mutants');
   const results = [];
-  for (const mutant of manifest.mutants) results.push(await runMutant(root, mutant, manifest.mutantCheck, spawnImpl));
+  for (const mutant of mutants) results.push(await runMutant(root, mutant, checkSpec, spawnImpl));
   const summary = { killed: 0, survived: 0, errors: 0 };
   for (const result of results) summary[result.status === 'killed' ? 'killed' : result.status === 'survived' ? 'survived' : 'errors']++;
   return { mutants: results, mutantsSummary: summary, mutantsPassed: summary.survived === 0 && summary.errors === 0 };
 }
 
-export async function integrateRun(root, id, { noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false } = {}) {
+export async function integrateRun(root, id, { noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck } = {}) {
   root = await fs.realpath(root);
   const state = await readState(root, id);
   if (state.root !== root || state.id !== id || state.status !== 'complete') fail('Only a complete run from this repository can be integrated');
@@ -963,7 +1105,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
     Object.assign(state, checksResult);
     // Mutation checks run only after normal integration and its checks have already written
     // and validated the real files; they never run during `run` and never touch .git/.swarm.
-    const mutantsResult = mutants ? await runMutants(root, manifest, spawnImpl) : {};
+    const mutantsResult = mutants ? await runMutants(root, manifest, spawnImpl, { mutantsFile, mutantCheck }) : {};
     if (mutants) Object.assign(state, mutantsResult);
     await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
     return { id, status: 'integrated', files: state.integratedFiles, ...checksResult, ...mutantsResult };
@@ -1090,24 +1232,30 @@ export async function validateProject(root, manifest, { exec = execFileAsync } =
       const files = await codexDirtyFiles(root, job);
       if (files.length) warnings.push({ code: 'codex-uncommitted-files', jobId: job.id, files, message: 'Codex starts from HEAD; uncommitted changes to these declared files are not included.' });
     }
+    // contextGlob is expanded here (validate/run time), never at manifest-write time, so a job
+    // can pick up files a build step later adds to a shared directory without editing the manifest.
+    const context = await expandJobContext(root, job);
     let bytes=0;
     const files=[];
-    for(const file of new Set([...job.context,...job.outputs])){
+    for(const file of new Set([...context,...job.outputs])){
       const data=await bytesAt(root,file);
-      if(data===null && job.context.includes(file)) fail(`Missing context: ${file}`);
+      if(data===null && context.includes(file)) fail(`Missing context: ${file}`);
       // The shared contract's text now travels inside the prompt, so codex never needs it from HEAD.
-      if (job.agent === 'codex' && job.context.includes(file) && file !== manifest.contract && !(await isTrackedByGit(root, file, exec))) fail(`Job ${job.id}: codex context file ${file} is not tracked by git (codex sees HEAD only)`);
+      if (job.agent === 'codex' && context.includes(file) && file !== manifest.contract && !(await isTrackedByGit(root, file, exec))) fail(`Job ${job.id}: codex context file ${file} is not tracked by git (codex sees HEAD only)`);
       bytes+=data?.length??0;
-      files.push({path:file,bytes:data===null?0:data.length,exists:data!==null,context:job.context.includes(file),output:job.outputs.includes(file)});
+      files.push({path:file,bytes:data===null?0:data.length,exists:data!==null,context:context.includes(file),output:job.outputs.includes(file)});
       if(data !== null && !['claude', 'codex'].includes(job.agent)) decodeContext(data);
       if(bytes>MAX_CONTEXT) fail(`Context exceeds 32 MiB for ${job.id}`);
     }
     for (const file of job.ignoreTests ?? []) {
       if ((await bytesAt(root, file)) === null) fail(`Job ${job.id}: missing ignoreTests entry: ${file}`);
     }
+    // Catches a review round's context copied from an earlier round, silently omitting files
+    // added since to the same directory (e.g. new screenshot captures).
+    warnings.push(...contextDirectoryWarnings(root, { id: job.id, context }));
     // Catches a worker changing an output's behavior without ever seeing the test that
     // asserts it: advisory static text matching, resolved via context or ignoreTests.
-    for (const pair of findUncoveredTests(root, job, projectFiles)) uncovered.push({ job: job.id, ...pair });
+    for (const pair of findUncoveredTests(root, { ...job, context }, projectFiles)) uncovered.push({ job: job.id, ...pair });
     jobs.push({id:job.id,agent:job.agent,model:job.model??null,tier:job.tier??null,tierReason:job.tierReason??null,contextBytes:bytes,outputs:job.outputs,files});
   }
   if (uncovered.length) throw Object.assign(new Error(`Uncovered test references (add the test to context, or list it in ignoreTests with a reason in the prompt): ${uncovered.map(u => `${u.job}: ${u.output} <- ${u.test}`).join('; ')}`), { details: { suggestedIgnoreTests: suggestIgnoreTests(uncovered) } });
@@ -1124,7 +1272,7 @@ export async function inspectRun(root,id){
     const record=state.jobs.find(j=>j.id===job.id);if(!record)fail('Missing job record');
     // tier/tierReason are validated metadata only; they never change which model ran.
     const parsedResult=await jobFinalJson(root,id,job.id);
-    jobs.push({id:job.id,agent:job.agent,model:job.model??null,tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,result:displayResult(parsedResult),costUsd:typeof record.costUsd==='number'?record.costUsd:null,tokens:jobTokens(record),modelsSeen:record.modelsSeen??[],modelMismatch:record.modelMismatch??false});
+    jobs.push({id:job.id,agent:job.agent,model:job.model??null,tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,...(record.agentError?{agentError:record.agentError}:{}),result:displayResult(parsedResult),costUsd:typeof record.costUsd==='number'?record.costUsd:null,tokens:jobTokens(record),modelsSeen:record.modelsSeen??[],modelMismatch:record.modelMismatch??false});
     const workspaceRoot=await safePath(root,`.swarm/workspaces/${id}/${job.id}`,{internal:true});
     for(const file of job.outputs){
       const current=await bytesAt(root,file),proposed=await bytesAt(workspaceRoot,file);
@@ -1178,7 +1326,7 @@ export async function inspectResults(root, id) {
         }
       }
     }
-    jobs.push({ id: record.id, status: record.status, model: record.model ?? null, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, tokens: jobTokens(record), result: resultSource === 'file' ? parsed : displayResult(parsed), resultSource });
+    jobs.push({ id: record.id, status: record.status, ...(record.agentError ? { agentError: record.agentError } : {}), model: record.model ?? null, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, tokens: jobTokens(record), result: resultSource === 'file' ? parsed : displayResult(parsed), resultSource });
   }
   return { runId: id, status: state.status, tokens: tokensTotal(jobs.map(job => job.tokens)), costNotReported: costNotReported(jobs), warnings, jobs };
 }
@@ -1653,7 +1801,7 @@ async function main() {
   const testIndex=args.indexOf('--test');
   const rootIndex=args.findIndex((arg,index)=>arg==='--root'&&(testIndex===-1||index<testIndex));
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|all] [--probe-local] | validate MANIFEST | preflight MANIFEST | board | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--mutants] [--no-flake-check] | redcheck RUN [--base REF] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] "goal" | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|all] [--probe-local] | validate MANIFEST | preflight MANIFEST | board | run MANIFEST | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] | redcheck RUN [--base REF] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] "goal" | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
   if(args[0]==='redcheck'){
     const hasBase=args[2]==='--base';
     const testAt=hasBase?4:2;
@@ -1801,14 +1949,17 @@ async function main() {
   }
   // integrate's checks/mutants flags are read-only selection of whether/how checks run; strip
   // them here so the generic argument-count check below still fails on anything else.
-  let noChecks=false,requireChecks=false,useMutants=false,noFlakeCheck=false;
+  let noChecks=false,requireChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag;
   if(command==='integrate'){
     const flags=rest.splice(0,rest.length);
-    for(const flag of flags){
+    for(let index=0;index<flags.length;index++){
+      const flag=flags[index];
       if(flag==='--no-flake-check'){noFlakeCheck=true;continue;}
       if(flag==='--no-checks'){noChecks=true;continue;}
       if(flag==='--require-checks'){requireChecks=true;continue;}
       if(flag==='--mutants'){useMutants=true;continue;}
+      if(flag==='--mutants-file'){mutantsFileFlag=flags[++index];if(!mutantsFileFlag)fail('--mutants-file requires a value');continue;}
+      if(flag==='--mutant-check'){mutantCheckFlag=flags[++index];if(mutantCheckFlag===undefined)fail('--mutant-check requires a value');continue;}
       rest.push(flag);
     }
     if(noChecks&&requireChecks)fail('--no-checks and --require-checks cannot be combined');
@@ -1912,7 +2063,7 @@ async function main() {
       ship: (goRoot,id,goShipFlags)=>shipRun(goRoot,id,goShipFlags),
     });
   }
-  else result=await integrateRun(root,argument,{noChecks,mutants:useMutants,noFlakeCheck});
+  else result=await integrateRun(root,argument,{noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag});
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if(command==='wait'){if(result.status==='running')process.exitCode=2;else if(['failed','cancelled'].includes(result.status))process.exitCode=1;return;}
   if(command==='ship'){if(shipExitCode(result.status)!==0)process.exitCode=1;return;}

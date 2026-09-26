@@ -88,6 +88,18 @@ longer goes unanswered without at least naming the existing tooling. Declare
 mutants and run `integrate --mutants` instead of hand-writing a mutation
 script; see [mutation checks](manifest-reference.md#mutation-checks).
 
+## Post-build mutants
+
+A mutant's `find` string sometimes only exists in code a build job generates, so it cannot be declared in the manifest before that job runs. `integrate --mutants --mutants-file FILE` (a JSON array, or `{mutants:[...]}`) and a job field `mutantsFile` (one of that job's own outputs, collected automatically) supply mutants after the run's outputs are integrated, validated under the same shape and 32-entry cap as manifest `mutants`; `--mutant-check "<argv json>"` supplies the check when the manifest declares none. Restore-and-byte-check behavior is unchanged. See [mutation checks](manifest-reference.md#mutation-checks).
+
+## Agent failure evidence
+
+A CLI worker whose process exits non-zero, times out, or fails to spawn previously left only its bare exit reason, with no route back to its own stdout/stderr. The last 4 KB of each stream is now saved to `agent.log` and summarized as a short `agentError` (exit code plus the first blocked/credit/quota/rate-limit/auth line, or the last stderr line), shown in `inspect`/`inspect --results`, with token-shaped secrets redacted; the job's existing error text is kept, with the agent failure prefixed onto it. A worker that exits cleanly (code 0) but leaves a declared output missing keeps its prior status and error untouched — that gap is still resolved at integrate time, exactly as before. A worker's own `blocked` envelope is reported as job status `blocked` with its summary instead of being masked by a generic message. See [agent failure evidence](manifest-reference.md#agent-failure-evidence).
+
+## Context directory drift
+
+A review job's context copied from an earlier round can silently omit files added since to the same directory (new screenshot captures being the recurring case), so the reviewer reports already-fixed items as still missing. `validate`/`run` now warn when a job's `context` names 3 or more files of one extension from a single directory that holds other files of that extension the context omits; job field `contextGlob` (`dir/*.ext`, no `**`) expands to every matching file at validate/run time instead of naming each one by hand. See [context directory drift](manifest-reference.md#context-directory-drift).
+
 ## Next
 
 - Hard spend reservations, reliable cost reconciliation and runtime model

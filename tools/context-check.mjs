@@ -142,6 +142,50 @@ export function findUncoveredTests(root, job, files = listProjectFiles(root)) {
   return pairs.sort((a, b) => (a.test !== b.test ? (a.test < b.test ? -1 : 1) : a.output < b.output ? -1 : a.output > b.output ? 1 : 0));
 }
 
+// Catches a class of bug where a review round's context is copied from an earlier round and
+// silently omits files added to the same directory since (e.g. new screenshot captures), so a
+// reviewer reports already-fixed items as still missing. Advisory only: a job may legitimately
+// need only some files of a directory, so this warns rather than refuses.
+export function contextDirectoryWarnings(root, job) {
+  const groups = new Map();
+  for (const file of job.context ?? []) {
+    const norm = String(file).replace(/\\/g, '/');
+    const ext = path.extname(norm);
+    if (!ext) continue;
+    const dir = path.dirname(norm);
+    if (dir.split('/').some(segment => SKIP_DIRS.has(segment))) continue;
+    const key = `${dir}\u0000${ext}`;
+    if (!groups.has(key)) groups.set(key, { dir, ext, files: new Set() });
+    groups.get(key).files.add(norm);
+  }
+  const warnings = [];
+  for (const { dir, ext, files } of groups.values()) {
+    if (files.size < 3) continue;
+    let entries;
+    try {
+      entries = fs.readdirSync(path.join(root, dir), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    const all = entries.filter(entry => entry.isFile() && entry.name.endsWith(ext)).map(entry => `${dir}/${entry.name}`);
+    const missing = all.filter(file => !files.has(file)).sort();
+    if (!missing.length) continue;
+    const shown = missing.slice(0, 5);
+    const more = missing.length - shown.length;
+    warnings.push({
+      code: 'context-directory-drift',
+      jobId: job.id,
+      dir,
+      extension: ext,
+      present: files.size,
+      total: all.length,
+      missing: shown,
+      message: `context lists ${files.size} of ${all.length} ${ext} in ${dir}; missing e.g. ${shown.join(', ')}${more > 0 ? ` (+${more} more)` : ''}`,
+    });
+  }
+  return warnings;
+}
+
 export function suggestIgnoreTests(uncovered) {
   const grouped = {};
   for (const item of uncovered) {
