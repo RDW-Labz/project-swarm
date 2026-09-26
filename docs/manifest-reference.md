@@ -52,6 +52,8 @@ Unknown top-level fields are rejected.
 - `web`: optional, must be `true` when present. Adds `WebSearch`/`WebFetch` to the claude worker's `--tools` and passes `--allowedTools WebSearch,WebFetch` (without the latter the restricted CLI asks for approval and, with no prompt surface, refuses). Refused when `agent` is not `"claude"` (`web is only supported for the claude agent`) or when `outputs` is non-empty (`a web job must be read-only (no outputs)`) — a web job never gets `Write`, `Edit`, `Bash`, or any other tool. See [Scout](#scout) below.
 - `testEnv`: optional, `codex` jobs only — an object of string→string set in the codex process environment, with a matching prompt line `Test environment (already set): K=V, ...` so the worker never has to rediscover a sandboxed test's required variables. Refused on any other agent (`Job <id>: testEnv is only supported for codex jobs`). Keys must match `^[A-Z][A-Z0-9_]*$`; a key containing `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, or `CREDENTIAL` is refused (`Job <id>: testEnv key <k> looks like a secret`). Values are capped at 200 characters and may not contain newlines. See "Sandbox probe" under [doctor](#kickoff-diagnostics-and-install-commands) below.
 - `resultFile`: optional repo-relative path that must also be one of the job's own `outputs` (`Job <id>: resultFile must be one of its outputs`). Optional `resultSchema`: a list of required top-level keys. See "Result file" under `inspect` below.
+- `mutantsFile`: optional repo-relative path that must also be one of the job's own `outputs` (`Job <id>: mutantsFile must be one of its outputs`), collected automatically by `integrate --mutants` once that output exists. See [post-build mutants](#post-build-mutants).
+- `contextGlob`: optional array of at most 20 simple globs, each exactly `dir/*.ext` (no `**`, no mid-path wildcards; the directory follows the same path-safety rules as `context`). Expanded into `context` at validate/run time — never at manifest-write time — with the same byte-cap rules as `context`; a glob matching zero files is refused. See [Context check](#context-check).
 
 **Precedence:** an explicit per-job `model` always wins. `tier` is descriptive, coordinator-facing routing guidance for choosing which provider/model to put in `model` (or which worker pool to dispatch to); the runner itself does not map `tier` to a model. A job may set both: `model` decides what actually runs, `tier`/`tierReason` document why that choice was made. A manifest with no `tier` field behaves exactly as before.
 
@@ -103,6 +105,7 @@ node tools/swarm.mjs integrate <run-id>
 node tools/swarm.mjs integrate <run-id> --no-checks
 node tools/swarm.mjs integrate <run-id> --require-checks
 node tools/swarm.mjs integrate <run-id> --mutants
+node tools/swarm.mjs integrate <run-id> --mutants --mutants-file post-build-mutants.json --mutant-check '["npm","test"]'
 node tools/swarm.mjs redcheck <run-id> --test node --test tests/regression.test.mjs
 node tools/swarm.mjs cancel <run-id>
 node tools/swarm.mjs board
@@ -210,6 +213,12 @@ and all declared outputs exist. Each warning is `permission denials: <job>:
 and `inspect --results`. Any other failure still fails the job. Failed jobs
 with changed declared outputs set `keptWorkspace` for inspection; failed runs
 remain ineligible for integration.
+
+### Agent failure evidence
+
+A CLI/codex worker that exits non-zero, or that otherwise looks complete but writes none of its declared outputs, has the last 4 KB of its stdout and the last 4 KB of its stderr saved to `.swarm/runs/<run>/<job>/agent.log`, and a short `agentError` set on the job record: the exit code plus the first stderr line matching `blocked`/`credit`/`quota`/`rate limit`/`auth`, or else the last non-empty stderr line, capped at 300 characters. Values shaped like a provider token or a `Bearer` header are redacted before either is saved. `agentError` (when set) is shown in both `inspect` and `inspect --results`. A worker that completes but writes none of its declared outputs is reported `failed`, naming the agent cause before any generic missing-output text, rather than left looking `complete` until a later `integrate` reports only a missing file.
+
+A worker's own `blocked` envelope (its final JSON message with `{"status":"blocked", ...}`, per the worker preamble) is never masked by either of the above: the job is reported with status `blocked` and `error: "blocked: <summary>"`, using the envelope's own `summary` (or `file`) field.
 
 ## Integration contract
 
@@ -327,13 +336,32 @@ When a check with `repeat` fails during `integrate` or `ship`, and the failure o
 ```
 
 - `mutants`: optional array of at most 32 entries `{"name", "file", "find", "replace"}`. `name` is required, non-empty, and unique. `file` is a relative project path, validated with the same rules as a job output. `find` is a required non-empty string that must occur in `file` exactly once for the mutant to run. `replace` is a required string (it may be empty).
-- `mutantCheck`: required whenever `--mutants` is used — `{"argv": [...], "timeoutMs": 300000}`, the same shape and limits as one entry in `checks` (no shell, no placeholders), run once per mutant with `cwd` at the project root.
+- `mutantCheck`: required whenever `--mutants` is used and neither the manifest nor the CLI supplies one another way — `{"argv": [...], "timeoutMs": 300000}`, the same shape and limits as one entry in `checks` (no shell, no placeholders), run once per mutant with `cwd` at the project root.
 
-The result gains `mutants: [{"name", "file", "status", "exitCode", "durationMs", "tail"}]` and `mutantsSummary: {"killed", "survived", "errors"}`. Per mutant, `status` is `killed` when the check exits non-zero, `survived` when it exits zero, or `error` for a timeout, a launch failure, a `find` match count other than one (`tail` explains why, e.g. `"find matched 0 times"`), or a missing file — none of these apply or run a check. `mutantsPassed` is `true` only when no mutant survived or errored. With `--require-checks`, a surviving or errored mutant also makes the `integrate` command exit 1, alongside a failed `checks` result. `--mutants` with no `mutants` declared in the manifest is a clear error, not a silent no-op. Mutants never touch `.git`/`.swarm` (the same path rules as every other declared file forbid it) and never run during `run` — only `integrate --mutants`.
+The result gains `mutants: [{"name", "file", "status", "exitCode", "durationMs", "tail"}]` and `mutantsSummary: {"killed", "survived", "errors"}`. Per mutant, `status` is `killed` when the check exits non-zero, `survived` when it exits zero, or `error` for a timeout, a launch failure, a `find` match count other than one (`tail` explains why, e.g. `"find matched 0 times"`), or a missing file — none of these apply or run a check. `mutantsPassed` is `true` only when no mutant survived or errored. With `--require-checks`, a surviving or errored mutant also makes the `integrate` command exit 1, alongside a failed `checks` result. `--mutants` with no mutants available from any source is a clear error, not a silent no-op. Mutants never touch `.git`/`.swarm` (the same path rules as every other declared file forbid it) and never run during `run` — only `integrate --mutants`.
+
+### Post-build mutants
+
+A mutant's `find` string sometimes only exists in code a build job generates, so it cannot be written into the manifest before that job runs. Two sources close that gap, and both are validated exactly like manifest `mutants` (same shape, and the combined total from every source is still capped at 32):
+
+- `integrate <run-id> --mutants --mutants-file FILE`: `FILE` is a JSON array of mutant entries, or `{"mutants": [...]}`, resolved like `ship`'s `--pr` payload (against the project root, read directly — not subject to in-repo path rules, since it is a coordinator-supplied local file, never written or copied).
+- A job field `mutantsFile` naming one of that job's own `outputs` (`Job <id>: mutantsFile must be one of its outputs`): once `integrate --mutants` has written that output, its JSON content is collected automatically as another mutants source — no `--mutants-file` needed.
+
+Either way, each mutant's `find` is still checked against the file's bytes **after** integration has written the run's outputs, exactly like a manifest-declared mutant. When the manifest declares no `mutantCheck`, pass `--mutant-check "<argv json>"` (a JSON array of argv strings, e.g. `--mutant-check '["npm","test"]'`) — `integrate --mutants` refuses with a clear message if neither is available. Restore-and-byte-check behavior for every mutant, from any source, is unchanged.
 
 ## Context check
 
 `validate` and `run` (which validates first) check, for every job, whether an already-existing declared output is referenced by a project test file that is not in that job's `context`, `outputs`, or `ignoreTests`. This catches a worker changing an output's behavior without ever seeing the test that asserts it. The check is advisory static text matching — a project file walk (or `git ls-files` in a git work tree) plus a regexp match against each candidate output's stem — not a dependency graph: it can miss an indirect reference and, rarely, flag a coincidental one. A reference from a test to a package manifest or version-only file — `package.json`, `package-lock.json`, `pyproject.toml`, `uv.lock`, `Cargo.toml`, `Cargo.lock`, or any `__init__.py` — never counts. A finding fails validation, naming the job, the output, and the test: add the test to `context`, or list it in `ignoreTests` with a reason in the job's `prompt`. The refusal JSON also carries `suggestedIgnoreTests: {"<jobId>": ["tests/...", ...]}`, listing exactly the uncovered tests per job so the coordinator can paste them in.
+
+### Context directory drift
+
+`validate`/`run` also add a warning (never a refusal) when a job's `context` names 3 or more files of the same extension from one directory, and that directory holds other files of that extension the context omits — the shape of a review round's context copied from an earlier round, silently missing new captures added to the same directory since (e.g. new screenshots). `.git`, `.swarm`, and `node_modules` segments are never scanned. The warning names the directory and up to 5 of the missing files:
+
+```json
+{"code": "context-directory-drift", "jobId": "review", "dir": "shots", "extension": ".png", "present": 3, "total": 4, "missing": ["shots/d.png"], "message": "context lists 3 of 4 .png in shots; missing e.g. shots/d.png"}
+```
+
+Add the missing files to `context` directly, or declare `contextGlob` (see [Job fields](#job-fields)) so every matching file in the directory is included automatically and this warning has nothing left to report.
 
 ## Ship
 
