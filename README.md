@@ -15,10 +15,10 @@ or another agent with file and command access. The worker adapter does not
 need to match the orchestrator. Paste this into your agent at project start:
 
 ```text
-Use Project Swarm 1.16.0 for this project. Read docs/kickoff.md in the toolkit
+Use Project Swarm 1.17.0 for this project. Read docs/kickoff.md in the toolkit
 and perform its kickoff workflow. Ask me up front which model providers may
 receive project code and what spend ceiling applies; wait before model calls.
-Install from tag v1.16.0 in ~/.project-swarm, run tools/install.mjs --user,
+Install from tag v1.17.0 in ~/.project-swarm, run tools/install.mjs --user,
 link this project, run doctor, validate and run the read-only and writing smoke
 jobs, inspect and integrate the reviewed writing output. Read the installed
 SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
@@ -44,10 +44,25 @@ to the same directory since an earlier round; see the
 [command reference](docs/manifest-reference.md) and
 [lessons 18–20](docs/lessons.md).
 
+Release 1.17.0 adds a standalone `mutants --mutants-file F --mutant-check
+ARGVJSON` command that mutation-tests the current tree with no run id,
+`validate`/`run` support for `--evidence <file>` (appended verbatim to every
+job prompt), a `resultMissing` flag plus a cheap JSON re-ask when a job's
+final message doesn't parse, a `contextGlob` filename-prefix form, a `doctor`
+warning for tool paths resolving under `/tmp`, a `validate` warning when a
+job's own core module is an untestable output, `inspect` cost-per-1k-token
+reporting, and a `run` warning when a no-shell worker is handed a runtime
+check failure it cannot reproduce. `ship` now resolves `gh`/`git` up front and
+always includes stderr (or `(empty)`) in a `pr list failed` reason, and
+`scout`/`sweep --brief` accepts any readable path, including one outside the
+project root, copied in for provenance. See
+[the command reference](docs/manifest-reference.md) and
+[lessons 21–31](docs/lessons.md).
+
 ## Shared install
 
 ```sh
-git clone --branch v1.16.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git ~/.project-swarm
+git clone --branch v1.17.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git ~/.project-swarm
 node ~/.project-swarm/tools/install.mjs --user
 node ~/.project-swarm/tools/install.mjs /absolute/path/to/project
 node ~/.project-swarm/current/tools/swarm.mjs --root /absolute/path/to/project doctor all
@@ -66,7 +81,7 @@ You need **Node.js 20.3+**, macOS/Linux/WSL, and one configured provider. For Cl
 Clone the public repository. No GitHub account or access invitation is required:
 
 ```sh
-git clone --branch v1.16.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git
+git clone --branch v1.17.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git
 cd project-swarm
 npm test
 npm run check
@@ -219,9 +234,9 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 - `integrate <run-id>` — import reviewed, declared outputs from a successful run, then run the manifest's optional `checks` (format, tests) right after writing files; add `--no-checks` to skip them or `--require-checks` to fail the command when a check fails. A `checks`/`mutantCheck` argv item may contain `{root}` anywhere inside it, expanding to the run's absolute project root, so parallel runs never share a build/output folder. A check may set `repeat` (1–20) to rerun its argv until the first failure, and `{new}`/`{new:.ext}` expand to files that did not exist before the run started. See [the manifest reference](docs/manifest-reference.md#repeat).
 - `cancel <run-id>` — request shutdown of that runner's owned workers.
 - `board` — print a read-only snapshot, `{"runs": [...]}`, of every live run this machine's user is tracking across every worktree of every repository, pruning any whose process is no longer alive. This is also what `run` consults to refuse a second writer. See [the manifest reference](docs/manifest-reference.md#board).
-- `ship <run-id> --repo OWNER/NAME --pr payload.json` — for an already-integrated run: push its branch, open or update the pull request, re-run the manifest's `checks` and fill them into the PR body, wait for CI, and merge once green. Refuses on a dirty tree, a failed check, a missing required `--require-section`, or a rejected push; never merges a PR body that opens with a `**needs ` human-review marker. Add `--no-merge` to stop at a green `ready` state, `--merge-method squash|merge|rebase` (default `squash`), or `--timeout`/`--poll` (seconds) to tune CI waiting. See [the manifest reference](docs/manifest-reference.md#ship).
+- `ship <run-id> --repo OWNER/NAME --pr payload.json` — for an already-integrated run: push its branch, open or update the pull request, re-run the manifest's `checks` and fill them into the PR body, wait for CI, and merge once green. Refuses on a dirty tree, a failed check, a missing required `--require-section`, or a rejected push; never merges a PR body that opens with a `**needs ` human-review marker. Resolves `gh`/`git` up front and refuses at once with a plain "not found on PATH" (or the spawn error text) when either is missing; a `pr list failed` reason always names stderr, or `(empty)`. Add `--no-merge` to stop at a green `ready` state, `--merge-method squash|merge|rebase` (default `squash`), or `--timeout`/`--poll` (seconds) to tune CI waiting. See [the manifest reference](docs/manifest-reference.md#ship).
 - `go <manifest.json|run-id> [--commit-message MSG] [--repo OWNER/NAME --pr payload.json] [--require-section NAME]... [--mutants] [--merge-method M] [--timeout S]` — one command from a manifest (or an already-started run) to a merged, reviewed change: run and wait (skipped for a run id), integrate with checks, commit exactly that run's integrated files (never `git add -A`) when `--commit-message` is given, then ship when `--repo`/`--pr` are given. Prints one JSON line and exits `0` for `merged`/`held`/`ready`/`integrated`/`committed`, `1` for `failed`. See [the manifest reference](docs/manifest-reference.md#go).
-- `scout --model M --brief FILE "goal"` — prior-art research for one large task; validates license claims and writes a report for review.
+- `scout --model M --brief FILE "goal"` — prior-art research for one large task; `--brief` may be any readable path, including outside the project root; validates license claims and writes a report for review.
 - `sweep --model M --brief FILE --goals FILE [--max-usd N]` — prior-art research across several areas with a dispatch spending threshold; review findings before adoption.
 - `version [--check]` — print `{version, installRoot, tag}`; with `--check`, also `latest`/`updateAvailable` from the `origin` remote's tags (or `checkError` if the remote can't be reached). No local files change.
 - `update [--projects [DIR...]] [--yes]` — move this shared install to the newest release tag and reinstall the skill; or, with `--projects`, find old per-project copies/stale pointers and replace them with a pointer only when `--yes` is given.

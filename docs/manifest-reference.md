@@ -30,6 +30,7 @@ Replace the example paths with files in your target project.
 - `checks`: optional array of at most 10 post-integration checks, run by `integrate` after it writes files. See the Checks section below.
 - `mutants`: optional array of at most 32 mutation entries, checked by `integrate --mutants`. See the Mutation checks section below.
 - `mutantCheck`: optional, the single check run against each mutant in `mutants`. See the Mutation checks section below.
+- `preChecks`: optional array of at most 10 plain argv arrays (e.g. `["uv", "sync"]`), run in order by `integrate` before its own `checks`, but only when an integrated file's basename is a recognized lockfile (`uv.lock`, `package-lock.json`, `Cargo.lock`, `pnpm-lock.yaml`). See [Pre-checks](#pre-checks) below.
 - `contract`: optional explicit existing relative file path. When set, every job's `context` must include it and no job's `outputs` may include it — only the coordinator writes it. Use this for a single file that lists every cross-job event, command, export, and field parallel jobs need to agree on; a job that needs a name not in that file should surface it rather than invent one silently. For a `codex` job, its current bytes are also injected directly into the prompt (a "Shared contract" section, read first, wins over any other file); with no `contract`, the codex prompt is unchanged. See "Shared contract" in [workflows](workflows.md).
 
 Unknown top-level fields are rejected.
@@ -53,7 +54,7 @@ Unknown top-level fields are rejected.
 - `testEnv`: optional, `codex` jobs only — an object of string→string set in the codex process environment, with a matching prompt line `Test environment (already set): K=V, ...` so the worker never has to rediscover a sandboxed test's required variables. Refused on any other agent (`Job <id>: testEnv is only supported for codex jobs`). Keys must match `^[A-Z][A-Z0-9_]*$`; a key containing `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, or `CREDENTIAL` is refused (`Job <id>: testEnv key <k> looks like a secret`). Values are capped at 200 characters and may not contain newlines. See "Sandbox probe" under [doctor](#kickoff-diagnostics-and-install-commands) below.
 - `resultFile`: optional repo-relative path that must also be one of the job's own `outputs` (`Job <id>: resultFile must be one of its outputs`). Optional `resultSchema`: a list of required top-level keys. See "Result file" under `inspect` below.
 - `mutantsFile`: optional repo-relative path that must also be one of the job's own `outputs` (`Job <id>: mutantsFile must be one of its outputs`), collected automatically by `integrate --mutants` once that output exists. See [post-build mutants](#post-build-mutants).
-- `contextGlob`: optional array of at most 20 simple globs, each exactly `dir/*.ext` (no `**`, no mid-path wildcards; the directory follows the same path-safety rules as `context`). Expanded into `context` at validate/run time — never at manifest-write time — with the same byte-cap rules as `context`; a glob matching zero files is refused. See [Context check](#context-check).
+- `contextGlob`: optional array of at most 20 simple globs, each exactly `dir/*.ext` or `dir/prefix*.ext` (no `**`, no mid-path wildcards; the directory follows the same path-safety rules as `context`). Expanded into `context` at validate/run time — never at manifest-write time — with the same byte-cap rules as `context`; a glob matching zero files is refused. `validate` echoes, per pattern, how many files it matched (`contextGlobCounts: [{"pattern", "count"}]`). See [Context check](#context-check).
 
 **Precedence:** an explicit per-job `model` always wins. `tier` is descriptive, coordinator-facing routing guidance for choosing which provider/model to put in `model` (or which worker pool to dispatch to); the runner itself does not map `tier` to a model. A job may set both: `model` decides what actually runs, `tier`/`tierReason` document why that choice was made. A manifest with no `tier` field behaves exactly as before.
 
@@ -106,6 +107,9 @@ node tools/swarm.mjs integrate <run-id> --no-checks
 node tools/swarm.mjs integrate <run-id> --require-checks
 node tools/swarm.mjs integrate <run-id> --mutants
 node tools/swarm.mjs integrate <run-id> --mutants --mutants-file post-build-mutants.json --mutant-check '["npm","test"]'
+node tools/swarm.mjs mutants --mutants-file post-build-mutants.json --mutant-check '["npm","test"]'
+node tools/swarm.mjs validate examples/smoke.json --evidence evidence.json
+node tools/swarm.mjs run examples/smoke.json --evidence evidence.json
 node tools/swarm.mjs redcheck <run-id> --test node --test tests/regression.test.mjs
 node tools/swarm.mjs cancel <run-id>
 node tools/swarm.mjs board
@@ -118,7 +122,13 @@ Use `--root /path/to/project` to select a project explicitly. Otherwise the runn
 
 `validate` checks the assignment, paths, file size limits, and (see "Context check" below) that every existing declared output is not left uncovered by a test that already references it, without creating a run or invoking a model. For Codex, both validate and preflight warn about uncommitted changes to declared context/output files because only HEAD is checked out; a declared `context` file that git does not track at all (untracked or ignored, not merely edited) is instead refused outright — `Job <id>: codex context file <path> is not tracked by git (codex sees HEAD only)` — since Codex would silently see nothing there; the manifest's `contract` path is exempt from this refusal, since its text now travels in the codex prompt directly (see below). `run` performs the same validation before dispatching any worker. `doctor` diagnoses local prerequisites without running a model task. `status` reports saved run state. `inspect` reports each job's `agent`, `model`, `tier`, and `tierReason`, plus proposed-output sizes, owning `jobStatus`, and current conflicts without editing files. Its file `status` is `blocked` whenever the owning job is not complete, even if the worker left a partial file. Neither inspection nor validation approves content or runs application tests.
 
+`validate`/`run` also add these warnings: `{"code": "tmp-tool-path", ..., "message": "<path> resolves under /tmp: macOS removes files here after 3 days unread; move the toolchain"}` for a job's `readPaths` entry or a `checks`/`mutantCheck` `argv[0]` that resolves under `/tmp` or `/private/tmp`; `{"code": "core-module-no-shell", "jobId", "message": "<agent> cannot run pinning tests for tools/swarm.mjs (no shell); consider a checker job"}` when a non-`codex` job's `outputs` includes this runner's own `tools/swarm.mjs` (only `codex` has shell access, so no other agent can run the tests that pin that file's own behavior); and `{"code": "runtime-check-no-shell", "jobId", "message": "worker cannot reproduce; consider a shell agent or --evidence"}` when a non-`codex` job's prompt quotes a runtime-check failure (a check name containing `harness`, `e2e`, `playwright`, or `preview`, or the words "Timeout" and "waitFor" together).
+
+`validate MANIFEST --evidence FILE` and `run MANIFEST --evidence FILE` read a local JSON file `{"failures": [{"name", "lines": [...]}]}` (the same shape `integrate` prints, see [Checks](#checks) below) and append a fixed `## Evidence: prior check failures` block, one `### <name>` subsection with its `lines` verbatim, to every job's prompt before validating or running — so a follow-up job sees the exact failing-assertion text from an earlier failed `integrate --require-checks`, without the coordinator retyping it. `FILE` is resolved directly against the project root, like `ship`'s `--pr` payload, not subject to the in-repo path-safety rules. A missing or invalid file, or one with no `failures` array, is a clear error before anything is validated or run.
+
 `inspect` additionally reports, per job, `result` — the worker's own final JSON-object line from its saved response (whatever keys it wrote, or `null` if no line parses as a JSON object) — and `costUsd` (a number when the provider reported one, else `null`). A `result.notes` array, if present, is capped at 20 entries of at most 500 characters each in the printed report; this is display data from the worker, never executed or trusted.
+
+`inspect` (and `inspect --results`) also report `costPer1kOutputTokens`: `costUsd` divided by (`usage.output_tokens` / 1000), or `null` whenever either figure was not reported — never estimated from a total or input-token count. A job whose prompt demands a JSON-only final reply (`"Return JSON only"` / `"reply with ONLY this JSON"`) but whose saved response never parsed as JSON adds `resultMissing: true`; for a `claude` job, the runner first attempts one cheap re-ask on the same session (`"Reply with the JSON only."`) and uses that answer instead whenever it parses, in which case `resultMissing` is not set.
 
 ### Result file
 
@@ -255,7 +265,31 @@ Up to 10 checks per manifest. Inside `argv`, a whole item of exactly `{integrate
 
 The text `{root}` may also appear anywhere inside a `checks` or `mutantCheck` argv item — not only as a whole item — and is replaced with the run's absolute project root, for example `"CARGO_TARGET_DIR={root}/src-tauri/target"`. This keeps a project-relative build directory unique per run so two parallel runs never share (and corrupt) the same build folder. `{integrated}`/`{integrated:.ext}` still only expand a whole item, unchanged.
 
-Checks run with `cwd` at the project root, the coordinator's inherited environment, and each check's own timeout; a later check still runs even if an earlier one fails, so a formatter can run before the tests that depend on its output. **Formatters may rewrite the files integration just wrote, and a failing check never rolls back the integration** — checks are reported, not a transactional gate. `integrate`'s own process exit code stays 0 when files integrate successfully regardless of check outcome; pass `--require-checks` to exit 1 when any check fails, times out, or errors. Pass `--no-checks` to skip them entirely (the result shows `checks: []` and `checksSkipped: true`).
+Checks run with `cwd` at the project root, the coordinator's inherited environment, and each check's own timeout; a later check still runs even if an earlier one fails, so a formatter can run before the tests that depend on its output. **Formatters may rewrite the files integration just wrote, and a failing check never rolls back the integration** — checks are reported, not a transactional gate. `integrate`'s own process exit code stays 0 when files integrate successfully regardless of check outcome; pass `--require-checks` to exit 1 when any check fails, times out, or errors. Pass `--no-checks` to skip them entirely (the result shows `checks: []`, `checksSkipped: true`, and `failures: []`).
+
+The result also gains `failures`: one compact entry per check whose status is `failed`, `timeout`, or `error` — `{"name", "lines": [...]}`, the last few lines of that check's own `tail` that look like a failure (matching `fail`/`error`/`assert`/`expected`/`✗`/`✕`, capped at 5) — so a coordinator does not need to open the full tail to see what broke. `failures` is `[]` when every check passed or was skipped. This same shape is what `--evidence` (above) expects a local JSON file to contain.
+
+## Pre-checks
+
+`integrate <run-id>` also accepts an optional manifest `preChecks`: at most 10 plain argv arrays (not named checks — they exist to resync the environment, not to pass or fail), run in declared order, `cwd` at the project root, before the manifest's own `checks`. They only run when at least one integrated file's basename matches a recognized lockfile: `uv.lock`, `package-lock.json`, `Cargo.lock`, or `pnpm-lock.yaml`.
+
+```json
+{
+  "preChecks": [["uv", "sync"], ["npm", "ci"]]
+}
+```
+
+When a lockfile changed and the manifest declares no `preChecks`, the result instead gains `warnings: ["lockfile changed, env not synced"]` — a reminder that the checked-out environment may no longer match the lockfile that was just integrated. The result's `preChecks` array (each entry the same shape as a check result: `name`, `status`, `exitCode`, `durationMs`, `tail`) is present whenever any ran.
+
+## Mutants (current tree)
+
+```sh
+node tools/swarm.mjs mutants --mutants-file post-build-mutants.json --mutant-check '["npm","test"]'
+```
+
+`mutants --mutants-file FILE --mutant-check ARGVJSON` runs mutation testing directly against the current tree — no run id, no manifest, and no integration required. `FILE` is the same shape as `integrate --mutants-file` (a JSON array of `{"name","file","find","replace"}`, or `{"mutants":[...]}`); `--mutant-check` is the same JSON-array-of-argv-strings shape as `integrate --mutant-check` and is always required (there is no manifest to fall back to). For each mutant, in order: `find` must occur in `file` exactly once or the mutant is `invalid`; otherwise the file is mutated, the check is run, and the file is always restored to its exact original bytes and mode afterward — including on a check timeout, launch failure, or a `Ctrl-C` (SIGINT), which is caught so the in-flight mutant's own restore still completes before the process exits; no further mutant then starts.
+
+It prints `{"mutants": [{"name","file","status","exitCode","durationMs","tail","firstFailingLine"}], "mutantsSummary": {"killed","survived","invalid"}, "mutantsPassed"}`. Per mutant, `status` is `killed` (check exits non-zero), `survived` (check exits zero), or `invalid` (a timeout, launch failure, a `find` match count other than one, or a missing file); `firstFailingLine` is the first line of the check's own tail that looks like a failure, set only when `status` is `killed`, else `null`. `mutantsPassed` is `true` only when nothing survived or was invalid; exit code is `0` when `mutantsPassed`, else `1`. See also [mutation checks](#mutation-checks) for the run-integrated equivalent, `integrate --mutants`.
 
 ## Redcheck
 
@@ -361,7 +395,7 @@ Either way, each mutant's `find` is still checked against the file's bytes **aft
 {"code": "context-directory-drift", "jobId": "review", "dir": "shots", "extension": ".png", "present": 3, "total": 4, "missing": ["shots/d.png"], "message": "context lists 3 of 4 .png in shots; missing e.g. shots/d.png"}
 ```
 
-Add the missing files to `context` directly, or declare `contextGlob` (see [Job fields](#job-fields)) so every matching file in the directory is included automatically and this warning has nothing left to report.
+Add the missing files to `context` directly, or declare `contextGlob` (see [Job fields](#job-fields)) so every matching file in the directory is included automatically and this warning has nothing left to report. `contextGlob` also accepts a filename prefix, `dir/prefix*.ext` (still exactly one directory, still no `**` or mid-path wildcards), for a directory that mixes several naming schemes. `validate`/`run` echo, per job, how many files each pattern actually matched: `contextGlobCounts: [{"pattern": "shots/*.png", "count": 4}]`.
 
 ## Ship
 

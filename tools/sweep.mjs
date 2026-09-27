@@ -5,7 +5,17 @@
 // build. The runner (tools/swarm.mjs) owns the jobs, the file writes, and the license/pin gate;
 // the model only ever returns raw JSON about candidates it was given, never a license or a pin.
 
+import path from 'node:path';
+
 const fail = message => { throw new Error(message); };
+
+// --brief is read-only research input, unlike job context/outputs: it may name any readable path,
+// including one outside the project root, and is only ever copied in for provenance, never written
+// to. A relative path still resolves against root; an absolute one passes through unchanged instead
+// of being rejected or wrongly joined under root.
+export function resolveBriefPath(briefPath, root) {
+  return path.isAbsolute(briefPath) ? briefPath : path.resolve(root, briefPath);
+}
 
 export const SWEEP_LICENSES = Object.freeze(['MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', 'MPL-2.0', '0BSD', 'Unlicense']);
 export const SWEEP_FLAGGED_LICENSES = Object.freeze({ 'MPL-2.0': 'weak-copyleft' });
