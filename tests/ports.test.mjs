@@ -83,7 +83,7 @@ async function fixture(t) {
 test('integrate: a check sees the resolved SWARM_PORT_BASE for this project root', async t => {
   const root = await fixture(t);
   const checks = [{ name: 'port-check', argv: [process.execPath, '-e', "require('fs').writeFileSync('port-seen.txt', process.env.SWARM_PORT_BASE || 'none')"] }];
-  const state = await runManifest(root, manifest([job()], checks));
+  const state = await runManifest(root, manifest([job()], checks), { spawnImpl: update });
   const result = await integrateRun(root, state.id);
   assert.equal(result.checks[0].status, 'passed');
   assert.equal(typeof result.portBase, 'number');

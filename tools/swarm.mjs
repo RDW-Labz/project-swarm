@@ -14,7 +14,7 @@ import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, p
 import { API_AGENTS, apiDoctor, probeLocalProvider, decodeContext, executeApi } from './api-adapters.mjs';
 
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, parseCodexReply, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
-import { expandShellPreset, validateNetworkAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, shellMessage, containsKey, redactKey } from './claude-shell.mjs';
+import { expandShellPreset, validateNetworkAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterHome, shellMessage, containsKey, redactKey } from './claude-shell.mjs';
 import { portBlockFor, resolvePortBlock } from './ports.mjs';
 import { scoutPrompt, normalizeScoutReport, renderScoutMarkdown, resolveBriefPath as resolveScoutBriefPath } from './scout.mjs';
 import { parseGoals, extractKnownRepos, gatherAreaCandidates, sweepPrompt, normalizeSweepArea, renderShortlistMarkdown, resolveBriefPath as resolveSweepBriefPath } from './sweep.mjs';
@@ -336,6 +336,15 @@ export function validateManifest(manifest) {
       if (job.agent !== 'codex' && job.shell !== true) fail('readPaths is codex-only (or claude with shell: true)');
       validateReadPaths(job.readPaths);
     }
+    // Field lesson #142: run once, outside the sandbox, in the job's own worktree, before the
+    // worker starts — a toolchain sync (`uv sync`, `npm ci`) needs network the worker never gets.
+    if (job.setup !== undefined) {
+      if (job.agent !== 'codex' && job.shell !== true) fail(`Job ${job.id}: setup is only supported for codex and claude shell jobs`);
+      if (!Array.isArray(job.setup) || job.setup.length > 5) fail(`Job ${job.id}: setup must be an array of at most 5 argv arrays`);
+      for (const argv of job.setup) {
+        if (!Array.isArray(argv) || !argv.length || argv.some(item => typeof item !== 'string')) fail(`Job ${job.id}: each setup entry must be a non-empty array of strings`);
+      }
+    }
     if (job.maxOutputTokens !== undefined && (!API_AGENTS.includes(job.agent) || !Number.isInteger(job.maxOutputTokens) || job.maxOutputTokens < 256 || job.maxOutputTokens > 32768)) fail('maxOutputTokens is API-only and must be 256–32768');
     // tier is advisory routing metadata for the coordinator, not a model selector: an explicit
     // job.model always wins. expensive must name why, so the choice is inspectable, not gut feel.
@@ -391,7 +400,7 @@ export function validateManifest(manifest) {
       if (job.outputs.length) fail('a web job must be read-only (no outputs)');
     }
     // Unknown command/provider fields cannot create an execution path.
-    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow'].includes(key)) fail(`Unknown job field: ${key}`);
+    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'setup'].includes(key)) fail(`Unknown job field: ${key}`);
   }
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
   for (const job of manifest.jobs) for (const afterId of job.after ?? []) if (!ids.has(afterId.toLowerCase())) fail(`Job ${job.id} after names unknown job ${afterId}`);
@@ -635,6 +644,29 @@ async function outputsChanged(root, job, { existingOnly = false } = {}) {
   return false;
 }
 
+// Field lesson #142: `setup` runs once, outside the sandbox, in the job's own worktree, right
+// after it exists and before the worker starts — a toolchain sync (`uv sync`, `npm ci`) needs
+// network the worker itself never gets. Same env as the manifest's own `checks` (incl.
+// SWARM_PORT_BASE), never the worker key. Returns the `setup-failed: ...` message, or null.
+async function runJobSetup(root, directory, job, worktree, spawnImpl, portBase) {
+  if (!job.setup?.length) return null;
+  const env = portBase != null ? { ...process.env, SWARM_PORT_BASE: String(portBase) } : process.env;
+  let log = '';
+  for (const argv of job.setup) {
+    const result = await runCheck(argv[0], argv, worktree, 600000, spawnImpl, false, () => {}, env);
+    log += `$ ${argv.join(' ')}\n${result.tail}\n`;
+    if (result.status !== 'passed') {
+      await write(root, `${directory}/${job.id}/setup.log`, redactSecrets(log), true);
+      return `setup-failed: ${argv[0]} exit ${result.exitCode}`;
+    }
+  }
+  await write(root, `${directory}/${job.id}/setup.log`, redactSecrets(log), true);
+  return null;
+}
+// A `setup` failure fails the job exactly like a launched worker that never produced a result,
+// without ever spawning the worker itself.
+const setupFailedResult = error => ({ status: 'failed', setupFailed: true, error, stdout: '', stderr: '', response: '', exitCode: null, actualModel: null, modelsSeen: [], modelMismatch: false, usage: null, modelUsage: null, costUsd: null, cleanupError: null, terminationReason: null, permissionDenials: [] });
+
 // The retained proposal workspace contains only declared outputs. The runnable checkout is
 // disposable unless a fallback requires it or a failed worker changed declared outputs.
 async function executeCodexJob(root, directory, job, proposalRoot, options) {
@@ -650,6 +682,8 @@ async function executeCodexJob(root, directory, job, proposalRoot, options) {
       baseline.baseHashes[file] = bytes === null ? null : digest(bytes);
       baseline.baseModes[file] = bytes === null ? 0o644 : (await fs.stat(await safePath(worktree, file))).mode & 0o777;
     }
+    const setupError = await runJobSetup(root, directory, job, worktree, options.spawnImpl, options.portBase);
+    if (setupError) { result = setupFailedResult(setupError); return result; }
     const metadataDir = await fs.realpath((await git(worktree, ['rev-parse', '--absolute-git-dir'])).trim());
     const readPaths = await resolveReadPaths(job.readPaths);
     const profileText = codexProfile({ worktree, commonDir, metadataDir, readPaths });
@@ -741,10 +775,27 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
       baseline.baseHashes[file] = bytes === null ? null : digest(bytes);
       baseline.baseModes[file] = bytes === null ? 0o644 : (await fs.stat(await safePath(worktree, file))).mode & 0o777;
     }
+    const setupError = await runJobSetup(root, directory, job, worktree, options.spawnImpl, options.portBase);
+    if (setupError) { result = setupFailedResult(setupError); return result; }
     const shellDir = await safePath(root, `${directory}/${job.id}/shell/placeholder`, { internal: true, parents: true }).then(file => path.dirname(file));
     const home = path.join(shellDir, 'home'), tmp = path.join(shellDir, 'tmp'), configDir = path.join(home, '.claude');
     for (const dir of [home, tmp, configDir]) await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-    const readPaths = await resolveReadPaths(job.readPaths);
+    // Field lesson #142: after `setup`, a synced venv's own recorded interpreter directory is
+    // granted read access too when it lives under the real $HOME (a toolchain cache, not the
+    // job-scoped HOME), same refusal list as any other readPath; a denied one is only warned.
+    const venvInterpreterDenied = [];
+    let extraReadPaths = [];
+    const venvHome = await resolveVenvInterpreterHome(worktree);
+    if (venvHome) {
+      const interpreterDir = path.resolve(venvHome);
+      const realHome = options.env?.HOME ?? os.homedir();
+      if (interpreterDir === realHome || interpreterDir.startsWith(`${realHome}${path.sep}`)) {
+        const parentDir = path.dirname(interpreterDir);
+        try { extraReadPaths = await resolveReadPaths([parentDir]); }
+        catch { venvInterpreterDenied.push(`venv-interpreter-denied: ${parentDir}`); }
+      }
+    }
+    const readPaths = [...await resolveReadPaths(job.readPaths), ...extraReadPaths];
     const bin = await (hooks.resolveClaude ?? resolveClaudeBinary)(options.env ?? process.env);
     const binDir = path.dirname(bin);
     const cliPaths = path.basename(binDir) === 'bin' ? [path.dirname(binDir)] : [binDir];
@@ -753,8 +804,9 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
     const profileRelative = `${directory}/${job.id}/sandbox.sb`;
     await write(root, profileRelative, profileText, true);
     const profile = await safePath(root, profileRelative, { internal: true });
-    const env = { ...shellEnvironment({ parentEnv: options.env ?? process.env, home, tmp, configDir, proxyPort: proxy.port, apiKey: workerKey, testEnv: job.testEnv, userId: `swarm-worker:${job.id}`, portBase: options.portBase }), ...(hooks.baseUrlFromProxy ? { ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxy.port}` } : {}) };
+    const env = { ...shellEnvironment({ parentEnv: options.env ?? process.env, home, tmp, configDir, proxyPort: proxy.port, apiKey: workerKey, testEnv: job.testEnv, userId: `swarm-worker:${job.id}`, portBase: options.portBase, uvCacheDir: path.join(shellDir, 'uv-cache') }), ...(hooks.baseUrlFromProxy ? { ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxy.port}` } : {}) };
     result = await execute(job, worktree, message, { ...options, claudeShell: { profile, bin, env } });
+    if (venvInterpreterDenied.length) result.venvInterpreterDenied = venvInterpreterDenied;
     for (const key of ['stdout', 'stderr', 'response']) {
       if (containsKey(result[key], workerKey)) { result.workerKeyExposed = true; result[key] = redactKey(result[key], workerKey); }
     }
@@ -1030,7 +1082,8 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           const summary = typeof finalMessage.summary === 'string' && finalMessage.summary.trim() ? finalMessage.summary.trim()
             : typeof finalMessage.file === 'string' && finalMessage.file.trim() ? `needs ${finalMessage.file.trim()}` : 'no summary given';
           result.error = `blocked: ${summary}`.slice(0, 300);
-        } else if (result.status !== 'blocked' && CLI_AGENTS.includes(job.agent)) {
+        } else if (result.status !== 'blocked' && !result.setupFailed && CLI_AGENTS.includes(job.agent)) {
+          // A failed setup never started the agent, so its error stays exactly `setup-failed: ...`.
           // Additive only: agentError/agent.log are recorded solely from how the agent process
           // itself ended (non-zero exit, timeout, or a failed spawn), never from whether a
           // declared output is present. A clean exit (code 0) that still left an output missing
@@ -1044,7 +1097,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
             result.error = result.error ? `${failure.agentError}; ${result.error}` : failure.agentError;
           }
         }
-        if (job.shell === true) Object.assign(record, { proxyRefused: result.proxyRefused ?? [], ...(result.workerKeyExposed ? { workerKeyExposed: true } : {}) });
+        if (job.shell === true) Object.assign(record, { proxyRefused: result.proxyRefused ?? [], ...(result.venvInterpreterDenied?.length ? { venvInterpreterDenied: result.venvInterpreterDenied } : {}), ...(result.workerKeyExposed ? { workerKeyExposed: true } : {}) });
         Object.assign(record, { permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt) });
         await queueSave();
       } catch (error) {
@@ -1158,7 +1211,10 @@ const invalidJsonOutputWarnings = state => state.jobs.flatMap(job => (job.invali
 // Field lesson 37: a worker edit that lands outside its declared outputs is silently discarded at
 // integrate time; surfaced here (workspace-diff based) so `inspect`/`integrate` show it up front.
 const droppedWriteWarnings = state => state.jobs.flatMap(job => (job.droppedWrites ?? []).map(file => `dropped write: ${file} (not in outputs)`));
-const runWarnings = state => [...modelMismatchWarnings(state), ...codexEnvelopeFallbackWarnings(state), ...permissionDenialWarnings(state), ...invalidJsonOutputWarnings(state), ...droppedWriteWarnings(state)];
+// Field lesson #142: a synced venv's own interpreter directory lived under $HOME but inside a
+// denied subtree (e.g. `~/.ssh`); surfaced, never fatal, since the worker may not need it anyway.
+const venvInterpreterWarnings = state => state.jobs.flatMap(job => job.venvInterpreterDenied ?? []);
+const runWarnings = state => [...modelMismatchWarnings(state), ...codexEnvelopeFallbackWarnings(state), ...permissionDenialWarnings(state), ...invalidJsonOutputWarnings(state), ...droppedWriteWarnings(state), ...venvInterpreterWarnings(state)];
 // A provider that never reports usage.total_tokens (or never ran) reports null, not 0: absence
 // of evidence, not evidence of zero cost.
 const jobTokens = record => typeof record?.usage?.total_tokens === 'number' ? record.usage.total_tokens : null;

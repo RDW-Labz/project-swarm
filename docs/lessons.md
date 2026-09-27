@@ -406,3 +406,16 @@ rule is enforced or documented.
     `ship` report the resolved block and warn when it had to move or every
     candidate block was busy. Documentation: [manifest
     reference](manifest-reference.md#ports).
+42. **A sandboxed shell job could not run its own project's checks.** Its
+    toolchain sync needed network the sandbox never grants, and even after a
+    sync ran outside the sandbox, the sandboxed worker still failed to find
+    its own workspace root or the venv that sync had just produced, both
+    hidden from it by default. Rule: run a toolchain sync once, outside the
+    sandbox, before the worker starts, and grant the narrow extra reads that
+    a synced toolchain actually needs to find itself. Enforcement: a job field
+    runs setup commands outside the sandbox in the job's own worktree before
+    the worker starts, failing the job outright on a non-zero exit instead of
+    starting the worker; the sandbox profile separately grants ancestor
+    workspace-discovery reads and, after setup, a synced interpreter's own
+    directory when it lives under the coordinator's home. Documentation:
+    [manifest reference](manifest-reference.md#setup).
