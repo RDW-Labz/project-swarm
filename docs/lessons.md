@@ -452,3 +452,14 @@ rule is enforced or documented.
     path that still resolves under the temp dir; both diagnostics and
     onboarding surface it as advice, never a status change. Documentation:
     [manifest reference](manifest-reference.md#kickoff-diagnostics-and-install-commands).
+46. **A worker's final JSON extraction returned one nested element, not the
+    whole result.** A final message held prose plus a fenced object whose own
+    value included an array of similarly-shaped objects; naive per-line
+    parsing matched one of those inner objects before it ever reached the
+    real top-level result, so the report looked complete but carried the
+    wrong (and mostly null) fields. Rule: extraction must find the last
+    *balanced top-level* object, string-aware so a brace inside a string
+    value never counts, not merely the last line or fenced block that happens
+    to parse. Enforcement: the same brace-depth scan prefers the last fenced
+    block when one exists and never returns a span that only opened at a
+    nested depth. Regression coverage is in `tests/final-json.test.mjs`.

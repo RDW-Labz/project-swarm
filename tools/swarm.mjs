@@ -1225,26 +1225,51 @@ const MAX_NOTES = 20, MAX_NOTE_LEN = 500;
 const asObject = value => (value && typeof value === 'object' && !Array.isArray(value) ? value : null);
 const tryObject = text => { try { return asObject(JSON.parse(text)); } catch { return null; } };
 
-// The last line that parses as a JSON object, not merely the last non-empty line: a worker's
-// final structured result may follow ordinary trailing log lines. Lessons #54/#58: workers often
-// wrap that line in backticks or put a (pretty-printed) object in a ```json fence, so a line's
-// surrounding backticks are stripped, and when no line parses, the last fenced block that holds
-// one JSON object wins.
-export function parseFinalJson(text) {
-  if (typeof text !== 'string' || !text) return null;
-  const lines = text.split('\n');
-  for (let index = lines.length - 1; index >= 0; index--) {
-    const line = lines[index].trim().replace(/^`+|`+$/g, '').trim();
-    if (!line) continue;
-    const value = tryObject(line);
-    if (value) return value;
+// String-aware brace matching: only counts { and } outside JSON string literals, so a string
+// value containing a literal '}' never breaks depth tracking. Returns every balanced top-level
+// (depth 0) object span found, in left-to-right order; a nested object inside an array or another
+// object's value only ever opens at depth > 0, so it can never be mistaken for the whole reply.
+function topLevelObjectSpans(text) {
+  const spans = [];
+  let depth = 0, start = -1, inString = false, escaped = false;
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') { inString = true; continue; }
+    if (char === '{') { if (depth === 0) start = index; depth++; }
+    else if (char === '}' && depth > 0) { depth--; if (depth === 0 && start !== -1) { spans.push(text.slice(start, index + 1)); start = -1; } }
   }
-  const fences = [...text.matchAll(/```[a-zA-Z]*[ \t]*\n([\s\S]*?)\n[ \t]*```/g)];
-  for (let index = fences.length - 1; index >= 0; index--) {
-    const value = tryObject(fences[index][1].trim());
+  return spans;
+}
+// The rightmost balanced top-level object that actually parses; an earlier, malformed-looking
+// span never masks a later valid one.
+function lastTopLevelObject(text) {
+  const spans = topLevelObjectSpans(text);
+  for (let index = spans.length - 1; index >= 0; index--) {
+    const value = tryObject(spans[index]);
     if (value) return value;
   }
   return null;
+}
+
+// A worker's final structured result may follow ordinary trailing log lines, be wrapped in
+// backticks (lesson #54), or sit inside a pretty-printed ```json fence (lesson #58). Field lesson
+// #146: naive per-line parsing can match a nested inner object (e.g. one element of a
+// "checksRun" array) before it ever reaches the real top-level object, so extraction instead finds
+// the last *balanced top-level* object — preferring the last fenced block when one exists.
+export function parseFinalJson(text) {
+  if (typeof text !== 'string' || !text) return null;
+  const fences = [...text.matchAll(/```[a-zA-Z]*[ \t]*\n([\s\S]*?)\n[ \t]*```/g)];
+  if (fences.length) {
+    const value = lastTopLevelObject(fences[fences.length - 1][1]);
+    if (value) return value;
+  }
+  return lastTopLevelObject(text);
 }
 const cappedNotes = value => (Array.isArray(value?.notes) ? value.notes : []).slice(0, MAX_NOTES).map(note => typeof note === 'string' ? note.slice(0, MAX_NOTE_LEN) : note);
 const displayResult = value => !value ? null : !Array.isArray(value.notes) ? value : { ...value, notes: cappedNotes(value) };
