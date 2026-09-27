@@ -33,6 +33,42 @@ function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Field lesson 140: a whole-file or glob-based guard test discovers files in its directory
+// dynamically and never names them, so referencePatterns' literal text match cannot see it. A
+// test that walks a directory or an extension glob counts as covering a new same-kind file
+// placed there, exactly as if it had named the file directly.
+const QUOTED_STRING_RE = /(['"`])((?:(?!\1)[^\\]|\\.)*)\1/g;
+const GLOB_DIR_EXT_RE = /^(.+?)\/(\*\*\/)?\*(\.[A-Za-z0-9]+)$/;
+const READDIR_CALL_RE = /\b(?:readdirSync|readdir|globSync|glob\.sync|fg\.sync)\s*\(/;
+const ENDSWITH_EXT_RE = /\.endsWith\(\s*(['"`])(\.[A-Za-z0-9]+)\1\s*\)/g;
+const EXT_REGEX_LITERAL_RE = /\/\\\.([A-Za-z0-9]+)\$\//g;
+
+export function directoryGuardCoverage(text) {
+  const covered = [];
+  for (const match of text.matchAll(QUOTED_STRING_RE)) {
+    const globMatch = GLOB_DIR_EXT_RE.exec(match[2]);
+    if (globMatch) covered.push({ dir: globMatch[1], ext: globMatch[3], recursive: Boolean(globMatch[2]) });
+  }
+  if (READDIR_CALL_RE.test(text)) {
+    const dirs = [];
+    for (const match of text.matchAll(QUOTED_STRING_RE)) {
+      const inner = match[2];
+      if (inner && !inner.includes('*') && /^[\w][\w./-]*$/.test(inner)) dirs.push(inner);
+    }
+    const exts = new Set();
+    for (const match of text.matchAll(ENDSWITH_EXT_RE)) exts.add(match[2]);
+    for (const match of text.matchAll(EXT_REGEX_LITERAL_RE)) exts.add(`.${match[1]}`);
+    for (const dir of dirs) for (const ext of exts) covered.push({ dir, ext, recursive: false });
+  }
+  return covered;
+}
+
+function matchesDirectoryGuard(coverage, outDir, outExt) {
+  return coverage.some(entry => entry.ext === outExt && (entry.recursive
+    ? (outDir === entry.dir || outDir.startsWith(`${entry.dir}/`))
+    : outDir === entry.dir));
+}
+
 export function referencePatterns(outputPath) {
   const norm = String(outputPath).replace(/\\/g, '/');
   const ext = path.extname(norm);
@@ -121,7 +157,7 @@ export function findUncoveredTests(root, job, files = listProjectFiles(root)) {
     } catch {
       continue;
     }
-    candidates.push({ file, text });
+    candidates.push({ file, text, guardCoverage: directoryGuardCoverage(text) });
   }
   const pairs = [];
   for (const output of job.outputs ?? []) {
@@ -134,9 +170,12 @@ export function findUncoveredTests(root, job, files = listProjectFiles(root)) {
     }
     if (!stat.isFile()) continue;
     const patterns = referencePatterns(output);
-    if (!patterns.length) continue;
-    for (const { file, text } of candidates) {
-      if (patterns.some(re => re.test(text))) pairs.push({ output, test: file });
+    const outNorm = String(output).replace(/\\/g, '/');
+    const outDir = path.dirname(outNorm);
+    const outExt = path.extname(outNorm);
+    for (const { file, text, guardCoverage } of candidates) {
+      const matched = patterns.some(re => re.test(text)) || matchesDirectoryGuard(guardCoverage, outDir, outExt);
+      if (matched) pairs.push({ output, test: file });
     }
   }
   return pairs.sort((a, b) => (a.test !== b.test ? (a.test < b.test ? -1 : 1) : a.output < b.output ? -1 : a.output > b.output ? 1 : 0));
@@ -212,6 +251,75 @@ export function contextDirectoryWarnings(root, job) {
     });
   }
   return warnings;
+}
+
+// Field lesson 155: a job that adds an entry to a registry (catalog dir, allowlist, pinned
+// scopes) also owns the test that pins that registry's membership, or the new file breaks a
+// hard-coded set the job's own context/outputs never named. "Near" is a same-text proximity
+// window, not a parser: this is advisory, exactly like findUncoveredTests above.
+// NOTE: not yet wired into validateProject (tools/swarm.mjs) — see job notes for the one-line
+// hook needed, since the existing contextDirectoryWarnings/findUncoveredTests call sites there
+// do not carry both a job's outputs and the warnings (vs. refusal) list at once.
+const REGISTRY_KEYWORD_SRC = '(?:load_\\w*|glob\\w*|listdir|readdir)';
+const NEAR_WINDOW = 80;
+
+export function registryPinningWarnings(root, job, files = listProjectFiles(root)) {
+  const covered = new Set([...(job.context ?? []), ...(job.outputs ?? []), ...(job.ignoreTests ?? [])]);
+  const newDirs = new Set();
+  for (const output of job.outputs ?? []) {
+    if (isTestFile(output) || isManifestOrVersionFile(output)) continue;
+    try {
+      fs.statSync(path.join(root, output));
+      continue; // already exists: not a new file
+    } catch { /* does not exist yet */ }
+    let dir = path.dirname(String(output).replace(/\\/g, '/'));
+    while (dir && dir !== '.') {
+      newDirs.add(dir);
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  if (!newDirs.size) return [];
+  const matches = new Map();
+  for (const file of files) {
+    if (!isTestFile(file) || covered.has(file)) continue;
+    let stat;
+    try {
+      stat = fs.statSync(path.join(root, file));
+    } catch {
+      continue;
+    }
+    if (!stat.isFile() || stat.size > CONTEXT_CHECK_LIMITS.maxTestBytes) continue;
+    let text;
+    try {
+      text = fs.readFileSync(path.join(root, file), 'utf8');
+    } catch {
+      continue;
+    }
+    for (const dir of newDirs) {
+      const name = dir.split('/').pop();
+      if (!name || name.length < 2) continue;
+      const esc = escapeRegExp(name);
+      const near = new RegExp(`${esc}[\\s\\S]{0,${NEAR_WINDOW}}?${REGISTRY_KEYWORD_SRC}|${REGISTRY_KEYWORD_SRC}[\\s\\S]{0,${NEAR_WINDOW}}?${esc}`, 'i');
+      if (near.test(text)) {
+        if (!matches.has(dir)) matches.set(dir, new Set());
+        matches.get(dir).add(file);
+      }
+    }
+  }
+  const warnings = [];
+  for (const [dir, testSet] of matches) {
+    const tests = [...testSet].sort();
+    warnings.push({
+      code: 'registry-pinning-tests',
+      jobId: job.id,
+      dir,
+      tests,
+      message: `job ${job.id} adds a new file under ${dir}; ${tests.join(', ')} enumerates that directory and is not in this job's context, outputs, or ignoreTests`,
+    });
+  }
+  return warnings.sort((a, b) => (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0));
 }
 
 export function suggestIgnoreTests(uncovered) {

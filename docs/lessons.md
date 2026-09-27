@@ -463,3 +463,164 @@ rule is enforced or documented.
     to parse. Enforcement: the same brace-depth scan prefers the last fenced
     block when one exists and never returns a span that only opened at a
     nested depth. Regression coverage is in `tests/final-json.test.mjs`.
+47. **A version-only dependency bump left checks running against a stale
+    environment.** A lockfile-only resync trigger missed a manifest file
+    (`pyproject.toml`/`package.json`/`Cargo.toml`) bumped without its
+    lockfile moving, so the installed environment silently disagreed with
+    the code. Rule: any dependency/version file counts as a resync trigger,
+    not only its lockfile. Enforcement: the env-resync trigger now also
+    fires on these three files, and `validate` warns `stale-env-risk` when
+    a job outputs one with no `preChecks` declared to resync it.
+    Regression coverage is in `tests/lessons120-checks.test.mjs`.
+48. **A check that never started looked like a check that failed.** A
+    missing tool or module produced the same generic status as a real
+    assertion failure, so a red run could not be told apart from an
+    environment that was never even ready to run it. Rule: a check that
+    could not start is distinct from one that ran and lost, and deserves
+    one resync-and-retry before being reported red. Enforcement: `spawn-error`
+    (could not spawn at all) and `unrunnable` (started but its own tool or
+    module was missing) are now their own statuses, each triggering one
+    automatic `preChecks` run plus a single retry; `integrate` gains
+    `checksErrored` and the CLI exits non-zero on it regardless of
+    `--require-checks`. Regression coverage is in
+    `tests/lessons120-checks.test.mjs`.
+49. **A test timeout under 5 seconds was a timing assertion in disguise.**
+    A short hang-guard passed reliably on a fast runner and flaked on a
+    slow one, discovered only after it went red in CI. Rule: a test
+    timeout is a hang guard, never a timing assertion, and belongs at 5
+    seconds or more. Enforcement: `validate` warns `tight-test-timeout`
+    when an added test line contains a timeout literal under that floor.
+    Regression coverage is in `tests/lessons120-checks.test.mjs`.
+50. **A flaky-test fix went to a worker that could never reproduce it.** A
+    job whose own acceptance check loops or repeats, or whose prompt names
+    a flake or race, produced only a guess when handed to a worker with no
+    shell to run that check itself. Rule: a job whose done-when is
+    "reproduce, then prove N green" needs a shell-capable worker, not a
+    guess. Enforcement: `runtime-check-no-shell` now also fires when a
+    check's own argv contains a repeat construct or the prompt names a
+    flake/race/intermittent bug, exempting a job whose outputs are all
+    docs. Regression coverage is in `tests/lessons120-checks.test.mjs`.
+51. **Background research and long check runs were miscounted as idle
+    time.** A single-question run and a scout wrote no record a
+    session-metrics reader could find, and a long checks/mutants run
+    inside integration looked identical to silence. Rule: measure what
+    actually runs, not just what writes to the run registry the reader
+    already knew about. Enforcement: a small state.json-compatible
+    `{startedAt, finishedAt, costUsd}` record is now written for a
+    single-question run, a scout, and integrate's own checks/mutants
+    windows. Regression coverage is in `tests/lessons120-checks.test.mjs`.
+52. **A check's interpreter was discovered missing only once integration
+    ran it for real.** A manifest check named `python3 -m X`, and the
+    system `python3` on the machine that later ran it had no such module,
+    so a job that was otherwise fine came back red. Rule: a check's
+    interpreter or module is confirmed present before the job that needs
+    it ever starts. Enforcement: `validate`/`preflight` probe each check's
+    resolved interpreter (or import the named module, for a `python -m X`
+    form) once and refuse a manifest naming one that can't be found.
+    Regression coverage is in `tests/lessons120-context.test.mjs`.
+53. **A side file, and a new registry entry, both escaped their guard
+    tests.** A second file of the same kind as an existing, guarded one
+    (in the same directory) was missed by a whole-file/glob guard that
+    only matched literal names, and a new entry added to a directory a
+    test enumerated by listing/globbing broke that test without ever
+    being in the job's own context or outputs. Rule: a directory- or
+    glob-level guard covers every same-kind file in it, and a job that
+    adds to a registry a test enumerates owns that test too. Enforcement:
+    a whole-file/glob guard test now counts as covering a new same-kind
+    output in the same directory, and `validate` warns
+    `registry-pinning-tests` when a job's new file lands in a directory an
+    existing test enumerates outside that job's own context, outputs, or
+    `ignoreTests`. Regression coverage is in
+    `tests/lessons120-context.test.mjs`.
+54. **An env var exported to checks leaked into an independent project test.**
+    A release added `SWARM_PORT_BASE` to the environment of every check, and a
+    project's own test suite that unstubbed/restored environment variables saw
+    the swarm's value leak through and change the test's behavior unexpectedly.
+    Rule: a release that adds environment variables to check processes lists
+    them clearly, and test code that exercises env isolation must explicitly
+    unset or stub them. Enforcement: `integrate`/`ship` scan every project test
+    file that was integrated for references to names of swarm-exported env vars
+    (`SWARM_PORT_BASE`, …); a match prints `swarm-env-in-tests: <file>: references
+    <name>; stub or unset it in this test`. The changelog lists all exported
+    env vars under a dedicated line. Regression coverage is in
+    `tests/lessons120-ship.test.mjs`.
+55. **A shell job's new declared output triggered a spurious dropped-write
+    warning.** A shell worker created a file declared in the job's own outputs,
+    but the completion logic warned it as a dropped write before integration
+    even saw the run. The warning's path-matching logic differed from
+    integration's own normalization, so files that would integrate just fine
+    were flagged as skipped. Rule: a warning that claims data was lost must
+    match integration's own decision; shell-job and copy-job completion use
+    identical path logic for output matching. Enforcement: shell-job completion
+    normalizes and matches new files against the outputs list the same way
+    `integrate` does, so a declared output is never warned as dropped; the
+    warning only fires when `integrate` would actually skip the file.
+    Additionally, swarm's own tests that spawn the sandbox no longer run when
+    already inside a sandbox; they skip with a named reason set via
+    `SWARM_IN_SANDBOX=1`, avoiding spurious nested-sandbox denials. Regression
+    coverage is in `tests/lessons120-mutants.test.mjs`.
+56. **Mutation checks ran against a red base and reported false coverage.**
+    A manifest check failed, but mutation checks still applied every mutant
+    and reported each one killed — a result that looked like passing coverage
+    but proved nothing, since a red base kills every mutant regardless of the
+    guard being tested. Rule: mutants only count against a base that is
+    actually green. Enforcement: `integrate --mutants` refuses to start unless
+    the unmutated tree passes all checks first; any non-test-failure exit
+    (spawn error, usage error) is classified as `invalid`, never `killed`;
+    `ship --require-section "Mutation check"` refuses outright when an
+    integrated run's mutants came from a red base. Regression coverage is in
+    `tests/lessons120-mutants.test.mjs`.
+57. **A blocked job's useful outputs were lost because they could not be
+    integrated.** A job returned `blocked` but its declared outputs were still
+    usable; they were abandoned entirely because the integration path had no
+    way to accept them. Rule: a blocked job's declared outputs are still
+    integrated, with the same conflict and snapshot checks, instead of being
+    discarded. Enforcement: `integrate --accept-blocked` integrates a blocked
+    job's outputs and records `integrationStatus: 'integrated-blocked'`,
+    carrying the blocked reason into the next job's evidence so a follow-up
+    can understand what happened. Regression coverage is in
+    `tests/lessons120-mutants.test.mjs`.
+58. **A hash-shaped string in output was never flagged as possibly invented.**
+    A job's output contained a 40- or 64-character hexadecimal string that
+    appeared nowhere verbatim in the job's own context files, suspiciously
+    hash-shaped but never noticed to be unexplained. Rule: an unexplained
+    40/64-hex string in an output is flagged as possibly invented. Enforcement:
+    `inspect`/`integrate` warn `invented-hash` when an output diff adds a
+    40-hex or 64-hex string not present verbatim in the job's own context
+    files. Regression coverage is in `tests/lessons120-mutants.test.mjs`.
+59. **A cancelled check process left its children running.** A `cancel`
+    command during an in-flight check killed the main process but left child
+    processes orphaned, consuming resources and holding ports. Rule: an
+    in-flight check is killed as a process group, not left running after a
+    run is cancelled. Enforcement: `runCheck` spawns the check as a process
+    group (not a bare child), and `cancel` kills the whole group, ensuring no
+    child process survives after cancellation. Regression coverage is in
+    `tests/lessons120-mutants.test.mjs`.
+60. **Force-pushing an amended PR branch overwrote another contributor's
+    work.** A run amended its PR branch and pushed it, but another contributor
+    had moved the remote head between the run's start and landing, so a
+    force-push silently overwrote their work undetected. Rule: ship uses a
+    lease-push for its own amended PR branch when the remote head is not an
+    ancestor, and refuses outright when someone else moved it. Enforcement:
+    `ship` pushes with `--force-with-lease=<branch>:<last-known-remote-sha>`
+    when the PR author is the coordinator's own bot identity and the remote
+    head is not an ancestor; it refuses (not lease-forces) when someone else
+    moved the head. Regression coverage is in `tests/lessons120-ship.test.mjs`.
+61. **A platform-only CI failure hid which OS actually failed.** A rollup of
+    CI results across multiple OS/job matrix entries showed a failure without
+    saying which platform was red, so the cause had to be rediscovered by
+    hand instead of being named in the run report. Rule: name the platform
+    when a CI failure is red on only some OS/job matrix entries, not all.
+    Enforcement: `ship` prints `platform-only failure: <os>` with the failing
+    test ids when a CI failure lands on only a subset of the OS/job matrix.
+    Regression coverage is in `tests/lessons120-ship.test.mjs`.
+62. **A test that shells out to a host binary was never checked before
+    ship.** A test file called an undocumented host system binary outside the
+    shipped code's own control, and ship did not catch it before integration,
+    so the test could fail mysteriously in CI even though it passed locally.
+    Rule: a test that shells out to a host binary needs a fake, a skip seam,
+    or a documented allowlist; ship checks this before pushing. Enforcement:
+    `ship` refuses when a test file spawns a binary outside the allowlist
+    (defined in the project's own `check:ci-like` script) with no fake or skip
+    seam, and runs the check under a stripped environment to match CI
+    conditions exactly. Regression coverage is in `tests/lessons120-ship.test.mjs`.

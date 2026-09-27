@@ -23,6 +23,9 @@ const FAKE_BIN = '/opt/fake-claude/bin/claude.exe';
 const hooks = { access: async () => {}, resolveClaude: async () => FAKE_BIN, scanListeningPorts: async () => [] };
 const noKeychain = () => assert.fail('the real keychain must never be read in tests');
 const runEnv = { ...process.env, SWARM_CLAUDE_WORKER_API_KEY: FAKE_KEY };
+// Field lesson #156: a nested swarm test run cannot spawn a real sandbox-exec; skip with a named
+// reason instead of a spurious failure, same as the existing macOS-only skip this test carries.
+const SANDBOX_SKIP = process.env.SWARM_IN_SANDBOX ? 'nested sandbox: cannot spawn a real sandbox-exec' : process.platform !== 'darwin' && 'macOS only';
 const shellJob = (overrides = {}) => ({ id: 'builder', agent: 'claude', model: 'sonnet', shell: true, prompt: 'Update the output.', context: ['input.txt'], outputs: ['output.txt'], timeoutMs: 10000, ...overrides });
 const codexJob = (overrides = {}) => ({ id: 'c', agent: 'codex', model: 'test-model', prompt: 'Update the output.', context: ['input.txt'], outputs: ['output.txt'], timeoutMs: 10000, ...overrides });
 const plainJob = (overrides = {}) => ({ id: 'writer', agent: 'claude', model: 'sonnet', prompt: 'x', context: [], outputs: ['output.txt'], ...overrides });
@@ -222,7 +225,7 @@ test('a shell job with setup states, in its prompt, that setup already ran and m
 
 // --- the generated profile under the real sandbox-exec (macOS only) -----------------------------
 
-test('the generated profile lets a real shell read an ancestor pyproject.toml but not an unrelated ancestor file', { skip: process.platform !== 'darwin' && 'macOS only' }, async t => {
+test('the generated profile lets a real shell read an ancestor pyproject.toml but not an unrelated ancestor file', { skip: SANDBOX_SKIP }, async t => {
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-setup-seatbelt-')));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   // The project root must sit inside the denied `home` subtree (as it does for a real coordinator

@@ -2,13 +2,85 @@
 // Advisory task sizing. This module neither starts workers nor changes a manifest.
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { validateManifest, validateProject } from './swarm.mjs';
+
+const execFileAsync = promisify(execFile);
 
 export const PREFLIGHT_THRESHOLDS = Object.freeze({ outputs: 5, contextBytes: 160 * 1024 });
 const byPath = (a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
 
-export async function preflightProject(root, manifest) {
+// Field lesson 129: a check's manifest argv (e.g. `python3 -m pytest`) can hit whatever
+// interpreter happens to be on PATH; if that interpreter or module is missing, the failure is
+// only discovered once integrate runs the check for real. Resolving argv[0] must skip past any
+// `env VAR=... ` prefix tokens, since those are not the program being run.
+export const PROBE_TIMEOUT_MS = 3000;
+const ENV_ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const PYTHON_BIN_RE = /^python3?$/;
+
+export function resolveCheckProbe(argv) {
+  if (!Array.isArray(argv) || !argv.length) return null;
+  let i = 0;
+  if (argv[0] === 'env') {
+    i = 1;
+    while (i < argv.length && ENV_ASSIGN_RE.test(argv[i])) i += 1;
+  }
+  if (i >= argv.length) return null;
+  const program = argv[i];
+  // A `python3 -m X` form (direct, or wrapped by `uv run ...`) is probed by importing the
+  // module, not merely by checking the interpreter starts; every other form probes `--version`.
+  for (let m = i + 1; m < argv.length - 1; m += 1) {
+    if (argv[m] === '-m' && PYTHON_BIN_RE.test(path.basename(argv[m - 1])) && !argv[m + 1].startsWith('-')) {
+      return { program: argv[m - 1], module: argv[m + 1], kind: 'module', probeArgv: [...argv.slice(i, m), '-c', `import ${argv[m + 1]}`] };
+    }
+  }
+  return { program, kind: 'interpreter', probeArgv: [program, '--version'] };
+}
+
+async function defaultProbeExec(probeArgv, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
+  await execFileAsync(probeArgv[0], probeArgv.slice(1), { timeout: timeoutMs, encoding: 'utf8' });
+}
+
+export function describeProbeFailure(failure) {
+  return failure.kind === 'module'
+    ? `check "${failure.check}" needs Python module ${failure.module} (via ${failure.program}), which could not be imported`
+    : `check "${failure.check}" needs ${failure.program}, which was not found`;
+}
+
+// One probe per distinct resolved probe command (not per check), so two checks sharing an
+// interpreter+module pair cost a single spawn; `exec` is an injectable seam so tests never need
+// a real interpreter on PATH.
+export async function probeCheckInterpreters(manifest, { exec = defaultProbeExec, timeoutMs = PROBE_TIMEOUT_MS } = {}) {
+  const checks = [
+    ...(manifest.checks ?? []).map(check => ({ check: check.name ?? check.argv.join(' '), argv: check.argv })),
+    ...(manifest.mutantCheck ? [{ check: 'mutantCheck', argv: manifest.mutantCheck.argv }] : []),
+    ...(manifest.preChecks ?? []).map((argv, index) => ({ check: `preCheck-${index + 1}`, argv })),
+  ];
+  const cache = new Map();
+  const failures = [];
+  for (const { check, argv } of checks) {
+    const resolved = resolveCheckProbe(argv);
+    if (!resolved) continue;
+    const key = JSON.stringify(resolved.probeArgv);
+    if (!cache.has(key)) {
+      cache.set(key, exec(resolved.probeArgv, { timeoutMs }).then(() => null, error => ({
+        kind: resolved.kind, program: resolved.program, module: resolved.module ?? null,
+        error: error?.message ?? String(error),
+      })));
+    }
+    const result = await cache.get(key);
+    if (result) failures.push({ check, ...result });
+  }
+  return failures;
+}
+
+export async function preflightProject(root, manifest, { exec, timeoutMs } = {}) {
   validateManifest(manifest);
+  const probeFailures = await probeCheckInterpreters(manifest, { ...(exec ? { exec } : {}), ...(timeoutMs ? { timeoutMs } : {}) });
+  if (probeFailures.length) {
+    throw Object.assign(new Error(`Check interpreter probe failed: ${probeFailures.map(describeProbeFailure).join('; ')}`), { details: { probeFailures } });
+  }
   // Use the same guarded reads as execution. Do not follow validation with a
   // second, unguarded filesystem walk merely to gather size information.
   const validated = await validateProject(root, manifest);

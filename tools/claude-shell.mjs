@@ -37,7 +37,7 @@ const ANCESTOR_LOOKUP_FILES = ['pyproject.toml', 'uv.toml', 'package.json'];
 // Fixed values the runner sets itself; never copied from the parent env and never overridable
 // by testEnv. CLAUDE_CODE_SUBPROCESS_ENV_SCRUB makes the CLI unset credential variables
 // (ANTHROPIC_API_KEY included) inside each Bash command before it runs.
-const FIXED_ENV_KEYS = ['PATH', 'HOME', 'LANG', 'TMPDIR', 'TMP', 'TEMP', 'HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'NO_PROXY', 'no_proxy', 'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_TMPDIR', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_EXTRA_BODY', 'SSL_CERT_FILE', 'SWARM_PORT_BASE', 'UV_OFFLINE', 'UV_PYTHON_DOWNLOADS', 'UV_CACHE_DIR', 'npm_config_offline'];
+const FIXED_ENV_KEYS = ['PATH', 'HOME', 'LANG', 'TMPDIR', 'TMP', 'TEMP', 'HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'NO_PROXY', 'no_proxy', 'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_TMPDIR', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_EXTRA_BODY', 'SSL_CERT_FILE', 'SWARM_PORT_BASE', 'UV_OFFLINE', 'UV_PYTHON_DOWNLOADS', 'UV_CACHE_DIR', 'npm_config_offline', 'SWARM_IN_SANDBOX'];
 const SECRET_KEY = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|^ANTHROPIC_|^OPENAI_|^AWS_|^GH_|^GITHUB_|^CLAUDE_CODE_OAUTH/;
 const HOST = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
 const within = (file, parent) => file === parent || file.startsWith(`${parent}/`);
@@ -229,6 +229,11 @@ export function shellEnvironment({ parentEnv = process.env, home, tmp, configDir
     HTTPS_PROXY: proxy, HTTP_PROXY: proxy, https_proxy: proxy, http_proxy: proxy, NO_PROXY: '', no_proxy: '',
     ANTHROPIC_API_KEY: apiKey, CLAUDE_CONFIG_DIR: configDir, CLAUDE_CODE_TMPDIR: tmp, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     CLAUDE_CODE_EXTRA_BODY: JSON.stringify({ metadata: { user_id: userId } }),
+    // Field lesson #156: this child always runs inside a sandbox; if its own parent is itself
+    // already inside one (a nested swarm invocation), that signal carries through unchanged so a
+    // test run further down reads it and skips a check that itself needs a real sandbox-exec,
+    // instead of failing. A top-level, unsandboxed parent adds nothing new here (never invented).
+    ...(clean(parentEnv.SWARM_IN_SANDBOX) !== undefined ? { SWARM_IN_SANDBOX: clean(parentEnv.SWARM_IN_SANDBOX) } : {}),
     ...(certFile ? { SSL_CERT_FILE: certFile } : {}),
     ...(portBase != null ? { SWARM_PORT_BASE: String(portBase) } : {}),
     // Field lesson #142: the sandbox has no network, so a toolchain that tries to reach the

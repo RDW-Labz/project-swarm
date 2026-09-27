@@ -3,6 +3,7 @@
 // and merge when everything is green and nobody has asked for a human to look first. No shell:
 // git and gh are invoked through the injected `exec` with an argv array.
 import fs from 'node:fs/promises';
+import path from 'node:path';
 
 export const SHIP_DEFAULTS = Object.freeze({ pollMs: 20_000, timeoutMs: 45 * 60_000, noCiGraceMs: 5 * 60_000, mergeMethod: 'squash' });
 export const CHECKS_PLACEHOLDER = '<!-- swarm:checks -->';
@@ -15,6 +16,112 @@ const ALLOWED_EXTRA_PAYLOAD_FIELDS = new Set(['draft', 'maintainer_can_modify'])
 const PASSING_CONCLUSIONS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 const PENDING_STATES = new Set(['PENDING', 'EXPECTED']);
 const VALID_MERGE_METHODS = new Set(['squash', 'merge', 'rebase']);
+
+// Field lesson 147: a version bump's outputs include the lockfile that records the project's own
+// version; a stale lockfile fails CI at `uv sync --locked`/`npm ci` long after ship already
+// pushed. The manifest file a run touched picks which project lock check to run before pushing.
+const LOCK_CHECKS = [
+  { name: 'npm-lock-check', triggers: new Set(['package.json', 'package-lock.json']), argv: ['npm', 'ci', '--dry-run'] },
+  { name: 'uv-lock-check', triggers: new Set(['pyproject.toml', 'uv.lock']), argv: ['uv', 'lock', '--check'] },
+];
+export function selectLockCheck(files) {
+  const basenames = new Set((files ?? []).map(file => path.basename(file)));
+  for (const candidate of LOCK_CHECKS) {
+    for (const trigger of candidate.triggers) if (basenames.has(trigger)) return { name: candidate.name, argv: candidate.argv };
+  }
+  return null;
+}
+
+// Field lesson 150: a plain push only ever fails this way when the remote branch moved out from
+// under us (a squash-amend of our own PR, or someone else's push); other push failures (auth,
+// permissions, branch protection) keep their existing plain "push failed" reason untouched below.
+const NON_FAST_FORWARD_RE = /\[rejected\]|non-fast-forward|failed to push some refs|stale info/i;
+
+// Field lesson 150: --force-with-lease is only safe when nobody else's commit sits on the branch
+// we're about to overwrite; the GitHub login of the remote tip (not just a local git identity)
+// is what actually answers "did someone else move this head".
+async function resolveLeasePush(exec, root, repo, branch) {
+  const remoteRes = await exec('git', ['ls-remote', 'origin', `refs/heads/${branch}`], { cwd: root });
+  const remoteSha = remoteRes.code === 0 ? remoteRes.stdout.trim().split(/\s+/)[0] : null;
+  if (!remoteSha) return null;
+  const meRes = await exec('gh', ['api', 'user', '--jq', '.login'], { cwd: root });
+  const me = meRes.code === 0 ? meRes.stdout.trim() : null;
+  const authorRes = await exec('gh', ['api', `repos/${repo}/commits/${remoteSha}`, '--jq', '.author.login'], { cwd: root });
+  const remoteAuthor = authorRes.code === 0 ? authorRes.stdout.trim() : null;
+  if (!me || remoteAuthor !== me) return { ok: false, remoteSha, remoteAuthor, me };
+  return { ok: true, remoteSha, me };
+}
+
+// Field lesson 151: a CI matrix name embeds its OS ("test (ubuntu-latest, 20.x)"); a failure only
+// on some of the OS entries present is a platform difference, not a real red build, and is worth
+// naming up front instead of leaving it to be rediscovered by hand.
+const OS_TOKEN_RE = /\b(ubuntu-latest|ubuntu|windows-latest|windows|macos-latest|macos)\b/i;
+function extractOs(name) {
+  const match = OS_TOKEN_RE.exec(name);
+  return match ? match[1].toLowerCase().replace(/-latest$/, '') : null;
+}
+export function platformOnlyFailures(rollup) {
+  const items = Array.isArray(rollup) ? rollup : [];
+  const oses = new Set();
+  const failedByOs = new Map();
+  for (const item of items) {
+    const name = item.name ?? item.context ?? 'unknown';
+    const os = extractOs(name);
+    if (!os) continue;
+    oses.add(os);
+    const isPending = 'state' in item ? PENDING_STATES.has(item.state) : item.status !== 'COMPLETED';
+    if (isPending) continue;
+    const passed = 'state' in item ? item.state === 'SUCCESS' : PASSING_CONCLUSIONS.has(item.conclusion);
+    if (!passed) {
+      if (!failedByOs.has(os)) failedByOs.set(os, []);
+      failedByOs.get(os).push(name);
+    }
+  }
+  const failedOses = [...failedByOs.keys()];
+  if (oses.size < 2 || failedOses.length === 0 || failedOses.length === oses.size) return [];
+  return failedOses.map(os => ({ os, testIds: failedByOs.get(os) }));
+}
+
+// Field lesson 154/156: a test file that shells out to a host tool needs either a documented
+// binary, or a fake/skip seam nearby; one that reads a swarm-exported env var (SWARM_PORT_BASE)
+// needs a stub or unset hint instead of silently depending on the swarm runner's own port block.
+const TEST_FILE_RE = /(^|\/)(tests?|__tests__|specs?)\/|\.(test|spec)\.[A-Za-z0-9]+$|(^|\/)test_[^/]+\.py$/i;
+export const DOCUMENTED_TEST_BINARIES = new Set(['node', 'npm', 'npx', 'git', 'gh']);
+const SPAWN_CALL_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|exec|execSync)\(\s*['"]([^'"]+)['"]/g;
+function seamNearby(text, index) {
+  return /\b(skip|fake|stub)\b/i.test(text.slice(Math.max(0, index - 300), index + 300));
+}
+export function undocumentedBinaryWarnings(fileTexts) {
+  const warnings = [];
+  for (const [file, text] of fileTexts) {
+    const seen = new Set();
+    for (const match of text.matchAll(SPAWN_CALL_RE)) {
+      const bin = path.basename(match[1].split(/\s+/)[0]);
+      if (DOCUMENTED_TEST_BINARIES.has(bin) || seen.has(bin) || seamNearby(text, match.index)) continue;
+      seen.add(bin);
+      warnings.push({ file, bin });
+    }
+  }
+  return warnings;
+}
+
+const SWARM_EXPORTED_ENV_VARS = ['SWARM_PORT_BASE'];
+export function swarmEnvInTestWarnings(fileTexts) {
+  const warnings = [];
+  for (const [file, text] of fileTexts) {
+    for (const name of SWARM_EXPORTED_ENV_VARS) if (text.includes(name)) warnings.push({ file, name });
+  }
+  return warnings;
+}
+
+async function readIntegratedTestFiles(root, integratedFiles) {
+  const files = new Map();
+  for (const file of integratedFiles ?? []) {
+    if (!TEST_FILE_RE.test(file)) continue;
+    try { files.set(file, await fs.readFile(path.join(root, file), 'utf8')); } catch { /* removed or unreadable: nothing to scan */ }
+  }
+  return files;
+}
 
 function firstStderrLine(stderr) {
   const line = String(stderr ?? '').split('\n')[0] ?? '';
@@ -183,6 +290,7 @@ export async function ship(options) {
     tagTimeoutMs = 180_000, manifest,
     mutantsSkippedRedBase = false,
     portBase = null, portWarnings = [],
+    integratedFiles = [],
     runChecks, exec, sleep, now = () => Date.now(),
   } = options;
 
@@ -229,6 +337,16 @@ export async function ship(options) {
   const sha = shaRes.stdout.trim();
   base.sha = sha;
 
+  // Field lesson 154/156: a static gate over the run's own test file outputs, before any check
+  // spawns them for real; an undocumented binary with no fake/skip seam refuses outright, while a
+  // swarm-exported env var reference is only a warning (the test may already handle it).
+  const integratedTestFiles = integratedFiles.length ? await readIntegratedTestFiles(root, integratedFiles) : new Map();
+  const undocumentedBinaries = undocumentedBinaryWarnings(integratedTestFiles);
+  if (undocumentedBinaries.length) {
+    return { ...base, status: 'refused', reason: `test file spawns undocumented binary with no fake/skip seam: ${undocumentedBinaries.map(w => `${w.file} -> ${w.bin}`).join(', ')}` };
+  }
+  for (const warning of swarmEnvInTestWarnings(integratedTestFiles)) base.warnings.push(`swarm-env-in-tests: ${warning.file}: references ${warning.name}; stub or unset it in this test (lesson #156)`);
+
   const checks = await runChecks();
   base.checks = checks;
   const body = fillChecks(payload.body, checks);
@@ -243,8 +361,27 @@ export async function ship(options) {
     return { ...base, status: 'refused', reason: `missing sections: ${reasons.join(', ')}` };
   }
 
-  const pushRes = await exec('git', ['push', 'origin', `HEAD:refs/heads/${payload.head}`], { cwd: root });
-  if (pushRes.code !== 0) return { ...base, status: 'refused', reason: stepFailed('push', pushRes) };
+  // Field lesson 147: a run's outputs that touch a dependency manifest may leave its lockfile
+  // stale; the matching project lock check runs once, right before push, so a bad lockfile never
+  // reaches CI as a surprise.
+  if (integratedFiles.length) {
+    const lockCheck = selectLockCheck(integratedFiles);
+    if (lockCheck) {
+      const lockRes = await exec(lockCheck.argv[0], lockCheck.argv.slice(1), { cwd: root });
+      if (lockRes.code !== 0) return { ...base, status: 'refused', reason: `${lockCheck.name} failed: ${firstStderrLine(lockRes.stderr || lockRes.stdout)}` };
+    }
+  }
+
+  let pushRes = await exec('git', ['push', 'origin', `HEAD:refs/heads/${payload.head}`], { cwd: root });
+  if (pushRes.code !== 0) {
+    // Field lesson 150: only a non-fast-forward-shaped rejection is a candidate for a lease push;
+    // every other push failure (auth, permissions, branch protection) keeps today's plain reason.
+    const lease = NON_FAST_FORWARD_RE.test(`${pushRes.stderr ?? ''}\n${pushRes.stdout ?? ''}`) ? await resolveLeasePush(exec, root, repo, payload.head) : null;
+    if (!lease) return { ...base, status: 'refused', reason: stepFailed('push', pushRes) };
+    if (!lease.ok) return { ...base, status: 'refused', reason: `push refused: remote head of ${payload.head} was moved by ${lease.remoteAuthor ?? 'someone else'}, not the coordinator (${lease.me ?? 'unknown identity'})` };
+    pushRes = await exec('git', ['push', `--force-with-lease=${payload.head}:${lease.remoteSha}`, 'origin', `HEAD:refs/heads/${payload.head}`], { cwd: root });
+    if (pushRes.code !== 0) return { ...base, status: 'refused', reason: stepFailed('push', pushRes) };
+  }
 
   const [owner] = repo.split('/');
   const listRes = await exec('gh', ['api', `repos/${repo}/pulls?head=${owner}:${payload.head}&state=open`], { cwd: root });
@@ -282,6 +419,7 @@ export async function ship(options) {
 
   const start = now();
   let ci = null;
+  let ciRollup = null;
   for (;;) {
     const viewRes = await exec('gh', ['pr', 'view', String(pr.number), '--repo', repo, '--json', 'state,headRefOid,mergeStateStatus,statusCheckRollup'], { cwd: root });
     if (viewRes.code !== 0 && /HTTP 30[1278]\b/.test(`${viewRes.stderr} ${viewRes.stdout}`)) return { ...base, status: 'refused', reason: stepFailed('pr view', viewRes, originRepo) };
@@ -296,7 +434,7 @@ export async function ship(options) {
     if (view) {
       const summary = summarizeRollup(view.statusCheckRollup);
       const headMatches = view.headRefOid === sha;
-      if (headMatches && summary.total > 0 && summary.pending === 0) { ci = summary; break; }
+      if (headMatches && summary.total > 0 && summary.pending === 0) { ci = summary; ciRollup = view.statusCheckRollup; break; }
       const elapsed = now() - start;
       if (headMatches && summary.total === 0 && elapsed >= noCiGraceMs) return { ...base, status: 'no-ci', reason: 'no CI detected', ci: summary };
       if (elapsed >= timeoutMs) return { ...base, status: 'timeout', reason: 'timed out waiting for checks', ci: summary };
@@ -306,7 +444,11 @@ export async function ship(options) {
     await sleep(pollMs);
   }
   base.ci = ci;
-  if (ci.failed.length > 0) return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}` };
+  if (ci.failed.length > 0) {
+    // Field lesson 151: named up front so the next job starts from "this OS only", not a guess.
+    for (const entry of platformOnlyFailures(ciRollup)) base.warnings.push(`platform-only failure: ${entry.os}: ${entry.testIds.join(', ')}`);
+    return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}` };
+  }
 
   if (isHeld(body)) return { ...base, status: 'held', reason: 'PR body requests manual review' };
   if (merge === false) return { ...base, status: 'ready' };
