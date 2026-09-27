@@ -181,6 +181,7 @@ export async function ship(options) {
     timeoutMs = SHIP_DEFAULTS.timeoutMs,
     noCiGraceMs = SHIP_DEFAULTS.noCiGraceMs,
     tagTimeoutMs = 180_000, manifest,
+    mutantsSkippedRedBase = false,
     runChecks, exec, sleep, now = () => Date.now(),
   } = options;
 
@@ -212,6 +213,12 @@ export async function ship(options) {
   } else if (originRepo && repo !== originRepo) base.warnings.push(`--repo ${repo} differs from origin ${originRepo}`);
   if (manifest && requireSections.some(name => name.toLowerCase() === 'mutation check') && !manifest.mutants?.length && !manifest.jobs?.some(job => job.mutants?.length)) {
     base.warnings.push('no manifest mutants: declare "mutants" in the manifest and run "integrate --mutants" (see docs/verification.md)');
+  }
+  // Field lesson 123: a red base's mutants proved nothing (every mutant is forced to
+  // skipped-red-base); a required "Mutation check" section cannot be honestly filled from that,
+  // so ship refuses before pushing or opening a PR instead of shipping an empty/misleading section.
+  if (mutantsSkippedRedBase && requireSections.some(name => name.toLowerCase() === 'mutation check')) {
+    return { ...base, status: 'refused', reason: 'mutants skipped: red base (checks failed); required Mutation check section cannot be satisfied' };
   }
   const statusRes = await exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root });
   if (statusRes.code !== 0) return { ...base, status: 'refused', reason: 'git status failed' };

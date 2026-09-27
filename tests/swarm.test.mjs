@@ -675,7 +675,7 @@ test('inspect --results prints only the contract shape', async t => {
   assert.equal(report.status, 'complete');
   assert.deepEqual(report.warnings, []);
   assert.equal(report.jobs.length, 1);
-  assert.deepEqual(Object.keys(report.jobs[0]).sort(), ['actualModel', 'costUsd', 'id', 'model', 'modelMismatch', 'result', 'resultSource', 'status', 'tokens'].sort());
+  assert.deepEqual(Object.keys(report.jobs[0]).sort(), ['actualModel', 'costUsd', 'id', 'model', 'modelMismatch', 'outputs', 'result', 'resultSource', 'status', 'tokens'].sort());
   assert.equal(report.jobs[0].id, 'writer');
   assert.equal(report.jobs[0].costUsd, 0.1);
   assert.deepEqual(report.jobs[0].result, { files_changed: ['input.txt'], notes: ['done'] });

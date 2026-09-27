@@ -124,6 +124,38 @@ A job whose prompt demands a JSON-only final reply but whose saved response neve
 
 `mutants --mutants-file FILE --mutant-check ARGVJSON` runs the same restore-and-byte-check mutation loop as `integrate --mutants`, directly against the current tree with no run id or manifest — useful for a quick kill/survive read before wiring either into a manifest. A `Ctrl-C` is caught so the in-flight mutant's own restore still completes before the process exits. See [manifest reference](manifest-reference.md#mutants-current-tree).
 
+## Post-build mutants: parsed before any write, retryable if interrupted after
+
+Every mutants source (manifest `mutants`, a job's own `mutantsFile` output, and `--mutants-file`) is now parsed and validated — same shape, same combined cap — before `integrate --mutants` writes a single project file, not after. A `mutantsFile` output that fails to parse, including one carrying trailing text after an otherwise valid JSON value (a worker's own final-message line appended to its declared output instead of only sent as its reply), refuses integration with nothing written. Once files are written, the run's saved state gains `integrationStatus: "partial"`, persisted immediately, before `preChecks`/`checks`/mutants run; `integrate <run-id>` on a `partial` run is accepted as a retry, and a file that already carries the exact bytes this same run wrote is treated as already applied rather than a conflict. See [manifest reference](manifest-reference.md#post-build-mutants).
+
+## Bad JSON output flagged at job completion
+
+At job completion, any `.json` output that fails to parse is recorded as warning `output-invalid-json: <path>`, shown by `inspect`/`inspect --results`/`wait`, well before `integrate` would otherwise discover it (for example while reading it as a mutants source). This check is scoped to declared JSON *output* files only: a job's own `resultFile` is excluded here, since it already gets a more specific `resultFile unreadable: <job>: <reason>` warning from `inspect --results` itself. See [manifest reference](manifest-reference.md#mutation-checks).
+
+## Mutants only count against a green base
+
+`integrate --mutants` now checks whether the manifest's own `checks` passed before applying any mutant. When any check failed, every mutant is reported `status: "skipped-red-base"` instead of actually being applied and checked — a red base fails every mutant regardless of the guard under test, so a "killed" verdict there proves nothing. `ship --require-section "Mutation check"` refuses outright when an integrated run's mutants came from a red base, rather than accept a mutation check that never really ran. See [manifest reference](manifest-reference.md#mutation-checks).
+
+## An undeclared mutants-shaped output
+
+`validate` warns `mutants-file-undeclared` when a job's output path matches the shell glob `*mutants*.json` but the job names no `mutantsFile` — its shape would otherwise only be checked once `integrate --mutants` reads it, after the job has already run. A job that does declare `mutantsFile` gets the exact required shape stated directly in its own worker preamble. See [manifest reference](manifest-reference.md#job-fields).
+
+## contextGlob directory coverage
+
+`validate`/`run` warn `context-directory-drift` when a job's `contextGlob` entries for one directory cover only some of that directory's filename prefixes (multiple entries against the same directory, one prefix each, already work) — caught even when the omitted files share a prefix the job never declared at all. This is the same code, and the same check, described next. See [manifest reference](manifest-reference.md#context-check).
+
+## Context directory drift also catches a small, plainly-numbered context list
+
+`context-directory-drift` (see [Context directory drift](#context-directory-drift) above) previously only grouped a job's context by directory and extension, and required at least 3 already-listed files before warning — enough for the general "copied an old round's context" case, but not for a job that lists just one or two files of an obviously numbered series (e.g. `activity-3.png`) while the same directory holds several more of that same prefix; that gap stayed silent regardless of how many more existed. The check now also groups by a declared `contextGlob` prefix or an inferred one (a filename ending in digits implies a numbered series), with no minimum-file floor for either, and reports the one `context-directory-drift` code either way — the previous, separate `context-glob-partial-dir` warning was folded into this same code path. See [manifest reference](manifest-reference.md#context-check).
+
+## Dropped writes
+
+A worker's edit outside its job's declared `outputs` is never applied by `integrate` — only declared outputs are ever written to the project tree. `inspect`/`integrate` now warn `dropped write: <path> (not in outputs)` for every such path: one signal is a job's own final result naming a `changed` path that isn't one of its outputs; the other, for a non-codex job (whose workspace is a plain copy of its context and outputs), is an actual diff of that workspace — a context file whose bytes changed, or any wholly new file, that is not a declared output. The worker preamble states plainly that edits outside outputs are discarded. See [manifest reference](manifest-reference.md#dropped-writes).
+
+## Outputs before integrate
+
+`inspect --results` now lists, per job, each declared output's path, the absolute path of that job's own workspace copy on disk, and — for a `.json` output — whether it currently parses. This is the same information `integrate` (and a post-build mutants read) would otherwise be the first to discover, made visible at inspection time instead. See [manifest reference](manifest-reference.md#outputs-before-integrate).
+
 ## Next
 
 - Hard spend reservations, reliable cost reconciliation and runtime model
