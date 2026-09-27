@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Experimental, off by default:** a manifest may declare `selfCheck` (top-level and/or per-job override, or `"selfCheck": false` to opt out) so a file-tools-only worker's own outputs are run through the manifest's `checks` in a disposable check tree before the run ever reaches `integrate`. Red and retries left re-asks the same worker session (the lesson-116 `--resume` path, `claude` only) with which checks failed and their tails; still red after the last retry leaves the job `complete` (`integrate` remains the gate) with `job.selfCheck.passed: false` and an `inspect` warning `self-check red: <job>: <check names>`. Absent `selfCheck`, behaviour is unchanged. See `docs/e1/contract.md`.
+
 ## 1.18.0
 
 - `validate` warns `mutants-file-undeclared` when a job's output path matches `*mutants*.json` but the job declares no `mutantsFile`; a job that does declare one gets the exact required shape, `{"name","file","find","replace"}`, stated directly in its own worker preamble.

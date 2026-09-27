@@ -245,9 +245,32 @@ function validateMutantsArray(mutants) {
   return mutants;
 }
 
+// E1 candidate (experimental, off by default): see docs/e1/contract.md. Shared shape for both
+// the manifest-level default and a job's own override; a job may also opt out with `false`.
+function validateSelfCheckShape(value, checkNames, { allowFalse }) {
+  if (allowFalse && value === false) return;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) fail('Invalid selfCheck');
+  for (const key of Object.keys(value)) if (!['maxRetries', 'checks'].includes(key)) fail(`Unknown selfCheck field: ${key}`);
+  if (value.maxRetries !== undefined && (!Number.isInteger(value.maxRetries) || value.maxRetries < 0 || value.maxRetries > 2)) fail('selfCheck.maxRetries must be 0-2');
+  if (value.checks !== undefined) {
+    if (!Array.isArray(value.checks) || !value.checks.length) fail('selfCheck.checks must be a non-empty array of check names');
+    for (const name of value.checks) if (!checkNames.includes(name)) fail(`selfCheck.checks names an unknown check: ${name}`);
+  }
+}
+
+// A job's own `selfCheck` (object or `false`) overrides the manifest's default entirely; `null`
+// means self-check is disabled for this job (no manifest default, or an explicit job `false`).
+function resolveSelfCheck(manifest, job) {
+  if (job.selfCheck === false) return null;
+  const base = job.selfCheck ?? manifest.selfCheck;
+  if (!base) return null;
+  const allNames = (manifest.checks ?? []).map(check => check.name);
+  return { maxRetries: base.maxRetries ?? 1, checks: base.checks ?? allNames };
+}
+
 export function validateManifest(manifest) {
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.jobs) || !manifest.jobs.length || manifest.jobs.length > 256) fail('Manifest requires version: 1 and 1–256 jobs');
-  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract', 'preChecks'].includes(key)) fail(`Unknown manifest field: ${key}`);
+  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract', 'preChecks', 'selfCheck'].includes(key)) fail(`Unknown manifest field: ${key}`);
   // A shared contract file is coordinator-owned: every job reads it, no job may overwrite it.
   if (manifest.contract !== undefined) {
     if (typeof manifest.contract !== 'string') fail('contract must be a relative file path');
@@ -275,6 +298,11 @@ export function validateManifest(manifest) {
       if (!Array.isArray(argv) || !argv.length || argv.some(item => typeof item !== 'string')) fail('Each preChecks entry must be a non-empty array of strings');
     }
   }
+  // E1 candidate (experimental, off by default): see docs/e1/contract.md. Absent selfCheck
+  // leaves behaviour byte-for-byte unchanged; a job may override the top-level shape or opt out
+  // entirely with `"selfCheck": false`.
+  const selfCheckNames = (manifest.checks ?? []).map(check => check.name);
+  if (manifest.selfCheck !== undefined) validateSelfCheckShape(manifest.selfCheck, selfCheckNames, { allowFalse: false });
   if (manifest.mutants !== undefined) validateMutantsArray(manifest.mutants);
   if (manifest.mutantCheck !== undefined) {
     const check = manifest.mutantCheck;
@@ -327,6 +355,7 @@ export function validateManifest(manifest) {
     if (job.mutantsFile !== undefined) {
       if (typeof job.mutantsFile !== 'string' || !job.outputs.includes(job.mutantsFile)) fail(`Job ${job.id}: mutantsFile must be one of its outputs`);
     }
+    if (job.selfCheck !== undefined) validateSelfCheckShape(job.selfCheck, selfCheckNames, { allowFalse: true });
     if (job.contextGlob !== undefined) {
       if (!Array.isArray(job.contextGlob) || !job.contextGlob.length || job.contextGlob.length > 20) fail(`Job ${job.id}: contextGlob must be a non-empty array of at most 20 globs`);
       if (new Set(job.contextGlob).size !== job.contextGlob.length) fail(`Job ${job.id}: duplicate contextGlob entry`);
@@ -361,7 +390,7 @@ export function validateManifest(manifest) {
       if (job.outputs.length) fail('a web job must be read-only (no outputs)');
     }
     // Unknown command/provider fields cannot create an execution path.
-    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob'].includes(key)) fail(`Unknown job field: ${key}`);
+    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'selfCheck'].includes(key)) fail(`Unknown job field: ${key}`);
   }
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
   for (const job of manifest.jobs) for (const afterId of job.after ?? []) if (!ids.has(afterId.toLowerCase())) fail(`Job ${job.id} after names unknown job ${afterId}`);
@@ -919,7 +948,25 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
             result.error = result.error ? `${failure.agentError}; ${result.error}` : failure.agentError;
           }
         }
-        Object.assign(record, { permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt) });
+        // E1 candidate (experimental, off by default): see docs/e1/contract.md. Runs only once
+        // the worker itself finished complete, and before this record is marked complete/settled,
+        // so `status`/`monitor` can show it as still running (phase self-check) meanwhile.
+        let selfCheckResult = null;
+        if (result.status === 'complete') {
+          const selfCheckConfig = resolveSelfCheck(manifest, job);
+          if (selfCheckConfig) {
+            record.phase = 'self-check';
+            await queueSave();
+            try {
+              selfCheckResult = await runSelfCheck(root, id, job, record, manifest, workspaceRoot, selfCheckConfig, { spawnImpl, killImpl, signal, cancelled, baseCommit: state.baseCommit, initialResult: result, initialMessage: message });
+            } catch (error) {
+              selfCheckResult = { runs: 1, retries: 0, passed: false, checks: [], error: error.message.slice(0, 300) };
+            }
+            delete record.phase;
+            if (typeof selfCheckResult.retryCostUsd === 'number') result.costUsd = (typeof result.costUsd === 'number' ? result.costUsd : 0) + selfCheckResult.retryCostUsd;
+          }
+        }
+        Object.assign(record, { permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt), ...(selfCheckResult ? { selfCheck: selfCheckResult } : {}) });
         await queueSave();
       } catch (error) {
         if (error.keptWorkspace) record.keptWorkspace = error.keptWorkspace;
@@ -970,7 +1017,7 @@ export function summarizeRun(state, now=Date.now()) {
  const counts={queued:0,running:0,complete:0,failed:0,timeout:0,cancelled:0,skipped:0};
  const usageByProvider={};
  for(const job of state.jobs){if(Object.hasOwn(counts,job.status))counts[job.status]++;if(job.usage){const usage=usageByProvider[job.agent]??={};for(const[key,value]of Object.entries(job.usage))if(typeof value==='number'&&Number.isFinite(value))usage[key]=(usage[key]??0)+value;}}
- return {id:state.id,status:state.status,concurrency:state.concurrency??null,peakConcurrency:state.peakConcurrency??null,total:state.jobs.length,counts,elapsedMs:Math.max(0,(state.finishedAt?Date.parse(state.finishedAt):now)-Date.parse(state.startedAt)),usageByProvider,jobs:state.jobs.map(job=>({id:job.id,agent:job.agent,status:job.status,queuedAt:job.queuedAt??null,startedAt:job.startedAt??null,finishedAt:job.finishedAt??null,durationMs:job.startedAt?job.durationMs??Math.max(0,now-Date.parse(job.startedAt)):null,progress:progressReport(job,now)}))};
+ return {id:state.id,status:state.status,concurrency:state.concurrency??null,peakConcurrency:state.peakConcurrency??null,total:state.jobs.length,counts,elapsedMs:Math.max(0,(state.finishedAt?Date.parse(state.finishedAt):now)-Date.parse(state.startedAt)),usageByProvider,jobs:state.jobs.map(job=>({id:job.id,agent:job.agent,status:job.status,queuedAt:job.queuedAt??null,startedAt:job.startedAt??null,finishedAt:job.finishedAt??null,durationMs:job.startedAt?job.durationMs??Math.max(0,now-Date.parse(job.startedAt)):null,progress:progressReport(job,now),...(job.phase?{phase:job.phase}:{})}))};
 }
 
 export async function readState(root, id) {
@@ -1032,7 +1079,10 @@ const invalidJsonOutputWarnings = state => state.jobs.flatMap(job => (job.invali
 // Field lesson 37: a worker edit that lands outside its declared outputs is silently discarded at
 // integrate time; surfaced here (workspace-diff based) so `inspect`/`integrate` show it up front.
 const droppedWriteWarnings = state => state.jobs.flatMap(job => (job.droppedWrites ?? []).map(file => `dropped write: ${file} (not in outputs)`));
-const runWarnings = state => [...modelMismatchWarnings(state), ...codexEnvelopeFallbackWarnings(state), ...permissionDenialWarnings(state), ...invalidJsonOutputWarnings(state), ...droppedWriteWarnings(state)];
+// E1 candidate (experimental, off by default): see docs/e1/contract.md. Still red after the
+// last retry never fails the job — integrate remains the gate — but is always surfaced here.
+const selfCheckWarnings = state => state.jobs.filter(job => job.selfCheck && job.selfCheck.passed === false).map(job => `self-check red: ${job.id}: ${job.selfCheck.checks.filter(check => ['failed', 'timeout', 'error'].includes(check.status)).map(check => check.name).join(', ')}`);
+const runWarnings = state => [...modelMismatchWarnings(state), ...codexEnvelopeFallbackWarnings(state), ...permissionDenialWarnings(state), ...invalidJsonOutputWarnings(state), ...droppedWriteWarnings(state), ...selfCheckWarnings(state)];
 // A provider that never reports usage.total_tokens (or never ran) reports null, not 0: absence
 // of evidence, not evidence of zero cost.
 const jobTokens = record => typeof record?.usage?.total_tokens === 'number' ? record.usage.total_tokens : null;
@@ -1191,6 +1241,81 @@ async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { b
   // capped) so a coordinator does not have to open the full tail to see what broke.
   const failures = results.filter(check => ['failed', 'timeout', 'error'].includes(check.status)).map(check => ({ name: check.name, lines: lastFailureLines(check.tail) }));
   return { checks: results, checksPassed: results.every(check => !['failed', 'timeout', 'error'].includes(check.status)), failures };
+}
+
+// E1 candidate (experimental, off by default): see docs/e1/contract.md. `withSelfCheckTree`
+// owns the create/remove pair on its own so the tree is always removed in a finally block, even
+// when the callback throws — a leftover here must never block the next run.
+const SELFCHECK_LINK_DIRS = ['node_modules', '.venv'];
+export async function withSelfCheckTree(root, runId, jobId, baseCommit, fn) {
+  const checkTree = await safePath(root, `.swarm/selfcheck/${runId}/${jobId}`, { internal: true, parents: true });
+  await git(root, ['worktree', 'add', '--detach', checkTree, baseCommit]);
+  try {
+    for (const name of SELFCHECK_LINK_DIRS) {
+      const source = path.join(root, name);
+      const exists = await fs.lstat(source).then(() => true, () => false);
+      if (exists) await fs.symlink(source, path.join(checkTree, name));
+    }
+    return await fn(checkTree);
+  } finally {
+    await git(root, ['worktree', 'remove', '--force', checkTree]).catch(() => {});
+  }
+}
+
+// Copies a job's current declared outputs from its workspace into the check tree; an output the
+// worker deleted (missing from the workspace) is deleted from the check tree too — deletions are
+// never propagated at integrate time, but a self-check runs before integration ever sees them.
+async function syncSelfCheckOutputs(checkTree, workspaceRoot, outputs) {
+  for (const file of outputs) {
+    const bytes = await bytesAt(workspaceRoot, file);
+    if (bytes === null) { await fs.rm(await safePath(checkTree, file, {}), { force: true }); continue; }
+    const mode = (await fs.stat(await safePath(workspaceRoot, file))).mode & 0o777;
+    await write(checkTree, file, bytes, false, mode);
+  }
+}
+
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const SELFCHECK_TAIL_LINES = 60;
+// Contract-fixed wording (docs/e1/contract.md) so a worker sees a stable, literal instruction.
+function selfCheckRetryMessage(failing) {
+  const lines = [`Self-check failed: ${failing.map(check => check.name).join(', ')}`];
+  for (const check of failing) {
+    lines.push(`### ${check.name}`);
+    lines.push(check.tail.replace(ANSI_RE, '').split('\n').slice(-SELFCHECK_TAIL_LINES).join('\n'));
+  }
+  lines.push('Fix the cause in your outputs. Do not delete, skip or loosen tests. Files outside outputs are discarded.');
+  return lines.join('\n');
+}
+
+// E1 candidate (experimental, off by default): see docs/e1/contract.md. Runs only after a job's
+// worker already finished with status complete. Retrying re-asks the SAME worker session (lesson
+// 116's `--resume` path) when a session id was observed, else re-spawns with the original prompt
+// plus the failure message — but only for `claude`, the only agent this resume mechanism covers;
+// every other agent gets 0 retries even when maxRetries > 0.
+async function runSelfCheck(root, runId, job, record, manifest, workspaceRoot, config, { spawnImpl, killImpl, signal, cancelled, baseCommit, initialResult, initialMessage }) {
+  const selected = (manifest.checks ?? []).filter(check => config.checks.includes(check.name));
+  if (!selected.length) return { runs: 1, retries: 0, passed: true, checks: [] };
+  return withSelfCheckTree(root, runId, job.id, baseCommit, async checkTree => {
+    let retries = 0, retryCostUsd = null, lastResult = initialResult, checksOut = [];
+    const newFiles = job.outputs.filter(file => record.baseHashes[file] === null);
+    for (let attempt = 0; ; attempt++) {
+      await syncSelfCheckOutputs(checkTree, workspaceRoot, job.outputs);
+      if (manifest.preChecks?.length) for (const argv of manifest.preChecks) await runCheck('preCheck', expandRootArgv(argv, checkTree), checkTree, 300000, spawnImpl);
+      const result = await runChecks(checkTree, selected, job.outputs, newFiles, spawnImpl, { baseCommit });
+      checksOut = result.checks.map(check => ({ name: check.name, status: check.status, durationMs: check.durationMs }));
+      if (result.checksPassed) return { runs: 1, retries, passed: true, checks: checksOut, ...(retryCostUsd !== null ? { retryCostUsd } : {}) };
+      if (attempt >= config.maxRetries || job.agent !== 'claude' || await cancelled()) return { runs: 1, retries, passed: false, checks: checksOut, ...(retryCostUsd !== null ? { retryCostUsd } : {}) };
+      retries++;
+      const failing = result.checks.filter(check => ['failed', 'timeout', 'error'].includes(check.status));
+      const retryMessage = selfCheckRetryMessage(failing);
+      const sessionId = extractSessionId(lastResult.stdout ?? '');
+      const reask = sessionId
+        ? await execute(job, workspaceRoot, retryMessage, { spawnImpl, signal, cancelled, killImpl, onOutput: () => {}, resumeSessionId: sessionId })
+        : await execute(job, workspaceRoot, `${initialMessage}\n\n${retryMessage}`, { spawnImpl, signal, cancelled, killImpl, onOutput: () => {} });
+      if (typeof reask.costUsd === 'number') retryCostUsd = (retryCostUsd ?? 0) + reask.costUsd;
+      lastResult = reask;
+    }
+  });
 }
 
 // The mutant's file is written, checked, then always restored byte-for-byte (try/finally,
@@ -1591,7 +1716,7 @@ export async function inspectRun(root,id){
     const record=state.jobs.find(j=>j.id===job.id);if(!record)fail('Missing job record');
     // tier/tierReason are validated metadata only; they never change which model ran.
     const parsedResult=await jobFinalJson(root,id,job.id);
-    jobs.push({id:job.id,agent:job.agent,model:job.model??null,tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,...(record.agentError?{agentError:record.agentError}:{}),...(record.resultMissing?{resultMissing:true}:{}),result:displayResult(parsedResult),costUsd:typeof record.costUsd==='number'?record.costUsd:null,costPer1kOutputTokens:costPer1kOutputTokens(record),tokens:jobTokens(record),modelsSeen:record.modelsSeen??[],modelMismatch:record.modelMismatch??false});
+    jobs.push({id:job.id,agent:job.agent,model:job.model??null,tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,...(record.agentError?{agentError:record.agentError}:{}),...(record.resultMissing?{resultMissing:true}:{}),result:displayResult(parsedResult),costUsd:typeof record.costUsd==='number'?record.costUsd:null,costPer1kOutputTokens:costPer1kOutputTokens(record),tokens:jobTokens(record),modelsSeen:record.modelsSeen??[],modelMismatch:record.modelMismatch??false,...(record.selfCheck?{selfCheck:record.selfCheck}:{})});
     const workspaceRoot=await safePath(root,`.swarm/workspaces/${id}/${job.id}`,{internal:true});
     for(const file of job.outputs){
       const current=await bytesAt(root,file),proposed=await bytesAt(workspaceRoot,file);
@@ -1666,7 +1791,7 @@ export async function inspectResults(root, id) {
       }
       outputs.push(info);
     }
-    jobs.push({ id: record.id, status: record.status, ...(record.agentError ? { agentError: record.agentError } : {}), ...(record.resultMissing ? { resultMissing: true } : {}), model: record.model ?? null, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, tokens: jobTokens(record), result: resultSource === 'file' ? parsed : displayResult(parsed), resultSource, outputs });
+    jobs.push({ id: record.id, status: record.status, ...(record.agentError ? { agentError: record.agentError } : {}), ...(record.resultMissing ? { resultMissing: true } : {}), model: record.model ?? null, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, tokens: jobTokens(record), result: resultSource === 'file' ? parsed : displayResult(parsed), resultSource, outputs, ...(record.selfCheck ? { selfCheck: record.selfCheck } : {}) });
   }
   return { runId: id, status: state.status, tokens: tokensTotal(jobs.map(job => job.tokens)), costNotReported: costNotReported(jobs), warnings, jobs };
 }
