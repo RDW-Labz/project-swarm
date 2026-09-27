@@ -17,7 +17,8 @@ export function sandboxPath(value) {
   if (typeof value !== 'string' || !path.isAbsolute(value) || /["\\\x00-\x1f\x7f]/.test(value)) throw Error('Unsafe sandbox path');
   return path.resolve(value);
 }
-const deniedPaths = home => ['.oasis', 'Library/Keychains', '.ssh', '.aws', '.config'].map(part => path.join(home, part));
+export const DENIED_HOME_DIRS = Object.freeze(['.oasis', 'Library/Keychains', '.ssh', '.aws', '.config']);
+const deniedPaths = home => DENIED_HOME_DIRS.map(part => path.join(home, part));
 const within = (file, parent) => file === parent || file.startsWith(`${parent}/`);
 export function validateReadPaths(paths = [], home = os.homedir()) {
   home = sandboxPath(home);

@@ -383,3 +383,14 @@ rule is enforced or documented.
     `context-directory-drift` code, and the runner's separate
     contextGlob-only warning was removed. Documentation: [manifest
     reference](manifest-reference.md#context-check).
+40. **File-tools-only workers reported done with tests they never ran.** A
+    worker that can only read and edit files writes tests, then reports
+    them passing, although nothing in its seat can execute them; the first
+    real run of those tests happens only at integration. Rule: a worker
+    asked to add or change tested code needs a way to run the checks
+    itself, inside a sandbox, and must report which checks it ran.
+    Enforcement: claude `shell: true` jobs (presets `sonnet-shell`,
+    `opus-shell`) run the whole worker under a generated seatbelt profile
+    with a sandboxed shell and report `checksRun`; `validate` warns
+    `tests-without-shell` when a claude job without a shell writes tests.
+    Documentation: [manifest reference](manifest-reference.md#shell-jobs).
