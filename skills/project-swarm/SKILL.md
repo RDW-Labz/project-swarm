@@ -21,13 +21,14 @@ agents can follow AGENTS.md or CLAUDE.md. The shared installed skill lives at
 `<install>/current/skills/project-swarm/SKILL.md`, even without agent homes.
 
 Follow [Agent kickoff](references/kickoff.md) for a new project: install from
-v1.18.0, run `install.mjs --user`, link, doctor, and the read-only and writing
+v1.19.0, run `install.mjs --user`, link, doctor, and the read-only and writing
 smoke tests. Ask up front which providers may receive code and the spend
 ceiling; record answers before model calls. Fill TASK.md from the goal, keep
 HANDOFF.md and TASK.md current after every dispatch, log swarm-lessons.md,
 and hand off at the 10th build dispatch or before unrelated work, whichever
 comes first, using the seat's exact prompt.
 Never commit `.swarm/`, let a worker see secrets, or pass `--root` to update/version.
+A claude job with `shell: true` (or model `sonnet-shell`/`opus-shell`) gets a sandboxed Bash so it can run the manifest checks itself; see [shell jobs](references/manifest-reference.md#shell-jobs).
 Link preserves existing seed files, updates only agent marker blocks and adds
 `.swarm/` to `.gitignore`; `--no-agent-files` opts out of agent pointers.
 
