@@ -419,3 +419,18 @@ rule is enforced or documented.
     workspace-discovery reads and, after setup, a synced interpreter's own
     directory when it lives under the coordinator's home. Documentation:
     [manifest reference](manifest-reference.md#setup).
+43. **A sandboxed shell job still could not run its own project's tests.** Even
+    after its toolchain sync and workspace-discovery reads worked, a real run
+    hit two more walls: some tools' own upward git discovery reads the
+    project root's `.git` entry directly, not just the job's own detached
+    worktree's local one, and every test that opens a loopback server found
+    the network entirely closed. Rule: grant read-only access to the
+    project root's own `.git` (its gitdir and common dir too, when the root
+    is itself a linked worktree), and allow the job's own loopback sockets —
+    but never one a service on the host already had listening when the job
+    started. Enforcement: the sandbox profile grants the root's `.git`
+    read-only and allows `localhost:*` bind/inbound/outbound, with an
+    explicit deny (placed after that allow) for every port an `lsof` scan
+    found already listening, plus a fixed rig-service port; an `lsof`
+    failure refuses the job outright instead of guessing. Documentation:
+    [manifest reference](manifest-reference.md#shell-jobs).

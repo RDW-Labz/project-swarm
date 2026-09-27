@@ -14,7 +14,7 @@ import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, p
 import { API_AGENTS, apiDoctor, probeLocalProvider, decodeContext, executeApi } from './api-adapters.mjs';
 
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, parseCodexReply, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
-import { expandShellPreset, validateNetworkAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterHome, shellMessage, containsKey, redactKey } from './claude-shell.mjs';
+import { expandShellPreset, validateNetworkAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterHome, resolveRootGitInfo, scanListeningPorts, resolveRigServicePort, shellMessage, containsKey, redactKey } from './claude-shell.mjs';
 import { portBlockFor, resolvePortBlock } from './ports.mjs';
 import { scoutPrompt, normalizeScoutReport, renderScoutMarkdown, resolveBriefPath as resolveScoutBriefPath } from './scout.mjs';
 import { parseGoals, extractKnownRepos, gatherAreaCandidates, sweepPrompt, normalizeSweepArea, renderShortlistMarkdown, resolveBriefPath as resolveSweepBriefPath } from './sweep.mjs';
@@ -665,7 +665,10 @@ async function runJobSetup(root, directory, job, worktree, spawnImpl, portBase) 
 }
 // A `setup` failure fails the job exactly like a launched worker that never produced a result,
 // without ever spawning the worker itself.
-const setupFailedResult = error => ({ status: 'failed', setupFailed: true, error, stdout: '', stderr: '', response: '', exitCode: null, actualModel: null, modelsSeen: [], modelMismatch: false, usage: null, modelUsage: null, costUsd: null, cleanupError: null, terminationReason: null, permissionDenials: [] });
+const setupFailedResult = error => ({ status: 'failed', setupFailed: true, refusedBeforeStart: true, error, stdout: '', stderr: '', response: '', exitCode: null, actualModel: null, modelsSeen: [], modelMismatch: false, usage: null, modelUsage: null, costUsd: null, cleanupError: null, terminationReason: null, permissionDenials: [] });
+// Field lesson #143: an lsof failure means the parent cannot know what to keep denied, so the job
+// is refused the same way a failing `setup` is — the worker is never spawned.
+const loopbackScanFailedResult = () => ({ status: 'failed', loopbackScanFailed: true, refusedBeforeStart: true, error: 'loopback-scan-failed', stdout: '', stderr: '', response: '', exitCode: null, actualModel: null, modelsSeen: [], modelMismatch: false, usage: null, modelUsage: null, costUsd: null, cleanupError: null, terminationReason: null, permissionDenials: [] });
 
 // The retained proposal workspace contains only declared outputs. The runnable checkout is
 // disposable unless a fallback requires it or a failed worker changed declared outputs.
@@ -800,12 +803,28 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
     const binDir = path.dirname(bin);
     const cliPaths = path.basename(binDir) === 'bin' ? [path.dirname(binDir)] : [binDir];
     proxy = await startConnectProxy({ handleHttp: hooks.handleHttp });
-    const profileText = shellProfile({ worktree, commonDir, shellDir, readPaths, cliPaths, proxyPort: proxy.port, extraHomes: hooks.extraHomes ?? [] });
+    // Field lesson #143: git discovery (a project's own tests running `git rev-parse
+    // --show-toplevel` etc.) needs the project root's own `.git` readable, and, when the root is
+    // itself a linked worktree, the gitdir it points at and that repo's real common dir.
+    const rootGit = await (hooks.resolveRootGitInfo ?? resolveRootGitInfo)(root);
+    // Field lesson #143: own loopback sockets only — never one a service on the host already had
+    // listening when the job started. An lsof failure refuses the job before any worker starts.
+    let loopbackDenied;
+    try {
+      const scanned = await (hooks.scanListeningPorts ?? scanListeningPorts)();
+      const rigPort = await (hooks.resolveRigServicePort ?? resolveRigServicePort)();
+      loopbackDenied = [...new Set([...scanned, rigPort])].filter(port => port !== proxy.port).sort((a, b) => a - b);
+    } catch {
+      result = loopbackScanFailedResult();
+      return result;
+    }
+    const profileText = shellProfile({ worktree, commonDir, shellDir, readPaths, cliPaths, proxyPort: proxy.port, extraHomes: hooks.extraHomes ?? [], rootGit, loopbackDenied });
     const profileRelative = `${directory}/${job.id}/sandbox.sb`;
     await write(root, profileRelative, profileText, true);
     const profile = await safePath(root, profileRelative, { internal: true });
     const env = { ...shellEnvironment({ parentEnv: options.env ?? process.env, home, tmp, configDir, proxyPort: proxy.port, apiKey: workerKey, testEnv: job.testEnv, userId: `swarm-worker:${job.id}`, portBase: options.portBase, uvCacheDir: path.join(shellDir, 'uv-cache') }), ...(hooks.baseUrlFromProxy ? { ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxy.port}` } : {}) };
     result = await execute(job, worktree, message, { ...options, claudeShell: { profile, bin, env } });
+    result.loopbackDenied = loopbackDenied;
     if (venvInterpreterDenied.length) result.venvInterpreterDenied = venvInterpreterDenied;
     for (const key of ['stdout', 'stderr', 'response']) {
       if (containsKey(result[key], workerKey)) { result.workerKeyExposed = true; result[key] = redactKey(result[key], workerKey); }
@@ -1082,8 +1101,8 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           const summary = typeof finalMessage.summary === 'string' && finalMessage.summary.trim() ? finalMessage.summary.trim()
             : typeof finalMessage.file === 'string' && finalMessage.file.trim() ? `needs ${finalMessage.file.trim()}` : 'no summary given';
           result.error = `blocked: ${summary}`.slice(0, 300);
-        } else if (result.status !== 'blocked' && !result.setupFailed && CLI_AGENTS.includes(job.agent)) {
-          // A failed setup never started the agent, so its error stays exactly `setup-failed: ...`.
+        } else if (result.status !== 'blocked' && !result.refusedBeforeStart && CLI_AGENTS.includes(job.agent)) {
+          // A job refused before the agent started (setup-failed, loopback-scan-failed) keeps its exact error.
           // Additive only: agentError/agent.log are recorded solely from how the agent process
           // itself ended (non-zero exit, timeout, or a failed spawn), never from whether a
           // declared output is present. A clean exit (code 0) that still left an output missing
@@ -1097,7 +1116,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
             result.error = result.error ? `${failure.agentError}; ${result.error}` : failure.agentError;
           }
         }
-        if (job.shell === true) Object.assign(record, { proxyRefused: result.proxyRefused ?? [], ...(result.venvInterpreterDenied?.length ? { venvInterpreterDenied: result.venvInterpreterDenied } : {}), ...(result.workerKeyExposed ? { workerKeyExposed: true } : {}) });
+        if (job.shell === true) Object.assign(record, { proxyRefused: result.proxyRefused ?? [], loopbackDenied: result.loopbackDenied ?? [], ...(result.venvInterpreterDenied?.length ? { venvInterpreterDenied: result.venvInterpreterDenied } : {}), ...(result.workerKeyExposed ? { workerKeyExposed: true } : {}) });
         Object.assign(record, { permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt) });
         await queueSave();
       } catch (error) {
@@ -1804,7 +1823,7 @@ export async function inspectRun(root,id){
     const record=state.jobs.find(j=>j.id===job.id);if(!record)fail('Missing job record');
     // tier/tierReason are validated metadata only; they never change which model ran.
     const parsedResult=await jobFinalJson(root,id,job.id);
-    jobs.push({id:job.id,agent:job.agent,model:job.model??null,...(job.shell===true?{shell:true,checksRun:Array.isArray(parsedResult?.checksRun)?parsedResult.checksRun:null,proxyRefused:record.proxyRefused??[]}:{}),tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,...(record.agentError?{agentError:record.agentError}:{}),...(record.resultMissing?{resultMissing:true}:{}),result:displayResult(parsedResult),costUsd:typeof record.costUsd==='number'?record.costUsd:null,costPer1kOutputTokens:costPer1kOutputTokens(record),tokens:jobTokens(record),modelsSeen:record.modelsSeen??[],modelMismatch:record.modelMismatch??false});
+    jobs.push({id:job.id,agent:job.agent,model:job.model??null,...(job.shell===true?{shell:true,checksRun:Array.isArray(parsedResult?.checksRun)?parsedResult.checksRun:null,proxyRefused:record.proxyRefused??[],loopbackDenied:record.loopbackDenied??[]}:{}),tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,...(record.agentError?{agentError:record.agentError}:{}),...(record.resultMissing?{resultMissing:true}:{}),result:displayResult(parsedResult),costUsd:typeof record.costUsd==='number'?record.costUsd:null,costPer1kOutputTokens:costPer1kOutputTokens(record),tokens:jobTokens(record),modelsSeen:record.modelsSeen??[],modelMismatch:record.modelMismatch??false});
     const workspaceRoot=await safePath(root,`.swarm/workspaces/${id}/${job.id}`,{internal:true});
     for(const file of job.outputs){
       const current=await bytesAt(root,file),proposed=await bytesAt(workspaceRoot,file);
