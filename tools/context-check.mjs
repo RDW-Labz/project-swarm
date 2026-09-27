@@ -146,7 +146,27 @@ export function findUncoveredTests(root, job, files = listProjectFiles(root)) {
 // silently omits files added to the same directory since (e.g. new screenshot captures), so a
 // reviewer reports already-fixed items as still missing. Advisory only: a job may legitimately
 // need only some files of a directory, so this warns rather than refuses.
+//
+// Field lesson 39: a plain, unnumbered same-extension reference (no contextGlob, no numbering)
+// only warns once at least 3 files are listed, to avoid noise on ordinary source directories. But
+// a declared contextGlob prefix, or even a single context file that is plainly one of a numbered
+// series (e.g. "activity-3.png"), is already strong evidence a series exists — the root cause of
+// one missed warning was requiring that same 3+ floor even when a numbered-series file made the
+// gap obvious with only one or two files actually listed. Both kinds of evidence (declared or
+// inferred prefix) share this one code path and warning code (previously two: this function's own
+// `context-directory-drift`, and a separate `context-glob-partial-dir` duplicating it in swarm.mjs).
+const CONTEXT_GLOB_DIR_RE = /^([^*]+)\/([^*/]*)\*(\.[A-Za-z0-9]+)$/;
+const NUMBERED_STEM_RE = /^(.*?)[0-9]+$/;
+
 export function contextDirectoryWarnings(root, job) {
+  const declaredByDirExt = new Map();
+  for (const pattern of job.contextGlob ?? []) {
+    const match = CONTEXT_GLOB_DIR_RE.exec(String(pattern));
+    if (!match) continue;
+    const key = `${match[1]}\u0000${match[3]}`;
+    if (!declaredByDirExt.has(key)) declaredByDirExt.set(key, new Set());
+    declaredByDirExt.get(key).add(match[2]);
+  }
   const groups = new Map();
   for (const file of job.context ?? []) {
     const norm = String(file).replace(/\\/g, '/');
@@ -155,32 +175,40 @@ export function contextDirectoryWarnings(root, job) {
     const dir = path.dirname(norm);
     if (dir.split('/').some(segment => SKIP_DIRS.has(segment))) continue;
     const key = `${dir}\u0000${ext}`;
-    if (!groups.has(key)) groups.set(key, { dir, ext, files: new Set() });
-    groups.get(key).files.add(norm);
+    if (!groups.has(key)) groups.set(key, { dir, ext, files: new Set(), inferred: new Set() });
+    const group = groups.get(key);
+    group.files.add(norm);
+    const numbered = NUMBERED_STEM_RE.exec(path.basename(norm, ext));
+    if (numbered && numbered[1]) group.inferred.add(numbered[1]);
   }
   const warnings = [];
-  for (const { dir, ext, files } of groups.values()) {
-    if (files.size < 3) continue;
+  for (const [key, { dir, ext, files, inferred }] of groups) {
+    const prefixes = new Set([...(declaredByDirExt.get(key) ?? []), ...inferred]);
+    if (!prefixes.size && files.size < 3) continue;
     let entries;
     try {
       entries = fs.readdirSync(path.join(root, dir), { withFileTypes: true });
     } catch {
       continue;
     }
-    const all = entries.filter(entry => entry.isFile() && entry.name.endsWith(ext)).map(entry => `${dir}/${entry.name}`);
-    const missing = all.filter(file => !files.has(file)).sort();
+    const names = entries.filter(entry => entry.isFile() && entry.name.endsWith(ext)).map(entry => entry.name);
+    const missing = names.filter(name => !files.has(`${dir}/${name}`)).map(name => `${dir}/${name}`).sort();
     if (!missing.length) continue;
     const shown = missing.slice(0, 5);
     const more = missing.length - shown.length;
+    const sortedPrefixes = prefixes.size ? [...prefixes].sort() : undefined;
     warnings.push({
       code: 'context-directory-drift',
       jobId: job.id,
       dir,
       extension: ext,
+      ...(sortedPrefixes ? { prefixes: sortedPrefixes } : {}),
       present: files.size,
-      total: all.length,
+      total: names.length,
       missing: shown,
-      message: `context lists ${files.size} of ${all.length} ${ext} in ${dir}; missing e.g. ${shown.join(', ')}${more > 0 ? ` (+${more} more)` : ''}`,
+      message: sortedPrefixes
+        ? `context for ${dir} covers ${JSON.stringify(sortedPrefixes)}; missing e.g. ${shown.join(', ')}${more > 0 ? ` (+${more} more)` : ''}`
+        : `context lists ${files.size} of ${names.length} ${ext} in ${dir}; missing e.g. ${shown.join(', ')}${more > 0 ? ` (+${more} more)` : ''}`,
     });
   }
   return warnings;
