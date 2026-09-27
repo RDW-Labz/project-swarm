@@ -84,5 +84,5 @@ test('inspect output surfaces tier, tierReason, and the explicit model per job',
   const fake = script => (_command, _args, options) => spawn(process.execPath, ['--input-type=module', '-e', `import fs from 'node:fs';\n${script}`], options);
   const state = await runManifest(root, manifest([job({ tier: 'mid', model: 'claude-haiku-4-5' })]), { spawnImpl: fake(`fs.writeFileSync('input.txt','updated'); ${done}`) });
   const report = await inspectRun(root, state.id);
-  assert.deepEqual(report.jobs, [{ id: 'writer', agent: 'claude', model: 'claude-haiku-4-5', tier: 'mid', tierReason: null, status: 'complete', result: null, costUsd: null, tokens: null, modelsSeen: [], modelMismatch: false }]);
+  assert.deepEqual(report.jobs, [{ id: 'writer', agent: 'claude', model: 'claude-haiku-4-5', tier: 'mid', tierReason: null, status: 'complete', result: null, costUsd: null, costPer1kOutputTokens: null, tokens: null, modelsSeen: [], modelMismatch: false }]);
 });

@@ -27,6 +27,36 @@ function stepFailed(step, res, originRepo) {
     (originRepo && /HTTP 30[1278]\b/.test(output) ? ` (repo moved? origin is ${originRepo})` : '');
 }
 
+// Unlike stepFailed (which falls back to stdout so a non-gh, non-git step still shows something
+// useful), a PR list failure always names its stderr, or the literal "(empty)" when there is none,
+// so a JSON-parse failure never gets confused with the raw stdout it failed to parse.
+function prListFailedReason(res, originRepo) {
+  const output = `${res.stderr ?? ''}\n${res.stdout ?? ''}`;
+  const stderr = firstStderrLine(res.stderr);
+  return `pr list failed: ${stderr || '(empty)'}` +
+    (originRepo && /HTTP 30[1278]\b/.test(output) ? ` (repo moved? origin is ${originRepo})` : '');
+}
+
+// Resolve gh/git before doing any real work: a missing binary should refuse at once with a plain
+// "<bin> not found on PATH", not surface as a confusing failure partway through a check or push.
+// Not called automatically by ship() itself (which never issues exec calls beyond its documented
+// sequence); callers that want this preflight run it first and refuse before calling ship().
+export async function resolveGhAndGit(exec) {
+  for (const bin of ['git', 'gh']) {
+    let res;
+    try {
+      res = await exec(bin, ['--version']);
+    } catch (err) {
+      return { ok: false, bin, reason: err?.message || `${bin} not found on PATH` };
+    }
+    if (!res || res.code !== 0) {
+      const detail = firstStderrLine(res?.stderr || res?.stdout);
+      return { ok: false, bin, reason: detail || `${bin} not found on PATH` };
+    }
+  }
+  return { ok: true };
+}
+
 function githubRepo(url) {
   const match = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)\/?$/.exec(url);
   const repo = match?.[1].replace(/\.git$/, '');
@@ -211,11 +241,11 @@ export async function ship(options) {
   const [owner] = repo.split('/');
   const listRes = await exec('gh', ['api', `repos/${repo}/pulls?head=${owner}:${payload.head}&state=open`], { cwd: root });
   let existing;
-  if (listRes.code !== 0) return { ...base, status: 'refused', reason: stepFailed('pr list', listRes, originRepo) };
+  if (listRes.code !== 0) return { ...base, status: 'refused', reason: prListFailedReason(listRes, originRepo) };
   try {
     existing = JSON.parse(listRes.stdout || '[]');
   } catch {
-    return { ...base, status: 'refused', reason: stepFailed('pr list', listRes, originRepo) };
+    return { ...base, status: 'refused', reason: prListFailedReason(listRes, originRepo) };
   }
   let pr;
   if (existing.length > 0) {

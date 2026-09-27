@@ -100,6 +100,30 @@ A CLI worker whose process exits non-zero, times out, or fails to spawn previous
 
 A review job's context copied from an earlier round can silently omit files added since to the same directory (new screenshot captures being the recurring case), so the reviewer reports already-fixed items as still missing. `validate`/`run` now warn when a job's `context` names 3 or more files of one extension from a single directory that holds other files of that extension the context omits; job field `contextGlob` (`dir/*.ext`, no `**`) expands to every matching file at validate/run time instead of naming each one by hand. See [context directory drift](manifest-reference.md#context-directory-drift).
 
+## Tmp-path and no-shell diagnostics
+
+`validate`/`run` now warn when a job's `readPaths` entry or a `checks`/`mutantCheck` `argv[0]` resolves under `/tmp` or `/private/tmp` (macOS purges unread files there after about 3 days), when a non-`codex` job's `outputs` includes this runner's own `tools/swarm.mjs` (only `codex` has shell access to run the tests that pin it — consider a checker job instead), and when a non-`codex` job's prompt quotes a runtime-check failure it has no shell to reproduce (consider a shell agent or `--evidence`). See [manifest reference](manifest-reference.md#commands).
+
+## Evidence and compact check failures
+
+`integrate`'s result now gains `failures`: a compact `{name, lines}` entry per failed/timed-out/errored check, the last few failure-shaped lines of its tail. `validate`/`run --evidence FILE` reads a local JSON file in that same `{"failures": [...]}` shape and appends a fixed heading plus each entry's lines verbatim to every job's prompt, so a follow-up job sees the exact prior failure instead of the coordinator retyping it. See [manifest reference](manifest-reference.md#checks).
+
+## Pre-checks for a changed lockfile
+
+An optional manifest `preChecks` (plain argv arrays, no shell) runs before `checks` whenever `integrate` writes a recognized lockfile (`uv.lock`, `package-lock.json`, `Cargo.lock`, `pnpm-lock.yaml`), to resync the environment first. With a changed lockfile and no `preChecks` declared, the result instead warns `lockfile changed, env not synced`. See [manifest reference](manifest-reference.md#pre-checks).
+
+## Context glob prefixes
+
+`contextGlob` now also accepts a filename prefix, `dir/prefix*.ext`, alongside the existing `dir/*.ext` (still one directory, still no `**`). `validate`/`run` echo each pattern's matched file count as `contextGlobCounts`. See [manifest reference](manifest-reference.md#job-fields).
+
+## Recovering an unparsable JSON-only reply
+
+A job whose prompt demands a JSON-only final reply but whose saved response never parses as JSON now gets `resultMissing: true` in state and `inspect`. For a `claude` job, the runner first tries one cheap re-ask on the same session ("Reply with the JSON only.") and uses that answer instead whenever it parses, clearing `resultMissing`. `inspect` also gains `costPer1kOutputTokens` per job, computed only when both a cost and an output-token count were actually reported. See [manifest reference](manifest-reference.md#commands).
+
+## Mutants on the current tree
+
+`mutants --mutants-file FILE --mutant-check ARGVJSON` runs the same restore-and-byte-check mutation loop as `integrate --mutants`, directly against the current tree with no run id or manifest — useful for a quick kill/survive read before wiring either into a manifest. A `Ctrl-C` is caught so the in-flight mutant's own restore still completes before the process exits. See [manifest reference](manifest-reference.md#mutants-current-tree).
+
 ## Next
 
 - Hard spend reservations, reliable cost reconciliation and runtime model

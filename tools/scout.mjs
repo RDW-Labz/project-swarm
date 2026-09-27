@@ -4,6 +4,16 @@
 // Pure helpers for `swarm scout`: prior-art research before a build. The runner (tools/swarm.mjs)
 // owns the job, the file writes, and the license gate; the model only ever returns raw JSON.
 
+import path from 'node:path';
+
+// --brief is read-only research input, unlike job context/outputs: it may name any readable path,
+// including one outside the project root, and is only ever copied in for provenance, never written
+// to. A relative path still resolves against root; an absolute one passes through unchanged instead
+// of being rejected or wrongly joined under root.
+export function resolveBriefPath(briefPath, root) {
+  return path.isAbsolute(briefPath) ? briefPath : path.resolve(root, briefPath);
+}
+
 export const SCOUT_LICENSES = Object.freeze(['MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', '0BSD', 'Unlicense', 'Zlib', 'BSL-1.0', 'MPL-2.0']);
 export const SCOUT_FLAGGED_LICENSES = Object.freeze({ 'MPL-2.0': 'file-level copyleft' });
 export const SCOUT_FITS = Object.freeze(['drop-in', 'borrow-pattern', 'reference-only']);
