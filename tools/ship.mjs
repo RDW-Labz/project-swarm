@@ -4,6 +4,7 @@
 // git and gh are invoked through the injected `exec` with an argv array.
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { packagingChangeWarnings } from './packaging-check.mjs';
 
 export const SHIP_DEFAULTS = Object.freeze({ pollMs: 20_000, timeoutMs: 45 * 60_000, noCiGraceMs: 5 * 60_000, mergeMethod: 'squash' });
 export const CHECKS_PLACEHOLDER = '<!-- swarm:checks -->';
@@ -291,11 +292,12 @@ export async function ship(options) {
     mutantsSkippedRedBase = false,
     portBase = null, portWarnings = [],
     integratedFiles = [],
+    packagingChanges = [], checkArgvs = [], extraWarnings = [],
     runChecks, exec, sleep, now = () => Date.now(),
   } = options;
 
   let repo = options.repo;
-  const base = { warnings: [...portWarnings], tag: { name: null, status: 'skipped', waitedSeconds: 0 }, status: null, repo, pr: null, url: null, sha: null, mergeSha: null, checks: null, ci: null, reason: null, portBase };
+  const base = { warnings: [...portWarnings, ...extraWarnings], tag: { name: null, status: 'skipped', waitedSeconds: 0 }, status: null, repo, pr: null, url: null, sha: null, mergeSha: null, checks: null, ci: null, reason: null, portBase };
 
   if (!VALID_MERGE_METHODS.has(mergeMethod)) return { ...base, status: 'refused', reason: 'invalid merge method' };
   for (const [name, value] of [['pollMs', pollMs], ['timeoutMs', timeoutMs], ['noCiGraceMs', noCiGraceMs]]) {
@@ -346,6 +348,11 @@ export async function ship(options) {
     return { ...base, status: 'refused', reason: `test file spawns undocumented binary with no fake/skip seam: ${undocumentedBinaries.map(w => `${w.file} -> ${w.bin}`).join(', ')}` };
   }
   for (const warning of swarmEnvInTestWarnings(integratedTestFiles)) base.warnings.push(`swarm-env-in-tests: ${warning.file}: references ${warning.name}; stub or unset it in this test (lesson #156)`);
+
+  // Field lesson #159: a shipped change to packaging keys needs a check that builds the package;
+  // tests, lint and types all pass on a package that will not build.
+  const packagingRefusals = packagingChangeWarnings(packagingChanges, checkArgvs);
+  if (packagingRefusals.length) return { ...base, status: 'refused', reason: `${packagingRefusals.join('; ')}; add a check that builds the package (uv build --wheel, npm pack --dry-run)` };
 
   const checks = await runChecks();
   base.checks = checks;

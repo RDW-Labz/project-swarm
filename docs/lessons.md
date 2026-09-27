@@ -624,3 +624,70 @@ rule is enforced or documented.
     (defined in the project's own `check:ci-like` script) with no fake or skip
     seam, and runs the check under a stripped environment to match CI
     conditions exactly. Regression coverage is in `tests/lessons120-ship.test.mjs`.
+63. **A shell job could not start its own test interpreter.** A mid-tier
+    shell job's venv pointed at a managed Python under the home directory,
+    reached through symlinks; the sandbox hid it, so the worker fell back to
+    an old system Python and reported its checks as not run. Rule: a shell
+    job's first check must be able to start before the worker spends a
+    token. Enforcement: the parent follows `.venv/bin/python` symlink by
+    symlink to its realpath and grants every install dir under `$HOME`, plus
+    the swarm toolchains dir and uv's managed-Python dir (and points
+    `UV_PYTHON_INSTALL_DIR` at it); a python link that resolves nowhere
+    refuses the job, and the first manifest check is smoke-started once
+    inside the profile, refusing `sandbox-cannot-run-check: <argv0>` when it
+    cannot start. Regression coverage is in
+    `tests/field-lessons-batch-e.test.mjs`.
+64. **A packaging change passed every check and still broke the package.**
+    A mid-tier job ($4.77) added a build-backend include rule for data
+    that was already packaged; tests, lint and types all passed, but the
+    wheel build failed on a duplicate archive path, caught only by a hand
+    build. Rule: a job that touches packaging config gets a check that builds
+    the package. Enforcement: `validate` warns
+    `packaging-change-without-build-check` for a packaging-file output with
+    no build check; `integrate` warns and `ship` refuses when the change
+    touches packaging keys and no check builds the package. Regression
+    coverage is in `tests/field-lessons-batch-e.test.mjs`.
+65. **Every worker's first harness run failed on a missing env var.** Three
+    expensive-tier outside workers each hit "set the browsers path" on their
+    first harness run; the coordinator had to send the toolchain env to each
+    one mid-run, because it lived only in task prose. Rule: every check, and
+    every prompt that runs one, carries the toolchain env. Enforcement: a
+    per-root `.swarm/env.json` is applied to every setup, worker, check,
+    redcheck and mutant check; `validate` warns `check-needs-env` for a
+    toolchain check with no env file; `env --print` prints a paste-ready
+    block for outside agents' prompts. Regression coverage is in
+    `tests/field-lessons-batch-e.test.mjs`.
+66. **Two of fifteen mutants had a find string that was not in the file.**
+    A cheap-tier job wrote mutants from diffs; two multi-line `find` blocks
+    carried the wrong indentation and matched nothing, caught only because
+    the coordinator counted each by hand. Rule: count every mutant's find in
+    its target before a mutants run. Enforcement: `mutants` and
+    `integrate --mutants` refuse the whole run before any check or write,
+    listing each `invalid-find` / `ambiguous-find` / `no-op` mutant;
+    `mutants --dry-run` does only that. Regression coverage is in
+    `tests/field-lessons-batch-e.test.mjs`.
+67. **Layout mutants survived unit tests that never read layout.** Nine of
+    thirty style mutants survived the unit-test check; rerunning just those
+    against the screenshot harness for the affected views killed three more,
+    through a hand-written wrapper per worktree. Rule: a layout mutant runs
+    against the harness view that shows it. Enforcement: a mutant may carry
+    its own `check` argv, overriding the shared mutant check for that mutant;
+    each distinct check must pass unmutated first, and the report names which
+    check ran. Regression coverage is in `tests/field-lessons-batch-e.test.mjs`.
+68. **A worker ran a bare git stash in a shared worktree.** An outside UI
+    worker ran `git stash` / `git stash pop` in a worktree whose stash stack
+    is shared with every other worktree and session; the stack happened to
+    be empty, so nothing was lost. Rule: workers never use `git stash`; they
+    use a temporary WIP commit. Enforcement: shell and codex prompts and the
+    `env --print` block carry the rule, and a shell worker's `git` is a
+    wrapper that refuses `stash` with a plain message. Regression coverage is
+    in `tests/field-lessons-batch-e.test.mjs`.
+69. **A branch built outside the swarm could not be shipped by it.** One
+    slice was built by an outside worker in its own worktree, so that root
+    had no swarm run and `ship` refused without a run id; the coordinator
+    fell back to a hand push and PR, and the merge waited for a later turn.
+    Rule: any finished branch is shippable, whoever built it. Enforcement:
+    `ship --branch <b>` (no run id) runs the given `--check` argvs, fills the
+    checks placeholder, and applies the same hold, required-section, lock,
+    test-binary and packaging rules before push, PR, CI wait and merge.
+    Regression coverage is in `tests/field-lessons-batch-e.test.mjs`.
