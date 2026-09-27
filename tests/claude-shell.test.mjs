@@ -116,9 +116,11 @@ test('shell profile: whole-process seatbelt, writes only worktree + job dir, den
 test('shell env: allowlist only, worker key only as ANTHROPIC_API_KEY, spend label, testEnv', () => {
   const parentEnv = { PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8', HOME: '/Users/example', ANTHROPIC_API_KEY: 'sk-FAKE-person', FAKE_TOKEN: FAKE_KEY, GH_TOKEN: 'x', AWS_SECRET_ACCESS_KEY: 'x', CLAUDE_CODE_OAUTH_TOKEN: 'x', SSH_AUTH_SOCK: '/tmp/agent', SWARM_CLAUDE_WORKER_API_KEY: FAKE_KEY };
   const env = shellEnvironment({ parentEnv, home: '/j/home', tmp: '/j/tmp', configDir: '/j/home/.claude', proxyPort: 4000, apiKey: FAKE_KEY, userId: 'swarm-worker:builder', testEnv: { NODE_ENV: 'test' } });
-  assert.deepEqual(Object.keys(env).sort(), ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_EXTRA_BODY', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'CLAUDE_CODE_TMPDIR', 'CLAUDE_CONFIG_DIR', 'HOME', 'HTTPS_PROXY', 'HTTP_PROXY', 'LANG', 'NODE_ENV', 'NO_PROXY', 'PATH', 'TMPDIR', 'http_proxy', 'https_proxy', 'no_proxy'].sort());
+  assert.deepEqual(Object.keys(env).sort(), ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_EXTRA_BODY', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'CLAUDE_CODE_TMPDIR', 'CLAUDE_CONFIG_DIR', 'HOME', 'HTTPS_PROXY', 'HTTP_PROXY', 'LANG', 'NODE_ENV', 'NO_PROXY', 'PATH', 'TEMP', 'TMP', 'TMPDIR', 'http_proxy', 'https_proxy', 'no_proxy'].sort());
   assert.equal(env.ANTHROPIC_API_KEY, FAKE_KEY);
   assert.equal(env.HOME, '/j/home');
+  assert.equal(env.TMP, env.TMPDIR);
+  assert.equal(env.TEMP, env.TMPDIR);
   assert.equal(env.CLAUDE_CONFIG_DIR, '/j/home/.claude');
   assert.equal(env.HTTPS_PROXY, 'http://127.0.0.1:4000');
   assert.equal(env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
@@ -214,7 +216,11 @@ test('a shell job runs the whole claude process under sandbox-exec in a worktree
   assert.deepEqual(launch.args, ['-f', profilePath, FAKE_BIN, ...claudeShellArgs(shellJob())]);
   assert.equal(launch.options.cwd, worktree);
   assert.equal(launch.options.shell, false);
-  assert.equal(launch.options.env.HOME, path.join(shellDir, 'home'));
+  const scratchDir = state.jobs[0].scratchDir;
+  assert.ok(scratchDir, 'scratchDir is recorded on the job');
+  assert.equal(scratchDir.startsWith(root), false, 'the scratch dir is outside the worktree/repo');
+  assert.equal(launch.options.env.HOME, path.join(scratchDir, 'home'));
+  assert.equal(launch.options.env.TMPDIR, path.join(scratchDir, 'tmp'));
   assert.equal(launch.options.env.ANTHROPIC_API_KEY, FAKE_KEY);
   for (const key of ['FAKE_TOKEN', 'GH_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'OPENAI_API_KEY', 'SWARM_CLAUDE_WORKER_API_KEY', 'ANTHROPIC_BASE_URL']) assert.equal(key in launch.options.env, false, key);
   const profile = await fs.readFile(profilePath, 'utf8');
