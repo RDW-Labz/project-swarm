@@ -293,7 +293,10 @@ describe('L117: mutants runs killed/survived/invalid mutation testing directly o
     await fs.writeFile(mutantsPath, JSON.stringify([
       { name: 'off-by-one', file: 'target.js', find: 'v<=10', replace: 'v<10' },
       { name: 'always-true', file: 'target.js', find: 'return v<=10', replace: 'return true; //v<=10' },
-      { name: 'no-such-string', file: 'target.js', find: 'NOPE_NOT_PRESENT', replace: 'x' },
+      // Field lesson #161: a find that is not in the target now refuses the whole run up front
+      // (tests/lessons158.test.mjs); the invalid case is a mutant whose own check (#162) exits
+      // with a usage error once mutated.
+      { name: 'usage-error', file: 'target.js', find: 'function ok', replace: 'function ko', check: [process.execPath, '-e', "process.exit(require('fs').readFileSync('target.js','utf8').includes('function ok')?0:3)"] },
     ]));
     const mutantCheck = JSON.stringify([process.execPath, '-e', "const ok=require('fs').readFileSync('target.js','utf8').includes('v<=10');if(!ok){console.error('AssertionError: expected v<=10 guard to remain');process.exit(1);}else process.exit(0);"]);
     const result = await runMutantsCurrentTree(root, { mutantsFile: mutantsPath, mutantCheck }, spawn);
@@ -307,7 +310,7 @@ describe('L117: mutants runs killed/survived/invalid mutation testing directly o
     const survived = result.mutants.find(m => m.name === 'always-true');
     assert.equal(survived.status, 'survived');
     assert.equal(survived.firstFailingLine, null);
-    const invalid = result.mutants.find(m => m.name === 'no-such-string');
+    const invalid = result.mutants.find(m => m.name === 'usage-error');
     assert.equal(invalid.status, 'invalid');
     assert.equal(invalid.firstFailingLine, null);
     assert.equal(await fs.readFile(path.join(root, 'target.js'), 'utf8'), original);

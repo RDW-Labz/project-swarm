@@ -215,10 +215,16 @@ test('a shell job runs the whole claude process under sandbox-exec in a worktree
   const seen = [];
   const state = await runManifest(root, manifest([shellJob()], { checks: [{ name: 'unit', argv: ['npm', 'test'] }] }), { platform: 'darwin', spawnImpl: fakeSandbox(worked, seen), env: runEnv, keyExec: noKeychain, shellHooks: hooks });
   assert.equal(state.status, 'complete', state.jobs[0].error ?? '');
-  const [launch] = seen;
+  // Field lesson #158: the first manifest check is smoke-started inside the same profile first,
+  // with the worker key stripped from its env; the worker launch comes after it.
+  const [smoke] = seen;
+  const launch = seen.find(call => call.args[2] === FAKE_BIN);
   const worktree = path.join(root, '.swarm/runs', state.id, 'worktrees/builder');
   const shellDir = path.join(root, '.swarm/runs', state.id, 'builder/shell');
   const profilePath = path.join(root, '.swarm/runs', state.id, 'builder/sandbox.sb');
+  assert.deepEqual(smoke.args, ['-f', profilePath, 'npm', 'test']);
+  assert.equal(smoke.command, 'sandbox-exec');
+  assert.equal('ANTHROPIC_API_KEY' in smoke.options.env, false, 'the smoke check never sees the worker key');
   assert.equal(launch.command, 'sandbox-exec');
   assert.deepEqual(launch.args, ['-f', profilePath, FAKE_BIN, ...claudeShellArgs(shellJob())]);
   assert.equal(launch.options.cwd, worktree);

@@ -249,28 +249,22 @@ test('a mutant that a check cannot detect is reported survived and fails --requi
   });
 });
 
-test('a mutant whose find text does not occur exactly once is an error and is never applied', async t => {
+// Field lesson #161: a find that does not occur exactly once now refuses integrate --mutants
+// before any project write, naming the mutant, instead of integrating and reporting an error.
+test('a mutant whose find text does not occur exactly once refuses integrate before any write', async t => {
   const root = await fixture(t);
   const plan = { version: 1, jobs: [job()], mutants: [{ name: 'bad', file: 'input.txt', find: 'zzz-not-present', replace: 'y' }], mutantCheck: { argv: [process.execPath, '-e', 'process.exit(0)'] } };
   const state = await runManifest(root, plan, { spawnImpl: update });
-  const result = await integrateRun(root, state.id, { mutants: true });
-  assert.equal(result.mutants[0].status, 'error');
-  assert.match(result.mutants[0].tail, /find matched 0 times/);
-  assert.equal(result.mutants[0].exitCode, null);
-  assert.equal(result.mutantsSummary.errors, 1);
-  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'updated');
+  await assert.rejects(integrateRun(root, state.id, { mutants: true }), /Refusing to run mutants: 1 invalid mutant\(s\), nothing mutated: bad: invalid-find \(input\.txt: find matched 0 times\)/);
+  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'original');
 });
 
-test('a mutant whose find text occurs twice is an error and check does not run', async t => {
+test('a mutant whose find text occurs twice (in the proposed bytes) refuses integrate and no check runs', async t => {
   const root = await fixture(t);
   const plan = { version: 1, jobs: [job()], mutants: [{ name: 'twice', file: 'input.txt', find: 'updated', replace: 'mutated' }], mutantCheck: { argv: [process.execPath, '-e', 'process.exit(1)'] } };
   const state = await runManifest(root, plan, { spawnImpl: fake(`fs.writeFileSync('input.txt','updated updated'); ${done}`) });
-  const result = await integrateRun(root, state.id, { mutants: true });
-  assert.equal(result.mutants[0].status, 'error');
-  assert.match(result.mutants[0].tail, /find matched 2 times/);
-  assert.equal(result.mutants[0].exitCode, null);
-  assert.equal(result.mutantsSummary.errors, 1);
-  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'updated updated');
+  await assert.rejects(integrateRun(root, state.id, { mutants: true }), /twice: ambiguous-find \(input\.txt: find matched 2 times\)/);
+  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'original');
 });
 
 test('a mutation check timeout is reported as an error and still restores the original file', async t => {

@@ -80,6 +80,10 @@ A claude job with `shell: true` gets `Bash` so it can run the project checks its
 - **Key guard:** `integrate` and `ship` refuse a shell run whose saved exchange, logs, results, proposed outputs, integrated files or ship payload contain the worker key (exact bytes), before any project or git write. An output holding the key fails its job.
 - **Prompt:** the shell boilerplate says to run the manifest `checks` before reporting done and to report `"checksRun": [{"name", "status"}]`, and states `Network: you may open local test servers on 127.0.0.1 and connect to them; nothing else on this machine or the internet is reachable.` (lesson #143); `inspect` and `inspect --results` show `shell: true` and `checksRun`. A job that declares `setup` also gets `Setup already ran outside the sandbox: <argv...>. Do not run it again; the network is blocked.` — see [Setup](#setup) below.
 - `validate` warns `{"code": "tests-without-shell", "jobId", "message": "Job <id> adds tests without shell: the worker cannot run them (lesson #135)"}` for a claude job without `shell` whose outputs include a tests path.
+- **Venv interpreter (lesson #158):** after `setup`, the parent follows `<worktree>/.venv/bin/python` (and `python3`) symlink by symlink to its realpath, and reads `.venv/pyvenv.cfg`'s `home`; the install dir of every hop (the parent of its `bin`), and its realpath, is granted read-only when either spelling lies under `$HOME` (same deny list as `readPaths`; a denied one is only warned `venv-interpreter-denied: <dir>`). A python link that resolves nowhere refuses the job before the worker starts: `venv-interpreter-unresolvable: .venv/bin/python`. The swarm toolchains dir (`SWARM_TOOLCHAINS`, else `~/.project-swarm/toolchains`) and uv's managed-Python dir (`UV_PYTHON_INSTALL_DIR` from the parent env, else `~/.local/share/uv/python`) are granted read-only when they exist, and the child env gets `UV_PYTHON_INSTALL_DIR` so `uv` finds its interpreters even though `HOME` is job-scoped (reserved in `testEnv`).
+- **Smoke check (lesson #158):** before the worker starts, the first manifest check with no `{integrated}`/`{new}` placeholder runs once as `sandbox-exec -f <profile> <argv...>` in the worktree, with the worker's env minus `ANTHROPIC_API_KEY`, for at most 30 s (still running then counts as started). Output goes to `<run>/<job>/smoke.log`. A check that could not start (spawn error, exit 127, or output naming `Operation not permitted`, `No interpreter found`, `Failed to inspect/query Python interpreter`, `command not found`, `ERR_MODULE_NOT_FOUND`, a dyld library error) refuses the job: `sandbox-cannot-run-check: <argv0>`, `sandboxCannotRunCheck` on the job record. A check that starts and fails (red before the work) is fine.
+- **No git stash (lesson #163):** the prompt says never to run `git stash`, and `git` inside the sandbox is a wrapper at `<run>/<job>/shell/bin/git`, first on `PATH`, that refuses `stash` as the subcommand (after any global options) with a plain message and exit 2, and runs the real git for anything else. Codex prompts carry the same line.
+- **Env file (lesson #160):** the root's `.swarm/env.json` (see [Env file](#env-file)) is added to the child env, except any key this allowlist fixes itself; `testEnv` still wins.
 
 ## File rules
 
@@ -129,6 +133,9 @@ node tools/swarm.mjs integrate <run-id> --require-checks
 node tools/swarm.mjs integrate <run-id> --mutants
 node tools/swarm.mjs integrate <run-id> --mutants --mutants-file post-build-mutants.json --mutant-check '["npm","test"]'
 node tools/swarm.mjs mutants --mutants-file post-build-mutants.json --mutant-check '["npm","test"]'
+node tools/swarm.mjs mutants --mutants-file post-build-mutants.json --mutant-check '["npm","test"]' --dry-run
+node tools/swarm.mjs env
+node tools/swarm.mjs env --print
 node tools/swarm.mjs validate examples/smoke.json --evidence evidence.json
 node tools/swarm.mjs run examples/smoke.json --evidence evidence.json
 node tools/swarm.mjs redcheck <run-id> --test node --test tests/regression.test.mjs
@@ -136,6 +143,7 @@ node tools/swarm.mjs cancel <run-id>
 node tools/swarm.mjs board
 node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json
 node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json --require-section "Mutation check" --no-merge
+node tools/swarm.mjs --root ../worktree-of-branch ship --branch slice-5 --pr payload.json --check '["npm","test"]' --require-section Checks
 node tools/swarm.mjs go examples/smoke.json --commit-message "Add render review" --repo OWNER/NAME --pr payload.json
 ```
 
@@ -321,6 +329,22 @@ Field lesson #142: a claude `shell: true` job's own sandboxed Bash has no networ
 - A job with `setup` gets one more prompt line: `Setup already ran outside the sandbox: <argv...>. Do not run it again; the network is blocked.`
 - A codex or claude job without `shell: true` is refused outright: `Job <id>: setup is only supported for codex and claude shell jobs`.
 
+## Env file
+
+Field lesson #160: a toolchain env a check needs (a browsers path, a toolchain cache) used to live only in prose. `<root>/.swarm/env.json` is a JSON object of at most 50 `"NAME": "value"` strings; a linked worktree with none uses its main worktree's file. `PATH`, `HOME`, `SWARM_PORT_BASE`, `SWARM_IN_SANDBOX` and any name that looks like a secret (`KEY`/`TOKEN`/`SECRET`/`PASSWORD`/`CREDENTIAL`) are refused, and so is an invalid file, by `validate`, `run`, `integrate` and `ship`.
+
+- Applied to every `setup` step, codex worker, claude shell worker (minus the keys the shell allowlist fixes), `preChecks`, `checks` (in `integrate` and `ship`), flake reruns, `redcheck`, and every mutant check (`integrate --mutants` and `mutants`). Non-shell claude jobs, `ask` and `scout` have no shell, so nothing there reads it.
+- `validate` warns `{"code": "check-needs-env", "checks": [...]}` when a check, preCheck or `mutantCheck` runs `npm`/`npx`/`pnpm`/`yarn`/`cargo`/`uv`/`uvx` and no env file exists.
+- `env` prints `{source, env, portBase}`; `env --print` prints a paste-ready block for an outside agent's prompt: one `export NAME='value'` line per entry, `export SWARM_PORT_BASE=<base>` for this root, and the rule `Never run \`git stash\`...` (lesson #163).
+
+## Packaging build check
+
+Field lesson #159: a packaging-config change can pass every test, lint and type check and still produce a package that does not build. A build check is any `checks`/`preChecks` argv matching `uv|hatch|poetry|pdm|flit build`, `-m build`, `pip wheel`, `npm|pnpm|yarn pack`, or `cargo package|build` (argv0 may be an absolute path).
+
+- `validate` warns `{"code": "packaging-change-without-build-check", "jobId", "files"}` when a job's outputs include `pyproject.toml`, `setup.cfg`, `setup.py`, `MANIFEST.in`, `package.json` or `Cargo.toml` and the manifest has no build check (the stricter reading: nothing is written yet, so any packaging output counts).
+- `integrate` warns `packaging-change-without-build-check: <file>: <keys>` when the change itself touches packaging keys: a line in `[build-system]`, `[tool.hatch.build*]`, `[tool.setuptools*]`, `[project.scripts]`/`[project.entry-points*]`, `[options*]` (setup.cfg) and similar sections, a `packages`/`include`/`exclude`/`force-include`/`package-data`/... key, any `setup.py`/`MANIFEST.in` change, or `package.json`'s `files`/`main`/`module`/`exports`/`bin`/`types`/`browser`/`publishConfig`/`directories`. A version bump alone is not a packaging change.
+- `ship` (a run, or `--branch`) refuses the same change before any check runs or anything is pushed: `packaging-change-without-build-check: <file>: <keys>; add a check that builds the package (uv build --wheel, npm pack --dry-run)`. With a build check, a broken package is simply a red check.
+
 ## Mutants (current tree)
 
 ```sh
@@ -330,6 +354,10 @@ node tools/swarm.mjs mutants --mutants-file post-build-mutants.json --mutant-che
 `mutants --mutants-file FILE --mutant-check ARGVJSON` runs mutation testing directly against the current tree — no run id, no manifest, and no integration required. `FILE` is the same shape as `integrate --mutants-file` (a JSON array of `{"name","file","find","replace"}`, or `{"mutants":[...]}`); `--mutant-check` is the same JSON-array-of-argv-strings shape as `integrate --mutant-check` and is always required (there is no manifest to fall back to). For each mutant, in order: `find` must occur in `file` exactly once or the mutant is `invalid`; otherwise the file is mutated, the check is run, and the file is always restored to its exact original bytes and mode afterward — including on a check timeout, launch failure, or a `Ctrl-C` (SIGINT), which is caught so the in-flight mutant's own restore still completes before the process exits; no further mutant then starts.
 
 It prints `{"mutants": [{"name","file","status","exitCode","durationMs","tail","firstFailingLine"}], "mutantsSummary": {"killed","survived","invalid"}, "mutantsPassed"}`. Per mutant, `status` is `killed` (check exits non-zero), `survived` (check exits zero), or `invalid` (a timeout, launch failure, a `find` match count other than one, or a missing file); `firstFailingLine` is the first line of the check's own tail that looks like a failure, set only when `status` is `killed`, else `null`. `mutantsPassed` is `true` only when nothing survived or was invalid; exit code is `0` when `mutantsPassed`, else `1`. See also [mutation checks](#mutation-checks) for the run-integrated equivalent, `integrate --mutants`.
+
+**Find pre-check (lesson #161):** before the baseline or any mutant runs, every mutant's `find` is counted in its target: missing (or the file is missing) is `invalid-find`, more than once is `ambiguous-find`, `find` equal to `replace` is `no-op`. Any of these refuses the whole run, listing each bad mutant (`Refusing to run mutants: N invalid mutant(s), nothing mutated: <name>: <code> (<file>: ...)`, with `mutantProblems` in the error details); nothing is mutated and no check runs. `--dry-run` does only this and prints `{"status": "dry-run", "mutants": [{"name","file","status":"valid","check","checkArgv"}], "mutantsValid": true}`.
+
+**Per-mutant check (lesson #162):** a mutant may carry `"check": [argv...]`, run instead of `--mutant-check` for that mutant only, so one file mixes unit-test and harness checks. `--mutant-check` is optional when every mutant has its own. Every distinct check in use must pass on the unmutated tree first. Each result names `check` (`"default"` or `"mutant"`) and `checkArgv`.
 
 ## Redcheck
 
@@ -409,7 +437,7 @@ When a check with `repeat` fails during `integrate` or `ship`, and the failure o
 }
 ```
 
-- `mutants`: optional array of at most 32 entries `{"name", "file", "find", "replace"}`. `name` is required, non-empty, and unique. `file` is a relative project path, validated with the same rules as a job output. `find` is a required non-empty string that must occur in `file` exactly once for the mutant to run. `replace` is a required string (it may be empty).
+- `mutants`: optional array of at most 32 entries `{"name", "file", "find", "replace"}`, plus an optional `check` argv array (lesson #162; overrides `mutantCheck` for that mutant, must pass on the unmutated tree first, else that mutant is an `error`). `name` is required, non-empty, and unique. `file` is a relative project path, validated with the same rules as a job output. `find` is a required non-empty string that must occur in `file` exactly once for the mutant to run. `replace` is a required string (it may be empty).
 - `mutantCheck`: required whenever `--mutants` is used and neither the manifest nor the CLI supplies one another way — `{"argv": [...], "timeoutMs": 300000}`, the same shape and limits as one entry in `checks` (no shell, no placeholders), run once per mutant with `cwd` at the project root.
 
 The result gains `mutants: [{"name", "file", "status", "exitCode", "durationMs", "tail"}]` and `mutantsSummary: {"killed", "survived", "errors"}`. Per mutant, `status` is `killed` when the check exits non-zero, `survived` when it exits zero, or `error` for a timeout, a launch failure, a `find` match count other than one (`tail` explains why, e.g. `"find matched 0 times"`), or a missing file — none of these apply or run a check. `mutantsPassed` is `true` only when no mutant survived or errored. With `--require-checks`, a surviving or errored mutant also makes the `integrate` command exit 1, alongside a failed `checks` result. `--mutants` with no mutants available from any source is a clear error, not a silent no-op. Mutants never touch `.git`/`.swarm` (the same path rules as every other declared file forbid it) and never run during `run` — only `integrate --mutants`.
@@ -417,6 +445,8 @@ The result gains `mutants: [{"name", "file", "status", "exitCode", "durationMs",
 **Mutants only count against a green base.** Whenever any of the manifest's own `checks` failed (`checksPassed: false`), `integrate --mutants` never actually applies or checks any mutant — a red base kills every mutant regardless of the guard under test, so a "killed" verdict there would prove nothing. Instead every mutant is reported `status: "skipped-red-base"`, `mutantsSummary` gains a `skipped` count, `mutantsPassed` is `false`, the result's own `mutantsSkippedRedBase` is `true`, and `warnings` gains `"mutants skipped: red base (checks failed)"`. `ship --require-section "Mutation check"` refuses outright (`status: "refused"`, a reason naming the red base) rather than accept a run whose mutants came from one — see [Ship](#ship) below.
 
 Every mutants source (manifest `mutants`, a job's own `mutantsFile` output, and `--mutants-file`) is parsed and validated — same shape, same combined 32-entry cap — **before the first project file is written**, alongside every other integration precondition; a `mutantsFile` output that fails to parse (or a malformed `--mutants-file`/`--mutant-check`) refuses integration with nothing written at all. See [Post-build mutants](#post-build-mutants) for the retry semantics this enables.
+
+**Find pre-check (lesson #161):** `integrate --mutants` counts every mutant's `find` in the bytes its target will hold after this integration (the proposed output, else the current file) before the first project write, and refuses with the same `invalid-find`/`ambiguous-find`/`no-op` list as `mutants` — nothing is written, mutated or checked. Results gain `check`/`checkArgv` per mutant.
 
 ### Post-build mutants
 
@@ -464,6 +494,10 @@ node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json [--requir
 - `--no-flake-check`: disable the base-commit flake rerun described in [Flake on base](#flake-on-base) above.
 
 `ship` prints one JSON line: `{status, repo, pr, url, sha, mergeSha, checks, ci, reason, portBase}`, where `status` is one of `merged | held | ready | refused | checks-failed | ci-failed | no-ci | timeout | merge-failed` and fields that do not apply are `null`. The re-run of `checks` gets its own `SWARM_PORT_BASE` (see [Ports](#ports) above), computed from the project root; a moved or exhausted block adds the same `port-block-moved`/`port-block-busy` warning `integrate` does. When the merged PR's diff changed `package.json`'s `version`, the result also gains `tag: {name: 'v<version>', status: 'found'|'missing'|'skipped', waitedSeconds}`; a `missing` tag also adds warning `release tag v<version> not on origin after <n>s`. A PR body whose first non-blank line starts with `**needs ` is never merged (`held`); a person merges it. Exit code is `0` for `merged`, `held`, or `ready`, and `1` for every other status.
+
+### Ship a branch without a run
+
+Field lesson #164: `ship --branch BRANCH --pr payload.json [--check ARGVJSON]... [other ship flags]` (no run id) ships a finished branch built outside the swarm, e.g. by an outside agent in its own worktree. `--root` must be the worktree that has `BRANCH` checked out (else refused: `--branch <b> is not checked out in <root>`), and the payload's `head` must equal `BRANCH`. Each `--check '["argv",...]'` (repeatable, at most 10, named `check-1`, `check-2`, ...) runs like a manifest check, with the env file and this root's port block; with none, the result warns `no-checks: ...`. Everything else is the same `ship`: the tracked tree must be clean, the checks fill `<!-- swarm:checks -->`, `--require-section`, the `**needs ...**` hold, the lock check and test-binary gate over the branch's diff against `origin/<base>` (else `<base>`), the packaging build check, push, PR create/update, CI wait and merge. `--check` with a run id, or `--branch` with a run id, is refused.
 
 ## Go
 
