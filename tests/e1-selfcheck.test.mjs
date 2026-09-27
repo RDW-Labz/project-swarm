@@ -111,7 +111,11 @@ describe('E1 selfCheck (experimental, off by default)', () => {
     const baseCommit = (await git(root, ['rev-parse', 'HEAD'])).trim();
     await assert.rejects(withSelfCheckTree(root, 'run-throw', 'job-throw', baseCommit, async () => { throw new Error('boom'); }), /boom/);
     const worktrees = await git(root, ['worktree', 'list']);
-    assert.ok(!worktrees.includes('selfcheck'), 'the check tree worktree was removed despite the throw');
+    // Checking for the literal substring 'selfcheck' here would always fail: the fixture's own
+    // tmpdir is named `swarm-e1-selfcheck-<rand>`, and the main worktree's own line in this
+    // output always carries that root path. Check for the job's own path segment instead, which
+    // only ever appears if the check-tree worktree itself is still registered.
+    assert.ok(!worktrees.includes('run-throw/job-throw'), 'the check tree worktree was removed despite the throw');
     await assert.rejects(fs.stat(path.join(root, '.swarm/selfcheck/run-throw/job-throw')));
   });
 
