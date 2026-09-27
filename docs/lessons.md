@@ -383,3 +383,83 @@ rule is enforced or documented.
     `context-directory-drift` code, and the runner's separate
     contextGlob-only warning was removed. Documentation: [manifest
     reference](manifest-reference.md#context-check).
+40. **File-tools-only workers reported done with tests they never ran.** A
+    worker that can only read and edit files writes tests, then reports
+    them passing, although nothing in its seat can execute them; the first
+    real run of those tests happens only at integration. Rule: a worker
+    asked to add or change tested code needs a way to run the checks
+    itself, inside a sandbox, and must report which checks it ran.
+    Enforcement: claude `shell: true` jobs (presets `sonnet-shell`,
+    `opus-shell`) run the whole worker under a generated seatbelt profile
+    with a sandboxed shell and report `checksRun`; `validate` warns
+    `tests-without-shell` when a claude job without a shell writes tests.
+    Documentation: [manifest reference](manifest-reference.md#shell-jobs).
+41. **Two concurrent checks shared a fixed dev-server port.** Checks in two
+    different worktrees each started a dev server on the same fixed port at
+    the same time; one side failed on "port in use" and the failure looked
+    like a real test failure. Rule: give each worktree its own stable block
+    of ports, derived from its own path, and tell every process that runs
+    there. Enforcement: env var `SWARM_PORT_BASE` is set for a run's
+    `preChecks`/`checks`/mutant checks, a shipped run's re-run of checks, and
+    every codex or claude shell-job process (whose prompt also states its
+    port range); a manifest `testEnv` may not set it itself; `integrate` and
+    `ship` report the resolved block and warn when it had to move or every
+    candidate block was busy. Documentation: [manifest
+    reference](manifest-reference.md#ports).
+42. **A sandboxed shell job could not run its own project's checks.** Its
+    toolchain sync needed network the sandbox never grants, and even after a
+    sync ran outside the sandbox, the sandboxed worker still failed to find
+    its own workspace root or the venv that sync had just produced, both
+    hidden from it by default. Rule: run a toolchain sync once, outside the
+    sandbox, before the worker starts, and grant the narrow extra reads that
+    a synced toolchain actually needs to find itself. Enforcement: a job field
+    runs setup commands outside the sandbox in the job's own worktree before
+    the worker starts, failing the job outright on a non-zero exit instead of
+    starting the worker; the sandbox profile separately grants ancestor
+    workspace-discovery reads and, after setup, a synced interpreter's own
+    directory when it lives under the coordinator's home. Documentation:
+    [manifest reference](manifest-reference.md#setup).
+43. **A sandboxed shell job still could not run its own project's tests.** Even
+    after its toolchain sync and workspace-discovery reads worked, a real run
+    hit two more walls: some tools' own upward git discovery reads the
+    project root's `.git` entry directly, not just the job's own detached
+    worktree's local one, and every test that opens a loopback server found
+    the network entirely closed. Rule: grant read-only access to the
+    project root's own `.git` (its gitdir and common dir too, when the root
+    is itself a linked worktree), and allow the job's own loopback sockets —
+    but never one a service on the host already had listening when the job
+    started. Enforcement: the sandbox profile grants the root's `.git`
+    read-only and allows `localhost:*` bind/inbound/outbound, with an
+    explicit deny (placed after that allow) for every port an `lsof` scan
+    found already listening, plus a fixed rig-service port; an `lsof`
+    failure refuses the job outright instead of guessing. Documentation:
+    [manifest reference](manifest-reference.md#shell-jobs).
+44. **A tool temp dir inside a repo trips repo-safety rules.** A sandboxed
+    job's own temp directory sat inside the project's own git worktree, and a
+    tool it ran refused to write scratch data there, correctly treating it as
+    version-controlled storage. Rule: a job's scratch/temp directory must
+    live outside every git repo, never as a path under one the job itself is
+    working in. Enforcement: a claude shell job's `HOME`/`TMPDIR` point at a
+    per-job scratch dir created under the OS temp dir, refusing the job
+    outright if that OS temp dir itself resolves inside a repo. Documentation:
+    [manifest reference](manifest-reference.md#shell-jobs).
+45. **Toolchains under the OS temp dir get purged.** A toolchain cache placed
+    under the OS temp directory worked at first, then silently broke once the
+    OS reclaimed unread files there after a few days. Rule: point toolchains
+    at a stable, non-temp directory, and flag it plainly whenever one still
+    resolves under the temp dir. Enforcement: a reusable report names the
+    expected toolchains directory, whether it exists, and every configured
+    path that still resolves under the temp dir; both diagnostics and
+    onboarding surface it as advice, never a status change. Documentation:
+    [manifest reference](manifest-reference.md#kickoff-diagnostics-and-install-commands).
+46. **A worker's final JSON extraction returned one nested element, not the
+    whole result.** A final message held prose plus a fenced object whose own
+    value included an array of similarly-shaped objects; naive per-line
+    parsing matched one of those inner objects before it ever reached the
+    real top-level result, so the report looked complete but carried the
+    wrong (and mostly null) fields. Rule: extraction must find the last
+    *balanced top-level* object, string-aware so a brace inside a string
+    value never counts, not merely the last line or fenced block that happens
+    to parse. Enforcement: the same brace-depth scan prefers the last fenced
+    block when one exists and never returns a span that only opened at a
+    nested depth. Regression coverage is in `tests/final-json.test.mjs`.
