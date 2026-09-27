@@ -394,3 +394,15 @@ rule is enforced or documented.
     with a sandboxed shell and report `checksRun`; `validate` warns
     `tests-without-shell` when a claude job without a shell writes tests.
     Documentation: [manifest reference](manifest-reference.md#shell-jobs).
+41. **Two concurrent checks shared a fixed dev-server port.** Checks in two
+    different worktrees each started a dev server on the same fixed port at
+    the same time; one side failed on "port in use" and the failure looked
+    like a real test failure. Rule: give each worktree its own stable block
+    of ports, derived from its own path, and tell every process that runs
+    there. Enforcement: env var `SWARM_PORT_BASE` is set for a run's
+    `preChecks`/`checks`/mutant checks, a shipped run's re-run of checks, and
+    every codex or claude shell-job process (whose prompt also states its
+    port range); a manifest `testEnv` may not set it itself; `integrate` and
+    `ship` report the resolved block and warn when it had to move or every
+    candidate block was busy. Documentation: [manifest
+    reference](manifest-reference.md#ports).

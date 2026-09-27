@@ -182,11 +182,12 @@ export async function ship(options) {
     noCiGraceMs = SHIP_DEFAULTS.noCiGraceMs,
     tagTimeoutMs = 180_000, manifest,
     mutantsSkippedRedBase = false,
+    portBase = null, portWarnings = [],
     runChecks, exec, sleep, now = () => Date.now(),
   } = options;
 
   let repo = options.repo;
-  const base = { warnings: [], tag: { name: null, status: 'skipped', waitedSeconds: 0 }, status: null, repo, pr: null, url: null, sha: null, mergeSha: null, checks: null, ci: null, reason: null };
+  const base = { warnings: [...portWarnings], tag: { name: null, status: 'skipped', waitedSeconds: 0 }, status: null, repo, pr: null, url: null, sha: null, mergeSha: null, checks: null, ci: null, reason: null, portBase };
 
   if (!VALID_MERGE_METHODS.has(mergeMethod)) return { ...base, status: 'refused', reason: 'invalid merge method' };
   for (const [name, value] of [['pollMs', pollMs], ['timeoutMs', timeoutMs], ['noCiGraceMs', noCiGraceMs]]) {
