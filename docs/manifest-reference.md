@@ -109,6 +109,8 @@ A job with no `after` starts exactly as before. A job that does have `after` sta
 
 Before starting any job, `run` (and therefore `go`) checks this same registry for another live run in the same repository — across worktrees — already writing one of this run's declared outputs. If it finds one, it refuses to start with `Refusing to run: <file> is also written by live run <runId> in <root>`, naming the first conflicting file and run; every conflict is listed in the error's `details.conflicts`. Nothing is registered and no job starts. There is no override flag: resolve the conflict (wait for the other run, or change one manifest's outputs) and try again. Once a run is registered, it is unregistered when the run ends, whether it completes, fails, is cancelled, or the process itself throws.
 
+`validate` catches the milder, earlier case of the same problem: the manifest being validated declares an output file that an *already-open* run elsewhere in this same repository (another worktree or branch) also lists. Two open jobs each working from their own copy of one shared file collide on the next rebase or integrate — a hand union-merge of the two independent results can break the file's own syntax. This is only a warning, never a refusal (unlike the exact-collision case above): a genuinely shared file (a registry, an index) is sometimes integrated one job at a time on purpose. `{"code": "shared-output-across-open-jobs", "path", "runIds"}`, naming the other open run(s) and suggesting a per-job fragment file, combined in a later step, instead. (Two jobs of the *same* manifest sharing one output file is refused outright by `validate`/`run`'s existing case-insensitive writer-collision check, so that case never reaches this warning.) (lesson #165)
+
 ## Commands
 
 ```sh
@@ -337,6 +339,14 @@ Field lesson #160: a toolchain env a check needs (a browsers path, a toolchain c
 - `validate` warns `{"code": "check-needs-env", "checks": [...]}` when a check, preCheck or `mutantCheck` runs `npm`/`npx`/`pnpm`/`yarn`/`cargo`/`uv`/`uvx` and no env file exists.
 - `env` prints `{source, env, portBase}`; `env --print` prints a paste-ready block for an outside agent's prompt: one `export NAME='value'` line per entry, `export SWARM_PORT_BASE=<base>` for this root, and the rule `Never run \`git stash\`...` (lesson #163).
 
+## Gotchas file
+
+Field lesson #167: a known platform gotcha (e.g. Windows refuses a private file created under a raw pytest `tmp_path`) used to live only in the orchestrator's own memory, so every fresh worker rediscovered the same one by hand. `<root>/.swarm/gotchas.md` is free-form Markdown, at most 16 KiB; a linked worktree with none falls back to its main worktree's file, exactly like `.swarm/env.json`.
+
+- Appended to every claude, codex and shell job prompt (`env`/`ask`/`scout` are read-only or single-question and carry no gotchas).
+- `env --print` includes it under a `Known platform gotchas for this project (from <source>):` heading when one exists; the plain `env` JSON gains a `gotchas: {text, source}` field.
+- `validate` warns `{"code": "windows-ci-no-gotchas"}` when the project's own `.github/workflows/*.yml`/`*.yaml` mentions Windows (a Windows CI job) and no gotchas file — the exact gap this lesson closed, before it repeats on the next Windows-specific worker.
+
 ## Packaging build check
 
 Field lesson #159: a packaging-config change can pass every test, lint and type check and still produce a package that does not build. A build check is any `checks`/`preChecks` argv matching `uv|hatch|poetry|pdm|flit build`, `-m build`, `pip wheel`, `npm|pnpm|yarn pack`, or `cargo package|build` (argv0 may be an absolute path).
@@ -477,7 +487,7 @@ A directory can mix more filename prefixes than a job's `contextGlob` actually n
 
 ## Ship
 
-`ship <run-id> --repo OWNER/NAME --pr payload.json` pushes an integrated run's branch, opens or updates its pull request, waits for CI, and merges once everything is green — refusing at any earlier step leaves nothing pushed or merged. It requires the run to already be integrated (`integrate <run-id>` must have run first) and reuses that run's saved manifest `checks`, re-running them against the committed tree before filling `<!-- swarm:checks -->` in the PR body.
+`ship <run-id> --repo OWNER/NAME --pr payload.json` pushes an integrated run's branch, opens or updates its pull request, waits for CI, and merges once everything is green — refusing at any earlier step leaves nothing pushed or merged. It requires the run to already be integrated (`integrate <run-id>` must have run first) and reuses that run's saved manifest `checks`, re-running them against the committed tree before filling `<!-- swarm:checks -->` in the PR body. It also passes the run's own integrated files through to the pre-push lock check (field lesson 147); fixed in lesson #166 (`ship --branch`, below, already passed them — a plain `ship <run-id>` did not, so the lock check never ran on a real run).
 
 ```sh
 node tools/swarm.mjs ship <run-id> --pr payload.json

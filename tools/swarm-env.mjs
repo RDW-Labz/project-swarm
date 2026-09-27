@@ -61,11 +61,13 @@ export async function loadSwarmEnv(root, { mainRoot } = {}) {
 }
 
 const shellQuote = value => `'${String(value).split("'").join("'\\''")}'`;
-export function envPrintText({ env = {}, source = null, portBase = null } = {}) {
+// `gotchas` (field lesson #167): { text, source } from tools/gotchas.mjs's loadGotchas, or null.
+export function envPrintText({ env = {}, source = null, portBase = null, gotchas = null } = {}) {
   const lines = [`# project-swarm environment for this root (${source ? `from ${source}` : `no ${ENV_FILE} found`})`, '# Paste into an outside agent\'s prompt; set these before running any check, harness or mutant.'];
   for (const [key, value] of Object.entries(env)) lines.push(`export ${key}=${shellQuote(value)}`);
   if (portBase != null) lines.push(`export SWARM_PORT_BASE=${portBase}  # this worktree owns ports ${portBase}..${portBase + 9}`);
   lines.push('', 'Rules:', `- ${NO_STASH_LINE}`);
+  if (gotchas?.text?.trim()) lines.push('', `Known platform gotchas for this project (from ${gotchas.source}):`, gotchas.text.trim());
   return `${lines.join('\n')}\n`;
 }
 
