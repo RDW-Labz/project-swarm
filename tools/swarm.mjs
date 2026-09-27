@@ -14,7 +14,7 @@ import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, p
 import { API_AGENTS, apiDoctor, probeLocalProvider, decodeContext, executeApi } from './api-adapters.mjs';
 
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, parseCodexReply, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
-import { expandShellPreset, validateNetworkAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterHome, resolveRootGitInfo, scanListeningPorts, resolveRigServicePort, shellMessage, containsKey, redactKey } from './claude-shell.mjs';
+import { expandShellPreset, validateNetworkAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterHome, resolveRootGitInfo, scanListeningPorts, resolveRigServicePort, createShellScratchDir, shellMessage, containsKey, redactKey } from './claude-shell.mjs';
 import { portBlockFor, resolvePortBlock } from './ports.mjs';
 import { scoutPrompt, normalizeScoutReport, renderScoutMarkdown, resolveBriefPath as resolveScoutBriefPath } from './scout.mjs';
 import { parseGoals, extractKnownRepos, gatherAreaCandidates, sweepPrompt, normalizeSweepArea, renderShortlistMarkdown, resolveBriefPath as resolveSweepBriefPath } from './sweep.mjs';
@@ -41,18 +41,35 @@ const execFileAsync = promisify(execFile);
 // Field lesson 106: macOS purges unread files under /tmp (and its /private/tmp realpath) after
 // about 3 days; a manifest that points a toolchain there works today and silently breaks later.
 const TMP_PREFIX_RE = /^\/(?:private\/)?tmp(?:\/|$)/;
-export function tmpToolPathWarnings(manifest) {
+export function tmpToolPathWarnings(manifest, { dir = toolchainsDir() } = {}) {
   const warnings = [];
   for (const job of manifest.jobs ?? []) {
     for (const readPath of job.readPaths ?? []) {
-      if (TMP_PREFIX_RE.test(readPath)) warnings.push({ code: 'tmp-tool-path', jobId: job.id, path: readPath, message: `${readPath} resolves under /tmp: macOS removes files here after 3 days unread; move the toolchain` });
+      if (TMP_PREFIX_RE.test(readPath)) warnings.push({ code: 'tmp-tool-path', jobId: job.id, path: readPath, message: `${readPath} resolves under /tmp: macOS removes files here after 3 days unread; move it under ${dir}` });
     }
   }
   for (const check of [...(manifest.checks ?? []), ...(manifest.mutantCheck ? [manifest.mutantCheck] : [])]) {
     const program = check.argv?.[0];
-    if (typeof program === 'string' && TMP_PREFIX_RE.test(program)) warnings.push({ code: 'tmp-tool-path', check: check.name ?? 'mutantCheck', path: program, message: `${program} resolves under /tmp: macOS removes files here after 3 days unread; move the toolchain` });
+    if (typeof program === 'string' && TMP_PREFIX_RE.test(program)) warnings.push({ code: 'tmp-tool-path', check: check.name ?? 'mutantCheck', path: program, message: `${program} resolves under /tmp: macOS removes files here after 3 days unread; move it under ${dir}` });
   }
   return warnings;
+}
+
+// Field lesson 106: toolchains that live under the OS tmp dir get silently purged; the project's
+// own toolchains live at SWARM_TOOLCHAINS (or ~/.project-swarm/toolchains) instead. `doctor` and
+// `onboard` surface this as advice only — it never changes a provider's status or configured field.
+function toolchainsDir({ env = process.env, home = os.homedir() } = {}) {
+  return env.SWARM_TOOLCHAINS || path.join(home, '.project-swarm/toolchains');
+}
+const TOOLCHAIN_TMP_ENV_VARS = ['RUSTUP_HOME', 'CARGO_HOME', 'UV_CACHE_DIR', 'UV_PYTHON_INSTALL_DIR', 'UV_TOOL_DIR', 'PLAYWRIGHT_BROWSERS_PATH', 'npm_config_cache'];
+export async function toolchainsReport({ env = process.env, home = os.homedir(), platform = process.platform, fsImpl = fs } = {}) {
+  const dir = toolchainsDir({ env, home });
+  let exists = false;
+  try { exists = (await fsImpl.stat(dir)).isDirectory(); } catch { exists = false; }
+  const tmpPaths = [];
+  for (const entry of String(env.PATH ?? '').split(':')) if (entry && TMP_PREFIX_RE.test(entry)) tmpPaths.push({ name: 'PATH', path: entry });
+  for (const name of TOOLCHAIN_TMP_ENV_VARS) if (typeof env[name] === 'string' && TMP_PREFIX_RE.test(env[name])) tmpPaths.push({ name, path: env[name] });
+  return { dir, exists, tmpPaths };
 }
 
 // Codex and claude shell jobs run in a detached worktree; every other CLI job in a copied workspace.
@@ -345,6 +362,12 @@ export function validateManifest(manifest) {
         if (!Array.isArray(argv) || !argv.length || argv.some(item => typeof item !== 'string')) fail(`Job ${job.id}: each setup entry must be a non-empty array of strings`);
       }
     }
+    // Field lesson #145: kept only on request, since the scratch dir sits outside every repo and
+    // is otherwise removed once the job ends (success, failure or cancel alike).
+    if (job.keepScratch !== undefined) {
+      if (job.shell !== true) fail(`Job ${job.id}: keepScratch is only supported for claude shell jobs`);
+      if (typeof job.keepScratch !== 'boolean') fail(`Job ${job.id}: keepScratch must be true or false`);
+    }
     if (job.maxOutputTokens !== undefined && (!API_AGENTS.includes(job.agent) || !Number.isInteger(job.maxOutputTokens) || job.maxOutputTokens < 256 || job.maxOutputTokens > 32768)) fail('maxOutputTokens is API-only and must be 256–32768');
     // tier is advisory routing metadata for the coordinator, not a model selector: an explicit
     // job.model always wins. expensive must name why, so the choice is inspectable, not gut feel.
@@ -400,7 +423,7 @@ export function validateManifest(manifest) {
       if (job.outputs.length) fail('a web job must be read-only (no outputs)');
     }
     // Unknown command/provider fields cannot create an execution path.
-    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'setup'].includes(key)) fail(`Unknown job field: ${key}`);
+    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'setup', 'keepScratch'].includes(key)) fail(`Unknown job field: ${key}`);
   }
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
   for (const job of manifest.jobs) for (const afterId of job.after ?? []) if (!ids.has(afterId.toLowerCase())) fail(`Job ${job.id} after names unknown job ${afterId}`);
@@ -669,6 +692,9 @@ const setupFailedResult = error => ({ status: 'failed', setupFailed: true, refus
 // Field lesson #143: an lsof failure means the parent cannot know what to keep denied, so the job
 // is refused the same way a failing `setup` is — the worker is never spawned.
 const loopbackScanFailedResult = () => ({ status: 'failed', loopbackScanFailed: true, refusedBeforeStart: true, error: 'loopback-scan-failed', stdout: '', stderr: '', response: '', exitCode: null, actualModel: null, modelsSeen: [], modelMismatch: false, usage: null, modelUsage: null, costUsd: null, cleanupError: null, terminationReason: null, permissionDenials: [] });
+// Field lesson #145: os.tmpdir() itself resolves inside a git repo — refused the same way a
+// failing loopback scan is, before the worker is ever spawned.
+const scratchInsideRepoResult = () => ({ status: 'failed', scratchInsideRepo: true, refusedBeforeStart: true, error: 'scratch-inside-repo', stdout: '', stderr: '', response: '', exitCode: null, actualModel: null, modelsSeen: [], modelMismatch: false, usage: null, modelUsage: null, costUsd: null, cleanupError: null, terminationReason: null, permissionDenials: [] });
 
 // The retained proposal workspace contains only declared outputs. The runnable checkout is
 // disposable unless a fallback requires it or a failed worker changed declared outputs.
@@ -760,7 +786,7 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
   const workerKey = options.workerKey;
   const worktree = await safePath(root, `${directory}/worktrees/${job.id}`, { internal: true, parents: true });
   const commonDir = await fs.realpath((await git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim());
-  let added = false, keepWorktree = false, result, proxy = null;
+  let added = false, keepWorktree = false, result, proxy = null, scratch = null;
   const baseline = { outputs: job.outputs, baseHashes: {}, baseModes: {} };
   try {
     await git(root, ['worktree', 'add', '--detach', worktree, 'HEAD']);
@@ -781,8 +807,13 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
     const setupError = await runJobSetup(root, directory, job, worktree, options.spawnImpl, options.portBase);
     if (setupError) { result = setupFailedResult(setupError); return result; }
     const shellDir = await safePath(root, `${directory}/${job.id}/shell/placeholder`, { internal: true, parents: true }).then(file => path.dirname(file));
-    const home = path.join(shellDir, 'home'), tmp = path.join(shellDir, 'tmp'), configDir = path.join(home, '.claude');
-    for (const dir of [home, tmp, configDir]) await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+    // Field lesson #145: TMPDIR/HOME live in a per-job scratch dir outside every repo (never under
+    // `shellDir`, which sits inside this project's own worktree), so a tool that refuses to write
+    // scratch data inside a git repo (pytest included) never trips over the job's own tmp dir.
+    try { scratch = await (hooks.createScratchDir ?? createShellScratchDir)({ runId: path.basename(directory), jobId: job.id }); }
+    catch { result = scratchInsideRepoResult(); return result; }
+    const home = scratch.home, tmp = scratch.tmp, configDir = path.join(home, '.claude');
+    await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
     // Field lesson #142: after `setup`, a synced venv's own recorded interpreter directory is
     // granted read access too when it lives under the real $HOME (a toolchain cache, not the
     // job-scoped HOME), same refusal list as any other readPath; a denied one is only warned.
@@ -818,13 +849,14 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
       result = loopbackScanFailedResult();
       return result;
     }
-    const profileText = shellProfile({ worktree, commonDir, shellDir, readPaths, cliPaths, proxyPort: proxy.port, extraHomes: hooks.extraHomes ?? [], rootGit, loopbackDenied });
+    const profileText = shellProfile({ worktree, commonDir, shellDir, scratchDir: scratch.scratchDir, readPaths, cliPaths, proxyPort: proxy.port, extraHomes: hooks.extraHomes ?? [], rootGit, loopbackDenied });
     const profileRelative = `${directory}/${job.id}/sandbox.sb`;
     await write(root, profileRelative, profileText, true);
     const profile = await safePath(root, profileRelative, { internal: true });
     const env = { ...shellEnvironment({ parentEnv: options.env ?? process.env, home, tmp, configDir, proxyPort: proxy.port, apiKey: workerKey, testEnv: job.testEnv, userId: `swarm-worker:${job.id}`, portBase: options.portBase, uvCacheDir: path.join(shellDir, 'uv-cache') }), ...(hooks.baseUrlFromProxy ? { ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxy.port}` } : {}) };
     result = await execute(job, worktree, message, { ...options, claudeShell: { profile, bin, env } });
     result.loopbackDenied = loopbackDenied;
+    result.scratchDir = scratch.scratchDir;
     if (venvInterpreterDenied.length) result.venvInterpreterDenied = venvInterpreterDenied;
     for (const key of ['stdout', 'stderr', 'response']) {
       if (containsKey(result[key], workerKey)) { result.workerKeyExposed = true; result[key] = redactKey(result[key], workerKey); }
@@ -858,6 +890,9 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
       result.keptWorkspace = worktree;
     }
     if (added && !keepWorktree) await git(root, ['worktree', 'remove', '--force', worktree]);
+    // Field lesson #145: removed after the job ends, success, failure or cancel alike, unless the
+    // manifest job itself asked to keep it.
+    if (scratch && job.keepScratch !== true) await fs.rm(scratch.scratchDir, { recursive: true, force: true });
   }
 }
 
@@ -1116,7 +1151,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
             result.error = result.error ? `${failure.agentError}; ${result.error}` : failure.agentError;
           }
         }
-        if (job.shell === true) Object.assign(record, { proxyRefused: result.proxyRefused ?? [], loopbackDenied: result.loopbackDenied ?? [], ...(result.venvInterpreterDenied?.length ? { venvInterpreterDenied: result.venvInterpreterDenied } : {}), ...(result.workerKeyExposed ? { workerKeyExposed: true } : {}) });
+        if (job.shell === true) Object.assign(record, { proxyRefused: result.proxyRefused ?? [], loopbackDenied: result.loopbackDenied ?? [], scratchDir: result.scratchDir ?? null, ...(result.venvInterpreterDenied?.length ? { venvInterpreterDenied: result.venvInterpreterDenied } : {}), ...(result.workerKeyExposed ? { workerKeyExposed: true } : {}) });
         Object.assign(record, { permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt) });
         await queueSave();
       } catch (error) {
@@ -2035,13 +2070,15 @@ export async function sweepRun(root, { model, brief, goals, maxUsd = 15, concurr
   };
 }
 
-export async function doctor({exec=execViaFile, agent='claude', env=process.env, platform=process.platform, probeLocal=false, probeTimeoutMs=1500, fetchImpl=fetch}={}){
+export async function doctor({exec=execViaFile, agent='claude', env=process.env, platform=process.platform, probeLocal=false, probeTimeoutMs=1500, fetchImpl=fetch, home=os.homedir(), fsImpl=fs}={}){
   const [major,minor]=process.versions.node.split('.').map(Number);
   if(major<20||(major===20&&minor<3))fail('Node 20.3 or newer is required');
-  if(agent==='codex')return codexDoctor({exec,platform});
+  // Field lesson 106: advisory only, added to every agent's result; it never changes status/configured.
+  const toolchains=await toolchainsReport({env,home,platform,fsImpl});
+  if(agent==='codex')return {...await codexDoctor({exec,platform}),toolchains};
   if(process.platform==='win32')fail('Use macOS, Linux, or WSL; native Windows process-group cleanup is not supported');
-  if(EXTRA_CLI_AGENTS.includes(agent))return extraCliDoctor(agent,exec);
-  if(agent!=='claude')return probeLocal ? probeLocalProvider(agent,env,{timeoutMs:probeTimeoutMs,fetchImpl}) : apiDoctor(agent,env);
+  if(EXTRA_CLI_AGENTS.includes(agent))return {...await extraCliDoctor(agent,exec),toolchains};
+  if(agent!=='claude')return {...await(probeLocal ? probeLocalProvider(agent,env,{timeoutMs:probeTimeoutMs,fetchImpl}) : apiDoctor(agent,env)),toolchains};
   const options={timeout:10000,maxBuffer:1024*1024};
   const version=await exec('claude',['--version'],options);
   const required=['--restricted','--safe-mode','--tools','--permission-prompts','--strict-mcp-config','--mcp-config','--no-session-persistence','--no-chrome','--output-format'];
@@ -2052,7 +2089,7 @@ export async function doctor({exec=execViaFile, agent='claude', env=process.env,
   if(missing.length){help=await exec('claude',['--help'],options).catch(()=>({stdout:''}));missing=required.filter(flag=>!help.stdout.includes(flag));}
   if(!help.stdout)fail('Claude CLI help probe failed (no or empty output)');
   if(missing.length)fail(`Installed Claude CLI lacks required flags: ${missing.join(', ')}. Update Claude; restrictions will not be weakened.`);
-  return {status:'compatible',node:process.versions.node,claude:version.stdout.trim(),auth:'not checked; use a live smoke job',liveVerified:false,platform:process.platform};
+  return {status:'compatible',node:process.versions.node,claude:version.stdout.trim(),auth:'not checked; use a live smoke job',liveVerified:false,platform:process.platform,toolchains};
 }
 
 export async function doctorAll(options={}){
@@ -2204,8 +2241,10 @@ function agentReadiness(agent,result){
 }
 
 // Plain Markdown for the agent to relay verbatim; no model calls, all facts come from doctor.
-export async function onboardReport(root,{doctorAllImpl=doctorAll}={}){
+export async function onboardReport(root,{doctorAllImpl=doctorAll,toolchainsReportImpl=toolchainsReport}={}){
   const {providers}=await doctorAllImpl();
+  const toolchains=await toolchainsReportImpl();
+  const toolchainsLine=toolchains.exists&&toolchains.tmpPaths.length===0?`- toolchains: ok (${toolchains.dir})`:`- toolchains: move to ${toolchains.dir}${toolchains.tmpPaths.length?` (${toolchains.tmpPaths.map(p=>`${p.name}=${p.path}`).join(', ')})`:''}`;
   const lines=[
     '# Project Swarm onboarding','',
     '## What this does',
@@ -2230,6 +2269,8 @@ export async function onboardReport(root,{doctorAllImpl=doctorAll}={}){
     '- Workers only touch files explicitly listed in their job.',
     '- No API keys or secrets are ever read from or written into a manifest.',
     '- The Codex sandbox only runs on macOS; other platforms refuse codex jobs.','',
+    '## Toolchains',
+    toolchainsLine,'',
     '## Staying current',
     '- `node tools/swarm.mjs version --check` reports whether a newer release exists.',
     '- Nothing updates itself: run `node tools/swarm.mjs update` to move to it.',

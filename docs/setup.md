@@ -24,7 +24,7 @@ npm test
 node tools/swarm.mjs doctor
 ```
 
-`doctor` checks local prerequisites and CLI flag compatibility. A successful diagnostic does not establish that authentication, billing, a requested model, or network access will work. A real smoke job provides that evidence.
+`doctor` checks local prerequisites and CLI flag compatibility. A successful diagnostic does not establish that authentication, billing, a requested model, or network access will work. A real smoke job provides that evidence. It also reports `toolchains` (expected directory, whether it exists, and any configured toolchain path that still resolves under the OS tmp dir, which macOS purges after a few days unread) as advice only — see [manifest reference](manifest-reference.md#toolchains).
 
 Read [the security boundaries](../SECURITY.md) before copying sensitive files into a worker context. Add `.swarm/` to your project's `.gitignore`; local run records can contain source code, prompts, and provider responses.
 

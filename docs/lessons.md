@@ -434,3 +434,21 @@ rule is enforced or documented.
     found already listening, plus a fixed rig-service port; an `lsof`
     failure refuses the job outright instead of guessing. Documentation:
     [manifest reference](manifest-reference.md#shell-jobs).
+44. **A tool temp dir inside a repo trips repo-safety rules.** A sandboxed
+    job's own temp directory sat inside the project's own git worktree, and a
+    tool it ran refused to write scratch data there, correctly treating it as
+    version-controlled storage. Rule: a job's scratch/temp directory must
+    live outside every git repo, never as a path under one the job itself is
+    working in. Enforcement: a claude shell job's `HOME`/`TMPDIR` point at a
+    per-job scratch dir created under the OS temp dir, refusing the job
+    outright if that OS temp dir itself resolves inside a repo. Documentation:
+    [manifest reference](manifest-reference.md#shell-jobs).
+45. **Toolchains under the OS temp dir get purged.** A toolchain cache placed
+    under the OS temp directory worked at first, then silently broke once the
+    OS reclaimed unread files there after a few days. Rule: point toolchains
+    at a stable, non-temp directory, and flag it plainly whenever one still
+    resolves under the temp dir. Enforcement: a reusable report names the
+    expected toolchains directory, whether it exists, and every configured
+    path that still resolves under the temp dir; both diagnostics and
+    onboarding surface it as advice, never a status change. Documentation:
+    [manifest reference](manifest-reference.md#kickoff-diagnostics-and-install-commands).

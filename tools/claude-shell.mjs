@@ -37,7 +37,7 @@ const ANCESTOR_LOOKUP_FILES = ['pyproject.toml', 'uv.toml', 'package.json'];
 // Fixed values the runner sets itself; never copied from the parent env and never overridable
 // by testEnv. CLAUDE_CODE_SUBPROCESS_ENV_SCRUB makes the CLI unset credential variables
 // (ANTHROPIC_API_KEY included) inside each Bash command before it runs.
-const FIXED_ENV_KEYS = ['PATH', 'HOME', 'LANG', 'TMPDIR', 'HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'NO_PROXY', 'no_proxy', 'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_TMPDIR', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_EXTRA_BODY', 'SSL_CERT_FILE', 'SWARM_PORT_BASE', 'UV_OFFLINE', 'UV_PYTHON_DOWNLOADS', 'UV_CACHE_DIR', 'npm_config_offline'];
+const FIXED_ENV_KEYS = ['PATH', 'HOME', 'LANG', 'TMPDIR', 'TMP', 'TEMP', 'HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy', 'NO_PROXY', 'no_proxy', 'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_TMPDIR', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_EXTRA_BODY', 'SSL_CERT_FILE', 'SWARM_PORT_BASE', 'UV_OFFLINE', 'UV_PYTHON_DOWNLOADS', 'UV_CACHE_DIR', 'npm_config_offline'];
 const SECRET_KEY = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|^ANTHROPIC_|^OPENAI_|^AWS_|^GH_|^GITHUB_|^CLAUDE_CODE_OAUTH/;
 const HOST = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
 const within = (file, parent) => file === parent || file.startsWith(`${parent}/`);
@@ -127,6 +127,27 @@ export async function scanListeningPorts({ exec = execFileAsync } = {}) {
   return [...ports];
 }
 
+// Field lesson #145: a shell job's own TMPDIR/HOME must never resolve inside any git repo — some
+// tools (pytest included) refuse to write scratch data under a path that is itself version
+// controlled. The parent walks from the realpath of os.tmpdir() up to `/` looking for a `.git`
+// entry before ever creating the per-job scratch dir; `mkdtemp` then makes it, mode 0700.
+export async function createShellScratchDir({ runId, jobId }, { tmpdir = os.tmpdir, mkdtemp = fs.mkdtemp, realpath = fs.realpath, access = file => fs.access(file), mkdir = fs.mkdir, chmod = fs.chmod } = {}) {
+  const base = await realpath(tmpdir());
+  for (let dir = base; ; dir = path.dirname(dir)) {
+    let insideRepo = true;
+    try { await access(path.join(dir, '.git')); } catch { insideRepo = false; }
+    if (insideRepo) throw Error('scratch-inside-repo');
+    if (dir === path.parse(dir).root) break;
+  }
+  const created = await mkdtemp(path.join(base, `swarm-${runId}-${jobId}-`));
+  await chmod(created, 0o700);
+  const scratchDir = await realpath(created);
+  const tmp = path.join(scratchDir, 'tmp'), home = path.join(scratchDir, 'home');
+  await mkdir(tmp, { recursive: true, mode: 0o700 });
+  await mkdir(home, { recursive: true, mode: 0o700 });
+  return { scratchDir, tmp, home };
+}
+
 export const RIG_SERVICE_DEFAULT_PORT = 4405;
 export const rigServicePortFile = (home = os.homedir()) => path.join(home, 'Library/Application Support/OASIS/rig/service.port');
 export async function resolveRigServicePort({ read = file => fs.readFile(file, 'utf8'), home = os.homedir() } = {}) {
@@ -140,11 +161,14 @@ const quoteRegex = value => value.replace(/[.*+?^${}()|[\]]/g, match => `\\${mat
 // `rootGit` and `loopbackDenied` are both optional and additive: omitted (as by every pre-1.19.0
 // caller), the generated profile is byte-identical to before. `loopbackDenied` undefined leaves
 // the network section untouched; passing an array (even empty) turns on the loopback allowance.
-export function shellProfile({ home = os.homedir(), extraHomes = [], worktree, commonDir, shellDir, readPaths = [], cliPaths = [], proxyPort, rootGit = null, loopbackDenied }) {
+export function shellProfile({ home = os.homedir(), extraHomes = [], worktree, commonDir, shellDir, scratchDir = null, readPaths = [], cliPaths = [], proxyPort, rootGit = null, loopbackDenied }) {
   if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) throw Error('shell profile needs a proxy port');
   const homes = [...new Set([home, ...extraHomes].map(sandboxPath))];
-  const reads = [worktree, commonDir, shellDir, ...cliPaths, ...homes.flatMap(h => TOOLCHAIN_DIRS.map(part => path.join(h, part))), ...validateReadPaths(readPaths, homes[0])].map(sandboxPath);
-  const writes = [worktree, shellDir].map(sandboxPath);
+  // Field lesson #145: the job's scratch dir (TMPDIR/HOME) lives outside every repo, under the
+  // OS tmp dir, not under `shellDir`; it needs its own read+write grant, placed with the other
+  // writable-path allows so the final keychain/.claude*/securityd denies still win.
+  const reads = [worktree, commonDir, shellDir, ...(scratchDir ? [scratchDir] : []), ...cliPaths, ...homes.flatMap(h => TOOLCHAIN_DIRS.map(part => path.join(h, part))), ...validateReadPaths(readPaths, homes[0])].map(sandboxPath);
+  const writes = [worktree, shellDir, ...(scratchDir ? [scratchDir] : [])].map(sandboxPath);
   const filter = (kind, file) => `(${kind} "${sandboxPath(file)}")`;
   const ancestors = new Set(homes);
   for (const file of reads) for (const h of homes) {
@@ -192,7 +216,7 @@ export function shellEnvironment({ parentEnv = process.env, home, tmp, configDir
   const proxy = `http://127.0.0.1:${proxyPort}`;
   const clean = value => typeof value === 'string' && !/[\0\r\n]/.test(value) ? value : undefined;
   const env = {
-    PATH: clean(parentEnv.PATH) ?? '/usr/bin:/bin:/usr/sbin:/sbin', HOME: home, LANG: clean(parentEnv.LANG) ?? 'en_US.UTF-8', TMPDIR: tmp,
+    PATH: clean(parentEnv.PATH) ?? '/usr/bin:/bin:/usr/sbin:/sbin', HOME: home, LANG: clean(parentEnv.LANG) ?? 'en_US.UTF-8', TMPDIR: tmp, TMP: tmp, TEMP: tmp,
     HTTPS_PROXY: proxy, HTTP_PROXY: proxy, https_proxy: proxy, http_proxy: proxy, NO_PROXY: '', no_proxy: '',
     ANTHROPIC_API_KEY: apiKey, CLAUDE_CONFIG_DIR: configDir, CLAUDE_CODE_TMPDIR: tmp, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     CLAUDE_CODE_EXTRA_BODY: JSON.stringify({ metadata: { user_id: userId } }),
