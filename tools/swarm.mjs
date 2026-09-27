@@ -18,10 +18,11 @@ import { expandShellPreset, validateNetworkAllow, validateShellTestEnvKey, requi
 import { portBlockFor, resolvePortBlock } from './ports.mjs';
 import { scoutPrompt, normalizeScoutReport, renderScoutMarkdown, resolveBriefPath as resolveScoutBriefPath } from './scout.mjs';
 import { parseGoals, extractKnownRepos, gatherAreaCandidates, sweepPrompt, normalizeSweepArea, renderShortlistMarkdown, resolveBriefPath as resolveSweepBriefPath } from './sweep.mjs';
-import { findUncoveredTests, listProjectFiles, suggestIgnoreTests, contextDirectoryWarnings } from './context-check.mjs';
+import { findUncoveredTests, listProjectFiles, suggestIgnoreTests, contextDirectoryWarnings, registryPinningWarnings, isTestFile } from './context-check.mjs';
 import { ship, SHIP_DEFAULTS, resolveGhAndGit } from './ship.mjs';
 import { go, commitOutputs, goExitCode } from './go.mjs';
 import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary } from './board.mjs';
+import { writeSessionMetric } from './session-metrics.mjs';
 
 const MAX_CONTEXT = 32 * 1024 * 1024;
 const MAX_FILE = 16 * 1024 * 1024;
@@ -87,9 +88,40 @@ export function coreModuleNoShellWarning(job) {
 // prompt; a worker with no shell (every agent but codex) cannot reproduce or rerun that check.
 const RUNTIME_CHECK_RE = /harness|e2e|playwright|preview/i;
 const quotesRuntimeFailure = prompt => RUNTIME_CHECK_RE.test(prompt) || (/\btimeout\b/i.test(prompt) && /\bwaitfor\b/i.test(prompt));
-export function runtimeCheckNoShellWarning(job) {
-  if (job.agent !== 'codex' && job.shell !== true && quotesRuntimeFailure(job.prompt)) return { code: 'runtime-check-no-shell', jobId: job.id, message: 'worker cannot reproduce; consider a shell agent or --evidence' };
-  return null;
+// Field lesson 153: a job whose own checks loop (a repeat construct in a manifest check's own
+// argv) or whose prompt names a flake/race/intermittent bug needs a worker that can actually run
+// and repeat that check itself, exactly like the runtime-check case above; a job whose outputs are
+// all docs never runs anything, so it is exempt from every trigger this function checks.
+const FLAKY_PROMPT_RE = /\b(flak(?:y|iness)|race condition|racy|intermittent(?:ly)?)\b/i;
+const REPEAT_CONSTRUCT_RE = /\bseq\s+\d+\b|--repeat\b|\bfor\s+\w+\s+in\b/;
+const isDocOnlyJob = job => (job.outputs ?? []).length > 0 && job.outputs.every(file => /\.md$/i.test(file));
+const manifestChecksHaveRepeatConstruct = manifest => (manifest?.checks ?? []).some(check => REPEAT_CONSTRUCT_RE.test((check.argv ?? []).join(' ')));
+export function runtimeCheckNoShellWarning(job, manifest = null) {
+  if (job.agent === 'codex' || job.shell === true || isDocOnlyJob(job)) return null;
+  const flagged = quotesRuntimeFailure(job.prompt) || FLAKY_PROMPT_RE.test(job.prompt) || manifestChecksHaveRepeatConstruct(manifest);
+  if (!flagged) return null;
+  return { code: 'runtime-check-no-shell', jobId: job.id, message: 'worker cannot reproduce; consider a shell agent or --evidence' };
+}
+
+// Field lesson 149: a test timeout under 5s is a hang guard masquerading as a timing assertion; a
+// slow (but healthy) runner can miss it, so `validate` flags one in a job's own new/edited test
+// output as soon as it's declared, rather than waiting for it to go red on an unlucky CI runner.
+const PY_TIMEOUT_KWARG_RE = /\btimeout\s*=\s*([0-9]+(?:\.[0-9]+)?)\b/g;
+const JS_SET_TIMEOUT_RE = /\bsetTimeout\([^,)]*,\s*([0-9]+(?:\.[0-9]+)?)\s*\)/g;
+const JS_WAITFOR_TIMEOUT_RE = /\bwaitFor\(\s*\{[^}]*\btimeout\s*:\s*([0-9]+(?:\.[0-9]+)?)/g;
+export function tightTestTimeoutWarnings(job, files) {
+  const warnings = [];
+  for (const file of job.outputs ?? []) {
+    if (!isTestFile(file)) continue;
+    const text = files.get(file);
+    if (typeof text !== 'string') continue;
+    for (const [re, limit] of [[PY_TIMEOUT_KWARG_RE, 5], [JS_SET_TIMEOUT_RE, 5000], [JS_WAITFOR_TIMEOUT_RE, 5000]]) {
+      for (const match of text.matchAll(re)) {
+        if (Number(match[1]) < limit) warnings.push({ code: 'tight-test-timeout', jobId: job.id, path: file, message: `${file}: timeout literal ${match[1]} is under the ${limit >= 1000 ? `${limit / 1000}s` : `${limit}s`} hang-guard floor (lesson #149)` });
+      }
+    }
+  }
+  return warnings;
 }
 
 // Lesson #135: a file-tools-only claude worker that writes tests reports done without ever
@@ -118,6 +150,33 @@ export function undeclaredMutantsFileWarnings(job) {
 // Field lesson 109: a changed lockfile means the checked-out environment may no longer match it;
 // `preChecks` gives the coordinator a place to resync before the manifest's own checks run.
 const LOCKFILE_NAMES = new Set(['uv.lock', 'package-lock.json', 'Cargo.lock', 'pnpm-lock.yaml']);
+// Field lesson 127/148: a version-only bump to the dependency manifest itself (pyproject.toml,
+// package.json, Cargo.toml) leaves the checked-out environment stale exactly like a lockfile
+// change does, even though no lockfile byte moved; the same resync trigger covers both.
+const DEPENDENCY_MANIFEST_NAMES = new Set(['pyproject.toml', 'package.json', 'Cargo.toml']);
+const ENV_RESYNC_TRIGGER_NAMES = new Set([...LOCKFILE_NAMES, ...DEPENDENCY_MANIFEST_NAMES]);
+// Field lesson 127/148: surfaced at validate time (before any job even runs) whenever a job's own
+// outputs include one of these files and the manifest declares no preChecks to resync with.
+export function staleEnvRiskWarning(manifest, job) {
+  if (manifest.preChecks?.length) return null;
+  const hit = (job.outputs ?? []).find(file => ENV_RESYNC_TRIGGER_NAMES.has(path.basename(file)));
+  if (!hit) return null;
+  return { code: 'stale-env-risk', jobId: job.id, path: hit, message: `${job.id} outputs ${hit}; the manifest declares no preChecks to resync the environment before checks run` };
+}
+
+// Field lesson 152: a check that cannot even start (missing tool/module) is discovered only once
+// the checkout has no dependencies installed; `validate` flags the obvious, cheap-to-check case.
+export async function missingDepsWarnings(root, { fsImpl = fs } = {}) {
+  const isDir = async relPath => { try { return (await fsImpl.stat(path.join(root, relPath))).isDirectory(); } catch { return false; } };
+  const warnings = [];
+  if ((await bytesAt(root, 'package.json')) !== null && !(await isDir('node_modules'))) {
+    warnings.push({ code: 'missing-deps', path: 'node_modules', message: 'package.json exists but node_modules is missing; checks may fail to spawn (try npm ci --offline)' });
+  }
+  if ((await bytesAt(root, 'pyproject.toml')) !== null && !(await isDir('.venv'))) {
+    warnings.push({ code: 'missing-deps', path: '.venv', message: 'pyproject.toml exists but .venv is missing; checks may fail to spawn (try uv sync --offline)' });
+  }
+  return warnings;
+}
 
 // Field lesson 110/117: a check's tail already holds its own evidence; these two views over the
 // same text serve different reports — the last few failing lines for `integrate`'s `failures`,
@@ -125,6 +184,20 @@ const LOCKFILE_NAMES = new Set(['uv.lock', 'package-lock.json', 'Cargo.lock', 'p
 const FAILURE_LINE_RE = /fail|error|assert|expected|✗|✕/i;
 export const lastFailureLines = (tail, cap = 5) => tail.split('\n').map(line => line.trim()).filter(line => line && FAILURE_LINE_RE.test(line)).slice(-cap);
 export const firstFailureLine = tail => tail.split('\n').map(line => line.trim()).find(line => line && FAILURE_LINE_RE.test(line)) ?? null;
+
+// Field lesson 128: shas and provenance strings come from the coordinator, never a worker's own
+// invention; a 40- (git) or 64-hex (sha256) string is suspect only once it is both new (absent
+// from the file's own prior bytes) and not read verbatim anywhere in the job's own context.
+const HEX_HASH_RE = /\b[0-9a-fA-F]{64}\b|\b[0-9a-fA-F]{40}\b/g;
+export function inventedHashesIn(afterText, beforeText, contextText) {
+  const found = new Set();
+  for (const match of afterText.matchAll(HEX_HASH_RE)) {
+    const hash = match[0];
+    if (beforeText.includes(hash) || contextText.includes(hash)) continue;
+    found.add(hash);
+  }
+  return [...found];
+}
 
 // Field lesson 110: a prior `integrate --require-checks` failure can be replayed into a fresh
 // `validate`/`run` as `--evidence`, so a follow-up job sees the exact failing assertion text
@@ -171,6 +244,18 @@ function relative(value, internal = false) {
   if (parts.some(p => !p || p === '.' || p === '..')) fail(`Unsafe path: ${value}`);
   if (!internal && parts.some(p => ['.git', '.swarm', '.env', '.ssh', '.aws', '.gnupg'].includes(p.toLowerCase()) || p.toLowerCase().startsWith('.env.'))) fail(`Reserved or secret path: ${value}`);
   return parts;
+}
+
+// Field lesson 137: a harness or coordinator sometimes has only the absolute manifest path in
+// hand (from a replay, a glob, a prior command's own output); accepted transparently once it
+// resolves inside --root, exactly as if the relative form had been typed, instead of a bare
+// "Invalid relative path" that names no way to fix it.
+function resolveManifestArgument(root, argument) {
+  if (typeof argument === 'string' && path.isAbsolute(argument)) {
+    const relativeForm = path.relative(root, argument).split(path.sep).join('/');
+    if (relativeForm && !relativeForm.startsWith('..')) return relativeForm;
+  }
+  return argument;
 }
 
 // A simple glob is exactly one directory plus an optional filename prefix plus `*.ext`; no `**`,
@@ -671,12 +756,12 @@ async function outputsChanged(root, job, { existingOnly = false } = {}) {
 // after it exists and before the worker starts — a toolchain sync (`uv sync`, `npm ci`) needs
 // network the worker itself never gets. Same env as the manifest's own `checks` (incl.
 // SWARM_PORT_BASE), never the worker key. Returns the `setup-failed: ...` message, or null.
-async function runJobSetup(root, directory, job, worktree, spawnImpl, portBase) {
+async function runJobSetup(root, directory, job, worktree, spawnImpl, portBase, cancelled) {
   if (!job.setup?.length) return null;
   const env = portBase != null ? { ...process.env, SWARM_PORT_BASE: String(portBase) } : process.env;
   let log = '';
   for (const argv of job.setup) {
-    const result = await runCheck(argv[0], argv, worktree, 600000, spawnImpl, false, () => {}, env);
+    const result = await runCheck(argv[0], argv, worktree, 600000, spawnImpl, false, () => {}, env, { cancelled });
     log += `$ ${argv.join(' ')}\n${result.tail}\n`;
     if (result.status !== 'passed') {
       await write(root, `${directory}/${job.id}/setup.log`, redactSecrets(log), true);
@@ -713,7 +798,7 @@ async function executeCodexJob(root, directory, job, proposalRoot, options) {
       baseline.baseHashes[file] = bytes === null ? null : digest(bytes);
       baseline.baseModes[file] = bytes === null ? 0o644 : (await fs.stat(await safePath(worktree, file))).mode & 0o777;
     }
-    const setupError = await runJobSetup(root, directory, job, worktree, options.spawnImpl, options.portBase);
+    const setupError = await runJobSetup(root, directory, job, worktree, options.spawnImpl, options.portBase, options.cancelled);
     if (setupError) { result = setupFailedResult(setupError); return result; }
     const metadataDir = await fs.realpath((await git(worktree, ['rev-parse', '--absolute-git-dir'])).trim());
     const readPaths = await resolveReadPaths(job.readPaths);
@@ -783,6 +868,25 @@ async function executeCodexJob(root, directory, job, proposalRoot, options) {
 // with the WHOLE claude process under a generated seatbelt profile, a job-scoped HOME and
 // config dir, an allowlisted env and a CONNECT proxy that only reaches the model API. Only
 // declared outputs are copied back into the proposal workspace; the worktree is disposable.
+// Field lesson 157: a shell job's worktree is a full git checkout (unlike a copied workspace,
+// which only ever holds declared context/outputs), so a plain file-listing diff would flag every
+// untouched repo file as a dropped write; `git status` inside it already reports only what
+// actually changed since the last snapshot, new or modified alike.
+async function worktreeStatusMap(worktree) {
+  const text = await git(worktree, ['status', '--porcelain', '--untracked-files=all']);
+  const map = new Map();
+  for (const line of text.split('\n')) {
+    if (!line) continue;
+    const code = line.slice(0, 2);
+    let file = line.slice(3);
+    const arrow = file.indexOf(' -> ');
+    if (arrow !== -1) file = file.slice(arrow + 4);
+    if (file.startsWith('"') && file.endsWith('"')) { try { file = JSON.parse(file); } catch { /* keep the quoted form as-is */ } }
+    map.set(file, code);
+  }
+  return map;
+}
+
 async function executeClaudeShellJob(root, directory, job, proposalRoot, dependencyFiles, message, options) {
   const hooks = options.shellHooks ?? {};
   const workerKey = options.workerKey;
@@ -806,8 +910,11 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
       baseline.baseHashes[file] = bytes === null ? null : digest(bytes);
       baseline.baseModes[file] = bytes === null ? 0o644 : (await fs.stat(await safePath(worktree, file))).mode & 0o777;
     }
-    const setupError = await runJobSetup(root, directory, job, worktree, options.spawnImpl, options.portBase);
+    const setupError = await runJobSetup(root, directory, job, worktree, options.spawnImpl, options.portBase, options.cancelled);
     if (setupError) { result = setupFailedResult(setupError); return result; }
+    // Field lesson 157: snapshotted once setup (which may itself add a synced venv, node_modules,
+    // or similar build artifacts) has already run, so only what the worker's own turn adds counts.
+    const beforeStatus = await worktreeStatusMap(worktree);
     const shellDir = await safePath(root, `${directory}/${job.id}/shell/placeholder`, { internal: true, parents: true }).then(file => path.dirname(file));
     // Field lesson #145: TMPDIR/HOME live in a per-job scratch dir outside every repo (never under
     // `shellDir`, which sits inside this project's own worktree), so a tool that refuses to write
@@ -864,6 +971,17 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
       if (containsKey(result[key], workerKey)) { result.workerKeyExposed = true; result[key] = redactKey(result[key], workerKey); }
     }
     if (result.status === 'complete') {
+      // Field lesson 157: a new file that IS a declared output is never a dropped write, whether
+      // or not it existed before the job ran — matched against job.outputs the same way integrate
+      // matches a proposed file against declared.outputs, before the new-vs-modified split below.
+      const afterStatus = await worktreeStatusMap(worktree);
+      const dropped = [], droppedNew = [];
+      for (const [file, code] of afterStatus) {
+        if (job.outputs.includes(file) || beforeStatus.get(file) === code) continue;
+        dropped.push(file);
+        if (!beforeStatus.has(file)) droppedNew.push(file);
+      }
+      if (dropped.length) { result.droppedWrites = dropped.sort(); if (droppedNew.length) result.droppedWritesNew = droppedNew.sort(); }
       const outputs = [], leaked = [];
       for (const file of job.outputs) {
         const bytes = await bytesAt(worktree, file);
@@ -1153,7 +1271,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
             result.error = result.error ? `${failure.agentError}; ${result.error}` : failure.agentError;
           }
         }
-        if (job.shell === true) Object.assign(record, { proxyRefused: result.proxyRefused ?? [], loopbackDenied: result.loopbackDenied ?? [], scratchDir: result.scratchDir ?? null, ...(result.venvInterpreterDenied?.length ? { venvInterpreterDenied: result.venvInterpreterDenied } : {}), ...(result.workerKeyExposed ? { workerKeyExposed: true } : {}), ...(result.loopbackScanHint ? { loopbackScanHint: result.loopbackScanHint } : {}) });
+        if (job.shell === true) Object.assign(record, { proxyRefused: result.proxyRefused ?? [], loopbackDenied: result.loopbackDenied ?? [], scratchDir: result.scratchDir ?? null, ...(result.venvInterpreterDenied?.length ? { venvInterpreterDenied: result.venvInterpreterDenied } : {}), ...(result.workerKeyExposed ? { workerKeyExposed: true } : {}), ...(result.loopbackScanHint ? { loopbackScanHint: result.loopbackScanHint } : {}), ...(result.droppedWrites?.length ? { droppedWrites: result.droppedWrites, ...(result.droppedWritesNew?.length ? { droppedWritesNew: result.droppedWritesNew } : {}) } : {}) });
         Object.assign(record, { permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt) });
         await queueSave();
       } catch (error) {
@@ -1291,7 +1409,10 @@ const permissionDenialWarnings = state => state.jobs.flatMap(job => (job.permiss
 const invalidJsonOutputWarnings = state => state.jobs.flatMap(job => (job.invalidJsonOutputs ?? []).map(file => `output-invalid-json: ${file}`));
 // Field lesson 37: a worker edit that lands outside its declared outputs is silently discarded at
 // integrate time; surfaced here (workspace-diff based) so `inspect`/`integrate` show it up front.
-const droppedWriteWarnings = state => state.jobs.flatMap(job => (job.droppedWrites ?? []).map(file => `dropped write: ${file} (not in outputs)`));
+// Field lesson 157: a shell job's worktree diff can tell a brand-new stray file from a modified
+// one (droppedWritesNew, populated only there); a non-shell job's copied workspace never carries
+// that distinction, so job.droppedWritesNew stays undefined and the message is unchanged.
+const droppedWriteWarnings = state => state.jobs.flatMap(job => (job.droppedWrites ?? []).map(file => `dropped write: ${file}${(job.droppedWritesNew ?? []).includes(file) ? ' (new)' : ''} (not in outputs)`));
 // Field lesson #142: a synced venv's own interpreter directory lived under $HOME but inside a
 // denied subtree (e.g. `~/.ssh`); surfaced, never fatal, since the worker may not need it anyway.
 const venvInterpreterWarnings = state => state.jobs.flatMap(job => job.venvInterpreterDenied ?? []);
@@ -1370,10 +1491,10 @@ function expandRootArgv(argv, root) {
   return argv.map(item => item.split('{root}').join(root));
 }
 
-function runCheck(name, argv, cwd, timeoutMs, spawnImpl, characterTail = false, onOutput = () => {}, env = process.env) {
+export function runCheck(name, argv, cwd, timeoutMs, spawnImpl, characterTail = false, onOutput = () => {}, env = process.env, { cancelled, killImpl } = {}) {
   return new Promise(resolve => {
     const start = Date.now();
-    let chunks = [], size = 0, settled = false, child, timer;
+    let chunks = [], size = 0, settled = false, child, timer, poll, reason, termination;
     // Redcheck promises characters; existing integration checks promise bytes.
     const retainedBytes = characterTail ? CHECK_TAIL * 4 : CHECK_TAIL;
     // Bound retained memory while keeping enough data for the requested tail.
@@ -1382,28 +1503,63 @@ function runCheck(name, argv, cwd, timeoutMs, spawnImpl, characterTail = false, 
       chunks.push(data); size += data.length;
       while (chunks.length > 1 && size - chunks[0].length >= retainedBytes) size -= chunks.shift().length;
     };
-    const finish = (status, exitCode) => {
+    // Field lesson 139: a check's own child may itself spawn descendants (a test harness, a
+    // bundler); stopChild kills the whole group it leads, the same guarantee execute() already
+    // gives the worker's own process. finish() below always awaits it before resolving, so this
+    // promise only settles once that group is confirmed gone — never merely "signal sent".
+    const stop = why => { if (reason || settled) return; reason = why; termination = stopChild(child, { killImpl }); termination.then(cleanup => { if (cleanup.error) finish('failed', null); }); };
+    // Field lesson 134/138/152: a check that never started at all (Node could not spawn its own
+    // argv[0]) is a distinct, more basic failure than one whose own binary/module could not be
+    // found after something did start (exit 127, or "command not found"/ERR_MODULE_NOT_FOUND in
+    // its own output) — which is itself distinct from a real pass/fail.
+    const finish = async (status, exitCode) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimeout(timer); clearInterval(poll);
+      const cleanup = await (termination ?? Promise.resolve({ error: null }));
       const combined = Buffer.concat(chunks);
       const tail = characterTail ? combined.toString('utf8').slice(-CHECK_TAIL) : combined.length > CHECK_TAIL ? combined.subarray(combined.length - CHECK_TAIL).toString('utf8') : combined.toString('utf8');
-      resolve({ name, status, exitCode, durationMs: Date.now() - start, tail, ...(status === 'error' ? { hint: `could not start ${argv[0]}: pass the test command as separate argv tokens` } : {}) });
+      // reason is recorded synchronously in stop(), before any signal is ever sent, so it always
+      // reflects whether a cancel/timeout was requested prior to this exit; it must outrank a
+      // cleanup-probe error (which only means "couldn't confirm the group is gone", not that the
+      // requested cancel/timeout didn't happen) or a same-tick close/exit event would misreport a
+      // real cancellation as a plain failure.
+      const finalStatus = reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : cleanup.error ? 'failed'
+        : status === 'failed' && (exitCode === 127 || UNRUNNABLE_RE.test(tail)) ? 'unrunnable' : status;
+      const hint = finalStatus === 'spawn-error' ? `could not start ${argv[0]}: pass the test command as separate argv tokens`
+        : finalStatus === 'unrunnable' ? `${argv[0]} could not run (missing tool/module): try npm ci --offline or uv sync --offline`
+        : undefined;
+      resolve({ name, status: finalStatus, exitCode, durationMs: Date.now() - start, tail, ...(hint ? { hint } : {}) });
     };
     try {
       const [program, ...rest] = argv;
-      child = spawnImpl(program, rest, { cwd, shell: false, stdio: ['ignore', 'pipe', 'pipe'], env });
-      child.on('error', () => finish('error', null));
+      child = spawnImpl(program, rest, { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'], env });
+      child.on('error', () => finish('spawn-error', null));
       for (const stream of [child.stdout, child.stderr]) stream?.on('data', data => push(Buffer.isBuffer(data) ? data : Buffer.from(data)));
       child.on('close', code => finish(code === 0 ? 'passed' : 'failed', code));
-      timer = setTimeout(() => { child.kill('SIGKILL'); finish('timeout', null); }, timeoutMs);
-    } catch { finish('error', null); }
+      timer = setTimeout(() => stop('timeout'), timeoutMs);
+      if (cancelled) poll = setInterval(async () => { try { if (!settled && await cancelled()) stop('cancelled'); } catch { stop('cancelled'); } }, 100);
+    } catch { finish('spawn-error', null); }
   });
 }
+const UNRUNNABLE_RE = /command not found|ERR_MODULE_NOT_FOUND/i;
+const CHECK_ERRORED_STATUSES = new Set(['spawn-error', 'unrunnable']);
 
-async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { baseCommit, noFlakeCheck = false, portBase } = {}) {
+async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { baseCommit, noFlakeCheck = false, portBase, preChecks = [] } = {}) {
   const env = portBase != null ? { ...process.env, SWARM_PORT_BASE: String(portBase) } : process.env;
   const results = [];
+  // Field lesson 134/138/152: a check that never started gets one automatic resync (the
+  // manifest's own preChecks, run at most once for the whole batch) plus a single retry before
+  // it is ever reported red; a check that already ran and genuinely failed never gets this.
+  let preChecksRetryPromise = null;
+  const runPreChecksOnce = () => {
+    preChecksRetryPromise ??= (async () => {
+      const log = [];
+      for (const [index, argv] of preChecks.entries()) log.push(await runCheck(argv.join(' ').slice(0, 60) || `preCheck-${index + 1}`, expandRootArgv(argv, root), root, 300000, spawnImpl, false, () => {}, env));
+      return log;
+    })();
+    return preChecksRetryPromise;
+  };
   for (const check of checks) {
     const { argv, empty } = expandCheckArgv(check.argv, integratedFiles, newFiles, root);
     if (empty) { results.push({ name: check.name, status: 'skipped', exitCode: null, durationMs: 0, tail: '', runs: 0 }); continue; }
@@ -1420,6 +1576,10 @@ async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { b
       runs = attempt; failedFile = undefined; outputWindow = '';
       result = await runCheck(check.name, argv, root, check.timeoutMs ?? 300000, spawnImpl, false, identifyTest, env);
       if (result.status !== 'passed') break;
+    }
+    if (CHECK_ERRORED_STATUSES.has(result.status)) {
+      if (preChecks.length) await runPreChecksOnce();
+      result = { ...await runCheck(check.name, argv, root, check.timeoutMs ?? 300000, spawnImpl, false, () => {}, env), retriedAfterError: true };
     }
     if (check.repeat !== undefined && result.status === 'failed' && !noFlakeCheck && baseCommit) {
       const file = failedFile;
@@ -1453,8 +1613,18 @@ async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { b
   }
   // Field lesson 110: a compact per-check failure summary (name + last few failing lines,
   // capped) so a coordinator does not have to open the full tail to see what broke.
-  const failures = results.filter(check => ['failed', 'timeout', 'error'].includes(check.status)).map(check => ({ name: check.name, lines: lastFailureLines(check.tail) }));
-  return { checks: results, checksPassed: results.every(check => !['failed', 'timeout', 'error'].includes(check.status)), failures };
+  const NOT_PASSED = ['failed', 'timeout', 'spawn-error', 'unrunnable'];
+  const failures = results.filter(check => NOT_PASSED.includes(check.status)).map(check => ({ name: check.name, lines: lastFailureLines(check.tail) }));
+  // Field lesson 138 (tool half): a check that never started is invalid evidence, not a red
+  // check; surfaced distinctly so a caller (integrate/selfCheck) can refuse to score it as either.
+  const checksErrored = results.some(check => CHECK_ERRORED_STATUSES.has(check.status));
+  return {
+    checks: results,
+    checksPassed: results.every(check => !NOT_PASSED.includes(check.status)),
+    checksErrored,
+    failures,
+    ...(preChecksRetryPromise ? { retryPreChecks: await preChecksRetryPromise } : {}),
+  };
 }
 
 // The mutant's file is written, checked, then always restored byte-for-byte (try/finally,
@@ -1472,7 +1642,10 @@ async function runMutant(root, mutant, checkSpec, spawnImpl, env = process.env) 
   try {
     await write(root, mutant.file, mutated, false, mode);
     const result = await runCheck(mutant.name, expandRootArgv(checkSpec.argv, root), root, checkSpec.timeoutMs ?? 300000, spawnImpl, false, () => {}, env);
-    const status = result.status === 'passed' ? 'survived' : result.status === 'failed' ? 'killed' : 'error';
+    // Field lesson 136: a real test failure exits 1 (pytest, vitest, jest and mocha all agree on
+    // this); any other non-passing exit is the check's own usage/collection error (pytest 2-5, a
+    // config error, "no tests ran") and never counts as a kill, no matter how it reads in a tail.
+    const status = result.status === 'passed' ? 'survived' : result.status === 'failed' ? (result.exitCode === 1 ? 'killed' : 'invalid') : 'error';
     return { name: mutant.name, file: mutant.file, status, exitCode: result.exitCode, durationMs: result.durationMs, tail: result.tail };
   } finally {
     await write(root, mutant.file, original, false, mode);
@@ -1549,6 +1722,11 @@ export async function runMutantsCurrentTree(root, { mutantsFile, mutantCheck } =
   if (!mutants.length) fail('No mutants declared; pass --mutants-file with at least one mutant');
   if (!mutantCheck) fail('mutants requires --mutant-check "<argv json>"');
   const checkSpec = parseMutantCheckFlag(mutantCheck);
+  // Field lesson 136: a mutation "kill" only means something once the check is known to pass on
+  // the unmutated tree; a check whose own argv or harness is already broken (a missing test file,
+  // a bad path) would otherwise fail identically for every mutant and read as a perfect score.
+  const baseline = await runCheck('mutants-baseline', expandRootArgv(checkSpec.argv, root), root, checkSpec.timeoutMs ?? 300000, spawnImpl);
+  if (baseline.status !== 'passed') fail(`Refusing to run mutants: the mutant check does not pass on the unmutated tree (${baseline.status}${Number.isInteger(baseline.exitCode) ? `, exit ${baseline.exitCode}` : ''})`);
   const results = [];
   for (const mutant of mutants) {
     if (isInterrupted()) break;
@@ -1581,15 +1759,21 @@ export async function workerKeyGuard(root, id, state, { env = process.env, keyEx
   if (hits.length) fail(`Refusing: run ${id} contains the worker API key in ${hits.slice(0, 5).join(', ')}`);
 }
 
-export async function integrateRun(root, id, { noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec } = {}) {
+export async function integrateRun(root, id, { noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false } = {}) {
   root = await fs.realpath(root);
   const state = await readState(root, id);
-  if (state.root !== root || state.id !== id || state.status !== 'complete') fail('Only a complete run from this repository can be integrated');
-  await workerKeyGuard(root, id, state, { env, keyExec });
+  // Field lesson 131: a job that stopped `blocked` (an out-of-scope break it could not fix itself)
+  // may still have written every one of its own declared outputs; --accept-blocked lets those
+  // outputs through the same conflict/snapshot checks as any other job, instead of a hand copy.
+  const jobsAcceptable = job => acceptBlocked ? ['complete', 'blocked'].includes(job.status) : job.status === 'complete';
+  if (state.root !== root || state.id !== id) fail('Run belongs to another repository');
   // Field lesson 120: a run left `integrationStatus: 'partial'` by an earlier failure that struck
   // after its files were already written (preChecks/checks/mutants) may be retried; only a fully
-  // completed integration refuses outright.
+  // completed integration refuses outright. Checked before the completeness gate below so a run
+  // already integrated (blocked or otherwise) always reports that, not a generic status mismatch.
   if (state.integratedAt && state.integrationStatus !== 'partial') fail('Run already integrated');
+  if (!(acceptBlocked ? state.jobs.every(jobsAcceptable) : state.status === 'complete')) fail(`Only a complete${acceptBlocked ? ' or blocked' : ''} run from this repository can be integrated`);
+  await workerKeyGuard(root, id, state, { env, keyExec });
   const manifest = validateManifest(JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true)));
   if (state.jobs.length !== manifest.jobs.length) fail('Job records do not match manifest');
   const lock = await safePath(root, '.swarm/integration.lock', { internal: true });
@@ -1597,12 +1781,16 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   const writes = [];
   const newFiles = [];
   const jobMutantsBytes = new Map();
+  const inventedHashWarnings = [];
   try {
     for (const [index, job] of state.jobs.entries()) {
       const declared = manifest.jobs[index];
       const expectedWorkspace = `.swarm/workspaces/${id}/${declared.id}`;
-      if (job.id !== declared.id || job.workspace !== expectedWorkspace || job.status !== 'complete' || JSON.stringify(job.outputs) !== JSON.stringify(declared.outputs)) fail('Worker metadata does not match manifest');
+      if (job.id !== declared.id || job.workspace !== expectedWorkspace || !jobsAcceptable(job) || JSON.stringify(job.outputs) !== JSON.stringify(declared.outputs)) fail('Worker metadata does not match manifest');
       const workspaceRoot = await safePath(root, expectedWorkspace, { internal: true });
+      // Field lesson 128: the job's own context, concatenated once, is the only source a worker
+      // could have copied a real sha/provenance string from verbatim.
+      const contextText = (await Promise.all(declared.context.map(async file => (await bytesAt(root, file))?.toString('utf8') ?? ''))).join('\n');
       for (const file of declared.outputs) {
         const current = await bytesAt(root, file);
         const currentHash = current === null ? null : digest(current);
@@ -1619,6 +1807,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
           if (currentHash !== job.baseHashes[file]) fail(`Integration conflict: ${file} changed since worker snapshot`);
         }
         if (declared.mutantsFile === file) jobMutantsBytes.set(file, output);
+        for (const hash of inventedHashesIn(output.toString('utf8'), current?.toString('utf8') ?? '', contextText)) inventedHashWarnings.push(`invented-hash: ${declared.id}: ${file}: ${hash}`);
         if (outputHash !== currentHash) { writes.push({ file, bytes: output, previous: current, mode: currentMode }); if (job.baseHashes[file] === null) newFiles.push(file); }
       }
     }
@@ -1668,10 +1857,12 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
     const { base: portBase, moved: portMoved } = await resolvePortBlock(root);
     const portWarnings = portMoved ? [portBase === originalPortBase ? `port-block-busy: ${portBase}` : `port-block-moved: ${originalPortBase} -> ${portBase}`] : [];
     const portEnv = { ...process.env, SWARM_PORT_BASE: String(portBase) };
-    // Field lesson 109: a changed lockfile means the checked-out environment may no longer match
-    // it. `preChecks` (plain argv, run in order) resyncs it before the manifest's own checks run;
-    // with no `preChecks` declared, this is at least surfaced instead of silently stale.
-    const lockfileChanged = state.integratedFiles.some(file => LOCKFILE_NAMES.has(path.basename(file)));
+    // Field lesson 109/127/148: a changed lockfile, or a changed dependency/version manifest file
+    // (pyproject.toml/package.json/Cargo.toml) even with no lockfile byte moved, means the
+    // checked-out environment may no longer match it. `preChecks` (plain argv, run in order)
+    // resyncs it before the manifest's own checks run; with no `preChecks` declared, this is at
+    // least surfaced instead of silently stale.
+    const lockfileChanged = state.integratedFiles.some(file => ENV_RESYNC_TRIGGER_NAMES.has(path.basename(file)));
     const preChecksResult = { preChecks: [], warnings: [] };
     if (lockfileChanged) {
       if (manifest.preChecks?.length) {
@@ -1682,7 +1873,11 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
     if (preChecksResult.warnings.length) state.preCheckWarnings = preChecksResult.warnings;
     // Checks run after every integrated file is written and are never rolled back on failure:
     // a formatter may legitimately rewrite the files this same integration just wrote.
-    const checksResult = noChecks ? { checks: [], checksPassed: true, checksSkipped: true, failures: [] } : { ...await runChecks(root, manifest.checks ?? [], state.integratedFiles, newFiles, spawnImpl, { baseCommit: state.baseCommit, noFlakeCheck, portBase }), checksSkipped: false };
+    // Field lesson 133: recorded as its own session-metrics window so "checks running" is
+    // reported apart from idle time, instead of only ever showing up as one long silent gap.
+    const checksStartedAt = new Date().toISOString();
+    const checksResult = noChecks ? { checks: [], checksPassed: true, checksSkipped: true, failures: [] } : { ...await runChecks(root, manifest.checks ?? [], state.integratedFiles, newFiles, spawnImpl, { baseCommit: state.baseCommit, noFlakeCheck, portBase, preChecks: manifest.preChecks ?? [] }), checksSkipped: false };
+    if (!noChecks) await writeSessionMetric(root, 'checks', id, { startedAt: checksStartedAt, finishedAt: new Date().toISOString(), costUsd: null });
     Object.assign(state, checksResult);
     // Field lesson 123: mutants only count against a green base — a red base fails every mutant
     // regardless of the guard under test, so a "killed" verdict there would prove nothing. Mutation
@@ -1698,14 +1893,20 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
           mutantsSkippedRedBase: true,
         };
       } else {
+        const mutantsStartedAt = new Date().toISOString();
         mutantsResult = await runMutants(root, manifest, spawnImpl, { mutantsFile, mutantCheck, preValidated: preValidatedMutants, portBase });
+        await writeSessionMetric(root, 'mutants', id, { startedAt: mutantsStartedAt, finishedAt: new Date().toISOString(), costUsd: null });
       }
       Object.assign(state, mutantsResult);
     }
-    const warnings = [...portWarnings, ...preChecksResult.warnings, ...(mutantsResult.mutantsSkippedRedBase ? ['mutants skipped: red base (checks failed)'] : []), ...droppedWriteWarnings(state)];
-    state.integrationStatus = 'complete';
+    const warnings = [...portWarnings, ...preChecksResult.warnings, ...(mutantsResult.mutantsSkippedRedBase ? ['mutants skipped: red base (checks failed)'] : []), ...droppedWriteWarnings(state), ...inventedHashWarnings];
+    // Field lesson 131: a blocked job's own outputs went in through the same checks as any other;
+    // the run is tagged distinctly so a later `inspect`/`ship` never mistakes it for a clean pass,
+    // and the blocked reason rides along as ready-made evidence for whatever job comes next.
+    const blockedJobs = state.jobs.filter(job => job.status === 'blocked');
+    state.integrationStatus = acceptBlocked && blockedJobs.length ? 'integrated-blocked' : 'complete';
     await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
-    return { id, status: 'integrated', files: state.integratedFiles, portBase, ...(preChecksResult.preChecks.length ? { preChecks: preChecksResult.preChecks } : {}), ...(warnings.length ? { warnings } : {}), ...checksResult, ...mutantsResult };
+    return { id, status: 'integrated', integrationStatus: state.integrationStatus, files: state.integratedFiles, portBase, ...(preChecksResult.preChecks.length ? { preChecks: preChecksResult.preChecks } : {}), ...(warnings.length ? { warnings } : {}), ...checksResult, ...mutantsResult, ...(blockedJobs.length ? { blockedEvidence: blockedJobs.map(job => ({ name: job.id, lines: [job.error ?? 'blocked'] })) } : {}) };
   } finally { await fs.rmdir(lock); }
 }
 
@@ -1833,15 +2034,19 @@ export async function validateProject(root, manifest, { exec = execFileAsync } =
     // core module on any other agent can never itself run the tests that pin its behavior.
     const coreWarning = coreModuleNoShellWarning(job);
     if (coreWarning) warnings.push(coreWarning);
-    // Field lesson 113: same reasoning — a prompt quoting a runtime-check failure needs a shell
-    // agent (or --evidence) to actually reproduce it.
-    const runtimeWarning = runtimeCheckNoShellWarning(job);
+    // Field lesson 113/153: same reasoning — a prompt quoting a runtime-check failure, a check
+    // whose own argv loops, or a prompt naming a flake/race needs a shell agent to reproduce it.
+    const runtimeWarning = runtimeCheckNoShellWarning(job, manifest);
     if (runtimeWarning) warnings.push(runtimeWarning);
     // Field lesson 119: a job's own mutants-shaped output only gets its shape checked once
     // integrate reads it; warn as soon as the manifest is validated, not after the build runs.
     warnings.push(...undeclaredMutantsFileWarnings(job));
     const testsWarning = testsWithoutShellWarning(job);
     if (testsWarning) warnings.push(testsWarning);
+    // Field lesson 127/148: a job that outputs a dependency/version file with no preChecks
+    // declared to resync the environment leaves the next checks run pointed at a stale install.
+    const staleEnvWarning = staleEnvRiskWarning(manifest, job);
+    if (staleEnvWarning) warnings.push(staleEnvWarning);
     // contextGlob is expanded here (validate/run time), never at manifest-write time, so a job
     // can pick up files a build step later adds to a shared directory without editing the manifest.
     // Field lesson 115: also echoes, per pattern, how many files it matched.
@@ -1849,6 +2054,7 @@ export async function validateProject(root, manifest, { exec = execFileAsync } =
     const context = [...new Set([...job.context, ...contextGlobExtra])];
     let bytes=0;
     const files=[];
+    const testOutputTexts = new Map();
     for(const file of new Set([...context,...job.outputs])){
       const data=await bytesAt(root,file);
       if(data===null && context.includes(file)) fail(`Missing context: ${file}`);
@@ -1858,19 +2064,26 @@ export async function validateProject(root, manifest, { exec = execFileAsync } =
       files.push({path:file,bytes:data===null?0:data.length,exists:data!==null,context:context.includes(file),output:job.outputs.includes(file)});
       if(data !== null && !['claude', 'codex'].includes(job.agent)) decodeContext(data);
       if(bytes>MAX_CONTEXT) fail(`Context exceeds 32 MiB for ${job.id}`);
+      if (data !== null && job.outputs.includes(file) && isTestFile(file)) testOutputTexts.set(file, data.toString('utf8'));
     }
     for (const file of job.ignoreTests ?? []) {
       if ((await bytesAt(root, file)) === null) fail(`Job ${job.id}: missing ignoreTests entry: ${file}`);
     }
+    // Field lesson 149: a test timeout under 5s is a hang guard, not a timing assertion.
+    warnings.push(...tightTestTimeoutWarnings(job, testOutputTexts));
     // Catches a review round's context copied from an earlier round, silently omitting files
     // added since to the same directory (e.g. new screenshot captures); also covers a contextGlob
     // that names one capture kind but not another sharing the same directory (lesson 34).
-    warnings.push(...contextDirectoryWarnings(root, { id: job.id, context, contextGlob: job.contextGlob }));
+    warnings.push(...contextDirectoryWarnings(root, { id: job.id, context, outputs: job.outputs, contextGlob: job.contextGlob }));
+    // Field lesson 155/#(registry-pinning half): a job adding a file to a directory an existing
+    // test enumerates (glob/listdir) also needs that test in its own context/outputs/ignoreTests.
+    warnings.push(...registryPinningWarnings(root, { id: job.id, outputs: job.outputs, context, ignoreTests: job.ignoreTests ?? [] }, projectFiles));
     // Catches a worker changing an output's behavior without ever seeing the test that
     // asserts it: advisory static text matching, resolved via context or ignoreTests.
     for (const pair of findUncoveredTests(root, { ...job, context }, projectFiles)) uncovered.push({ job: job.id, ...pair });
     jobs.push({id:job.id,agent:job.agent,model:job.model??null,...(job.shell===true?{shell:true}:{}),tier:job.tier??null,tierReason:job.tierReason??null,contextBytes:bytes,outputs:job.outputs,files,contextGlobCounts});
   }
+  warnings.push(...await missingDepsWarnings(root));
   if (uncovered.length) throw Object.assign(new Error(`Uncovered test references (add the test to context, or list it in ignoreTests with a reason in the prompt): ${uncovered.map(u => `${u.job}: ${u.output} <- ${u.test}`).join('; ')}`), { details: { suggestedIgnoreTests: suggestIgnoreTests(uncovered) } });
   return {status:'valid',root,jobs,warnings};
 }
@@ -1881,21 +2094,26 @@ export async function inspectRun(root,id){
   const manifest=validateManifest(JSON.parse(await bytesAt(root,`.swarm/runs/${id}/manifest.json`,true)));
   const files=[];
   const jobs=[];
+  const inventedHashWarnings=[];
   for(const job of manifest.jobs){
     const record=state.jobs.find(j=>j.id===job.id);if(!record)fail('Missing job record');
     // tier/tierReason are validated metadata only; they never change which model ran.
     const parsedResult=await jobFinalJson(root,id,job.id);
     jobs.push({id:job.id,agent:job.agent,model:job.model??null,...(job.shell===true?{shell:true,checksRun:Array.isArray(parsedResult?.checksRun)?parsedResult.checksRun:null,proxyRefused:record.proxyRefused??[],loopbackDenied:record.loopbackDenied??[]}:{}),tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,...(record.agentError?{agentError:record.agentError}:{}),...(record.resultMissing?{resultMissing:true}:{}),result:displayResult(parsedResult),costUsd:typeof record.costUsd==='number'?record.costUsd:null,costPer1kOutputTokens:costPer1kOutputTokens(record),tokens:jobTokens(record),modelsSeen:record.modelsSeen??[],modelMismatch:record.modelMismatch??false});
     const workspaceRoot=await safePath(root,`.swarm/workspaces/${id}/${job.id}`,{internal:true});
+    // Field lesson 128: the same invented-hash scan integrate runs, surfaced here before any file
+    // is actually written, so a made-up sha is visible at inspect time too.
+    const contextText=(await Promise.all(job.context.map(async file=>(await bytesAt(root,file))?.toString('utf8')??''))).join('\n');
     for(const file of job.outputs){
       const current=await bytesAt(root,file),proposed=await bytesAt(workspaceRoot,file);
       const currentHash=current===null?null:digest(current),proposedHash=proposed===null?null:digest(proposed);
       const currentMode=current===null?0o644:(await fs.stat(await safePath(root,file))).mode & 0o777;
       const conflict=currentHash!==record.baseHashes[file]||(current!==null&&record.baseModes?.[file]!==undefined&&currentMode!==record.baseModes[file]);
       files.push({job:job.id,jobStatus:record.status,path:file,baseHash:record.baseHashes[file],currentHash,proposedHash,bytes:proposed?.length??0,status:record.status!=='complete'?'blocked':proposed===null?'missing':state.integratedAt&&currentHash===proposedHash?'applied':conflict?'conflict':currentHash===proposedHash?'unchanged':'ready'});
+      if(proposed!==null)for(const hash of inventedHashesIn(proposed.toString('utf8'),current?.toString('utf8')??'',contextText))inventedHashWarnings.push(`invented-hash: ${job.id}: ${file}: ${hash}`);
     }
   }
-  return {id,status:state.status,integratedAt:state.integratedAt??null,tokens:tokensTotal(jobs.map(job=>job.tokens)),costNotReported:costNotReported(jobs),warnings:runWarnings(state),jobs,files};
+  return {id,status:state.status,integratedAt:state.integratedAt??null,tokens:tokensTotal(jobs.map(job=>job.tokens)),costNotReported:costNotReported(jobs),warnings:[...runWarnings(state),...inventedHashWarnings],jobs,files};
 }
 
 // Lesson #48: a coordinator asking only "did it work, what did it say" should not have to
@@ -1978,6 +2196,9 @@ export async function askRun(root, { model, context = [], agent = 'claude', time
   const state = await runManifest(root, { version: 1, jobs: [job] }, { ...runOptions, id });
   const record = state.jobs[0];
   const parsed = await jobFinalJson(root, id, id);
+  // Field lesson 133: a single-question run is real elapsed session time, not idle time; a
+  // state.json-compatible record lets a session-metrics reader see it the same way it sees a run.
+  await writeSessionMetric(root, 'ask', id, { startedAt: state.startedAt, finishedAt: state.finishedAt, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null });
   return { id, status: state.status, model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, result: displayResult(parsed), ...(parsed === null ? { error: 'Worker returned no parsable final JSON' } : {}) };
 }
 
@@ -2007,6 +2228,9 @@ export async function scoutRun(root, { model, brief, context = [], timeoutMs, ma
   const markdownRelative = `.swarm/scouts/${id}/report.md`;
   await jsonWrite(root, reportRelative, { ...normalized, id, goal: trimmedGoal, model, actualModel, createdAt: new Date().toISOString() });
   await write(root, markdownRelative, renderScoutMarkdown(normalized, { goal: trimmedGoal, id, model }), true);
+  // Field lesson 133: a scout writes only under .swarm/scouts, invisible to a metrics reader that
+  // only ever scanned run state; this record gives it the same {startedAt,finishedAt,costUsd} shape.
+  await writeSessionMetric(root, 'scout', id, { startedAt: state.startedAt, finishedAt: state.finishedAt, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null });
   return { id, status: state.status, model, actualModel, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, report: reportRelative, reportMarkdown: markdownRelative, picks: normalized.picks.length, rejected: normalized.rejected.length, moved: normalized.moved, ...(parsed === null ? { error: 'scout returned no report' } : {}) };
 }
 
@@ -2405,7 +2629,7 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
     timeoutMs: flags.timeoutMs ?? SHIP_DEFAULTS.timeoutMs,
     noCiGraceMs: SHIP_DEFAULTS.noCiGraceMs,
     portBase, portWarnings,
-    runChecks: async () => (await runChecks(root, manifest.checks ?? [], state.integratedFiles ?? [], state.integratedNewFiles ?? [], spawnImpl, { baseCommit: state.baseCommit, noFlakeCheck: flags.noFlakeCheck, portBase })).checks,
+    runChecks: async () => (await runChecks(root, manifest.checks ?? [], state.integratedFiles ?? [], state.integratedNewFiles ?? [], spawnImpl, { baseCommit: state.baseCommit, noFlakeCheck: flags.noFlakeCheck, portBase, preChecks: manifest.preChecks ?? [] })).checks,
     exec, sleep,
   });
 }
@@ -2467,7 +2691,7 @@ async function main() {
   const testIndex=args.indexOf('--test');
   const rootIndex=args.findIndex((arg,index)=>arg==='--root'&&(testIndex===-1||index<testIndex));
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] | mutants --mutants-file FILE --mutant-check ARGVJSON | redcheck RUN [--base REF] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] "goal" | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] | mutants --mutants-file FILE --mutant-check ARGVJSON | redcheck RUN [--base REF] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] "goal" | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
   if(args[0]==='redcheck'){
     const hasBase=args[2]==='--base';
     const testAt=hasBase?4:2;
@@ -2637,7 +2861,7 @@ async function main() {
   }
   // integrate's checks/mutants flags are read-only selection of whether/how checks run; strip
   // them here so the generic argument-count check below still fails on anything else.
-  let noChecks=false,requireChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag;
+  let noChecks=false,requireChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag,acceptBlocked=false;
   if(command==='integrate'){
     const flags=rest.splice(0,rest.length);
     for(let index=0;index<flags.length;index++){
@@ -2648,9 +2872,13 @@ async function main() {
       if(flag==='--mutants'){useMutants=true;continue;}
       if(flag==='--mutants-file'){mutantsFileFlag=flags[++index];if(!mutantsFileFlag)fail('--mutants-file requires a value');continue;}
       if(flag==='--mutant-check'){mutantCheckFlag=flags[++index];if(mutantCheckFlag===undefined)fail('--mutant-check requires a value');continue;}
+      if(flag==='--accept-blocked'){acceptBlocked=true;continue;}
       rest.push(flag);
     }
     if(noChecks&&requireChecks)fail('--no-checks and --require-checks cannot be combined');
+    // Field lesson 130: naming a mutants source without --mutants used to run the checks and
+    // silently skip mutation testing; asking for one now means running it.
+    if((mutantsFileFlag!==undefined||mutantCheckFlag!==undefined)&&!useMutants)useMutants=true;
   }
   // wait's --timeout is read-only selection of how long to poll; stripped here for the same reason.
   let waitTimeoutSeconds=null;
@@ -2733,11 +2961,19 @@ async function main() {
   else if(command==='board')result=await boardSummary();
   else if(command==='run'||command==='validate'||command==='preflight'){
     if(command==='run'||command==='validate')await warnProjectVersionMismatch(root);
-    const bytes=await bytesAt(root,argument);if(!bytes)fail(`Missing manifest: ${argument}`);
+    const manifestArgument=resolveManifestArgument(root,argument);
+    const bytes=await bytesAt(root,manifestArgument);if(!bytes)fail(`Missing manifest: ${manifestArgument}`);
     let manifest=JSON.parse(bytes);
     if(evidenceFlag)manifest=applyEvidence(manifest,await loadEvidenceFile(path.resolve(root,evidenceFlag)));
     if(command==='preflight')result=await (await import('./preflight.mjs')).preflightProject(root,manifest);
-    else if(command==='validate')result=await validateProject(root,manifest);
+    else if(command==='validate'){
+      // Field lesson 129: the same interpreter/module probe preflight already runs, so a missing
+      // check tool/module is refused here too, not only discovered later at `integrate` time.
+      const preflightMod=await import('./preflight.mjs');
+      const probeFailures=await preflightMod.probeCheckInterpreters(manifest);
+      if(probeFailures.length)fail(`Check interpreter probe failed: ${probeFailures.map(preflightMod.describeProbeFailure).join('; ')}`);
+      result=await validateProject(root,manifest);
+    }
     else result=await runManifestChecked(root,manifest,state=>process.stdout.write(`${JSON.stringify({id:state.id,status:'running'})}\n`));
   }else if(command==='status')result=await readState(root,argument);
   else if(command==='monitor')result=summarizeRun(await readState(root,argument));
@@ -2762,12 +2998,15 @@ async function main() {
       ship: (goRoot,id,goShipFlags)=>shipRun(goRoot,id,goShipFlags),
     });
   }
-  else result=await integrateRun(root,argument,{noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag});
+  else result=await integrateRun(root,argument,{noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked});
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if(command==='wait'){if(result.status==='running')process.exitCode=2;else if(['failed','cancelled'].includes(result.status))process.exitCode=1;return;}
   if(command==='ship'){if(shipExitCode(result.status)!==0)process.exitCode=1;return;}
   if(command==='go'){if(goExitCode(result.status)!==0)process.exitCode=1;return;}
   if(['failed','cancelled'].includes(result.status))process.exitCode=1;
+  // Field lesson 138 (tool half): a check that never started is invalid evidence, not a red
+  // check; either way the CLI exits non-zero so it is never mistaken for a clean pass.
+  if(command==='integrate'&&result.checksErrored)process.exitCode=1;
   if(command==='integrate'&&requireChecks&&(result.checksPassed===false||result.mutantsPassed===false))process.exitCode=1;
 }
 

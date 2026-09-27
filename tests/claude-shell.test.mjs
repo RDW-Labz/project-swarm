@@ -23,6 +23,10 @@ const FAKE_BIN = '/opt/fake-claude/bin/claude.exe';
 // itself (see tests/shell-loopback.test.mjs), so they inject a deterministic fake scanner.
 const hooks = { access: async () => {}, resolveClaude: async () => FAKE_BIN, scanListeningPorts: async () => [] };
 const noKeychain = () => assert.fail('the real keychain must never be read in tests');
+// Field lesson #156: a nested swarm test run (this job itself, running inside a claude-shell
+// sandbox) cannot spawn a real sandbox-exec; skip with a named reason instead of a spurious
+// failure, same as the existing macOS-only skip these tests already carry.
+const SANDBOX_SKIP = process.env.SWARM_IN_SANDBOX ? 'nested sandbox: cannot spawn a real sandbox-exec' : process.platform !== 'darwin' && 'macOS only';
 const shellJob = (overrides = {}) => ({ id: 'builder', agent: 'claude', model: 'sonnet', shell: true, prompt: 'Update the output and run the checks.', context: ['input.txt'], outputs: ['output.txt'], timeoutMs: 10000, ...overrides });
 const plainJob = (overrides = {}) => ({ id: 'writer', agent: 'claude', model: 'sonnet', prompt: 'Update the assigned file.', context: ['input.txt'], outputs: ['input.txt'], timeoutMs: 5000, ...overrides });
 const manifest = (jobs, extra = {}) => ({ version: 1, jobs, ...extra });
@@ -355,7 +359,7 @@ test('proxy tunnels only api.anthropic.com:443 and records refused hosts only', 
 
 // --- the generated profile under the real sandbox-exec (macOS only, no network, no model) -------
 
-test('generated profile confines a real shell: worktree writes only, denied reads, no network, no env secrets', { skip: process.platform !== 'darwin' && 'macOS only' }, async t => {
+test('generated profile confines a real shell: worktree writes only, denied reads, no network, no env secrets', { skip: SANDBOX_SKIP }, async t => {
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-shell-seatbelt-')));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const worktree = path.join(base, 'worktree'), shellDir = path.join(base, 'run/shell'), fakeHome = path.join(base, 'home');

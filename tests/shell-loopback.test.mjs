@@ -20,6 +20,9 @@ const FAKE_KEY = 'sk-FAKE-loopback-0000';
 const FAKE_BIN = '/opt/fake-claude/bin/claude.exe';
 const noKeychain = () => assert.fail('the real keychain must never be read in tests');
 const runEnv = { ...process.env, SWARM_CLAUDE_WORKER_API_KEY: FAKE_KEY };
+// Field lesson #156: a nested swarm test run cannot spawn a real sandbox-exec; skip with a named
+// reason instead of a spurious failure, same as the existing macOS-only skip these tests carry.
+const SANDBOX_SKIP = process.env.SWARM_IN_SANDBOX ? 'nested sandbox: cannot spawn a real sandbox-exec' : process.platform !== 'darwin' && 'macOS only';
 const shellJob = (overrides = {}) => ({ id: 'builder', agent: 'claude', model: 'sonnet', shell: true, prompt: 'Run the checks.', context: ['input.txt'], outputs: ['output.txt'], timeoutMs: 10000, ...overrides });
 const manifest = jobs => ({ version: 1, jobs });
 
@@ -155,7 +158,7 @@ test('a shell job prompt states the loopback-only network line', async t => {
 
 // --- the generated profile under the real sandbox-exec (macOS only) -----------------------------
 
-test('generated profile: a fresh self-connection over loopback works; a port already listening on the host is deniable via loopbackDenied', { skip: process.platform !== 'darwin' && 'macOS only' }, async t => {
+test('generated profile: a fresh self-connection over loopback works; a port already listening on the host is deniable via loopbackDenied', { skip: SANDBOX_SKIP }, async t => {
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-loopback-net-')));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const worktree = path.join(base, 'worktree'), shellDir = path.join(base, 'run/shell');
@@ -182,7 +185,7 @@ test('generated profile: a fresh self-connection over loopback works; a port alr
   assert.match(deniedRun.stdout, /busy=blocked/);
 });
 
-test('generated profile: the project root .git is unreadable without rootGit, readable with it; git rev-parse still resolves the job worktree', { skip: process.platform !== 'darwin' && 'macOS only' }, async t => {
+test('generated profile: the project root .git is unreadable without rootGit, readable with it; git rev-parse still resolves the job worktree', { skip: SANDBOX_SKIP }, async t => {
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-loopback-git-')));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   // The project root must sit inside the denied `home` subtree for the grant to be load-bearing:

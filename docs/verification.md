@@ -156,6 +156,30 @@ A worker's edit outside its job's declared `outputs` is never applied by `integr
 
 `inspect --results` now lists, per job, each declared output's path, the absolute path of that job's own workspace copy on disk, and — for a `.json` output — whether it currently parses. This is the same information `integrate` (and a post-build mutants read) would otherwise be the first to discover, made visible at inspection time instead. See [manifest reference](manifest-reference.md#outputs-before-integrate).
 
+## Check classification: spawn-error and unrunnable
+
+A check that never actually started is no longer folded into a generic `error` status. A check whose own argv could not be spawned at all (Node's `error` event, or a synchronous spawn exception) is now `spawn-error`; a check that did start but whose own tool or module could not be found (exit 127, or `command not found`/`ERR_MODULE_NOT_FOUND` in its own output) is `unrunnable` — both carry a `hint`. Either classification gets one automatic run of the manifest's own `preChecks` (if any are declared) plus a single retry of that same check before it is ever reported red; the retried check gains `retriedAfterError: true`, and any preChecks run this way are returned as `retryPreChecks`. `integrate`'s result gains `checksErrored` (true when any check ended `spawn-error`/`unrunnable`), and the CLI now exits non-zero whenever `checksErrored` is true, independent of `--require-checks`. See [manifest reference](manifest-reference.md#checks).
+
+## Wider env-resync trigger, and two new validate warnings
+
+`preChecks` (see [Pre-checks](#pre-checks-for-a-changed-lockfile) above) now also runs when `integrate` writes `pyproject.toml`, `package.json`, or `Cargo.toml`, not only a recognized lockfile — a version-only bump to the manifest file itself leaves the checked-out environment just as stale. `validate` gains two related warnings: `stale-env-risk` when a job's own outputs include one of these dependency/version files and the manifest declares no `preChecks`, and `missing-deps` when `package.json` exists with no `node_modules` (or `pyproject.toml` with no `.venv`) at the project root — both are advisory, surfaced before any job runs rather than discovered later as a spawn failure. See [manifest reference](manifest-reference.md#pre-checks).
+
+## Tight test timeouts
+
+`validate` warns `tight-test-timeout` when a job's own test-file output contains a timeout literal under the 5-second hang-guard floor: a Python-style `timeout=N` keyword under 5, or a JS `setTimeout(..., N)`/`waitFor({timeout: N})` under 5000ms. A short timeout inside a test is a timing assertion in disguise — reliable on a fast runner, flaky on a slow one — so it is flagged at validate time instead of being rediscovered as a one-off CI failure. The same literal outside a test file is silent.
+
+## runtime-check-no-shell also covers repeat checks and named flakes
+
+`runtime-check-no-shell` (previously only for a prompt quoting a runtime-check failure) now also fires when a manifest check's own argv contains a repeat construct (`seq N`, `--repeat`, `for i in`), or when a job's prompt names a flake/race/intermittent bug, and that job has no shell to actually reproduce or repeat the check itself. A job whose outputs are all `.md` is exempt from every trigger this warning checks, since it never runs anything. See [manifest reference](manifest-reference.md#commands).
+
+## Interpreter probe and registry pinning wired into validate/preflight
+
+The bare `validate` command now also runs the same check-interpreter/module probe `preflight` already ran (`probeCheckInterpreters` in `tools/preflight.mjs`), refusing a manifest whose check names a missing tool or Python module instead of only discovering it at `integrate` time. `validateProject` also now calls `registryPinningWarnings` (`tools/context-check.mjs`) for every job, warning `registry-pinning-tests` when a job adds a new file under a directory an existing test enumerates (via `glob`/`listdir`) that isn't in that job's own context, outputs, or `ignoreTests`.
+
+## session-metrics: scouts, asks, and check/mutant windows are no longer invisible to idle accounting
+
+New `tools/session-metrics.mjs` writes and reads a small state.json-compatible `{startedAt, finishedAt, costUsd}` record, one file per run under `.swarm/session-metrics/<kind>/<id>.json`. `ask`/`scout` each write one such record (`kind: 'ask'`/`'scout'`) alongside their existing `.swarm/runs`/`.swarm/scouts` artifacts, and `integrate` writes one for its own checks phase (`kind: 'checks'`) and, when `--mutants` runs, its mutants phase (`kind: 'mutants'`) — so a coordinator-side idle-time reader can see a background research question or a long checks/mutants run as real elapsed time instead of an unexplained gap.
+
 ## Next
 
 - Hard spend reservations, reliable cost reconciliation and runtime model
