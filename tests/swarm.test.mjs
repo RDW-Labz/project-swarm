@@ -261,9 +261,29 @@ test('execViaFile reads full stdout through a temp file even when the exit races
 });
 
 test('explicit concurrency four creates four simultaneous fresh processes and drains the queue', async t => {
- const root=await fixture(t);let active=0,maximum=0,launched=0;
- const provider=fake(`setTimeout(()=>{${done}},120)`);
- const state=await runManifest(root,{...manifest(Array.from({length:9},(_,i)=>job({id:`parallel-${i}`,outputs:[]}))),concurrency:4},{spawnImpl:(...args)=>{launched++;active++;maximum=Math.max(maximum,active);const child=provider(...args);child.on('close',()=>active--);return child;}});
+ const root=await fixture(t);let active=0,maximum=0,launched=0;const live=[];
+ // Field lesson #182: a worker that exits after a fixed wall-clock delay assumes launching every
+ // worker up to the concurrency limit is faster than that delay; under load on the same machine
+ // it sometimes is not, and the observed peak concurrency reads low (flaky). Each worker instead
+ // reports (over stderr, so it never pollutes the stdout JSONL) once its own SIGTERM handler is
+ // registered, and is only ever sent that signal after this test has actually observed both that
+ // report and (via a bounded poll, no fixed sleep) that the next queued worker launched.
+ const provider=fake(`process.on('SIGTERM',()=>{${done}process.exit(0);});process.stderr.write('ready');setInterval(()=>{},1000);`);
+ const pending=runManifest(root,{...manifest(Array.from({length:9},(_,i)=>job({id:`parallel-${i}`,outputs:[]}))),concurrency:4},{spawnImpl:(...args)=>{
+   launched++;active++;maximum=Math.max(maximum,active);
+   const child=provider(...args);
+   const ready=new Promise(resolve=>child.stderr.once('data',resolve));
+   live.push({child,ready});
+   child.on('close',()=>active--);
+   return child;
+ }});
+ const waitUntil=async(predicate,label)=>{const deadline=Date.now()+5000;while(!predicate()&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,5));assert.ok(predicate(),label);};
+ const killOldest=async()=>{const entry=live.shift();await entry.ready;entry.child.kill();};
+ await waitUntil(()=>launched===4,'first four workers did not launch');
+ assert.equal(maximum,4);
+ while(launched<9){const before=launched;await killOldest();await waitUntil(()=>launched>before,'next queued worker did not launch after a slot freed');}
+ while(live.length)await killOldest();
+ const state=await pending;
  assert.equal(state.status,'complete');assert.equal(launched,9);assert.equal(maximum,4);assert.equal(active,0);
 });
 

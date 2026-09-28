@@ -30,6 +30,35 @@ export const SCOUT_LICENSES = Object.freeze(['MIT', 'Apache-2.0', 'BSD-2-Clause'
 export const SCOUT_FLAGGED_LICENSES = Object.freeze({ 'MPL-2.0': 'file-level copyleft' });
 export const SCOUT_FITS = Object.freeze(['drop-in', 'borrow-pattern', 'reference-only']);
 
+// Field lesson #194: the gate used to check every pick against a fixed code-license list, so a
+// brief that allows asset licenses (CC0, CC-BY) had its own worker-verified picks rejected. A
+// brief line `Allowed licenses: A, B, ...` now names the allowlist itself; only when the brief
+// names none does the fixed list above apply.
+const ALLOWED_LICENSES_LINE = /^[ \t]*allowed licenses:[ \t]*(.+)$/im;
+
+export function parseAllowedLicenses(briefText) {
+  if (typeof briefText !== 'string') return null;
+  const match = briefText.match(ALLOWED_LICENSES_LINE);
+  if (!match) return null;
+  const list = match[1].split(',').map(entry => entry.trim()).filter(Boolean);
+  return list.length ? list : null;
+}
+
+// Case-insensitive, punctuation-insensitive SPDX-ish match: "CC0-1.0" and "CC0 1.0 Universal"
+// normalize to "cc010" / "cc010universal", one a prefix of the other, so a full license name and
+// its short SPDX id are treated as the same license either direction.
+const normalizeLicenseKey = value => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+export function licenseAllowed(license, allowlist) {
+  if (typeof license !== 'string' || !license) return false;
+  if (!allowlist) return SCOUT_LICENSES.includes(license);
+  const key = normalizeLicenseKey(license);
+  return allowlist.some(entry => {
+    const entryKey = normalizeLicenseKey(entry);
+    return Boolean(entryKey) && (key === entryKey || key.startsWith(entryKey) || entryKey.startsWith(key));
+  });
+}
+
 const PICK_KEYS = ['name', 'url', 'license', 'licenseEvidence', 'commit', 'stars', 'lastCommit', 'gives', 'fit', 'where', 'risk'];
 const REJECTED_KEYS = ['name', 'url', 'reason'];
 const MAX_STR = 300;
@@ -62,7 +91,7 @@ const capStr = value => { const trimmed = value.trim(); return trimmed.length > 
 const capValue = (key, value) => (key === 'stars' ? value : typeof value === 'string' ? capStr(value) : null);
 const withPresentKeys = (source, keys) => { const out = {}; for (const key of keys) if (Object.hasOwn(source, key)) out[key] = capValue(key, source[key]); return out; };
 
-export function normalizeScoutReport(raw, { maxPicks = 12 } = {}) {
+export function normalizeScoutReport(raw, { maxPicks = 12, allowlist = null } = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { picks: [], rejected: [], top: [], moved: [] };
   const rawPicks = Array.isArray(raw.picks) ? raw.picks : [];
   const rawRejected = Array.isArray(raw.rejected) ? raw.rejected : [];
@@ -74,7 +103,7 @@ export function normalizeScoutReport(raw, { maxPicks = 12 } = {}) {
     const pick = withPresentKeys(item, PICK_KEYS);
     if (typeof pick.url !== 'string' || !pick.url.startsWith('https://')) { rejected.push({ ...withPresentKeys(pick, ['name', 'url']), reason: 'bad url' }); continue; }
     const license = typeof pick.license === 'string' ? pick.license : undefined;
-    if (!license || !SCOUT_LICENSES.includes(license)) {
+    if (!license || !licenseAllowed(license, allowlist)) {
       rejected.push({ ...withPresentKeys(pick, ['name', 'url']), reason: `license not allowed: ${license || 'none'}` });
       if (typeof pick.name === 'string') moved.push(pick.name);
       continue;

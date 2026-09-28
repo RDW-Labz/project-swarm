@@ -20,7 +20,7 @@ import { portBlockFor, resolvePortBlock } from './ports.mjs';
 import { loadSwarmEnv, envPrintText, checkNeedsEnvWarnings, NO_STASH_LINE, MUTANTS_BY_HAND_LINE, MUTANTS_SHAPE, gitGuardScript, findRealGit, materializeGitGuard } from './swarm-env.mjs';
 import { loadGotchas, gotchasPromptBlock, windowsCiGotchasWarnings } from './gotchas.mjs';
 import { packagingWithoutBuildCheckWarning, packagingKeyChanges, packagingChangeWarnings, isPackagingFile } from './packaging-check.mjs';
-import { scoutPrompt, normalizeScoutReport, renderScoutMarkdown, briefPathCandidates } from './scout.mjs';
+import { scoutPrompt, normalizeScoutReport, renderScoutMarkdown, briefPathCandidates, parseAllowedLicenses } from './scout.mjs';
 import { parseGoals, extractKnownRepos, gatherAreaCandidates, sweepPrompt, normalizeSweepArea, renderShortlistMarkdown, resolveBriefPath as resolveSweepBriefPath } from './sweep.mjs';
 import { findUncoveredTests, listProjectFiles, suggestIgnoreTests, contextDirectoryWarnings, registryPinningWarnings, isTestFile } from './context-check.mjs';
 import { ship, SHIP_DEFAULTS, resolveGhAndGit, parsePrPayload, resolveToolchainBin, parseExemptFlag } from './ship.mjs';
@@ -42,6 +42,22 @@ const CHECK_TAIL = 2000;
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const fail = message => { throw new Error(message); };
 const runId = () => `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+// Field lesson #193: several `ask`/`scout` runs launched in the same millisecond used to get the
+// identical id `<prefix>-<ms>`; a random suffix (like plain `run`'s own id above) makes two runs
+// started the same millisecond, in different processes, vanishingly unlikely to collide.
+export const makeRunId = prefix => `${prefix}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+// A claim collision (the astronomically rare case the suffix above doesn't rule out) is retried
+// once with a fresh id; the first id may be forced by a caller (id retry tests, or a resumed run)
+// but the retry always mints a brand new one. Any other error propagates unchanged.
+async function runWithIdRetry(prefix, runOptions, attempt) {
+  let id = runOptions.id ?? makeRunId(prefix);
+  try { return { id, ...(await attempt(id)) }; }
+  catch (error) {
+    if (error?.code !== 'EEXIST' || !String(error.path ?? '').endsWith(`${path.sep}claim`)) throw error;
+    id = makeRunId(prefix);
+    return { id, ...(await attempt(id)) };
+  }
+}
 const execFileAsync = promisify(execFile);
 
 // Field lesson 106: macOS purges unread files under /tmp (and its /private/tmp realpath) after
@@ -765,7 +781,11 @@ async function execute(job, cwd, message, { spawnImpl, signal, cancelled, killIm
       // Lesson #46: init only reports the requested model, not what actually ran.
       const { actualModel, modelsSeen, modelMismatch } = summarizeModels(events, job.model);
       const failed = cleanupError || reason || error?.message || (code !== 0 ? `Worker exited ${code}` : null) || parseError || (!result ? 'Worker returned no result event' : null) || (result?.is_error || (result?.subtype && result.subtype !== 'success') ? `Worker result: ${result.subtype || 'error'}` : null);
-      resolve({ cleanupError, terminationReason:reason??null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed || null, permissionDenials: Array.isArray(result?.permission_denials) ? result.permission_denials : [], stdout, stderr, response: typeof result?.result === 'string' ? result.result : '', exitCode: code, actualModel: actualModel ?? null, modelsSeen, modelMismatch, usage: result?.usage ?? null, modelUsage: result?.modelUsage ?? null, costUsd: result?.total_cost_usd ?? null });
+      // Field lesson #193: a cancelled job is killed before its final `result` event ever lands;
+      // the last already-streamed event that reported a running cost is still real spend, so a
+      // cancelled scout/ask/run reports that instead of a costUsd that only ever meant "no result".
+      const lastCostEvent = result ? result : events.findLast(event => typeof event?.total_cost_usd === 'number');
+      resolve({ cleanupError, terminationReason:reason??null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed || null, permissionDenials: Array.isArray(result?.permission_denials) ? result.permission_denials : [], stdout, stderr, response: typeof result?.result === 'string' ? result.result : '', exitCode: code, actualModel: actualModel ?? null, modelsSeen, modelMismatch, usage: result?.usage ?? null, modelUsage: result?.modelUsage ?? null, costUsd: lastCostEvent?.total_cost_usd ?? null });
     };
     if (signal?.aborted) { reason = 'cancelled'; return finish(null); }
     try {
@@ -2392,22 +2412,32 @@ export async function askRun(root, { model, context = [], agent = 'claude', time
   if (!Array.isArray(context) || !context.length) fail('ask requires --context with at least one file');
   if (typeof question !== 'string' || !question.trim()) fail('ask requires a non-empty question');
   if (agent !== 'claude' && !API_AGENTS.includes(agent)) fail('ask only supports claude or an API agent, not codex');
-  const id = `ask-${Date.now()}`;
   // Field lesson 176: a worker reading only a fixed context list cannot tell a genuine absence
   // from a file it was never given; any claim of one must say so and name what it searched.
   const prompt = `${question.trim()}\n\nIf your answer claims that something is missing, never called, omitted, or absent, include "basis":"context-only" in your JSON and name what you searched (which of your context files) to reach that conclusion.\n\nFinish with exactly one JSON line containing your complete answer as a JSON object.`;
-  const job = { id, agent, model, prompt, context, outputs: [], ...(timeoutMs !== undefined ? { timeoutMs } : {}) };
-  const state = await runManifest(root, { version: 1, jobs: [job] }, { ...runOptions, id });
+  const { id, job, state } = await runWithIdRetry('ask', runOptions, async id => {
+    const job = { id, agent, model, prompt, context, outputs: [], ...(timeoutMs !== undefined ? { timeoutMs } : {}) };
+    const state = await runManifest(root, { version: 1, jobs: [job] }, { ...runOptions, id });
+    return { job, state };
+  });
   const record = state.jobs[0];
   const parsed = await jobFinalJson(root, id, id);
   // Field lesson 133: a single-question run is real elapsed session time, not idle time; a
   // state.json-compatible record lets a session-metrics reader see it the same way it sees a run.
   await writeSessionMetric(root, 'ask', id, { startedAt: state.startedAt, finishedAt: state.finishedAt, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null });
+  const costUsd = typeof record.costUsd === 'number' ? record.costUsd : null;
+  // Field lesson #184: ask's prompt asks every agent for a final JSON line, but an API agent's
+  // envelope carries only a free-text `summary` (never asked to itself be JSON); losing that
+  // answer to a format mismatch is worse than returning it unparsed and saying so.
+  if (API_AGENTS.includes(agent) && record.status === 'complete' && parsed === null) {
+    const responseBytes = await bytesAt(root, `.swarm/runs/${id}/${id}/response.txt`, true);
+    return { id, status: 'ok', model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd, contextFiles: job.context, answer: responseBytes ? responseBytes.toString('utf8') : '', parsed: false };
+  }
   // Field lesson 176: warn (never fail the job) when the worker's own answer text reads as an
   // absence claim, so a reader knows to check the claim against more than this job's own context
   // before spending tokens proving there was no bug.
   const warnings = parsed !== null && hasAbsenceClaim(JSON.stringify(parsed)) ? ['absence-claim-limited-context'] : [];
-  return { id, status: state.status, model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, contextFiles: job.context, warnings, result: displayResult(parsed), ...(parsed === null ? { error: 'Worker returned no parsable final JSON' } : {}) };
+  return { id, status: state.status, model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd, contextFiles: job.context, warnings, result: displayResult(parsed), ...(parsed === null ? { error: 'Worker returned no parsable final JSON' } : {}) };
 }
 
 // OASIS decision #112: a read-only web job (GitHub first) that returns raw JSON; the runner, not
@@ -2427,15 +2457,21 @@ export async function scoutRun(root, { model, brief, context = [], timeoutMs, ma
   if (briefBytes === undefined) fail(`scout brief not found: ${brief} (tried: ${briefCandidates.join(', ')})`);
   if (typeof goal !== 'string' || !goal.trim()) fail('scout requires a non-empty goal');
   if (!Number.isInteger(maxPicks) || maxPicks < 1 || maxPicks > 30) fail('--max-picks must be 1-30');
-  const id = `scout-${Date.now()}`;
-  await write(root, `.swarm/scouts/${id}/brief.md`, briefBytes, true);
   const trimmedGoal = goal.trim();
-  const prompt = scoutPrompt({ brief: briefBytes.toString('utf8'), goal: trimmedGoal, maxPicks });
-  const job = { id, agent: 'claude', model, prompt, context: [...new Set(context)], outputs: [], web: true, ...(timeoutMs !== undefined ? { timeoutMs } : {}) };
-  const state = await runManifest(root, { version: 1, jobs: [job] }, { ...runOptions, id });
+  const briefText = briefBytes.toString('utf8');
+  const prompt = scoutPrompt({ brief: briefText, goal: trimmedGoal, maxPicks });
+  // Field lesson #194: the brief's own `Allowed licenses: ...` line names the gate's allowlist;
+  // only when the brief names none does the fixed code-license list apply.
+  const allowlist = parseAllowedLicenses(briefText);
+  const { id, job, state } = await runWithIdRetry('scout', runOptions, async id => {
+    await write(root, `.swarm/scouts/${id}/brief.md`, briefBytes, true);
+    const job = { id, agent: 'claude', model, prompt, context: [...new Set(context)], outputs: [], web: true, ...(timeoutMs !== undefined ? { timeoutMs } : {}) };
+    const state = await runManifest(root, { version: 1, jobs: [job] }, { ...runOptions, id });
+    return { job, state };
+  });
   const record = state.jobs[0];
   const parsed = await jobFinalJson(root, id, id);
-  const normalized = normalizeScoutReport(parsed, { maxPicks });
+  const normalized = normalizeScoutReport(parsed, { maxPicks, allowlist });
   const actualModel = record.actualModel ?? null;
   const reportRelative = `.swarm/scouts/${id}/report.json`;
   const markdownRelative = `.swarm/scouts/${id}/report.md`;
@@ -2444,7 +2480,11 @@ export async function scoutRun(root, { model, brief, context = [], timeoutMs, ma
   // Field lesson 133: a scout writes only under .swarm/scouts, invisible to a metrics reader that
   // only ever scanned run state; this record gives it the same {startedAt,finishedAt,costUsd} shape.
   await writeSessionMetric(root, 'scout', id, { startedAt: state.startedAt, finishedAt: state.finishedAt, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null });
-  return { id, status: state.status, model, actualModel, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, report: reportRelative, reportMarkdown: markdownRelative, picks: normalized.picks.length, rejected: normalized.rejected.length, moved: normalized.moved, ...(parsed === null ? { error: 'scout returned no report' } : {}) };
+  const costUsd = typeof record.costUsd === 'number' ? record.costUsd : null;
+  // Field lesson #193: a cancelled scout still reports whatever cost the stream showed before it
+  // was killed (see execute()'s cost scan below); when even that is unavailable the spend is
+  // flagged as unknown rather than silently rendered as a real, complete $0 run.
+  return { id, status: state.status, model, actualModel, modelMismatch: record.modelMismatch ?? false, costUsd, ...(state.status === 'cancelled' && costUsd === null ? { costUnknown: true } : {}), report: reportRelative, reportMarkdown: markdownRelative, picks: normalized.picks.length, rejected: normalized.rejected.length, moved: normalized.moved, ...(parsed === null ? { error: 'scout returned no report' } : {}) };
 }
 
 // OASIS decision #124: read-only GitHub research across many areas at once, before a build. One
@@ -3087,7 +3127,7 @@ async function main() {
   const testIndex=args.indexOf('--test');
   const rootIndex=args.findIndex((arg,index)=>arg==='--root'&&(testIndex===-1||index<testIndex));
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] "goal" | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] "goal" | check-pins [--root DIR] [--json] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
   if(args[0]==='redcheck'){
     const hasBase=args[2]==='--base';
     const testAt=hasBase?4:2;
@@ -3123,6 +3163,27 @@ async function main() {
   if(args[0]==='onboard'){
     if(args.length>1)fail('Invalid arguments; use --help');
     process.stdout.write(await onboardReport(root));
+    return;
+  }
+  // check-pins is owned by a job that runs in parallel with this one; it is imported lazily, on
+  // this command branch only, so this file still loads (and every other command still works) even
+  // before tools/check-pins.mjs exists. --root is the same global flag handled above, already
+  // stripped from args by here.
+  if(args[0]==='check-pins'){
+    const flags=args.slice(1);let json=false;
+    for(const flag of flags){
+      if(flag==='--json'){json=true;continue;}
+      fail('Invalid arguments; use --help');
+    }
+    root=await fs.realpath(root);
+    const { runCheckPins } = await import('./check-pins.mjs');
+    const result=await runCheckPins({root,json});
+    if(json)process.stdout.write(`${JSON.stringify(result)}\n`);
+    else{
+      for(const finding of result.findings)process.stdout.write(`${finding.rule}: ${finding.file} (${finding.package}) ${finding.message}\n`);
+      if(result.ok)process.stdout.write('check-pins: ok\n');
+    }
+    process.exitCode=result.exitCode;
     return;
   }
   // ask has its own flag/positional shape (no single RUN/MANIFEST argument), so it is parsed and
