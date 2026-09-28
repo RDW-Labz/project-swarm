@@ -12,6 +12,7 @@ import { promisify, isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, parseExtraCli, extraCliDoctor, execViaFile, validateEnvelope, summarizeModels } from './cli-adapters.mjs';
 import { API_AGENTS, apiDoctor, probeLocalProvider, decodeContext, executeApi } from './api-adapters.mjs';
+import { summarizeRateLimit, rateLimitError, rateLimitWarning } from './rate-limit.mjs';
 
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, parseCodexReply, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
 import { expandShellPreset, validateNetworkAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterDirs, resolveRootGitInfo, scanListeningPorts, resolveRigServicePort, createShellScratchDir, shellMessage, containsKey, redactKey } from './claude-shell.mjs';
@@ -748,8 +749,11 @@ async function execute(job, cwd, message, { spawnImpl, signal, cancelled, killIm
       }
       // Lesson #46: init only reports the requested model, not what actually ran.
       const { actualModel, modelsSeen, modelMismatch } = summarizeModels(events, job.model);
-      const failed = cleanupError || reason || error?.message || (code !== 0 ? `Worker exited ${code}` : null) || parseError || (!result ? 'Worker returned no result event' : null) || (result?.is_error || (result?.subtype && result.subtype !== 'success') ? `Worker result: ${result.subtype || 'error'}` : null);
-      resolve({ cleanupError, terminationReason:reason??null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed || null, permissionDenials: Array.isArray(result?.permission_denials) ? result.permission_denials : [], stdout, stderr, response: typeof result?.result === 'string' ? result.result : '', exitCode: code, actualModel: actualModel ?? null, modelsSeen, modelMismatch, usage: result?.usage ?? null, modelUsage: result?.modelUsage ?? null, costUsd: result?.total_cost_usd ?? null });
+      const rateLimit = summarizeRateLimit(events);
+      const providerFailed = (code !== 0 ? `Worker exited ${code}` : null) || parseError || (!result ? 'Worker returned no result event' : null) || (result?.is_error || (result?.subtype && result.subtype !== 'success') ? `Worker result: ${result.subtype || 'error'}` : null);
+      // A rejected limit explains a provider failure; it never fails a job the CLI recovered from.
+      const failed = cleanupError || reason || error?.message || (providerFailed ? rateLimitError(rateLimit) || providerFailed : null);
+      resolve({ cleanupError, terminationReason:reason??null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed || null, permissionDenials: Array.isArray(result?.permission_denials) ? result.permission_denials : [], stdout, stderr, response: typeof result?.result === 'string' ? result.result : '', exitCode: code, actualModel: actualModel ?? null, modelsSeen, modelMismatch, usage: result?.usage ?? null, modelUsage: result?.modelUsage ?? null, costUsd: result?.total_cost_usd ?? null, rateLimit });
     };
     if (signal?.aborted) { reason = 'cancelled'; return finish(null); }
     try {
@@ -1378,7 +1382,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           }
         }
         if (job.shell === true) Object.assign(record, { proxyRefused: result.proxyRefused ?? [], loopbackDenied: result.loopbackDenied ?? [], scratchDir: result.scratchDir ?? null, ...(result.venvInterpreterDenied?.length ? { venvInterpreterDenied: result.venvInterpreterDenied } : {}), ...(result.workerKeyExposed ? { workerKeyExposed: true } : {}), ...(result.loopbackScanHint ? { loopbackScanHint: result.loopbackScanHint } : {}), ...(result.droppedWrites?.length ? { droppedWrites: result.droppedWrites, ...(result.droppedWritesNew?.length ? { droppedWritesNew: result.droppedWritesNew } : {}) } : {}) });
-        Object.assign(record, { permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt) });
+        Object.assign(record, { permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, rateLimit: result.rateLimit ?? null, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt) });
         await queueSave();
       } catch (error) {
         if (error.keptWorkspace) record.keptWorkspace = error.keptWorkspace;
@@ -1522,7 +1526,8 @@ const droppedWriteWarnings = state => state.jobs.flatMap(job => (job.droppedWrit
 // Field lesson #142: a synced venv's own interpreter directory lived under $HOME but inside a
 // denied subtree (e.g. `~/.ssh`); surfaced, never fatal, since the worker may not need it anyway.
 const venvInterpreterWarnings = state => state.jobs.flatMap(job => job.venvInterpreterDenied ?? []);
-const runWarnings = state => [...modelMismatchWarnings(state), ...codexEnvelopeFallbackWarnings(state), ...permissionDenialWarnings(state), ...invalidJsonOutputWarnings(state), ...droppedWriteWarnings(state), ...venvInterpreterWarnings(state)];
+const rateLimitWarnings = state => state.jobs.map(job => rateLimitWarning(job.id, job.rateLimit)).filter(Boolean);
+const runWarnings = state => [...modelMismatchWarnings(state), ...codexEnvelopeFallbackWarnings(state), ...permissionDenialWarnings(state), ...invalidJsonOutputWarnings(state), ...droppedWriteWarnings(state), ...venvInterpreterWarnings(state), ...rateLimitWarnings(state)];
 // A provider that never reports usage.total_tokens (or never ran) reports null, not 0: absence
 // of evidence, not evidence of zero cost.
 const jobTokens = record => typeof record?.usage?.total_tokens === 'number' ? record.usage.total_tokens : null;
