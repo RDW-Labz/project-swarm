@@ -243,6 +243,96 @@ async function addedScratchFiles(exec, root, payloadBase, integratedFiles) {
   return added;
 }
 
+// Field lesson #197: a private-names list — one term per line, `#` comments and blank lines
+// ignored — names things that must never appear in a public repo's diff.
+export function parsePrivateNames(text) {
+  return String(text ?? '')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith('#'));
+}
+
+async function loadPrivateNames(root, file) {
+  const target = file ? path.resolve(root, file) : path.join(root, 'coordination/private-names.txt');
+  try {
+    const text = await fs.readFile(target, 'utf8');
+    return { terms: parsePrivateNames(text), file: target, found: true };
+  } catch {
+    return { terms: [], file: target, found: false };
+  }
+}
+
+// gh repo view answers through ship's own exec seam, same as every other gh/git call, so tests
+// can fake it without a real network call. `PUBLIC` is the only visibility this guard runs for;
+// an unrecognized/erroring answer is treated the same as public — stricter, never a silent skip.
+export async function repoVisibility(exec, repo, { cwd } = {}) {
+  try {
+    const res = await exec('gh', ['repo', 'view', repo, '--json', 'visibility'], { cwd });
+    if (!res || res.code !== 0) return null;
+    const data = JSON.parse(res.stdout);
+    return typeof data?.visibility === 'string' ? data.visibility.toUpperCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+// Unified diff (-U0) added lines, each with the new-file line number it lands on.
+function parseAddedLines(diffText) {
+  const added = [];
+  let newLine = null;
+  for (const line of String(diffText ?? '').split('\n')) {
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line);
+    if (hunk) { newLine = Number(hunk[1]); continue; }
+    if (line.startsWith('+++') || line.startsWith('---')) continue;
+    if (newLine !== null && line.startsWith('+')) { added.push({ line: newLine, text: line.slice(1) }); newLine++; }
+  }
+  return added;
+}
+
+// Same no-usable-base fallback as readAddedTestFileLines/addedScratchFiles: without a real base to
+// diff against, every line of the file's current content counts as added (stricter, never a guess).
+async function addedLinesForFiles(exec, root, payloadBase, files) {
+  const result = new Map();
+  if (!files?.length) return result;
+  let baseSha = null;
+  try {
+    const baseRes = await exec('git', ['merge-base', `origin/${payloadBase}`, 'HEAD'], { cwd: root });
+    baseSha = baseRes && baseRes.code === 0 ? baseRes.stdout.trim() : null;
+  } catch { baseSha = null; }
+  for (const file of files) {
+    let entries = null;
+    if (baseSha) {
+      try {
+        const res = await exec('git', ['diff', `${baseSha}...HEAD`, '-U0', '--', file], { cwd: root });
+        if (res && res.code === 0) entries = parseAddedLines(res.stdout);
+      } catch { entries = null; }
+    }
+    if (entries === null) {
+      try {
+        const text = await fs.readFile(path.join(root, file), 'utf8');
+        entries = text.split('\n').map((lineText, index) => ({ line: index + 1, text: lineText }));
+      } catch { continue; /* removed or unreadable: nothing to scan */ }
+    }
+    result.set(file, entries);
+  }
+  return result;
+}
+
+// Term shown, line text never echoed: a refusal must not repeat whatever the private name sat
+// next to.
+export function findPrivateNameHits(addedByFile, terms) {
+  const hits = [];
+  for (const [file, entries] of addedByFile) {
+    for (const { line, text } of entries) {
+      const lowerText = text.toLowerCase();
+      for (const term of terms) {
+        if (term && lowerText.includes(term.toLowerCase())) { hits.push({ file, line, term }); break; }
+      }
+    }
+  }
+  return hits;
+}
+
 export function parseExemptFlag(value) {
   const raw = String(value ?? '');
   const colon = raw.indexOf(':');
@@ -599,7 +689,7 @@ export const SHIP_USAGE = [
   '       swarm ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [flags]',
   'Flags: [--repo OWNER/NAME] [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase]',
   '       [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check]',
-  '       [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]...',
+  '       [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [--private-names FILE]',
   `Exempt guards: ${EXEMPTION_GUARD_IDS.join(', ')}`,
   'Prints one JSON result naming its runId (or branch for --branch); exit 0 when merged, held or ready.',
 ].join('\n') + '\n';
@@ -667,13 +757,14 @@ export async function ship(options) {
     home = os.homedir(),
     resolveUv: resolveUvImpl = resolveUv,
     runId = null, branch = null,
+    privateNamesFile = null,
   } = options;
 
   let repo = options.repo;
   // Field lesson #187: every result, refusals included, names its run (or its --branch), so a
   // ship attempt is always recoverable without reading the source to find how it was started.
   const checkEnv = toolchainCheckEnv({ env, home });
-  const base = { ...(runId ? { runId } : {}), ...(branch ? { branch } : {}), warnings: [...portWarnings, ...extraWarnings], tag: { name: null, status: 'skipped', waitedSeconds: 0 }, status: null, repo, pr: null, url: null, sha: null, mergeSha: null, checks: null, ci: null, reason: null, portBase };
+  const base = { ...(runId ? { runId } : {}), ...(branch ? { branch } : {}), warnings: [...portWarnings, ...extraWarnings], tag: { name: null, status: 'skipped', waitedSeconds: 0 }, status: null, repo, pr: null, url: null, sha: null, mergeSha: null, checks: null, ci: null, reason: null, portBase, privateNames: null };
 
   if (!VALID_MERGE_METHODS.has(mergeMethod)) return { ...base, status: 'refused', reason: 'invalid merge method' };
   for (const [name, value] of [['pollMs', pollMs], ['timeoutMs', timeoutMs], ['noCiGraceMs', noCiGraceMs]]) {
@@ -698,6 +789,36 @@ export async function ship(options) {
     repo = originRepo;
     base.repo = repo;
   } else if (originRepo && repo !== originRepo) base.warnings.push(`--repo ${repo} differs from origin ${originRepo}`);
+
+  // Field lesson #197: a private-names list (`<root>/coordination/private-names.txt`, or
+  // --private-names FILE) is scanned against only the lines this diff ADDS, and only for a repo
+  // gh reports public; a private/internal repo already limits who can see it, so this is skipped
+  // there, and an unrecognized/erroring visibility answer is treated as public (stricter). The
+  // list is loaded first: with no list (or an empty one) there is nothing to check, so this never
+  // spends a `gh repo view` call a ship with no list configured has no use for.
+  const list = await loadPrivateNames(root, privateNamesFile);
+  if (!list.found) {
+    base.privateNames = { checked: false, reason: 'no list' };
+    base.warnings.push(`private-names: no list found at ${list.file}`);
+  } else if (!list.terms.length) {
+    base.privateNames = { checked: true, hits: 0 };
+  } else {
+    const visibility = await repoVisibility(exec, repo, { cwd: root });
+    if (visibility === 'PRIVATE' || visibility === 'INTERNAL') {
+      base.privateNames = { checked: false, reason: 'private repo' };
+    } else {
+      const addedByFile = await addedLinesForFiles(exec, root, payload.base, integratedFiles);
+      const hits = findPrivateNameHits(addedByFile, list.terms);
+      if (hits.length) {
+        return {
+          ...base, status: 'refused', code: 'private-name-in-diff',
+          reason: `private-name-in-diff: ${hits.map(hit => `${hit.file}:${hit.line} (${hit.term})`).join(', ')}`,
+        };
+      }
+      base.privateNames = { checked: true, hits: 0 };
+    }
+  }
+
   if (manifest && requireSections.some(name => name.toLowerCase() === 'mutation check') && !manifest.mutants?.length && !manifest.jobs?.some(job => job.mutants?.length)) {
     base.warnings.push('no manifest mutants: declare "mutants" in the manifest and run "integrate --mutants" (see docs/verification.md)');
   }

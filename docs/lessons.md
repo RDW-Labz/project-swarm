@@ -1010,3 +1010,15 @@ rule is enforced or documented.
     declaration, lock information, and vendored copies, and reports every
     exact-pin mismatch it finds, exiting non-zero on any finding.
     Regression coverage is in `tests/check-pins.test.mjs`.
+98. **A name that must never appear in a public repo had no automated guard
+    against it.** A term internal reviewers all knew to keep out of a public
+    project's history relied entirely on every contributor remembering not
+    to type it, with nothing to catch a slip before it was pushed. Rule: a
+    name that must never reach a public diff is checked by a tool, not by
+    memory alone. Enforcement: shipping now reads an optional list of such
+    terms and refuses, before pushing, when any line the diff actually adds
+    contains one — naming the file and line, never the text itself — but
+    only against a repo actually reported public; a private or internal
+    repo, or a project with no such list, ships as before (with a plain
+    warning when the list is simply absent). Regression coverage is in
+    `tests/private-names-125.test.mjs`.
