@@ -149,7 +149,7 @@ test('HEAD worktree runs with null stdin, collects only declared outputs, integr
   await assert.rejects(fs.access(path.join(root, 'extra.txt')));
 });
 
-for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-output', 'symlink-output', 'launch-error']) test(`Codex removes worktree and blocks proposals after ${scenario}, except a malformed envelope with no worktree evidence, which is kept (lessons #41, #64)`, async t => {
+for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-output', 'symlink-output', 'launch-error']) test(`Codex removes worktree and blocks proposals after ${scenario}, except a malformed envelope or a missing output that deleted a declared file, which are kept (lessons #41, #64; U15)`, async t => {
   const root = await fixture(t);
   let launched = false;
   const controller = new AbortController();
@@ -176,6 +176,13 @@ for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-
     assert.equal((await git(root, ['worktree', 'list', '--porcelain'])).includes(worktree), true);
     assert.equal(state.jobs[0].keptWorkspace, worktree);
     assert.equal(state.jobs[0].error, `envelope invalid; worktree kept at ${worktree}`);
+  } else if (scenario === 'missing-output') {
+    // U15: the missing declared output is itself a deletion relative to baseline, which the
+    // existing finally already treats as a declared-output change worth keeping for inspection.
+    await fs.access(worktree);
+    assert.equal((await git(root, ['worktree', 'list', '--porcelain'])).includes(worktree), true);
+    assert.equal(state.jobs[0].keptWorkspace, worktree);
+    assert.match(state.jobs[0].error, /^Missing output \(deletions are never propagated\): /);
   } else {
     await removed(root, state);
     assert.equal(state.jobs[0].keptWorkspace, null);

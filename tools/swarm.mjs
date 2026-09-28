@@ -829,7 +829,7 @@ async function executeCodexJob(root, directory, job, proposalRoot, options) {
           const summary = typeof reply.summary === 'string' && reply.summary.trim() ? reply.summary.trim()
             : typeof reply.file === 'string' && reply.file.trim() ? `needs ${reply.file.trim()}` : 'no summary given';
           result = { ...result, status: 'blocked', error: `blocked: ${summary}`.slice(0, 300) };
-        } else fail(`Missing output (deletions are never propagated): ${missing.join(', ')}`);
+        } else result = { ...result, status: 'failed', error: `Missing output (deletions are never propagated): ${missing.join(', ')}` };
       } else for (const output of outputs) await write(proposalRoot, output.file, output.bytes, false, output.mode);
     }
     // Lesson #64: a completed job that only resolved through the result-file or worktree
@@ -1276,7 +1276,10 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         await queueSave();
       } catch (error) {
         if (error.keptWorkspace) record.keptWorkspace = error.keptWorkspace;
-        throw error;
+        Object.assign(record, { status: 'failed', error: `Coordinator failed: ${error.message}`, finishedAt: new Date().toISOString(), durationMs: record.startedAt ? Date.now() - Date.parse(record.startedAt) : 0 });
+        state.error ??= error.message;
+        await queueSave();
+        return; // job-scoped failure: the other jobs keep running
       } finally { await settle(index); }
     };
 
