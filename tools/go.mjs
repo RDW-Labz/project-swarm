@@ -95,6 +95,7 @@ export async function go(root, target, flags, deps) {
         mergeMethod: flags.mergeMethod, timeoutMs: flags.timeoutMs,
         ...(flags.tagTimeoutMs !== undefined ? { tagTimeoutMs: flags.tagTimeoutMs } : {}),
         ...(flags.noFlakeCheck ? { noFlakeCheck: true } : {}),
+        ...(flags.exemptions?.length ? { exemptions: flags.exemptions } : {}),
       });
     } catch (error) { return { status: 'failed', stage: 'ship', ...base, reason: error.message }; }
     base.ship = shipped; stage = 'ship';

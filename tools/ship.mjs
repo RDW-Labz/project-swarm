@@ -39,7 +39,21 @@ function toolchainsDirFor(env, home) {
 // (`ship --check '["uv",...]'` run from a shell without the toolchains dir on PATH), not only
 // `uv lock --check`; this is the one resolver both use — toolchains dir, then its own bin/, then
 // every PATH entry — so a program that cannot be found anywhere is named with every path tried.
-export async function resolveToolchainBin(prog, { env = process.env, home = os.homedir(), access = file => fs.access(file, fs.constants.X_OK) } = {}) {
+// Field lesson #181: a toolchain package directory can share its binary's own name (real case:
+// ~/.project-swarm/toolchains/uv is the pip package directory; the real binary sits one level
+// down at toolchains/bin/uv). `fs.access(X_OK)` alone passes on a directory too — every directory
+// has its own search/execute bit — so that package directory used to get picked over the real
+// binary, and every spawn of "it" then failed before it ever started. The default check now also
+// requires `fs.stat` to say "regular file" (following a symlink) before a candidate counts; a
+// caller-injected `access` (tests, alternate resolution) fully replaces this default and is
+// trusted as-is, same as before.
+async function accessExecutableFile(file) {
+  const info = await fs.stat(file);
+  if (!info.isFile()) throw Object.assign(new Error(`not a regular file: ${file}`), { code: 'EISDIR' });
+  await fs.access(file, fs.constants.X_OK);
+}
+
+export async function resolveToolchainBin(prog, { env = process.env, home = os.homedir(), access = accessExecutableFile } = {}) {
   const dir = toolchainsDirFor(env, home);
   const pathDirs = String(env.PATH ?? '').split(':').filter(Boolean);
   const tried = [path.join(dir, prog), path.join(dir, 'bin', prog), ...pathDirs.map(entry => path.join(entry, prog))];
@@ -113,7 +127,10 @@ export function platformOnlyFailures(rollup) {
 // binary, or a fake/skip seam nearby; one that reads a swarm-exported env var (SWARM_PORT_BASE)
 // needs a stub or unset hint instead of silently depending on the swarm runner's own port block.
 const TEST_FILE_RE = /(^|\/)(tests?|__tests__|specs?)\/|\.(test|spec)\.[A-Za-z0-9]+$|(^|\/)test_[^/]+\.py$/i;
-export const DOCUMENTED_TEST_BINARIES = new Set(['node', 'npm', 'npx', 'git', 'gh']);
+// Field lesson #179: `ps` is a documented POSIX binary (macOS/Linux); a test that spawns it on
+// Windows still needs its own fake/skip seam or a `--exempt` — this allowlist never claims `ps`
+// is available there.
+export const DOCUMENTED_TEST_BINARIES = new Set(['node', 'npm', 'npx', 'git', 'gh', 'ps']);
 const SPAWN_CALL_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|exec|execSync)\(\s*['"]([^'"]+)['"]/g;
 function seamNearby(text, index) {
   return /\b(skip|fake|stub)\b/i.test(text.slice(Math.max(0, index - 300), index + 300));
@@ -141,13 +158,101 @@ export function swarmEnvInTestWarnings(fileTexts) {
   return warnings;
 }
 
-async function readIntegratedTestFiles(root, integratedFiles) {
+// Field lesson #179: the guard used to scan a test file's whole, current content, so a `ps` call
+// already on the base (untouched by this diff) refused a branch that only touched the file for an
+// unrelated reason. It now judges only the lines this change ADDS to each test file: with a real
+// base commit, `git diff <base>...HEAD -U0 -- <file>` and keep just the `+` lines (never the
+// `+++ b/<file>` header). With no usable base (the merge-base lookup fails, or the diff call
+// itself fails/errors — exactly the shape of every test written for the old whole-file scan, none
+// of which sets up a real base commit) this falls back to the file's current whole-file content,
+// so nothing already covered regresses just because a base could not be established. The
+// merge-base lookup itself only runs when there is at least one test file to judge, so a ship with
+// no integrated test files never pays for it.
+async function readAddedTestFileLines(exec, root, payloadBase, integratedFiles) {
+  const candidates = (integratedFiles ?? []).filter(file => TEST_FILE_RE.test(file));
   const files = new Map();
-  for (const file of integratedFiles ?? []) {
-    if (!TEST_FILE_RE.test(file)) continue;
-    try { files.set(file, await fs.readFile(path.join(root, file), 'utf8')); } catch { /* removed or unreadable: nothing to scan */ }
+  if (!candidates.length) return files;
+  let baseSha = null;
+  try {
+    const baseRes = await exec('git', ['merge-base', `origin/${payloadBase}`, 'HEAD'], { cwd: root });
+    baseSha = baseRes && baseRes.code === 0 ? baseRes.stdout.trim() : null;
+  } catch { baseSha = null; }
+  for (const file of candidates) {
+    let text = null;
+    if (baseSha) {
+      try {
+        const res = await exec('git', ['diff', `${baseSha}...HEAD`, '-U0', '--', file], { cwd: root });
+        if (res && res.code === 0) {
+          text = res.stdout
+            .split('\n')
+            .filter(line => line.startsWith('+') && !line.startsWith('+++'))
+            .map(line => line.slice(1))
+            .join('\n');
+        }
+      } catch { /* fall back to a whole-file read below */ }
+    }
+    if (text === null) {
+      try { text = await fs.readFile(path.join(root, file), 'utf8'); } catch { continue; /* removed or unreadable: nothing to scan */ }
+    }
+    files.set(file, text);
   }
   return files;
+}
+
+// Field lesson #179: `--exempt <guard>:<file>=<reason>` — an owner decision, so the reason is
+// required and must say something real (trimmed, >= 10 characters). Give each diff guard a stable
+// id so an exemption names exactly which one it excuses.
+export const EXEMPTION_GUARD_IDS = ['undocumented-binary', 'env-var'];
+
+export function parseExemptFlag(value) {
+  const raw = String(value ?? '');
+  const colon = raw.indexOf(':');
+  const eq = colon === -1 ? -1 : raw.indexOf('=', colon + 1);
+  if (colon === -1 || eq === -1) return { error: '--exempt requires <guard>:<file>=<reason>' };
+  const guard = raw.slice(0, colon);
+  const file = raw.slice(colon + 1, eq);
+  const reason = raw.slice(eq + 1).trim();
+  if (!EXEMPTION_GUARD_IDS.includes(guard)) {
+    return { error: `--exempt: unknown guard "${guard}"; valid guard ids: ${EXEMPTION_GUARD_IDS.join(', ')}` };
+  }
+  if (!file) return { error: '--exempt requires <guard>:<file>=<reason>' };
+  if (reason.length < 10) return { error: 'exemption-needs-reason: --exempt reason must be at least 10 characters' };
+  return { guard, file, reason };
+}
+
+// Field lesson #179: a used exemption must never be missing from the shipped PR body — appended
+// to an existing "## Exemptions" section (matched the same boundary-prefix way as
+// --require-section) when the payload body already has one, or created fresh at the end otherwise.
+export function appendExemptionsSection(body, usedExemptions) {
+  if (!usedExemptions?.length) return body;
+  const lines = usedExemptions.map(exemption => `- ${exemption.guard} · ${exemption.file} — ${exemption.reason}`);
+  const bodyLines = String(body ?? '').split('\n');
+  const headingIndex = bodyLines.findIndex(line => line.startsWith('## ') && headingMatchesName(line.slice(3).trim(), 'Exemptions'));
+  if (headingIndex === -1) {
+    const separator = bodyLines.length && bodyLines[bodyLines.length - 1].trim() !== '' ? '\n\n' : '\n';
+    return `${body}${separator}## Exemptions\n${lines.join('\n')}\n`;
+  }
+  let end = bodyLines.length;
+  for (let index = headingIndex + 1; index < bodyLines.length; index++) {
+    if (bodyLines[index].startsWith('## ')) { end = index; break; }
+  }
+  return [...bodyLines.slice(0, end), ...lines, ...bodyLines.slice(end)].join('\n');
+}
+
+// Field lesson #179: one JSON line per used exemption, appended (never overwritten), so which
+// guard was excused on which file — and why — stays auditable across ships. Same
+// env-override-else-home-dir shape as every other toolchain/install path in this file
+// (SWARM_TOOLCHAINS), so tests can point it at a temp dir instead of the real home directory.
+function installLogsDirFor(env, home) {
+  return env.SWARM_LOGS_DIR || path.join(home, '.project-swarm/logs');
+}
+
+export async function logExemption(entry, { env = process.env, home = os.homedir() } = {}) {
+  const dir = installLogsDirFor(env, home);
+  await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, 'ship-exemptions.jsonl');
+  await fs.appendFile(file, `${JSON.stringify(entry)}\n`, 'utf8');
+  return file;
 }
 
 function firstStderrLine(stderr) {
@@ -438,8 +543,10 @@ export async function ship(options) {
     integratedFiles = [],
     packagingChanges = [], checkArgvs = [], extraWarnings = [],
     rerunFlaky = 0,
+    exemptions = [],
     runChecks, exec, sleep, now = () => Date.now(),
     env = process.env,
+    home = os.homedir(),
     resolveUv: resolveUvImpl = resolveUv,
   } = options;
 
@@ -486,15 +593,54 @@ export async function ship(options) {
   const sha = shaRes.stdout.trim();
   base.sha = sha;
 
-  // Field lesson 154/156: a static gate over the run's own test file outputs, before any check
-  // spawns them for real; an undocumented binary with no fake/skip seam refuses outright, while a
-  // swarm-exported env var reference is only a warning (the test may already handle it).
-  const integratedTestFiles = integratedFiles.length ? await readIntegratedTestFiles(root, integratedFiles) : new Map();
-  const undocumentedBinaries = undocumentedBinaryWarnings(integratedTestFiles);
-  if (undocumentedBinaries.length) {
-    return { ...base, status: 'refused', reason: `test file spawns undocumented binary with no fake/skip seam: ${undocumentedBinaries.map(w => `${w.file} -> ${w.bin}`).join(', ')}` };
+  // Field lesson 154/156/179: a static gate over the lines this change ADDS to its own test files,
+  // before any check spawns them for real; an undocumented binary with no fake/skip seam refuses
+  // outright, while a swarm-exported env var reference is only a warning (the test may already
+  // handle it). A `--exempt <guard>:<file>=<reason>` (owner decision, required) excuses one file
+  // from one guard; it never excuses other files or other guards. Only looks up a base commit
+  // (another exec call) when there is at least one test file to judge, so a ship with no test
+  // files integrated never pays for a merge-base lookup it has nothing to use.
+  const integratedTestFiles = await readAddedTestFileLines(exec, root, payload.base, integratedFiles);
+  const rawUndocumentedBinaries = undocumentedBinaryWarnings(integratedTestFiles);
+  const rawEnvWarnings = swarmEnvInTestWarnings(integratedTestFiles);
+  const usedExemptions = [];
+  const findExemption = (guard, file) => exemptions.find(exemption => exemption.guard === guard && exemption.file === file);
+  const noteExemptionUsed = exemption => {
+    if (!usedExemptions.some(used => used.guard === exemption.guard && used.file === exemption.file)) usedExemptions.push(exemption);
+  };
+
+  const undocumentedBinaries = [];
+  for (const warning of rawUndocumentedBinaries) {
+    const exemption = findExemption('undocumented-binary', warning.file);
+    if (exemption) { noteExemptionUsed(exemption); continue; }
+    undocumentedBinaries.push(warning);
   }
-  for (const warning of swarmEnvInTestWarnings(integratedTestFiles)) base.warnings.push(`swarm-env-in-tests: ${warning.file}: references ${warning.name}; stub or unset it in this test (lesson #156)`);
+  for (const warning of rawEnvWarnings) {
+    const exemption = findExemption('env-var', warning.file);
+    if (exemption) { noteExemptionUsed(exemption); continue; }
+    base.warnings.push(`swarm-env-in-tests: ${warning.file}: references ${warning.name}; stub or unset it in this test (lesson #156)`);
+  }
+  for (const exemption of exemptions) {
+    if (!usedExemptions.some(used => used.guard === exemption.guard && used.file === exemption.file)) {
+      base.warnings.push(`unused-exemption: ${exemption.guard}:${exemption.file}`);
+    }
+  }
+  // Field lesson #179: a used exemption is recorded (result field, log, later the PR body) as soon
+  // as it is determined to be used — even when ship refuses anyway, for an unrelated file or an
+  // unrelated reason, so a legitimately-excused file is never left off the record just because
+  // something else also went wrong in the same ship.
+  if (usedExemptions.length) {
+    base.exemptions = usedExemptions;
+    for (const exemption of usedExemptions) {
+      await logExemption({ ts: new Date().toISOString(), repo, branch: payload.head, guard: exemption.guard, file: exemption.file, reason: exemption.reason }, { env, home });
+    }
+  }
+  if (undocumentedBinaries.length) {
+    return {
+      ...base, status: 'refused',
+      reason: `test file spawns undocumented binary with no fake/skip seam: ${undocumentedBinaries.map(w => `${w.file} -> ${w.bin}`).join(', ')}; fix the cause, or pass --exempt <guard>:<file>=<reason>`,
+    };
+  }
 
   // Field lesson #159: a shipped change to packaging keys needs a check that builds the package;
   // tests, lint and types all pass on a package that will not build.
@@ -522,7 +668,8 @@ export async function ship(options) {
     }
   }
 
-  const body = fillChecks(payload.body, checks);
+  let body = fillChecks(payload.body, checks);
+  if (usedExemptions.length) body = appendExemptionsSection(body, usedExemptions);
   if (checks.some(result => result.status === 'failed')) return { ...base, status: 'checks-failed', reason: 'checks failed' };
 
   const missing = missingSections(body, requireSections);
@@ -552,7 +699,16 @@ export async function ship(options) {
         lockArgv0 = resolved.path;
       }
       const lockRes = await exec(lockArgv0, lockCheck.argv.slice(1), { cwd: root });
-      if (lockRes.code !== 0) return { ...base, status: 'refused', reason: `${lockCheck.name} failed: ${firstStderrLine(lockRes.stderr || lockRes.stdout)}` };
+      if (lockRes.code !== 0) {
+        // Field lesson #181: a resolved path that still fails to even spawn (e.g. a toolchains
+        // package directory picked before this lesson's own `resolveToolchainBin` fix, or any
+        // other spawn-level failure) must never surface as the empty `<name> failed: ` this used
+        // to produce when the exec wrapper never ran and so had no stderr/stdout to report;
+        // `exec`'s own spawnError (set by shipExec on a real spawn failure) names the path and
+        // errno directly instead.
+        if (lockRes.spawnError) return { ...base, status: 'refused', reason: `lock-check-cannot-run: ${lockArgv0} (${lockRes.spawnError})` };
+        return { ...base, status: 'refused', reason: `${lockCheck.name} failed: ${firstStderrLine(lockRes.stderr || lockRes.stdout)}` };
+      }
     }
   }
 
