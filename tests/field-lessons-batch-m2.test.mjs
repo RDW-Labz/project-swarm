@@ -194,7 +194,8 @@ test('#208: a stated tierReason silences the warning; no config also means no wa
   const result = await validateProject(root, reasoned, { env: { SWARM_CONFIG: configPath } });
   assert.deepEqual(result.warnings.filter(w => w.code === 'cheap-tier-not-configured-model'), []);
   const cheapManifest = { version: 1, jobs: [{ id: 'w', agent: 'claude', model: 'haiku', tier: 'cheap', prompt: 'Do the small thing.', context: ['input.txt'], outputs: ['input.txt'] }] };
-  const noConfigResult = await validateProject(root, cheapManifest, { env: {} });
+  // Point at a config file that does not exist, never the real home config.
+  const noConfigResult = await validateProject(root, cheapManifest, { env: { SWARM_CONFIG: path.join(root, 'no-such-config.json') } });
   assert.deepEqual(noConfigResult.warnings.filter(w => w.code === 'cheap-tier-not-configured-model'), []);
 });
 
