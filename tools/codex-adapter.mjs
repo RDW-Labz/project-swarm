@@ -18,26 +18,32 @@ export function sandboxPath(value) {
   if (typeof value !== 'string' || !path.isAbsolute(value) || /["\\\x00-\x1f\x7f]/.test(value)) throw Error('Unsafe sandbox path');
   return path.resolve(value);
 }
-export const DENIED_HOME_DIRS = Object.freeze(['.oasis', 'Library/Keychains', '.ssh', '.aws', '.config']);
-const deniedPaths = home => DENIED_HOME_DIRS.map(part => path.join(home, part));
+// Generic entries only: a public repo names no product-specific path here. A project adds its
+// own via config `deniedHomeDirs` (loadLocalConfig), merged in by effectiveDeniedHomeDirs.
+export const DENIED_HOME_DIRS = Object.freeze(['Library/Keychains', '.ssh', '.aws', '.config']);
+export function effectiveDeniedHomeDirs(config = {}) {
+  const extra = Array.isArray(config?.deniedHomeDirs) ? config.deniedHomeDirs.filter(value => typeof value === 'string' && value) : [];
+  return [...DENIED_HOME_DIRS, ...extra];
+}
+const deniedPaths = (home, config = {}) => effectiveDeniedHomeDirs(config).map(part => path.join(home, part));
 const within = (file, parent) => file === parent || file.startsWith(`${parent}/`);
-export function validateReadPaths(paths = [], home = os.homedir()) {
+export function validateReadPaths(paths = [], home = os.homedir(), config = {}) {
   home = sandboxPath(home);
   if (!Array.isArray(paths) || paths.length > 100) throw Error('readPaths must be an array of at most 100 absolute paths');
   return paths.map(value => {
     const file = sandboxPath(value);
-    if (deniedPaths(home).some(denied => within(file.toLowerCase(), denied.toLowerCase()))) throw Error('readPaths cannot grant a denied home directory');
+    if (deniedPaths(home, config).some(denied => within(file.toLowerCase(), denied.toLowerCase()))) throw Error('readPaths cannot grant a denied home directory');
     return file;
   });
 }
-export async function resolveReadPaths(paths = [], home = os.homedir()) {
-  const validated = validateReadPaths(paths, home);
+export async function resolveReadPaths(paths = [], home = os.homedir(), config = {}) {
+  const validated = validateReadPaths(paths, home, config);
   // Reject aliases into denied directories as well as their literal spellings.
-  return validateReadPaths(await Promise.all(validated.map(file => fs.realpath(file))), home);
+  return validateReadPaths(await Promise.all(validated.map(file => fs.realpath(file))), home, config);
 }
-export function codexProfile({ home = os.homedir(), worktree, commonDir, metadataDir, readPaths = [] }) {
+export function codexProfile({ home = os.homedir(), worktree, commonDir, metadataDir, readPaths = [], config = {} }) {
   home = sandboxPath(home);
-  const reads = [worktree, commonDir, ...['.codex', '.nvm', '.cache', '.npm', '.local/share/uv', 'Library/Caches'].map(p => path.join(home, p)), ...validateReadPaths(readPaths, home)].map(sandboxPath);
+  const reads = [worktree, commonDir, ...['.codex', '.nvm', '.cache', '.npm', '.local/share/uv', 'Library/Caches'].map(p => path.join(home, p)), ...validateReadPaths(readPaths, home, config)].map(sandboxPath);
   const writes = [worktree, metadataDir, ...['.codex', '.cache', '.npm'].map(p => path.join(home, p)), '/private/tmp', '/private/var/folders'].map(sandboxPath);
   const filter = (kind, file) => `(${kind} "${sandboxPath(file)}")`;
   const ancestors = new Set([home]);
@@ -49,7 +55,7 @@ export function codexProfile({ home = os.homedir(), worktree, commonDir, metadat
   return `(version 1)\n(allow default)\n(deny file-read* file-write* ${filter('subpath', home)})\n` +
     `(allow file-read* ${[...ancestors].map(file => filter('literal', file)).join(' ')} ${reads.map(file => filter('subpath', file)).join(' ')} ${filter('literal', path.join(home, '.gitconfig'))})\n` +
     `(allow file-write* ${writable})\n(deny file-write* (require-not (require-any ${writable})))\n` +
-    `(deny file-read* file-write* ${deniedPaths(home).map(file => filter('subpath', file)).join(' ')})\n` +
+    `(deny file-read* file-write* ${deniedPaths(home, config).map(file => filter('subpath', file)).join(' ')})\n` +
     '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd.xpc"))\n';
 }
 export function codexArgs(job, { profile, worktree, lastMessage, message }) {

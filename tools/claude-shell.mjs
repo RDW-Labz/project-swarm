@@ -9,8 +9,9 @@ import http from 'node:http';
 import net from 'node:net';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { sandboxPath, validateReadPaths, DENIED_HOME_DIRS } from './codex-adapter.mjs';
+import { sandboxPath, validateReadPaths, effectiveDeniedHomeDirs } from './codex-adapter.mjs';
 import { NO_STASH_LINE, MUTANTS_BY_HAND_LINE } from './swarm-env.mjs';
+import { loadLocalConfig } from './local-config.mjs';
 
 const execFileAsync = promisify(execFile);
 // Exactly these tools, both offered (--tools) and pre-approved (--allowedTools): there is no
@@ -19,16 +20,23 @@ export const SHELL_TOOLS = 'Read,Edit,Write,Bash,Grep,Glob';
 // Accepted `model` values that expand to {model, shell: true, tier}.
 export const SHELL_PRESETS = Object.freeze({ 'sonnet-shell': Object.freeze({ model: 'sonnet', tier: 'cheap' }), 'opus-shell': Object.freeze({ model: 'opus', tier: 'expensive' }) });
 export const WORKER_KEY_ENV = 'SWARM_CLAUDE_WORKER_API_KEY';
-// The existing Anthropic key item; read by the swarm parent only, never by the sandboxed child.
-export const WORKER_KEY_ITEM = Object.freeze({ service: 'OASIS', account: 'anthropic.api_key' });
+// A public repo names no product keychain service: the default is generic, and a project's own
+// service name arrives via config `keychain.service` (loadLocalConfig). Read by the swarm parent
+// only, never by the sandboxed child.
+export const DEFAULT_KEYCHAIN_SERVICE = 'project-swarm';
+export function workerKeyItem(config = {}) {
+  const service = typeof config?.keychain?.service === 'string' && config.keychain.service ? config.keychain.service : DEFAULT_KEYCHAIN_SERVICE;
+  return { service, account: 'anthropic.api_key' };
+}
+export const WORKER_KEY_ITEM = Object.freeze(workerKeyItem());
 export const API_HOST = 'api.anthropic.com';
 export const API_PORT = 443;
 export const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
 // Read-only toolchain caches, the codex list minus codex's own config.
 const TOOLCHAIN_DIRS = ['.nvm', '.cache', '.npm', '.local/share/uv', 'Library/Caches'];
-// Denied even inside a granted readPaths/toolchain subtree: the codex list plus the claude
-// CLI's own stored login and config.
-const SHELL_DENIED_HOME_DIRS = [...DENIED_HOME_DIRS, '.claude'];
+// Denied even inside a granted readPaths/toolchain subtree: the codex list (generic entries plus
+// any config `deniedHomeDirs`) plus the claude CLI's own stored login and config.
+const shellDeniedHomeDirs = config => [...effectiveDeniedHomeDirs(config), '.claude'];
 const MACH_DENIED = ['com.apple.SecurityServer', 'com.apple.securityd.xpc', 'com.apple.secd', 'com.apple.security.agent'];
 // Field lesson #142: `uv run`/`npm` walk upward from cwd looking for a workspace root (a
 // pyproject.toml/uv.toml/package.json); the worktree's own ancestors (its enclosing project root
@@ -75,13 +83,14 @@ export function validateNetworkAllow(list, jobId) {
 
 // Parent-only: the environment variable wins, else the existing keychain item. The sandboxed
 // child never touches the keychain; `exec` is injectable so tests never read the real one.
-export async function resolveWorkerKey({ env = process.env, exec = execFileAsync } = {}) {
+export async function resolveWorkerKey({ env = process.env, exec = execFileAsync, config } = {}) {
   let key = typeof env[WORKER_KEY_ENV] === 'string' ? env[WORKER_KEY_ENV].trim() : '';
+  const item = workerKeyItem(config ?? loadLocalConfig({ env }));
   if (!key) {
-    try { key = String((await exec('/usr/bin/security', ['find-generic-password', '-s', WORKER_KEY_ITEM.service, '-a', WORKER_KEY_ITEM.account, '-w'], { encoding: 'utf8', timeout: 10000 })).stdout ?? '').trim(); }
+    try { key = String((await exec('/usr/bin/security', ['find-generic-password', '-s', item.service, '-a', item.account, '-w'], { encoding: 'utf8', timeout: 10000 })).stdout ?? '').trim(); }
     catch { key = ''; }
   }
-  if (!key) throw Error(`claude shell jobs need a worker API key: set ${WORKER_KEY_ENV} or keychain item service ${WORKER_KEY_ITEM.service} account ${WORKER_KEY_ITEM.account}; never falls back to your claude login`);
+  if (!key) throw Error(`claude shell jobs need a worker API key: set ${WORKER_KEY_ENV} or keychain item service ${item.service} account ${item.account}; never falls back to your claude login`);
   if (!/^[\x21-\x7e]{8,512}$/.test(key)) throw Error('worker API key has an invalid shape');
   return key;
 }
@@ -159,10 +168,14 @@ export async function createShellScratchDir({ runId, jobId }, { tmpdir = os.tmpd
 }
 
 export const RIG_SERVICE_DEFAULT_PORT = 4405;
-export const rigServicePortFile = (home = os.homedir()) => path.join(home, 'Library/Application Support/OASIS/rig/service.port');
-export async function resolveRigServicePort({ read = file => fs.readFile(file, 'utf8'), home = os.homedir() } = {}) {
+// No built-in path: a public repo names no product app-support directory. The rig port feature
+// is off (no file to read) unless config names one via `rig.portFile`.
+export const rigServicePortFile = (config = {}) => (typeof config?.rig?.portFile === 'string' && config.rig.portFile ? config.rig.portFile : null);
+export async function resolveRigServicePort({ read = file => fs.readFile(file, 'utf8'), config, env = process.env, home = os.homedir() } = {}) {
+  const file = rigServicePortFile(config ?? loadLocalConfig({ home, env }));
+  if (!file) return null;
   let text;
-  try { text = await read(rigServicePortFile(home)); } catch { return RIG_SERVICE_DEFAULT_PORT; }
+  try { text = await read(file); } catch { return RIG_SERVICE_DEFAULT_PORT; }
   const port = Number.parseInt(String(text).trim(), 10);
   return Number.isInteger(port) && port > 0 && port < 65536 ? port : RIG_SERVICE_DEFAULT_PORT;
 }
@@ -171,13 +184,13 @@ const quoteRegex = value => value.replace(/[.*+?^${}()|[\]]/g, match => `\\${mat
 // `rootGit` and `loopbackDenied` are both optional and additive: omitted (as by every pre-1.19.0
 // caller), the generated profile is byte-identical to before. `loopbackDenied` undefined leaves
 // the network section untouched; passing an array (even empty) turns on the loopback allowance.
-export function shellProfile({ home = os.homedir(), extraHomes = [], worktree, commonDir, shellDir, scratchDir = null, readPaths = [], cliPaths = [], proxyPort, rootGit = null, loopbackDenied }) {
+export function shellProfile({ home = os.homedir(), extraHomes = [], worktree, commonDir, shellDir, scratchDir = null, readPaths = [], cliPaths = [], proxyPort, rootGit = null, loopbackDenied, config = {} }) {
   if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) throw Error('shell profile needs a proxy port');
   const homes = [...new Set([home, ...extraHomes].map(sandboxPath))];
   // Field lesson #145: the job's scratch dir (TMPDIR/HOME) lives outside every repo, under the
   // OS tmp dir, not under `shellDir`; it needs its own read+write grant, placed with the other
   // writable-path allows so the final keychain/.claude*/securityd denies still win.
-  const reads = [worktree, commonDir, shellDir, ...(scratchDir ? [scratchDir] : []), ...cliPaths, ...homes.flatMap(h => TOOLCHAIN_DIRS.map(part => path.join(h, part))), ...validateReadPaths(readPaths, homes[0])].map(sandboxPath);
+  const reads = [worktree, commonDir, shellDir, ...(scratchDir ? [scratchDir] : []), ...cliPaths, ...homes.flatMap(h => TOOLCHAIN_DIRS.map(part => path.join(h, part))), ...validateReadPaths(readPaths, homes[0], config)].map(sandboxPath);
   const writes = [worktree, shellDir, ...(scratchDir ? [scratchDir] : [])].map(sandboxPath);
   const filter = (kind, file) => `(${kind} "${sandboxPath(file)}")`;
   const ancestors = new Set(homes);
@@ -193,7 +206,7 @@ export function shellProfile({ home = os.homedir(), extraHomes = [], worktree, c
     if (parent === path.parse(parent).root) break;
   }
   const writable = [...writes.map(file => filter('subpath', file)), '(literal "/dev/null")', '(regex #"^/dev/tty.*$")'].join(' ');
-  const denied = homes.flatMap(h => SHELL_DENIED_HOME_DIRS.map(part => filter('subpath', path.join(h, part))).concat(`(regex #"^${quoteRegex(h)}/\\.claude\\.json")`));
+  const denied = homes.flatMap(h => shellDeniedHomeDirs(config).map(part => filter('subpath', path.join(h, part))).concat(`(regex #"^${quoteRegex(h)}/\\.claude\\.json")`));
   // Field lesson #143: shell jobs may open and use their own loopback sockets (tests' own local
   // servers) but never one a service on the host already had listening when the job started; that
   // per-port deny is placed AFTER the general loopback allow so it wins (later rules win).

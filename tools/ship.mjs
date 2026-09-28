@@ -222,25 +222,32 @@ export function scratchFileMatches(file) {
   return SCRATCH_PATTERNS.some(re => re.test(String(file ?? '')));
 }
 
-// Only files that match a pattern cost an exec call each: a file already on the base commit was
-// not added by this change. No usable base counts every match as added (refuse, never guess).
-async function addedScratchFiles(exec, root, payloadBase, integratedFiles) {
-  const candidates = (integratedFiles ?? []).filter(scratchFileMatches);
-  if (!candidates.length) return [];
+// Field lesson #207: this guard used to ask "does the run's OWN declared-outputs list name a
+// scratch file absent from the base commit" — a job output that is git-ignored and never
+// committed is also absent from the base commit, so it was wrongly refused even though it was
+// never going to be pushed at all. The guard now judges the one thing that matters — is the path
+// part of `git diff --name-only <base>...HEAD`? A declared output nobody committed simply never
+// shows up there, ignored or not. (Staged-but-uncommitted changes are never reachable here: the
+// earlier "commit first" check above already refused before this point if there were any.)
+async function pushedFileNames(exec, root, payloadBase) {
+  const files = new Set();
   let baseSha = null;
   try {
     const baseRes = await exec('git', ['merge-base', `origin/${payloadBase}`, 'HEAD'], { cwd: root });
     baseSha = baseRes && baseRes.code === 0 ? baseRes.stdout.trim() : null;
   } catch { baseSha = null; }
-  const added = [];
-  for (const file of candidates) {
-    let onBase = false;
-    if (baseSha) {
-      try { onBase = (await exec('git', ['cat-file', '-e', `${baseSha}:${file}`], { cwd: root }))?.code === 0; } catch { onBase = false; }
-    }
-    if (!onBase) added.push(file);
+  if (baseSha) {
+    try {
+      const diffRes = await exec('git', ['diff', '--name-only', `${baseSha}...HEAD`], { cwd: root });
+      if (diffRes && diffRes.code === 0) for (const line of diffRes.stdout.split('\n')) if (line.trim()) files.add(line.trim());
+    } catch { /* no usable diff against base */ }
   }
-  return added;
+  return files;
+}
+
+async function addedScratchFiles(exec, root, payloadBase) {
+  const files = await pushedFileNames(exec, root, payloadBase);
+  return [...files].filter(scratchFileMatches);
 }
 
 // Field lesson #197: a private-names list — one term per line, `#` comments and blank lines
@@ -393,6 +400,10 @@ export async function logExemption(entry, { env = process.env, home = os.homedir
   await fs.appendFile(file, `${JSON.stringify(entry)}\n`, 'utf8');
   return file;
 }
+
+// Field lesson T51: every ship() timing field is seconds rounded to the nearest 0.1, computed
+// from a millisecond duration off the injected clock (`now`), so tests can use a fake clock.
+const round1 = ms => Math.round(ms / 100) / 10;
 
 function firstStderrLine(stderr) {
   const line = String(stderr ?? '').split('\n')[0] ?? '';
@@ -764,7 +775,7 @@ export async function ship(options) {
   // Field lesson #187: every result, refusals included, names its run (or its --branch), so a
   // ship attempt is always recoverable without reading the source to find how it was started.
   const checkEnv = toolchainCheckEnv({ env, home });
-  const base = { ...(runId ? { runId } : {}), ...(branch ? { branch } : {}), warnings: [...portWarnings, ...extraWarnings], tag: { name: null, status: 'skipped', waitedSeconds: 0 }, status: null, repo, pr: null, url: null, sha: null, mergeSha: null, checks: null, ci: null, reason: null, portBase, privateNames: null };
+  const base = { ...(runId ? { runId } : {}), ...(branch ? { branch } : {}), warnings: [...portWarnings, ...extraWarnings], tag: { name: null, status: 'skipped', waitedSeconds: 0 }, status: null, repo, pr: null, url: null, sha: null, mergeSha: null, checks: null, ci: null, reason: null, portBase, privateNames: null, timing: { checksSeconds: 0, ciWaitSeconds: 0, attempts: 0, rerunCount: 0 } };
 
   if (!VALID_MERGE_METHODS.has(mergeMethod)) return { ...base, status: 'refused', reason: 'invalid merge method' };
   for (const [name, value] of [['pollMs', pollMs], ['timeoutMs', timeoutMs], ['noCiGraceMs', noCiGraceMs]]) {
@@ -853,7 +864,7 @@ export async function ship(options) {
 
   // Field lesson #180: scratch files this diff adds, minus any `--exempt scratch:<file>=<reason>`.
   const scratchFiles = [];
-  for (const file of await addedScratchFiles(exec, root, payload.base, integratedFiles)) {
+  for (const file of await addedScratchFiles(exec, root, payload.base)) {
     const exemption = findExemption('scratch', file);
     if (exemption) { noteExemptionUsed(exemption); continue; }
     scratchFiles.push(file);
@@ -903,6 +914,7 @@ export async function ship(options) {
   const packagingRefusals = packagingChangeWarnings(packagingChanges, checkArgvs);
   if (packagingRefusals.length) return { ...base, status: 'refused', reason: `${packagingRefusals.join('; ')}; add a check that builds the package (uv build --wheel, npm pack --dry-run)` };
 
+  const checksStart = now();
   const checks = await runChecks({ env: checkEnv });
   base.checks = checks;
 
@@ -934,6 +946,7 @@ export async function ship(options) {
       if (baseStatus === 'fail') checks[index] = { ...checks[index], status: 'pre-existing', preExisting: true };
     }
   }
+  base.timing.checksSeconds = round1(now() - checksStart);
 
   let body = fillChecks(payload.body, checks);
   if (usedExemptions.length) body = appendExemptionsSection(body, usedExemptions);
@@ -1044,7 +1057,20 @@ export async function ship(options) {
   // One poll-to-settle pass; called again after a flaky rerun (field lesson #178) to re-check the
   // same PR/sha without repeating the push/PR-create steps above. Returns either a terminal ship()
   // result (refused/no-ci/timeout) or the settled { ci, ciRollup }.
+  // Field lesson T51: `timing.attempts` counts CI wait rounds (one per call below);
+  // `timing.ciWaitSeconds` is the summed wall time spent across all of them. base.timing is shared
+  // by reference with every already-built `{...base}` result, so updating it here still lands on a
+  // terminal result this same call already returned.
+  let ciWaitMs = 0;
   async function waitForCi() {
+    const roundStart = now();
+    base.timing.attempts += 1;
+    const result = await waitForCiOnce();
+    ciWaitMs += now() - roundStart;
+    base.timing.ciWaitSeconds = round1(ciWaitMs);
+    return result;
+  }
+  async function waitForCiOnce() {
     const start = now();
     for (;;) {
       const viewRes = await exec('gh', ['pr', 'view', String(pr.number), '--repo', repo, '--json', 'state,headRefOid,mergeStateStatus,statusCheckRollup'], { cwd: root });
@@ -1102,6 +1128,7 @@ export async function ship(options) {
       return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}` };
     }
     rerunAttempts++;
+    base.timing.rerunCount = rerunAttempts;
     for (const id of runIds) await exec('gh', ['run', 'rerun', id, '--failed', '--repo', repo], { cwd: root });
     await sleep(pollMs);
     const settled = await waitForCi();

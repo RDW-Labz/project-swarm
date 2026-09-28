@@ -35,6 +35,50 @@
   worker's own sandboxed environment (one it could never actually reach to run), and that worker's
   own boilerplate now marks such a check as run by a later, unrestricted step instead of asking the
   worker to run it itself. Tests in `tests/field-lessons-batch-l.test.mjs` (lesson #104).
+- `check-pins` gains a new rule: an exact pin on one of a repo's own packages with no vendored
+  wheel and no local/`uv.sources`-style override now fails `pin-not-vendored`, closing a gap where
+  such a pin was vendored nowhere at all and so was never compared against anything. Tests in
+  `tests/field-lessons-batch-m1.test.mjs` (lesson #105).
+- Fixed: `ship`'s scratch-file guard judged a run's own declared output list instead of the actual
+  commit diff, so a declared output that was git-ignored and never committed (and so was never
+  going to be pushed at all) was wrongly refused. The guard now checks the real diff between base
+  and HEAD (plus anything staged) — what would actually be pushed — instead. Tests in
+  `tests/field-lessons-batch-m1.test.mjs` (lesson #106).
+- Fixed: two shell workers sharing one machine both spent their final minutes stuck in a
+  sleep-and-poll loop waiting on a full test suite each had launched in the background, timing out
+  with an empty result even though their real edits were already finished. `integrate --salvage`
+  now accepts a timed-out job's declared outputs (hash-checked, marked `salvaged: true`), a shell
+  worker's own instructions now say to run only its own changed test files (the full suite runs at
+  integrate), `run` warns when two shell jobs share one root and both ask for a full suite, and a
+  timeout result now names the transcript's last activity. Tests in
+  `tests/field-lessons-batch-m2.test.mjs` (lesson #107).
+- Fixed: a worker adding a new field to a persisted record chose its own "stricter" default for
+  data saved before the field existed, which silently made a one-time migration a no-op for every
+  existing record on disk — nothing caught it because no test ever loaded a pre-field file. A
+  shell job's result schema now carries `newPersistedFields: [{name, legacyDefault, why}]`,
+  inspecting a run warns when a diff adds a field to a persisted record with that list empty, and
+  job instructions now say a new stored field must state its legacy default and have a
+  from-disk legacy test. Tests in `tests/field-lessons-batch-m2.test.mjs` (lesson #108).
+- Fixed: a routing decision that retired a model from the cheap tier was recorded only in a
+  decision log, not in the rulebook a model reads at boot, so jobs kept routing to the old
+  (now more expensive) choice. `validate` now warns when a job asks for the cheap tier on an
+  agent pricier than the configured cheap-tier model, unless the job states a reason. Tests in
+  `tests/field-lessons-batch-m2.test.mjs` (lesson #109).
+- Fixed: a public-repo tool hard-coded a product's keychain service name, an app-support port-file
+  path, and a product-specific denied-home-directory entry. All three now default to generic
+  values and are overridden through local config only, so the public tool names nothing
+  product-specific by default. Tests in `tests/field-lessons-batch-m3.test.mjs` (lesson #110).
+- Fixed: a tool-free API worker's incomplete reply (cut short by an output-length limit) surfaced
+  as a bare "incomplete or unexpected" error with no way to tell why. The error now names the
+  provider's own finish reason (e.g. truncated by length) directly. Tests in
+  `tests/field-lessons-batch-m3.test.mjs` (lesson #111).
+- `ship`'s result gains `timing: { checksSeconds, ciWaitSeconds, attempts, rerunCount }` (seconds
+  rounded to 0.1; `attempts` counts CI wait rounds, `rerunCount` counts failed-job reruns), using
+  an injectable clock so tests can measure it deterministically. Tests in
+  `tests/field-lessons-batch-m1.test.mjs`.
+- `tests/ask-125.test.mjs` and `tests/swarm.test.mjs` updated for two batch L defaults: an
+  unparsable worker reply now reports `status: "unparsed"` (not `"complete"` with a bare error),
+  and integration now refuses by default on a failed check (not a silent exit 0).
 
 ## 1.25.0
 

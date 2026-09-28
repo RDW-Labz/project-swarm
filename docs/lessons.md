@@ -1095,3 +1095,80 @@ rule is enforced or documented.
     worker's own boilerplate now marks such a check as run by a later step
     instead of asking the worker to run it itself. Regression coverage is
     in `tests/field-lessons-batch-l.test.mjs`.
+105. **An exact pin on a repo's own package was vendored nowhere at all, and
+    passed clean.** The stale-pin check only ever compared an exact pin
+    against a vendored copy of the same package; a pin with no vendored
+    copy to compare against fell through both of its rules instead of
+    failing either one. Rule: an exact pin is only trustworthy when it is
+    backed by something the tests actually ran against — a vendored copy,
+    or an explicit local/override source. Enforcement: an exact pin with
+    neither now fails a new rule, in every kind of repo (no exemption for
+    the kind of repo that owns the shared core package). Regression
+    coverage is in `tests/field-lessons-batch-m1.test.mjs`.
+106. **A guard meant to stop a scratch file from ever being pushed judged
+    the wrong thing and refused a file that was never going to be pushed
+    at all.** It asked whether a run's own declared-output list named a
+    scratch-shaped file absent from the base commit — but a declared
+    output that is git-ignored and never committed is *also* absent from
+    the base commit, so a legitimate, ignored side-effect file was refused
+    exactly like a real mistake would have been. Rule: a guard that exists
+    to stop something from being pushed must judge the actual diff that
+    would be pushed, never a list of what a job merely claims to have
+    produced. Enforcement: the guard now reads the real diff between the
+    base commit and the current one (plus anything staged) instead of the
+    run's declared outputs. Regression coverage is in
+    `tests/field-lessons-batch-m1.test.mjs`.
+107. **Two workers sharing one machine both burned their last minutes in a
+    sleep-and-poll loop, waiting on a full test suite each had launched in
+    the background, and both timed out with nothing to show for it even
+    though their real work was already finished.** A shell worker told to
+    "run the full suite" ran it itself, in the background, and then polled
+    it by sleeping — exactly the kind of busy-waiting that starves a
+    shared machine when two such workers land on it at once. Rule: a
+    worker runs only its own new or changed files; the full suite is the
+    orchestrator's job, run once, after the fact. Enforcement: a worker's
+    own instructions now say so directly; integrating a timed-out job can
+    now accept its already-finished, hash-checked outputs instead of
+    discarding them; starting two shell jobs that share a root and both
+    ask for a full suite now warns up front; and a timeout result now
+    names what the transcript was last doing when time ran out.
+    Regression coverage is in `tests/field-lessons-batch-m2.test.mjs`.
+108. **A worker fixed a set of failing tests by adding a new field to a
+    persisted record, picked its own default for data saved before the
+    field existed, and called that choice "stricter" — but that default
+    silently made a one-time migration a no-op for every record already on
+    disk, which was the entire point of the fix.** Every test was green
+    because no test ever loaded a file saved before the field existed.
+    Rule: a newly persisted field must state its legacy default in plain
+    words, and a test must prove that default by loading a real pre-change
+    file from disk — a worker's own judgment about which default is
+    "safer" is not a substitute for that. Enforcement: a result schema now
+    carries the field's name, legacy default and reasoning; inspecting a
+    run warns when a diff adds a field to a persisted record with that
+    left empty. Regression coverage is in
+    `tests/field-lessons-batch-m2.test.mjs`.
+109. **A routing decision that retired a model from the cheap tier landed
+    only in a decision log, not in the rulebook a model reads at boot, and
+    jobs kept quietly routing to the old, pricier choice.** Rule: a routing
+    decision only takes effect once it lands in the document the model
+    actually reads before acting, not only in a record meant for humans.
+    Enforcement: validation now warns when a job asks for the cheap tier on
+    an agent pricier than the configured cheap-tier model, unless the job
+    states a reason the cheaper model was skipped. Regression coverage is
+    in `tests/field-lessons-batch-m2.test.mjs`.
+110. **A public tool hard-coded a private product's keychain service name,
+    an app-support path, and a product-specific denied-directory entry.**
+    A contract written for one project's own conventions was carried
+    faithfully into a tool meant to be read by anyone. Rule: a public-repo
+    tool names no private product specifics directly; project-specific
+    values arrive through local configuration, with a generic default.
+    Enforcement: all three now default to generic values, overridden only
+    through local config. Regression coverage is in
+    `tests/field-lessons-batch-m3.test.mjs`.
+111. **A tool-free API worker's reply, cut short by an output-length limit,
+    surfaced only as a bare "incomplete or unexpected" error with no way
+    to tell why from the error alone.** Rule: a failure to parse a
+    worker's reply names the actual reason it failed, not just the fact
+    that it did. Enforcement: the error now names the provider's own
+    finish reason (e.g. truncated by length) directly. Regression coverage
+    is in `tests/field-lessons-batch-m3.test.mjs`.
