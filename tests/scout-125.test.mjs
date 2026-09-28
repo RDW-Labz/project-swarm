@@ -145,11 +145,13 @@ test('CLI check-pins parses its own flags before touching the (parallel-job-owne
   );
 });
 
-test('CLI check-pins with valid flags reaches the dynamic import of ./check-pins.mjs, proving swarm.mjs itself loads fine before that module exists', async t => {
+test('CLI check-pins --json on a repo with no manifests exits 0 with ok:true', async t => {
   const root = await fixture(t);
-  const failure = await execFileAsync(process.execPath, [CLI, '--root', root, 'check-pins', '--json']).catch(error => error);
-  assert.ok(failure instanceof Error, 'check-pins.mjs does not exist yet in this worktree, so the command must fail');
-  assert.match(String(failure.stderr ?? failure.message ?? ''), /check-pins\.mjs/);
+  const { stdout } = await execFileAsync(process.execPath, [CLI, '--root', root, 'check-pins', '--json']);
+  const result = JSON.parse(stdout);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.findings, []);
 });
 
 test('check-pins is listed in --help usage', async () => {
