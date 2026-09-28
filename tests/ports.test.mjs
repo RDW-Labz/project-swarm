@@ -93,6 +93,14 @@ test('integrate: a check sees the resolved SWARM_PORT_BASE for this project root
 });
 
 test('a non-shell claude job env and prompt are unchanged', async t => {
+  // Field lesson 190: save and clear SWARM_PORT_BASE to prevent inherited ambient port from failing this test
+  const savedPortBase = process.env.SWARM_PORT_BASE;
+  delete process.env.SWARM_PORT_BASE;
+  t.after(() => {
+    if (savedPortBase !== undefined) {
+      process.env.SWARM_PORT_BASE = savedPortBase;
+    }
+  });
   const root = await fixture(t);
   const seen = [];
   const spawnImpl = (command, args, options) => { seen.push({ command, args, options }); return spawn(process.execPath, ['-e', "console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'done'}))"], options); };
