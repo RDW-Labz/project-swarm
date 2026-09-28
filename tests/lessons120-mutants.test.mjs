@@ -206,7 +206,7 @@ test('validate still refuses a bare absolute path outside --root', async t => {
 
 // --- #139: runCheck group-spawn + group-kill on cancel ---------------------------------------------
 
-test('runCheck kills its child as a whole process group once cancelled, leaving no descendant running', async t => {
+test('#322: runCheck kills its child as a whole process group once cancelled, leaving no descendant running', async t => {
   const root = await plainFixture(t);
   const pidFile = path.join(root, 'grandchild.pid');
   // The grandchild inherits the parent's process group (no `detached` of its own) and ignores
@@ -214,7 +214,12 @@ test('runCheck kills its child as a whole process group once cancelled, leaving 
   const script = `const { spawn } = require('child_process'); const g = spawn(process.execPath, ['-e', "require('fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(()=>{},1000);", ${JSON.stringify(pidFile)}], { stdio: 'ignore' }); setInterval(()=>{}, 1000);`;
   let cancelled = false;
   const resultPromise = runCheck('sleeper', [process.execPath, '-e', script], root, 300000, spawn, false, () => {}, process.env, { cancelled: async () => cancelled });
-  const deadline = Date.now() + 5000;
+  // Field lesson #182: this is already an event-driven, bounded poll rather than a fixed sleep,
+  // but under 4x parallel npm test (heavy CPU contention delaying process spawn, signal delivery
+  // and reaping alike) the old 5s/3s bounds were sometimes too tight and reported a real pass as a
+  // timeout. Widened generously (still bounded, still polled, no plain fixed sleep) so the
+  // assertions below stay exactly as strict.
+  const deadline = Date.now() + 15000;
   let pid = NaN;
   while (Date.now() < deadline) {
     // The name can appear (via writeFileSync's open()) a hair before its content is visible to a
@@ -227,8 +232,9 @@ test('runCheck kills its child as a whole process group once cancelled, leaving 
   const result = await resultPromise;
   assert.equal(result.status, 'cancelled');
   let alive = true;
-  // Field lesson 191: poll for grandchild death, allowing for reparenting race
-  const killDeadline = Date.now() + 3000;
+  // Field lesson 191/#182: poll for grandchild death, allowing for reparenting race and for
+  // load-delayed signal delivery/reaping under 4x parallel npm test.
+  const killDeadline = Date.now() + 10000;
   while (Date.now() < killDeadline) {
     try {
       process.kill(pid, 0);

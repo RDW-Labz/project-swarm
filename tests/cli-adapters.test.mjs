@@ -85,9 +85,17 @@ test('both new CLI adapters time out owned children and never expose partial fil
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-cli-timeout-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));await fs.writeFile(path.join(root,'input.md'),'source');
  for(const agent of ['hermes','qwen']){let closed=false;const state=await runManifest(root,manifest([{...job(agent),timeoutMs:50}]),{spawnImpl:(_command,_args,options)=>{const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],options);child.on('close',()=>closed=true);return child;}});assert.equal(state.jobs[0].status,'timeout');assert.equal(closed,true);await assert.rejects(integrateRun(root,state.id));}
 });
-test('eight active jobs drain a larger queue with consistent observed counts',async t=>{
+test('#67: eight active jobs drain a larger queue with consistent observed counts',async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-eight-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));await fs.writeFile(path.join(root,'input.md'),'source');let active=0,peak=0;const snapshots=[];
+ // Field lesson #182: a fixed 80ms delay before each fake worker "finishes" was flaky under a
+ // loaded host (4x parallel npm test): if 8 real child processes take longer than 80ms to spawn,
+ // the earliest ones can exit and free a slot before the 8th ever starts, so peak concurrency is
+ // never actually observed at 8. Each child instead waits (bounded, polling every 5ms) until at
+ // least 8 siblings have started — an event-driven barrier proving true 8-way concurrency really
+ // happened, instead of hoping a fixed sleep outlasted the host's own scheduling latency.
+ const markers=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-eight-markers-'));t.after(()=>fs.rm(markers,{recursive:true,force:true}));
  const jobs=Array.from({length:24},(_,i)=>({...job('qwen'),id:`qwen-${i}`,outputs:[],timeoutMs:5000}));const emptyEvents=events('qwen');emptyEvents[1].result=JSON.stringify({summary:'done',files:[]});
- const state=await runManifest(root,{version:1,concurrency:8,jobs},{onState:state=>snapshots.push(structuredClone(state.summary)),spawnImpl:(_command,_args,options)=>{active++;peak=Math.max(peak,active);const child=spawn(process.execPath,['-e',`setTimeout(()=>process.stdout.write(${JSON.stringify(lines(emptyEvents))}),80);`],options);child.on('close',()=>active--);return child;}});
+ const script=`const fs=require('node:fs');const path=require('node:path');const dir=${JSON.stringify(markers)};fs.writeFileSync(path.join(dir,process.pid+'-'+Math.random().toString(36).slice(2)),'');const deadline=Date.now()+4000;(function poll(){let count=0;try{count=fs.readdirSync(dir).length;}catch{}if(count>=8||Date.now()>=deadline)process.stdout.write(${JSON.stringify(lines(emptyEvents))});else setTimeout(poll,5);})();`;
+ const state=await runManifest(root,{version:1,concurrency:8,jobs},{onState:state=>snapshots.push(structuredClone(state.summary)),spawnImpl:(_command,_args,options)=>{active++;peak=Math.max(peak,active);const child=spawn(process.execPath,['-e',script],options);child.on('close',()=>active--);return child;}});
  assert.equal(state.status,'complete');assert.equal(peak,8);assert.equal(state.peakConcurrency,8);assert.equal(active,0);assert.equal(state.summary.counts.complete,24);assert.ok(snapshots.some(s=>s.counts.running===8&&s.counts.queued>0));for(const snapshot of snapshots)assert.equal(Object.values(snapshot.counts).reduce((a,b)=>a+b,0),24);
 });

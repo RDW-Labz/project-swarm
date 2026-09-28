@@ -62,6 +62,16 @@ export async function resolveToolchainBin(prog, { env = process.env, home = os.h
   }
   return { path: null, tried };
 }
+// Field lesson #192: a check that calls `shutil.which("uv")` itself (not through ship's resolved
+// argv) failed only because the toolchains bin dir was not on the child's PATH, and that failure
+// was then excused as pre-existing. Every check ship spawns (its base re-run, its lock check, and
+// the env it hands `runChecks`) gets `<toolchains>/bin` first on PATH — the same dir the resolver
+// above tries, from the same SWARM_TOOLCHAINS-else-home rule swarm.mjs's toolchainsDir() uses.
+export function toolchainCheckEnv({ env = process.env, home = os.homedir() } = {}) {
+  const bin = path.join(toolchainsDirFor(env, home), 'bin');
+  const rest = String(env.PATH ?? '').split(':').filter(entry => entry && entry !== bin);
+  return { ...env, PATH: [bin, ...rest].join(':') };
+}
 export async function resolveUv(options = {}) {
   return resolveToolchainBin('uv', options);
 }
@@ -202,7 +212,126 @@ async function readAddedTestFileLines(exec, root, payloadBase, integratedFiles) 
 // Field lesson #179: `--exempt <guard>:<file>=<reason>` — an owner decision, so the reason is
 // required and must say something real (trimmed, >= 10 characters). Give each diff guard a stable
 // id so an exemption names exactly which one it excuses.
-export const EXEMPTION_GUARD_IDS = ['undocumented-binary', 'env-var'];
+export const EXEMPTION_GUARD_IDS = ['undocumented-binary', 'env-var', 'scratch'];
+
+// Field lesson #180: a worker committed a scratch PR body (`.pr-body.md`) into a release; it only
+// showed up one branch later. A diff that ADDS a file matching one of these patterns refuses with
+// `scratch-file-in-diff` before anything is pushed, unless `--exempt scratch:<file>=<reason>`.
+const SCRATCH_PATTERNS = [/(^|\/)\.pr-body\.md$/, /-pr-create\.json$/, /^\.swarm-manifests\//, /\.out$/];
+export function scratchFileMatches(file) {
+  return SCRATCH_PATTERNS.some(re => re.test(String(file ?? '')));
+}
+
+// Only files that match a pattern cost an exec call each: a file already on the base commit was
+// not added by this change. No usable base counts every match as added (refuse, never guess).
+async function addedScratchFiles(exec, root, payloadBase, integratedFiles) {
+  const candidates = (integratedFiles ?? []).filter(scratchFileMatches);
+  if (!candidates.length) return [];
+  let baseSha = null;
+  try {
+    const baseRes = await exec('git', ['merge-base', `origin/${payloadBase}`, 'HEAD'], { cwd: root });
+    baseSha = baseRes && baseRes.code === 0 ? baseRes.stdout.trim() : null;
+  } catch { baseSha = null; }
+  const added = [];
+  for (const file of candidates) {
+    let onBase = false;
+    if (baseSha) {
+      try { onBase = (await exec('git', ['cat-file', '-e', `${baseSha}:${file}`], { cwd: root }))?.code === 0; } catch { onBase = false; }
+    }
+    if (!onBase) added.push(file);
+  }
+  return added;
+}
+
+// Field lesson #197: a private-names list — one term per line, `#` comments and blank lines
+// ignored — names things that must never appear in a public repo's diff.
+export function parsePrivateNames(text) {
+  return String(text ?? '')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith('#'));
+}
+
+async function loadPrivateNames(root, file) {
+  const target = file ? path.resolve(root, file) : path.join(root, 'coordination/private-names.txt');
+  try {
+    const text = await fs.readFile(target, 'utf8');
+    return { terms: parsePrivateNames(text), file: target, found: true };
+  } catch {
+    return { terms: [], file: target, found: false };
+  }
+}
+
+// gh repo view answers through ship's own exec seam, same as every other gh/git call, so tests
+// can fake it without a real network call. `PUBLIC` is the only visibility this guard runs for;
+// an unrecognized/erroring answer is treated the same as public — stricter, never a silent skip.
+export async function repoVisibility(exec, repo, { cwd } = {}) {
+  try {
+    const res = await exec('gh', ['repo', 'view', repo, '--json', 'visibility'], { cwd });
+    if (!res || res.code !== 0) return null;
+    const data = JSON.parse(res.stdout);
+    return typeof data?.visibility === 'string' ? data.visibility.toUpperCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+// Unified diff (-U0) added lines, each with the new-file line number it lands on.
+function parseAddedLines(diffText) {
+  const added = [];
+  let newLine = null;
+  for (const line of String(diffText ?? '').split('\n')) {
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line);
+    if (hunk) { newLine = Number(hunk[1]); continue; }
+    if (line.startsWith('+++') || line.startsWith('---')) continue;
+    if (newLine !== null && line.startsWith('+')) { added.push({ line: newLine, text: line.slice(1) }); newLine++; }
+  }
+  return added;
+}
+
+// Same no-usable-base fallback as readAddedTestFileLines/addedScratchFiles: without a real base to
+// diff against, every line of the file's current content counts as added (stricter, never a guess).
+async function addedLinesForFiles(exec, root, payloadBase, files) {
+  const result = new Map();
+  if (!files?.length) return result;
+  let baseSha = null;
+  try {
+    const baseRes = await exec('git', ['merge-base', `origin/${payloadBase}`, 'HEAD'], { cwd: root });
+    baseSha = baseRes && baseRes.code === 0 ? baseRes.stdout.trim() : null;
+  } catch { baseSha = null; }
+  for (const file of files) {
+    let entries = null;
+    if (baseSha) {
+      try {
+        const res = await exec('git', ['diff', `${baseSha}...HEAD`, '-U0', '--', file], { cwd: root });
+        if (res && res.code === 0) entries = parseAddedLines(res.stdout);
+      } catch { entries = null; }
+    }
+    if (entries === null) {
+      try {
+        const text = await fs.readFile(path.join(root, file), 'utf8');
+        entries = text.split('\n').map((lineText, index) => ({ line: index + 1, text: lineText }));
+      } catch { continue; /* removed or unreadable: nothing to scan */ }
+    }
+    result.set(file, entries);
+  }
+  return result;
+}
+
+// Term shown, line text never echoed: a refusal must not repeat whatever the private name sat
+// next to.
+export function findPrivateNameHits(addedByFile, terms) {
+  const hits = [];
+  for (const [file, entries] of addedByFile) {
+    for (const { line, text } of entries) {
+      const lowerText = text.toLowerCase();
+      for (const term of terms) {
+        if (term && lowerText.includes(term.toLowerCase())) { hits.push({ file, line, term }); break; }
+      }
+    }
+  }
+  return hits;
+}
 
 export function parseExemptFlag(value) {
   const raw = String(value ?? '');
@@ -243,14 +372,24 @@ export function appendExemptionsSection(body, usedExemptions) {
 // guard was excused on which file — and why — stays auditable across ships. Same
 // env-override-else-home-dir shape as every other toolchain/install path in this file
 // (SWARM_TOOLCHAINS), so tests can point it at a temp dir instead of the real home directory.
+// Field lesson #186: the suite still wrote fixture rows into the real audit log (a test that set
+// no override). SWARM_HOME (the install dir) is honoured after SWARM_LOGS_DIR, and a process run
+// by `node --test` (NODE_TEST_CONTEXT set) with no override and the real home never writes there:
+// it gets a per-process temp dir instead, so a forgotten override cannot pollute the real record.
 function installLogsDirFor(env, home) {
-  return env.SWARM_LOGS_DIR || path.join(home, '.project-swarm/logs');
+  if (env.SWARM_LOGS_DIR) return env.SWARM_LOGS_DIR;
+  if (env.SWARM_HOME) return path.join(env.SWARM_HOME, 'logs');
+  if (env.NODE_TEST_CONTEXT && path.resolve(home) === path.resolve(os.homedir())) return path.join(os.tmpdir(), `project-swarm-test-logs-${process.pid}`);
+  return path.join(home, '.project-swarm/logs');
+}
+
+export function exemptionLogPath({ env = process.env, home = os.homedir() } = {}) {
+  return path.join(installLogsDirFor(env, home), 'ship-exemptions.jsonl');
 }
 
 export async function logExemption(entry, { env = process.env, home = os.homedir() } = {}) {
-  const dir = installLogsDirFor(env, home);
-  await fs.mkdir(dir, { recursive: true });
-  const file = path.join(dir, 'ship-exemptions.jsonl');
+  const file = exemptionLogPath({ env, home });
+  await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.appendFile(file, `${JSON.stringify(entry)}\n`, 'utf8');
   return file;
 }
@@ -434,7 +573,9 @@ function expandArgvForRoot(argv, integratedFiles, root) {
 // same failure is rediscovered by hand. Re-runs the check once against that tree — a throwaway
 // `git worktree`, always cleaned up — through the same injected `exec` ship already uses for every
 // other command, so this is exercised the same way in tests as the rest of ship().
-export async function verifyPreExistingOnBase({ root, argv, integratedFiles, baseSha, exec }) {
+// Field lesson #192: the whole check failing on base used to be enough; now each failing test id
+// from the head run also gets its own baseStatus from the base run's output and checkout files.
+export async function verifyPreExistingOnBase({ root, argv, integratedFiles, baseSha, exec, env, failingTests = [] }) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-preexisting-'));
   const checkout = path.join(temporary, 'base');
   let added = false;
@@ -444,8 +585,11 @@ export async function verifyPreExistingOnBase({ root, argv, integratedFiles, bas
     added = true;
     const expanded = expandArgvForRoot(argv, integratedFiles, checkout);
     if (!expanded || !expanded.length) return { checked: false };
-    const result = await exec(expanded[0], expanded.slice(1), { cwd: checkout });
-    return { checked: true, alsoFails: result.code !== 0 };
+    const result = await exec(expanded[0], expanded.slice(1), { cwd: checkout, ...(env ? { env } : {}) });
+    const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+    const tests = [];
+    for (const id of failingTests) tests.push({ id, baseStatus: await baseStatusForTest(id, output, result.code, checkout) });
+    return { checked: true, alsoFails: result.code !== 0, output, tests };
   } catch {
     return { checked: false };
   } finally {
@@ -470,6 +614,54 @@ export function extractFailingTestFiles(text) {
   return [...files];
 }
 
+// Field lesson #192: the test ids a check's output names as failing — pytest `FAILED f::t`, node's
+// TAP `not ok N - t` and spec `✖ t (1ms)`, vitest `FAIL f > t`, go `--- FAIL: T`.
+const FAILING_TEST_RES = [
+  /^FAILED\s+(\S+::\S+?)(?:\s+-\s.*)?$/gm,
+  /^\s*not ok \d+ - (.+?)(?:\s+#\s.*)?$/gm,
+  /^\s*✖ (.+?)(?: \([\d.]+m?s\))?$/gm,
+  /^\s*(?:✗\s*)?FAIL\s+(\S+(?: > .+)?)$/gm,
+  /^\s*--- FAIL: (\S+)/gm,
+];
+export function extractFailingTestIds(text) {
+  const ids = new Set();
+  const source = String(text ?? '');
+  for (const re of FAILING_TEST_RES) {
+    re.lastIndex = 0;
+    let match;
+    while ((match = re.exec(source))) {
+      const id = match[1].trim();
+      if (id && !/^failing tests:?$/i.test(id)) ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
+const escapeRegExp = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Field lesson #192: "fail" needs positive evidence (the same id fails on base); a test whose file
+// or pytest function is missing from the base checkout is "absent"; a base run that passed, or
+// names the id as passing, is "pass"; anything else is "unknown". Only "fail" is pre-existing.
+async function baseStatusForTest(id, output, baseCode, checkout) {
+  const file = id.includes('::') ? id.split('::')[0] : id.includes(' > ') ? id.split(' > ')[0] : null;
+  let fileText = null;
+  if (file) {
+    try { fileText = await fs.readFile(path.join(checkout, file), 'utf8'); } catch { return 'absent'; }
+  }
+  if (extractFailingTestIds(output).includes(id)) return 'fail';
+  if (baseCode === 0) return 'pass';
+  const quoted = escapeRegExp(id);
+  if (new RegExp(`^\\s*(?:ok \\d+ - ${quoted}(?:\\s|$)|✔ ${quoted}(?:\\s|$)|PASSED ${quoted}|${quoted} PASSED|--- PASS: ${quoted}(?:\\s|$))`, 'm').test(output)) return 'pass';
+  if (id.includes('::') && fileText !== null) {
+    const fn = id.split('::').at(-1).replace(/\[.*$/, '');
+    if (!new RegExp(`\\bdef ${escapeRegExp(fn)}\\s*\\(`).test(fileText)) return 'absent';
+  }
+  return 'unknown';
+}
+
+// A check's own baseStatus is its worst test's: any blocking test blocks the whole check.
+const BASE_STATUS_RANK = ['absent', 'pass', 'unknown', 'fail'];
+
 function runIdFromDetailsUrl(url) {
   const match = /\/actions\/runs\/(\d+)/.exec(String(url ?? ''));
   return match ? match[1] : null;
@@ -488,6 +680,22 @@ export function failedRunIds(rollup, failedNames) {
     if (id) ids.add(id);
   }
   return [...ids];
+}
+
+// Field lesson #187: `ship --help`/`-h` prints this and exits 0 (the swarm.mjs dispatch calls
+// shipHelpRequested before parsing any other ship flag).
+export const SHIP_USAGE = [
+  'Usage: swarm ship RUN --pr PAYLOAD.json [flags]',
+  '       swarm ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [flags]',
+  'Flags: [--repo OWNER/NAME] [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase]',
+  '       [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check]',
+  '       [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [--private-names FILE]',
+  `Exempt guards: ${EXEMPTION_GUARD_IDS.join(', ')}`,
+  'Prints one JSON result naming its runId (or branch for --branch); exit 0 when merged, held or ready.',
+].join('\n') + '\n';
+
+export function shipHelpRequested(args) {
+  return (args ?? []).some(arg => arg === '--help' || arg === '-h');
 }
 
 export function renderChecks(results) {
@@ -548,10 +756,15 @@ export async function ship(options) {
     env = process.env,
     home = os.homedir(),
     resolveUv: resolveUvImpl = resolveUv,
+    runId = null, branch = null,
+    privateNamesFile = null,
   } = options;
 
   let repo = options.repo;
-  const base = { warnings: [...portWarnings, ...extraWarnings], tag: { name: null, status: 'skipped', waitedSeconds: 0 }, status: null, repo, pr: null, url: null, sha: null, mergeSha: null, checks: null, ci: null, reason: null, portBase };
+  // Field lesson #187: every result, refusals included, names its run (or its --branch), so a
+  // ship attempt is always recoverable without reading the source to find how it was started.
+  const checkEnv = toolchainCheckEnv({ env, home });
+  const base = { ...(runId ? { runId } : {}), ...(branch ? { branch } : {}), warnings: [...portWarnings, ...extraWarnings], tag: { name: null, status: 'skipped', waitedSeconds: 0 }, status: null, repo, pr: null, url: null, sha: null, mergeSha: null, checks: null, ci: null, reason: null, portBase, privateNames: null };
 
   if (!VALID_MERGE_METHODS.has(mergeMethod)) return { ...base, status: 'refused', reason: 'invalid merge method' };
   for (const [name, value] of [['pollMs', pollMs], ['timeoutMs', timeoutMs], ['noCiGraceMs', noCiGraceMs]]) {
@@ -576,6 +789,35 @@ export async function ship(options) {
     repo = originRepo;
     base.repo = repo;
   } else if (originRepo && repo !== originRepo) base.warnings.push(`--repo ${repo} differs from origin ${originRepo}`);
+
+  // Field lesson #197: a private-names list (`<root>/coordination/private-names.txt`, or
+  // --private-names FILE) is scanned against only the lines this diff ADDS, and only for a repo
+  // gh reports public; a private/internal repo already limits who can see it, so this is skipped
+  // there, and an unrecognized/erroring visibility answer is treated as public (stricter). The
+  // list is loaded first: with no list (or an empty one) there is nothing to check, so this never
+  // spends a `gh repo view` call a ship with no list configured has no use for.
+  const list = await loadPrivateNames(root, privateNamesFile);
+  if (!list.found) {
+    base.privateNames = { checked: false, reason: 'no list' };
+  } else if (!list.terms.length) {
+    base.privateNames = { checked: true, hits: 0 };
+  } else {
+    const visibility = await repoVisibility(exec, repo, { cwd: root });
+    if (visibility === 'PRIVATE' || visibility === 'INTERNAL') {
+      base.privateNames = { checked: false, reason: 'private repo' };
+    } else {
+      const addedByFile = await addedLinesForFiles(exec, root, payload.base, integratedFiles);
+      const hits = findPrivateNameHits(addedByFile, list.terms);
+      if (hits.length) {
+        return {
+          ...base, status: 'refused', code: 'private-name-in-diff',
+          reason: `private-name-in-diff: ${hits.map(hit => `${hit.file}:${hit.line} (${hit.term})`).join(', ')}`,
+        };
+      }
+      base.privateNames = { checked: true, hits: 0 };
+    }
+  }
+
   if (manifest && requireSections.some(name => name.toLowerCase() === 'mutation check') && !manifest.mutants?.length && !manifest.jobs?.some(job => job.mutants?.length)) {
     base.warnings.push('no manifest mutants: declare "mutants" in the manifest and run "integrate --mutants" (see docs/verification.md)');
   }
@@ -609,6 +851,14 @@ export async function ship(options) {
     if (!usedExemptions.some(used => used.guard === exemption.guard && used.file === exemption.file)) usedExemptions.push(exemption);
   };
 
+  // Field lesson #180: scratch files this diff adds, minus any `--exempt scratch:<file>=<reason>`.
+  const scratchFiles = [];
+  for (const file of await addedScratchFiles(exec, root, payload.base, integratedFiles)) {
+    const exemption = findExemption('scratch', file);
+    if (exemption) { noteExemptionUsed(exemption); continue; }
+    scratchFiles.push(file);
+  }
+
   const undocumentedBinaries = [];
   for (const warning of rawUndocumentedBinaries) {
     const exemption = findExemption('undocumented-binary', warning.file);
@@ -635,6 +885,12 @@ export async function ship(options) {
       await logExemption({ ts: new Date().toISOString(), repo, branch: payload.head, guard: exemption.guard, file: exemption.file, reason: exemption.reason }, { env, home });
     }
   }
+  if (scratchFiles.length) {
+    return {
+      ...base, status: 'refused', code: 'scratch-file-in-diff',
+      reason: `scratch-file-in-diff: ${scratchFiles.join(', ')}; scratch files (PR bodies, payloads, manifests, *.out) never enter a commit; remove it, or pass --exempt scratch:<file>=<reason>`,
+    };
+  }
   if (undocumentedBinaries.length) {
     return {
       ...base, status: 'refused',
@@ -647,7 +903,7 @@ export async function ship(options) {
   const packagingRefusals = packagingChangeWarnings(packagingChanges, checkArgvs);
   if (packagingRefusals.length) return { ...base, status: 'refused', reason: `${packagingRefusals.join('; ')}; add a check that builds the package (uv build --wheel, npm pack --dry-run)` };
 
-  const checks = await runChecks();
+  const checks = await runChecks({ env: checkEnv });
   base.checks = checks;
 
   // Field lesson #177(c): before blocking on any failing check, verify it against the base
@@ -655,16 +911,27 @@ export async function ship(options) {
   // longer blocking) instead of costing a re-ship for something this change did not cause.
   if (checks.some(result => result.status === 'failed') && checkArgvs.length) {
     const argvForCheck = checkArgvs.slice(0, checks.length);
+    // Field lesson #192: pre-existing means the same failing test ids fail on base. A test the PR
+    // adds (absent on base), one that passes there, or a base that cannot be run or read, all
+    // block. Only when neither run names any test id (a formatter, say) does the check itself
+    // stand in as the one id, compared by exit code as #177(c) did.
     const baseRes = await exec('git', ['merge-base', `origin/${payload.base}`, 'HEAD'], { cwd: root });
     const baseSha = baseRes.code === 0 ? baseRes.stdout.trim() : null;
-    if (baseSha) {
-      for (let index = 0; index < checks.length; index++) {
-        if (checks[index].status !== 'failed') continue;
-        const argv = argvForCheck[index];
-        if (!argv) continue;
-        const verified = await verifyPreExistingOnBase({ root, argv, integratedFiles, baseSha, exec });
-        if (verified.checked && verified.alsoFails) checks[index] = { ...checks[index], status: 'pre-existing', preExisting: true };
+    for (let index = 0; index < checks.length; index++) {
+      if (checks[index].status !== 'failed') continue;
+      const argv = argvForCheck[index];
+      const failingTests = extractFailingTestIds([checks[index].output, checks[index].tail].filter(Boolean).join('\n'));
+      const verified = baseSha && argv ? await verifyPreExistingOnBase({ root, argv, integratedFiles, baseSha, exec, env: checkEnv, failingTests }) : { checked: false };
+      let baseStatus = 'unknown';
+      let tests = failingTests.map(id => ({ id, baseStatus: 'unknown' }));
+      if (verified.checked && failingTests.length) {
+        tests = verified.tests;
+        baseStatus = tests.map(entry => entry.baseStatus).sort((a, b) => BASE_STATUS_RANK.indexOf(a) - BASE_STATUS_RANK.indexOf(b))[0];
+      } else if (verified.checked && !extractFailingTestIds(verified.output).length) {
+        baseStatus = verified.alsoFails ? 'fail' : 'pass';
       }
+      checks[index] = { ...checks[index], baseStatus, ...(tests.length ? { failingTests: tests } : {}) };
+      if (baseStatus === 'fail') checks[index] = { ...checks[index], status: 'pre-existing', preExisting: true };
     }
   }
 
@@ -715,7 +982,7 @@ export async function ship(options) {
         if (!resolved.path) return { ...base, status: 'refused', reason: `lock-check-cannot-run: uv not found (tried ${resolved.tried.join(', ')})` };
         lockArgv0 = resolved.path;
       }
-      const lockRes = await exec(lockArgv0, lockCheck.argv.slice(1), { cwd: root });
+      const lockRes = await exec(lockArgv0, lockCheck.argv.slice(1), { cwd: root, env: checkEnv });
       if (lockRes.code !== 0) {
         // Field lesson #181: a resolved path that still fails to even spawn (e.g. a toolchains
         // package directory picked before this lesson's own `resolveToolchainBin` fix, or any
