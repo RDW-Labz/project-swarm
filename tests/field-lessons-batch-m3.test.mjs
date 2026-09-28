@@ -11,16 +11,43 @@ import { loadLocalConfig } from '../tools/local-config.mjs';
 import { workerKeyItem, resolveWorkerKey, rigServicePortFile, resolveRigServicePort, RIG_SERVICE_DEFAULT_PORT, shellProfile } from '../tools/claude-shell.mjs';
 import { openRouterKeyItem, readOpenRouterKey, describeIncompleteChatResponse, assertCompleteChatResponse, OpenRouterError } from '../tools/openrouter.mjs';
 import { DENIED_HOME_DIRS, effectiveDeniedHomeDirs, validateReadPaths } from '../tools/codex-adapter.mjs';
+import { parsePrivateNames } from '../tools/ship.mjs';
 
 const SOURCE_FILES = ['../tools/claude-shell.mjs', '../tools/codex-adapter.mjs', '../tools/openrouter.mjs', '../tools/local-config.mjs'];
 
 // --- row #197-followup: no product literal, project specifics arrive via config --------------
 
-test('#197-followup: no source string in these files names the product keychain service, app-support path, or home dir', async () => {
+// Field lesson 112: a test that asserts a private term is absent reads the terms from the
+// local config's `privateNames` file (never spelled here); with no config, or an unreadable list,
+// it skips with a clear reason instead of guessing or hardcoding the term itself.
+async function loadPrivateTermsOrSkip(t) {
+  let config;
+  if (process.env.SWARM_REAL_CONFIG) {
+    try { config = loadLocalConfig({ env: { SWARM_CONFIG: process.env.SWARM_REAL_CONFIG } }); }
+    catch { t.skip('real config could not be read; nothing to scan for'); return null; }
+  } else {
+    t.skip('no real config path preserved; nothing to scan for');
+    return null;
+  }
+  if (!config?.privateNames) { t.skip('no local config privateNames file configured; nothing to scan for'); return null; }
+  try {
+    const text = await fs.readFile(config.privateNames, 'utf8');
+    return parsePrivateNames(text);
+  } catch {
+    t.skip(`configured privateNames file ${config.privateNames} could not be read`);
+    return null;
+  }
+}
+
+test('#197-followup: no source string in these files names a configured private term (keychain service, app-support path, or home dir)', async t => {
+  const terms = await loadPrivateTermsOrSkip(t);
+  if (!terms) return;
   for (const relative of SOURCE_FILES) {
     const text = await fs.readFile(new URL(relative, import.meta.url), 'utf8');
-    assert.equal(text.includes('OASIS'), false, `${relative} must not name the product keychain service`);
-    assert.equal(text.includes('.oasis'), false, `${relative} must not name the product home directory`);
+    for (const term of terms) {
+      const hit = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text);
+      assert.equal(hit, false, `${relative} must not name ${term}`);
+    }
   }
 });
 
@@ -60,13 +87,13 @@ test('#197-followup: rig port file has no built-in path; absent config turns the
 test('#197-followup: DENIED_HOME_DIRS keeps only generic entries; config deniedHomeDirs is additive', () => {
   assert.deepEqual([...DENIED_HOME_DIRS], ['Library/Keychains', '.ssh', '.aws', '.config']);
   assert.deepEqual(effectiveDeniedHomeDirs(), DENIED_HOME_DIRS);
-  assert.deepEqual(effectiveDeniedHomeDirs({ deniedHomeDirs: ['.oasis'] }), [...DENIED_HOME_DIRS, '.oasis']);
+  assert.deepEqual(effectiveDeniedHomeDirs({ deniedHomeDirs: ['.acme-app'] }), [...DENIED_HOME_DIRS, '.acme-app']);
 
   const home = '/Users/example';
-  // With no config, a path under the (now removed) product-specific directory is no longer denied...
-  assert.doesNotThrow(() => validateReadPaths([path.join(home, '.oasis/secret.txt')], home));
-  // ...but adding it back through config still denies it (existing behavior stays reachable).
-  assert.throws(() => validateReadPaths([path.join(home, '.oasis/secret.txt')], home, { deniedHomeDirs: ['.oasis'] }), /denied/);
+  // With no config, a path under an arbitrary project-specific directory is not denied...
+  assert.doesNotThrow(() => validateReadPaths([path.join(home, '.acme-app/secret.txt')], home));
+  // ...but adding it through config denies it.
+  assert.throws(() => validateReadPaths([path.join(home, '.acme-app/secret.txt')], home, { deniedHomeDirs: ['.acme-app'] }), /denied/);
   // The still-generic entries are denied either way.
   assert.throws(() => validateReadPaths([path.join(home, '.ssh/id_rsa')], home), /denied/);
 });
@@ -74,13 +101,17 @@ test('#197-followup: DENIED_HOME_DIRS keeps only generic entries; config deniedH
 test('#197-followup: shellProfile denies only the generic dirs by default, and config deniedHomeDirs additionally', () => {
   const base = { home: '/Users/example', worktree: '/Users/example/repo/.swarm/runs/r/worktrees/j', commonDir: '/Users/example/repo/.git', shellDir: '/Users/example/repo/.swarm/runs/r/j/shell', proxyPort: 1 };
   const plain = shellProfile(base);
-  assert.equal(plain.includes('/Users/example/.oasis'), false);
+  assert.equal(plain.includes('/Users/example/.acme-app'), false);
   assert.ok(plain.includes('(subpath "/Users/example/.ssh")'));
-  const configured = shellProfile({ ...base, config: { deniedHomeDirs: ['.oasis'] } });
-  assert.ok(configured.includes('(subpath "/Users/example/.oasis")'));
+  const configured = shellProfile({ ...base, config: { deniedHomeDirs: ['.acme-app'] } });
+  assert.ok(configured.includes('(subpath "/Users/example/.acme-app")'));
 });
 
-test('#197-followup: loadLocalConfig reads SWARM_CONFIG or <home>/.project-swarm/config.json, {} when missing, throws on invalid JSON', async t => {
+// Field lesson 112: the default moved off `<home>/.project-swarm/config.json` (inside the install
+// checkout itself) to XDG/`~/.config`; a leftover file at that old path now refuses instead of
+// being read. See tests/config-private-names.test.mjs (A1-A3) for the full default-path and
+// refusal coverage.
+test('#197-followup: loadLocalConfig reads SWARM_CONFIG, {} when missing, throws on invalid JSON, refuses a leftover file at the old default path', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-local-config-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   assert.deepEqual(loadLocalConfig({ home: dir, env: {} }), {});
@@ -89,10 +120,10 @@ test('#197-followup: loadLocalConfig reads SWARM_CONFIG or <home>/.project-swarm
   await fs.writeFile(file, JSON.stringify({ keychain: { service: 'acme-swarm' } }));
   assert.deepEqual(loadLocalConfig({ home: dir, env: { SWARM_CONFIG: file } }), { keychain: { service: 'acme-swarm' } });
 
-  const homeWithConfig = path.join(dir, 'home');
-  await fs.mkdir(path.join(homeWithConfig, '.project-swarm'), { recursive: true });
-  await fs.writeFile(path.join(homeWithConfig, '.project-swarm', 'config.json'), JSON.stringify({ rig: { portFile: '/x' } }));
-  assert.deepEqual(loadLocalConfig({ home: homeWithConfig, env: {} }), { rig: { portFile: '/x' } });
+  const homeWithOldConfig = path.join(dir, 'home');
+  await fs.mkdir(path.join(homeWithOldConfig, '.project-swarm'), { recursive: true });
+  await fs.writeFile(path.join(homeWithOldConfig, '.project-swarm', 'config.json'), JSON.stringify({ rig: { portFile: '/x' } }));
+  assert.throws(() => loadLocalConfig({ home: homeWithOldConfig, env: {} }), /config-inside-install:/);
 
   const badFile = path.join(dir, 'bad.json');
   await fs.writeFile(badFile, '{not json');

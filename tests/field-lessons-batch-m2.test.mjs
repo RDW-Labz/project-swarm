@@ -12,6 +12,30 @@ import {
   SHELL_SUITE_BOILERPLATE, NEW_PERSISTED_FIELD_BOILERPLATE,
 } from '../tools/swarm.mjs';
 import { git } from '../tools/codex-adapter.mjs';
+import { loadLocalConfig } from '../tools/local-config.mjs';
+import { parsePrivateNames } from '../tools/ship.mjs';
+
+// Field lesson 112: a test that asserts a private term is absent reads the terms from the
+// local config's `privateNames` file (never spelled here); with no config, or an unreadable list,
+// it skips with a clear reason instead of guessing or hardcoding the term itself.
+async function loadPrivateTermsOrSkip(t) {
+  let config;
+  if (process.env.SWARM_REAL_CONFIG) {
+    try { config = loadLocalConfig({ env: { SWARM_CONFIG: process.env.SWARM_REAL_CONFIG } }); }
+    catch { t.skip('real config could not be read; nothing to scan for'); return null; }
+  } else {
+    t.skip('no real config path preserved; nothing to scan for');
+    return null;
+  }
+  if (!config?.privateNames) { t.skip('no local config privateNames file configured; nothing to scan for'); return null; }
+  try {
+    const text = await fs.readFile(config.privateNames, 'utf8');
+    return parsePrivateNames(text);
+  } catch {
+    t.skip(`configured privateNames file ${config.privateNames} could not be read`);
+    return null;
+  }
+}
 
 const SWARM_MJS = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
 
@@ -201,7 +225,12 @@ test('#208: a stated tierReason silences the warning; no config also means no wa
 
 // --- swarm.mjs comment scrub: no product name in the scout/sweep decision comments ----------------
 
-test('swarm.mjs comment scrub: no product name literal remains anywhere in the file', async () => {
+test('swarm.mjs comment scrub: no configured private term remains anywhere in the file', async t => {
+  const terms = await loadPrivateTermsOrSkip(t);
+  if (!terms) return;
   const text = await fs.readFile(SWARM_MJS, 'utf8');
-  assert.ok(!text.includes('OASIS'), 'OASIS must not appear in the public repo source');
+  for (const term of terms) {
+    const hit = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text);
+    assert.equal(hit, false, `${term} must not appear in the public repo source`);
+  }
 });

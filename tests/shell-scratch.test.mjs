@@ -82,13 +82,13 @@ test('shell profile: scratch dir gets a realpathd read+write allow, placed befor
   assert.ok(scratchIndex > -1);
   assert.ok(scratchIndex < profile.indexOf('(subpath "/Library/Keychains")'), 'scratch allow comes before the keychain deny');
   assert.ok(scratchIndex < profile.lastIndexOf('(deny mach-lookup'), 'scratch allow comes before the final deny');
-  // Every existing generic deny (.claude, .ssh, .aws, keychain, securityd) still appears; '.oasis'
-  // is a product-specific literal, denied only when a project's config names it.
+  // Every existing generic deny (.claude, .ssh, .aws, keychain, securityd) still appears; an
+  // arbitrary project-specific directory is denied only when a project's config names it.
   for (const part of ['.ssh', '.aws', '.claude']) assert.ok(profile.includes(`(subpath "/Users/example/${part}")`), part);
-  assert.equal(profile.includes('/Users/example/.oasis'), false, 'a public repo names no product home directory by default');
+  assert.equal(profile.includes('/Users/example/.acme-app'), false, 'no directory outside the generic deny list by default');
   for (const service of ['com.apple.SecurityServer', 'com.apple.securityd.xpc', 'com.apple.secd', 'com.apple.security.agent']) assert.ok(profile.includes(`(global-name "${service}")`), service);
-  const configured = shellProfile({ ...base, scratchDir: '/private/var/folders/xx/scratch-fixture', config: { deniedHomeDirs: ['.oasis'] } });
-  assert.ok(configured.includes('(subpath "/Users/example/.oasis")'));
+  const configured = shellProfile({ ...base, scratchDir: '/private/var/folders/xx/scratch-fixture', config: { deniedHomeDirs: ['.acme-app'] } });
+  assert.ok(configured.includes('(subpath "/Users/example/.acme-app")'));
 });
 
 // --- shellEnvironment: TMPDIR/TMP/TEMP/HOME + reservation ----------------------------------------

@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { packagingChangeWarnings } from './packaging-check.mjs';
+import { loadLocalConfig } from './local-config.mjs';
 
 export const SHIP_DEFAULTS = Object.freeze({ pollMs: 20_000, timeoutMs: 45 * 60_000, noCiGraceMs: 5 * 60_000, mergeMethod: 'squash' });
 export const CHECKS_PLACEHOLDER = '<!-- swarm:checks -->';
@@ -259,14 +260,77 @@ export function parsePrivateNames(text) {
     .filter(line => line && !line.startsWith('#'));
 }
 
-async function loadPrivateNames(root, file) {
-  const target = file ? path.resolve(root, file) : path.join(root, 'coordination/private-names.txt');
-  try {
-    const text = await fs.readFile(target, 'utf8');
-    return { terms: parsePrivateNames(text), file: target, found: true };
-  } catch {
-    return { terms: [], file: target, found: false };
+// Field lesson #211: a `path:` prefixed line is a path glob (relative to the repo root), never a
+// text term — it names a whole file that must never enter a diff at all (secrets, machine-local
+// fixtures), regardless of what its contents say.
+export function splitPrivateNameLines(lines) {
+  const terms = [];
+  const pathGlobs = [];
+  for (const line of lines) {
+    if (line.startsWith('path:')) pathGlobs.push(line.slice('path:'.length).trim());
+    else terms.push(line);
   }
+  return { terms, pathGlobs };
+}
+
+// `*` matches within one path segment; `**` matches across segments (including none, so
+// `path:config.json` — no wildcard, no slash — only ever matches that exact file at the repo root).
+export function pathGlobToRegExp(glob) {
+  let source = '';
+  for (let i = 0; i < glob.length; i++) {
+    if (glob[i] === '*' && glob[i + 1] === '*') { source += '.*'; i++; }
+    else if (glob[i] === '*') source += '[^/]*';
+    else source += escapeRegExp(glob[i]);
+  }
+  return new RegExp(`^${source}$`);
+}
+
+export function findPrivatePathHits(files, pathGlobs) {
+  const hits = [];
+  for (const file of files) {
+    for (const glob of pathGlobs) {
+      if (pathGlobToRegExp(glob).test(file)) { hits.push({ file, glob }); break; }
+    }
+  }
+  return hits;
+}
+
+// Field lesson #197/#211: source order is `--private-names FILE`, then
+// `<root>/coordination/private-names.txt`, then the local config's `privateNames` (an absolute
+// path). A config-named file that does not exist is a refusal (`missing: true`), not a silent
+// "no list" — an owner who bothered to name a list meant for it to be checked.
+async function loadPrivateNames(root, file, { env = process.env, home = os.homedir() } = {}) {
+  const load = async (target) => {
+    const text = await fs.readFile(target, 'utf8');
+    const { terms, pathGlobs } = splitPrivateNameLines(parsePrivateNames(text));
+    return { terms, pathGlobs, file: target, found: true };
+  };
+  if (file) {
+    const target = path.resolve(root, file);
+    try { return await load(target); }
+    catch { return { terms: [], pathGlobs: [], file: target, found: false }; }
+  }
+  const rootFile = path.join(root, 'coordination/private-names.txt');
+  try { return await load(rootFile); }
+  catch { /* fall through to the local config */ }
+  let config;
+  try { config = loadLocalConfig({ home, env }); } catch { config = {}; }
+  if (config?.privateNames) {
+    const configured = config.privateNames;
+    try { return await load(configured); }
+    catch { return { terms: [], pathGlobs: [], file: configured, found: false, missing: true }; }
+  }
+  return { terms: [], pathGlobs: [], file: rootFile, found: false };
+}
+
+// Field lesson #211: `git diff --name-only <base>...HEAD` (what will actually land in the PR) plus
+// anything staged locally but not yet part of that diff — a private-path glob is checked against
+// both, public or private repo alike.
+async function changedFileNames(exec, root, payloadBase) {
+  const files = new Set(await pushedFileNames(exec, root, payloadBase));
+  const stagedRes = await exec('git', ['diff', '--name-only', '--cached'], { cwd: root });
+  if (stagedRes && stagedRes.code === 0) for (const line of stagedRes.stdout.split('\n')) if (line.trim()) files.add(line.trim());
+  return [...files];
 }
 
 // gh repo view answers through ship's own exec seam, same as every other gh/git call, so tests
@@ -807,7 +871,22 @@ export async function ship(options) {
   // there, and an unrecognized/erroring visibility answer is treated as public (stricter). The
   // list is loaded first: with no list (or an empty one) there is nothing to check, so this never
   // spends a `gh repo view` call a ship with no list configured has no use for.
-  const list = await loadPrivateNames(root, privateNamesFile);
+  const list = await loadPrivateNames(root, privateNamesFile, { env, home });
+  if (!list.found && list.missing) {
+    return { ...base, status: 'refused', reason: `private-names-missing: ${list.file}` };
+  }
+  // Field lesson #211: `path:` glob lines are checked public or private repo alike — a whole file
+  // that must never enter a diff is just as much a leak in a private/internal repo.
+  if (list.found && list.pathGlobs.length) {
+    const changed = await changedFileNames(exec, root, payload.base);
+    const pathHits = findPrivatePathHits(changed, list.pathGlobs);
+    if (pathHits.length) {
+      return {
+        ...base, status: 'refused', code: 'private-path-in-diff',
+        reason: `private-path-in-diff: ${pathHits.map(hit => `${hit.file} matches path:${hit.glob}`).join(', ')}`,
+      };
+    }
+  }
   if (!list.found) {
     base.privateNames = { checked: false, reason: 'no list' };
   } else if (!list.terms.length) {

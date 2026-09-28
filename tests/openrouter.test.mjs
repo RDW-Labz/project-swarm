@@ -172,7 +172,6 @@ test('an incomplete OpenRouter reply names its finish_reason through executeApi'
 // apiDoctor's auth string names the configured keychain service, never a hard-coded product name.
 test('apiDoctor names the configured keychain service, defaulting to project-swarm', () => {
   assert.match(apiDoctor('openrouter', { SWARM_CONFIG: '/nonexistent/swarm-config.json' }).authentication, /keychain project-swarm\/openrouter\.api_key/);
-  assert.equal(apiDoctor('openrouter', { SWARM_CONFIG: '/nonexistent/swarm-config.json' }).authentication.includes('OASIS'), false);
 });
 
 test('a key read from the keychain (not env) that is echoed back still discards the output', async t => {
