@@ -35,14 +35,21 @@ const LOCK_CHECKS = [
 function toolchainsDirFor(env, home) {
   return env.SWARM_TOOLCHAINS || path.join(home, '.project-swarm/toolchains');
 }
-export async function resolveUv({ env = process.env, home = os.homedir(), access = file => fs.access(file, fs.constants.X_OK) } = {}) {
+// Field lesson #175: the identical "not on PATH" problem hits any bare check argv[0]
+// (`ship --check '["uv",...]'` run from a shell without the toolchains dir on PATH), not only
+// `uv lock --check`; this is the one resolver both use — toolchains dir, then its own bin/, then
+// every PATH entry — so a program that cannot be found anywhere is named with every path tried.
+export async function resolveToolchainBin(prog, { env = process.env, home = os.homedir(), access = file => fs.access(file, fs.constants.X_OK) } = {}) {
   const dir = toolchainsDirFor(env, home);
   const pathDirs = String(env.PATH ?? '').split(':').filter(Boolean);
-  const tried = [path.join(dir, 'uv'), path.join(dir, 'bin', 'uv'), ...pathDirs.map(entry => path.join(entry, 'uv'))];
+  const tried = [path.join(dir, prog), path.join(dir, 'bin', prog), ...pathDirs.map(entry => path.join(entry, prog))];
   for (const candidate of tried) {
     try { await access(candidate); return { path: candidate, tried }; } catch { /* try the next candidate */ }
   }
   return { path: null, tried };
+}
+export async function resolveUv(options = {}) {
+  return resolveToolchainBin('uv', options);
 }
 export function selectLockCheck(files) {
   const basenames = new Set((files ?? []).map(file => path.basename(file)));
@@ -202,9 +209,22 @@ async function releaseVersion(exec, root, branch) {
   } catch { return null; }
 }
 
+// Field lesson #174: `ship --require-section 'Mutation check'` used to refuse a PR body whose
+// heading was `## Mutation check (mutant -> killing test)` — a real section, just with more text
+// in the heading than the required name. A required section now matches `## <name>` followed by
+// end of line, a space, or `(` — a prefix match on a word boundary, so `## Mutation checks` (a
+// different word, not a boundary character) still does not match `Mutation check`.
+function headingMatchesName(title, name) {
+  const normalizedTitle = title.toLowerCase();
+  const normalizedName = name.toLowerCase();
+  if (!normalizedTitle.startsWith(normalizedName)) return false;
+  const boundary = normalizedTitle.charAt(normalizedName.length);
+  return boundary === '' || boundary === ' ' || boundary === '(';
+}
+
 function getMarkerForSection(body, sectionName) {
   const lines = String(body ?? '').split('\n');
-  const at = lines.findIndex(line => line.toLowerCase() === `## ${sectionName}`.toLowerCase());
+  const at = lines.findIndex(line => line.startsWith('## ') && headingMatchesName(line.slice(3).trim(), sectionName));
   if (at === -1) return null;
   const nextHeading = lines.slice(at + 1).findIndex(line => line.startsWith('## '));
   const end = nextHeading === -1 ? lines.length : at + 1 + nextHeading;
@@ -213,6 +233,25 @@ function getMarkerForSection(body, sectionName) {
   if (!matches) return null;
   const markerMatch = matches[0].match(/swarm:([a-z0-9_-]+)/);
   return markerMatch ? markerMatch[1] : null;
+}
+
+// Field lesson #174: when a required section really is missing, name the nearest heading actually
+// present (the one with the longest matching prefix against the required name) instead of refusing
+// silently — a near-miss heading (a typo, an extra word before the boundary) is the most common
+// real cause, and pointing at it saves a guess.
+function nearestHeading(body, name) {
+  const headings = String(body ?? '').split('\n').filter(line => line.startsWith('## ')).map(line => line.slice(3).trim());
+  if (!headings.length) return null;
+  const normalizedName = name.toLowerCase();
+  let best = headings[0];
+  let bestScore = -1;
+  for (const title of headings) {
+    const normalizedTitle = title.toLowerCase();
+    let score = 0;
+    while (score < normalizedTitle.length && score < normalizedName.length && normalizedTitle[score] === normalizedName[score]) score++;
+    if (score > bestScore) { bestScore = score; best = title; }
+  }
+  return best;
 }
 
 export function parsePrPayload(text) {
@@ -249,7 +288,7 @@ export function missingSections(body, names) {
   });
   const missing = [];
   for (const name of names) {
-    const at = headings.findIndex(heading => heading.title.toLowerCase() === name.toLowerCase());
+    const at = headings.findIndex(heading => headingMatchesName(heading.title, name));
     if (at === -1) { missing.push(name); continue; }
     const end = at + 1 < headings.length ? headings[at + 1].index : lines.length;
     const content = lines.slice(headings[at].index + 1, end).join('\n');
@@ -384,7 +423,9 @@ export async function ship(options) {
   if (missing.length > 0) {
     const reasons = missing.map(section => {
       const marker = getMarkerForSection(body, section);
-      return marker ? `${section} (leftover: ${marker})` : section;
+      if (marker) return `${section} (leftover: ${marker})`;
+      const nearest = nearestHeading(body, section);
+      return nearest ? `${section} (nearest heading: "${nearest}")` : section;
     });
     return { ...base, status: 'refused', reason: `missing sections: ${reasons.join(', ')}` };
   }

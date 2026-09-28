@@ -22,7 +22,7 @@ import { packagingWithoutBuildCheckWarning, packagingKeyChanges, packagingChange
 import { scoutPrompt, normalizeScoutReport, renderScoutMarkdown, briefPathCandidates } from './scout.mjs';
 import { parseGoals, extractKnownRepos, gatherAreaCandidates, sweepPrompt, normalizeSweepArea, renderShortlistMarkdown, resolveBriefPath as resolveSweepBriefPath } from './sweep.mjs';
 import { findUncoveredTests, listProjectFiles, suggestIgnoreTests, contextDirectoryWarnings, registryPinningWarnings, isTestFile } from './context-check.mjs';
-import { ship, SHIP_DEFAULTS, resolveGhAndGit, parsePrPayload } from './ship.mjs';
+import { ship, SHIP_DEFAULTS, resolveGhAndGit, parsePrPayload, resolveToolchainBin } from './ship.mjs';
 import { go, commitOutputs, goExitCode } from './go.mjs';
 import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary, listLiveRuns, repoKey, repoPaths } from './board.mjs';
 import { writeSessionMetric } from './session-metrics.mjs';
@@ -1666,7 +1666,7 @@ export function runCheck(name, argv, cwd, timeoutMs, spawnImpl, characterTail = 
   });
 }
 const UNRUNNABLE_RE = /command not found|ERR_MODULE_NOT_FOUND/i;
-const CHECK_ERRORED_STATUSES = new Set(['spawn-error', 'unrunnable']);
+const CHECK_ERRORED_STATUSES = new Set(['spawn-error', 'unrunnable', 'cannot-run']);
 
 async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { baseCommit, noFlakeCheck = false, portBase, preChecks = [], extraEnv = {} } = {}) {
   // Field lesson #160: the root's .swarm/env.json (extraEnv) reaches every check, never PATH/HOME.
@@ -1687,6 +1687,20 @@ async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { b
   for (const check of checks) {
     const { argv, empty } = expandCheckArgv(check.argv, integratedFiles, newFiles, root);
     if (empty) { results.push({ name: check.name, status: 'skipped', exitCode: null, durationMs: 0, tail: '', runs: 0 }); continue; }
+    // Field lesson #175: a bare check argv[0] (e.g. "uv") is not reliably on PATH when it lives
+    // only in the swarm's own toolchains dir; resolved here the same way the uv lock check already
+    // is (toolchains dir, then PATH) before ever spawning, so an unresolvable one refuses just this
+    // check at once, naming every path tried, instead of a spawn-error with no program or PATH shown.
+    let resolvedProgram = null;
+    if (!path.isAbsolute(argv[0]) && !argv[0].startsWith('.')) {
+      const resolved = await resolveToolchainBin(argv[0], { env });
+      if (!resolved.path) {
+        results.push({ name: check.name, status: 'cannot-run', exitCode: null, durationMs: 0, tail: '', runs: 0, hint: `cannot-run: ${argv[0]} not found (tried ${resolved.tried.join(', ')})` });
+        continue;
+      }
+      resolvedProgram = resolved.path;
+    }
+    const runArgv = resolvedProgram ? [resolvedProgram, ...argv.slice(1)] : argv;
     // repeat runs the same check up to `repeat` times and stops at the first non-passing run.
     const repeat = check.repeat ?? 1;
     let result, runs = 0, failedFile, outputWindow = '';
@@ -1698,12 +1712,12 @@ async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { b
     };
     for (let attempt = 1; attempt <= repeat; attempt++) {
       runs = attempt; failedFile = undefined; outputWindow = '';
-      result = await runCheck(check.name, argv, root, check.timeoutMs ?? 300000, spawnImpl, false, identifyTest, env);
+      result = await runCheck(check.name, runArgv, root, check.timeoutMs ?? 300000, spawnImpl, false, identifyTest, env);
       if (result.status !== 'passed') break;
     }
     if (CHECK_ERRORED_STATUSES.has(result.status)) {
       if (preChecks.length) await runPreChecksOnce();
-      result = { ...await runCheck(check.name, argv, root, check.timeoutMs ?? 300000, spawnImpl, false, () => {}, env), retriedAfterError: true };
+      result = { ...await runCheck(check.name, runArgv, root, check.timeoutMs ?? 300000, spawnImpl, false, () => {}, env), retriedAfterError: true };
     }
     if (check.repeat !== undefined && result.status === 'failed' && !noFlakeCheck && baseCommit) {
       const file = failedFile;
@@ -1714,7 +1728,8 @@ async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { b
         try {
           await git(root, ['worktree', 'add', '--detach', checkout, baseCommit]);
           added = true;
-          const baseArgv = expandCheckArgv(check.argv, integratedFiles, newFiles, checkout).argv;
+          const baseArgvRaw = expandCheckArgv(check.argv, integratedFiles, newFiles, checkout).argv;
+          const baseArgv = resolvedProgram ? [resolvedProgram, ...baseArgvRaw.slice(1)] : baseArgvRaw;
           const count = Math.min(check.flakeRuns ?? repeat, 20);
           let failed = 0;
           for (let attempt = 0; attempt < count; attempt++) {
@@ -1737,7 +1752,7 @@ async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { b
   }
   // Field lesson 110: a compact per-check failure summary (name + last few failing lines,
   // capped) so a coordinator does not have to open the full tail to see what broke.
-  const NOT_PASSED = ['failed', 'timeout', 'spawn-error', 'unrunnable'];
+  const NOT_PASSED = ['failed', 'timeout', 'spawn-error', 'unrunnable', 'cannot-run'];
   const failures = results.filter(check => NOT_PASSED.includes(check.status)).map(check => ({ name: check.name, lines: lastFailureLines(check.tail) }));
   // Field lesson 138 (tool half): a check that never started is invalid evidence, not a red
   // check; surfaced distinctly so a caller (integrate/selfCheck) can refuse to score it as either.

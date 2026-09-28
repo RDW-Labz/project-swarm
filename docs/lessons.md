@@ -779,3 +779,28 @@ rule is enforced or documented.
     directory, then the system path) before it is ever spawned; when it
     cannot be found, the check refuses at once, naming every path it tried.
     Regression coverage is in `tests/field-lessons-batch-g.test.mjs`.
+78. **A required section was refused for carrying extra words in its own
+    heading.** A gate that required a named section refused a real section
+    whose heading added a short parenthetical after the required name, even
+    though the section itself was present and filled in. Rule: match a
+    required heading by its name plus a following word boundary (end of
+    line, a space, or an opening parenthesis), not by an exact match, so a
+    heading that only shares a name's first word without a boundary still
+    correctly fails to match. Enforcement: the section-matching rule was
+    changed from an exact heading match to this boundary-prefix match, and a
+    refusal for a section that is genuinely absent now also names the
+    heading in the body that came closest to matching, to save a guess.
+    Regression coverage is in `tests/field-lessons-batch-h.test.mjs`.
+79. **A missing toolchain gave a check failure with no program or path
+    named.** A local check step spawned a bare tool name from a shell whose
+    session did not have the dedicated toolchains directory on its path,
+    and every such check failed with a bare, generic status and no
+    indication of what was missing or where it looked. Rule: reuse the one
+    resolver that already checks a dedicated toolchains directory before the
+    system path for any check's own command, not only the one binary that
+    previously had this treatment, and name every location tried when
+    nothing is found. Enforcement: local check execution resolves a bare
+    command through that shared resolver before ever spawning it; one that
+    cannot be resolved anywhere refuses only that check, naming the command
+    and every path tried, instead of a bare, uninformative failure.
+    Regression coverage is in `tests/field-lessons-batch-h.test.mjs`.
