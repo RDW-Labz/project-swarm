@@ -3,6 +3,7 @@
 // and merge when everything is green and nobody has asked for a human to look first. No shell:
 // git and gh are invoked through the injected `exec` with an argv array.
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { packagingChangeWarnings } from './packaging-check.mjs';
 
@@ -25,6 +26,31 @@ const LOCK_CHECKS = [
   { name: 'npm-lock-check', triggers: new Set(['package.json', 'package-lock.json']), argv: ['npm', 'ci', '--dry-run'] },
   { name: 'uv-lock-check', triggers: new Set(['pyproject.toml', 'uv.lock']), argv: ['uv', 'lock', '--check'] },
 ];
+// Field lesson #172: `uv lock --check` used to spawn a bare `uv`, which is not on PATH when `uv`
+// lives only in the swarm's own toolchains dir (SWARM_TOOLCHAINS, else ~/.project-swarm/toolchains)
+// — the same place every other toolchain binary is expected. A spawn failure there used to surface
+// as `uv-lock-check failed: ` with an empty reason (the exec wrapper never runs, so there is no
+// stderr to report); `uv` is now resolved the same way first (toolchains dir, then PATH), and a
+// lock check that cannot even start says so, naming every path it tried.
+function toolchainsDirFor(env, home) {
+  return env.SWARM_TOOLCHAINS || path.join(home, '.project-swarm/toolchains');
+}
+// Field lesson #175: the identical "not on PATH" problem hits any bare check argv[0]
+// (`ship --check '["uv",...]'` run from a shell without the toolchains dir on PATH), not only
+// `uv lock --check`; this is the one resolver both use — toolchains dir, then its own bin/, then
+// every PATH entry — so a program that cannot be found anywhere is named with every path tried.
+export async function resolveToolchainBin(prog, { env = process.env, home = os.homedir(), access = file => fs.access(file, fs.constants.X_OK) } = {}) {
+  const dir = toolchainsDirFor(env, home);
+  const pathDirs = String(env.PATH ?? '').split(':').filter(Boolean);
+  const tried = [path.join(dir, prog), path.join(dir, 'bin', prog), ...pathDirs.map(entry => path.join(entry, prog))];
+  for (const candidate of tried) {
+    try { await access(candidate); return { path: candidate, tried }; } catch { /* try the next candidate */ }
+  }
+  return { path: null, tried };
+}
+export async function resolveUv(options = {}) {
+  return resolveToolchainBin('uv', options);
+}
 export function selectLockCheck(files) {
   const basenames = new Set((files ?? []).map(file => path.basename(file)));
   for (const candidate of LOCK_CHECKS) {
@@ -183,9 +209,22 @@ async function releaseVersion(exec, root, branch) {
   } catch { return null; }
 }
 
+// Field lesson #174: `ship --require-section 'Mutation check'` used to refuse a PR body whose
+// heading was `## Mutation check (mutant -> killing test)` — a real section, just with more text
+// in the heading than the required name. A required section now matches `## <name>` followed by
+// end of line, a space, or `(` — a prefix match on a word boundary, so `## Mutation checks` (a
+// different word, not a boundary character) still does not match `Mutation check`.
+function headingMatchesName(title, name) {
+  const normalizedTitle = title.toLowerCase();
+  const normalizedName = name.toLowerCase();
+  if (!normalizedTitle.startsWith(normalizedName)) return false;
+  const boundary = normalizedTitle.charAt(normalizedName.length);
+  return boundary === '' || boundary === ' ' || boundary === '(';
+}
+
 function getMarkerForSection(body, sectionName) {
   const lines = String(body ?? '').split('\n');
-  const at = lines.findIndex(line => line.toLowerCase() === `## ${sectionName}`.toLowerCase());
+  const at = lines.findIndex(line => line.startsWith('## ') && headingMatchesName(line.slice(3).trim(), sectionName));
   if (at === -1) return null;
   const nextHeading = lines.slice(at + 1).findIndex(line => line.startsWith('## '));
   const end = nextHeading === -1 ? lines.length : at + 1 + nextHeading;
@@ -194,6 +233,25 @@ function getMarkerForSection(body, sectionName) {
   if (!matches) return null;
   const markerMatch = matches[0].match(/swarm:([a-z0-9_-]+)/);
   return markerMatch ? markerMatch[1] : null;
+}
+
+// Field lesson #174: when a required section really is missing, name the nearest heading actually
+// present (the one with the longest matching prefix against the required name) instead of refusing
+// silently — a near-miss heading (a typo, an extra word before the boundary) is the most common
+// real cause, and pointing at it saves a guess.
+function nearestHeading(body, name) {
+  const headings = String(body ?? '').split('\n').filter(line => line.startsWith('## ')).map(line => line.slice(3).trim());
+  if (!headings.length) return null;
+  const normalizedName = name.toLowerCase();
+  let best = headings[0];
+  let bestScore = -1;
+  for (const title of headings) {
+    const normalizedTitle = title.toLowerCase();
+    let score = 0;
+    while (score < normalizedTitle.length && score < normalizedName.length && normalizedTitle[score] === normalizedName[score]) score++;
+    if (score > bestScore) { bestScore = score; best = title; }
+  }
+  return best;
 }
 
 export function parsePrPayload(text) {
@@ -230,7 +288,7 @@ export function missingSections(body, names) {
   });
   const missing = [];
   for (const name of names) {
-    const at = headings.findIndex(heading => heading.title.toLowerCase() === name.toLowerCase());
+    const at = headings.findIndex(heading => headingMatchesName(heading.title, name));
     if (at === -1) { missing.push(name); continue; }
     const end = at + 1 < headings.length ? headings[at + 1].index : lines.length;
     const content = lines.slice(headings[at].index + 1, end).join('\n');
@@ -294,6 +352,8 @@ export async function ship(options) {
     integratedFiles = [],
     packagingChanges = [], checkArgvs = [], extraWarnings = [],
     runChecks, exec, sleep, now = () => Date.now(),
+    env = process.env,
+    resolveUv: resolveUvImpl = resolveUv,
   } = options;
 
   let repo = options.repo;
@@ -363,7 +423,9 @@ export async function ship(options) {
   if (missing.length > 0) {
     const reasons = missing.map(section => {
       const marker = getMarkerForSection(body, section);
-      return marker ? `${section} (leftover: ${marker})` : section;
+      if (marker) return `${section} (leftover: ${marker})`;
+      const nearest = nearestHeading(body, section);
+      return nearest ? `${section} (nearest heading: "${nearest}")` : section;
     });
     return { ...base, status: 'refused', reason: `missing sections: ${reasons.join(', ')}` };
   }
@@ -374,7 +436,16 @@ export async function ship(options) {
   if (integratedFiles.length) {
     const lockCheck = selectLockCheck(integratedFiles);
     if (lockCheck) {
-      const lockRes = await exec(lockCheck.argv[0], lockCheck.argv.slice(1), { cwd: root });
+      // Field lesson #172: `uv` (unlike `npm`) is not reliably on a bare PATH; resolve it like
+      // every other toolchain binary before ever spawning it, and refuse at once, naming every
+      // path tried, when it cannot be found — instead of a spawn failure with an empty reason.
+      let lockArgv0 = lockCheck.argv[0];
+      if (lockArgv0 === 'uv') {
+        const resolved = await resolveUvImpl({ env });
+        if (!resolved.path) return { ...base, status: 'refused', reason: `lock-check-cannot-run: uv not found (tried ${resolved.tried.join(', ')})` };
+        lockArgv0 = resolved.path;
+      }
+      const lockRes = await exec(lockArgv0, lockCheck.argv.slice(1), { cwd: root });
       if (lockRes.code !== 0) return { ...base, status: 'refused', reason: `${lockCheck.name} failed: ${firstStderrLine(lockRes.stderr || lockRes.stdout)}` };
     }
   }

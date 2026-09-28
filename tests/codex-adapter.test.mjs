@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { CODEX_FLAGS, codexArgs, codexMessage, codexProfile, codexEnvironment, codexUsage, parseCodexReply, validateReadPaths, resolveReadPaths, git } from '../tools/codex-adapter.mjs';
-import { NO_STASH_LINE } from '../tools/swarm-env.mjs';
+import { NO_STASH_LINE, MUTANTS_BY_HAND_LINE } from '../tools/swarm-env.mjs';
 import { validateManifest, validateProject, runManifest, inspectRun, waitRun, integrateRun, doctor, cancelRun } from '../tools/swarm.mjs';
 import { preflightProject } from '../tools/preflight.mjs';
 
@@ -59,7 +59,7 @@ test('Codex argv always includes explicit model, all required flags, prompt and 
 test('codexMessage with no contract includes the blocked rule', () => {
   const j = job();
   const message = codexMessage(j, { contract: null });
-  assert.equal(message, `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(j.context)}. You may edit only these declared outputs: ${JSON.stringify(j.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.\nRead only the files in your context; other reads may be denied.\nIf a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\n${NO_STASH_LINE}\nTASK:\n${j.prompt}\n`);
+  assert.equal(message, `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(j.context)}. You may edit only these declared outputs: ${JSON.stringify(j.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.\nRead only the files in your context; other reads may be denied.\nIf a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\n${NO_STASH_LINE}\n${MUTANTS_BY_HAND_LINE}\nTASK:\n${j.prompt}\n`);
   const messageImplicit = codexMessage(j);
   assert.equal(messageImplicit, message);
 });

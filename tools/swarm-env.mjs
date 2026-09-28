@@ -61,6 +61,14 @@ export async function loadSwarmEnv(root, { mainRoot } = {}) {
 }
 
 const shellQuote = value => `'${String(value).split("'").join("'\\''")}'`;
+
+// Field lesson #171: the exact shape a mutants file must have, shared byte-for-byte between a
+// job's own mutantsFile preamble (tools/swarm.mjs) and `env --print`, so an outside agent who only
+// ever reads the pasted block still gets the one true shape instead of guessing at
+// `id`/`description`/`kills` (a worker-written file used exactly those and had to be converted by
+// hand before `swarm mutants` would take it).
+export const MUTANTS_SHAPE = 'a JSON array (or {"mutants":[...]}) of objects shaped exactly {"name": string, "file": string, "find": string, "replace": string}, nothing else on any line of that file.';
+
 // `gotchas` (field lesson #167): { text, source } from tools/gotchas.mjs's loadGotchas, or null.
 // `wrapperPath` (field lesson #168): the per-root dir from materializeGitGuard, so an outside agent
 // (not a sandboxed shell worker, which already gets its own guard on PATH) that pastes this block
@@ -70,7 +78,7 @@ export function envPrintText({ env = {}, source = null, portBase = null, gotchas
   if (wrapperPath != null) lines.push(`export PATH=${shellQuote(wrapperPath)}:"$PATH"  # git here refuses \`git stash\`/\`git stash pop\`; everything else runs the real git`);
   for (const [key, value] of Object.entries(env)) lines.push(`export ${key}=${shellQuote(value)}`);
   if (portBase != null) lines.push(`export SWARM_PORT_BASE=${portBase}  # this worktree owns ports ${portBase}..${portBase + 9}`);
-  lines.push('', 'Rules:', `- ${NO_STASH_LINE}`);
+  lines.push('', 'Rules:', `- ${NO_STASH_LINE}`, `- ${MUTANTS_BY_HAND_LINE}`, `- A mutantsFile is ${MUTANTS_SHAPE}`);
   if (gotchas?.text?.trim()) lines.push('', `Known platform gotchas for this project (from ${gotchas.source}):`, gotchas.text.trim());
   return `${lines.join('\n')}\n`;
 }
@@ -85,21 +93,68 @@ export function checkNeedsEnvWarnings(manifest, envFound) {
   return names.length ? [{ code: 'check-needs-env', checks: names, message: `checks ${names.join(', ')} run a toolchain (npm/npx/cargo/uv) but no ${ENV_FILE} exists; put the toolchain env there so every check, mutant and worker gets it` }] : [];
 }
 
+// Field lesson #170: the git guard's stash refusal also covers a hand mutant-revert. `git checkout
+// -- <path>` / `git checkout <path>` / `git restore <path>` silently discard whatever uncommitted
+// change sits on that path — exactly what happened when a worker hand-reverted a mutant with
+// `git checkout <file>` and wiped its own unrelated edits to that same file. A plain-branch
+// checkout (`git checkout main`) is never blocked: the pathspec check below only ever refuses when
+// the named argument actually has a diff against HEAD, so a branch name that happens not to be a
+// tracked path with local changes always passes straight through to the real git.
+export const MUTANTS_BY_HAND_LINE = 'Never hand-revert a mutant (`git checkout <file>` or `git restore <file>`) to undo it: run mutants with `swarm mutants`, never by hand.';
+
 // Field lesson #163: a sandboxed shell worker's `git` is this wrapper first on PATH; `stash` as the
 // subcommand (after any global options) is refused with a plain message, anything else runs git.
+// Field lesson #170: `checkout`/`restore` of a path that has uncommitted changes is refused too.
 export function gitGuardScript(realGit) {
   if (typeof realGit !== 'string' || !path.isAbsolute(realGit) || /['\0\r\n]/.test(realGit)) throw Error('git guard needs an absolute git path');
   return `#!/bin/sh
-# project-swarm (lesson #163): git stash is refused in worker sandboxes.
+# project-swarm (lesson #163/#170): git stash, and a checkout/restore of a path with uncommitted
+# changes, are both refused in worker sandboxes. Scanning never consumes "$@": on the fallthrough
+# path, the real git always gets the exact original argument list, untouched.
+real_git='${realGit}'
+index=0
 skip=0
+cdir=""
 for arg in "$@"; do
+  index=$((index + 1))
   if [ "$skip" = 1 ]; then skip=0; continue; fi
   case "$arg" in
-    -C|-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env|--super-prefix) skip=1 ;;
+    -C)
+      # A global -C changes where "git" itself looks for the repo; the diff check below must
+      # look in the same place, or a clean path there reads as dirty from the wrapper's own cwd.
+      eval "cdir=\\$$((index + 1))"
+      skip=1 ;;
+    -c|--git-dir|--work-tree|--namespace|--exec-path|--config-env|--super-prefix) skip=1 ;;
     -*) ;;
     stash)
       echo "swarm: git stash is not allowed here. The stash stack is shared by every worktree and session of this repository. Copy the file aside, or make a temporary WIP commit where commits are allowed." >&2
       exit 2 ;;
+    checkout|restore)
+      # A subshell parses only the args after this subcommand (via its own private "shift"), so
+      # the parent's own "$@" is never touched; the parent only ever reacts to its exit status.
+      # Every remaining non-flag argument is checked and refused the moment it turns out to have
+      # a diff against HEAD (working tree or staged); a plain branch name never has one, so
+      # switching branches always falls through untouched.
+      ( sub="$arg"
+        shift "$index"
+        [ -n "$cdir" ] && cd "$cdir" 2>/dev/null
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            -b|-B|--conflict) shift 2; continue ;;
+            -*) shift; continue ;;
+            *)
+              p="$1"
+              if ! "$real_git" diff --quiet -- "$p" 2>/dev/null || ! "$real_git" diff --cached --quiet -- "$p" 2>/dev/null; then
+                echo "swarm: git $sub of '$p' is refused here: it has uncommitted changes; commit WIP first (git commit -m WIP), or run mutants with \\\`swarm mutants\\\`, never by hand." >&2
+                exit 3
+              fi
+              shift; continue ;;
+          esac
+        done
+      )
+      status=$?
+      if [ "$status" = 3 ]; then exit 2; fi
+      break ;;
     *) break ;;
   esac
 done
