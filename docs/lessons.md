@@ -725,3 +725,14 @@ rule is enforced or documented.
     prompt and to `env --print`; `validate` warns `windows-ci-no-gotchas`
     when the repository's CI runs on Windows and no gotchas file exists.
     Regression coverage is in `tests/field-lessons-batch-f.test.mjs`.
+73. **A prompt-level ban was not enough outside the sandbox.** An agent
+    working in a shared worktree, told plainly not to, ran the stash command
+    anyway. A prior fix had already given sandboxed shell workers a wrapper
+    that refuses the command outright, but that protection never reached an
+    agent working outside that sandbox. Rule: a rule this costly to break
+    should be enforced everywhere it can be, not only where the harness
+    happens to control the tool. Enforcement: the same refusal is now
+    materialized into a stable, per-project location and handed to any
+    outside agent as a `PATH` entry it can paste in, ahead of the real
+    version of the tool, so pasting the block gets the refusal even outside
+    a sandbox. Regression coverage is in `tests/field-lessons-batch-f.test.mjs`.

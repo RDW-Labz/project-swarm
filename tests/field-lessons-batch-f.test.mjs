@@ -15,7 +15,7 @@ import { runManifest, integrateRun, validateProject } from '../tools/swarm.mjs';
 import { registerLiveRun, unregisterLiveRun } from '../tools/board.mjs';
 import { shellMessage } from '../tools/claude-shell.mjs';
 import { codexMessage, git } from '../tools/codex-adapter.mjs';
-import { envPrintText, NO_STASH_LINE } from '../tools/swarm-env.mjs';
+import { envPrintText, NO_STASH_LINE, materializeGitGuard, GIT_GUARD_DIR } from '../tools/swarm-env.mjs';
 import { loadGotchas, gotchasPromptBlock, windowsCiGotchasWarnings, GOTCHAS_FILE } from '../tools/gotchas.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -195,5 +195,58 @@ describe('L167: .swarm/gotchas.md reaches every job prompt and env --print', () 
     assert.equal(withGotchas.warnings.some(w => w.code === 'windows-ci-no-gotchas'), false);
 
     assert.deepEqual(await windowsCiGotchasWarnings(await tmp(t, 'swarm-167-nowin-')), []);
+  });
+});
+
+// --- L168: an outside agent (not a sandboxed shell worker) gets the stash-refusing git too -------
+
+describe('L168: env / env --print materializes a stable per-root git-stash guard for outside agents', () => {
+  test('env --print carries a PATH export for the materialized wrapper; the wrapper refuses stash and passes everything else to the real git', async t => {
+    const root = await repo(t);
+    const wrapperDir = path.join(root, GIT_GUARD_DIR);
+    const { stdout } = await execFileAsync(process.execPath, [CLI, '--root', root, 'env', '--print']);
+    assert.ok(stdout.includes(`export PATH='${wrapperDir}':"$PATH"`), stdout);
+
+    const guard = path.join(wrapperDir, 'git');
+    for (const args of [['stash'], ['stash', 'pop']]) {
+      await assert.rejects(execFileAsync(guard, args, { cwd: root }), error => {
+        assert.notEqual(error.code, 0, args.join(' '));
+        assert.match(error.stderr, /git stash is not allowed here/);
+        return true;
+      });
+    }
+    const version = await execFileAsync(guard, ['--version'], { cwd: root });
+    assert.match(version.stdout, /^git version/);
+    await execFileAsync(guard, ['status'], { cwd: root }); // does not reject: a real git status runs
+
+    // The plain (non --print) `env` JSON also materializes the wrapper and names its path.
+    const { stdout: jsonOut } = await execFileAsync(process.execPath, [CLI, '--root', root, 'env']);
+    assert.equal(JSON.parse(jsonOut).wrapperPath, wrapperDir);
+  });
+
+  test('materializeGitGuard resolves the real git even when the wrapper dir is already first on PATH, so the wrapper never execs itself', async t => {
+    const root = await repo(t);
+    const wrapperDir = await materializeGitGuard(root, { parentEnv: process.env });
+    assert.equal(wrapperDir, path.join(root, GIT_GUARD_DIR));
+    const realGitLine = script => script.match(/^exec '(.+)' "\$@"$/m);
+
+    const first = realGitLine(await fs.readFile(path.join(wrapperDir, 'git'), 'utf8'));
+    assert.ok(first, 'wrapper script must exec a real git');
+    assert.notEqual(path.resolve(first[1]), path.join(wrapperDir, 'git'));
+
+    // Simulate an outside agent that already pasted the block: the wrapper dir is now first on
+    // PATH for this second run. Without excluding it, findRealGit would "discover" the wrapper
+    // itself as git and the script would exec itself forever instead of the real git.
+    const pastedPath = `${wrapperDir}${path.delimiter}${process.env.PATH}`;
+    await materializeGitGuard(root, { parentEnv: { ...process.env, PATH: pastedPath } });
+    const second = realGitLine(await fs.readFile(path.join(wrapperDir, 'git'), 'utf8'));
+    assert.ok(second, 'wrapper script must still exec a real git');
+    assert.notEqual(path.resolve(second[1]), path.join(wrapperDir, 'git'));
+    assert.equal(second[1], first[1]);
+
+    await assert.rejects(execFileAsync(path.join(wrapperDir, 'git'), ['stash'], { cwd: root }), error => {
+      assert.match(error.stderr, /git stash is not allowed here/);
+      return true;
+    });
   });
 });

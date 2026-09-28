@@ -16,7 +16,7 @@ import { API_AGENTS, apiDoctor, probeLocalProvider, decodeContext, executeApi } 
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, parseCodexReply, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
 import { expandShellPreset, validateNetworkAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterDirs, resolveRootGitInfo, scanListeningPorts, resolveRigServicePort, createShellScratchDir, shellMessage, containsKey, redactKey } from './claude-shell.mjs';
 import { portBlockFor, resolvePortBlock } from './ports.mjs';
-import { loadSwarmEnv, envPrintText, checkNeedsEnvWarnings, NO_STASH_LINE, gitGuardScript, findRealGit } from './swarm-env.mjs';
+import { loadSwarmEnv, envPrintText, checkNeedsEnvWarnings, NO_STASH_LINE, gitGuardScript, findRealGit, materializeGitGuard } from './swarm-env.mjs';
 import { loadGotchas, gotchasPromptBlock, windowsCiGotchasWarnings } from './gotchas.mjs';
 import { packagingWithoutBuildCheckWarning, packagingKeyChanges, packagingChangeWarnings, isPackagingFile } from './packaging-check.mjs';
 import { scoutPrompt, normalizeScoutReport, renderScoutMarkdown, resolveBriefPath as resolveScoutBriefPath } from './scout.mjs';
@@ -3071,8 +3071,10 @@ async function main() {
     if(!result.mutantsPassed&&!result.mutantsValid)process.exitCode=1;
     return;
   }
-  // Field lesson #160/#163/#167: the root's toolchain env, gotchas file (and the shared-stash
-  // rule) as JSON, or with --print as a paste-ready block for an outside agent's prompt.
+  // Field lesson #160/#163/#167/#168: the root's toolchain env, gotchas file (and the shared-stash
+  // rule) as JSON, or with --print as a paste-ready block for an outside agent's prompt. Either
+  // form also materializes the stash-refusing git wrapper into this root's stable .swarm/bin, so an
+  // outside agent that only pastes the block still gets it on PATH ahead of the real git.
   if(args[0]==='env'){
     const flags=args.slice(1);
     if(flags.some(flag=>flag!=='--print'))fail('Invalid arguments; use --help');
@@ -3080,8 +3082,9 @@ async function main() {
     const loaded=await loadSwarmEnv(root);
     const gotchas=await loadGotchas(root);
     const portBase=portBlockFor(root);
-    if(flags.includes('--print'))process.stdout.write(envPrintText({...loaded,portBase,gotchas}));
-    else process.stdout.write(`${JSON.stringify({source:loaded.source,env:loaded.env,portBase,gotchas})}\n`);
+    const wrapperPath=await materializeGitGuard(root,{parentEnv:process.env});
+    if(flags.includes('--print'))process.stdout.write(envPrintText({...loaded,portBase,gotchas,wrapperPath}));
+    else process.stdout.write(`${JSON.stringify({source:loaded.source,env:loaded.env,portBase,gotchas,wrapperPath})}\n`);
     return;
   }
   // Field lesson #164: `ship --branch B` has no RUN argument; everything else about ship is shared.
