@@ -67,6 +67,13 @@ test('rateLimitError falls back to unknown when resetsAt or type is missing', ()
   assert.equal(rateLimitError(summary), 'Provider rate limit rejected (unknown); resets unknown');
 });
 
+test('summarizeRateLimit reads resetsAt in seconds or milliseconds', () => {
+  const seconds = summarizeRateLimit([{ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', rateLimitType: 'five_hour', resetsAt: RESETS } }]);
+  const milliseconds = summarizeRateLimit([{ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', rateLimitType: 'five_hour', resetsAt: RESETS * 1000 } }]);
+  assert.equal(seconds.resetsAt, RESETS_ISO);
+  assert.equal(milliseconds.resetsAt, RESETS_ISO);
+});
+
 test('rateLimitWarning reports warnings and rejections, and nothing otherwise', () => {
   assert.equal(rateLimitWarning('w', null), null);
   assert.equal(rateLimitWarning('w', summarizeRateLimit([{ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', rateLimitType: 'five_hour' } }])), null);
@@ -118,4 +125,23 @@ test('a job without rate limit events records a null rateLimit and no warning', 
   assert.equal(state.jobs[0].status, 'complete');
   assert.equal(state.jobs[0].rateLimit, null);
   assert.deepEqual(state.warnings, []);
+});
+
+test('a rejected limit the CLI recovered from stays complete', async t => {
+  const root = await fixture(t);
+  const state = await runManifest(root, manifest(), { spawnImpl: emit([warn(0.92), rejected, okResult], 0) });
+  const [record] = state.jobs;
+  assert.equal(record.status, 'complete');
+  assert.equal(record.error, null);
+  assert.equal(record.rateLimit.status, 'rejected');
+  assert.equal(state.status, 'complete');
+  assert.ok(state.warnings.includes(`rate limit: writer rejected (five_hour); resets ${RESETS_ISO}`));
+});
+
+test('an error result after a rejected limit fails with the rate-limit error even on exit 0', async t => {
+  const root = await fixture(t);
+  const state = await runManifest(root, manifest(), { spawnImpl: emit([rejected, errorResult], 0) });
+  const [record] = state.jobs;
+  assert.equal(record.status, 'failed');
+  assert.ok(record.error.endsWith(`Provider rate limit rejected (five_hour); resets ${RESETS_ISO}`), record.error);
 });

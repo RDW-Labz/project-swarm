@@ -688,7 +688,9 @@ async function execute(job, cwd, message, { spawnImpl, signal, cancelled, killIm
       // Lesson #46: init only reports the requested model, not what actually ran.
       const { actualModel, modelsSeen, modelMismatch } = summarizeModels(events, job.model);
       const rateLimit = summarizeRateLimit(events);
-      const failed = cleanupError || reason || error?.message || rateLimitError(rateLimit) || (code !== 0 ? `Worker exited ${code}` : null) || parseError || (!result ? 'Worker returned no result event' : null) || (result?.is_error || (result?.subtype && result.subtype !== 'success') ? `Worker result: ${result.subtype || 'error'}` : null);
+      const providerFailed = (code !== 0 ? `Worker exited ${code}` : null) || parseError || (!result ? 'Worker returned no result event' : null) || (result?.is_error || (result?.subtype && result.subtype !== 'success') ? `Worker result: ${result.subtype || 'error'}` : null);
+      // A rejected limit explains a provider failure; it never fails a job the CLI recovered from.
+      const failed = cleanupError || reason || error?.message || (providerFailed ? rateLimitError(rateLimit) || providerFailed : null);
       resolve({ cleanupError, terminationReason:reason??null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed || null, permissionDenials: Array.isArray(result?.permission_denials) ? result.permission_denials : [], stdout, stderr, response: typeof result?.result === 'string' ? result.result : '', exitCode: code, actualModel: actualModel ?? null, modelsSeen, modelMismatch, usage: result?.usage ?? null, modelUsage: result?.modelUsage ?? null, costUsd: result?.total_cost_usd ?? null, rateLimit });
     };
     if (signal?.aborted) { reason = 'cancelled'; return finish(null); }

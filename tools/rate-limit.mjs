@@ -4,6 +4,8 @@
 
 const isObject = value => value !== null && typeof value === 'object';
 const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
+// Seconds today (CLI 2.1.283); values >= 1e11 are already milliseconds.
+const epochMs = value => value >= 1e11 ? value : value * 1000;
 
 // The rejected event carries no top-level utilization; it sits under unifiedWindows[rateLimitType].
 function utilizationOf(info) {
@@ -20,7 +22,7 @@ export function summarizeRateLimit(events) {
   return {
     status: typeof last.status === 'string' ? last.status : null,
     rateLimitType: typeof last.rateLimitType === 'string' ? last.rateLimitType : null,
-    resetsAt: resetsAt === null ? null : new Date(resetsAt * 1000).toISOString(),
+    resetsAt: resetsAt === null ? null : new Date(epochMs(resetsAt)).toISOString(),
     utilization: utilizationOf(last),
     maxUtilization: utilizations.length ? Math.max(...utilizations) : null,
     warnings: infos.filter(info => info.status === 'allowed_warning').length
