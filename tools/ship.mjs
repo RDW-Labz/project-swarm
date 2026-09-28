@@ -39,7 +39,21 @@ function toolchainsDirFor(env, home) {
 // (`ship --check '["uv",...]'` run from a shell without the toolchains dir on PATH), not only
 // `uv lock --check`; this is the one resolver both use — toolchains dir, then its own bin/, then
 // every PATH entry — so a program that cannot be found anywhere is named with every path tried.
-export async function resolveToolchainBin(prog, { env = process.env, home = os.homedir(), access = file => fs.access(file, fs.constants.X_OK) } = {}) {
+// Field lesson #181: a toolchain package directory can share its binary's own name (real case:
+// ~/.project-swarm/toolchains/uv is the pip package directory; the real binary sits one level
+// down at toolchains/bin/uv). `fs.access(X_OK)` alone passes on a directory too — every directory
+// has its own search/execute bit — so that package directory used to get picked over the real
+// binary, and every spawn of "it" then failed before it ever started. The default check now also
+// requires `fs.stat` to say "regular file" (following a symlink) before a candidate counts; a
+// caller-injected `access` (tests, alternate resolution) fully replaces this default and is
+// trusted as-is, same as before.
+async function accessExecutableFile(file) {
+  const info = await fs.stat(file);
+  if (!info.isFile()) throw Object.assign(new Error(`not a regular file: ${file}`), { code: 'EISDIR' });
+  await fs.access(file, fs.constants.X_OK);
+}
+
+export async function resolveToolchainBin(prog, { env = process.env, home = os.homedir(), access = accessExecutableFile } = {}) {
   const dir = toolchainsDirFor(env, home);
   const pathDirs = String(env.PATH ?? '').split(':').filter(Boolean);
   const tried = [path.join(dir, prog), path.join(dir, 'bin', prog), ...pathDirs.map(entry => path.join(entry, prog))];
@@ -113,7 +127,10 @@ export function platformOnlyFailures(rollup) {
 // binary, or a fake/skip seam nearby; one that reads a swarm-exported env var (SWARM_PORT_BASE)
 // needs a stub or unset hint instead of silently depending on the swarm runner's own port block.
 const TEST_FILE_RE = /(^|\/)(tests?|__tests__|specs?)\/|\.(test|spec)\.[A-Za-z0-9]+$|(^|\/)test_[^/]+\.py$/i;
-export const DOCUMENTED_TEST_BINARIES = new Set(['node', 'npm', 'npx', 'git', 'gh']);
+// Field lesson #179: `ps` is a documented POSIX binary (macOS/Linux); a test that spawns it on
+// Windows still needs its own fake/skip seam or a `--exempt` — this allowlist never claims `ps`
+// is available there.
+export const DOCUMENTED_TEST_BINARIES = new Set(['node', 'npm', 'npx', 'git', 'gh', 'ps']);
 const SPAWN_CALL_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|exec|execSync)\(\s*['"]([^'"]+)['"]/g;
 function seamNearby(text, index) {
   return /\b(skip|fake|stub)\b/i.test(text.slice(Math.max(0, index - 300), index + 300));
@@ -141,13 +158,101 @@ export function swarmEnvInTestWarnings(fileTexts) {
   return warnings;
 }
 
-async function readIntegratedTestFiles(root, integratedFiles) {
+// Field lesson #179: the guard used to scan a test file's whole, current content, so a `ps` call
+// already on the base (untouched by this diff) refused a branch that only touched the file for an
+// unrelated reason. It now judges only the lines this change ADDS to each test file: with a real
+// base commit, `git diff <base>...HEAD -U0 -- <file>` and keep just the `+` lines (never the
+// `+++ b/<file>` header). With no usable base (the merge-base lookup fails, or the diff call
+// itself fails/errors — exactly the shape of every test written for the old whole-file scan, none
+// of which sets up a real base commit) this falls back to the file's current whole-file content,
+// so nothing already covered regresses just because a base could not be established. The
+// merge-base lookup itself only runs when there is at least one test file to judge, so a ship with
+// no integrated test files never pays for it.
+async function readAddedTestFileLines(exec, root, payloadBase, integratedFiles) {
+  const candidates = (integratedFiles ?? []).filter(file => TEST_FILE_RE.test(file));
   const files = new Map();
-  for (const file of integratedFiles ?? []) {
-    if (!TEST_FILE_RE.test(file)) continue;
-    try { files.set(file, await fs.readFile(path.join(root, file), 'utf8')); } catch { /* removed or unreadable: nothing to scan */ }
+  if (!candidates.length) return files;
+  let baseSha = null;
+  try {
+    const baseRes = await exec('git', ['merge-base', `origin/${payloadBase}`, 'HEAD'], { cwd: root });
+    baseSha = baseRes && baseRes.code === 0 ? baseRes.stdout.trim() : null;
+  } catch { baseSha = null; }
+  for (const file of candidates) {
+    let text = null;
+    if (baseSha) {
+      try {
+        const res = await exec('git', ['diff', `${baseSha}...HEAD`, '-U0', '--', file], { cwd: root });
+        if (res && res.code === 0) {
+          text = res.stdout
+            .split('\n')
+            .filter(line => line.startsWith('+') && !line.startsWith('+++'))
+            .map(line => line.slice(1))
+            .join('\n');
+        }
+      } catch { /* fall back to a whole-file read below */ }
+    }
+    if (text === null) {
+      try { text = await fs.readFile(path.join(root, file), 'utf8'); } catch { continue; /* removed or unreadable: nothing to scan */ }
+    }
+    files.set(file, text);
   }
   return files;
+}
+
+// Field lesson #179: `--exempt <guard>:<file>=<reason>` — an owner decision, so the reason is
+// required and must say something real (trimmed, >= 10 characters). Give each diff guard a stable
+// id so an exemption names exactly which one it excuses.
+export const EXEMPTION_GUARD_IDS = ['undocumented-binary', 'env-var'];
+
+export function parseExemptFlag(value) {
+  const raw = String(value ?? '');
+  const colon = raw.indexOf(':');
+  const eq = colon === -1 ? -1 : raw.indexOf('=', colon + 1);
+  if (colon === -1 || eq === -1) return { error: '--exempt requires <guard>:<file>=<reason>' };
+  const guard = raw.slice(0, colon);
+  const file = raw.slice(colon + 1, eq);
+  const reason = raw.slice(eq + 1).trim();
+  if (!EXEMPTION_GUARD_IDS.includes(guard)) {
+    return { error: `--exempt: unknown guard "${guard}"; valid guard ids: ${EXEMPTION_GUARD_IDS.join(', ')}` };
+  }
+  if (!file) return { error: '--exempt requires <guard>:<file>=<reason>' };
+  if (reason.length < 10) return { error: 'exemption-needs-reason: --exempt reason must be at least 10 characters' };
+  return { guard, file, reason };
+}
+
+// Field lesson #179: a used exemption must never be missing from the shipped PR body — appended
+// to an existing "## Exemptions" section (matched the same boundary-prefix way as
+// --require-section) when the payload body already has one, or created fresh at the end otherwise.
+export function appendExemptionsSection(body, usedExemptions) {
+  if (!usedExemptions?.length) return body;
+  const lines = usedExemptions.map(exemption => `- ${exemption.guard} · ${exemption.file} — ${exemption.reason}`);
+  const bodyLines = String(body ?? '').split('\n');
+  const headingIndex = bodyLines.findIndex(line => line.startsWith('## ') && headingMatchesName(line.slice(3).trim(), 'Exemptions'));
+  if (headingIndex === -1) {
+    const separator = bodyLines.length && bodyLines[bodyLines.length - 1].trim() !== '' ? '\n\n' : '\n';
+    return `${body}${separator}## Exemptions\n${lines.join('\n')}\n`;
+  }
+  let end = bodyLines.length;
+  for (let index = headingIndex + 1; index < bodyLines.length; index++) {
+    if (bodyLines[index].startsWith('## ')) { end = index; break; }
+  }
+  return [...bodyLines.slice(0, end), ...lines, ...bodyLines.slice(end)].join('\n');
+}
+
+// Field lesson #179: one JSON line per used exemption, appended (never overwritten), so which
+// guard was excused on which file — and why — stays auditable across ships. Same
+// env-override-else-home-dir shape as every other toolchain/install path in this file
+// (SWARM_TOOLCHAINS), so tests can point it at a temp dir instead of the real home directory.
+function installLogsDirFor(env, home) {
+  return env.SWARM_LOGS_DIR || path.join(home, '.project-swarm/logs');
+}
+
+export async function logExemption(entry, { env = process.env, home = os.homedir() } = {}) {
+  const dir = installLogsDirFor(env, home);
+  await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, 'ship-exemptions.jsonl');
+  await fs.appendFile(file, `${JSON.stringify(entry)}\n`, 'utf8');
+  return file;
 }
 
 function firstStderrLine(stderr) {
@@ -299,6 +404,92 @@ export function missingSections(body, names) {
   return missing;
 }
 
+const INTEGRATED_PLACEHOLDER_RE = /^\{integrated(?::(\.[^}]+))?\}$/;
+const NEW_PLACEHOLDER_RE = /^\{new(?::[^}]+)?\}$/;
+
+// A reduced, ship-local copy of swarm.mjs's own check-argv expansion (kept separate rather than
+// imported: swarm.mjs already imports from ship.mjs, and importing back would be circular). Only
+// {root} and {integrated[:.ext]} are supported here; a check using {new[:.ext]} is left
+// unverified (ship() is never given the run's "new files" set) rather than guessed at.
+function expandArgvForRoot(argv, integratedFiles, root) {
+  const expanded = [];
+  for (const item of argv) {
+    if (NEW_PLACEHOLDER_RE.test(item)) return null;
+    const match = INTEGRATED_PLACEHOLDER_RE.exec(item);
+    if (match) {
+      const ext = match[1];
+      const files = ext ? integratedFiles.filter(file => file.endsWith(ext)) : integratedFiles;
+      if (!files.length) return null;
+      expanded.push(...files);
+      continue;
+    }
+    expanded.push(item.split('{root}').join(root));
+  }
+  return expanded;
+}
+
+// Field lesson #177(c): a check that already fails on the base commit's own tree (e.g. CI running
+// a formatter check it never enforced before, so files were already unformatted) proves nothing
+// about what this change broke, and blocking the ship on it just costs a wasted re-ship once the
+// same failure is rediscovered by hand. Re-runs the check once against that tree — a throwaway
+// `git worktree`, always cleaned up — through the same injected `exec` ship already uses for every
+// other command, so this is exercised the same way in tests as the rest of ship().
+export async function verifyPreExistingOnBase({ root, argv, integratedFiles, baseSha, exec }) {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-preexisting-'));
+  const checkout = path.join(temporary, 'base');
+  let added = false;
+  try {
+    const addRes = await exec('git', ['worktree', 'add', '--detach', checkout, baseSha], { cwd: root });
+    if (addRes.code !== 0) return { checked: false };
+    added = true;
+    const expanded = expandArgvForRoot(argv, integratedFiles, checkout);
+    if (!expanded || !expanded.length) return { checked: false };
+    const result = await exec(expanded[0], expanded.slice(1), { cwd: checkout });
+    return { checked: true, alsoFails: result.code !== 0 };
+  } catch {
+    return { checked: false };
+  } finally {
+    if (added) { try { await exec('git', ['worktree', 'remove', '--force', checkout], { cwd: root }); } catch { /* best-effort cleanup */ } }
+    await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+// Field lesson #178: a `ci-failed` CI run whose failing tests are not in this ship's own diff (a
+// flaky test elsewhere — Windows timing, say) is worth one automatic rerun before it blocks the
+// ship; pytest's own failure line and vitest's own summary line each name the file plainly enough
+// to check that without parsing full test output structure. A failing test that IS in the diff is
+// never rerun this way — that is a real regression, not flake, and reruns cannot fix it.
+export function extractFailingTestFiles(text) {
+  const files = new Set();
+  const source = String(text ?? '');
+  for (const re of [/^FAILED\s+([^\s:]+)::/gm, /^\s*(?:✗\s*)?FAIL\s+(\S+)/gm]) {
+    re.lastIndex = 0;
+    let match;
+    while ((match = re.exec(source))) files.add(match[1]);
+  }
+  return [...files];
+}
+
+function runIdFromDetailsUrl(url) {
+  const match = /\/actions\/runs\/(\d+)/.exec(String(url ?? ''));
+  return match ? match[1] : null;
+}
+
+// The run ids behind the checks in `failedNames`, deduplicated — several failed check names can
+// come from jobs in the same workflow run, and `gh run rerun` reruns a whole run's failed jobs.
+export function failedRunIds(rollup, failedNames) {
+  const items = Array.isArray(rollup) ? rollup : [];
+  const wanted = new Set(failedNames);
+  const ids = new Set();
+  for (const item of items) {
+    const name = item.name ?? item.context ?? 'unknown';
+    if (!wanted.has(name)) continue;
+    const id = runIdFromDetailsUrl(item.detailsUrl ?? item.target_url);
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
 export function renderChecks(results) {
   const lines = [];
   for (const result of results) {
@@ -351,8 +542,11 @@ export async function ship(options) {
     portBase = null, portWarnings = [],
     integratedFiles = [],
     packagingChanges = [], checkArgvs = [], extraWarnings = [],
+    rerunFlaky = 0,
+    exemptions = [],
     runChecks, exec, sleep, now = () => Date.now(),
     env = process.env,
+    home = os.homedir(),
     resolveUv: resolveUvImpl = resolveUv,
   } = options;
 
@@ -399,15 +593,54 @@ export async function ship(options) {
   const sha = shaRes.stdout.trim();
   base.sha = sha;
 
-  // Field lesson 154/156: a static gate over the run's own test file outputs, before any check
-  // spawns them for real; an undocumented binary with no fake/skip seam refuses outright, while a
-  // swarm-exported env var reference is only a warning (the test may already handle it).
-  const integratedTestFiles = integratedFiles.length ? await readIntegratedTestFiles(root, integratedFiles) : new Map();
-  const undocumentedBinaries = undocumentedBinaryWarnings(integratedTestFiles);
-  if (undocumentedBinaries.length) {
-    return { ...base, status: 'refused', reason: `test file spawns undocumented binary with no fake/skip seam: ${undocumentedBinaries.map(w => `${w.file} -> ${w.bin}`).join(', ')}` };
+  // Field lesson 154/156/179: a static gate over the lines this change ADDS to its own test files,
+  // before any check spawns them for real; an undocumented binary with no fake/skip seam refuses
+  // outright, while a swarm-exported env var reference is only a warning (the test may already
+  // handle it). A `--exempt <guard>:<file>=<reason>` (owner decision, required) excuses one file
+  // from one guard; it never excuses other files or other guards. Only looks up a base commit
+  // (another exec call) when there is at least one test file to judge, so a ship with no test
+  // files integrated never pays for a merge-base lookup it has nothing to use.
+  const integratedTestFiles = await readAddedTestFileLines(exec, root, payload.base, integratedFiles);
+  const rawUndocumentedBinaries = undocumentedBinaryWarnings(integratedTestFiles);
+  const rawEnvWarnings = swarmEnvInTestWarnings(integratedTestFiles);
+  const usedExemptions = [];
+  const findExemption = (guard, file) => exemptions.find(exemption => exemption.guard === guard && exemption.file === file);
+  const noteExemptionUsed = exemption => {
+    if (!usedExemptions.some(used => used.guard === exemption.guard && used.file === exemption.file)) usedExemptions.push(exemption);
+  };
+
+  const undocumentedBinaries = [];
+  for (const warning of rawUndocumentedBinaries) {
+    const exemption = findExemption('undocumented-binary', warning.file);
+    if (exemption) { noteExemptionUsed(exemption); continue; }
+    undocumentedBinaries.push(warning);
   }
-  for (const warning of swarmEnvInTestWarnings(integratedTestFiles)) base.warnings.push(`swarm-env-in-tests: ${warning.file}: references ${warning.name}; stub or unset it in this test (lesson #156)`);
+  for (const warning of rawEnvWarnings) {
+    const exemption = findExemption('env-var', warning.file);
+    if (exemption) { noteExemptionUsed(exemption); continue; }
+    base.warnings.push(`swarm-env-in-tests: ${warning.file}: references ${warning.name}; stub or unset it in this test (lesson #156)`);
+  }
+  for (const exemption of exemptions) {
+    if (!usedExemptions.some(used => used.guard === exemption.guard && used.file === exemption.file)) {
+      base.warnings.push(`unused-exemption: ${exemption.guard}:${exemption.file}`);
+    }
+  }
+  // Field lesson #179: a used exemption is recorded (result field, log, later the PR body) as soon
+  // as it is determined to be used — even when ship refuses anyway, for an unrelated file or an
+  // unrelated reason, so a legitimately-excused file is never left off the record just because
+  // something else also went wrong in the same ship.
+  if (usedExemptions.length) {
+    base.exemptions = usedExemptions;
+    for (const exemption of usedExemptions) {
+      await logExemption({ ts: new Date().toISOString(), repo, branch: payload.head, guard: exemption.guard, file: exemption.file, reason: exemption.reason }, { env, home });
+    }
+  }
+  if (undocumentedBinaries.length) {
+    return {
+      ...base, status: 'refused',
+      reason: `test file spawns undocumented binary with no fake/skip seam: ${undocumentedBinaries.map(w => `${w.file} -> ${w.bin}`).join(', ')}; fix the cause, or pass --exempt <guard>:<file>=<reason>`,
+    };
+  }
 
   // Field lesson #159: a shipped change to packaging keys needs a check that builds the package;
   // tests, lint and types all pass on a package that will not build.
@@ -416,7 +649,27 @@ export async function ship(options) {
 
   const checks = await runChecks();
   base.checks = checks;
-  const body = fillChecks(payload.body, checks);
+
+  // Field lesson #177(c): before blocking on any failing check, verify it against the base
+  // commit's own tree; one that fails there too is reported `pre-existing` (still listed, no
+  // longer blocking) instead of costing a re-ship for something this change did not cause.
+  if (checks.some(result => result.status === 'failed') && checkArgvs.length) {
+    const argvForCheck = checkArgvs.slice(0, checks.length);
+    const baseRes = await exec('git', ['merge-base', `origin/${payload.base}`, 'HEAD'], { cwd: root });
+    const baseSha = baseRes.code === 0 ? baseRes.stdout.trim() : null;
+    if (baseSha) {
+      for (let index = 0; index < checks.length; index++) {
+        if (checks[index].status !== 'failed') continue;
+        const argv = argvForCheck[index];
+        if (!argv) continue;
+        const verified = await verifyPreExistingOnBase({ root, argv, integratedFiles, baseSha, exec });
+        if (verified.checked && verified.alsoFails) checks[index] = { ...checks[index], status: 'pre-existing', preExisting: true };
+      }
+    }
+  }
+
+  let body = fillChecks(payload.body, checks);
+  if (usedExemptions.length) body = appendExemptionsSection(body, usedExemptions);
   if (checks.some(result => result.status === 'failed')) return { ...base, status: 'checks-failed', reason: 'checks failed' };
 
   const missing = missingSections(body, requireSections);
@@ -434,7 +687,24 @@ export async function ship(options) {
   // stale; the matching project lock check runs once, right before push, so a bad lockfile never
   // reaches CI as a surprise.
   if (integratedFiles.length) {
-    const lockCheck = selectLockCheck(integratedFiles);
+    let lockCheck = selectLockCheck(integratedFiles);
+    if (lockCheck?.name === 'npm-lock-check') {
+      // Field lesson #183: only a confirmed missing lockfile skips npm ci. A present
+      // lockfile still gets the strict check, including malformed or stale lockfiles.
+      const exists = async file => fs.stat(file).then(() => true).catch(error => {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+      });
+      try {
+        if (await exists(path.join(root, 'package.json')) && !await exists(path.join(root, 'package-lock.json'))) {
+          base.warnings.push(`no-lockfile: ${path.join(root, 'package.json')} has no package-lock.json`);
+          base.warnings.push('npm-lock-check did not run: package-lock.json is missing');
+          lockCheck = null;
+        }
+      } catch (error) {
+        return { ...base, status: 'refused', reason: `lock-check-cannot-run: ${error.message}` };
+      }
+    }
     if (lockCheck) {
       // Field lesson #172: `uv` (unlike `npm`) is not reliably on a bare PATH; resolve it like
       // every other toolchain binary before ever spawning it, and refuse at once, naming every
@@ -446,7 +716,16 @@ export async function ship(options) {
         lockArgv0 = resolved.path;
       }
       const lockRes = await exec(lockArgv0, lockCheck.argv.slice(1), { cwd: root });
-      if (lockRes.code !== 0) return { ...base, status: 'refused', reason: `${lockCheck.name} failed: ${firstStderrLine(lockRes.stderr || lockRes.stdout)}` };
+      if (lockRes.code !== 0) {
+        // Field lesson #181: a resolved path that still fails to even spawn (e.g. a toolchains
+        // package directory picked before this lesson's own `resolveToolchainBin` fix, or any
+        // other spawn-level failure) must never surface as the empty `<name> failed: ` this used
+        // to produce when the exec wrapper never ran and so had no stderr/stdout to report;
+        // `exec`'s own spawnError (set by shipExec on a real spawn failure) names the path and
+        // errno directly instead.
+        if (lockRes.spawnError) return { ...base, status: 'refused', reason: `lock-check-cannot-run: ${lockArgv0} (${lockRes.spawnError})` };
+        return { ...base, status: 'refused', reason: `${lockCheck.name} failed: ${firstStderrLine(lockRes.stderr || lockRes.stdout)}` };
+      }
     }
   }
 
@@ -495,38 +774,75 @@ export async function ship(options) {
   base.pr = pr.number;
   base.url = pr.html_url;
 
-  const start = now();
-  let ci = null;
-  let ciRollup = null;
-  for (;;) {
-    const viewRes = await exec('gh', ['pr', 'view', String(pr.number), '--repo', repo, '--json', 'state,headRefOid,mergeStateStatus,statusCheckRollup'], { cwd: root });
-    if (viewRes.code !== 0 && /HTTP 30[1278]\b/.test(`${viewRes.stderr} ${viewRes.stdout}`)) return { ...base, status: 'refused', reason: stepFailed('pr view', viewRes, originRepo) };
-    let view = null;
-    if (viewRes.code === 0) {
-      try {
-        view = JSON.parse(viewRes.stdout);
-      } catch {
-        view = null;
+  // One poll-to-settle pass; called again after a flaky rerun (field lesson #178) to re-check the
+  // same PR/sha without repeating the push/PR-create steps above. Returns either a terminal ship()
+  // result (refused/no-ci/timeout) or the settled { ci, ciRollup }.
+  async function waitForCi() {
+    const start = now();
+    for (;;) {
+      const viewRes = await exec('gh', ['pr', 'view', String(pr.number), '--repo', repo, '--json', 'state,headRefOid,mergeStateStatus,statusCheckRollup'], { cwd: root });
+      if (viewRes.code !== 0 && /HTTP 30[1278]\b/.test(`${viewRes.stderr} ${viewRes.stdout}`)) return { terminal: { ...base, status: 'refused', reason: stepFailed('pr view', viewRes, originRepo) } };
+      let view = null;
+      if (viewRes.code === 0) {
+        try {
+          view = JSON.parse(viewRes.stdout);
+        } catch {
+          view = null;
+        }
       }
+      if (view) {
+        const summary = summarizeRollup(view.statusCheckRollup);
+        const headMatches = view.headRefOid === sha;
+        if (headMatches && summary.total > 0 && summary.pending === 0) return { ci: summary, ciRollup: view.statusCheckRollup };
+        const elapsed = now() - start;
+        if (headMatches && summary.total === 0 && elapsed >= noCiGraceMs) return { terminal: { ...base, status: 'no-ci', reason: 'no CI detected', ci: summary } };
+        if (elapsed >= timeoutMs) return { terminal: { ...base, status: 'timeout', reason: 'timed out waiting for checks', ci: summary } };
+      } else if (now() - start >= timeoutMs) {
+        return { terminal: { ...base, status: 'timeout', reason: 'timed out waiting for checks', ci: null } };
+      }
+      await sleep(pollMs);
     }
-    if (view) {
-      const summary = summarizeRollup(view.statusCheckRollup);
-      const headMatches = view.headRefOid === sha;
-      if (headMatches && summary.total > 0 && summary.pending === 0) { ci = summary; ciRollup = view.statusCheckRollup; break; }
-      const elapsed = now() - start;
-      if (headMatches && summary.total === 0 && elapsed >= noCiGraceMs) return { ...base, status: 'no-ci', reason: 'no CI detected', ci: summary };
-      if (elapsed >= timeoutMs) return { ...base, status: 'timeout', reason: 'timed out waiting for checks', ci: summary };
-    } else if (now() - start >= timeoutMs) {
-      return { ...base, status: 'timeout', reason: 'timed out waiting for checks', ci: null };
-    }
-    await sleep(pollMs);
+  }
+
+  let ci, ciRollup;
+  {
+    const settled = await waitForCi();
+    if (settled.terminal) return settled.terminal;
+    ({ ci, ciRollup } = settled);
   }
   base.ci = ci;
-  if (ci.failed.length > 0) {
+
+  // Field lesson #178: a ci-failed run whose failing tests are not in this ship's own diff (a
+  // flaky test elsewhere) gets up to `rerunFlaky` automatic reruns of just the failed jobs before
+  // it blocks the ship; a failing test that IS in the diff is never rerun (a real regression).
+  let rerunAttempts = 0, rerunTests = null;
+  while (ci.failed.length > 0) {
     // Field lesson 151: named up front so the next job starts from "this OS only", not a guess.
     for (const entry of platformOnlyFailures(ciRollup)) base.warnings.push(`platform-only failure: ${entry.os}: ${entry.testIds.join(', ')}`);
-    return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}` };
+    if (!(rerunFlaky > 0 && rerunAttempts < rerunFlaky)) {
+      return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}`, ...(rerunTests ? { flakyRerun: { attempts: rerunAttempts, result: 'failed', tests: rerunTests } } : {}) };
+    }
+    const runIds = failedRunIds(ciRollup, ci.failed);
+    const logs = [];
+    for (const id of runIds) {
+      const logRes = await exec('gh', ['run', 'view', id, '--repo', repo, '--log-failed'], { cwd: root });
+      if (logRes.code === 0) logs.push(logRes.stdout);
+    }
+    rerunTests = [...new Set(logs.flatMap(extractFailingTestFiles))];
+    const inDiff = rerunTests.some(test => integratedFiles.some(file => file === test || file.endsWith(`/${test}`) || test.endsWith(`/${file}`)));
+    if (inDiff) {
+      base.warnings.push(`rerun-flaky-skipped: failing test is in this PR's diff: ${rerunTests.join(', ')}`);
+      return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}` };
+    }
+    rerunAttempts++;
+    for (const id of runIds) await exec('gh', ['run', 'rerun', id, '--failed', '--repo', repo], { cwd: root });
+    await sleep(pollMs);
+    const settled = await waitForCi();
+    if (settled.terminal) return settled.terminal;
+    ({ ci, ciRollup } = settled);
+    base.ci = ci;
   }
+  if (rerunAttempts > 0) base.flakyRerun = { attempts: rerunAttempts, result: 'passed', tests: rerunTests ?? [] };
 
   if (isHeld(body)) return { ...base, status: 'held', reason: 'PR body requests manual review' };
   if (merge === false) return { ...base, status: 'ready' };

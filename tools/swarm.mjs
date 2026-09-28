@@ -12,6 +12,7 @@ import { promisify, isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, parseExtraCli, extraCliDoctor, execViaFile, validateEnvelope, summarizeModels } from './cli-adapters.mjs';
 import { API_AGENTS, apiDoctor, probeLocalProvider, decodeContext, executeApi } from './api-adapters.mjs';
+import { nonBookkeepingOutputs } from './openrouter.mjs';
 
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, parseCodexReply, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
 import { expandShellPreset, validateNetworkAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterDirs, resolveRootGitInfo, scanListeningPorts, resolveRigServicePort, createShellScratchDir, shellMessage, containsKey, redactKey } from './claude-shell.mjs';
@@ -22,7 +23,8 @@ import { packagingWithoutBuildCheckWarning, packagingKeyChanges, packagingChange
 import { scoutPrompt, normalizeScoutReport, renderScoutMarkdown, briefPathCandidates } from './scout.mjs';
 import { parseGoals, extractKnownRepos, gatherAreaCandidates, sweepPrompt, normalizeSweepArea, renderShortlistMarkdown, resolveBriefPath as resolveSweepBriefPath } from './sweep.mjs';
 import { findUncoveredTests, listProjectFiles, suggestIgnoreTests, contextDirectoryWarnings, registryPinningWarnings, isTestFile } from './context-check.mjs';
-import { ship, SHIP_DEFAULTS, resolveGhAndGit, parsePrPayload, resolveToolchainBin } from './ship.mjs';
+import { ship, SHIP_DEFAULTS, resolveGhAndGit, parsePrPayload, resolveToolchainBin, parseExemptFlag } from './ship.mjs';
+import { loadChecksFromCi, checkNotInCiWarnings, DEFAULT_CI_PATH } from './checks-from-ci.mjs';
 import { go, commitOutputs, goExitCode } from './go.mjs';
 import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary, listLiveRuns, repoKey, repoPaths } from './board.mjs';
 import { writeSessionMetric } from './session-metrics.mjs';
@@ -537,6 +539,8 @@ export function validateManifest(manifest) {
     if (!Array.isArray(job.context) || !Array.isArray(job.outputs) || job.context.length > 100 || job.outputs.length > 100) fail('context and outputs must be explicit arrays of at most 100 files');
     if (new Set(job.context).size !== job.context.length || new Set(job.outputs).size !== job.outputs.length) fail('Duplicate file path');
     for (const file of [...job.context, ...job.outputs]) relative(file);
+    // Decision #227: a deepseek/* model on OpenRouter writes bookkeeping files only.
+    if (job.agent === 'openrouter') { const bad = nonBookkeepingOutputs(job.model, job.outputs); if (bad.length) fail(`Job ${job.id}: ${job.model} is for bookkeeping jobs only (PR payloads, changelogs, mutants files, metrics); refused outputs: ${bad.join(', ')}`); }
     if (job.resultFile !== undefined) {
       if (!job.outputs.includes(job.resultFile)) fail(`Job ${job.id}: resultFile must be one of its outputs`);
       relative(job.resultFile);
@@ -2762,10 +2766,22 @@ const ownRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 // --- ship: push, PR, wait for CI, merge -------------------------------------------------
 
 // Never rejects on a non-zero exit or a launch failure; ship() decides what a failed step means.
+// Field lesson #181: when the child process never actually starts (a bad path, a directory picked
+// as the binary, EACCES, ...), Node gives `error.code` as the errno STRING (e.g. "EISDIR",
+// "EACCES"), never a number — that is exactly what already tells a real exit ("code" is a number)
+// apart from a launch failure here. A launch failure has no real stdout/stderr to report, so
+// callers used to see an empty reason; `spawnError` now names the errno so a caller (ship()'s own
+// lock check, in particular) can say exactly what could not even start, instead of nothing.
 function shipExec(file, args, { cwd, input } = {}) {
   return new Promise(resolve => {
     const child = execFile(file, args, { cwd, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' }, (error, stdout, stderr) => {
-      resolve({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout: stdout ?? '', stderr: stderr ?? '' });
+      const spawnFailed = Boolean(error) && typeof error.code !== 'number';
+      resolve({
+        code: error ? (typeof error.code === 'number' ? error.code : 1) : 0,
+        stdout: stdout ?? '',
+        stderr: stderr ?? '',
+        ...(spawnFailed ? { spawnError: String(error.code || error.message || 'spawn failed') } : {}),
+      });
     });
     child.stdin.on('error', () => {});
     if (input !== undefined) child.stdin.write(input);
@@ -2777,16 +2793,25 @@ export function shipExitCode(status) {
   return ['merged', 'held', 'ready'].includes(status) ? 0 : 1;
 }
 
-const SHIP_FLAGS_WITH_VALUE = new Set(['--repo', '--pr', '--require-section', '--merge-method', '--timeout', '--poll', '--tag-timeout', '--branch', '--check']);
+const SHIP_FLAGS_WITH_VALUE = new Set(['--repo', '--pr', '--require-section', '--merge-method', '--timeout', '--poll', '--tag-timeout', '--branch', '--check', '--rerun-flaky', '--exempt']);
 
 // Pure CLI-flag parsing, kept separate from ship() execution so it is directly testable.
 export function parseShipFlags(flags) {
   let repo, payloadPath, mergeMethod, timeoutMs, pollMs, tagTimeoutMs, noFlakeCheck, branch, merge = true;
-  const requireSections = [], checks = [];
+  let checksFromCi, checksFromCiPath, rerunFlaky;
+  const requireSections = [], checks = [], exemptions = [];
   for (let index = 0; index < flags.length; index++) {
     const flag = flags[index];
     if (flag === '--no-flake-check') { noFlakeCheck = true; continue; }
     if (flag === '--no-merge') { merge = false; continue; }
+    // Field lesson #177: an optional trailing path (the CI workflow to read `run:` steps from);
+    // omitted, it defaults to .github/workflows/ci.yml relative to the ship root.
+    if (flag === '--checks-from-ci') {
+      checksFromCi = true;
+      const next = flags[index + 1];
+      if (next !== undefined && !next.startsWith('--')) { checksFromCiPath = next; index++; }
+      continue;
+    }
     if (!SHIP_FLAGS_WITH_VALUE.has(flag)) fail(`Unknown flag: ${flag}`);
     const value = flags[++index];
     if (value === undefined) fail(`${flag} requires a value`);
@@ -2806,10 +2831,27 @@ export function parseShipFlags(flags) {
     else if (flag === '--timeout') { if (!/^\d+(\.\d+)?$/.test(value) || Number(value) <= 0) fail('--timeout requires a positive number of seconds'); timeoutMs = Number(value) * 1000; }
     else if (flag === '--tag-timeout') { if (!/^\d+(\.\d+)?$/.test(value)) fail('--tag-timeout requires a non-negative number of seconds'); tagTimeoutMs = Number(value) * 1000; }
     else if (flag === '--poll') { if (!/^\d+(\.\d+)?$/.test(value) || Number(value) <= 0) fail('--poll requires a positive number of seconds'); pollMs = Number(value) * 1000; }
+    // Field lesson #178: how many times ship reruns CI's failed jobs before giving up, only when
+    // none of the tests they failed on are in this ship's own diff (default 0: never rerun).
+    else if (flag === '--rerun-flaky') { if (!/^\d+$/.test(value)) fail('--rerun-flaky requires a non-negative integer'); rerunFlaky = Number(value); }
+    // Field lesson #179: an owner decision to excuse one file from one diff guard, with a reason.
+    else if (flag === '--exempt') {
+      const parsed = parseExemptFlag(value);
+      if (parsed.error) fail(parsed.error);
+      exemptions.push(parsed);
+    }
   }
   if (!payloadPath) fail('ship requires --pr PAYLOAD.json');
   if (checks.length && !branch) fail('--check is only for ship --branch; a run ships with its manifest checks');
-  return { repo, payloadPath, requireSections, merge, mergeMethod, timeoutMs, pollMs, ...(tagTimeoutMs !== undefined ? { tagTimeoutMs } : {}), ...(noFlakeCheck ? { noFlakeCheck } : {}), ...(branch ? { branch, checks } : {}) };
+  return {
+    repo, payloadPath, requireSections, merge, mergeMethod, timeoutMs, pollMs,
+    ...(tagTimeoutMs !== undefined ? { tagTimeoutMs } : {}),
+    ...(noFlakeCheck ? { noFlakeCheck } : {}),
+    ...(branch ? { branch, checks } : {}),
+    ...(checksFromCi ? { checksFromCi, ...(checksFromCiPath !== undefined ? { checksFromCiPath } : {}) } : {}),
+    ...(rerunFlaky !== undefined ? { rerunFlaky } : {}),
+    ...(exemptions.length ? { exemptions } : {}),
+  };
 }
 
 // Field lesson #159: each packaging file a change touched, with the packaging keys it moved.
@@ -2871,7 +2913,32 @@ export async function shipBranch(root, flags, { spawnImpl = spawn, exec = shipEx
   const originalPortBase = portBlockFor(root);
   const { base: portBase, moved: portMoved } = await resolvePortBlock(root);
   const portWarnings = portMoved ? [portBase === originalPortBase ? `port-block-busy: ${portBase}` : `port-block-moved: ${originalPortBase} -> ${portBase}`] : [];
-  const checks = flags.checks ?? [];
+  const handChecks = flags.checks ?? [];
+  // Field lesson #177: a hand-typed --check list drifts from what CI actually runs. With
+  // --checks-from-ci, CI's own `run:` steps (read from the given/default workflow path) become
+  // ship's own checks, merged with any --check entries; either way, a --check whose program and
+  // subcommand are not among the CI-derived checks warns instead of silently drifting further.
+  const ciWarnings = [];
+  let checks = handChecks;
+  if (flags.checksFromCi) {
+    const ciPath = flags.checksFromCiPath ?? DEFAULT_CI_PATH;
+    const ciResult = await loadChecksFromCi(root, ciPath);
+    if (ciResult.missing) {
+      ciWarnings.push(`checks-from-ci: ${ciPath} not found`);
+    } else {
+      for (const skip of ciResult.skipped) ciWarnings.push(`checks-from-ci-skipped (${skip.reason}): ${skip.raw}`);
+      ciWarnings.push(...checkNotInCiWarnings(handChecks, ciResult.checks));
+      const seen = new Set(handChecks.map(check => JSON.stringify(check.argv)));
+      const merged = [...handChecks];
+      for (const check of ciResult.checks) {
+        const key = JSON.stringify(check.argv);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(check);
+      }
+      checks = merged.slice(0, 10);
+    }
+  }
   return ship({
     root, repo: flags.repo, payloadPath, manifest: null, tagTimeoutMs: flags.tagTimeoutMs, now,
     requireSections: flags.requireSections,
@@ -2880,8 +2947,10 @@ export async function shipBranch(root, flags, { spawnImpl = spawn, exec = shipEx
     pollMs: flags.pollMs ?? SHIP_DEFAULTS.pollMs,
     timeoutMs: flags.timeoutMs ?? SHIP_DEFAULTS.timeoutMs,
     noCiGraceMs: SHIP_DEFAULTS.noCiGraceMs,
+    rerunFlaky: flags.rerunFlaky ?? 0,
+    exemptions: flags.exemptions ?? [],
     portBase, portWarnings,
-    extraWarnings: checks.length ? [] : ['no-checks: ship --branch ran no local checks; pass --check \'<argv json>\''],
+    extraWarnings: [...ciWarnings, ...(checks.length ? [] : ['no-checks: ship --branch ran no local checks; pass --check \'<argv json>\' or --checks-from-ci'])],
     integratedFiles: changedFiles,
     packagingChanges: await packagingChangesSince(root, baseRevision, changedFiles),
     checkArgvs: checks.map(check => check.argv),
@@ -2914,6 +2983,18 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
   const originalPortBase = portBlockFor(root);
   const { base: portBase, moved: portMoved } = await resolvePortBlock(root);
   const portWarnings = portMoved ? [portBase === originalPortBase ? `port-block-busy: ${portBase}` : `port-block-moved: ${originalPortBase} -> ${portBase}`] : [];
+  // Field lesson #177(b): a manifest's own hand-authored checks drift from CI the same way a
+  // hand-typed --check list does; --checks-from-ci here only warns (a manifest's checks are not
+  // replaced — they are what the run was actually verified against).
+  const ciWarnings = [];
+  if (flags.checksFromCi) {
+    const ciResult = await loadChecksFromCi(root, flags.checksFromCiPath ?? DEFAULT_CI_PATH);
+    if (ciResult.missing) ciWarnings.push(`checks-from-ci: ${flags.checksFromCiPath ?? DEFAULT_CI_PATH} not found`);
+    else {
+      for (const skip of ciResult.skipped) ciWarnings.push(`checks-from-ci-skipped (${skip.reason}): ${skip.raw}`);
+      ciWarnings.push(...checkNotInCiWarnings(manifest.checks ?? [], ciResult.checks));
+    }
+  }
   return ship({
     root, repo: flags.repo, payloadPath, manifest, tagTimeoutMs: flags.tagTimeoutMs, now,
     // Field lesson 123: a red base's mutants proved nothing; ship refuses a required "Mutation
@@ -2925,7 +3006,10 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
     pollMs: flags.pollMs ?? SHIP_DEFAULTS.pollMs,
     timeoutMs: flags.timeoutMs ?? SHIP_DEFAULTS.timeoutMs,
     noCiGraceMs: SHIP_DEFAULTS.noCiGraceMs,
+    rerunFlaky: flags.rerunFlaky ?? 0,
+    exemptions: flags.exemptions ?? [],
     portBase, portWarnings,
+    extraWarnings: ciWarnings,
     // Field lesson #166: shipRun used to omit this, so ship()'s own pre-push lock check (field
     // lesson 147, gated on `integratedFiles.length`) never ran on a real `ship <id>`; only
     // `ship --branch` (shipBranch, above) ever passed it.
@@ -2948,12 +3032,12 @@ async function runManifestChecked(root, manifest, onRunning) {
   finally { process.off('SIGINT', abort); process.off('SIGTERM', abort); }
 }
 
-const GO_FLAGS_WITH_VALUE = new Set(['--commit-message', '--repo', '--pr', '--require-section', '--merge-method', '--timeout', '--tag-timeout']);
+const GO_FLAGS_WITH_VALUE = new Set(['--commit-message', '--repo', '--pr', '--require-section', '--merge-method', '--timeout', '--tag-timeout', '--exempt']);
 
 // Pure CLI-flag parsing for `go`, kept separate from go() execution so it is directly testable.
 export function parseGoFlags(flags) {
   let commitMessage, repo, payloadPath, mergeMethod, timeoutMs, tagTimeoutMs, noFlakeCheck, mutants = false;
-  const requireSections = [];
+  const requireSections = [], exemptions = [];
   for (let index = 0; index < flags.length; index++) {
     const flag = flags[index];
     if (flag === '--mutants') { mutants = true; continue; }
@@ -2968,9 +3052,15 @@ export function parseGoFlags(flags) {
     else if (flag === '--merge-method') mergeMethod = value;
     else if (flag === '--tag-timeout') { if (!/^\d+(\.\d+)?$/.test(value)) fail('--tag-timeout requires a non-negative number of seconds'); tagTimeoutMs = Number(value) * 1000; }
     else if (flag === '--timeout') { if (!/^\d+(\.\d+)?$/.test(value) || Number(value) <= 0) fail('--timeout requires a positive number of seconds'); timeoutMs = Number(value) * 1000; }
+    // Field lesson #179: an owner decision to excuse one file from one diff guard, with a reason.
+    else if (flag === '--exempt') {
+      const parsed = parseExemptFlag(value);
+      if (parsed.error) fail(parsed.error);
+      exemptions.push(parsed);
+    }
   }
   if (repo && !payloadPath) fail('go requires --pr with --repo');
-  return { commitMessage, repo, payloadPath, requireSections, mergeMethod, timeoutMs, mutants, ...(tagTimeoutMs !== undefined ? { tagTimeoutMs } : {}), ...(noFlakeCheck ? { noFlakeCheck } : {}) };
+  return { commitMessage, repo, payloadPath, requireSections, mergeMethod, timeoutMs, mutants, ...(tagTimeoutMs !== undefined ? { tagTimeoutMs } : {}), ...(noFlakeCheck ? { noFlakeCheck } : {}), ...(exemptions.length ? { exemptions } : {}) };
 }
 
 // Run through current/, this file's realpath is a snapshot under <install>/versions/<v>/, which
@@ -2994,7 +3084,7 @@ async function main() {
   const testIndex=args.indexOf('--test');
   const rootIndex=args.findIndex((arg,index)=>arg==='--root'&&(testIndex===-1||index<testIndex));
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] "goal" | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] "goal" | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
   if(args[0]==='redcheck'){
     const hasBase=args[2]==='--base';
     const testAt=hasBase?4:2;

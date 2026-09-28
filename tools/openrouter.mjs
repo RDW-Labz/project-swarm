@@ -1,0 +1,129 @@
+// SPDX-License-Identifier: Apache-2.0
+// OpenRouter as a tool-free API worker pool. Every rule the owner set lives here, enforced in
+// code before any request leaves the machine:
+// - every request carries provider.data_collection = "deny"; a body without it is refused;
+// - anthropic/* models are pinned to the Anthropic provider, with no fallback;
+// - deepseek/* models may only write bookkeeping files (PR payloads, changelogs, mutants files,
+//   metrics), never code;
+// - spend caps: $5 per job and $25 per UTC day, checked against a worst-case estimate before
+//   each request and recorded from the provider's reported cost after it.
+// The key is read by the swarm parent only (env OPENROUTER_API_KEY, else the macOS keychain
+// item service "OASIS", account "openrouter.api_key"), never passed to a worker.
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+export const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+export const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
+export const OPENROUTER_KEY_ENV = 'OPENROUTER_API_KEY';
+export const OPENROUTER_KEY_ITEM = Object.freeze({ service: 'OASIS', account: 'openrouter.api_key' });
+export const JOB_CAP_USD = 5;
+export const DAY_CAP_USD = 25;
+// Bookkeeping outputs a deepseek/* model may write. Anything else (all code, tests, configs)
+// refuses. An allowlist, not a denylist: a new sensitive path can never slip through.
+export const BOOKKEEPING_OUTPUTS = Object.freeze([
+  /(^|\/)[^/]*-pr-create\.json$/,
+  /(^|\/)\.?pr-body\.md$/,
+  /(^|\/)CHANGELOG\.md$/,
+  /(^|\/)[^/]*mutants[^/]*\.json$/,
+  /(^|\/)[^/]*-metrics\.md$/,
+  /(^|\/)[^/]*metrics[^/]*\.jsonl?$/,
+]);
+
+class OpenRouterError extends Error {}
+const fail = message => { throw new OpenRouterError(message); };
+
+export const isAnthropicModel = model => typeof model === 'string' && model.startsWith('anthropic/');
+export const isBookkeepingOnlyModel = model => typeof model === 'string' && model.startsWith('deepseek/');
+
+// The provider block every request carries. require_parameters keeps OpenRouter from routing to
+// a provider that would silently drop response_format.
+export function providerPolicy(model) {
+  return isAnthropicModel(model)
+    ? { data_collection: 'deny', require_parameters: true, order: ['anthropic'], allow_fallbacks: false }
+    : { data_collection: 'deny', require_parameters: true };
+}
+
+// The last check before a body is sent. Refuses anything that does not carry the owner's rules.
+export function assertRequestBody(body) {
+  if (!body || typeof body !== 'object') fail('OpenRouter request refused: no body');
+  const provider = body.provider;
+  if (!provider || provider.data_collection !== 'deny') fail('OpenRouter request refused: provider.data_collection must be "deny"');
+  if (isAnthropicModel(body.model) && (!Array.isArray(provider.order) || provider.order.length !== 1 || provider.order[0] !== 'anthropic' || provider.allow_fallbacks !== false)) {
+    fail('OpenRouter request refused: anthropic/* models must pin provider.order ["anthropic"] with allow_fallbacks false');
+  }
+  return body;
+}
+
+// A deepseek/* job may only write bookkeeping files. Returns the offending outputs (empty = ok).
+export function nonBookkeepingOutputs(model, outputs) {
+  if (!isBookkeepingOnlyModel(model)) return [];
+  return (outputs ?? []).filter(file => !BOOKKEEPING_OUTPUTS.some(pattern => pattern.test(String(file).replaceAll('\\', '/'))));
+}
+export function assertBookkeepingOnly(job) {
+  const bad = nonBookkeepingOutputs(job.model, job.outputs);
+  if (bad.length) fail(`Job ${job.id}: ${job.model} is for bookkeeping jobs only (PR payloads, changelogs, mutants files, metrics); refused outputs: ${bad.join(', ')}`);
+}
+
+// The key: env first (tests, CI), else the keychain on macOS. Never logged, never returned
+// in any result.
+export function readOpenRouterKey(env = process.env, { platform = process.platform, exec = execFileSync } = {}) {
+  const fromEnv = env[OPENROUTER_KEY_ENV];
+  if (typeof fromEnv === 'string' && fromEnv.length) return fromEnv;
+  if (env.SWARM_OPENROUTER_NO_KEYCHAIN === '1' || platform !== 'darwin') return null;
+  try {
+    const out = exec('/usr/bin/security', ['find-generic-password', '-s', OPENROUTER_KEY_ITEM.service, '-a', OPENROUTER_KEY_ITEM.account, '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+    const key = String(out).trim();
+    return key.length ? key : null;
+  } catch { return null; }
+}
+
+// Spend ledger: one JSON line per request, append-only, in the swarm logs dir.
+export function ledgerPath(env = process.env, home = os.homedir()) {
+  return path.join(env.SWARM_LOGS_DIR || path.join(home, '.project-swarm', 'logs'), 'openrouter-spend.jsonl');
+}
+export function readLedger(file) {
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return []; }
+  return text.split('\n').filter(Boolean).flatMap(line => { try { const row = JSON.parse(line); return Number.isFinite(row.costUsd) ? [row] : []; } catch { return []; } });
+}
+export function spentSoFar(rows, { jobId, day }) {
+  let job = 0, today = 0;
+  for (const row of rows) {
+    if (String(row.ts ?? '').slice(0, 10) === day) today += row.costUsd;
+    if (row.jobId === jobId) job += row.costUsd;
+  }
+  return { job, today };
+}
+export function appendLedger(file, row) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, `${JSON.stringify(row)}\n`);
+}
+
+// Per-token prices for one model, from OpenRouter's public model list (no key sent).
+export async function fetchPricing(model, { fetchImpl = fetch, signal } = {}) {
+  let response;
+  try { response = await fetchImpl(OPENROUTER_MODELS_URL, { method: 'GET', redirect: 'error', signal }); }
+  catch { fail('OpenRouter pricing unavailable; the spend cap cannot be checked, so the request is refused'); }
+  if (!response.ok) fail(`OpenRouter pricing HTTP ${response.status}; the spend cap cannot be checked, so the request is refused`);
+  let body; try { body = await response.json(); } catch { fail('OpenRouter pricing malformed; request refused'); }
+  const entry = Array.isArray(body?.data) ? body.data.find(item => item?.id === model) : null;
+  if (!entry) fail(`OpenRouter model not found: ${model}`);
+  const prompt = Number(entry.pricing?.prompt), completion = Number(entry.pricing?.completion);
+  if (!Number.isFinite(prompt) || !Number.isFinite(completion) || prompt < 0 || completion < 0) fail(`OpenRouter pricing missing for ${model}; request refused`);
+  return { prompt, completion };
+}
+
+// Worst case for one request: every input character counted as a token (tokens are always
+// fewer), plus the full output budget.
+export function worstCaseUsd(pricing, { inputChars, maxTokens }) {
+  return inputChars * pricing.prompt + maxTokens * pricing.completion;
+}
+
+export function assertWithinCaps({ worstUsd, spent }) {
+  if (spent.job + worstUsd > JOB_CAP_USD) fail(`OpenRouter job cap: $${spent.job.toFixed(4)} spent + $${worstUsd.toFixed(4)} worst case > $${JOB_CAP_USD}; request refused`);
+  if (spent.today + worstUsd > DAY_CAP_USD) fail(`OpenRouter day cap: $${spent.today.toFixed(4)} spent today + $${worstUsd.toFixed(4)} worst case > $${DAY_CAP_USD}; request refused`);
+}
+
+export { OpenRouterError };

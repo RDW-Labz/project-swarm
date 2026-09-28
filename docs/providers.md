@@ -1,6 +1,6 @@
 # Providers and setup
 
-Project Swarm supports eight adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
+Project Swarm supports nine adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
 
 ## Choose the execution style
 
@@ -9,6 +9,7 @@ Project Swarm supports eight adapters. Configure only the providers your manifes
 
 
 - **Claude (`claude`)** starts a fresh restricted CLI process with copied files and scoped file tools. Authentication belongs to the installed Claude Code CLI. The repository's website case study records real Claude exchanges.
+- **OpenRouter (`openrouter`)** makes one OpenAI-compatible chat-completions request to `https://openrouter.ai/api/v1/chat/completions` with strict structured output and no tools. The coordinator reads the key from `OPENROUTER_API_KEY`, else from the macOS keychain item service `OASIS`, account `openrouter.api_key` (store it with `security add-generic-password -U -s OASIS -a openrouter.api_key -w`, which prompts for it); workers never see it. Enforced before any request leaves: `provider.data_collection` is always `"deny"` (a body without it is refused); `anthropic/*` models pin `provider.order` to `["anthropic"]` with `allow_fallbacks: false`; `deepseek/*` models may only write bookkeeping outputs (PR payloads, `.pr-body.md`, `CHANGELOG.md`, mutants files, metrics), refused at `validate` and again at run; each request's worst case (every input character as a token, plus the full output budget, priced from OpenRouter's public model list) must fit under $5 for the job id and $25 for the UTC day, and pricing that cannot be fetched refuses the request. Every request, usable or not, is appended to `~/.project-swarm/logs/openrouter-spend.jsonl` (`SWARM_LOGS_DIR` overrides) with the provider-reported cost, or the worst case when none is reported.
 - **OpenAI (`openai`)** makes one Responses API request with strict structured output and no tools. It reads `OPENAI_API_KEY` from the coordinator environment; a ChatGPT or Codex login is not automatically an API credential.
 - **Gemini (`gemini`)** makes one `generateContent` request with JSON schema output and no tools. It reads `GEMINI_API_KEY`, falling back to `GOOGLE_API_KEY` when the first is absent.
 - **Ollama (`ollama`)** makes one chat request to a server you already operate, using JSON schema output. Its default is `http://127.0.0.1:11434`. Select a model already available on that server. No Claude or cloud account is needed for an unauthenticated local server.

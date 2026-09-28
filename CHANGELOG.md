@@ -1,5 +1,64 @@
 # Changelog
 
+## 1.24.0
+
+- New `openrouter` API adapter (the ninth): OpenAI-compatible chat completions via OpenRouter, key from `OPENROUTER_API_KEY` or the macOS keychain item `OASIS`/`openrouter.api_key`, read by the coordinator only. Enforced in code before any request: `provider.data_collection: "deny"` on every body (a body without it is refused), `anthropic/*` models pinned to the Anthropic provider with no fallback, `deepseek/*` models limited to bookkeeping outputs (refused at `validate` and at run), and spend caps of $5 per job id and $25 per UTC day checked against a priced worst case (unpriceable = refused), with every request appended to `logs/openrouter-spend.jsonl`. New module `tools/openrouter.mjs`; tests in `tests/openrouter.test.mjs` (12/12 mutants killed).
+- `ship --checks-from-ci [PATH]` (default `.github/workflows/ci.yml`) reads a CI workflow's own
+  `run:` steps and keeps the ones that invoke a known checker/test runner (`uv`, `npm`, `npx`,
+  `ruff`, `mypy`, `pytest`, `vitest`, `tsc`, `eslint`) as ship's own checks — a documented,
+  line-based reader of `run:` steps (scalar and `|`/`>` block forms), not a YAML parser; a line with
+  a shell operator (`&&`, `|`, `>`, `;`) is reported skipped, not split apart and guessed at. Any
+  hand `--check` whose program and subcommand are not among the CI-derived checks warns
+  `check-not-in-ci`. New `tools/checks-from-ci.mjs` (`loadChecksFromCi`, `ciChecksFromWorkflowText`,
+  `checkNotInCiWarnings`) (lesson #177a/b).
+- Fixed: a check that already failed on the base commit's own tree (not something the change being
+  shipped broke) blocked the ship the same as a genuine regression, costing a wasted re-ship once
+  the same failure was rediscovered by hand. `ship` now re-runs a failing check once against the
+  base commit's own tree (a throwaway `git worktree`, always cleaned up) and reports it
+  `pre-existing` — still listed in the checks section, no longer blocking — when it fails there too.
+  New exported `verifyPreExistingOnBase` in `tools/ship.mjs` (lesson #177c).
+- `ship --rerun-flaky N` (default 0): on `ci-failed`, fetches the failed jobs' own logs via `gh`,
+  extracts failing test file paths (pytest `FAILED path::name`, vitest `FAIL path`), and — only when
+  none of them are among the files the shipped change itself touched — reruns the failed jobs
+  (`gh run rerun <id> --failed`) up to N times and waits again; the result gains
+  `flakyRerun: {attempts, result: "passed"|"failed", tests: [...]}`. A failing test that IS among
+  the changed files is never rerun. New exported `extractFailingTestFiles`/`failedRunIds` in
+  `tools/ship.mjs` (lesson #178).
+- Fixed: `ship --branch` refused a branch over `tests/swarm.test.mjs -> ps`, a call already sitting
+  on `main` and untouched by that branch's own diff. The undocumented-binary/env-var test-file gate
+  now judges only the lines a change ADDS to a test file (`git diff <base>...HEAD -U0`, `+` lines
+  only, never the `+++ b/<file>` header); a call already on the base does not refuse. `ps` joins the
+  documented POSIX binaries (macOS/Linux; a Windows-run test spawning it still needs its own
+  fake/skip seam). New repeatable ship flag `--exempt <guard>:<file>=<reason>` (works on `ship RUN`,
+  `ship --branch`, and `go`) excuses one file from one guard (`undocumented-binary` or `env-var`) —
+  never other files, never other guards; the reason is required (trimmed, >= 10 characters, else
+  `exemption-needs-reason`) and an unknown guard id refuses with the valid list. Every used
+  exemption appears in the result's `exemptions: [{guard, file, reason}]`, is appended as one JSON
+  line to `<installRoot>/logs/ship-exemptions.jsonl` (`SWARM_LOGS_DIR` overrides the directory), and
+  is written into the PR body's `## Exemptions` section (appended to one already there, or created
+  fresh) — a shipped PR body can never omit a used exemption. An exemption that matched nothing
+  warns `unused-exemption: <guard>:<file>` without touching the PR body. A guard that still refuses
+  now ends its reason with a hint: `fix the cause, or pass --exempt <guard>:<file>=<reason>`. New
+  exported `parseExemptFlag`, `EXEMPTION_GUARD_IDS`, `appendExemptionsSection`, `logExemption` in
+  `tools/ship.mjs` (lesson #179).
+- Fixed: `resolveToolchainBin` picked a directory that merely shared a program's name over the real
+  binary (real case: `~/.project-swarm/toolchains/uv` is the pip package directory, not the `uv`
+  binary, which sits at `toolchains/bin/uv`) — `fs.access(X_OK)` alone passes on a directory too,
+  so every real check hit a spawn failure and the pre-push lock check refused with the empty reason
+  `uv-lock-check failed: `, exactly what lesson #172 was meant to prevent. A candidate now also has
+  to be a regular file (`fs.stat`, following a symlink) before it counts. A lock check that still
+  fails to spawn no longer produces an empty reason either way: `shipExec` now names the errno on a
+  genuine launch failure (`spawnError`, distinguished the same way `error.code` already told a real
+  exit apart from one), and `ship` reports `lock-check-cannot-run: <path> (<errno>)` instead of the
+  empty `<name> failed: ` (lesson #181).
+- `ship` now warns `no-lockfile: <path>/package.json has no package-lock.json` when
+  a changed Node manifest has no lockfile, and explicitly reports that `npm-lock-check`
+  did not run. A present lockfile still runs `npm ci --dry-run`; stale or inconsistent
+  locks still refuse before push. Added the project's dependency-free `package-lock.json`
+  at version 1.24.0 and regression coverage including a real npm stale-lock refusal
+  (lesson #183).
+- docs/lessons.md entries 81–85.
+
 ## 1.23.0
 
 - Fixed: `scout --brief` (like any relative path flag on `scout`/`ask`) resolved only against `--root`, not the cwd the user actually typed it from; `swarm scout --root repos/desktop-app --brief coordination/research/brief.md` failed "brief not found" for a path that only ever made sense relative to the cwd. A relative `--brief` is now tried against the cwd first, then against `--root`, and the not-found error names every path actually tried. `ship`/`go`'s `--pr PAYLOAD.json` had the identical bug (`ship --branch` and `ship <run-id>` both resolved it only against `--root`) and gets the same fix, via the new `resolvePathCwdThenRoot` (lesson #169).

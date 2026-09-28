@@ -511,9 +511,26 @@ node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json [--requir
 
 Field lesson #164: `ship --branch BRANCH --pr payload.json [--check ARGVJSON]... [other ship flags]` (no run id) ships a finished branch built outside the swarm, e.g. by an outside agent in its own worktree. `--root` must be the worktree that has `BRANCH` checked out (else refused: `--branch <b> is not checked out in <root>`), and the payload's `head` must equal `BRANCH`. Each `--check '["argv",...]'` (repeatable, at most 10, named `check-1`, `check-2`, ...) runs like a manifest check, with the env file and this root's port block; with none, the result warns `no-checks: ...`. Everything else is the same `ship`: the tracked tree must be clean, the checks fill `<!-- swarm:checks -->`, `--require-section`, the `**needs ...**` hold, the lock check and test-binary gate over the branch's diff against `origin/<base>` (else `<base>`), the packaging build check, push, PR create/update, CI wait and merge. `--check` with a run id, or `--branch` with a run id, is refused.
 
+Field lesson #179: the test-binary/env-var gate above (lesson #154/#156) now judges only the lines a
+change ADDS to a test file (`git diff <base>...HEAD -U0`, `+` lines only, never the `+++ b/<file>`
+header) — a call already sitting on the base commit, untouched by this diff, no longer refuses a
+branch that only touched the file for an unrelated reason. `ps` is now a documented POSIX binary
+(macOS/Linux only; a Windows-run test spawning it still needs its own fake/skip seam or exemption).
+A repeatable `--exempt <guard>:<file>=<reason>` (works on `ship RUN`, `ship --branch`, and `go`)
+excuses one file from one guard, never other files or other guards; `<guard>` is one of
+`undocumented-binary` or `env-var` (an unknown id refuses with the valid list), and `<reason>` is
+required — trimmed, at least 10 characters, else refused `exemption-needs-reason`. Every exemption
+that actually matched a real warning appears in the result's `exemptions: [{guard, file, reason}]`,
+is appended as one JSON line to `<installRoot>/logs/ship-exemptions.jsonl` (`SWARM_LOGS_DIR`
+overrides the directory, same as `SWARM_TOOLCHAINS`), and is written into the PR body's
+`## Exemptions` section (appended to one already there, or created fresh) — a shipped PR body can
+never omit a used exemption. An exemption that matched nothing warns `unused-exemption: <guard>:<file>`
+without touching the PR body. A guard that still refuses now ends its reason with a hint: `fix the
+cause, or pass --exempt <guard>:<file>=<reason>`.
+
 ## Go
 
-`go <manifest.json|run-id> [--commit-message MSG] [--repo OWNER/NAME --pr payload.json] [--require-section NAME]... [--mutants] [--merge-method M] [--timeout S]` is one command carrying a manifest (or an already-started run) as far toward a merged change as the given flags allow, stopping at the first stage that fails:
+`go <manifest.json|run-id> [--commit-message MSG] [--repo OWNER/NAME --pr payload.json] [--require-section NAME]... [--mutants] [--merge-method M] [--timeout S] [--exempt GUARD:FILE=REASON]...` is one command carrying a manifest (or an already-started run) as far toward a merged change as the given flags allow, stopping at the first stage that fails:
 
 1. **run** — given a manifest path, validate it, run it to completion, and wait; given a run id instead, this stage is skipped entirely and that run id is used as-is.
 2. **integrate** — `integrate <run-id>` with the manifest's `checks` (and mutation checks when `--mutants` is passed or the manifest declares `mutants`).

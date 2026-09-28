@@ -227,7 +227,17 @@ test('runCheck kills its child as a whole process group once cancelled, leaving 
   const result = await resultPromise;
   assert.equal(result.status, 'cancelled');
   let alive = true;
-  try { process.kill(pid, 0); } catch { alive = false; }
+  // Field lesson 191: poll for grandchild death, allowing for reparenting race
+  const killDeadline = Date.now() + 3000;
+  while (Date.now() < killDeadline) {
+    try {
+      process.kill(pid, 0);
+      await new Promise(r => setTimeout(r, 25));
+    } catch {
+      alive = false;
+      break;
+    }
+  }
   assert.equal(alive, false, 'the grandchild must not survive a group cancel');
 });
 
