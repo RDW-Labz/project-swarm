@@ -363,6 +363,25 @@ test('#214: redcheck --commit reports importOnly when every failure is a missing
   assert.equal(result.importOnly, true, JSON.stringify(result));
 });
 
+test('#214: redcheck --commit run as the real CLI subprocess reverts only that commit and reports red', async t => {
+  const root = await gitFixture(t);
+  await fs.writeFile(path.join(root, 'greet.mjs'), "export function greet(){return 'hi';}\n");
+  await commitAll(root, 'initial');
+  await fs.writeFile(path.join(root, 'greet.mjs'), "export function greet(){return 'hello';}\n");
+  const commitA = await commitAll(root, 'run A: greet says hello');
+  await fs.writeFile(path.join(root, 'greet.test.mjs'), "import { greet } from './greet.mjs';\nimport assert from 'node:assert/strict';\nassert.equal(greet(), 'hello');\n");
+  await commitAll(root, 'run B: stacked change on top');
+  await fakeRunState(root, 'run-cli');
+  const { stdout } = await execFileAsync(process.execPath, [
+    CLI, '--root', root, 'redcheck', 'run-cli', '--commit', commitA, '--test', process.execPath, 'greet.test.mjs',
+  ]);
+  const result = JSON.parse(stdout);
+  assert.equal(result.status, 'red', JSON.stringify(result));
+  assert.match(result.tail, /AssertionError/);
+  // HEAD's own greet.mjs is untouched: only a throwaway worktree had the commit reverted.
+  assert.equal(await fs.readFile(path.join(root, 'greet.mjs'), 'utf8'), "export function greet(){return 'hello';}\n");
+});
+
 test('#210: session-metrics idleGaps lists only gaps at or above 5 minutes, oldest first', () => {
   const records = [
     { startedAt: '2026-09-28T10:00:00.000Z', finishedAt: '2026-09-28T10:05:00.000Z' },
