@@ -299,6 +299,92 @@ export function missingSections(body, names) {
   return missing;
 }
 
+const INTEGRATED_PLACEHOLDER_RE = /^\{integrated(?::(\.[^}]+))?\}$/;
+const NEW_PLACEHOLDER_RE = /^\{new(?::[^}]+)?\}$/;
+
+// A reduced, ship-local copy of swarm.mjs's own check-argv expansion (kept separate rather than
+// imported: swarm.mjs already imports from ship.mjs, and importing back would be circular). Only
+// {root} and {integrated[:.ext]} are supported here; a check using {new[:.ext]} is left
+// unverified (ship() is never given the run's "new files" set) rather than guessed at.
+function expandArgvForRoot(argv, integratedFiles, root) {
+  const expanded = [];
+  for (const item of argv) {
+    if (NEW_PLACEHOLDER_RE.test(item)) return null;
+    const match = INTEGRATED_PLACEHOLDER_RE.exec(item);
+    if (match) {
+      const ext = match[1];
+      const files = ext ? integratedFiles.filter(file => file.endsWith(ext)) : integratedFiles;
+      if (!files.length) return null;
+      expanded.push(...files);
+      continue;
+    }
+    expanded.push(item.split('{root}').join(root));
+  }
+  return expanded;
+}
+
+// Field lesson #177(c): a check that already fails on the base commit's own tree (e.g. CI running
+// a formatter check it never enforced before, so files were already unformatted) proves nothing
+// about what this change broke, and blocking the ship on it just costs a wasted re-ship once the
+// same failure is rediscovered by hand. Re-runs the check once against that tree — a throwaway
+// `git worktree`, always cleaned up — through the same injected `exec` ship already uses for every
+// other command, so this is exercised the same way in tests as the rest of ship().
+export async function verifyPreExistingOnBase({ root, argv, integratedFiles, baseSha, exec }) {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-preexisting-'));
+  const checkout = path.join(temporary, 'base');
+  let added = false;
+  try {
+    const addRes = await exec('git', ['worktree', 'add', '--detach', checkout, baseSha], { cwd: root });
+    if (addRes.code !== 0) return { checked: false };
+    added = true;
+    const expanded = expandArgvForRoot(argv, integratedFiles, checkout);
+    if (!expanded || !expanded.length) return { checked: false };
+    const result = await exec(expanded[0], expanded.slice(1), { cwd: checkout });
+    return { checked: true, alsoFails: result.code !== 0 };
+  } catch {
+    return { checked: false };
+  } finally {
+    if (added) { try { await exec('git', ['worktree', 'remove', '--force', checkout], { cwd: root }); } catch { /* best-effort cleanup */ } }
+    await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+// Field lesson #178: a `ci-failed` CI run whose failing tests are not in this ship's own diff (a
+// flaky test elsewhere — Windows timing, say) is worth one automatic rerun before it blocks the
+// ship; pytest's own failure line and vitest's own summary line each name the file plainly enough
+// to check that without parsing full test output structure. A failing test that IS in the diff is
+// never rerun this way — that is a real regression, not flake, and reruns cannot fix it.
+export function extractFailingTestFiles(text) {
+  const files = new Set();
+  const source = String(text ?? '');
+  for (const re of [/^FAILED\s+([^\s:]+)::/gm, /^\s*(?:✗\s*)?FAIL\s+(\S+)/gm]) {
+    re.lastIndex = 0;
+    let match;
+    while ((match = re.exec(source))) files.add(match[1]);
+  }
+  return [...files];
+}
+
+function runIdFromDetailsUrl(url) {
+  const match = /\/actions\/runs\/(\d+)/.exec(String(url ?? ''));
+  return match ? match[1] : null;
+}
+
+// The run ids behind the checks in `failedNames`, deduplicated — several failed check names can
+// come from jobs in the same workflow run, and `gh run rerun` reruns a whole run's failed jobs.
+export function failedRunIds(rollup, failedNames) {
+  const items = Array.isArray(rollup) ? rollup : [];
+  const wanted = new Set(failedNames);
+  const ids = new Set();
+  for (const item of items) {
+    const name = item.name ?? item.context ?? 'unknown';
+    if (!wanted.has(name)) continue;
+    const id = runIdFromDetailsUrl(item.detailsUrl ?? item.target_url);
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
 export function renderChecks(results) {
   const lines = [];
   for (const result of results) {
@@ -351,6 +437,7 @@ export async function ship(options) {
     portBase = null, portWarnings = [],
     integratedFiles = [],
     packagingChanges = [], checkArgvs = [], extraWarnings = [],
+    rerunFlaky = 0,
     runChecks, exec, sleep, now = () => Date.now(),
     env = process.env,
     resolveUv: resolveUvImpl = resolveUv,
@@ -416,6 +503,25 @@ export async function ship(options) {
 
   const checks = await runChecks();
   base.checks = checks;
+
+  // Field lesson #177(c): before blocking on any failing check, verify it against the base
+  // commit's own tree; one that fails there too is reported `pre-existing` (still listed, no
+  // longer blocking) instead of costing a re-ship for something this change did not cause.
+  if (checks.some(result => result.status === 'failed') && checkArgvs.length) {
+    const argvForCheck = checkArgvs.slice(0, checks.length);
+    const baseRes = await exec('git', ['merge-base', `origin/${payload.base}`, 'HEAD'], { cwd: root });
+    const baseSha = baseRes.code === 0 ? baseRes.stdout.trim() : null;
+    if (baseSha) {
+      for (let index = 0; index < checks.length; index++) {
+        if (checks[index].status !== 'failed') continue;
+        const argv = argvForCheck[index];
+        if (!argv) continue;
+        const verified = await verifyPreExistingOnBase({ root, argv, integratedFiles, baseSha, exec });
+        if (verified.checked && verified.alsoFails) checks[index] = { ...checks[index], status: 'pre-existing', preExisting: true };
+      }
+    }
+  }
+
   const body = fillChecks(payload.body, checks);
   if (checks.some(result => result.status === 'failed')) return { ...base, status: 'checks-failed', reason: 'checks failed' };
 
@@ -495,38 +601,75 @@ export async function ship(options) {
   base.pr = pr.number;
   base.url = pr.html_url;
 
-  const start = now();
-  let ci = null;
-  let ciRollup = null;
-  for (;;) {
-    const viewRes = await exec('gh', ['pr', 'view', String(pr.number), '--repo', repo, '--json', 'state,headRefOid,mergeStateStatus,statusCheckRollup'], { cwd: root });
-    if (viewRes.code !== 0 && /HTTP 30[1278]\b/.test(`${viewRes.stderr} ${viewRes.stdout}`)) return { ...base, status: 'refused', reason: stepFailed('pr view', viewRes, originRepo) };
-    let view = null;
-    if (viewRes.code === 0) {
-      try {
-        view = JSON.parse(viewRes.stdout);
-      } catch {
-        view = null;
+  // One poll-to-settle pass; called again after a flaky rerun (field lesson #178) to re-check the
+  // same PR/sha without repeating the push/PR-create steps above. Returns either a terminal ship()
+  // result (refused/no-ci/timeout) or the settled { ci, ciRollup }.
+  async function waitForCi() {
+    const start = now();
+    for (;;) {
+      const viewRes = await exec('gh', ['pr', 'view', String(pr.number), '--repo', repo, '--json', 'state,headRefOid,mergeStateStatus,statusCheckRollup'], { cwd: root });
+      if (viewRes.code !== 0 && /HTTP 30[1278]\b/.test(`${viewRes.stderr} ${viewRes.stdout}`)) return { terminal: { ...base, status: 'refused', reason: stepFailed('pr view', viewRes, originRepo) } };
+      let view = null;
+      if (viewRes.code === 0) {
+        try {
+          view = JSON.parse(viewRes.stdout);
+        } catch {
+          view = null;
+        }
       }
+      if (view) {
+        const summary = summarizeRollup(view.statusCheckRollup);
+        const headMatches = view.headRefOid === sha;
+        if (headMatches && summary.total > 0 && summary.pending === 0) return { ci: summary, ciRollup: view.statusCheckRollup };
+        const elapsed = now() - start;
+        if (headMatches && summary.total === 0 && elapsed >= noCiGraceMs) return { terminal: { ...base, status: 'no-ci', reason: 'no CI detected', ci: summary } };
+        if (elapsed >= timeoutMs) return { terminal: { ...base, status: 'timeout', reason: 'timed out waiting for checks', ci: summary } };
+      } else if (now() - start >= timeoutMs) {
+        return { terminal: { ...base, status: 'timeout', reason: 'timed out waiting for checks', ci: null } };
+      }
+      await sleep(pollMs);
     }
-    if (view) {
-      const summary = summarizeRollup(view.statusCheckRollup);
-      const headMatches = view.headRefOid === sha;
-      if (headMatches && summary.total > 0 && summary.pending === 0) { ci = summary; ciRollup = view.statusCheckRollup; break; }
-      const elapsed = now() - start;
-      if (headMatches && summary.total === 0 && elapsed >= noCiGraceMs) return { ...base, status: 'no-ci', reason: 'no CI detected', ci: summary };
-      if (elapsed >= timeoutMs) return { ...base, status: 'timeout', reason: 'timed out waiting for checks', ci: summary };
-    } else if (now() - start >= timeoutMs) {
-      return { ...base, status: 'timeout', reason: 'timed out waiting for checks', ci: null };
-    }
-    await sleep(pollMs);
+  }
+
+  let ci, ciRollup;
+  {
+    const settled = await waitForCi();
+    if (settled.terminal) return settled.terminal;
+    ({ ci, ciRollup } = settled);
   }
   base.ci = ci;
-  if (ci.failed.length > 0) {
+
+  // Field lesson #178: a ci-failed run whose failing tests are not in this ship's own diff (a
+  // flaky test elsewhere) gets up to `rerunFlaky` automatic reruns of just the failed jobs before
+  // it blocks the ship; a failing test that IS in the diff is never rerun (a real regression).
+  let rerunAttempts = 0, rerunTests = null;
+  while (ci.failed.length > 0) {
     // Field lesson 151: named up front so the next job starts from "this OS only", not a guess.
     for (const entry of platformOnlyFailures(ciRollup)) base.warnings.push(`platform-only failure: ${entry.os}: ${entry.testIds.join(', ')}`);
-    return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}` };
+    if (!(rerunFlaky > 0 && rerunAttempts < rerunFlaky)) {
+      return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}`, ...(rerunTests ? { flakyRerun: { attempts: rerunAttempts, result: 'failed', tests: rerunTests } } : {}) };
+    }
+    const runIds = failedRunIds(ciRollup, ci.failed);
+    const logs = [];
+    for (const id of runIds) {
+      const logRes = await exec('gh', ['run', 'view', id, '--repo', repo, '--log-failed'], { cwd: root });
+      if (logRes.code === 0) logs.push(logRes.stdout);
+    }
+    rerunTests = [...new Set(logs.flatMap(extractFailingTestFiles))];
+    const inDiff = rerunTests.some(test => integratedFiles.some(file => file === test || file.endsWith(`/${test}`) || test.endsWith(`/${file}`)));
+    if (inDiff) {
+      base.warnings.push(`rerun-flaky-skipped: failing test is in this PR's diff: ${rerunTests.join(', ')}`);
+      return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}` };
+    }
+    rerunAttempts++;
+    for (const id of runIds) await exec('gh', ['run', 'rerun', id, '--failed', '--repo', repo], { cwd: root });
+    await sleep(pollMs);
+    const settled = await waitForCi();
+    if (settled.terminal) return settled.terminal;
+    ({ ci, ciRollup } = settled);
+    base.ci = ci;
   }
+  if (rerunAttempts > 0) base.flakyRerun = { attempts: rerunAttempts, result: 'passed', tests: rerunTests ?? [] };
 
   if (isHeld(body)) return { ...base, status: 'held', reason: 'PR body requests manual review' };
   if (merge === false) return { ...base, status: 'ready' };

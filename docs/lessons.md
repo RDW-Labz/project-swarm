@@ -822,3 +822,28 @@ rule is enforced or documented.
     (a simple, case-insensitive, whole-word scan for a handful of such
     words), independent of whether the worker itself added the basis marker.
     Regression coverage is in `tests/field-lessons-batch-i.test.mjs`.
+81. **A hand-typed check list drifted from what CI actually ran.** A format
+    check CI never ran failed on a batch of already-unformatted files, and
+    ship's own hand-typed checks had already passed, so the drift was found
+    only once CI itself ran — costing one wasted re-ship. Rule: a hand-typed
+    check list is a guess at what CI runs, and guesses drift; a check that
+    already fails on the commit being shipped from proves nothing about what
+    the change itself broke. Enforcement: ship can now read a CI workflow's
+    own run steps directly and use them as its own checks, and warns when a
+    hand-typed check's program and subcommand are not among them; separately,
+    any check that fails is re-run once against the base commit's own tree (a
+    throwaway checkout, always cleaned up) and reported pre-existing — still
+    listed, no longer blocking — when it fails there too. Regression coverage
+    is in `tests/field-lessons-batch-j.test.mjs`.
+82. **Ship stopped on a red CI run whose failing tests the change never
+    touched.** A platform-specific, timing-sensitive test suite failed on a
+    run that otherwise had nothing to do with the change being shipped, and a
+    manual rerun of the same run passed immediately — the wait and the manual
+    step were both wasted. Rule: a failing test the change did not touch is
+    worth one automatic rerun before it blocks a ship; a failing test the
+    change did touch is treated as a real regression and must never be rerun
+    away. Enforcement: ship can now rerun a CI run's own failed jobs, up to a
+    given number of attempts, but only when none of the tests they failed on
+    appear among the files the change itself touched; it reports how many
+    attempts it took and whether the rerun passed. Regression coverage is in
+    `tests/field-lessons-batch-j.test.mjs`.
