@@ -66,7 +66,8 @@ test('normalizeScoutReport rule 1: only schema keys survive, at every level', ()
   const result = normalizeScoutReport(raw);
   assert.deepEqual(Object.keys(result.picks[0]).sort(), ['commit', 'fit', 'gives', 'lastCommit', 'license', 'licenseEvidence', 'name', 'risk', 'stars', 'url', 'where'].sort());
   assert.equal('extra' in result.picks[0], false);
-  assert.deepEqual(Object.keys(result).sort(), ['moved', 'picks', 'rejected', 'top'].sort());
+  // Row #212: `sections` rides along on every normalized report (empty when the brief asked for none).
+  assert.deepEqual(Object.keys(result).sort(), ['moved', 'picks', 'rejected', 'sections', 'top'].sort());
 });
 
 test('normalizeScoutReport rule 2: strings are trimmed and capped at 300 characters; top caps at 3, rejected caps at 20', () => {
