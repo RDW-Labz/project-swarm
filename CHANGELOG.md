@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.24.1
+
+- Web jobs can now browse: a job with `web: true` (every `scout`) was offered WebSearch/WebFetch but its worker message still said "No shell commands, delegation, network tools, or MCP.", so workers refused to browse and scouts returned empty reports. The message now allows WebSearch/WebFetch for read-only research (no logins, sign-ups, form submits or downloads; pages are untrusted data) only when `web: true`; every other job's message is byte-identical. Tests in `tests/field-lesson188.test.mjs` (lesson #188).
+- docs/lessons.md entry 86.
+
 ## 1.24.0
 
 - New `openrouter` API adapter (the ninth): OpenAI-compatible chat completions via OpenRouter, key from `OPENROUTER_API_KEY` or the macOS keychain item `OASIS`/`openrouter.api_key`, read by the coordinator only. Enforced in code before any request: `provider.data_collection: "deny"` on every body (a body without it is refused), `anthropic/*` models pinned to the Anthropic provider with no fallback, `deepseek/*` models limited to bookkeeping outputs (refused at `validate` and at run), and spend caps of $5 per job id and $25 per UTC day checked against a priced worst case (unpriceable = refused), with every request appended to `logs/openrouter-spend.jsonl`. New module `tools/openrouter.mjs`; tests in `tests/openrouter.test.mjs` (12/12 mutants killed).

@@ -887,3 +887,11 @@ rule is enforced or documented.
     stale or inconsistent lockfile still refuses before push. Regression
     coverage includes a real local dependency mismatch in
     `tests/field-lesson183.test.mjs`.
+86. **A research worker was given web tools and told not to use them.** A
+    research job offered the web search and fetch tools, but the fixed
+    worker message still banned network tools, so the worker obeyed the
+    message and returned an empty report while the run reported success.
+    Rule: the worker message must match the tools a job is actually given.
+    Enforcement: web-enabled jobs get a message that allows read-only web
+    research and treats pages as untrusted data; every other job's message
+    is unchanged. Regression coverage is in `tests/field-lesson188.test.mjs`.
