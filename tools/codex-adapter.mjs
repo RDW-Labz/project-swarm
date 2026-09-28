@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { NO_STASH_LINE } from './swarm-env.mjs';
+import { NO_STASH_LINE, MUTANTS_BY_HAND_LINE } from './swarm-env.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { execViaFile } from './cli-adapters.mjs';
@@ -61,8 +61,9 @@ export function codexMessage(job, { contract = null, gotchas = '' } = {}) {
   const contractSection = contract ? `Shared contract (${contract.path}). Read it first; it wins over any other file:\n${contract.text}\n\n` : '';
   const testEnvironment = job.testEnv ? `Test environment (already set): ${Object.entries(job.testEnv).map(([key, value]) => `${key}=${value}`).join(', ')}\n` : '';
   // Field lesson #163: codex has a shell too, and the stash stack is shared by every worktree.
+  // Field lesson #170: never hand-revert a mutant with checkout/restore; run `swarm mutants`.
   // Field lesson #167: known platform gotchas for this project, when a .swarm/gotchas.md exists.
-  return `${base}${contractSection}${testEnvironment}${NO_STASH_LINE}\n${gotchas}TASK:\n${job.prompt}\n`;
+  return `${base}${contractSection}${testEnvironment}${NO_STASH_LINE}\n${MUTANTS_BY_HAND_LINE}\n${gotchas}TASK:\n${job.prompt}\n`;
 }
 const tryObject = text => { try { const value = JSON.parse(text); return value && typeof value === 'object' && !Array.isArray(value) ? value : null; } catch { return null; } };
 const CODEX_FENCE = /```[a-zA-Z]*[ \t]*\n([\s\S]*?)\n[ \t]*```/g;

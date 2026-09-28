@@ -110,9 +110,13 @@ test('ship: a passing lock check does not block the push', async t => {
     clean(), ok('[]'), ok(prJson()),
     ok(rollupView({ statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }] })),
   ]);
-  const result = await ship(baseOptions(root, payloadPath, { exec, merge: false, integratedFiles: ['pyproject.toml'] }));
+  // Field lesson #172: uv is resolved (toolchains dir, then PATH) before it is ever spawned; a
+  // fake resolveUv keeps this deterministic regardless of whether the test machine has uv at all.
+  const resolvedUvPath = '/opt/toolchains/uv';
+  const resolveUv = async () => ({ path: resolvedUvPath, tried: [resolvedUvPath] });
+  const result = await ship(baseOptions(root, payloadPath, { exec, merge: false, integratedFiles: ['pyproject.toml'], resolveUv }));
   assert.equal(result.status, 'ready');
-  const lockCall = calls.find(c => c.file === 'uv');
+  const lockCall = calls.find(c => c.file === resolvedUvPath);
   assert.deepEqual(lockCall.args, ['lock', '--check']);
 });
 

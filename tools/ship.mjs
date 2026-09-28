@@ -3,6 +3,7 @@
 // and merge when everything is green and nobody has asked for a human to look first. No shell:
 // git and gh are invoked through the injected `exec` with an argv array.
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { packagingChangeWarnings } from './packaging-check.mjs';
 
@@ -25,6 +26,24 @@ const LOCK_CHECKS = [
   { name: 'npm-lock-check', triggers: new Set(['package.json', 'package-lock.json']), argv: ['npm', 'ci', '--dry-run'] },
   { name: 'uv-lock-check', triggers: new Set(['pyproject.toml', 'uv.lock']), argv: ['uv', 'lock', '--check'] },
 ];
+// Field lesson #172: `uv lock --check` used to spawn a bare `uv`, which is not on PATH when `uv`
+// lives only in the swarm's own toolchains dir (SWARM_TOOLCHAINS, else ~/.project-swarm/toolchains)
+// — the same place every other toolchain binary is expected. A spawn failure there used to surface
+// as `uv-lock-check failed: ` with an empty reason (the exec wrapper never runs, so there is no
+// stderr to report); `uv` is now resolved the same way first (toolchains dir, then PATH), and a
+// lock check that cannot even start says so, naming every path it tried.
+function toolchainsDirFor(env, home) {
+  return env.SWARM_TOOLCHAINS || path.join(home, '.project-swarm/toolchains');
+}
+export async function resolveUv({ env = process.env, home = os.homedir(), access = file => fs.access(file, fs.constants.X_OK) } = {}) {
+  const dir = toolchainsDirFor(env, home);
+  const pathDirs = String(env.PATH ?? '').split(':').filter(Boolean);
+  const tried = [path.join(dir, 'uv'), path.join(dir, 'bin', 'uv'), ...pathDirs.map(entry => path.join(entry, 'uv'))];
+  for (const candidate of tried) {
+    try { await access(candidate); return { path: candidate, tried }; } catch { /* try the next candidate */ }
+  }
+  return { path: null, tried };
+}
 export function selectLockCheck(files) {
   const basenames = new Set((files ?? []).map(file => path.basename(file)));
   for (const candidate of LOCK_CHECKS) {
@@ -294,6 +313,8 @@ export async function ship(options) {
     integratedFiles = [],
     packagingChanges = [], checkArgvs = [], extraWarnings = [],
     runChecks, exec, sleep, now = () => Date.now(),
+    env = process.env,
+    resolveUv: resolveUvImpl = resolveUv,
   } = options;
 
   let repo = options.repo;
@@ -374,7 +395,16 @@ export async function ship(options) {
   if (integratedFiles.length) {
     const lockCheck = selectLockCheck(integratedFiles);
     if (lockCheck) {
-      const lockRes = await exec(lockCheck.argv[0], lockCheck.argv.slice(1), { cwd: root });
+      // Field lesson #172: `uv` (unlike `npm`) is not reliably on a bare PATH; resolve it like
+      // every other toolchain binary before ever spawning it, and refuse at once, naming every
+      // path tried, when it cannot be found — instead of a spawn failure with an empty reason.
+      let lockArgv0 = lockCheck.argv[0];
+      if (lockArgv0 === 'uv') {
+        const resolved = await resolveUvImpl({ env });
+        if (!resolved.path) return { ...base, status: 'refused', reason: `lock-check-cannot-run: uv not found (tried ${resolved.tried.join(', ')})` };
+        lockArgv0 = resolved.path;
+      }
+      const lockRes = await exec(lockArgv0, lockCheck.argv.slice(1), { cwd: root });
       if (lockRes.code !== 0) return { ...base, status: 'refused', reason: `${lockCheck.name} failed: ${firstStderrLine(lockRes.stderr || lockRes.stdout)}` };
     }
   }

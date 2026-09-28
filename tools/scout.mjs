@@ -14,6 +14,18 @@ export function resolveBriefPath(briefPath, root) {
   return path.isAbsolute(briefPath) ? briefPath : path.resolve(root, briefPath);
 }
 
+// Field lesson #169: a coordinator often runs `scout --root <other-project>` from its own parent
+// directory, typing --brief the way they would from the cwd they are actually sitting in; the old
+// single root-relative resolution failed "brief not found" against a path that only ever made
+// sense relative to --root. An absolute path is unambiguous either way (one candidate); a relative
+// one is tried against the cwd first, then against --root, so whichever the user meant is found.
+export function briefPathCandidates(briefPath, root, cwd = process.cwd()) {
+  const fromRoot = resolveBriefPath(briefPath, root);
+  if (path.isAbsolute(briefPath)) return [fromRoot];
+  const fromCwd = path.resolve(cwd, briefPath);
+  return fromCwd === fromRoot ? [fromRoot] : [fromCwd, fromRoot];
+}
+
 export const SCOUT_LICENSES = Object.freeze(['MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', '0BSD', 'Unlicense', 'Zlib', 'BSL-1.0', 'MPL-2.0']);
 export const SCOUT_FLAGGED_LICENSES = Object.freeze({ 'MPL-2.0': 'file-level copyleft' });
 export const SCOUT_FITS = Object.freeze(['drop-in', 'borrow-pattern', 'reference-only']);
