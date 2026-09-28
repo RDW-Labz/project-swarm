@@ -46,3 +46,23 @@ export async function readSessionMetrics(root, { kinds } = {}) {
   }
   return records.sort((a, b) => (a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : 0));
 }
+
+// Per skill: jobs that had it attached (named or paths, never index-only) vs jobs that did not,
+// and each group's own rework share — the fraction whose outputs were touched again by another
+// job, of a later run of the same root, within 24h of this job finishing. `jobs` is a flat list
+// across every run of interest, each `{ root, runId, startedAt, finishedAt, outputs, skills }`,
+// the same shape a run's own state.json job record already carries.
+const DAY_MS = 24 * 60 * 60 * 1000;
+export function reworkBySkill(jobs) {
+  const names = new Set();
+  for (const job of jobs) for (const skill of job.skills ?? []) if (skill.attached !== 'index-only') names.add(skill.name);
+  const hasSkill = (job, name) => (job.skills ?? []).some(skill => skill.name === name && skill.attached !== 'index-only');
+  const followedUp = job => jobs.some(other => other !== job && other.root === job.root && other.runId !== job.runId
+    && Date.parse(other.startedAt ?? other.finishedAt ?? '') > Date.parse(job.finishedAt ?? '')
+    && Date.parse(other.startedAt ?? other.finishedAt ?? '') - Date.parse(job.finishedAt ?? '') <= DAY_MS
+    && (other.outputs ?? []).some(file => (job.outputs ?? []).includes(file)));
+  const summarize = group => { const rework = group.filter(followedUp).length; return { jobs: group.length, reworkJobs: rework, reworkShare: group.length ? rework / group.length : null }; };
+  const result = {};
+  for (const name of names) result[name] = { withSkill: summarize(jobs.filter(job => hasSkill(job, name))), withoutSkill: summarize(jobs.filter(job => !hasSkill(job, name))) };
+  return result;
+}
