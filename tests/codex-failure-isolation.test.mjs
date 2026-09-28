@@ -8,7 +8,7 @@ import { mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { runManifest } from '../tools/swarm.mjs';
+import { runManifest, isRunFatalError, validateManifest } from '../tools/swarm.mjs';
 import { git, codexMessage } from '../tools/codex-adapter.mjs';
 
 function fake(script) {
@@ -113,14 +113,16 @@ test('U14: dependents of a failed job are skipped while an unrelated job complet
   assert.equal(state.status, 'failed');
 });
 
-// Amendment 1: isolation stays (the other job keeps running), but the run still records the
-// first coordinator error, using the same message-write injection as tests/live-progress.test.mjs.
-test('Amendment 1: a run-level coordinator error on one job is recorded on state while a concurrent job completes', async t => {
+// Review follow-up (PR #46): a state-write failure under .swarm is environmental, not job-scoped;
+// it must stop the run outright, so a queued job never starts, using the same message-write
+// injection as tests/live-progress.test.mjs.
+test('run-fatal: a state-write failure under .swarm stops the run and starts no queued job', async t => {
   const root = await codexFixture(t);
-  const id = 'amendment1-isolation';
+  const id = 'run-fatal-isolation';
   let injected = false;
+  const spawnedJobIds = [];
   const manifest = {
-    version: 1, concurrency: 2,
+    version: 1, concurrency: 1,
     jobs: [
       { id: 'a', agent: 'claude', model: 'sonnet', prompt: 'Write the output.', context: [], outputs: ['a-output.txt'], timeoutMs: 5000 },
       { id: 'b', agent: 'claude', model: 'sonnet', prompt: 'Write the output.', context: [], outputs: ['b-output.txt'], timeoutMs: 5000 },
@@ -129,8 +131,8 @@ test('Amendment 1: a run-level coordinator error on one job is recorded on state
   const state = await runManifest(root, manifest, {
     id, platform: 'darwin',
     spawnImpl: (command, args, options) => {
-      if (path.basename(options.cwd) === 'a') throw new Error('Unexpected provider launch for a');
-      return fake(`setTimeout(() => { fs.writeFileSync('b-output.txt','done'); ${done} }, 400);`)(command, args, options);
+      spawnedJobIds.push(path.basename(options.cwd));
+      return fake(`setTimeout(() => { fs.writeFileSync('a-output.txt','done'); ${done} }, 400);`)(command, args, options);
     },
     onState(snapshot) {
       if (!injected && snapshot.jobs.find(job => job.id === 'a')?.status === 'running') {
@@ -144,10 +146,65 @@ test('Amendment 1: a run-level coordinator error on one job is recorded on state
   const b = state.jobs.find(job => job.id === 'b');
   assert.equal(a.status, 'failed');
   assert.match(a.error, /^Coordinator failed: .*(EISDIR|EPERM)/);
+  assert.equal(b.status, 'failed');
+  assert.match(b.error, /^Coordinator failed: /);
+  assert.ok(!spawnedJobIds.includes('b'));
+  assert.equal(state.status, 'failed');
+  assert.match(state.error, /EISDIR|EPERM/);
+});
+
+test('job-scoped: a plain error inside runOne fails only that job and the queued job still runs', async t => {
+  const root = await codexFixture(t);
+  let injected = false;
+  const manifest = {
+    version: 1, concurrency: 1,
+    jobs: [
+      { id: 'a', agent: 'claude', model: 'sonnet', prompt: 'Write the output.', context: [], outputs: ['a-output.txt'], timeoutMs: 5000 },
+      { id: 'b', agent: 'claude', model: 'sonnet', prompt: 'Write the output.', context: [], outputs: ['b-output.txt'], timeoutMs: 5000 },
+    ],
+  };
+  const state = await runManifest(root, manifest, {
+    platform: 'darwin',
+    progressIntervalMs: 60000,
+    spawnImpl: (command, args, options) => {
+      const jobId = path.basename(options.cwd);
+      if (jobId === 'a') return fake(`fs.writeFileSync('a-output.txt','done'); ${done}`)(command, args, options);
+      return fake(`setTimeout(() => { fs.writeFileSync('b-output.txt','done'); ${done} }, 400);`)(command, args, options);
+    },
+    onState(snapshot) {
+      // concurrency 1 + a parked progress ticker: only a's own runOne awaits the save that sees a running (queueSave is one shared chain).
+      if (!injected && snapshot.jobs.find(job => job.id === 'a')?.status === 'running') {
+        injected = true;
+        throw new Error('injected job error');
+      }
+    },
+  });
+  const a = state.jobs.find(job => job.id === 'a');
+  const b = state.jobs.find(job => job.id === 'b');
+  assert.equal(a.status, 'failed');
+  assert.equal(a.error, 'Coordinator failed: injected job error');
   assert.equal(b.status, 'complete');
   assert.equal(await fs.readFile(path.join(root, b.workspace, 'b-output.txt'), 'utf8'), 'done');
   assert.equal(state.status, 'failed');
-  assert.match(state.error, /EISDIR|EPERM/);
+  assert.equal(state.error, 'injected job error');
+});
+
+test('isRunFatalError: disk/quota codes and .swarm-scoped filesystem errors are fatal; near misses are not', () => {
+  const root = '/r';
+  for (const error of [
+    { code: 'ENOSPC' },
+    { code: 'EDQUOT' },
+    { code: 'EACCES', syscall: 'open', path: '/r/.swarm/runs/x/state.json' },
+    { code: 'EPERM', syscall: 'rename', path: '/tmp/a', dest: '/r/.swarm/lock' },
+    { code: 'EISDIR', syscall: 'open', path: '/r/.swarm' },
+  ]) assert.equal(isRunFatalError(error, root), true, JSON.stringify(error));
+  for (const error of [
+    new Error('Missing output …'),
+    { code: 'EACCES', syscall: 'open', path: '/r/src/a.ts' },
+    { code: 'EACCES', syscall: 'open', path: '/r/.swarmish/x' },
+    { code: 'EACCES', path: '/r/.swarm/x' },
+    null,
+  ]) assert.equal(isRunFatalError(error, root), false, JSON.stringify(error));
 });
 
 // Case 5: codexMessage only swaps in the review-only sentence when every declared output is
@@ -162,4 +219,13 @@ test('U16: codexMessage tells review-only .md jobs not to run tests, every other
   assert.ok(codexMessage(j(['src/a.ts'])).includes(runTests));
   assert.ok(codexMessage(j(['notes.md', 'src/a.ts'])).includes(runTests));
   assert.ok(codexMessage(j([])).includes(runTests));
+  assert.ok(codexMessage(codexJob({ outputs: ['src/a.ts'], runTests: false })).includes(noTests));
+  assert.ok(codexMessage(codexJob({ outputs: ['review.md'], runTests: true })).includes(runTests));
+});
+
+test('validate: runTests must be a boolean and is codex-only', () => {
+  const base = { id: 'x', agent: 'claude', model: 'sonnet', prompt: 'Write it.', context: [], outputs: ['x-output.txt'], timeoutMs: 5000 };
+  assert.throws(() => validateManifest({ version: 1, jobs: [{ ...base, agent: 'codex', model: 'test-model', runTests: 'no' }] }), /Job x runTests must be a boolean/);
+  assert.throws(() => validateManifest({ version: 1, jobs: [{ ...base, runTests: false }] }), /Job x runTests is only supported for agent codex/);
+  assert.doesNotThrow(() => validateManifest({ version: 1, jobs: [{ ...base, agent: 'codex', model: 'test-model', runTests: false }] }));
 });

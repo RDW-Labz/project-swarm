@@ -412,6 +412,10 @@ export function validateManifest(manifest) {
       if (typeof job.shell !== 'boolean') fail(`Job ${job.id}: shell must be true or false`);
       if (job.agent !== 'claude') fail(`Job ${job.id} shell is only supported for agent claude`);
     }
+    if (job.runTests !== undefined) {
+      if (typeof job.runTests !== 'boolean') fail(`Job ${job.id} runTests must be a boolean`);
+      if (job.agent !== 'codex') fail(`Job ${job.id} runTests is only supported for agent codex`);
+    }
     if (job.preset !== undefined && (job.shell !== true || !['sonnet-shell', 'opus-shell'].includes(job.preset))) fail(`Job ${job.id}: invalid preset`);
     if (job.networkAllow !== undefined) {
       if (job.shell !== true) fail(`Job ${job.id}: networkAllow is only supported for claude shell jobs`);
@@ -508,7 +512,7 @@ export function validateManifest(manifest) {
       if (job.outputs.length) fail('a web job must be read-only (no outputs)');
     }
     // Unknown command/provider fields cannot create an execution path.
-    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'setup', 'keepScratch'].includes(key)) fail(`Unknown job field: ${key}`);
+    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'setup', 'keepScratch', 'runTests'].includes(key)) fail(`Unknown job field: ${key}`);
   }
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
   for (const job of manifest.jobs) for (const afterId of job.after ?? []) if (!ids.has(afterId.toLowerCase())) fail(`Job ${job.id} after names unknown job ${afterId}`);
@@ -1016,6 +1020,17 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
   }
 }
 
+// PR #46 review: a failure of the machine or of the runner's own state is not one job's fault.
+const RUN_FATAL_CODES = ['ENOSPC', 'EDQUOT', 'EROFS', 'EMFILE', 'ENFILE'];
+export function isRunFatalError(error, root) {
+  if (!error || typeof error !== 'object') return false;
+  if (RUN_FATAL_CODES.includes(error.code)) return true;
+  if (typeof error.syscall !== 'string') return false;
+  const swarmDir = path.join(root, '.swarm');
+  const inSwarm = file => typeof file === 'string' && (file === swarmDir || file.startsWith(swarmDir + path.sep));
+  return inSwarm(error.path) || inSwarm(error.dest);
+}
+
 export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks } = {}) {
   root = await fs.realpath(root);
   validateManifest(manifest);
@@ -1276,6 +1291,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         await queueSave();
       } catch (error) {
         if (error.keptWorkspace) record.keptWorkspace = error.keptWorkspace;
+        if (isRunFatalError(error, root)) throw error; // environmental: stop the run, start nothing else
         Object.assign(record, { status: 'failed', error: `Coordinator failed: ${error.message}`, finishedAt: new Date().toISOString(), durationMs: record.startedAt ? Date.now() - Date.parse(record.startedAt) : 0 });
         state.error ??= error.message;
         await queueSave();
