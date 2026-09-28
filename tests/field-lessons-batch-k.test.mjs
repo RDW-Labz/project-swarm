@@ -19,7 +19,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   ship, parseExemptFlag, EXEMPTION_GUARD_IDS, appendExemptionsSection,
@@ -91,6 +91,18 @@ function addedLinesDiff(file, addedLines) {
 // (identical) packaging-check.mjs, dynamically imported, is a real module: no stash, no checkout
 // of a dirty path, nothing in the working tree touched.
 const PRE_FIX_SHA = '3e4f4f6';
+
+// Field lesson 189: a shallow `actions/checkout` (or this branch's own history once squash-merged
+// to main) may not have PRE_FIX_SHA at all — `git show <sha>:<path>` then fails with "fatal: invalid
+// object name", not a real assertion failure. Check once, synchronously, whether the commit is
+// present, and skip the whole pre-fix-proof describe block (with the reason why) when it isn't.
+let PRE_FIX_AVAILABLE;
+try {
+  execFileSync('git', ['cat-file', '-e', `${PRE_FIX_SHA}^{commit}`], { cwd: process.cwd(), stdio: 'ignore' });
+  PRE_FIX_AVAILABLE = true;
+} catch {
+  PRE_FIX_AVAILABLE = false;
+}
 
 async function importPreFixShip(t) {
   const dir = await tmp(t, 'swarm-lessons-k-prefix-');
@@ -297,7 +309,7 @@ describe('L181: a lock check that fails to spawn never produces an empty reason'
   });
 });
 
-describe('L179/L181: proof these are real regressions — the pre-fix module fails these exact assertions', () => {
+describe('L179/L181: proof these are real regressions — the pre-fix module fails these exact assertions', { skip: PRE_FIX_AVAILABLE ? false : `pre-fix commit ${PRE_FIX_SHA} is not in this clone (shallow CI checkout or squash-merged); the proof ran on the full-history branch before merge` }, () => {
   test('pre-fix ship.mjs does not have `ps` documented, and refuses on the pre-existing (already-on-base) spawn call', async t => {
     const preFix = await importPreFixShip(t);
     assert.equal(preFix.DOCUMENTED_TEST_BINARIES.has('ps'), false, 'pre-fix DOCUMENTED_TEST_BINARIES must not already have ps (else this is not a real regression test)');
