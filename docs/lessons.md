@@ -736,3 +736,46 @@ rule is enforced or documented.
     outside agent as a `PATH` entry it can paste in, ahead of the real
     version of the tool, so pasting the block gets the refusal even outside
     a sandbox. Regression coverage is in `tests/field-lessons-batch-f.test.mjs`.
+74. **A path flag was read against the target directory, not the one it was
+    typed from.** A research run named its input file the way it was typed,
+    sitting in one directory while pointed at another; the file was read only
+    against the pointed-at directory, so a plainly-relative path failed "not
+    found" even though it existed exactly where it was typed. Cost one
+    re-run (seconds). Rule: a path flag resolves the way the user typed it —
+    tried against the directory they were sitting in before the one the
+    command was pointed at. Enforcement: every such flag is now tried against
+    the current directory first, then against the pointed-at one; a truly
+    missing file names every path actually tried. Regression coverage is in
+    `tests/field-lessons-batch-g.test.mjs`.
+75. **A worker hand-reverted a mutant and wiped its own unrelated edit to the
+    same file.** A mid-tier worker, undoing a mutant by hand, ran a plain
+    revert command on the mutated file and lost uncommitted work of its own
+    sitting in that same file; recovery needed a full re-run of the check
+    suite and every mutant to confirm nothing else had been lost. Rule:
+    workers never hand-revert a mutant; the tool that applies one also
+    restores it. Enforcement: the guard that already refused a shared-stack
+    stash command now also refuses a plain revert of any path that still has
+    uncommitted changes, naming the fix in its own refusal message; job
+    instructions for any worker with shell access now say to run mutants only
+    through the tool, never by hand. Regression coverage is in
+    `tests/field-lessons-batch-g.test.mjs`.
+76. **One mutants shape was expected, but a worker wrote a different one.** A
+    worker's own mutants file used a different key for a mutant's name than
+    the one the mutation tool reads, so the difference had to be converted by
+    hand before the tool would accept the file. Rule: state the one true
+    shape everywhere a worker can read it, and let the tool bridge the common
+    near-miss instead of failing outright. Enforcement: the mutation tool now
+    accepts the old key as an alias for the new one (renamed, with a
+    warning), and the paste-ready environment block states the exact shape
+    alongside every other rule a worker needs. Regression coverage is in
+    `tests/field-lessons-batch-g.test.mjs`.
+77. **A check that could not even start reported no reason at all.** A
+    pre-push lock check spawned a toolchain binary that was not on a bare
+    system path (it lived only in a dedicated toolchains directory); the
+    check refused with a blank reason, costing one re-attempt (about three
+    minutes) before the real cause was found. Rule: a check that cannot start
+    says so, naming the command it tried. Enforcement: that toolchain binary
+    is now resolved the same way every other one is (a dedicated toolchains
+    directory, then the system path) before it is ever spawned; when it
+    cannot be found, the check refuses at once, naming every path it tried.
+    Regression coverage is in `tests/field-lessons-batch-g.test.mjs`.
