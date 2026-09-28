@@ -307,3 +307,31 @@ describe("#196(b): manifest job.deletes lets integrate apply a declared deletion
     assert.equal(await fs.readFile(path.join(root, 'old.whl'), 'utf8'), 'stale wheel');
   });
 });
+
+// --- generic-pins: check-pins --core/--app-prefix reach runCheckPins via the CLI ---------------
+
+describe('generic-pins: check-pins is generic (no built-in package names), driven entirely by --core/--app-prefix', () => {
+  test('--help usage names --core and --app-prefix for check-pins', async () => {
+    const { stdout } = await execFileAsync(process.execPath, [CLI, '--help']);
+    assert.match(stdout, /check-pins \[--root DIR\] \[--json\] \[--core NAME\] \[--app-prefix PREFIX\]/);
+  });
+
+  test('CLI check-pins --core/--app-prefix flags a library exact-pinning the named core package', async t => {
+    const root = await tmp(t, 'swarm-wire-check-pins-core-');
+    await fs.writeFile(path.join(root, 'pyproject.toml'), '[project]\nname = "acme-lib-a"\ndependencies = [\n  "acme-core==0.4.0",\n]\n');
+    const error = await execFileAsync(process.execPath, [CLI, '--root', root, 'check-pins', '--json', '--core', 'acme-core', '--app-prefix', 'acme-app-']).catch(e => e);
+    assert.equal(error.code, 1, JSON.stringify(error));
+    const result = JSON.parse(error.stdout);
+    assert.equal(result.ok, false);
+    assert.ok(result.findings.some(f => f.rule === 'library-exact-core-pin'), JSON.stringify(result));
+  });
+
+  test('CLI check-pins without --core skips the core-specific rules and names them in skippedRules', async t => {
+    const root = await tmp(t, 'swarm-wire-check-pins-nocore-');
+    await fs.writeFile(path.join(root, 'pyproject.toml'), '[project]\nname = "acme-lib-a"\ndependencies = [\n  "acme-core==0.4.0",\n]\n');
+    const { stdout } = await execFileAsync(process.execPath, [CLI, '--root', root, 'check-pins', '--json']);
+    const result = JSON.parse(stdout);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.skippedRules, ['library-exact-core-pin', 'wheel-requirement-unsatisfied']);
+  });
+});

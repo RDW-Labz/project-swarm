@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Field lesson #224/#225: swarm check-pins catches stale internal pins (a library exact-pinning
-// agent-core, an exact pin drifted from the vendored copy, or a vendored wheel's own requirement
-// going unsatisfied) that otherwise only surface at a fresh, offline install.
+// the shared core package, an exact pin drifted from the vendored copy, or a vendored wheel's own
+// requirement going unsatisfied) that otherwise only surface at a fresh, offline install.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -19,6 +19,9 @@ import {
   parseRequiresDist,
   exactNpmVersion,
 } from '../tools/check-pins.mjs';
+
+const CORE = 'acme-core';
+const APP_PREFIX = 'acme-app-';
 
 async function tmpRoot(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'check-pins-test-'));
@@ -109,38 +112,38 @@ test('compareVersions orders dotted versions numerically, not lexically', () => 
 });
 
 test('parseRequirement: exact pin vs range vs extras', () => {
-  assert.deepEqual(parseRequirement('agent-core==0.4.0'), { name: 'agent-core', exact: '0.4.0', clauses: ['==0.4.0'], raw: '==0.4.0' });
-  assert.equal(parseRequirement('connectors>=0.5,<0.6').exact, null);
-  assert.equal(parseRequirement('skills[extra]==1.2').exact, '1.2');
-  assert.equal(parseRequirement('agent_core==0.4.0').name, 'agent-core');
+  assert.deepEqual(parseRequirement('acme-core==0.4.0'), { name: 'acme-core', exact: '0.4.0', clauses: ['==0.4.0'], raw: '==0.4.0' });
+  assert.equal(parseRequirement('acme-lib-a>=0.5,<0.6').exact, null);
+  assert.equal(parseRequirement('acme-lib-c[extra]==1.2').exact, '1.2');
+  assert.equal(parseRequirement('acme_core==0.4.0').name, 'acme-core');
 });
 
 test('satisfiesRequirement checks every clause', () => {
-  const range = parseRequirement('agent-core>=0.5,<0.6');
+  const range = parseRequirement('acme-core>=0.5,<0.6');
   assert.equal(satisfiesRequirement('0.5.1', range), true);
   assert.equal(satisfiesRequirement('0.6.0', range), false);
   assert.equal(satisfiesRequirement('0.4.9', range), false);
 });
 
 test('parseWheelFilename and parseTarballFilename normalize underscores to hyphens', () => {
-  assert.deepEqual(parseWheelFilename('agent_core-0.5.1-py3-none-any.whl'), { name: 'agent-core', version: '0.5.1' });
+  assert.deepEqual(parseWheelFilename('acme_core-0.5.1-py3-none-any.whl'), { name: 'acme-core', version: '0.5.1' });
   assert.equal(parseWheelFilename('not-a-wheel.txt'), null);
-  assert.deepEqual(parseTarballFilename('connectors-0.4.0.tgz'), { name: 'connectors', version: '0.4.0' });
+  assert.deepEqual(parseTarballFilename('acme-lib-a-0.4.0.tgz'), { name: 'acme-lib-a', version: '0.4.0' });
   assert.equal(parseTarballFilename('random.tgz'), null);
 });
 
 test('parseUvLockVersions reads repeated [[package]] blocks', () => {
-  const lock = `version = 1\n\n[[package]]\nname = "agent-core"\nversion = "0.5.1"\nsource = { virtual = "." }\n\n[[package]]\nname = "connectors"\nversion = "0.5.0"\n`;
+  const lock = `version = 1\n\n[[package]]\nname = "acme-core"\nversion = "0.5.1"\nsource = { virtual = "." }\n\n[[package]]\nname = "acme-lib-a"\nversion = "0.5.0"\n`;
   const versions = parseUvLockVersions(lock);
-  assert.equal(versions.get('agent-core'), '0.5.1');
-  assert.equal(versions.get('connectors'), '0.5.0');
+  assert.equal(versions.get('acme-core'), '0.5.1');
+  assert.equal(versions.get('acme-lib-a'), '0.5.0');
 });
 
 test('parseRequiresDist skips conditional (extras/markers) requirements', () => {
-  const metadata = `Name: skills\nRequires-Dist: agent-core==0.4.0\nRequires-Dist: pytest>=7 ; extra == "test"\n`;
+  const metadata = `Name: acme-lib-c\nRequires-Dist: acme-core==0.4.0\nRequires-Dist: pytest>=7 ; extra == "test"\n`;
   const reqs = parseRequiresDist(metadata);
   assert.equal(reqs.length, 1);
-  assert.equal(reqs[0].name, 'agent-core');
+  assert.equal(reqs[0].name, 'acme-core');
   assert.equal(reqs[0].exact, '0.4.0');
 });
 
@@ -153,61 +156,61 @@ test('exactNpmVersion accepts a plain version, rejects ranges', () => {
 
 // --- runCheckPins: the three stale-pin fixtures from the contract -------------------------------
 
-test('runCheckPins: a library (connectors) exact-pinning agent-core older than the vendored wheel fails three rules', async t => {
+test('runCheckPins: a library (acme-lib-a) exact-pinning the core package older than the vendored wheel fails three rules', async t => {
   const root = await tmpRoot(t);
-  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "connectors"\ndependencies = [\n  "agent-core==0.4.0",\n]\n`);
-  await writeWheel(path.join(root, 'vendor'), 'agent-core', '0.5.1');
+  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "acme-lib-a"\ndependencies = [\n  "acme-core==0.4.0",\n]\n`);
+  await writeWheel(path.join(root, 'vendor'), 'acme-core', '0.5.1');
 
-  const result = await runCheckPins({ root });
+  const result = await runCheckPins({ root, core: CORE, appPrefix: APP_PREFIX });
   assert.equal(result.ok, false);
   assert.equal(result.exitCode, 1);
   const rules = result.findings.map(f => f.rule).sort();
-  assert.deepEqual(rules, ['library-exact-agent-core', 'pin-not-vendored-version', 'pin-older-than-vendored']);
-  for (const finding of result.findings) assert.equal(finding.package, 'agent-core');
+  assert.deepEqual(rules, ['library-exact-core-pin', 'pin-not-vendored-version', 'pin-older-than-vendored']);
+  for (const finding of result.findings) assert.equal(finding.package, 'acme-core');
 });
 
-test('runCheckPins: playbooks reproduces the same stale agent-core pin as connectors', async t => {
+test('runCheckPins: acme-lib-b reproduces the same stale core pin as acme-lib-a', async t => {
   const root = await tmpRoot(t);
-  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "playbooks"\ndependencies = [\n  "agent-core==0.4.0",\n]\n`);
-  await writeWheel(path.join(root, 'vendor'), 'agent-core', '0.5.1');
+  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "acme-lib-b"\ndependencies = [\n  "acme-core==0.4.0",\n]\n`);
+  await writeWheel(path.join(root, 'vendor'), 'acme-core', '0.5.1');
 
-  const result = await runCheckPins({ root });
+  const result = await runCheckPins({ root, core: CORE, appPrefix: APP_PREFIX });
   assert.equal(result.ok, false);
-  assert.deepEqual(result.findings.map(f => f.rule).sort(), ['library-exact-agent-core', 'pin-not-vendored-version', 'pin-older-than-vendored']);
+  assert.deepEqual(result.findings.map(f => f.rule).sort(), ['library-exact-core-pin', 'pin-not-vendored-version', 'pin-older-than-vendored']);
 });
 
-test('runCheckPins: skills stale pin one layer down, inside a wheel vendored by agent-core, unsatisfied by uv.lock', async t => {
+test('runCheckPins: acme-lib-c stale pin one layer down, inside a wheel vendored by the core repo, unsatisfied by uv.lock', async t => {
   const root = await tmpRoot(t);
-  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "agent-core"\ndependencies = []\n`);
-  await fs.writeFile(path.join(root, 'uv.lock'), `[[package]]\nname = "agent-core"\nversion = "0.5.1"\n`);
-  await writeWheel(path.join(root, 'vendor'), 'skills', '0.3.0', ['agent-core==0.4.0']);
+  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "acme-core"\ndependencies = []\n`);
+  await fs.writeFile(path.join(root, 'uv.lock'), `[[package]]\nname = "acme-core"\nversion = "0.5.1"\n`);
+  await writeWheel(path.join(root, 'vendor'), 'acme-lib-c', '0.3.0', ['acme-core==0.4.0']);
 
-  const result = await runCheckPins({ root });
+  const result = await runCheckPins({ root, core: CORE, appPrefix: APP_PREFIX });
   assert.equal(result.ok, false);
   assert.deepEqual(result.findings, [{
     rule: 'wheel-requirement-unsatisfied',
-    file: 'vendor/skills-0.3.0-py3-none-any.whl',
-    package: 'agent-core',
-    message: 'vendored wheel skills-0.3.0-py3-none-any.whl requires agent-core==0.4.0 but uv.lock has agent-core==0.5.1',
+    file: 'vendor/acme_lib_c-0.3.0-py3-none-any.whl',
+    package: 'acme-core',
+    message: 'vendored wheel acme_lib_c-0.3.0-py3-none-any.whl requires acme-core==0.4.0 but uv.lock has acme-core==0.5.1',
   }]);
 });
 
 test('runCheckPins: a fixed tree (pin matches the vendored version, satisfied wheel requirement) passes clean', async t => {
   const root = await tmpRoot(t);
-  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "connectors"\ndependencies = [\n  "agent-core>=0.5,<0.6",\n]\n`);
-  await writeWheel(path.join(root, 'vendor'), 'agent-core', '0.5.1');
+  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "acme-lib-a"\ndependencies = [\n  "acme-core>=0.5,<0.6",\n]\n`);
+  await writeWheel(path.join(root, 'vendor'), 'acme-core', '0.5.1');
 
-  const result = await runCheckPins({ root });
+  const result = await runCheckPins({ root, core: CORE, appPrefix: APP_PREFIX });
   assert.deepEqual(result, { ok: true, exitCode: 0, findings: [] });
 });
 
-test('runCheckPins: agent-core repo with a satisfied wheel requirement passes clean', async t => {
+test('runCheckPins: the core repo itself with a satisfied wheel requirement passes clean', async t => {
   const root = await tmpRoot(t);
-  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "agent-core"\ndependencies = []\n`);
-  await fs.writeFile(path.join(root, 'uv.lock'), `[[package]]\nname = "agent-core"\nversion = "0.5.1"\n`);
-  await writeWheel(path.join(root, 'vendor'), 'skills', '0.3.0', ['agent-core==0.5.1']);
+  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "acme-core"\ndependencies = []\n`);
+  await fs.writeFile(path.join(root, 'uv.lock'), `[[package]]\nname = "acme-core"\nversion = "0.5.1"\n`);
+  await writeWheel(path.join(root, 'vendor'), 'acme-lib-c', '0.3.0', ['acme-core==0.5.1']);
 
-  const result = await runCheckPins({ root });
+  const result = await runCheckPins({ root, core: CORE, appPrefix: APP_PREFIX });
   assert.deepEqual(result, { ok: true, exitCode: 0, findings: [] });
 });
 
@@ -215,57 +218,69 @@ test('runCheckPins: agent-core repo with a satisfied wheel requirement passes cl
 
 test('runCheckPins: pin matches an older vendored copy exactly, but a newer vendored copy also exists', async t => {
   const root = await tmpRoot(t);
-  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "agent-amber"\ndependencies = [\n  "agent-core==0.4.0",\n]\n`);
-  await writeWheel(path.join(root, 'vendor'), 'agent-core', '0.4.0');
-  await writeWheel(path.join(root, 'vendor'), 'agent-core', '0.5.1');
+  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "acme-app-x"\ndependencies = [\n  "acme-core==0.4.0",\n]\n`);
+  await writeWheel(path.join(root, 'vendor'), 'acme-core', '0.4.0');
+  await writeWheel(path.join(root, 'vendor'), 'acme-core', '0.5.1');
 
-  const result = await runCheckPins({ root });
-  assert.deepEqual(result.findings, [{ rule: 'pin-older-than-vendored', file: 'pyproject.toml', package: 'agent-core', message: 'agent-core is pinned to 0.4.0 but a newer vendored copy 0.5.1 exists' }]);
+  const result = await runCheckPins({ root, core: CORE, appPrefix: APP_PREFIX });
+  assert.deepEqual(result.findings, [{ rule: 'pin-older-than-vendored', file: 'pyproject.toml', package: 'acme-core', message: 'acme-core is pinned to 0.4.0 but a newer vendored copy 0.5.1 exists' }]);
 });
 
-test('runCheckPins: an agent repo (agent-amber) may exact-pin agent-core without tripping library-exact-agent-core', async t => {
+test('runCheckPins: an app repo (acme-app-x) may exact-pin the core package without tripping library-exact-core-pin', async t => {
   const root = await tmpRoot(t);
-  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "agent-amber"\ndependencies = [\n  "agent-core==0.5.1",\n]\n`);
-  await writeWheel(path.join(root, 'vendor'), 'agent-core', '0.5.1');
+  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "acme-app-x"\ndependencies = [\n  "acme-core==0.5.1",\n]\n`);
+  await writeWheel(path.join(root, 'vendor'), 'acme-core', '0.5.1');
 
-  const result = await runCheckPins({ root });
+  const result = await runCheckPins({ root, core: CORE, appPrefix: APP_PREFIX });
   assert.deepEqual(result, { ok: true, exitCode: 0, findings: [] });
 });
 
-// --- desktop-app: package.json dependencies vs vendored tarballs, same rule names ---------------
+// --- acme-desk: package.json dependencies vs vendored tarballs, same rule names -----------------
 
-test('runCheckPins: desktop-app package.json exact-pins connectors older than the vendored tarball', async t => {
+test('runCheckPins: acme-desk package.json exact-pins acme-lib-a older than the vendored tarball', async t => {
   const root = await tmpRoot(t);
-  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'desktop-app', dependencies: { connectors: '0.4.0', react: '^18.0.0' } }));
-  await writeTarball(path.join(root, 'vendor'), 'connectors', '0.5.0');
+  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'acme-desk', dependencies: { 'acme-lib-a': '0.4.0', react: '^18.0.0' } }));
+  await writeTarball(path.join(root, 'vendor'), 'acme-lib-a', '0.5.0');
 
-  const result = await runCheckPins({ root });
+  const result = await runCheckPins({ root, core: CORE, appPrefix: APP_PREFIX });
   assert.equal(result.ok, false);
   assert.deepEqual(result.findings.map(f => f.rule).sort(), ['pin-not-vendored-version', 'pin-older-than-vendored']);
   for (const finding of result.findings) assert.equal(finding.file, 'package.json');
 });
 
-test('runCheckPins: desktop-app package.json matching the vendored tarball passes clean', async t => {
+test('runCheckPins: acme-desk package.json matching the vendored tarball passes clean', async t => {
   const root = await tmpRoot(t);
-  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'desktop-app', dependencies: { connectors: '0.5.0' } }));
-  await writeTarball(path.join(root, 'vendor'), 'connectors', '0.5.0');
+  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'acme-desk', dependencies: { 'acme-lib-a': '0.5.0' } }));
+  await writeTarball(path.join(root, 'vendor'), 'acme-lib-a', '0.5.0');
+
+  const result = await runCheckPins({ root, core: CORE, appPrefix: APP_PREFIX });
+  assert.deepEqual(result, { ok: true, exitCode: 0, findings: [] });
+});
+
+// --- no --core: the two core-specific rules are skipped, generic rules still fire ---------------
+
+test('runCheckPins: without core, library-exact-core-pin and wheel-requirement-unsatisfied are skipped and named in skippedRules', async t => {
+  const root = await tmpRoot(t);
+  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "acme-lib-a"\ndependencies = [\n  "acme-core==0.4.0",\n]\n`);
+  await writeWheel(path.join(root, 'vendor'), 'acme-core', '0.5.1');
 
   const result = await runCheckPins({ root });
-  assert.deepEqual(result, { ok: true, exitCode: 0, findings: [] });
+  assert.deepEqual(result.skippedRules, ['library-exact-core-pin', 'wheel-requirement-unsatisfied']);
+  assert.deepEqual(result.findings.map(f => f.rule).sort(), ['pin-not-vendored-version', 'pin-older-than-vendored']);
 });
 
 // --- json / human output, and a repo with neither manifest -------------------------------------
 
 test('runCheckPins: json:true prints exactly one JSON line matching the returned result', async t => {
   const root = await tmpRoot(t);
-  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "connectors"\ndependencies = [\n  "agent-core==0.4.0",\n]\n`);
-  await writeWheel(path.join(root, 'vendor'), 'agent-core', '0.5.1');
+  await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "acme-lib-a"\ndependencies = [\n  "acme-core==0.4.0",\n]\n`);
+  await writeWheel(path.join(root, 'vendor'), 'acme-core', '0.5.1');
 
   const lines = [];
   const originalLog = console.log;
   console.log = (...args) => lines.push(args.join(' '));
   let result;
-  try { result = await runCheckPins({ root, json: true }); } finally { console.log = originalLog; }
+  try { result = await runCheckPins({ root, json: true, core: CORE, appPrefix: APP_PREFIX }); } finally { console.log = originalLog; }
 
   assert.equal(lines.length, 1);
   assert.deepEqual(JSON.parse(lines[0]), result);
@@ -273,6 +288,6 @@ test('runCheckPins: json:true prints exactly one JSON line matching the returned
 
 test('runCheckPins: a repo with no pyproject.toml and no package.json is clean, not an error', async t => {
   const root = await tmpRoot(t);
-  const result = await runCheckPins({ root });
+  const result = await runCheckPins({ root, core: CORE, appPrefix: APP_PREFIX });
   assert.deepEqual(result, { ok: true, exitCode: 0, findings: [] });
 });

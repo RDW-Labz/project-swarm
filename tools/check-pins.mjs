@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-// Field lesson #224/#225: the same stale internal pin (a library exact-pinning agent-core, or an
-// exact pin left behind after a vendored wheel moved on) showed up three times in one day before
-// anyone noticed at a fresh install. This check reads what each repo actually ships (pyproject.toml
-// + uv.lock + vendored wheel METADATA, or package.json + vendored tarballs) so the mismatch fails
-// fast, in CI, instead of at `uv sync --offline` weeks later.
+// Field lesson #224/#225: the same stale internal pin (a library exact-pinning the shared core
+// package, or an exact pin left behind after a vendored wheel moved on) showed up three times in
+// one day before anyone noticed at a fresh install. This check reads what each repo actually ships
+// (pyproject.toml + uv.lock + vendored wheel METADATA, or package.json + vendored tarballs) so the
+// mismatch fails fast, in CI, instead of at `uv sync --offline` weeks later.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import zlib from 'node:zlib';
 
-export const OUR_PACKAGES = new Set(['agent-core', 'connectors', 'skills', 'playbooks', 'remote', 'rag-pipeline']);
-
 export const normalizeName = name => String(name).toLowerCase().replace(/[_.]+/g, '-');
-const isAgentRepo = name => /^agent-/.test(name ?? '');
+const isAppRepo = (name, appPrefix) => appPrefix != null && String(name ?? '').startsWith(appPrefix);
 
 // --- version comparison (plain dotted versions; good enough for our internal packages) ---------
 
@@ -26,7 +24,7 @@ export function compareVersions(a, b) {
   return 0;
 }
 
-// --- requirement specs: "agent-core==0.4.0", "connectors>=0.5,<0.6", "skills[extra]==1.2" ------
+// --- requirement specs: "acme-core==0.4.0", "acme-lib-a>=0.5,<0.6", "acme-lib-c[extra]==1.2" -----
 
 const SPEC_RE = /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$/;
 const CLAUSE_RE = /^(==|!=|>=|<=|>|<|~=)\s*([A-Za-z0-9_.+-]+)$/;
@@ -203,8 +201,10 @@ function printHuman(result) {
   for (const finding of result.findings) console.log(`${finding.rule}: ${finding.file}: ${finding.message}`);
 }
 
-export async function runCheckPins({ root, json = false }) {
+export async function runCheckPins({ root, json = false, core, appPrefix }) {
   const findings = [];
+  const normalizedCore = core != null ? normalizeName(core) : null;
+  const skippedRules = normalizedCore ? [] : ['library-exact-core-pin', 'wheel-requirement-unsatisfied'];
 
   const vendorDir = path.join(root, 'vendor');
   const vendorFiles = await listVendorFiles(vendorDir);
@@ -218,19 +218,18 @@ export async function runCheckPins({ root, json = false }) {
     const { name, dependencies } = parsePyprojectDependencies(pyprojectText);
     for (const spec of dependencies) {
       const req = parseRequirement(spec);
-      if (!req || !OUR_PACKAGES.has(req.name)) continue;
-      if (req.exact && req.name === 'agent-core' && !isAgentRepo(name)) {
-        findings.push({ rule: 'library-exact-agent-core', file: 'pyproject.toml', package: req.name, message: `${name ?? 'this library'} pins agent-core with == (${req.exact}); libraries must use a range, not an exact pin` });
+      if (!req) continue;
+      if (normalizedCore && req.exact && req.name === normalizedCore && !isAppRepo(name, appPrefix)) {
+        findings.push({ rule: 'library-exact-core-pin', file: 'pyproject.toml', package: req.name, message: `${name ?? 'this library'} pins ${normalizedCore} with == (${req.exact}); libraries must use a range, not an exact pin` });
       }
       if (req.exact) checkVendored(findings, 'pyproject.toml', req.name, req.exact, vendoredWheelVersions);
     }
 
-    if (name === 'agent-core' && wheelFiles.length) {
+    if (normalizedCore && normalizeName(name ?? '') === normalizedCore && wheelFiles.length) {
       const lockVersions = parseUvLockVersions(await readIfExists(path.join(root, 'uv.lock')) ?? '');
       for (const file of wheelFiles) {
         const metadataText = await readWheelMetadata(path.join(vendorDir, file));
         for (const req of parseRequiresDist(metadataText)) {
-          if (!OUR_PACKAGES.has(req.name)) continue;
           const locked = lockVersions.get(req.name);
           if (locked == null || satisfiesRequirement(locked, req)) continue;
           findings.push({ rule: 'wheel-requirement-unsatisfied', file: `vendor/${file}`, package: req.name, message: `vendored wheel ${file} requires ${req.name}${req.raw} but uv.lock has ${req.name}==${locked}` });
@@ -245,14 +244,13 @@ export async function runCheckPins({ root, json = false }) {
     try { pkg = JSON.parse(packageJsonText); } catch { pkg = null; }
     for (const [depName, depSpec] of Object.entries(pkg?.dependencies ?? {})) {
       const name = normalizeName(depName);
-      if (!OUR_PACKAGES.has(name)) continue;
       const exact = exactNpmVersion(depSpec);
       if (exact) checkVendored(findings, 'package.json', name, exact, vendoredTarballVersions);
     }
   }
 
   const ok = findings.length === 0;
-  const result = { ok, exitCode: ok ? 0 : 1, findings };
+  const result = { ok, exitCode: ok ? 0 : 1, findings, ...(skippedRules.length ? { skippedRules } : {}) };
   if (json) console.log(JSON.stringify(result));
   else printHuman(result);
   return result;
