@@ -107,7 +107,10 @@ test('shell profile: whole-process seatbelt, writes only worktree + job dir, den
   const writable = '(subpath "/Users/example/repo/.swarm/runs/r/worktrees/j") (subpath "/Users/example/repo/.swarm/runs/r/j/shell") (literal "/dev/null") (regex #"^/dev/tty.*$")';
   assert.ok(profile.includes(`(allow file-write* ${writable})\n(deny file-write* (require-not (require-any ${writable})))`));
   assert.ok(profile.includes('(deny file-write* (literal "/Users/example/repo/.swarm/runs/r/worktrees/j/.git"))'));
-  for (const part of ['.oasis', 'Library/Keychains', '.ssh', '.aws', '.config', '.claude']) assert.ok(profile.includes(`(subpath "/Users/example/${part}")`), part);
+  for (const part of ['Library/Keychains', '.ssh', '.aws', '.config', '.claude']) assert.ok(profile.includes(`(subpath "/Users/example/${part}")`), part);
+  assert.equal(profile.includes('/Users/example/.oasis'), false, 'a public repo names no product home directory by default');
+  const configured = shellProfile({ home: '/Users/example', worktree: '/Users/example/repo/.swarm/runs/r/worktrees/j', commonDir: '/Users/example/repo/.git', shellDir: '/Users/example/repo/.swarm/runs/r/j/shell', readPaths: ['/opt/toolchain'], cliPaths: ['/opt/claude'], proxyPort: 40123, config: { deniedHomeDirs: ['.oasis'] } });
+  assert.ok(configured.includes('(subpath "/Users/example/.oasis")'), 'config deniedHomeDirs is still denied');
   assert.ok(profile.includes('(regex #"^/Users/example/\\.claude\\.json")'));
   assert.ok(profile.includes('(subpath "/Library/Keychains")'));
   for (const service of ['com.apple.SecurityServer', 'com.apple.securityd.xpc', 'com.apple.secd']) assert.ok(profile.includes(`(global-name "${service}")`));
@@ -187,15 +190,27 @@ test('validate warns (not refuses) when a claude job without shell writes tests'
 
 // --- worker key -----------------------------------------------------------------------------------
 
-test('worker key: env wins, else the existing OASIS keychain item via the parent, else a clear failure', async () => {
+test('worker key: env wins, else the keychain item named by config (default project-swarm), else a clear failure', async t => {
   assert.equal(await resolveWorkerKey({ env: { SWARM_CLAUDE_WORKER_API_KEY: FAKE_KEY }, exec: noKeychain }), FAKE_KEY);
+  // A public repo names no product keychain service by default: point SWARM_CONFIG at a file that
+  // does not exist, never the real home, so the default (project-swarm) is exercised deterministically.
+  const missingConfig = { SWARM_CONFIG: '/nonexistent/swarm-config.json' };
   const calls = [];
   const exec = async (command, args) => { calls.push([command, ...args]); return { stdout: `${FAKE_KEY}\n` }; };
-  assert.equal(await resolveWorkerKey({ env: {}, exec }), FAKE_KEY);
-  assert.deepEqual(calls, [['/usr/bin/security', 'find-generic-password', '-s', 'OASIS', '-a', 'anthropic.api_key', '-w']]);
-  assert.deepEqual(WORKER_KEY_ITEM, { service: 'OASIS', account: 'anthropic.api_key' });
-  await assert.rejects(resolveWorkerKey({ env: {}, exec: async () => { throw Error('item not found'); } }), /need a worker API key: set SWARM_CLAUDE_WORKER_API_KEY or keychain item service OASIS account anthropic\.api_key; never falls back to your claude login/);
+  assert.equal(await resolveWorkerKey({ env: missingConfig, exec }), FAKE_KEY);
+  assert.deepEqual(calls, [['/usr/bin/security', 'find-generic-password', '-s', 'project-swarm', '-a', 'anthropic.api_key', '-w']]);
+  assert.deepEqual(WORKER_KEY_ITEM, { service: 'project-swarm', account: 'anthropic.api_key' });
+  await assert.rejects(resolveWorkerKey({ env: missingConfig, exec: async () => { throw Error('item not found'); } }), /need a worker API key: set SWARM_CLAUDE_WORKER_API_KEY or keychain item service project-swarm account anthropic\.api_key; never falls back to your claude login/);
   await assert.rejects(resolveWorkerKey({ env: { SWARM_CLAUDE_WORKER_API_KEY: 'short' }, exec: noKeychain }), /invalid shape/);
+
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-worker-key-config-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const configFile = path.join(dir, 'config.json');
+  await fs.writeFile(configFile, JSON.stringify({ keychain: { service: 'acme-swarm' } }));
+  const configuredCalls = [];
+  const configuredExec = async (command, args) => { configuredCalls.push([command, ...args]); return { stdout: `${FAKE_KEY}\n` }; };
+  assert.equal(await resolveWorkerKey({ env: { SWARM_CONFIG: configFile }, exec: configuredExec }), FAKE_KEY);
+  assert.deepEqual(configuredCalls, [['/usr/bin/security', 'find-generic-password', '-s', 'acme-swarm', '-a', 'anthropic.api_key', '-w']]);
 });
 
 test('shell jobs refuse before any work without macOS, sandbox-exec or a worker key', async t => {
@@ -375,7 +390,7 @@ test('generated profile confines a real shell: worktree writes only, denied read
   const proxy = await startConnectProxy();
   t.after(() => proxy.close());
   const profile = path.join(base, 'run/sandbox.sb');
-  await fs.writeFile(profile, shellProfile({ worktree, commonDir: path.join(worktree, '.git'), shellDir, proxyPort: proxy.port, extraHomes: [fakeHome] }));
+  await fs.writeFile(profile, shellProfile({ worktree, commonDir: path.join(worktree, '.git'), shellDir, proxyPort: proxy.port, extraHomes: [fakeHome], config: { deniedHomeDirs: ['.oasis'] } }));
   const env = { ...shellEnvironment({ parentEnv: { ...process.env, FAKE_TOKEN: FAKE_KEY }, home: path.join(shellDir, 'home'), tmp: path.join(shellDir, 'tmp'), configDir: path.join(shellDir, 'home/.claude'), proxyPort: proxy.port, apiKey: FAKE_KEY, userId: 'swarm-worker:t' }), CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1' };
   const probe = [
     'echo ok > inside.txt && echo inside=ok || echo inside=fail',

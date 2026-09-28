@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Tool-free, one-request workers. Transport injection is for tests, never manifests.
 import { randomBytes } from 'node:crypto';
-import { OPENROUTER_ENDPOINT, OPENROUTER_KEY_ENV, readOpenRouterKey, providerPolicy, assertRequestBody, assertBookkeepingOnly, fetchPricing, worstCaseUsd, ledgerPath, readLedger, spentSoFar, assertWithinCaps, appendLedger, OpenRouterError } from './openrouter.mjs';
+import { OPENROUTER_ENDPOINT, OPENROUTER_KEY_ENV, openRouterKeyItem, readOpenRouterKey, providerPolicy, assertRequestBody, assertBookkeepingOnly, fetchPricing, worstCaseUsd, ledgerPath, readLedger, spentSoFar, assertWithinCaps, appendLedger, assertCompleteChatResponse, OpenRouterError } from './openrouter.mjs';
+import { loadLocalConfig } from './local-config.mjs';
 export const API_AGENTS = ['openai', 'gemini', 'ollama', 'lambda', 'openrouter'];
 const MAX_RESPONSE = 16 * 1024 * 1024;
 class AdapterError extends Error {}
@@ -41,7 +42,10 @@ export function apiConfiguration(agent, env = process.env, { readKey = readOpenR
 
 export function apiDoctor(agent, env = process.env) {
   const config = apiConfiguration(agent, env);
-  return { agent, status: config.configured ? 'configured' : 'unconfigured', configured: config.configured, liveVerified: false, reachable: null, authentication: agent === 'ollama' ? 'Optional OLLAMA_API_KEY; service/model availability not checked' : agent === 'openrouter' ? `OPENROUTER_API_KEY or keychain OASIS/openrouter.api_key ${config.key ? 'present' : 'required'}; every request sets provider.data_collection deny; caps $5/job, $25/day` : agent === 'lambda' ? `LAMBDA_API_KEY ${config.key ? 'present' : 'absent'}; required for hosted Lambda Inference, optional for a self-hosted SWARM_LAMBDA_URL origin` : `${config.keyName}${agent === 'gemini' ? ' or GOOGLE_API_KEY' : ''} ${config.configured ? 'present' : 'required'}`, endpoint: config.endpoint, tools: [], mode: 'single-request text/files', note: 'No network request made; run a bounded smoke job to verify access and model support.' };
+  // A public repo names no product keychain service: the item named here is the one config
+  // `keychain.service` actually points at (default project-swarm), never a hard-coded product name.
+  const keyItem = agent === 'openrouter' ? openRouterKeyItem(loadLocalConfig({ env })) : null;
+  return { agent, status: config.configured ? 'configured' : 'unconfigured', configured: config.configured, liveVerified: false, reachable: null, authentication: agent === 'ollama' ? 'Optional OLLAMA_API_KEY; service/model availability not checked' : agent === 'openrouter' ? `OPENROUTER_API_KEY or keychain ${keyItem.service}/${keyItem.account} ${config.key ? 'present' : 'required'}; every request sets provider.data_collection deny; caps $5/job, $25/day` : agent === 'lambda' ? `LAMBDA_API_KEY ${config.key ? 'present' : 'absent'}; required for hosted Lambda Inference, optional for a self-hosted SWARM_LAMBDA_URL origin` : `${config.keyName}${agent === 'gemini' ? ' or GOOGLE_API_KEY' : ''} ${config.configured ? 'present' : 'required'}`, endpoint: config.endpoint, tools: [], mode: 'single-request text/files', note: 'No network request made; run a bounded smoke job to verify access and model support.' };
 }
 
 // Opt-in health only: never send credentials, project content, or model prompts.
@@ -122,10 +126,17 @@ function extract(agent, body) {
     for (const part of candidate.content.parts) { if (part.thought === true) continue; if (typeof part.text !== 'string' || part.functionCall) fail('Unexpected Gemini content'); texts.push(part.text); }
     return { text: texts.join(''), actualModel: modelName(body.modelVersion), usage: numericUsage(body.usageMetadata) };
   }
-  if (agent === 'lambda' || agent === 'openrouter') {
+  if (agent === 'openrouter') {
+    // Row #185: a tool-free worker never sees a generic "incomplete, refused, truncated, or
+    // unexpected" — the actual finish_reason the provider gave rides along in the error.
+    assertCompleteChatResponse(body);
+    const choice = body.choices[0];
+    return { text: choice.message.content, actualModel: modelName(body.model), usage: numericUsage(body.usage), provider: typeof body.provider === 'string' && /^[A-Za-z0-9 ._-]{1,60}$/.test(body.provider) ? body.provider : null };
+  }
+  if (agent === 'lambda') {
     const choice = body.choices?.[0];
-    if (body.choices?.length !== 1 || choice?.finish_reason !== 'stop' || choice.message?.tool_calls?.length || choice.message?.refusal || typeof choice.message?.content !== 'string') fail(`${agent === 'lambda' ? 'Lambda' : 'OpenRouter'} response incomplete, refused, truncated, or unexpected`);
-    return { text: choice.message.content, actualModel: modelName(body.model), usage: numericUsage(body.usage), provider: agent === 'openrouter' && typeof body.provider === 'string' && /^[A-Za-z0-9 ._-]{1,60}$/.test(body.provider) ? body.provider : null };
+    if (body.choices?.length !== 1 || choice?.finish_reason !== 'stop' || choice.message?.tool_calls?.length || choice.message?.refusal || typeof choice.message?.content !== 'string') fail('Lambda response incomplete, refused, truncated, or unexpected');
+    return { text: choice.message.content, actualModel: modelName(body.model), usage: numericUsage(body.usage) };
   }
   if (body.done !== true || body.done_reason === 'length' || body.error || typeof body.message?.content !== 'string' || body.message?.tool_calls?.length) fail('Ollama response incomplete or unexpected');
   return { text: body.message.content, actualModel: modelName(body.model), usage: numericUsage({ input_tokens: body.prompt_eval_count, output_tokens: body.eval_count, total_duration_ns: body.total_duration }) };

@@ -17,6 +17,7 @@ import { nonBookkeepingOutputs } from './openrouter.mjs';
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, parseCodexReply, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
 import { expandShellPreset, validateNetworkAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterDirs, resolveRootGitInfo, scanListeningPorts, resolveRigServicePort, createShellScratchDir, shellMessage, containsKey, redactKey } from './claude-shell.mjs';
 import { portBlockFor, resolvePortBlock } from './ports.mjs';
+import { loadLocalConfig } from './local-config.mjs';
 import { loadSwarmEnv, envPrintText, checkNeedsEnvWarnings, NO_STASH_LINE, MUTANTS_BY_HAND_LINE, MUTANTS_SHAPE, gitGuardScript, findRealGit, materializeGitGuard } from './swarm-env.mjs';
 import { loadGotchas, gotchasPromptBlock, windowsCiGotchasWarnings } from './gotchas.mjs';
 import { packagingWithoutBuildCheckWarning, packagingKeyChanges, packagingChangeWarnings, isPackagingFile } from './packaging-check.mjs';
@@ -1079,8 +1080,11 @@ async function executeCodexJob(root, directory, job, proposalRoot, options) {
     const setupError = await runJobSetup(root, directory, job, worktree, options.spawnImpl, options.portBase, options.cancelled, options.swarmEnv);
     if (setupError) { result = setupFailedResult(setupError); return result; }
     const metadataDir = await fs.realpath((await git(worktree, ['rev-parse', '--absolute-git-dir'])).trim());
-    const readPaths = await resolveReadPaths(job.readPaths);
-    const profileText = codexProfile({ worktree, commonDir, metadataDir, readPaths });
+    // Field lesson #197-followup: a project's own denied-home-dir additions (config
+    // `deniedHomeDirs`) reach the real sandbox profile, not just the generic built-ins.
+    const config = loadLocalConfig({ env: options.env });
+    const readPaths = await resolveReadPaths(job.readPaths, undefined, config);
+    const profileText = codexProfile({ worktree, commonDir, metadataDir, readPaths, config });
     const profileRelative = `${directory}/${job.id}/sandbox.sb`;
     await write(root, profileRelative, profileText, true);
     const profile = await safePath(root, profileRelative, { internal: true });
@@ -1205,6 +1209,9 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
     const venvInterpreterDenied = [];
     let extraReadPaths = [];
     const realHome = options.env?.HOME ?? os.homedir();
+    // Field lesson #197-followup: a project's own denied-home-dir additions, keychain service name
+    // and rig port file all arrive via this same config, read once for the whole job.
+    const config = loadLocalConfig({ env: options.env, home: realHome });
     const insideHome = dir => dir === realHome || dir.startsWith(`${realHome}${path.sep}`);
     const venv = await (hooks.resolveVenvInterpreterDirs ?? resolveVenvInterpreterDirs)(worktree);
     if (venv.unresolvable.length) { result = venvUnresolvableResult(venv.unresolvable); return result; }
@@ -1227,7 +1234,7 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
     const uvPythonInstallDir = typeof parentEnv.UV_PYTHON_INSTALL_DIR === 'string' && path.isAbsolute(parentEnv.UV_PYTHON_INSTALL_DIR) ? parentEnv.UV_PYTHON_INSTALL_DIR
       : await fs.access(path.join(realHome, '.local/share/uv/python')).then(() => path.join(realHome, '.local/share/uv/python'), () => null);
     if (uvPythonInstallDir) await grantHomeDir(uvPythonInstallDir, 'uv-python-denied');
-    const readPaths = [...await resolveReadPaths(job.readPaths), ...extraReadPaths];
+    const readPaths = [...await resolveReadPaths(job.readPaths, undefined, config), ...extraReadPaths];
     const bin = await (hooks.resolveClaude ?? resolveClaudeBinary)(options.env ?? process.env);
     const binDir = path.dirname(bin);
     const cliPaths = path.basename(binDir) === 'bin' ? [path.dirname(binDir)] : [binDir];
@@ -1241,13 +1248,15 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
     let loopbackDenied;
     try {
       const scanned = await (hooks.scanListeningPorts ?? scanListeningPorts)();
-      const rigPort = await (hooks.resolveRigServicePort ?? resolveRigServicePort)();
-      loopbackDenied = [...new Set([...scanned, rigPort])].filter(port => port !== proxy.port).sort((a, b) => a - b);
+      // Field lesson #197-followup: no config `rig.portFile` means the rig port feature is off
+      // (null), never the built-in default port; a null port is filtered out here, never denied.
+      const rigPort = await (hooks.resolveRigServicePort ?? resolveRigServicePort)({ config });
+      loopbackDenied = [...new Set([...scanned, ...(rigPort != null ? [rigPort] : [])])].filter(port => port !== proxy.port).sort((a, b) => a - b);
     } catch (error) {
       result = loopbackScanFailedResult(error?.hint ?? null);
       return result;
     }
-    const profileText = shellProfile({ worktree, commonDir, shellDir, scratchDir: scratch.scratchDir, readPaths, cliPaths, proxyPort: proxy.port, extraHomes: hooks.extraHomes ?? [], rootGit, loopbackDenied });
+    const profileText = shellProfile({ worktree, commonDir, shellDir, scratchDir: scratch.scratchDir, readPaths, cliPaths, proxyPort: proxy.port, extraHomes: hooks.extraHomes ?? [], rootGit, loopbackDenied, config });
     const profileRelative = `${directory}/${job.id}/sandbox.sb`;
     await write(root, profileRelative, profileText, true);
     const profile = await safePath(root, profileRelative, { internal: true });
@@ -1327,7 +1336,7 @@ export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl,
   if (manifest.jobs.some(job => job.shell === true)) {
     requireShellPlatform(platform);
     await requireSandboxExec(shellHooks?.access);
-    workerKey = await resolveWorkerKey({ env, exec: keyExec });
+    workerKey = await resolveWorkerKey({ env, exec: keyExec, config: loadLocalConfig({ env }) });
   }
   if (typeof id !== 'string' || !ID.test(id)) fail('Invalid run id');
   if (!Number.isInteger(progressIntervalMs) || progressIntervalMs < 50 || progressIntervalMs > 60000) fail('progressIntervalMs must be 50–60000');
@@ -2157,7 +2166,7 @@ export async function workerKeyGuard(root, id, state, { env = process.env, keyEx
   if (!state.jobs.some(job => job.shell === true)) return;
   if (state.jobs.some(job => job.workerKeyExposed)) fail(`Refusing: run ${id} exposed the worker API key during a shell job`);
   let key;
-  try { key = await resolveWorkerKey({ env, exec: keyExec }); } catch (error) { fail(`Refusing: cannot check run ${id} for the worker API key: ${error.message}`); }
+  try { key = await resolveWorkerKey({ env, exec: keyExec, config: loadLocalConfig({ env }) }); } catch (error) { fail(`Refusing: cannot check run ${id} for the worker API key: ${error.message}`); }
   const hits = [];
   const check = async file => { try { const info = await fs.lstat(file); if (info.isFile() && containsKey(await fs.readFile(file), key)) hits.push(path.relative(root, file)); } catch (error) { if (error.code !== 'ENOENT') throw error; } };
   const walk = async dir => {
