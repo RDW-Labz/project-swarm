@@ -799,7 +799,6 @@ export async function ship(options) {
   const list = await loadPrivateNames(root, privateNamesFile);
   if (!list.found) {
     base.privateNames = { checked: false, reason: 'no list' };
-    base.warnings.push(`private-names: no list found at ${list.file}`);
   } else if (!list.terms.length) {
     base.privateNames = { checked: true, hits: 0 };
   } else {

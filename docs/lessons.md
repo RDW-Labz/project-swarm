@@ -1019,6 +1019,6 @@ rule is enforced or documented.
     terms and refuses, before pushing, when any line the diff actually adds
     contains one — naming the file and line, never the text itself — but
     only against a repo actually reported public; a private or internal
-    repo, or a project with no such list, ships as before (with a plain
-    warning when the list is simply absent). Regression coverage is in
+    repo, or a project with no such list, ships as before (the result
+    records that no list was found; it is not a warning). Regression coverage is in
     `tests/private-names-125.test.mjs`.

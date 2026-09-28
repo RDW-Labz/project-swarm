@@ -243,12 +243,12 @@ describe('ship(): the private-names guard', () => {
     assert.match(result.reason, /private-name-in-diff: notes\.txt:5 \(nimbus-project\)/);
   });
 
-  test('no list file anywhere: checked:false reason "no list", a warning, but never an error', async t => {
+  test('no list file anywhere: checked:false reason "no list", never an error, and no warnings line', async t => {
     const root = await tmp(t, 'pn-no-list-');
     const { exec } = fakeExec({ visibility: 'PUBLIC' });
     const result = await shipWith(t, root, { exec, integratedFiles: ['notes.txt'] });
     assert.equal(result.status, 'ready', JSON.stringify(result));
     assert.deepEqual(result.privateNames, { checked: false, reason: 'no list' });
-    assert.ok(result.warnings.some(w => w.startsWith('private-names: no list found at')), JSON.stringify(result.warnings));
+    assert.ok(!result.warnings.some(w => w.startsWith('private-names:')), JSON.stringify(result.warnings));
   });
 });
