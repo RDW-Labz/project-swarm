@@ -1021,11 +1021,13 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
 }
 
 // PR #46 review: a failure of the machine or of the runner's own state is not one job's fault.
+// Under .swarm/ only permission and read-only errors are; ENOENT and the rest stay job-scoped.
 const RUN_FATAL_CODES = ['ENOSPC', 'EDQUOT', 'EROFS', 'EMFILE', 'ENFILE'];
+const RUN_FATAL_SWARM_CODES = ['EACCES', 'EPERM', 'EROFS'];
 export function isRunFatalError(error, root) {
   if (!error || typeof error !== 'object') return false;
   if (RUN_FATAL_CODES.includes(error.code)) return true;
-  if (typeof error.syscall !== 'string') return false;
+  if (typeof error.syscall !== 'string' || !RUN_FATAL_SWARM_CODES.includes(error.code)) return false;
   const swarmDir = path.join(root, '.swarm');
   const inSwarm = file => typeof file === 'string' && (file === swarmDir || file.startsWith(swarmDir + path.sep));
   return inSwarm(error.path) || inSwarm(error.dest);

@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import { mkdirSync } from 'node:fs';
+import { chmodSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -113,10 +113,10 @@ test('U14: dependents of a failed job are skipped while an unrelated job complet
   assert.equal(state.status, 'failed');
 });
 
-// Review follow-up (PR #46): a state-write failure under .swarm is environmental, not job-scoped;
-// it must stop the run outright, so a queued job never starts, using the same message-write
-// injection as tests/live-progress.test.mjs.
-test('run-fatal: a state-write failure under .swarm stops the run and starts no queued job', async t => {
+// Review follow-up (PR #46): a permission-denied state write under .swarm is environmental,
+// not job-scoped; it must stop the run outright, so a queued job never starts, by making
+// the job's run directory read-only.
+test('run-fatal: a permission-denied state write under .swarm stops the run and starts no queued job', async t => {
   const root = await codexFixture(t);
   const id = 'run-fatal-isolation';
   let injected = false;
@@ -128,29 +128,35 @@ test('run-fatal: a state-write failure under .swarm stops the run and starts no 
       { id: 'b', agent: 'claude', model: 'sonnet', prompt: 'Write the output.', context: [], outputs: ['b-output.txt'], timeoutMs: 5000 },
     ],
   };
-  const state = await runManifest(root, manifest, {
-    id, platform: 'darwin',
-    spawnImpl: (command, args, options) => {
-      spawnedJobIds.push(path.basename(options.cwd));
-      return fake(`setTimeout(() => { fs.writeFileSync('a-output.txt','done'); ${done} }, 400);`)(command, args, options);
-    },
-    onState(snapshot) {
-      if (!injected && snapshot.jobs.find(job => job.id === 'a')?.status === 'running') {
-        injected = true;
-        // A directory cannot be atomically replaced by the requested transcript file.
-        mkdirSync(path.join(root, '.swarm/runs', id, 'a/message.txt'), { recursive: true });
-      }
-    },
-  });
+  let state;
+  try {
+    state = await runManifest(root, manifest, {
+      id, platform: 'darwin',
+      spawnImpl: (command, args, options) => {
+        spawnedJobIds.push(path.basename(options.cwd));
+        return fake(`setTimeout(() => { fs.writeFileSync('a-output.txt','done'); ${done} }, 400);`)(command, args, options);
+      },
+      onState(snapshot) {
+        if (!injected && snapshot.jobs.find(job => job.id === 'a')?.status === 'running') {
+          injected = true;
+          // A read-only job run directory refuses the transcript write with EACCES.
+          mkdirSync(path.join(root, '.swarm/runs', id, 'a'), { recursive: true });
+          chmodSync(path.join(root, '.swarm/runs', id, 'a'), 0o500);
+        }
+      },
+    });
+  } finally {
+    chmodSync(path.join(root, '.swarm/runs', id, 'a'), 0o755);
+  }
   const a = state.jobs.find(job => job.id === 'a');
   const b = state.jobs.find(job => job.id === 'b');
   assert.equal(a.status, 'failed');
-  assert.match(a.error, /^Coordinator failed: .*(EISDIR|EPERM)/);
+  assert.match(a.error, /^Coordinator failed: EACCES/);
   assert.equal(b.status, 'failed');
   assert.match(b.error, /^Coordinator failed: /);
   assert.ok(!spawnedJobIds.includes('b'));
   assert.equal(state.status, 'failed');
-  assert.match(state.error, /EISDIR|EPERM/);
+  assert.match(state.error, /^EACCES/);
 });
 
 test('job-scoped: a plain error inside runOne fails only that job and the queued job still runs', async t => {
@@ -189,20 +195,63 @@ test('job-scoped: a plain error inside runOne fails only that job and the queued
   assert.equal(state.error, 'injected job error');
 });
 
-test('isRunFatalError: disk/quota codes and .swarm-scoped filesystem errors are fatal; near misses are not', () => {
+test('job-scoped: an ENOENT inside the job\'s own .swarm/workspaces directory fails only that job and the queued job still runs', async t => {
+  const root = await codexFixture(t);
+  const id = 'workspace-enoent';
+  let injected = false;
+  const manifest = {
+    version: 1, concurrency: 1,
+    jobs: [
+      { id: 'a', agent: 'claude', model: 'sonnet', prompt: 'Write the output.', context: [], outputs: ['a-output.txt'], timeoutMs: 5000 },
+      { id: 'b', agent: 'claude', model: 'sonnet', prompt: 'Write the output.', context: [], outputs: ['b-output.txt'], timeoutMs: 5000 },
+    ],
+  };
+  const state = await runManifest(root, manifest, {
+    id,
+    platform: 'darwin',
+    progressIntervalMs: 60000,
+    spawnImpl: (command, args, options) => {
+      const jobId = path.basename(options.cwd);
+      if (jobId === 'a') return fake(`fs.writeFileSync('a-output.txt','done'); ${done}`)(command, args, options);
+      return fake(`setTimeout(() => { fs.writeFileSync('b-output.txt','done'); ${done} }, 400);`)(command, args, options);
+    },
+    onState(snapshot) {
+      // concurrency 1 + a parked progress ticker: only a's own runOne awaits the save that sees a running (queueSave is one shared chain).
+      if (!injected && snapshot.jobs.find(job => job.id === 'a')?.status === 'running') {
+        injected = true;
+        throw Object.assign(new Error('ENOENT: no such file or directory, open'), { code: 'ENOENT', syscall: 'open', path: path.join(root, '.swarm/workspaces', id, 'a', 'gone.txt') });
+      }
+    },
+  });
+  const a = state.jobs.find(job => job.id === 'a');
+  const b = state.jobs.find(job => job.id === 'b');
+  assert.equal(a.status, 'failed');
+  assert.equal(a.error, 'Coordinator failed: ENOENT: no such file or directory, open');
+  assert.equal(b.status, 'complete');
+  assert.equal(await fs.readFile(path.join(root, b.workspace, 'b-output.txt'), 'utf8'), 'done');
+  assert.equal(state.status, 'failed');
+  assert.equal(state.error, 'ENOENT: no such file or directory, open');
+});
+
+test('isRunFatalError: disk/quota codes and .swarm permission errors are fatal; other .swarm errors and near misses are not', () => {
   const root = '/r';
   for (const error of [
     { code: 'ENOSPC' },
     { code: 'EDQUOT' },
     { code: 'EACCES', syscall: 'open', path: '/r/.swarm/runs/x/state.json' },
     { code: 'EPERM', syscall: 'rename', path: '/tmp/a', dest: '/r/.swarm/lock' },
-    { code: 'EISDIR', syscall: 'open', path: '/r/.swarm' },
+    { code: 'EROFS', syscall: 'open', path: '/r/.swarm/runs/x/state.json' },
+    { code: 'EACCES', syscall: 'mkdir', path: '/r/.swarm/workspaces/run-1/a' },
   ]) assert.equal(isRunFatalError(error, root), true, JSON.stringify(error));
   for (const error of [
     new Error('Missing output …'),
     { code: 'EACCES', syscall: 'open', path: '/r/src/a.ts' },
     { code: 'EACCES', syscall: 'open', path: '/r/.swarmish/x' },
     { code: 'EACCES', path: '/r/.swarm/x' },
+    { code: 'EISDIR', syscall: 'open', path: '/r/.swarm' },
+    { code: 'ENOENT', syscall: 'open', path: '/r/.swarm/workspaces/run-1/a/gone.txt' },
+    { code: 'ENOENT', syscall: 'open', path: '/r/.swarm/runs/x/state.json' },
+    { code: 'EEXIST', syscall: 'rename', path: '/tmp/a', dest: '/r/.swarm/lock' },
     null,
   ]) assert.equal(isRunFatalError(error, root), false, JSON.stringify(error));
 });
