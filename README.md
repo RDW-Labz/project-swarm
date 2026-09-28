@@ -2,7 +2,7 @@
 
 **Give one coordinator a mission. Let scoped workers handle independent pieces. Review and integrate the results.**
 
-Project Swarm is a reusable agent skill and dependency-free Node.js runner for coordinating fresh Claude Code, Hermes, and Qwen Code workers plus tool-free OpenAI, Gemini, Ollama, and Lambda API jobs inside a project. It grew out of a real website build: Claude implemented commerce pages, then a reusable worker pool helped review rendering and scroll animation.
+Project Swarm is a reusable agent skill and dependency-free Node.js runner for coordinating fresh Claude Code, Hermes, and Qwen Code workers plus tool-free OpenAI, Gemini, Ollama, Lambda, and OpenRouter API jobs inside a project. It grew out of a real website build: Claude implemented commerce pages, then a reusable worker pool helped review rendering and scroll animation.
 
 It is designed for a human or coding agent acting as the coordinator. The coordinator decides the tasks, supplies context, reviews findings, integrates changes, and verifies the final product.
 
@@ -228,7 +228,7 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 | `version` / `update` | Inspect or upgrade the shared install; never use `--root` |
 | `onboard` | Explain workflow and local provider configuration |
 
-- `doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|all] [--probe-local]` — check compatibility/configuration and root tool exclusions; no network by default. `--probe-local` checks only loopback HTTP health with a short timeout and no credentials; cloud keys remain configuration-only. Omitted provider means Claude.
+- `doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local]` — check compatibility/configuration and root tool exclusions; no network by default. `--probe-local` checks only loopback HTTP health with a short timeout and no credentials; cloud keys remain configuration-only. Omitted provider means Claude.
 - `validate <manifest>` — check schema, paths, files, and size limits; no run or model call. A refusal for an uncovered test names exactly which tests to add via `suggestedIgnoreTests: {"<jobId>": ["tests/...", ...]}` in its JSON, ready to paste into `ignoreTests`.
 - `preflight <manifest>` — validate and flag oversized jobs, repeated context, and snapshot dependencies before dispatch. Warnings support coordinator judgment; they do not automatically split or launch jobs.
 - `run <manifest>` — start workers and save the exchange. Refuses to start if another live run in the same repository (any of its worktrees) is already writing one of this run's declared outputs, with no override; see `board` below. A job may declare `after: [ids]` so it starts only once those jobs complete; see [the manifest reference](docs/manifest-reference.md#after). When the manifest sets `contract`, a `codex` job's prompt also gets that file's current text injected directly, ahead of the task itself.
@@ -273,7 +273,7 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 - [Security and limitations](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 
-Eight adapters are implemented: `codex` (macOS-sandboxed Codex CLI), `claude`, `hermes` (Nous Research CLI), `qwen` (Qwen Code CLI), `openai` (Responses API), `gemini` (generateContent), `ollama` (chat API), and `lambda` (OpenAI-compatible chat completions against hosted Lambda Inference or an operator-owned origin). API workers are single-request text/file generators, not interactive coding CLIs. Their contract is tested with mock HTTP responses; this release does not claim live API account/model verification. Claude has a recorded live project-scoped history. See [provider setup](docs/providers.md) for honest capability limits and smoke verification.
+Nine adapters are implemented: `codex` (macOS-sandboxed Codex CLI), `claude`, `hermes` (Nous Research CLI), `qwen` (Qwen Code CLI), `openai` (Responses API), `gemini` (generateContent), `ollama` (chat API), `lambda` (OpenAI-compatible chat completions against hosted Lambda Inference or an operator-owned origin), and `openrouter` (OpenRouter chat completions; every request denies provider data collection, `anthropic/*` models are pinned to Anthropic, `deepseek/*` models may write bookkeeping files only, and spend is capped at $5 per job and $25 per UTC day). API workers are single-request text/file generators, not interactive coding CLIs. Their contract is tested with mock HTTP responses; this release does not claim live API account/model verification. Claude has a recorded live project-scoped history. See [provider setup](docs/providers.md) for honest capability limits and smoke verification.
 
 Use the included recipes for code review, UI source review, documentation, test planning, four-worker Claude reviews, and mixed-provider reviews. API workers do not see rendered screenshots or run tests. The coordinator performs those checks. Hermes and Qwen use serialized copied context and strict JSON file envelopes; they do not get file-editing tools through this adapter. Their compatibility and authentication must be checked independently. Raising concurrency is opt-in and increases simultaneous resource use; it is not a spending cap.
 
