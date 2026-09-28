@@ -279,7 +279,13 @@ const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 async function loadPrivateTermsOrSkip(t) {
   let config;
-  try { config = loadLocalConfig({}); } catch { t.skip('local config could not be read; nothing to scan for'); return null; }
+  if (process.env.SWARM_REAL_CONFIG) {
+    try { config = loadLocalConfig({ env: { SWARM_CONFIG: process.env.SWARM_REAL_CONFIG } }); }
+    catch { t.skip('real config could not be read; nothing to scan for'); return null; }
+  } else {
+    t.skip('no real config path preserved; nothing to scan for');
+    return null;
+  }
   if (!config?.privateNames) { t.skip('no local config privateNames file configured; nothing to scan for'); return null; }
   try {
     const text = await fs.readFile(config.privateNames, 'utf8');
@@ -291,8 +297,13 @@ async function loadPrivateTermsOrSkip(t) {
 }
 
 test('C: the tracked tree has no whole-word, case-insensitive occurrence of a configured private term', async t => {
-  const terms = await loadPrivateTermsOrSkip(t);
-  if (!terms || !terms.length) return;
+  const loaded = await loadPrivateTermsOrSkip(t);
+  if (!loaded || !loaded.length) return;
+  // A repo must name its own home in clone URLs: the owner in package.json repository.url is exempt.
+  const pkg = JSON.parse(await fs.readFile(path.join(REPO_ROOT, 'package.json'), 'utf8'));
+  const owner = /github\.com\/([^/]+)\//i.exec(pkg.repository?.url ?? '')?.[1]?.toLowerCase();
+  // `path:` lines are path globs, never text terms (B2).
+  const terms = loaded.filter(term => !term.startsWith('path:') && term.toLowerCase() !== owner);
   const files = execFileSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf8' }).split('\n').filter(Boolean);
   const patterns = terms.map(term => new RegExp(`\\b${escapeRegExp(term)}\\b`, 'i'));
   const hits = [];

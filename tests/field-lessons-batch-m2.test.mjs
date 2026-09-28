@@ -20,7 +20,13 @@ import { parsePrivateNames } from '../tools/ship.mjs';
 // it skips with a clear reason instead of guessing or hardcoding the term itself.
 async function loadPrivateTermsOrSkip(t) {
   let config;
-  try { config = loadLocalConfig({}); } catch { t.skip('local config could not be read; nothing to scan for'); return null; }
+  if (process.env.SWARM_REAL_CONFIG) {
+    try { config = loadLocalConfig({ env: { SWARM_CONFIG: process.env.SWARM_REAL_CONFIG } }); }
+    catch { t.skip('real config could not be read; nothing to scan for'); return null; }
+  } else {
+    t.skip('no real config path preserved; nothing to scan for');
+    return null;
+  }
   if (!config?.privateNames) { t.skip('no local config privateNames file configured; nothing to scan for'); return null; }
   try {
     const text = await fs.readFile(config.privateNames, 'utf8');
