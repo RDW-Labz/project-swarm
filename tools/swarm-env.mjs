@@ -61,11 +61,17 @@ export async function loadSwarmEnv(root, { mainRoot } = {}) {
 }
 
 const shellQuote = value => `'${String(value).split("'").join("'\\''")}'`;
-export function envPrintText({ env = {}, source = null, portBase = null } = {}) {
+// `gotchas` (field lesson #167): { text, source } from tools/gotchas.mjs's loadGotchas, or null.
+// `wrapperPath` (field lesson #168): the per-root dir from materializeGitGuard, so an outside agent
+// (not a sandboxed shell worker, which already gets its own guard on PATH) that pastes this block
+// gets the same git-stash refusal.
+export function envPrintText({ env = {}, source = null, portBase = null, gotchas = null, wrapperPath = null } = {}) {
   const lines = [`# project-swarm environment for this root (${source ? `from ${source}` : `no ${ENV_FILE} found`})`, '# Paste into an outside agent\'s prompt; set these before running any check, harness or mutant.'];
+  if (wrapperPath != null) lines.push(`export PATH=${shellQuote(wrapperPath)}:"$PATH"  # git here refuses \`git stash\`/\`git stash pop\`; everything else runs the real git`);
   for (const [key, value] of Object.entries(env)) lines.push(`export ${key}=${shellQuote(value)}`);
   if (portBase != null) lines.push(`export SWARM_PORT_BASE=${portBase}  # this worktree owns ports ${portBase}..${portBase + 9}`);
   lines.push('', 'Rules:', `- ${NO_STASH_LINE}`);
+  if (gotchas?.text?.trim()) lines.push('', `Known platform gotchas for this project (from ${gotchas.source}):`, gotchas.text.trim());
   return `${lines.join('\n')}\n`;
 }
 
@@ -108,4 +114,20 @@ export async function findRealGit(pathValue, { exclude = null, access = file => 
     try { await access(candidate); return candidate; } catch { /* keep looking */ }
   }
   return '/usr/bin/git';
+}
+
+// Field lesson #168: the #163 guard above only ever protected a sandboxed shell worker (a fresh
+// guardDir per job). An outside agent — not a sandboxed worker, just something pasting `env
+// --print`'s block into its own shell — got no such protection, and one ran a bare `git stash` in a
+// shared worktree anyway. Fix: a stable per-root wrapper dir, so `env`/`env --print` can hand an
+// outside agent a `PATH` entry that refuses `git stash` the same way. `exclude` keeps the wrapper
+// from ever resolving to itself, including on a second run after an earlier paste already put this
+// same dir on PATH.
+export const GIT_GUARD_DIR = path.join('.swarm', 'bin');
+export async function materializeGitGuard(root, { parentEnv = process.env } = {}) {
+  const wrapperDir = path.join(root, GIT_GUARD_DIR);
+  const realGit = await findRealGit(parentEnv.PATH, { exclude: wrapperDir });
+  await fs.mkdir(wrapperDir, { recursive: true });
+  await fs.writeFile(path.join(wrapperDir, 'git'), gitGuardScript(realGit), { mode: 0o755 });
+  return wrapperDir;
 }

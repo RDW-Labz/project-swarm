@@ -691,3 +691,48 @@ rule is enforced or documented.
     checks placeholder, and applies the same hold, required-section, lock,
     test-binary and packaging rules before push, PR, CI wait and merge.
     Regression coverage is in `tests/field-lessons-batch-e.test.mjs`.
+70. **Two parallel branches' outputs collided on one shared file.** Two open
+    branches, being built in parallel worktrees of the same repository, each
+    listed one shared registry file among their outputs; when the two came
+    together, a hand union-merge of their two independent versions of that
+    file broke its own syntax. Rule: a coordinator should see a shared output
+    file before it happens, not after, and never as a hard block, since a
+    genuinely shared file (a registry, an index) is sometimes integrated one
+    branch at a time on purpose. Enforcement: `validate` warns
+    `shared-output-across-open-jobs` when the manifest being validated
+    declares an output file that an already-open run elsewhere in the same
+    repository also lists, naming the other run and suggesting a per-job
+    fragment file, combined in a later step, instead. Regression coverage is
+    in `tests/field-lessons-batch-f.test.mjs`.
+71. **A ship check was unreachable from the real ship path.** The pre-push
+    lockfile check ran only when shipping a branch built outside the swarm;
+    shipping a run never handed the run's integrated files to it, so for
+    runs the check silently never ran. Found in review before it hid a real
+    failure. Rule: every check a command claims must be reachable from its
+    real entry point, and tested through that entry point. Enforcement:
+    shipping a run now passes its integrated files through to the shared
+    ship logic, so a stale lockfile refuses the push; the regression test
+    goes through the CLI entry, not the inner function. Regression coverage
+    is in `tests/field-lessons-batch-f.test.mjs`.
+72. **A known platform quirk cost a CI round.** A Windows-only quirk (it
+    refuses private files placed directly under the test runner's raw temp
+    directory) was known but lived only in the coordinator's memory, not in
+    any job prompt. A new job hit it again: one CI round (about 6 minutes)
+    plus one fix job. Rule: known platform gotchas travel with every build
+    job in that repository. Enforcement: a per-root `.swarm/gotchas.md` (a
+    linked worktree falls back to its main worktree's file, like the
+    toolchain env file) is appended to every claude, codex and shell job
+    prompt and to `env --print`; `validate` warns `windows-ci-no-gotchas`
+    when the repository's CI runs on Windows and no gotchas file exists.
+    Regression coverage is in `tests/field-lessons-batch-f.test.mjs`.
+73. **A prompt-level ban was not enough outside the sandbox.** An agent
+    working in a shared worktree, told plainly not to, ran the stash command
+    anyway. A prior fix had already given sandboxed shell workers a wrapper
+    that refuses the command outright, but that protection never reached an
+    agent working outside that sandbox. Rule: a rule this costly to break
+    should be enforced everywhere it can be, not only where the harness
+    happens to control the tool. Enforcement: the same refusal is now
+    materialized into a stable, per-project location and handed to any
+    outside agent as a `PATH` entry it can paste in, ahead of the real
+    version of the tool, so pasting the block gets the refusal even outside
+    a sandbox. Regression coverage is in `tests/field-lessons-batch-f.test.mjs`.
