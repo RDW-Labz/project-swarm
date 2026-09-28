@@ -1516,6 +1516,14 @@ export function parseFinalJson(text) {
 }
 const cappedNotes = value => (Array.isArray(value?.notes) ? value.notes : []).slice(0, MAX_NOTES).map(note => typeof note === 'string' ? note.slice(0, MAX_NOTE_LEN) : note);
 const displayResult = value => !value ? null : !Array.isArray(value.notes) ? value : { ...value, notes: cappedNotes(value) };
+// Lesson #176: a read-only `ask` worker given a fixed set of context files has no way to know
+// whether something it never found is genuinely absent or simply lives in a file it was never
+// given; "the allowlist omits it, the callback is never invoked" reads as a fact either way. This
+// is a deliberately simple, word-boundary, case-insensitive scan of the worker's own answer text
+// for the handful of words an absence claim is made of — not an attempt to parse meaning, just a
+// flag that the claim rests only on the files it was handed.
+const ABSENCE_CLAIM_PATTERN = /\b(missing|never|omits?|lacks?|drops?|not\s+invoked|not\s+called)\b/i;
+export const hasAbsenceClaim = text => typeof text === 'string' && ABSENCE_CLAIM_PATTERN.test(text);
 // Lesson #46: surfaced to the coordinator without failing the job, since a mismatch is evidence
 // about what ran, not proof the work is wrong.
 const modelMismatchWarnings = state => state.jobs.filter(job => job.modelMismatch).map(job => `model mismatch: ${job.id} asked ${job.model}, ran ${job.actualModel}`);
@@ -2378,7 +2386,9 @@ export async function askRun(root, { model, context = [], agent = 'claude', time
   if (typeof question !== 'string' || !question.trim()) fail('ask requires a non-empty question');
   if (agent !== 'claude' && !API_AGENTS.includes(agent)) fail('ask only supports claude or an API agent, not codex');
   const id = `ask-${Date.now()}`;
-  const prompt = `${question.trim()}\n\nFinish with exactly one JSON line containing your complete answer as a JSON object.`;
+  // Field lesson 176: a worker reading only a fixed context list cannot tell a genuine absence
+  // from a file it was never given; any claim of one must say so and name what it searched.
+  const prompt = `${question.trim()}\n\nIf your answer claims that something is missing, never called, omitted, or absent, include "basis":"context-only" in your JSON and name what you searched (which of your context files) to reach that conclusion.\n\nFinish with exactly one JSON line containing your complete answer as a JSON object.`;
   const job = { id, agent, model, prompt, context, outputs: [], ...(timeoutMs !== undefined ? { timeoutMs } : {}) };
   const state = await runManifest(root, { version: 1, jobs: [job] }, { ...runOptions, id });
   const record = state.jobs[0];
@@ -2386,7 +2396,11 @@ export async function askRun(root, { model, context = [], agent = 'claude', time
   // Field lesson 133: a single-question run is real elapsed session time, not idle time; a
   // state.json-compatible record lets a session-metrics reader see it the same way it sees a run.
   await writeSessionMetric(root, 'ask', id, { startedAt: state.startedAt, finishedAt: state.finishedAt, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null });
-  return { id, status: state.status, model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, result: displayResult(parsed), ...(parsed === null ? { error: 'Worker returned no parsable final JSON' } : {}) };
+  // Field lesson 176: warn (never fail the job) when the worker's own answer text reads as an
+  // absence claim, so a reader knows to check the claim against more than this job's own context
+  // before spending tokens proving there was no bug.
+  const warnings = parsed !== null && hasAbsenceClaim(JSON.stringify(parsed)) ? ['absence-claim-limited-context'] : [];
+  return { id, status: state.status, model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, contextFiles: job.context, warnings, result: displayResult(parsed), ...(parsed === null ? { error: 'Worker returned no parsable final JSON' } : {}) };
 }
 
 // OASIS decision #112: a read-only web job (GitHub first) that returns raw JSON; the runner, not

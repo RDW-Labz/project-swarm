@@ -641,13 +641,15 @@ test('ask builds a read-only job, runs it like run, and returns the contract-sha
   const answer = JSON.stringify({ answer: 'yes' });
   const script = `console.log(${JSON.stringify(initEvent('claude-sonnet-5-20260101'))});console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${JSON.stringify(answer)},total_cost_usd:0.03}));`;
   const result = await askRun(root, { model: 'sonnet', context: ['input.txt'], question: 'Should we ship?' }, { spawnImpl: fake(script) });
-  assert.deepEqual(Object.keys(result).sort(), ['actualModel', 'costUsd', 'id', 'model', 'modelMismatch', 'result', 'status'].sort());
+  assert.deepEqual(Object.keys(result).sort(), ['actualModel', 'contextFiles', 'costUsd', 'id', 'model', 'modelMismatch', 'result', 'status', 'warnings'].sort());
   assert.equal(result.status, 'complete');
   assert.equal(result.model, 'sonnet');
   assert.equal(result.actualModel, 'claude-sonnet-5-20260101');
   assert.equal(result.modelMismatch, false);
   assert.equal(result.costUsd, 0.03);
   assert.deepEqual(result.result, { answer: 'yes' });
+  assert.deepEqual(result.contextFiles, ['input.txt']);
+  assert.deepEqual(result.warnings, []);
 });
 
 test('CLI ask prints exactly one JSON line with the contract keys and exits 0, using a fake claude CLI on PATH', async t => {
@@ -660,7 +662,7 @@ test('CLI ask prints exactly one JSON line with the contract keys and exits 0, u
   const lines = stdout.trim().split('\n');
   assert.equal(lines.length, 1);
   const parsed = JSON.parse(lines[0]);
-  assert.deepEqual(Object.keys(parsed).sort(), ['actualModel', 'costUsd', 'id', 'model', 'modelMismatch', 'result', 'status'].sort());
+  assert.deepEqual(Object.keys(parsed).sort(), ['actualModel', 'contextFiles', 'costUsd', 'id', 'model', 'modelMismatch', 'result', 'status', 'warnings'].sort());
   assert.equal(parsed.status, 'complete');
 });
 

@@ -804,3 +804,21 @@ rule is enforced or documented.
     cannot be resolved anywhere refuses only that check, naming the command
     and every path tried, instead of a bare, uninformative failure.
     Regression coverage is in `tests/field-lessons-batch-h.test.mjs`.
+80. **A read-only research worker's own "it's missing" claim was taken as
+    fact.** A read-only worker, given a fixed set of context files, reported
+    that a piece of behavior was dropped — an allowlist omitted it, a
+    callback was never invoked — when the truth lay entirely in a file
+    outside that fixed context; the claim read as a finding, not a guess
+    bounded by what the worker was shown. A follow-up job spent on the order
+    of 100k tokens proving there was no bug before the mistake was caught.
+    Rule: a worker reading only a fixed context list cannot tell a genuine
+    absence from a file it was never given, so any claim of one must say so
+    and name what it searched. Enforcement: the worker's own prompt now
+    states that a claim of something missing, never called, omitted, or
+    absent must carry a basis marker naming the claim as context-only, plus
+    what was searched; the result also carries back the exact context list
+    the worker was given, and gains a warning naming the result "limited by
+    context" whenever the worker's own answer text contains an absence claim
+    (a simple, case-insensitive, whole-word scan for a handful of such
+    words), independent of whether the worker itself added the basis marker.
+    Regression coverage is in `tests/field-lessons-batch-i.test.mjs`.
