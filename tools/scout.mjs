@@ -103,8 +103,12 @@ export function normalizeScoutReport(raw, { maxPicks = 12, allowlist = null } = 
     const pick = withPresentKeys(item, PICK_KEYS);
     if (typeof pick.url !== 'string' || !pick.url.startsWith('https://')) { rejected.push({ ...withPresentKeys(pick, ['name', 'url']), reason: 'bad url' }); continue; }
     const license = typeof pick.license === 'string' ? pick.license : undefined;
+    // Field lesson #195: the license gate's own rejection keeps every field the worker found (pin,
+    // license evidence, peer ranges in `gives`, ...), tagged with which gate moved it and why — the
+    // gate relocates a pick, it never drops its facts.
     if (!license || !licenseAllowed(license, allowlist)) {
-      rejected.push({ ...withPresentKeys(pick, ['name', 'url']), reason: `license not allowed: ${license || 'none'}` });
+      const reason = `license not allowed: ${license || 'none'}`;
+      rejected.push({ ...pick, reason, rejectedBy: `license-gate: ${reason}` });
       if (typeof pick.name === 'string') moved.push(pick.name);
       continue;
     }
@@ -131,7 +135,9 @@ export function renderScoutMarkdown(report, { goal, id, model }) {
   const rejected = Array.isArray(report?.rejected) ? report.rejected : [];
   const top = Array.isArray(report?.top) ? report.top : [];
   const pickRow = pick => `| ${escapeCell(pick.name)} | ${escapeCell(pick.license)}${pick.flag ? ` (${escapeCell(pick.flag)})` : ''} | ${escapeCell(pick.fit)} | ${escapeCell(pick.stars)} | ${escapeCell(pick.lastCommit)} | ${escapeCell(pick.where)} | ${escapeCell(pick.gives)} | ${escapeCell(pick.risk)} | ${escapeCell(pick.url)} |`;
-  const rejectedRow = item => `| ${escapeCell(item.name)} | ${escapeCell(item.url)} | ${escapeCell(item.reason)} |`;
+  // Field lesson #195: License and Pin (the verified commit) ride along with a gate-rejected row,
+  // instead of being dropped along with every other fact only the picks table used to show.
+  const rejectedRow = item => `| ${escapeCell(item.name)} | ${escapeCell(item.url)} | ${escapeCell(item.license)} | ${escapeCell(item.commit)} | ${escapeCell(item.reason)} |`;
   const lines = [
     `# Scout report: ${id}`,
     '',
@@ -147,9 +153,9 @@ export function renderScoutMarkdown(report, { goal, id, model }) {
     ...(picks.length ? picks.map(pickRow) : ['| (none) | | | | | | | | |']),
     '',
     '## Rejected',
-    '| Name | URL | Reason |',
-    '| --- | --- | --- |',
-    ...(rejected.length ? rejected.map(rejectedRow) : ['| (none) | | |'])
+    '| Name | URL | License | Pin | Reason |',
+    '| --- | --- | --- | --- | --- |',
+    ...(rejected.length ? rejected.map(rejectedRow) : ['| (none) | | | | |'])
   ];
   return `${lines.join('\n')}\n`;
 }
