@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-// Field lesson #211: the old default, `<home>/.project-swarm/config.json`, sits inside the shared
+// Field lesson 112: the old default, `<home>/.project-swarm/config.json`, sits inside the shared
 // install clone itself (the same directory `git pull`/`swarm update` operate on) — a machine-local
 // file living inside a git checkout is neither private nor safe from being overwritten. The default
 // now lives under XDG (or `~/.config` when XDG_CONFIG_HOME is unset or relative); `SWARM_CONFIG`

@@ -15,7 +15,7 @@ import { git } from '../tools/codex-adapter.mjs';
 import { loadLocalConfig } from '../tools/local-config.mjs';
 import { parsePrivateNames } from '../tools/ship.mjs';
 
-// Field lesson #211/#197: a test that asserts a private term is absent reads the terms from the
+// Field lesson 112: a test that asserts a private term is absent reads the terms from the
 // local config's `privateNames` file (never spelled here); with no config, or an unreadable list,
 // it skips with a clear reason instead of guessing or hardcoding the term itself.
 async function loadPrivateTermsOrSkip(t) {

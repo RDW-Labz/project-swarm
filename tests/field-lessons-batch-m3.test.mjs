@@ -17,7 +17,7 @@ const SOURCE_FILES = ['../tools/claude-shell.mjs', '../tools/codex-adapter.mjs',
 
 // --- row #197-followup: no product literal, project specifics arrive via config --------------
 
-// Field lesson #211/#197: a test that asserts a private term is absent reads the terms from the
+// Field lesson 112: a test that asserts a private term is absent reads the terms from the
 // local config's `privateNames` file (never spelled here); with no config, or an unreadable list,
 // it skips with a clear reason instead of guessing or hardcoding the term itself.
 async function loadPrivateTermsOrSkip(t) {
@@ -101,7 +101,7 @@ test('#197-followup: shellProfile denies only the generic dirs by default, and c
   assert.ok(configured.includes('(subpath "/Users/example/.acme-app")'));
 });
 
-// Field lesson #211: the default moved off `<home>/.project-swarm/config.json` (inside the install
+// Field lesson 112: the default moved off `<home>/.project-swarm/config.json` (inside the install
 // checkout itself) to XDG/`~/.config`; a leftover file at that old path now refuses instead of
 // being read. See tests/config-private-names.test.mjs (A1-A3) for the full default-path and
 // refusal coverage.

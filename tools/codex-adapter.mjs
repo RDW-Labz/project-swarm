@@ -98,7 +98,7 @@ function lastTopLevelObject(text) {
   }
   return null;
 }
-// Braden's rule (lessons #41, #64): the reply's last fenced (```json or bare ```) block wins
+// Rule (field lessons 41, 64): the reply's last fenced (```json or bare ```) block wins
 // when the reply has one; otherwise its last top-level JSON object. Earlier blocks never win
 // over a later one, and any keys are accepted — declared outputs, not envelope keys, gate
 // what integrates.
