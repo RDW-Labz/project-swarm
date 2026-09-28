@@ -90,7 +90,9 @@ test('#184: the claude agent keeps its existing "no parsable JSON" error shape (
   const root = await fixture(t);
   const script = `console.log(${JSON.stringify(initEvent('claude-sonnet-5-20260101'))});console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${JSON.stringify('Just prose, no JSON here.')},total_cost_usd:0.01}));`;
   const result = await askRun(root, { model: 'sonnet', context: ['input.txt'], question: 'Ok?' }, { spawnImpl: fake(script) });
-  assert.equal(result.status, 'complete');
+  // Field lesson #200 (batch L): an unparsable reply is reported as `status: "unparsed"`, not a
+  // `"complete"` job hiding the same failure behind a bare error field.
+  assert.equal(result.status, 'unparsed');
   assert.equal(result.error, 'Worker returned no parsable final JSON');
   assert.equal('answer' in result, false);
   assert.equal('parsed' in result, false);

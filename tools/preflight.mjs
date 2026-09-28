@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { validateManifest, validateProject } from './swarm.mjs';
+import { resolveToolchainBin } from './ship.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -38,14 +39,46 @@ export function resolveCheckProbe(argv) {
   return { program, kind: 'interpreter', probeArgv: [program, '--version'] };
 }
 
-async function defaultProbeExec(probeArgv, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
-  await execFileAsync(probeArgv[0], probeArgv.slice(1), { timeout: timeoutMs, encoding: 'utf8' });
+async function defaultProbeExec(probeArgv, { timeoutMs = PROBE_TIMEOUT_MS, env } = {}) {
+  await execFileAsync(probeArgv[0], probeArgv.slice(1), { timeout: timeoutMs, encoding: 'utf8', ...(env ? { env } : {}) });
 }
 
 export function describeProbeFailure(failure) {
+  const searched = failure.tried?.length ? ` (searched ${failure.tried.join(', ')})` : '';
   return failure.kind === 'module'
-    ? `check "${failure.check}" needs Python module ${failure.module} (via ${failure.program}), which could not be imported`
-    : `check "${failure.check}" needs ${failure.program}, which was not found`;
+    ? `check "${failure.check}" needs Python module ${failure.module} (via ${failure.program}), which could not be imported${searched}`
+    : `check "${failure.check}" needs ${failure.program}, which was not found${searched}`;
+}
+
+// Field lesson #198: an `env VAR=... prog` prefix names the PATH the real check will actually use;
+// resolving argv[0] to just "prog" (as resolveCheckProbe already does) and then probing it against
+// the orchestrator's own PATH ignores that override entirely. Parsed straight from the raw argv
+// (never from resolveCheckProbe's own return shape, which stays exactly as before for callers that
+// only want the plain program/module split).
+function parseEnvPrefix(argv) {
+  if (!Array.isArray(argv) || argv[0] !== 'env') return null;
+  const assignments = {};
+  let i = 1;
+  while (i < argv.length && ENV_ASSIGN_RE.test(argv[i])) {
+    const eq = argv[i].indexOf('=');
+    assignments[argv[i].slice(0, eq)] = argv[i].slice(eq + 1);
+    i += 1;
+  }
+  return assignments;
+}
+
+// Field lesson #198/#181: honour the env prefix's own PATH first (files only), then the toolchains
+// dir (resolveToolchainBin's own rule: toolchains dir, then toolchains/bin, then process PATH).
+async function resolveProbeProgram(program, envAssignments) {
+  if (path.isAbsolute(program) || program.startsWith('.')) return { path: program, tried: [program] };
+  const tried = [];
+  for (const dir of String(envAssignments.PATH ?? '').split(':').filter(Boolean)) {
+    const candidate = path.join(dir, program);
+    tried.push(candidate);
+    try { const info = await fs.stat(candidate); if (info.isFile()) return { path: candidate, tried }; } catch { /* try the next candidate */ }
+  }
+  const fallback = await resolveToolchainBin(program);
+  return { path: fallback.path, tried: [...tried, ...fallback.tried] };
 }
 
 // One probe per distinct resolved probe command (not per check), so two checks sharing an
@@ -62,9 +95,20 @@ export async function probeCheckInterpreters(manifest, { exec = defaultProbeExec
   for (const { check, argv } of checks) {
     const resolved = resolveCheckProbe(argv);
     if (!resolved) continue;
-    const key = JSON.stringify(resolved.probeArgv);
+    const envAssignments = parseEnvPrefix(argv);
+    let probeArgv = resolved.probeArgv, probeEnv;
+    if (envAssignments) {
+      const found = await resolveProbeProgram(resolved.program, envAssignments);
+      if (!found.path) {
+        failures.push({ check, kind: resolved.kind, program: resolved.program, module: resolved.module ?? null, tried: found.tried, error: `not found (searched ${found.tried.join(', ')})` });
+        continue;
+      }
+      probeArgv = [found.path, ...resolved.probeArgv.slice(1)];
+      probeEnv = { ...process.env, ...envAssignments };
+    }
+    const key = JSON.stringify(probeArgv);
     if (!cache.has(key)) {
-      cache.set(key, exec(resolved.probeArgv, { timeoutMs }).then(() => null, error => ({
+      cache.set(key, exec(probeArgv, { timeoutMs, ...(probeEnv ? { env: probeEnv } : {}) }).then(() => null, error => ({
         kind: resolved.kind, program: resolved.program, module: resolved.module ?? null,
         error: error?.message ?? String(error),
       })));

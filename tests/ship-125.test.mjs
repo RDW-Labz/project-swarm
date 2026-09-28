@@ -39,7 +39,9 @@ function fakeShipExec(handlers = {}) {
     if (file === 'git' && args[0] === 'rev-parse') return ok('sha-fixture\n');
     if (file === 'git' && args[0] === 'status') return ok('');
     if (file === 'git' && args[0] === 'merge-base') return handlers.baseSha ? ok(`${handlers.baseSha}\n`) : fail('', 'no base');
-    if (file === 'git' && args[0] === 'cat-file') return (handlers.onBase ?? []).includes(args.at(-1).split(':').slice(1).join(':')) ? ok('') : fail('', 'missing');
+    // #207: the scratch guard judges `git diff --name-only <base>...HEAD` (the real diff), not a
+    // run's declared outputs; a fixture names exactly which paths that diff reports as changed.
+    if (file === 'git' && args[0] === 'diff' && args[1] === '--name-only') return ok((handlers.diffFiles ?? []).join('\n'));
     if (file === 'git' && args[0] === 'worktree') return ok('');
     if (file === 'git' && args[0] === 'push') return ok('');
     if (file === 'gh' && args[0] === 'api' && args[1]?.includes('/pulls?head=')) return ok('[]');
@@ -231,7 +233,7 @@ describe('L180: ship refuses a diff that adds a scratch file', () => {
 
   test('an added scratch file refuses with scratch-file-in-diff before anything is pushed', async t => {
     const root = await tmp(t, 'swarm-125-scratch-');
-    const { exec, calls } = fakeShipExec({ baseSha: 'base-1' });
+    const { exec, calls } = fakeShipExec({ baseSha: 'base-1', diffFiles: ['tools/a.mjs', '.pr-body.md'] });
     const result = await shipWith(t, root, { exec, integratedFiles: ['tools/a.mjs', '.pr-body.md'] });
     assert.equal(result.status, 'refused');
     assert.equal(result.code, 'scratch-file-in-diff');
@@ -241,7 +243,9 @@ describe('L180: ship refuses a diff that adds a scratch file', () => {
 
   test('a scratch-pattern file already on base is not "added"', async t => {
     const root = await tmp(t, 'swarm-125-scratch-base-');
-    const { exec } = fakeShipExec({ baseSha: 'base-1', onBase: ['.swarm-manifests/old.md'] });
+    // Unchanged since base: absent from `git diff --name-only <base>...HEAD`, even though it is a
+    // declared output of this run.
+    const { exec } = fakeShipExec({ baseSha: 'base-1', diffFiles: [] });
     const result = await shipWith(t, root, { exec, integratedFiles: ['.swarm-manifests/old.md'] });
     assert.equal(result.status, 'ready', JSON.stringify(result));
   });
@@ -251,7 +255,7 @@ describe('L180: ship refuses a diff that adds a scratch file', () => {
     assert.ok(EXEMPTION_GUARD_IDS.includes('scratch'));
     const exemption = parseExemptFlag('scratch:fixtures/sample.out=fixture output the tests compare against');
     assert.equal(exemption.error, undefined);
-    const { exec } = fakeShipExec({ baseSha: 'base-1' });
+    const { exec } = fakeShipExec({ baseSha: 'base-1', diffFiles: ['fixtures/sample.out'] });
     const result = await shipWith(t, root, { exec, integratedFiles: ['fixtures/sample.out'], exemptions: [exemption] });
     assert.equal(result.status, 'ready', JSON.stringify(result));
     assert.deepEqual(result.exemptions, [exemption]);

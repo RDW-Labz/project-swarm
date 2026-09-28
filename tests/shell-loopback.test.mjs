@@ -73,11 +73,13 @@ test('scanListeningPorts parses lsof -Fn LISTEN lines (wildcard, v4 and v6 loopb
   await assert.rejects(scanListeningPorts({ exec: async () => { throw Error('lsof: command not found'); } }), /loopback-scan-failed/);
 });
 
-test('resolveRigServicePort reads the port file, defaulting to 4405 when missing or invalid', async () => {
+test('resolveRigServicePort reads the port file named by config, defaulting to 4405 when missing or invalid; no config turns the feature off (null)', async () => {
   assert.equal(RIG_SERVICE_DEFAULT_PORT, 4405);
-  assert.equal(await resolveRigServicePort({ read: async () => '4411\n' }), 4411);
-  assert.equal(await resolveRigServicePort({ read: async () => { throw Error('ENOENT'); } }), 4405);
-  assert.equal(await resolveRigServicePort({ read: async () => 'not-a-port' }), 4405);
+  const config = { rig: { portFile: '/custom/rig/service.port' } };
+  assert.equal(await resolveRigServicePort({ config, read: async () => '4411\n' }), 4411);
+  assert.equal(await resolveRigServicePort({ config, read: async () => { throw Error('ENOENT'); } }), 4405);
+  assert.equal(await resolveRigServicePort({ config, read: async () => 'not-a-port' }), 4405);
+  assert.equal(await resolveRigServicePort({ config: {} }), null, 'no config rig.portFile: the feature is off, never the default port');
 });
 
 // --- shellProfile: git discovery grants --------------------------------------------------------
@@ -135,6 +137,31 @@ test('a real run scans listening ports, denies them (minus its own proxy), and i
   assert.equal(profile.includes(`(deny network-outbound (remote ip "localhost:${proxyPort}"))`), false, 'the proxy port itself is never denied');
   const inspected = await inspectRun(root, state.id);
   assert.deepEqual(inspected.jobs[0].loopbackDenied, [4405, 4411, 5432]);
+});
+
+test('a real run with no config rig.portFile never denies a "localhost:null" loopback port', async t => {
+  const root = await repo(t);
+  // No resolveRigServicePort hook override: the real default runs, sees no SWARM_CONFIG (rig
+  // port feature off, null), and that null must never reach the profile as a deny rule.
+  const hooks = { access: async () => {}, resolveClaude: async () => FAKE_BIN, scanListeningPorts: async () => [4405] };
+  const state = await runManifest(root, manifest([shellJob()]), { platform: 'darwin', spawnImpl: fakeSandbox(worked), env: { ...runEnv, SWARM_CONFIG: '/nonexistent/swarm-config.json' }, keyExec: noKeychain, shellHooks: hooks });
+  assert.equal(state.status, 'complete', state.jobs[0].error ?? '');
+  assert.deepEqual(state.jobs[0].loopbackDenied, [4405]);
+  const profile = await fs.readFile(path.join(root, '.swarm/runs', state.id, 'builder/sandbox.sb'), 'utf8');
+  assert.equal(profile.includes('localhost:null'), false);
+});
+
+test('a real run threads config deniedHomeDirs into the generated sandbox profile', async t => {
+  const root = await repo(t);
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-loopback-config-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const configFile = path.join(dir, 'config.json');
+  await fs.writeFile(configFile, JSON.stringify({ deniedHomeDirs: ['.oasis'] }));
+  const hooks = { access: async () => {}, resolveClaude: async () => FAKE_BIN, scanListeningPorts: async () => [], resolveRigServicePort: async () => 4405 };
+  const state = await runManifest(root, manifest([shellJob()]), { platform: 'darwin', spawnImpl: fakeSandbox(worked), env: { ...runEnv, SWARM_CONFIG: configFile }, keyExec: noKeychain, shellHooks: hooks });
+  assert.equal(state.status, 'complete', state.jobs[0].error ?? '');
+  const profile = await fs.readFile(path.join(root, '.swarm/runs', state.id, 'builder/sandbox.sb'), 'utf8');
+  assert.match(profile, /\.oasis/);
 });
 
 test('an lsof failure refuses the job with loopback-scan-failed; the worker never spawns', async t => {

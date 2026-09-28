@@ -7,17 +7,26 @@
 //   metrics), never code;
 // - spend caps: $5 per job and $25 per UTC day, checked against a worst-case estimate before
 //   each request and recorded from the provider's reported cost after it.
-// The key is read by the swarm parent only (env OPENROUTER_API_KEY, else the macOS keychain
-// item service "OASIS", account "openrouter.api_key"), never passed to a worker.
+// The key is read by the swarm parent only (env OPENROUTER_API_KEY, else the macOS keychain item
+// named by config `keychain.service`, default "project-swarm", account "openrouter.api_key"),
+// never passed to a worker.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { loadLocalConfig } from './local-config.mjs';
 
 export const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 export const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
 export const OPENROUTER_KEY_ENV = 'OPENROUTER_API_KEY';
-export const OPENROUTER_KEY_ITEM = Object.freeze({ service: 'OASIS', account: 'openrouter.api_key' });
+// A public repo names no product keychain service: the default is generic, and a project's own
+// service name arrives via config `keychain.service` (loadLocalConfig).
+export const DEFAULT_KEYCHAIN_SERVICE = 'project-swarm';
+export function openRouterKeyItem(config = {}) {
+  const service = typeof config?.keychain?.service === 'string' && config.keychain.service ? config.keychain.service : DEFAULT_KEYCHAIN_SERVICE;
+  return { service, account: 'openrouter.api_key' };
+}
+export const OPENROUTER_KEY_ITEM = Object.freeze(openRouterKeyItem());
 export const JOB_CAP_USD = 5;
 export const DAY_CAP_USD = 25;
 // Bookkeeping outputs a deepseek/* model may write. Anything else (all code, tests, configs)
@@ -68,12 +77,13 @@ export function assertBookkeepingOnly(job) {
 
 // The key: env first (tests, CI), else the keychain on macOS. Never logged, never returned
 // in any result.
-export function readOpenRouterKey(env = process.env, { platform = process.platform, exec = execFileSync } = {}) {
+export function readOpenRouterKey(env = process.env, { platform = process.platform, exec = execFileSync, config } = {}) {
   const fromEnv = env[OPENROUTER_KEY_ENV];
   if (typeof fromEnv === 'string' && fromEnv.length) return fromEnv;
   if (env.SWARM_OPENROUTER_NO_KEYCHAIN === '1' || platform !== 'darwin') return null;
+  const item = openRouterKeyItem(config ?? loadLocalConfig({ env }));
   try {
-    const out = exec('/usr/bin/security', ['find-generic-password', '-s', OPENROUTER_KEY_ITEM.service, '-a', OPENROUTER_KEY_ITEM.account, '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+    const out = exec('/usr/bin/security', ['find-generic-password', '-s', item.service, '-a', item.account, '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
     const key = String(out).trim();
     return key.length ? key : null;
   } catch { return null; }
@@ -124,6 +134,27 @@ export function worstCaseUsd(pricing, { inputChars, maxTokens }) {
 export function assertWithinCaps({ worstUsd, spent }) {
   if (spent.job + worstUsd > JOB_CAP_USD) fail(`OpenRouter job cap: $${spent.job.toFixed(4)} spent + $${worstUsd.toFixed(4)} worst case > $${JOB_CAP_USD}; request refused`);
   if (spent.today + worstUsd > DAY_CAP_USD) fail(`OpenRouter day cap: $${spent.today.toFixed(4)} spent today + $${worstUsd.toFixed(4)} worst case > $${DAY_CAP_USD}; request refused`);
+}
+
+// Row #185: a tool-free worker is never left with a generic "incomplete, refused, truncated, or
+// unexpected" — the finish reason the provider actually gave rides along in the error, so a
+// truncated (maxOutputTokens too small) reply reads e.g. "truncated: finish_reason length"
+// instead of leaving the cause to guesswork. Null means the response is complete.
+export function describeIncompleteChatResponse(body) {
+  const choices = Array.isArray(body?.choices) ? body.choices : [];
+  if (choices.length !== 1) return `OpenRouter response incomplete: expected exactly one choice, got ${choices.length}`;
+  const choice = choices[0];
+  const reason = choice?.finish_reason ?? 'missing';
+  if (typeof choice?.message?.content !== 'string') return `OpenRouter response unexpected: finish_reason ${reason} carried no message content`;
+  if (choice.message?.tool_calls?.length) return `OpenRouter response unexpected: finish_reason ${reason} carried unrequested tool_calls`;
+  if (choice.message?.refusal) return `OpenRouter response refused: finish_reason ${reason}`;
+  if (reason !== 'stop') return `OpenRouter response truncated: finish_reason ${reason}`;
+  return null;
+}
+export function assertCompleteChatResponse(body) {
+  const problem = describeIncompleteChatResponse(body);
+  if (problem) fail(problem);
+  return body;
 }
 
 export { OpenRouterError };

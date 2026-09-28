@@ -1,5 +1,85 @@
 # Changelog
 
+## 1.26.0
+
+- Fixed: the interpreter probe run before a check ever executes resolved a program's name against
+  the orchestrator's own search path, refusing a check whose real invocation (an explicit
+  environment-variable prefix naming its own search path) would have found it fine. The probe now
+  honors that prefix's own search path first, then a dedicated tools directory, then the ordinary
+  search path, and names every directory it searched in a refusal. Tests in
+  `tests/field-lessons-batch-l.test.mjs` (lesson #99).
+- A mutants file may now carry two purely documentation-only fields — one naming which test(s) a
+  worker believes killed each mutant, one a free-text note — accepted with a warning instead of
+  refusing the whole file; running mutants now compares a claimed killer against what actually
+  failed and warns on a mismatch. Tests in `tests/field-lessons-batch-l.test.mjs` (lesson #100).
+- Fixed: `ask` against an almost-valid reply (structured data with one common, narrow mistake in
+  it) reported a bare empty result and a generic parse-failure message, with the real answer
+  recoverable only from raw logs. A parse failure now tries one narrow, documented repair first,
+  and otherwise reports a distinct status with the raw reply's own location and a leading excerpt,
+  never a "complete" result that is silently empty. Tests in `tests/field-lessons-batch-l.test.mjs`
+  (lesson #101).
+- Fixed: a one-time setup step failing before a job's worker ever started looked identical to a
+  worker that ran and reported nothing — empty error, empty result, empty cost — with the real
+  cause visible only in a log file nobody was told to open. Inspecting a run now names the phase a
+  setup failure happened in, with that failure's own log tail alongside it. Validation also now
+  warns when a dependency lock names a local path no longer present in the tree, instead of that
+  only surfacing once an offline install tries to use it. Tests in
+  `tests/field-lessons-batch-l.test.mjs` (lesson #102).
+- Fixed: a failed check at integration time stayed invisible unless a rarely remembered flag was
+  passed, reporting success by default even with a failing check in the list. Integration now
+  refuses by default when any check has failed, naming every one of them, with an explicit opt-in
+  (`--accept-failed-checks`) for the rare case a failure should be accepted anyway;
+  `--require-checks` remains an accepted flag. Tests in `tests/field-lessons-batch-l.test.mjs`
+  (lesson #103).
+- Validation now warns when a check or a shell job's own instructions name a path outside the
+  worker's own sandboxed environment (one it could never actually reach to run), and that worker's
+  own boilerplate now marks such a check as run by a later, unrestricted step instead of asking the
+  worker to run it itself. Tests in `tests/field-lessons-batch-l.test.mjs` (lesson #104).
+- `check-pins` gains a new rule: an exact pin on one of a repo's own packages with no vendored
+  wheel and no local/`uv.sources`-style override now fails `pin-not-vendored`, closing a gap where
+  such a pin was vendored nowhere at all and so was never compared against anything. Tests in
+  `tests/field-lessons-batch-m1.test.mjs` (lesson #105).
+- Fixed: `ship`'s scratch-file guard judged a run's own declared output list instead of the actual
+  commit diff, so a declared output that was git-ignored and never committed (and so was never
+  going to be pushed at all) was wrongly refused. The guard now checks the real diff between base
+  and HEAD (plus anything staged) — what would actually be pushed — instead. Tests in
+  `tests/field-lessons-batch-m1.test.mjs` (lesson #106).
+- Fixed: two shell workers sharing one machine both spent their final minutes stuck in a
+  sleep-and-poll loop waiting on a full test suite each had launched in the background, timing out
+  with an empty result even though their real edits were already finished. `integrate --salvage`
+  now accepts a timed-out job's declared outputs (hash-checked, marked `salvaged: true`), a shell
+  worker's own instructions now say to run only its own changed test files (the full suite runs at
+  integrate), `run` warns when two shell jobs share one root and both ask for a full suite, and a
+  timeout result now names the transcript's last activity. Tests in
+  `tests/field-lessons-batch-m2.test.mjs` (lesson #107).
+- Fixed: a worker adding a new field to a persisted record chose its own "stricter" default for
+  data saved before the field existed, which silently made a one-time migration a no-op for every
+  existing record on disk — nothing caught it because no test ever loaded a pre-field file. A
+  shell job's result schema now carries `newPersistedFields: [{name, legacyDefault, why}]`,
+  inspecting a run warns when a diff adds a field to a persisted record with that list empty, and
+  job instructions now say a new stored field must state its legacy default and have a
+  from-disk legacy test. Tests in `tests/field-lessons-batch-m2.test.mjs` (lesson #108).
+- Fixed: a routing decision that retired a model from the cheap tier was recorded only in a
+  decision log, not in the rulebook a model reads at boot, so jobs kept routing to the old
+  (now more expensive) choice. `validate` now warns when a job asks for the cheap tier on an
+  agent pricier than the configured cheap-tier model, unless the job states a reason. Tests in
+  `tests/field-lessons-batch-m2.test.mjs` (lesson #109).
+- Fixed: a public-repo tool hard-coded a product's keychain service name, an app-support port-file
+  path, and a product-specific denied-home-directory entry. All three now default to generic
+  values and are overridden through local config only, so the public tool names nothing
+  product-specific by default. Tests in `tests/field-lessons-batch-m3.test.mjs` (lesson #110).
+- Fixed: a tool-free API worker's incomplete reply (cut short by an output-length limit) surfaced
+  as a bare "incomplete or unexpected" error with no way to tell why. The error now names the
+  provider's own finish reason (e.g. truncated by length) directly. Tests in
+  `tests/field-lessons-batch-m3.test.mjs` (lesson #111).
+- `ship`'s result gains `timing: { checksSeconds, ciWaitSeconds, attempts, rerunCount }` (seconds
+  rounded to 0.1; `attempts` counts CI wait rounds, `rerunCount` counts failed-job reruns), using
+  an injectable clock so tests can measure it deterministically. Tests in
+  `tests/field-lessons-batch-m1.test.mjs`.
+- `tests/ask-125.test.mjs` and `tests/swarm.test.mjs` updated for two batch L defaults: an
+  unparsable worker reply now reports `status: "unparsed"` (not `"complete"` with a bare error),
+  and integration now refuses by default on a failed check (not a silent exit 0).
+
 ## 1.25.0
 
 - New `swarm check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX]`: reads pyproject.toml/uv.lock, vendored wheel METADATA, and package.json to catch a stale internal pin — a library that exact-pins the shared core package named by `--core` (`library-exact-core-pin`; a repo whose own name starts with `--app-prefix` is exempt), an exact pin that no longer matches a vendored copy (`pin-not-vendored-version`), a pin older than a newer vendored copy (`pin-older-than-vendored`), and (in the `--core` repo itself) a vendored wheel's own `Requires-Dist` left unsatisfied by `uv.lock` (`wheel-requirement-unsatisfied`) — instead of only surfacing at a fresh offline install. Without `--core`, the two core-specific rules are skipped and named in a `skippedRules` field. Exits 1 on any finding. New `tools/check-pins.mjs`; tests in `tests/check-pins.test.mjs`, wired into `swarm.mjs`'s command dispatch with tests in `tests/scout-125.test.mjs` and `tests/wire-125.test.mjs` (lesson #224/#225).

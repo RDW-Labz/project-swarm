@@ -328,10 +328,21 @@ describe('generic-pins: check-pins is generic (no built-in package names), drive
 
   test('CLI check-pins without --core skips the core-specific rules and names them in skippedRules', async t => {
     const root = await tmp(t, 'swarm-wire-check-pins-nocore-');
-    await fs.writeFile(path.join(root, 'pyproject.toml'), '[project]\nname = "acme-lib-a"\ndependencies = [\n  "acme-core==0.4.0",\n]\n');
+    // #204: R2b (pin-not-vendored) is not core-specific, so it still runs without --core; this
+    // fixture's exact pin is backed by a [tool.uv.sources] entry so only skippedRules is exercised.
+    await fs.writeFile(path.join(root, 'pyproject.toml'), '[project]\nname = "acme-lib-a"\ndependencies = [\n  "acme-core==0.4.0",\n]\n\n[tool.uv.sources]\nacme-core = { path = "../acme-core" }\n');
     const { stdout } = await execFileAsync(process.execPath, [CLI, '--root', root, 'check-pins', '--json']);
     const result = JSON.parse(stdout);
     assert.equal(result.ok, true);
     assert.deepEqual(result.skippedRules, ['library-exact-core-pin', 'wheel-requirement-unsatisfied']);
+
+    // The same fixture without the [tool.uv.sources] entry now fails pin-not-vendored, still with
+    // no --core given.
+    await fs.writeFile(path.join(root, 'pyproject.toml'), '[project]\nname = "acme-lib-a"\ndependencies = [\n  "acme-core==0.4.0",\n]\n');
+    const error = await execFileAsync(process.execPath, [CLI, '--root', root, 'check-pins', '--json']).catch(e => e);
+    assert.equal(error.code, 1, JSON.stringify(error));
+    const failed = JSON.parse(error.stdout);
+    assert.equal(failed.ok, false);
+    assert.ok(failed.findings.some(f => f.rule === 'pin-not-vendored'), JSON.stringify(failed));
   });
 });

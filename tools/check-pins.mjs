@@ -172,6 +172,20 @@ export function exactNpmVersion(spec) {
   return /^\d+[\w.+-]*$/.test(String(spec).trim()) ? spec.trim() : null;
 }
 
+// --- [tool.uv.sources]: a name pinned from a local path or git needs no vendored wheel ---------
+// Field lesson #204: an exact pin on a package vendored nowhere used to pass silently (R2 only
+// ever compared a pin against a vendored copy, so "no vendored copy at all" fell through both of
+// its findings). A `[tool.uv.sources]` entry (inline `name = {...}` or a `[tool.uv.sources.name]`
+// sub-table) is the one legitimate way an exact pin is backed by something other than a vendored
+// wheel; anything else with no vendored copy is now `pin-not-vendored`.
+export function parseUvSourcesNames(text) {
+  const names = new Set();
+  const block = /^\[tool\.uv\.sources\]\r?\n([\s\S]*?)(?=^\[|$)/m.exec(text)?.[1] ?? '';
+  for (const m of block.matchAll(/^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*=/gm)) names.add(normalizeName(m[1]));
+  for (const m of String(text).matchAll(/^\[tool\.uv\.sources\.([A-Za-z0-9][A-Za-z0-9._-]*)\]/gm)) names.add(normalizeName(m[1]));
+  return names;
+}
+
 // --- shared vendored-version checks (rule names shared by pyproject.toml and package.json) -----
 
 function checkVendored(findings, file, name, pin, vendoredVersions) {
@@ -216,6 +230,7 @@ export async function runCheckPins({ root, json = false, core, appPrefix }) {
   const pyprojectText = await readIfExists(path.join(root, 'pyproject.toml'));
   if (pyprojectText != null) {
     const { name, dependencies } = parsePyprojectDependencies(pyprojectText);
+    const uvSourceNames = parseUvSourcesNames(pyprojectText);
     for (const spec of dependencies) {
       const req = parseRequirement(spec);
       if (!req) continue;
@@ -223,6 +238,12 @@ export async function runCheckPins({ root, json = false, core, appPrefix }) {
         findings.push({ rule: 'library-exact-core-pin', file: 'pyproject.toml', package: req.name, message: `${name ?? 'this library'} pins ${normalizedCore} with == (${req.exact}); libraries must use a range, not an exact pin` });
       }
       if (req.exact) checkVendored(findings, 'pyproject.toml', req.name, req.exact, vendoredWheelVersions);
+      // Field lesson #204 (R2b): an exact pin backed by neither a vendored wheel nor a
+      // [tool.uv.sources] entry is not backed by anything the tests ran against, agent repos
+      // included (no isAppRepo exemption here — that exemption is about the core-pin rule only).
+      if (req.exact && !vendoredWheelVersions.get(req.name)?.length && !uvSourceNames.has(req.name)) {
+        findings.push({ rule: 'pin-not-vendored', file: 'pyproject.toml', package: req.name, message: `${req.name} is pinned to ${req.exact} but has no vendored wheel and no [tool.uv.sources] entry` });
+      }
     }
 
     if (normalizedCore && normalizeName(name ?? '') === normalizedCore && wheelFiles.length) {

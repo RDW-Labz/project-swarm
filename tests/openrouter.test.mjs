@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { executeApi, apiConfiguration } from '../tools/api-adapters.mjs';
+import { executeApi, apiConfiguration, apiDoctor } from '../tools/api-adapters.mjs';
 import { validateManifest } from '../tools/swarm.mjs';
 import { providerPolicy, assertRequestBody, nonBookkeepingOutputs, readOpenRouterKey, spentSoFar, worstCaseUsd, OPENROUTER_ENDPOINT, OPENROUTER_MODELS_URL } from '../tools/openrouter.mjs';
 
@@ -128,14 +128,19 @@ test('pricing that cannot be fetched refuses the request (the cap can never be s
   assert.match(result.error, /cannot be checked/);
 });
 
-test('the key comes from env, else the keychain item OASIS/openrouter.api_key, and a missing key refuses', async t => {
+test('the key comes from env, else the keychain item named by config (default project-swarm), and a missing key refuses', async t => {
   assert.equal(readOpenRouterKey({ OPENROUTER_API_KEY: KEY }), KEY);
+  // config: {} is passed explicitly throughout so this never falls back to reading the real home.
   let argv;
   const exec = (bin, args) => { argv = [bin, ...args]; return `${KEY}\n`; };
-  assert.equal(readOpenRouterKey({}, { platform: 'darwin', exec }), KEY);
-  assert.deepEqual(argv, ['/usr/bin/security', 'find-generic-password', '-s', 'OASIS', '-a', 'openrouter.api_key', '-w']);
-  assert.equal(readOpenRouterKey({}, { platform: 'darwin', exec: () => { throw new Error('not found'); } }), null);
-  assert.equal(readOpenRouterKey({}, { platform: 'linux', exec }), null);
+  assert.equal(readOpenRouterKey({}, { platform: 'darwin', exec, config: {} }), KEY);
+  assert.deepEqual(argv, ['/usr/bin/security', 'find-generic-password', '-s', 'project-swarm', '-a', 'openrouter.api_key', '-w']);
+  assert.equal(readOpenRouterKey({}, { platform: 'darwin', exec: () => { throw new Error('not found'); }, config: {} }), null);
+  assert.equal(readOpenRouterKey({}, { platform: 'linux', exec, config: {} }), null);
+  const configuredArgv = [];
+  const configuredExec = (bin, args) => { configuredArgv.push(bin, ...args); return `${KEY}\n`; };
+  assert.equal(readOpenRouterKey({}, { platform: 'darwin', exec: configuredExec, config: { keychain: { service: 'acme-swarm' } } }), KEY);
+  assert.deepEqual(configuredArgv, ['/usr/bin/security', 'find-generic-password', '-s', 'acme-swarm', '-a', 'openrouter.api_key', '-w']);
   assert.equal(apiConfiguration('openrouter', {}, { readKey: () => null }).configured, false);
   const result = await executeApi(job(), [], { env: { SWARM_LOGS_DIR: await logsDir(t) }, readKey: () => null, fetchImpl: async () => { throw new Error('no request expected'); } });
   assert.equal(result.status, 'failed');
@@ -152,6 +157,22 @@ test('an echoed key discards the output', async t => {
 
 test('worst case counts every input character as a token plus the full output budget', () => {
   assert.equal(worstCaseUsd({ prompt: 0.000002, completion: 0.00001 }, { inputChars: 1000, maxTokens: 100 }), 0.002 + 0.001);
+});
+
+// Row #185 wiring: executeApi's own extract() names the real finish_reason on an incomplete
+// OpenRouter reply, the same wording tools/openrouter.mjs's assertCompleteChatResponse produces.
+test('an incomplete OpenRouter reply names its finish_reason through executeApi', async t => {
+  const env = { OPENROUTER_API_KEY: KEY, SWARM_LOGS_DIR: await logsDir(t) };
+  const truncated = completion(envelope, { choices: [{ finish_reason: 'length', message: { role: 'assistant', content: '{"partial":' } }] });
+  const result = await executeApi(job(), [], { env, fetchImpl: transport(() => reply(truncated)).fetchImpl });
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /truncated: finish_reason length/);
+});
+
+// apiDoctor's auth string names the configured keychain service, never a hard-coded product name.
+test('apiDoctor names the configured keychain service, defaulting to project-swarm', () => {
+  assert.match(apiDoctor('openrouter', { SWARM_CONFIG: '/nonexistent/swarm-config.json' }).authentication, /keychain project-swarm\/openrouter\.api_key/);
+  assert.equal(apiDoctor('openrouter', { SWARM_CONFIG: '/nonexistent/swarm-config.json' }).authentication.includes('OASIS'), false);
 });
 
 test('a key read from the keychain (not env) that is echoed back still discards the output', async t => {

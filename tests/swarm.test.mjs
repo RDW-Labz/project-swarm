@@ -457,18 +457,26 @@ test('no shell: an argv item with shell metacharacters is passed literally, neve
  await assert.rejects(fs.access(path.join(root,'pwned.txt')));
 });
 
-test('--require-checks fails the CLI command when a check fails; the default exit code stays 0', async t => {
+test('integrate refuses a failed check by default (batch L #203); --require-checks stays an accepted no-op alias; --accept-failed-checks is the opt-in', async t => {
  const root=await fixture(t);
  const checks=[{name:'fails',argv:[process.execPath,'-e','process.exit(1)']}];
  const withoutFlag=await runManifest(root,checkManifest([job()],checks),{spawnImpl:update,id:'require-checks-default'});
- const defaultRun=await execFileAsync(process.execPath,[CLI,'--root',root,'integrate',withoutFlag.id]);
- assert.equal(JSON.parse(defaultRun.stdout).checksPassed,false);
+ await assert.rejects(execFileAsync(process.execPath,[CLI,'--root',root,'integrate',withoutFlag.id]), error => {
+  assert.equal(error.code,1);
+  assert.equal(JSON.parse(error.stdout).checksPassed,false);
+  return true;
+ });
  const withFlag=await runManifest(root,checkManifest([job()],checks),{spawnImpl:update,id:'require-checks-flag'});
  await assert.rejects(execFileAsync(process.execPath,[CLI,'--root',root,'integrate',withFlag.id,'--require-checks']), error => {
   assert.equal(error.code,1);
   assert.equal(JSON.parse(error.stdout).checksPassed,false);
   return true;
  });
+ const withAccept=await runManifest(root,checkManifest([job()],checks),{spawnImpl:update,id:'accept-failed-checks'});
+ const acceptedRun=await execFileAsync(process.execPath,[CLI,'--root',root,'integrate',withAccept.id,'--accept-failed-checks']);
+ const acceptedResult=JSON.parse(acceptedRun.stdout);
+ assert.equal(acceptedResult.checksPassed,false);
+ assert.equal(acceptedResult.status,'integrated-with-failures');
 });
 
 
