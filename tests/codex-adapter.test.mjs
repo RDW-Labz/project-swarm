@@ -91,20 +91,20 @@ test('profile grants exact scopes and ends with sensitive path and keychain serv
   assert.ok(profile.includes('(deny file-write* (require-not (require-any'));
   const last = profile.trim().split('\n').slice(-2);
   for (const file of ['Library/Keychains', '.ssh', '.aws', '.config']) assert.ok(last[0].includes(`"/Users/example/${file}"`));
-  assert.equal(last[0].includes('/Users/example/.oasis'), false, 'a public repo names no product home directory by default');
+  assert.equal(last[0].includes('/Users/example/.acme-app'), false, 'no directory outside the generic deny list by default');
   assert.equal(last[1], '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd.xpc"))');
   for (const field of ['home', 'worktree', 'commonDir', 'metadataDir']) for (const unsafe of ['/bad"path', '/bad\\path', '/bad\npath', 'relative']) assert.throws(() => codexProfile({ home: '/Users/example', worktree: '/repo/job', commonDir: '/repo/.git', metadataDir: '/repo/.git/worktrees/job', [field]: unsafe }), /sandbox path/);
   // Config deniedHomeDirs is still denied (never a weaker guard than before).
-  const configured = codexProfile({ home: '/Users/example', worktree: '/Users/example/repo/run/job', commonDir: '/Users/example/repo/.git', metadataDir: '/Users/example/repo/.git/worktrees/job', readPaths: ['/opt/toolchain'], config: { deniedHomeDirs: ['.oasis'] } });
-  assert.ok(configured.trim().split('\n').slice(-2)[0].includes('"/Users/example/.oasis"'));
+  const configured = codexProfile({ home: '/Users/example', worktree: '/Users/example/repo/run/job', commonDir: '/Users/example/repo/.git', metadataDir: '/Users/example/repo/.git/worktrees/job', readPaths: ['/opt/toolchain'], config: { deniedHomeDirs: ['.acme-app'] } });
+  assert.ok(configured.trim().split('\n').slice(-2)[0].includes('"/Users/example/.acme-app"'));
 });
 
 test('readPaths is Codex-only, absolute, safe and cannot name denied directories', () => {
   const home = os.homedir();
   for (const paths of [null, 'path', ['relative'], ['/bad"path'], ['/bad\\path'], ['/bad\npath'], Array(101).fill('/opt')]) assert.throws(() => validateManifest(manifest({ readPaths: paths })));
   for (const denied of ['Library/Keychains', '.ssh', '.aws', '.config']) for (const suffix of ['', '/child', '/a/../child']) assert.throws(() => validateReadPaths([path.join(home, denied) + suffix]), /denied/);
-  // A project's own config deniedHomeDirs addition (e.g. '.oasis') is still denied, never dropped.
-  for (const suffix of ['', '/child', '/a/../child']) assert.throws(() => validateReadPaths([path.join(home, '.oasis') + suffix], home, { deniedHomeDirs: ['.oasis'] }), /denied/);
+  // A project's own config deniedHomeDirs addition (e.g. '.acme-app') is still denied, never dropped.
+  for (const suffix of ['', '/child', '/a/../child']) assert.throws(() => validateReadPaths([path.join(home, '.acme-app') + suffix], home, { deniedHomeDirs: ['.acme-app'] }), /denied/);
   assert.throws(() => validateManifest(manifest({ agent: 'claude', readPaths: ['/opt'] })), /codex-only/);
   assert.deepEqual(validateReadPaths(['/opt/toolchain']), ['/opt/toolchain']);
 });
@@ -196,11 +196,11 @@ test('a real run threads config deniedHomeDirs into the generated sandbox profil
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-codex-config-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const configFile = path.join(dir, 'config.json');
-  await fs.writeFile(configFile, JSON.stringify({ deniedHomeDirs: ['.oasis'] }));
+  await fs.writeFile(configFile, JSON.stringify({ deniedHomeDirs: ['.acme-app'] }));
   const state = await runManifest(root, manifest(), { platform: 'darwin', env: { ...process.env, SWARM_CONFIG: configFile }, spawnImpl: fake(success) });
   assert.equal(state.status, 'complete', state.error ?? state.jobs[0]?.error);
   const profile = await fs.readFile(path.join(root, '.swarm/runs', state.id, 'writer/sandbox.sb'), 'utf8');
-  assert.match(profile, /\.oasis/);
+  assert.match(profile, /\.acme-app/);
 });
 
 test('Codex proposals retain ordinary conflict detection', async t => {
@@ -278,11 +278,11 @@ test('cancellation marker removes running Codex worktree and never creates queue
 test('resolved readPaths aliases cannot grant a forbidden directory', async t => {
   const root = await fixture(t);
   const home = path.join(root, 'home');
-  await fs.mkdir(path.join(home, '.oasis'), { recursive: true });
-  await fs.symlink(path.join(home, '.oasis'), path.join(root, 'toolchain-alias'));
-  // '.oasis' is only denied once a project's config names it (deniedHomeDirs); the alias must
+  await fs.mkdir(path.join(home, '.acme-app'), { recursive: true });
+  await fs.symlink(path.join(home, '.acme-app'), path.join(root, 'toolchain-alias'));
+  // '.acme-app' is only denied once a project's config names it (deniedHomeDirs); the alias must
   // still be caught through that config, the same as any built-in denied directory.
-  await assert.rejects(resolveReadPaths([path.join(root, 'toolchain-alias')], home, { deniedHomeDirs: ['.oasis'] }), /denied/);
+  await assert.rejects(resolveReadPaths([path.join(root, 'toolchain-alias')], home, { deniedHomeDirs: ['.acme-app'] }), /denied/);
   await fs.mkdir(path.join(root, 'toolchain'));
   const plan = manifest({ readPaths: [path.join(root, 'toolchain')] });
   assert.equal((await validateProject(root, plan)).status, 'valid');

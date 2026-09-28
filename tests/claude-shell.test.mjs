@@ -108,9 +108,9 @@ test('shell profile: whole-process seatbelt, writes only worktree + job dir, den
   assert.ok(profile.includes(`(allow file-write* ${writable})\n(deny file-write* (require-not (require-any ${writable})))`));
   assert.ok(profile.includes('(deny file-write* (literal "/Users/example/repo/.swarm/runs/r/worktrees/j/.git"))'));
   for (const part of ['Library/Keychains', '.ssh', '.aws', '.config', '.claude']) assert.ok(profile.includes(`(subpath "/Users/example/${part}")`), part);
-  assert.equal(profile.includes('/Users/example/.oasis'), false, 'a public repo names no product home directory by default');
-  const configured = shellProfile({ home: '/Users/example', worktree: '/Users/example/repo/.swarm/runs/r/worktrees/j', commonDir: '/Users/example/repo/.git', shellDir: '/Users/example/repo/.swarm/runs/r/j/shell', readPaths: ['/opt/toolchain'], cliPaths: ['/opt/claude'], proxyPort: 40123, config: { deniedHomeDirs: ['.oasis'] } });
-  assert.ok(configured.includes('(subpath "/Users/example/.oasis")'), 'config deniedHomeDirs is still denied');
+  assert.equal(profile.includes('/Users/example/.acme-app'), false, 'no directory outside the generic deny list by default');
+  const configured = shellProfile({ home: '/Users/example', worktree: '/Users/example/repo/.swarm/runs/r/worktrees/j', commonDir: '/Users/example/repo/.git', shellDir: '/Users/example/repo/.swarm/runs/r/j/shell', readPaths: ['/opt/toolchain'], cliPaths: ['/opt/claude'], proxyPort: 40123, config: { deniedHomeDirs: ['.acme-app'] } });
+  assert.ok(configured.includes('(subpath "/Users/example/.acme-app")'), 'config deniedHomeDirs is still denied');
   assert.ok(profile.includes('(regex #"^/Users/example/\\.claude\\.json")'));
   assert.ok(profile.includes('(subpath "/Library/Keychains")'));
   for (const service of ['com.apple.SecurityServer', 'com.apple.securityd.xpc', 'com.apple.secd']) assert.ok(profile.includes(`(global-name "${service}")`));
@@ -384,18 +384,18 @@ test('generated profile confines a real shell: worktree writes only, denied read
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-shell-seatbelt-')));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const worktree = path.join(base, 'worktree'), shellDir = path.join(base, 'run/shell'), fakeHome = path.join(base, 'home');
-  for (const dir of [worktree, path.join(shellDir, 'home'), path.join(shellDir, 'tmp'), path.join(fakeHome, '.oasis'), path.join(fakeHome, 'Library/Keychains')]) await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(fakeHome, '.oasis/secret.txt'), 'PLANTED');
+  for (const dir of [worktree, path.join(shellDir, 'home'), path.join(shellDir, 'tmp'), path.join(fakeHome, '.acme-app'), path.join(fakeHome, 'Library/Keychains')]) await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(fakeHome, '.acme-app/secret.txt'), 'PLANTED');
   await fs.writeFile(path.join(fakeHome, 'Library/Keychains/login.keychain-db'), 'PLANTED');
   const proxy = await startConnectProxy();
   t.after(() => proxy.close());
   const profile = path.join(base, 'run/sandbox.sb');
-  await fs.writeFile(profile, shellProfile({ worktree, commonDir: path.join(worktree, '.git'), shellDir, proxyPort: proxy.port, extraHomes: [fakeHome], config: { deniedHomeDirs: ['.oasis'] } }));
+  await fs.writeFile(profile, shellProfile({ worktree, commonDir: path.join(worktree, '.git'), shellDir, proxyPort: proxy.port, extraHomes: [fakeHome], config: { deniedHomeDirs: ['.acme-app'] } }));
   const env = { ...shellEnvironment({ parentEnv: { ...process.env, FAKE_TOKEN: FAKE_KEY }, home: path.join(shellDir, 'home'), tmp: path.join(shellDir, 'tmp'), configDir: path.join(shellDir, 'home/.claude'), proxyPort: proxy.port, apiKey: FAKE_KEY, userId: 'swarm-worker:t' }), CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1' };
   const probe = [
     'echo ok > inside.txt && echo inside=ok || echo inside=fail',
     `(echo x > '${base}/outside.txt') 2>/dev/null && echo outside=allowed || echo outside=blocked`,
-    `cat '${fakeHome}/.oasis/secret.txt' 2>/dev/null | grep -q PLANTED && echo read=allowed || echo read=blocked`,
+    `cat '${fakeHome}/.acme-app/secret.txt' 2>/dev/null | grep -q PLANTED && echo read=allowed || echo read=blocked`,
     `cat '${fakeHome}/Library/Keychains/login.keychain-db' 2>/dev/null | grep -q PLANTED && echo keychain=allowed || echo keychain=blocked`,
     `/usr/bin/nc -z -G 2 1.1.1.1 443 2>/dev/null && echo direct=allowed || echo direct=blocked`,
     `node -e "require('http').get({host:'127.0.0.1',port:${proxy.port},path:'http://example.com/'},r=>console.log('proxy='+r.statusCode)).on('error',()=>console.log('proxy=error'))"`,

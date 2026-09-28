@@ -9,7 +9,7 @@ import { parseCodexReply, codexResultFile, codexWorktreeFallback, resolveCodexEn
 // Shaped like the real evidence in .swarm-manifests/evidence/ (ac27-response.txt,
 // ub-build-response.txt): a bare final JSON object using the shared filesChanged/testsAdded/
 // crossJobNames/notes contract, plus job-specific keys, and no files_changed/notes at all.
-const ac27Reply = JSON.stringify({ filesChanged: ['CHANGELOG.md', 'src/anorak/chat_service.py', 'tests/test_chat_tools.py'], testsAdded: 68, mutantsCovered: ['accept_any_token', 'skip_plan_hash'], crossJobNames: [], checks: 'pytest 759 passed; ruff; mypy x2', notes: 'Reply-all fails closed pending complete connector recipient metadata.' });
+const ac27Reply = JSON.stringify({ filesChanged: ['CHANGELOG.md', 'src/acme_app/chat_service.py', 'tests/test_chat_tools.py'], testsAdded: 68, mutantsCovered: ['accept_any_token', 'skip_plan_hash'], crossJobNames: [], checks: 'pytest 759 passed; ruff; mypy x2', notes: 'Reply-all fails closed pending complete connector recipient metadata.' });
 const ubBuildReply = JSON.stringify({ filesChanged: ['CHANGELOG.md', 'src/components/Chat.tsx', 'tests/Chat.test.tsx'], testsAdded: 30, passes: 3, lastShots: ['.pilot/t27-r1/preview-light-1280x800.png'], crossJobNames: [], notes: '287 tests, typecheck, ESLint and build pass.' });
 
 async function tempDir(t) {
@@ -31,7 +31,7 @@ test('both evidence-shaped replies parse as bare top-level objects (no files_cha
   assert.deepEqual(parseCodexReply(ubBuildReply), JSON.parse(ubBuildReply));
 });
 
-test('the last fenced block wins over an earlier one (Braden\'s rule)', () => {
+test('the last fenced block wins over an earlier one (documented last-fence rule)', () => {
   const text = '```json\n{"notes":"first"}\n```\nthen\n```\n{"notes":"second"}\n```\n';
   assert.deepEqual(parseCodexReply(text), { notes: 'second' });
 });

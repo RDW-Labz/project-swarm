@@ -1,7 +1,7 @@
 # Automation integration study
 
 This case used the project-swarm coordination workflow with three authorized
-native workers and one coordinator in Cluer CRM. It did not run the toolkit's
+native workers and one coordinator in a CRM product. It did not run the toolkit's
 restricted CLI adapters. Four native slots were available; no nested managers
 were launched because there were only three independent implementation lanes.
 The toolkit's adapter capability and isolation claims are unchanged.
@@ -200,9 +200,9 @@ was collected, so this case makes no speedup claim.
 
 ## Completion capacity and turn-budget follow-up
 
-CRM implementation and regression coverage:
-[cluer-crm-pipeline PR #62](https://github.com/Btabor11/cluer-crm-pipeline/pull/62),
-reviewed at `0cb087e32f2d6a12854ca24664f175ff132eca6f`.
+CRM implementation and regression coverage: the consuming project's pull
+request (external, not linked here), reviewed at commit
+`0cb087e32f2d6a12854ca24664f175ff132eca6f`.
 
 The next production observation exposed a different boundary: a manager could
 successfully delegate a task, spend its remaining turns reading, and fail

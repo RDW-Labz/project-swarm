@@ -156,12 +156,12 @@ test('a real run threads config deniedHomeDirs into the generated sandbox profil
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-loopback-config-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const configFile = path.join(dir, 'config.json');
-  await fs.writeFile(configFile, JSON.stringify({ deniedHomeDirs: ['.oasis'] }));
+  await fs.writeFile(configFile, JSON.stringify({ deniedHomeDirs: ['.acme-app'] }));
   const hooks = { access: async () => {}, resolveClaude: async () => FAKE_BIN, scanListeningPorts: async () => [], resolveRigServicePort: async () => 4405 };
   const state = await runManifest(root, manifest([shellJob()]), { platform: 'darwin', spawnImpl: fakeSandbox(worked), env: { ...runEnv, SWARM_CONFIG: configFile }, keyExec: noKeychain, shellHooks: hooks });
   assert.equal(state.status, 'complete', state.jobs[0].error ?? '');
   const profile = await fs.readFile(path.join(root, '.swarm/runs', state.id, 'builder/sandbox.sb'), 'utf8');
-  assert.match(profile, /\.oasis/);
+  assert.match(profile, /\.acme-app/);
 });
 
 test('an lsof failure refuses the job with loopback-scan-failed; the worker never spawns', async t => {

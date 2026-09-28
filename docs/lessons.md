@@ -1172,3 +1172,16 @@ rule is enforced or documented.
     that it did. Enforcement: the error now names the provider's own
     finish reason (e.g. truncated by length) directly. Regression coverage
     is in `tests/field-lessons-batch-m3.test.mjs`.
+112. **A release removed a private name from code while its own new tests
+    added it back, and nothing caught it because the list of private
+    names lived outside the repo being shipped.** A scrub is only as good
+    as the check that runs on every later change, and a check with no
+    list to read against cannot enforce anything. Rule: a private-names
+    list lives in local, machine-specific configuration (never a source
+    literal), and ship's own diff guard reads it from there by default
+    when a project keeps no list of its own, refusing outright when a
+    configured list names a file that does not exist. Enforcement: ship's
+    private-names source order now falls through to local config, and a
+    `path:` line in that list refuses a whole file entering a diff at
+    all, public or private repo alike. Regression coverage is in
+    `tests/config-private-names.test.mjs`.

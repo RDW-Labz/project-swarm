@@ -21,7 +21,7 @@ async function fixture(t) {
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-live-shell-')));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const repo = path.join(base, 'repo'), fakeHome = path.join(base, 'fakehome');
-  const planted = { denied: path.join(fakeHome, '.oasis/secret.txt'), keychain: path.join(fakeHome, 'Library/Keychains/login.keychain-db'), creds: path.join(fakeHome, '.claude/.credentials.json') };
+  const planted = { denied: path.join(fakeHome, '.ssh/secret.txt'), keychain: path.join(fakeHome, 'Library/Keychains/login.keychain-db'), creds: path.join(fakeHome, '.claude/.credentials.json') };
   for (const file of Object.values(planted)) { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, 'PLANTED-SECRET\n'); }
   const outside = path.join(base, 'outside.txt');
   await fs.mkdir(repo);

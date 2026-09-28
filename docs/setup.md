@@ -28,6 +28,15 @@ node tools/swarm.mjs doctor
 
 Read [the security boundaries](../SECURITY.md) before copying sensitive files into a worker context. Add `.swarm/` to your project's `.gitignore`; local run records can contain source code, prompts, and provider responses.
 
+## Local machine config
+
+Anything project-specific (a keychain service name, a rig port file, a cheap-tier model
+override, extra denied home directories, a private-names list) lives in a small local, machine-specific
+config file, never as a source literal: `$XDG_CONFIG_HOME/project-swarm/config.json` when
+`XDG_CONFIG_HOME` is set to an absolute path, else `~/.config/project-swarm/config.json`.
+`SWARM_CONFIG` overrides either. This file must sit outside any git work tree, including the
+shared install's own checkout — the runner refuses to read a config file found inside one.
+
 ## One shared install per machine
 
 Project Swarm uses a single shared install per machine instead of a copy inside every project. Clone (or update) it once at `~/.project-swarm` (or choose another directory and invoke its runner explicitly), then register the skill for every agent home on the machine:
