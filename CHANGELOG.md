@@ -51,7 +51,13 @@
   genuine launch failure (`spawnError`, distinguished the same way `error.code` already told a real
   exit apart from one), and `ship` reports `lock-check-cannot-run: <path> (<errno>)` instead of the
   empty `<name> failed: ` (lesson #181).
-- docs/lessons.md entries 81–84.
+- `ship` now warns `no-lockfile: <path>/package.json has no package-lock.json` when
+  a changed Node manifest has no lockfile, and explicitly reports that `npm-lock-check`
+  did not run. A present lockfile still runs `npm ci --dry-run`; stale or inconsistent
+  locks still refuse before push. Added the project's dependency-free `package-lock.json`
+  at version 1.24.0 and regression coverage including a real npm stale-lock refusal
+  (lesson #183).
+- docs/lessons.md entries 81–85.
 
 ## 1.23.0
 

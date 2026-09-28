@@ -877,3 +877,13 @@ rule is enforced or documented.
     that spawns a resolved path now distinguishes "never started" from "ran
     and exited non-zero," naming the failure either way. Regression coverage
     is in `tests/field-lessons-batch-k.test.mjs`.
+85. **A lock check ran without the lockfile it needed.** A changed dependency
+    manifest triggered a strict install check in a project that had no
+    lockfile, so the check refused before shipping could proceed. Rule:
+    commit a lockfile for every Node project; a missing lockfile must name
+    the manifest in a warning and explicitly say the lock check did not run.
+    Enforcement: ship warns when the manifest exists without its lockfile;
+    when the lockfile exists, the strict install check still runs and a
+    stale or inconsistent lockfile still refuses before push. Regression
+    coverage includes a real local dependency mismatch in
+    `tests/field-lesson183.test.mjs`.

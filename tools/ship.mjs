@@ -687,7 +687,24 @@ export async function ship(options) {
   // stale; the matching project lock check runs once, right before push, so a bad lockfile never
   // reaches CI as a surprise.
   if (integratedFiles.length) {
-    const lockCheck = selectLockCheck(integratedFiles);
+    let lockCheck = selectLockCheck(integratedFiles);
+    if (lockCheck?.name === 'npm-lock-check') {
+      // Field lesson #183: only a confirmed missing lockfile skips npm ci. A present
+      // lockfile still gets the strict check, including malformed or stale lockfiles.
+      const exists = async file => fs.stat(file).then(() => true).catch(error => {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+      });
+      try {
+        if (await exists(path.join(root, 'package.json')) && !await exists(path.join(root, 'package-lock.json'))) {
+          base.warnings.push(`no-lockfile: ${path.join(root, 'package.json')} has no package-lock.json`);
+          base.warnings.push('npm-lock-check did not run: package-lock.json is missing');
+          lockCheck = null;
+        }
+      } catch (error) {
+        return { ...base, status: 'refused', reason: `lock-check-cannot-run: ${error.message}` };
+      }
+    }
     if (lockCheck) {
       // Field lesson #172: `uv` (unlike `npm`) is not reliably on a bare PATH; resolve it like
       // every other toolchain binary before ever spawning it, and refuse at once, naming every

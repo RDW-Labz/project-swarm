@@ -104,6 +104,9 @@ describe('L166: shipRun wires integratedFiles into ship(), so the #147 lock chec
     await git(root, ['add', 'package.json']);
     await git(root, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'package.json']);
 
+    // A stale lock must exist: without one, lesson #183 explicitly warns and skips npm ci.
+    await fs.writeFile(path.join(root, 'package-lock.json'), '{}');
+
     // A fake npm on PATH ahead of the real one: always fails npm-lock-check's `npm ci --dry-run`.
     const binDir = await tmp(t, 'swarm-166-bin-');
     const marker = path.join(binDir, 'npm-called');
