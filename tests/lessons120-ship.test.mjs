@@ -203,7 +203,9 @@ test('ship: ci-failed on a 1/3 OS matrix prints the platform-only failure line n
     clean(), rev('sha123'), clean(), ok('[]'), ok(prJson()),
     ok(rollupView({ statusCheckRollup: rollup })),
   ]);
-  const result = await ship(baseOptions(root, payloadPath, { exec }));
+  // Field lesson #243: rerunFlaky pinned to 0 here — this test is about the platform-only warning
+  // line, not the new default-rerun behavior (covered in tests/field-lessons-batch-r.test.mjs).
+  const result = await ship(baseOptions(root, payloadPath, { exec, rerunFlaky: 0 }));
   assert.equal(result.status, 'ci-failed');
   assert.ok(result.warnings.includes('platform-only failure: ubuntu: test (ubuntu-latest, 20.x)'));
 });

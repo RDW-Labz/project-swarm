@@ -3668,8 +3668,10 @@ export function parseShipFlags(flags) {
     else if (flag === '--timeout') { if (!/^\d+(\.\d+)?$/.test(value) || Number(value) <= 0) fail('--timeout requires a positive number of seconds'); timeoutMs = Number(value) * 1000; }
     else if (flag === '--tag-timeout') { if (!/^\d+(\.\d+)?$/.test(value)) fail('--tag-timeout requires a non-negative number of seconds'); tagTimeoutMs = Number(value) * 1000; }
     else if (flag === '--poll') { if (!/^\d+(\.\d+)?$/.test(value) || Number(value) <= 0) fail('--poll requires a positive number of seconds'); pollMs = Number(value) * 1000; }
-    // Field lesson #178: how many times ship reruns CI's failed jobs before giving up, only when
-    // none of the tests they failed on are in this ship's own diff (default 0: never rerun).
+    // Field lesson #178/#243: how many times ship reruns CI's failed jobs before giving up, only
+    // when none of the tests they failed on are in this ship's own diff. Left undefined here when
+    // the flag is absent so ship() can apply its own platform-only default instead of always 0;
+    // an explicit value (including 0) always wins over that default.
     else if (flag === '--rerun-flaky') { if (!/^\d+$/.test(value)) fail('--rerun-flaky requires a non-negative integer'); rerunFlaky = Number(value); }
     // Field lesson #179: an owner decision to excuse one file from one diff guard, with a reason.
     else if (flag === '--exempt') {
@@ -3792,7 +3794,7 @@ export async function shipBranch(root, flags, { spawnImpl = spawn, exec = shipEx
     pollMs: flags.pollMs ?? SHIP_DEFAULTS.pollMs,
     timeoutMs: flags.timeoutMs ?? SHIP_DEFAULTS.timeoutMs,
     noCiGraceMs: SHIP_DEFAULTS.noCiGraceMs,
-    rerunFlaky: flags.rerunFlaky ?? 0,
+    rerunFlaky: flags.rerunFlaky,
     exemptions: flags.exemptions ?? [],
     privateNamesFile: flags.privateNamesFile ?? null,
     portBase, portWarnings,
@@ -3859,7 +3861,7 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
     pollMs: flags.pollMs ?? SHIP_DEFAULTS.pollMs,
     timeoutMs: flags.timeoutMs ?? SHIP_DEFAULTS.timeoutMs,
     noCiGraceMs: SHIP_DEFAULTS.noCiGraceMs,
-    rerunFlaky: flags.rerunFlaky ?? 0,
+    rerunFlaky: flags.rerunFlaky,
     exemptions: flags.exemptions ?? [],
     privateNamesFile: flags.privateNamesFile ?? null,
     portBase, portWarnings,

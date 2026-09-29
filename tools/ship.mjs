@@ -881,7 +881,7 @@ export async function ship(options) {
     portBase = null, portWarnings = [],
     integratedFiles = [],
     packagingChanges = [], checkArgvs = [], extraWarnings = [],
-    rerunFlaky = 0,
+    rerunFlaky,
     exemptions = [],
     runChecks, exec, sleep, now = () => Date.now(),
     env = process.env,
@@ -1271,11 +1271,25 @@ export async function ship(options) {
   // Field lesson #178: a ci-failed run whose failing tests are not in this ship's own diff (a
   // flaky test elsewhere) gets up to `rerunFlaky` automatic reruns of just the failed jobs before
   // it blocks the ship; a failing test that IS in the diff is never rerun (a real regression).
-  let rerunAttempts = 0, rerunTests = null;
+  // Field lesson #243: an explicit --rerun-flaky (including 0) always wins; when the flag is
+  // absent (rerunFlaky undefined here), ship defaults to one automatic rerun only when every
+  // failed check is platform-only, and to zero otherwise.
+  let rerunAttempts = 0, rerunTests = null, defaultRerunWarned = false;
   while (ci.failed.length > 0) {
     // Field lesson 151: named up front so the next job starts from "this OS only", not a guess.
-    for (const entry of platformOnlyFailures(ciRollup)) base.warnings.push(`platform-only failure: ${entry.os}: ${entry.testIds.join(', ')}`);
-    if (!(rerunFlaky > 0 && rerunAttempts < rerunFlaky)) {
+    const platformOnly = platformOnlyFailures(ciRollup);
+    for (const entry of platformOnly) base.warnings.push(`platform-only failure: ${entry.os}: ${entry.testIds.join(', ')}`);
+    let effectiveRerunFlaky = rerunFlaky;
+    if (effectiveRerunFlaky === undefined) {
+      const platformOnlyNames = new Set(platformOnly.flatMap(entry => entry.testIds));
+      const allPlatformOnly = ci.failed.every(name => platformOnlyNames.has(name));
+      effectiveRerunFlaky = allPlatformOnly ? 1 : 0;
+      if (allPlatformOnly && !defaultRerunWarned) {
+        base.warnings.push('rerun-flaky-default: 1 (platform-only)');
+        defaultRerunWarned = true;
+      }
+    }
+    if (!(effectiveRerunFlaky > 0 && rerunAttempts < effectiveRerunFlaky)) {
       return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}`, ...(rerunTests ? { flakyRerun: { attempts: rerunAttempts, result: 'failed', tests: rerunTests } } : {}) };
     }
     const runIds = failedRunIds(ciRollup, ci.failed);
