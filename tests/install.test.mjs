@@ -153,6 +153,7 @@ test('installProject writes a pointer and the registry, and copies no runner',as
  assert.deepEqual(registry,[await fs.realpath(project)]);
  assert.equal(result.coordinationCreated,true);
  assert.ok(result.added.includes('coordination/swarm-smoke.json'));
+ assert.ok(result.added.includes('coordination/CONTRACT.md'));
  await assert.rejects(fs.access(path.join(project,'tools')));
  await assert.rejects(fs.access(path.join(project,'tests')));
  await assert.rejects(fs.access(path.join(project,'skills')));

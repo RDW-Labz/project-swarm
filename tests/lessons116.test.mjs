@@ -74,14 +74,16 @@ test('B: a non-zero exit keeps its own stderr reason in agentError and agent.log
   assert.match(log, /out of credits/);
 });
 
-test('B: a job that reports success but writes none of its declared outputs keeps today\'s status, undisturbed by agentError', async t => {
+test('B: a job that reports success but writes none of its declared outputs keeps today\'s status, undisturbed by agentError (#232: never-written, not a delete)', async t => {
   const root = await fixture(t);
   const silent = (_cmd, _args, options) => spawn(process.execPath, ['-e', "process.stderr.write('note: nothing to change\\n');console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'ok, done'}));"], options);
   const state = await runManifest(root, manifest({ outputs: ['new-output.txt'] }), { spawnImpl: silent });
   assert.equal(state.jobs[0].status, 'complete');
   assert.equal(state.jobs[0].agentError, undefined);
   assert.equal(state.jobs[0].error, null);
-  await assert.rejects(integrateRun(root, state.id), /Missing output/);
+  const result = await integrateRun(root, state.id);
+  assert.equal(result.status, 'integrated');
+  assert.ok(result.warnings.some(w => w === 'output-never-written: new-output.txt'), JSON.stringify(result.warnings));
 });
 
 test('B: a worker\'s own blocked envelope is reported as job status blocked, not masked by "missing output"', async t => {

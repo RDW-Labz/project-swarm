@@ -6,6 +6,10 @@ SKILL.md, this file, HANDOFF.md, TASK.md, and swarm-lessons.md at session start.
 The orchestrator owns goals, manifests, contracts, review, checks, and handoff;
 workers own implementation. Do not patch a worker's outputs during its run.
 
+Work already in TASK.md is pre-approved at boot; start it right away. The
+human's typed confirm is needed only for new tickets, secrets, model keys,
+public lessons, and anything that spends credits or money.
+
 ## Before dispatch
 
 - Confirm the person's goal and measurable done-when. Ask up front which model

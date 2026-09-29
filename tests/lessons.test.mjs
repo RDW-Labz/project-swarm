@@ -269,7 +269,10 @@ test('a mutant whose find text occurs twice (in the proposed bytes) refuses inte
 
 test('a mutation check timeout is reported as an error and still restores the original file', async t => {
   const root = await fixture(t);
-  const plan = { version: 1, jobs: [job()], mutants: [{ name: 'hang', file: 'input.txt', find: 'updated', replace: 'mutated' }], mutantCheck: { argv: [process.execPath, '-e', 'setInterval(()=>{},1000)'], timeoutMs: 1000 } };
+  // #233: the baseline (unmutated) run must pass, so the check hangs only once the mutant
+  // actually changes the file's content, never on the pre-mutation tree.
+  const checkScript = "const t=require('fs').readFileSync('input.txt','utf8');if(t.includes('mutated'))setInterval(()=>{},1000);else process.exit(0);";
+  const plan = { version: 1, jobs: [job()], mutants: [{ name: 'hang', file: 'input.txt', find: 'updated', replace: 'mutated' }], mutantCheck: { argv: [process.execPath, '-e', checkScript], timeoutMs: 1000 } };
   const state = await runManifest(root, plan, { spawnImpl: update });
   const result = await integrateRun(root, state.id, { mutants: true });
   assert.equal(result.mutants[0].status, 'error');
@@ -302,7 +305,9 @@ test('mutants never execute during run, only during integrate --mutants', async 
 
 test('integrate --mutants expands {root} inside a mutantCheck argv item to the run\'s absolute project root', async t => {
   const root = await fixture(t);
-  const script = "require('fs').writeFileSync('root-received.txt',process.argv[1]);process.exit(1)";
+  // #233: the baseline (unmutated) run must pass, so the check only fails once the mutant
+  // actually changes the file's content, never on the pre-mutation tree.
+  const script = "const fs=require('fs');fs.writeFileSync('root-received.txt',process.argv[1]);process.exit(fs.readFileSync('input.txt','utf8').includes('mutated')?1:0);";
   const plan = { version: 1, jobs: [job()], mutants: [{ name: 'flip', file: 'input.txt', find: 'updated', replace: 'mutated' }], mutantCheck: { argv: [process.execPath, '-e', script, 'PREFIX={root}/marker'] } };
   const state = await runManifest(root, plan, { spawnImpl: update });
   const result = await integrateRun(root, state.id, { mutants: true });

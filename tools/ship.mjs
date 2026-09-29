@@ -564,6 +564,26 @@ async function releaseVersion(exec, root, branch) {
   } catch { return null; }
 }
 
+// Field lesson #234: a PR titled with a release version merged with package.json left at the
+// prior version and CHANGELOG still `## Unreleased` — the batch contract said "version is set at
+// ship", but ship never actually set (or even checked) either one, so no release tag was created
+// and a second bump PR was needed. Only a title that actually names a release version triggers
+// this check at all; any other PR title (most ships) is unaffected.
+const RELEASE_TITLE_VERSION_RE = /^(?:Release\s+)?(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)\b/;
+export function releaseTitleVersion(title) {
+  return RELEASE_TITLE_VERSION_RE.exec(String(title ?? '').trim())?.[1] ?? null;
+}
+async function currentPackageVersion(exec, root) {
+  const res = await exec('git', ['show', 'HEAD:package.json'], { cwd: root });
+  if (res.code !== 0) return null;
+  try { const version = JSON.parse(res.stdout).version; return typeof version === 'string' ? version : null; } catch { return null; }
+}
+async function changelogTopHeading(exec, root) {
+  const res = await exec('git', ['show', 'HEAD:CHANGELOG.md'], { cwd: root });
+  if (res.code !== 0) return null;
+  return /^##\s+(.+)$/m.exec(res.stdout)?.[1].trim() ?? null;
+}
+
 // Field lesson #174: `ship --require-section 'Mutation check'` used to refuse a PR body whose
 // heading was `## Mutation check (mutant -> killing test)` — a real section, just with more text
 // in the heading than the required name. A required section now matches `## <name>` followed by
@@ -961,6 +981,22 @@ export async function ship(options) {
   if (shaRes.code !== 0 || shaRes.stdout.trim() === '') return { ...base, status: 'refused', reason: stepFailed('rev-parse', shaRes) };
   const sha = shaRes.stdout.trim();
   base.sha = sha;
+
+  // Field lesson #234: the job that owns CHANGELOG owns the version bump in the same PR. Only a
+  // PR title that actually names a release version triggers this; a title naming one that differs
+  // from package.json, or a CHANGELOG top heading still `Unreleased`, refuses before anything is
+  // pushed.
+  const releaseVersionInTitle = releaseTitleVersion(payload.title);
+  if (releaseVersionInTitle) {
+    const pkgVersion = await currentPackageVersion(exec, root);
+    const changelogHeading = await changelogTopHeading(exec, root);
+    if (pkgVersion !== releaseVersionInTitle || changelogHeading === 'Unreleased') {
+      return {
+        ...base, status: 'refused', code: 'release-version-mismatch',
+        reason: `release-version-mismatch: PR title names ${releaseVersionInTitle}, package.json is ${pkgVersion ?? 'unknown'}, CHANGELOG top heading is ${changelogHeading ?? 'unknown'}`,
+      };
+    }
+  }
 
   // Field lesson #213: refuses before push when any commit in this diff carries an author or
   // committer email that is neither the repo's own configured user.email nor a GitHub noreply

@@ -212,6 +212,53 @@ export function undeclaredPersistedFieldWarnings(job, parsedResult, file, before
   return [{ code: 'new-persisted-field-undeclared', jobId: job.id, path: file, fields: added, message: `${job.id}'s ${file} adds field(s) ${added.join(', ')} to a serialized dataclass; its result reports no newPersistedFields (name, legacyDefault, why), so a legacy record on disk with no from-disk test may silently change meaning.` }];
 }
 
+// Field lesson #229: a shared contract's own "Event names" table (`event | producer file:line |
+// reader file:line`) names every log/event a job's code writes or reads; a row with an empty
+// producer cell names a reader with no producer anywhere in this batch, the exact shape that let
+// 8 of 11 reader lines go unmeasured while fixture events fed the reader directly in tests.
+function parseContractEventRows(text) {
+  const rows = [];
+  let inTable = false;
+  for (const rawLine of String(text ?? '').split('\n')) {
+    const line = rawLine.trim();
+    if (/^\|.*\bevent\b.*\|.*\bproducer\b.*\|.*\breader\b.*\|$/i.test(line)) { inTable = true; continue; }
+    if (!inTable) continue;
+    if (!line.startsWith('|')) { inTable = false; continue; }
+    const cells = line.slice(1, line.endsWith('|') ? -1 : undefined).split('|').map(cell => cell.trim());
+    if (cells.length !== 3 || cells.every(cell => /^:?-+:?$/.test(cell)) || !cells[0]) continue;
+    rows.push({ event: cells[0], producer: cells[1], reader: cells[2] });
+  }
+  return rows;
+}
+export function eventReaderNoProducerWarnings(text) {
+  return parseContractEventRows(text).filter(row => !row.producer).map(row => ({
+    code: 'event-reader-no-producer', event: row.event, reader: row.reader,
+    message: `event-reader-no-producer: ${row.event}: contract lists reader ${row.reader} with no producer`,
+  }));
+}
+
+// Field lesson #235: a date-window comparison judged only ever by a UTC clock can pass every test
+// while being wrong for whoever isn't on UTC (a T66 forced run at 21:17 CT landed outside a window
+// bucketed by UTC day). Fires only when a job's own output source touches a date-window call and
+// none of that job's own test files (context or outputs) mention a non-UTC zone.
+const DATE_WINDOW_RE = /\bdate\(|astimezone\(\s*UTC\b|timezone\.utc\b/;
+const NON_UTC_ZONE_RE = /timezone\(\s*timedelta\(\s*hours\s*=|ZoneInfo\(|\bTZ\s*=/;
+export function utcOnlyWindowTestWarning(job, fileTexts) {
+  const touchesDateWindow = (job.outputs ?? []).some(file => !isTestFile(file) && DATE_WINDOW_RE.test(fileTexts.get(file) ?? ''));
+  if (!touchesDateWindow) return null;
+  const jobFiles = [...(job.context ?? []), ...(job.outputs ?? [])];
+  const hasNonUtcTest = jobFiles.some(file => isTestFile(file) && NON_UTC_ZONE_RE.test(fileTexts.get(file) ?? ''));
+  if (hasNonUtcTest) return null;
+  return { code: 'utc-only-window-tests', jobId: job.id, message: `${job.id}: outputs touch a date-window comparison (date()/astimezone(UTC)/timezone.utc) but no test in its context/outputs mentions a non-UTC zone (lesson #235)` };
+}
+
+// Field lesson #231: a job may declare `maxCredits` (a number) and `creditPreflight` (a JSON file
+// `[{"call": str, "cost": number}, ...]` the worker or orchestrator wrote from a real cost
+// preflight); the sum is computed here, in code, never trusted as a prompt's own mental math.
+export function sumCreditPreflight(entries) {
+  return (Array.isArray(entries) ? entries : []).reduce((total, entry) => total + (Number(entry?.cost) || 0), 0);
+}
+
 // Field lesson #165: parallel slices — separate open runs of this same repo, each in its own
 // worktree/branch — that both list one output file each rebase against their own stale copy of
 // it; a hand union-merge of the two independent results can break the file's own syntax. `run`
@@ -740,6 +787,14 @@ export function validateManifest(manifest) {
       if (typeof job.keepScratch !== 'boolean') fail(`Job ${job.id}: keepScratch must be true or false`);
     }
     if (job.maxOutputTokens !== undefined && (!API_AGENTS.includes(job.agent) || !Number.isInteger(job.maxOutputTokens) || job.maxOutputTokens < 256 || job.maxOutputTokens > 32768)) fail('maxOutputTokens is API-only and must be 256–32768');
+    // Field lesson #231: a job cap enforced in code, never by prompt text alone; a job that
+    // declares maxCredits with no readable creditPreflight refuses at validate/run time, before
+    // any spend, rather than trusting a worker's own step to stop itself.
+    if (job.maxCredits !== undefined && (typeof job.maxCredits !== 'number' || !Number.isFinite(job.maxCredits) || job.maxCredits <= 0)) fail(`Job ${job.id}: maxCredits must be a positive number`);
+    if (job.creditPreflight !== undefined) {
+      if (typeof job.creditPreflight !== 'string') fail(`Job ${job.id}: creditPreflight must be a relative file path`);
+      relative(job.creditPreflight);
+    }
     // tier is advisory routing metadata for the coordinator, not a model selector: an explicit
     // job.model always wins. expensive must name why, so the choice is inspectable, not gut feel.
     if (job.tier !== undefined && !TIERS.includes(job.tier)) fail(`Unknown tier: ${job.tier}`);
@@ -750,7 +805,7 @@ export function validateManifest(manifest) {
     if (new Set(job.context).size !== job.context.length || new Set(job.outputs).size !== job.outputs.length) fail('Duplicate file path');
     for (const file of [...job.context, ...job.outputs]) relative(file);
     // Decision #227: a deepseek/* model on OpenRouter writes bookkeeping files only.
-    if (job.agent === 'openrouter') { const bad = nonBookkeepingOutputs(job.model, job.outputs); if (bad.length) fail(`Job ${job.id}: ${job.model} is for bookkeeping jobs only (PR payloads, changelogs, mutants files, metrics); refused outputs: ${bad.join(', ')}`); }
+    if (job.agent === 'openrouter') { const bad = nonBookkeepingOutputs(job.model, job.outputs); if (bad.length) fail(`Job ${job.id}: ${job.model} is for bookkeeping jobs only (PR payloads, changelogs, mutants files, metrics, .swarm-manifests/*.md); a contract or other .md with design content goes to a cheap Claude tier instead; refused outputs: ${bad.join(', ')}`); }
     if (job.resultFile !== undefined) {
       if (!job.outputs.includes(job.resultFile)) fail(`Job ${job.id}: resultFile must be one of its outputs`);
       relative(job.resultFile);
@@ -813,7 +868,7 @@ export function validateManifest(manifest) {
       if (job.outputs.length) fail('a web job must be read-only (no outputs)');
     }
     // Unknown command/provider fields cannot create an execution path.
-    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills'].includes(key)) fail(`Unknown job field: ${key}`);
+    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight'].includes(key)) fail(`Unknown job field: ${key}`);
   }
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
   for (const job of manifest.jobs) for (const afterId of job.after ?? []) if (!ids.has(afterId.toLowerCase())) fail(`Job ${job.id} after names unknown job ${afterId}`);
@@ -2177,6 +2232,23 @@ async function loadMutantsFile(path_) {
   try { data = JSON.parse(raw); } catch { fail(`Invalid JSON in mutants file: ${path_}`); }
   return readMutantsSource(path_, data);
 }
+// Field lesson #236: `--mutants-file` naming one of THIS SAME run's own job outputs is not on disk
+// at the project root yet (integrate validates every mutants source before writing a single file);
+// its bytes are already sitting in `writes`, computed a few lines above this call, so those are
+// tried before ever failing "Could not read".
+async function loadMutantsFileForIntegrate(root, mutantsFile, writes) {
+  const resolved = path.resolve(root, mutantsFile);
+  let raw = null;
+  try { raw = await fs.readFile(resolved, 'utf8'); } catch { /* fall back to this run's own outputs below */ }
+  if (raw === null) {
+    const fromRun = writes.find(change => change.file === mutantsFile && change.bytes !== null);
+    if (fromRun) raw = fromRun.bytes.toString('utf8');
+  }
+  if (raw === null) fail(`Could not read mutants file: ${resolved}`);
+  let data;
+  try { data = JSON.parse(raw); } catch { fail(`Invalid JSON in mutants file: ${resolved}`); }
+  return readMutantsSource(resolved, data);
+}
 // A job's own `mutantsFile` output only exists once the run's outputs are integrated, so it is
 // read from the project root (post-integration bytes), the same files a post-build mutant's
 // `find` is checked against.
@@ -2214,23 +2286,29 @@ async function runMutants(root, manifest, spawnImpl, { mutantsFile, mutantCheck:
   const checkSpec = manifest.mutantCheck ?? (mutantCheckFlag ? parseMutantCheckFlag(mutantCheckFlag) : null);
   if (!checkSpec && !mutants.every(mutant => mutant.check)) fail('No mutantCheck declared in this manifest; add manifest.mutantCheck, or pass --mutant-check "<argv json>", to use --mutants');
   const env = { ...process.env, ...extraEnv, ...(portBase != null ? { SWARM_PORT_BASE: String(portBase) } : {}) };
-  // Field lesson #162: the shared check already passed as a manifest check (or the mutants were
-  // skipped for a red base); a mutant's own check is new here, so it must pass unmutated first.
-  const ownBaselines = new Map();
+  // Field lesson #162/#233: every distinct check in use (a mutant's own, or the shared one) runs
+  // once on the unmutated tree before any mutant is touched. A real incident had all 12 mutants
+  // `error` exit 127 (the checked-out env had no `node` on PATH) while `integrated: true` still
+  // read as a clean pass; a broken check now refuses `mutant-check-broken` outright, naming the
+  // exit code and tail, instead of quietly turning every mutant that used it into an `error`.
+  const distinctChecks = new Map();
   for (const mutant of mutants) {
-    if (!mutant.check) continue;
-    const key = JSON.stringify(mutant.check);
-    if (!ownBaselines.has(key)) ownBaselines.set(key, await runCheck('mutant-check-baseline', expandRootArgv(mutant.check, root), root, checkSpec?.timeoutMs ?? 300000, spawnImpl, false, () => {}, env));
+    const argv = mutant.check ?? checkSpec.argv;
+    const key = JSON.stringify(argv);
+    if (!distinctChecks.has(key)) distinctChecks.set(key, argv);
+  }
+  for (const argv of distinctChecks.values()) {
+    const baseline = await runCheck('mutant-check-baseline', expandRootArgv(argv, root), root, checkSpec?.timeoutMs ?? 300000, spawnImpl, false, () => {}, env);
+    if (baseline.status !== 'passed') fail(`mutant-check-broken: ${JSON.stringify(argv)} does not pass on the unmutated tree (${baseline.status}${Number.isInteger(baseline.exitCode) ? `, exit ${baseline.exitCode}` : ''}): ${baseline.tail.split('\n').slice(-3).join(' ').trim()}`);
   }
   const results = [];
-  for (const mutant of mutants) {
-    const baseline = mutant.check ? ownBaselines.get(JSON.stringify(mutant.check)) : null;
-    if (baseline && baseline.status !== 'passed') { results.push({ name: mutant.name, file: mutant.file, status: 'error', exitCode: baseline.exitCode, durationMs: 0, tail: `mutant check does not pass on the unmutated tree (${baseline.status})`, check: 'mutant', checkArgv: mutant.check }); continue; }
-    results.push(await runMutant(root, mutant, checkSpec, spawnImpl, env));
-  }
+  for (const mutant of mutants) results.push(await runMutant(root, mutant, checkSpec, spawnImpl, env));
   const summary = { killed: 0, survived: 0, errors: 0 };
   for (const result of results) summary[result.status === 'killed' ? 'killed' : result.status === 'survived' ? 'survived' : 'errors']++;
-  return { mutants: results, mutantsSummary: summary, mutantsPassed: summary.survived === 0 && summary.errors === 0 };
+  // Field lesson #233: a bare errors count is easy to misread as "not scored"; this line spells
+  // out that an errored mutant is never a kill, right next to the counts themselves.
+  const mutantsSummaryLine = `${summary.killed} killed, ${summary.survived} survived${summary.errors > 0 ? `, ${summary.errors} errored — not a kill` : ''}`;
+  return { mutants: results, mutantsSummary: summary, mutantsSummaryLine, mutantsPassed: summary.survived === 0 && summary.errors === 0 };
 }
 
 // Field lesson 117: `mutants` works directly on the current tree — no run id, no manifest, no
@@ -2259,7 +2337,9 @@ export async function runMutantsCurrentTree(root, { mutantsFile, mutantCheck, dr
   for (const mutant of mutants) { const argv = mutant.check ?? checkSpec.argv; distinct.set(JSON.stringify(argv), argv); }
   for (const argv of distinct.values()) {
     const baseline = await runCheck('mutants-baseline', expandRootArgv(argv, root), root, checkSpec?.timeoutMs ?? 300000, spawnImpl, false, () => {}, env);
-    if (baseline.status !== 'passed') fail(`Refusing to run mutants: the mutant check ${JSON.stringify(argv)} does not pass on the unmutated tree (${baseline.status}${Number.isInteger(baseline.exitCode) ? `, exit ${baseline.exitCode}` : ''})`);
+    // Field lesson #233: names both the exit code and the check's own tail, so a broken toolchain
+    // (exit 127, say) is never mistaken for the mutant target itself being broken.
+    if (baseline.status !== 'passed') fail(`Refusing to run mutants: mutant-check-broken: the mutant check ${JSON.stringify(argv)} does not pass on the unmutated tree (${baseline.status}${Number.isInteger(baseline.exitCode) ? `, exit ${baseline.exitCode}` : ''}): ${baseline.tail.split('\n').slice(-3).join(' ').trim()}`);
   }
   const results = [];
   for (const mutant of mutants) {
@@ -2339,6 +2419,10 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   const newFiles = [];
   const jobMutantsBytes = new Map();
   const inventedHashWarnings = [];
+  // Field lesson #232: an output absent from both base and workspace was simply never written by
+  // its job (a manifest typo, most likely), never the same thing as a worker deleting a file base
+  // already had; collected here instead of failing so a valid run still integrates.
+  const neverWrittenOutputs = [];
   // Field lesson 126s: the same source dir a run itself resolved, re-read fresh here so a check
   // reflects the frontmatter as it stands now, not as it stood when the job ran.
   const skillsSourceDirAtIntegrate = resolveSkillsDir(manifest, loadLocalConfig({ env }), root);
@@ -2364,11 +2448,17 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
         const currentMode=current===null?0o644:(await fs.stat(await safePath(root,file))).mode & 0o777;
         const output = await bytesAt(readRoot, file);
         if (output === null) {
+          // Field lesson #232: absent from base too means this was never written, not deleted —
+          // the orchestrator's own typo case (a declared output that never existed anywhere), kept
+          // distinct from the real undeclared-delete guard just below.
+          if (current === null) {
+            if (!(declared.deletes ?? []).includes(file)) neverWrittenOutputs.push(file);
+            continue; // Already absent from base and workspace: nothing to delete or roll back.
+          }
           // Field lesson #196: a worker's own output missing from its workspace is only ever a
           // real, intended deletion when this job's manifest names the path in `deletes`; anything
           // else refuses instead of silently dropping the file.
           if (!(declared.deletes ?? []).includes(file)) fail(`Missing output (deletions are never propagated): ${file} (undeclared-delete: not listed in this job's manifest deletes)`);
-          if (current === null) continue; // Already absent: nothing to delete or roll back.
           const alreadyApplied = state.integrationStatus === 'partial' && currentHash === null;
           if (!alreadyApplied) {
             if (job.baseModes?.[file] !== undefined && currentMode !== job.baseModes[file]) fail(`Integration conflict: ${file} permissions changed since worker snapshot`);
@@ -2423,7 +2513,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
           sourced.push(...readMutantsSource(job.mutantsFile, data));
         }
       }
-      if (mutantsFile) sourced.push(...await loadMutantsFile(path.resolve(root, mutantsFile)));
+      if (mutantsFile) sourced.push(...await loadMutantsFileForIntegrate(root, mutantsFile, writes));
       preValidatedMutants = validateMutantsArray(sourced);
       if (!preValidatedMutants.length) fail('No mutants declared in this manifest; add manifest.mutants, a job mutantsFile output, or --mutants-file to use --mutants');
       if (!manifest.mutantCheck) {
@@ -2476,13 +2566,23 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
     // least surfaced instead of silently stale.
     const lockfileChanged = state.integratedFiles.some(file => ENV_RESYNC_TRIGGER_NAMES.has(path.basename(file)));
     const preChecksResult = { preChecks: [], warnings: [] };
-    if (lockfileChanged) {
-      if (manifest.preChecks?.length) {
-        for (const [index, argv] of manifest.preChecks.entries()) preChecksResult.preChecks.push(await runCheck(argv.join(' ').slice(0, 60) || `preCheck-${index + 1}`, expandRootArgv(argv, root), root, 300000, spawnImpl, false, () => {}, portEnv));
-      } else preChecksResult.warnings.push('lockfile changed, env not synced');
+    // Field lesson #236: preChecks (a fresh worktree's own `uv sync --offline --locked`, say) run
+    // on every integrate, not only when this particular run happened to touch a lockfile — a run
+    // whose own diff never moved a lockfile byte still needs its checked-out environment synced
+    // from scratch in a fresh worktree.
+    if (manifest.preChecks?.length) {
+      for (const [index, argv] of manifest.preChecks.entries()) preChecksResult.preChecks.push(await runCheck(argv.join(' ').slice(0, 60) || `preCheck-${index + 1}`, expandRootArgv(argv, root), root, 300000, spawnImpl, false, () => {}, portEnv));
+    } else if (lockfileChanged) {
+      preChecksResult.warnings.push('lockfile changed, env not synced');
     }
     state.preChecks = preChecksResult.preChecks;
     if (preChecksResult.warnings.length) state.preCheckWarnings = preChecksResult.warnings;
+    // Field lesson #236: a preCheck that could not even start (ENOENT/127 — the exact shape of a
+    // fresh worktree with no toolchain synced yet) refuses `checks-not-runnable` here, before the
+    // manifest's own checks or any mutant ever runs; a broken toolchain is never scored as a red
+    // base (the change itself was never actually exercised).
+    const brokenPreCheck = preChecksResult.preChecks.find(result => CHECK_ERRORED_STATUSES.has(result.status));
+    if (brokenPreCheck) fail(`checks-not-runnable: preCheck ${brokenPreCheck.name} ${brokenPreCheck.status}${Number.isInteger(brokenPreCheck.exitCode) ? ` (exit ${brokenPreCheck.exitCode})` : ''}: ${brokenPreCheck.tail.split('\n').slice(-3).join(' ').trim()}`);
     // Checks run after every integrated file is written and are never rolled back on failure:
     // a formatter may legitimately rewrite the files this same integration just wrote.
     // Field lesson 133: recorded as its own session-metrics window so "checks running" is
@@ -2511,7 +2611,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       }
       Object.assign(state, mutantsResult);
     }
-    const warnings = [...portWarnings, ...preChecksResult.warnings, ...(mutantsResult.mutantsSkippedRedBase ? ['mutants skipped: red base (checks failed)'] : []), ...droppedWriteWarnings(state), ...inventedHashWarnings, ...packagingWarnings];
+    const warnings = [...portWarnings, ...preChecksResult.warnings, ...(mutantsResult.mutantsSkippedRedBase ? ['mutants skipped: red base (checks failed)'] : []), ...droppedWriteWarnings(state), ...inventedHashWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)];
     // Field lesson 131: a blocked job's own outputs went in through the same checks as any other;
     // the run is tagged distinctly so a later `inspect`/`ship` never mistakes it for a clean pass,
     // and the blocked reason rides along as ready-made evidence for whatever job comes next.
@@ -2788,7 +2888,25 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   const skills = skillsSourceDir ? await listSkills(skillsSourceDir) : [];
   warnings.push(...skillSizeWarnings(skills));
   refuseOversizeSkills(skills);
+  // Field lesson #229: a shared contract's own Event names table is read once, here, so a reader
+  // with no producer anywhere in this batch is visible at validate time, not only once mutation
+  // testing shows most of the reader's own lines could never be measured live.
+  if (manifest.contract) {
+    const contractText = (await bytesAt(root, manifest.contract))?.toString('utf8') ?? '';
+    warnings.push(...eventReaderNoProducerWarnings(contractText));
+  }
   for(const job of manifest.jobs){
+    // Field lesson #231: computed and refused here, before this job (or any job after it) ever
+    // runs — a job cap is enforced by code, never by prompt text asking a worker to stop itself.
+    if (job.maxCredits !== undefined) {
+      const preflightBytes = job.creditPreflight ? await bytesAt(root, job.creditPreflight) : null;
+      if (preflightBytes === null) fail(`credit-preflight-missing: Job ${job.id}: creditPreflight ${job.creditPreflight ?? '(not set)'} could not be read`);
+      let preflightEntries;
+      try { preflightEntries = JSON.parse(preflightBytes.toString('utf8')); } catch { fail(`credit-preflight-missing: Job ${job.id}: creditPreflight ${job.creditPreflight} is not valid JSON`); }
+      if (!Array.isArray(preflightEntries)) fail(`credit-preflight-missing: Job ${job.id}: creditPreflight ${job.creditPreflight} must be a JSON array of {call, cost}`);
+      const sum = sumCreditPreflight(preflightEntries);
+      if (sum > job.maxCredits) fail(`credit-cap-exceeded: Job ${job.id}: preflight totals ${sum} credits over cap ${job.maxCredits} (${preflightEntries.length} calls)`);
+    }
     if (job.agent === 'codex') {
       await resolveReadPaths(job.readPaths);
       const files = await codexDirtyFiles(root, job);
@@ -2831,6 +2949,7 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
     let bytes=0, apiContextBytes=0;
     const files=[];
     const testOutputTexts = new Map();
+    const jobFileTexts = new Map();
     for(const file of new Set([...context,...job.outputs])){
       const data=await bytesAt(root,file);
       if(data===null && context.includes(file)) {
@@ -2845,13 +2964,23 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
       if (data !== null && context.includes(file) && data.toString('utf8').trim() === '' && !(manifest.allowEmptyContext ?? []).includes(file)) fail(`empty-context-file: ${file}`);
       // The shared contract's text now travels inside the prompt, so codex never needs it from HEAD.
       if (job.agent === 'codex' && context.includes(file) && file !== manifest.contract && !(await isTrackedByGit(root, file, exec))) fail(`Job ${job.id}: codex context file ${file} is not tracked by git (codex sees HEAD only)`);
+      // Field lesson #232: the actual incident was a typo'd *test file* path that never existed in
+      // base (`tests/skills.test.mjs`); scoped to test-shaped outputs so this stays a signal, not
+      // noise on every ordinary new-file output (never a refusal either way).
+      if (data === null && job.outputs.includes(file) && isTestFile(file)) warnings.push({ code: 'output-not-in-base', jobId: job.id, path: file, message: `${job.id}: declared output ${file} is absent from base; check for a typo` });
       bytes+=data?.length??0;
       if (API_AGENTS.includes(job.agent) && context.includes(file)) apiContextBytes += data?.length ?? 0;
       files.push({path:file,bytes:data===null?0:data.length,exists:data!==null,context:context.includes(file),output:job.outputs.includes(file)});
       if(data !== null && !['claude', 'codex'].includes(job.agent)) decodeContext(data);
       if(bytes>MAX_CONTEXT) fail(`Context exceeds 32 MiB for ${job.id}`);
       if (data !== null && job.outputs.includes(file) && isTestFile(file)) testOutputTexts.set(file, data.toString('utf8'));
+      if (data !== null) jobFileTexts.set(file, data.toString('utf8'));
     }
+    // Field lesson #235: a job output touching a date-window comparison with no test anywhere in
+    // its own context/outputs naming a non-UTC zone is worth a warning before that window is ever
+    // exercised only by the clock the test happened to run on.
+    const utcWindowWarning = utcOnlyWindowTestWarning(job, jobFileTexts);
+    if (utcWindowWarning) warnings.push(utcWindowWarning);
     // Row #217: the total a tool-free worker's context can carry, inlined text (never a patch);
     // over this, at least one file cannot be delivered whole and validate refuses up front.
     if (API_AGENTS.includes(job.agent) && apiContextBytes > CONTEXT_TOTAL_CAP) fail(`context-not-deliverable: context exceeds ${CONTEXT_TOTAL_CAP} bytes for ${job.id} (${apiContextBytes} bytes)`);

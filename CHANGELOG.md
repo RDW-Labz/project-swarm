@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.30.0
+
+- New `templates/coordination/CONTRACT.md`, an "Event names" table (`event | producer file:line | reader file:line`); `validate` warns `event-reader-no-producer` when a contract lists a read event with no producer. (lesson 229)
+- OpenRouter bookkeeping outputs now also allow `.swarm-manifests/*.md`; the matching refusal names that a contract or other design-content `.md` still goes to a cheap Claude tier. (lesson 230)
+- A job may declare `maxCredits` (a number) and `creditPreflight` (a JSON `[{"call","cost"}, ...]` file); `validate`/`run` sum the preflight and refuse `credit-cap-exceeded` (naming the sum, cap and call count) or `credit-preflight-missing` when the file cannot be read. (lesson 231)
+- `validate` warns `output-not-in-base` on a declared test output absent from base (a typo, most likely); `integrate` now treats a declared output absent from both base and workspace as `output-never-written` (a warning), never an undeclared-delete refusal. (lesson 232)
+- `integrate --mutants`/`mutants` now run every distinct check once on the unmutated tree before any mutant, refusing `mutant-check-broken` (naming the exit code and tail) if it fails; any mutant `error` now reads in the summary as "N errored — not a kill". (lesson 233)
+- `ship` refuses `release-version-mismatch` when a PR title naming a release version disagrees with package.json, or the CHANGELOG top heading is still `Unreleased`. (lesson 234)
+- `templates/coordination/CONTRACT.md` gains a "Time zones" line; `validate` warns `utc-only-window-tests` when a job's own output touches a date-window comparison and no test in its context/outputs mentions a non-UTC zone. (lesson 235)
+- `integrate` now runs manifest `preChecks` before its own checks on every run (not only when a lockfile changed); a preCheck that cannot even start (ENOENT/127) refuses `checks-not-runnable` instead of being scored as a red base; `--mutants-file` now resolves against the run's own not-yet-written outputs when the root copy is absent. (lesson 236)
+- `templates/coordination/ORCHESTRATOR.md` and `docs/kickoff.md` now both state that work already in TASK.md is pre-approved at boot and can start right away; a typed confirm is needed only for new tickets, secrets, model keys, public lessons, and anything that spends credits or money. (lesson 237)
+
 ## 1.29.0
 
 - Validation's `missing-deps` now only warns when `package.json` actually declares `dependencies`/`devDependencies`/`optionalDependencies`; `check-needs-env` now skips an `npm test`/`npm run <script>` check whose script resolves to a plain `node ...` command. (lesson 219)
