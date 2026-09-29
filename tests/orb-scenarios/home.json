@@ -1,0 +1,1 @@
+{"name": "home", "route": "/", "setup": [{"call": "setOrbState", "args": ["proposal_ready"]}], "assertions": [{"type": "selector", "selector": "[data-look=\"ready\"]"}, {"type": "text", "text": "Something needs you"}], "screenshot": true}

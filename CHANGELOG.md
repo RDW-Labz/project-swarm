@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.0
+
+- New optional `swarm verify --orb [--scenario NAME]` step a frontend job can name in its own `checks`: serves that job's own `tests/fixtures/verify-orb/` fixture (a static page plus a tiny `fake-service.mjs`) and runs a saved `tests/orb-scenarios/<name>.json` scenario (selector/text assertions, optional screenshot), driven by Playwright in the toolchain's own Chromium, resolved only from `~/.project-swarm/toolchains` (Playwright + pinned Chromium copied in directly, decision #249) — never a system Node or PATH-resolved npx. The orb token (`SWARM_VERIFY_ORB_TOKEN`) is generated fresh per run and reaches the spawned worker only via that env var, injected into the page context via Playwright's `addInitScript`, never a file. Not wired into `swarm ship` or CI. (T52b, decision #262)
+
 ## 1.34.0
 
 - A claude job that ends `api_error` with status 5xx or 429 is now retried once, over its own kept workspace, with a continuation note (`retries: 1`, `retryReason: "api_error <status>"`); `integrate --salvage` now also accepts a `failed` run whose failure is `api_error` and whose kept workspace has output changes. (lesson 248)
