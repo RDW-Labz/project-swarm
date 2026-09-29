@@ -137,11 +137,33 @@ export async function assertNoSkillSymlinks(dir) {
     if (entry.isDirectory()) await assertNoSkillSymlinks(full);
   }
 }
+// Field lesson #244: swarm itself seeds these copies into a job's workspace (the job wrote none
+// of them), so the dropped-write scan needs to tell an untouched seeded file apart from one a
+// worker actually edited; returning each copied file's own path (relative to destDir) and content
+// hash lets that scan compare against what was actually seeded instead of guessing by path alone.
 export async function copySkillsInto(sourceDir, destDir) {
   await assertNoSkillSymlinks(sourceDir);
   await fs.rm(destDir, { recursive: true, force: true });
   await fs.mkdir(path.dirname(destDir), { recursive: true });
   await fs.cp(sourceDir, destDir, { recursive: true });
+  return await seededSkillFileHashes(destDir);
+}
+async function seededSkillFileHashes(destDir) {
+  const out = [];
+  async function walk(dir) {
+    let entries;
+    try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) await walk(full);
+      else if (entry.isFile()) {
+        const bytes = await fs.readFile(full);
+        out.push({ file: path.relative(destDir, full).split(path.sep).join('/'), hash: crypto.createHash('sha256').update(bytes).digest('hex') });
+      }
+    }
+  }
+  await walk(destDir);
+  return out;
 }
 
 // gitHash matches `git hash-object`'s own blob id, computed without shelling out to git: sha1 of

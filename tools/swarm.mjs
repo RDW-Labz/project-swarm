@@ -1550,6 +1550,10 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
     // silently discarded by integrate (it only ever writes declared outputs); recording each
     // context file's starting hash here lets job completion notice such a dropped write.
     const contextHashesByJob = new Map();
+    // Field lesson #244: each seeded skill file's own path + content hash, keyed by job id, so the
+    // dropped-write scan below can tell an untouched swarm-seeded copy apart from one a worker
+    // actually edited, instead of reporting every seeded path as a dropped write.
+    const seededHashesByJob = new Map();
     // Field lesson 126s: resolved once per run; absent (no manifest skillsDir or config
     // skills.dir), allSkills stays [] and every job's prompt block below is '' — byte-identical
     // to a release before this feature existed.
@@ -1581,7 +1585,10 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
       }
       // Copied once per job, alongside its declared context/outputs; a job that runs in its own
       // git worktree (codex, claude shell) instead gets its own copy once that worktree exists.
-      if (skillsSourceDir && !usesWorktree(job)) await copySkillsInto(skillsSourceDir, path.join(workspaceRoot, SKILLS_DIR_NAME));
+      if (skillsSourceDir && !usesWorktree(job)) {
+        const seeded = await copySkillsInto(skillsSourceDir, path.join(workspaceRoot, SKILLS_DIR_NAME));
+        seededHashesByJob.set(job.id, new Map(seeded.map(({ file, hash }) => [`${SKILLS_DIR_NAME}/${file}`, hash])));
+      }
       contextHashesByJob.set(job.id, contextHashes);
       state.jobs.push({ id: job.id, agent: job.agent, model: job.model ?? null, ...(job.shell === true ? { shell: true } : {}), workspace, outputs: job.outputs, baseHashes, baseModes, baseWorkspace, queuedAt: new Date().toISOString(), startedAt:null, finishedAt:null, durationMs:null, status: 'queued', progress: null, keptWorkspace: null, envelopeFallback: null, ...(allSkills.length ? { skills: skillRecordEntries(attachedSkills) } : {}) });
     }
@@ -1738,7 +1745,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         // hashes and file list to catch this — a modified context file, or any wholly new file,
         // that is not itself a declared output.
         if (result.status === 'complete' && !usesWorktree(job)) {
-          const droppedWrites = new Set();
+          const droppedWrites = new Set(), droppedWritesNew = new Set();
           const contextHashes = contextHashesByJob.get(job.id) ?? {};
           for (const file of job.context) {
             if (job.outputs.includes(file)) continue;
@@ -1747,8 +1754,23 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
             if (hash !== contextHashes[file]) droppedWrites.add(file);
           }
           const known = new Set([...job.context, ...job.outputs]);
-          for (const file of await listWorkspaceFiles(workspaceRoot)) if (!known.has(file)) droppedWrites.add(file);
-          if (droppedWrites.size) record.droppedWrites = [...droppedWrites].sort();
+          // Field lesson #244: a file swarm itself seeded (e.g. .swarm/skills/**) is never a dropped
+          // write on its own — the job wrote none of them — unless its content no longer matches
+          // what was actually seeded, meaning a worker did edit it.
+          const seededHashes = seededHashesByJob.get(job.id);
+          for (const file of await listWorkspaceFiles(workspaceRoot)) {
+            if (known.has(file)) continue;
+            if (seededHashes?.has(file)) {
+              const bytes = await bytesAt(workspaceRoot, file);
+              const hash = bytes === null ? null : digest(bytes);
+              if (hash === seededHashes.get(file)) continue;
+              droppedWrites.add(file);
+              droppedWritesNew.add(file);
+              continue;
+            }
+            droppedWrites.add(file);
+          }
+          if (droppedWrites.size) { record.droppedWrites = [...droppedWrites].sort(); if (droppedWritesNew.size) record.droppedWritesNew = [...droppedWritesNew].sort(); }
         }
         // Field lesson 19: a worker's own "blocked" envelope, or the first sign of why it
         // crashed, is the only evidence of what actually happened; it must survive past a later
