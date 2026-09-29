@@ -86,10 +86,32 @@ export function envPrintText({ env = {}, source = null, portBase = null, gotchas
 // Field lesson #160: these toolchains usually need a browsers/cache/toolchain path the coordinator
 // only knows from prose; with no env file, every check starts without it.
 const ENV_HUNGRY = new Set(['npm', 'npx', 'pnpm', 'yarn', 'cargo', 'uv', 'uvx']);
-export function checkNeedsEnvWarnings(manifest, envFound) {
+// Field lesson #219: an `npm test`/`npm run <script>` check whose script resolves to a plain
+// `node ...` command needs no toolchain env of its own — node itself is not in ENV_HUNGRY, and the
+// npm wrapper around it never touches a browsers/cache/toolchain path either. Reading package.json
+// is async, so this stays a plain, synchronous predicate: a caller that already knows the script
+// map (or has none to offer) passes `resolvesToPlainNode`, kept synchronous so
+// `checkNeedsEnvWarnings` itself never needs to become async (byte-identical for every existing
+// caller that omits it).
+export function npmScriptName(argv) {
+  if (path.basename(argv[0] ?? '') !== 'npm') return null;
+  if (argv[1] === 'test') return 'test';
+  if (argv[1] === 'run' && typeof argv[2] === 'string' && argv[2]) return argv[2];
+  return null;
+}
+export function scriptIsPlainNode(script) {
+  return typeof script === 'string' && /^node(\s|$)/.test(script.trim());
+}
+export function npmScriptsResolveToPlainNode(scripts) {
+  return argv => {
+    const name = npmScriptName(argv);
+    return name !== null && scriptIsPlainNode(scripts?.[name]);
+  };
+}
+export function checkNeedsEnvWarnings(manifest, envFound, { resolvesToPlainNode = () => false } = {}) {
   if (envFound) return [];
   const argvs = [...(manifest.checks ?? []).map(check => [check.name, check.argv]), ...(manifest.preChecks ?? []).map((argv, index) => [`preCheck-${index + 1}`, argv]), ...(manifest.mutantCheck ? [['mutantCheck', manifest.mutantCheck.argv]] : [])];
-  const names = argvs.filter(([, argv]) => ENV_HUNGRY.has(path.basename(argv[0] ?? ''))).map(([name]) => name);
+  const names = argvs.filter(([, argv]) => ENV_HUNGRY.has(path.basename(argv[0] ?? '')) && !resolvesToPlainNode(argv)).map(([name]) => name);
   return names.length ? [{ code: 'check-needs-env', checks: names, message: `checks ${names.join(', ')} run a toolchain (npm/npx/cargo/uv) but no ${ENV_FILE} exists; put the toolchain env there so every check, mutant and worker gets it` }] : [];
 }
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Validation's `missing-deps` now only warns when `package.json` actually declares `dependencies`/`devDependencies`/`optionalDependencies`; `check-needs-env` now skips an `npm test`/`npm run <script>` check whose script resolves to a plain `node ...` command. (lesson 219)
+- `ship`'s `scratch-file-in-diff` guard now judges only `git diff --name-only <base>...HEAD` (plus what is staged), never a run's own declared-output list; a gitignored/untracked output that was never committed no longer refuses a ship. (lesson 220)
+- `ask`, `validate` and `run` now refuse `empty-context-file: <path>` for a 0-byte or whitespace-only context file, naming the path; a manifest `allowEmptyContext: [...]` names a deliberate exception. (lesson 221)
+- API adapters now refuse `api-key-missing`, naming the env var (and, for OpenRouter, the keychain service/account and config path they looked in), before ever sending a request; a provider's "incomplete" error only fires once a real response exists, and an empty 200 body now names `empty-body` instead of a generic malformed-JSON error. (lesson 222)
+- CLI jobs: a null result (no parsable JSON) on a job whose own prompt demands a JSON-only reply, with none of its declared outputs actually written, now ends `failed`, reason `no-output`, instead of `complete` (a job with no such demand keeps deferring a missing output to `integrate`, as before); a worker's prose `Status: BLOCKED` reply naming a `Required file:` line is now parsed into `status: "blocked"` with `needFile` set, the same as a JSON blocked envelope. (lesson 223)
+- Worker skills: `checks.filesMustChange`/`checks.resultKeys: []` are now valid (an explicit "none"); the frontmatter reader now accepts a flow-style inline YAML list (`key: [a, b]`); a skill with an otherwise-invalid frontmatter field that no job in the manifest names or path-matches now only warns `skill-invalid-unused`, refusing only the jobs that actually attach it. New `swarm skills check [--dir DIR]` validates a skills directory (the configured `skills.dir` by default) and prints each problem. (lesson 224)
+- `shell-sandbox-denied-check` no longer warns on a path already granted to a shell worker's sandbox (its own toolchains directory, or any job `readPaths`); new `swarm doctor shell` prints the effective sandbox profile (denied home directories, current loopback denials, keychain service, granted read paths, `skillsDir`) as JSON. (lesson 225)
+- API jobs now default `maxOutputTokens` per model (a DeepSeek reasoning model defaults to 16000, covering its own thinking plus its reply); a `finish_reason: "length"` response with no reply text at all gets one automatic retry at double the limit (still checked against the job's own $ cap), recorded as `retriedForLength: true`. (lesson 226)
+- The idle `no-job-running` warning gains an optional hint naming the first step of the next queued ticket, read from a coordination task file; `swarm next --from <file>` prints the same hint on its own. (lesson 227)
+- A job manifest may set `loopbackAllow: [port, ...]` on a claude shell job to restrict its sandbox's loopback network access to only those ports; left unset, today's behavior (all loopback minus ports already listening at job start) is unchanged. (lesson 262)
+- `ship` now returns `macCheckLine`, a ready-to-paste `mac-check: <repo>@<sha> merged <ISO timestamp>` line, alongside `mergeSha`, once a PR actually merges. (lesson 228)
+
 ## 1.28.0
 
 - API job envelopes may now name `edits: [{path, find, replace}]` per declared output instead of the whole file; the coordinator applies each edit and refuses `edit-no-match`/`edit-multiple-match` when the find text is missing or ambiguous. Validation now warns `large-output-whole` when an API job declares an output already over 20 KB on disk. (lesson 113)

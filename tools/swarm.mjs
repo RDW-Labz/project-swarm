@@ -15,10 +15,10 @@ import { API_AGENTS, apiDoctor, probeLocalProvider, decodeContext, executeApi, a
 import { nonBookkeepingOutputs } from './openrouter.mjs';
 
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, parseCodexReply, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
-import { expandShellPreset, validateNetworkAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterDirs, resolveRootGitInfo, scanListeningPorts, resolveRigServicePort, createShellScratchDir, shellMessage, containsKey, redactKey } from './claude-shell.mjs';
+import { expandShellPreset, validateNetworkAllow, validateLoopbackAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterDirs, resolveRootGitInfo, scanListeningPorts, resolveRigServicePort, createShellScratchDir, shellMessage, containsKey, redactKey, effectiveShellDeniedHomeDirs, workerKeyItem, TOOLCHAIN_DIRS } from './claude-shell.mjs';
 import { portBlockFor, resolvePortBlock } from './ports.mjs';
 import { loadLocalConfig } from './local-config.mjs';
-import { loadSwarmEnv, envPrintText, checkNeedsEnvWarnings, NO_STASH_LINE, MUTANTS_BY_HAND_LINE, MUTANTS_SHAPE, gitGuardScript, findRealGit, materializeGitGuard } from './swarm-env.mjs';
+import { loadSwarmEnv, envPrintText, checkNeedsEnvWarnings, npmScriptsResolveToPlainNode, NO_STASH_LINE, MUTANTS_BY_HAND_LINE, MUTANTS_SHAPE, gitGuardScript, findRealGit, materializeGitGuard } from './swarm-env.mjs';
 import { loadGotchas, gotchasPromptBlock, windowsCiGotchasWarnings } from './gotchas.mjs';
 import { packagingWithoutBuildCheckWarning, packagingKeyChanges, packagingChangeWarnings, isPackagingFile } from './packaging-check.mjs';
 import { scoutPrompt, normalizeScoutReport, renderScoutMarkdown, briefPathCandidates, parseAllowedLicenses } from './scout.mjs';
@@ -293,21 +293,57 @@ export async function cheapTierNotConfiguredModelWarnings(manifest, { env = proc
 // check argv naming a path there can never actually be run by that worker, only by integrate
 // (which runs from the real checkout). This is a plain text scan, not a path resolver, since the
 // argv may itself use `~` or `$HOME` a worker's shell would expand but this check never spawns.
-const SHELL_SANDBOX_DENIED_PATH_RE = /(\$HOME\b|~\/|\/Users\/[^\s"']+|\/home\/[^\s"']+)/;
-export function shellSandboxDeniesArgv(argv) {
-  return SHELL_SANDBOX_DENIED_PATH_RE.test((argv ?? []).join(' '));
+// The trigger tokens are the same as before (bare `$HOME`/`~/`/absolute `/Users`, `/home`), but the
+// full path text following the trigger is captured too — never shown in isolation before, and the
+// only way #225's exemption below can tell a granted subtree (the toolchains dir) apart from any
+// other path under the same trigger.
+const SHELL_SANDBOX_DENIED_PATH_RE = /(\$HOME(?:\/[^\s"']*)?|~\/[^\s"']*|\/Users\/[^\s"']+|\/home\/[^\s"']+)/;
+function toolchainsDirFor205(env, home) {
+  return env.SWARM_TOOLCHAINS || path.join(home, '.project-swarm', 'toolchains');
 }
-export function shellSandboxDeniedCheckWarnings(manifest) {
+// Field lesson #225: a shell worker's sandbox does grant read access to some paths under $HOME —
+// its own toolchains dir (always, when it exists) and any job.readPaths (already absolute,
+// validated at manifest time) — and a check/prompt naming one of those is never actually denied.
+export function shellGrantedPathPrefixes(manifest, { env = process.env, home = os.homedir() } = {}) {
+  const prefixes = new Set([toolchainsDirFor205(env, home)]);
+  for (const job of manifest.jobs ?? []) for (const readPath of job.readPaths ?? []) prefixes.add(readPath);
+  return [...prefixes];
+}
+function normalizeShellSandboxMatch(raw, home) {
+  if (raw.startsWith('$HOME')) return home + raw.slice('$HOME'.length);
+  if (raw.startsWith('~/')) return home + raw.slice(1);
+  return raw;
+}
+function isGrantedShellPath(absPath, grantedPrefixes) {
+  return grantedPrefixes.some(prefix => absPath === prefix || absPath.startsWith(`${prefix}/`));
+}
+// Every denied (non-granted) occurrence in `text`, in order — empty when every match is granted or
+// there was no match at all.
+export function shellSandboxDeniedMatches(text, { grantedPrefixes = [], home = os.homedir() } = {}) {
+  const denied = [];
+  for (const match of String(text ?? '').matchAll(new RegExp(SHELL_SANDBOX_DENIED_PATH_RE.source, 'g'))) {
+    if (!isGrantedShellPath(normalizeShellSandboxMatch(match[0], home), grantedPrefixes)) denied.push(match[0]);
+  }
+  return denied;
+}
+export function shellSandboxDeniesArgv(argv, options) {
+  return shellSandboxDeniedMatches((argv ?? []).join(' '), options).length > 0;
+}
+export function shellSandboxDeniedCheckWarnings(manifest, { env = process.env, home = os.homedir() } = {}) {
   if (!manifest.jobs.some(job => job.shell === true)) return [];
   const warnings = [];
+  const sharedGranted = shellGrantedPathPrefixes(manifest, { env, home });
   for (const check of manifest.checks ?? []) {
-    if (shellSandboxDeniesArgv(check.argv)) warnings.push({
+    const denied = shellSandboxDeniedMatches(check.argv.join(' '), { grantedPrefixes: sharedGranted, home });
+    if (denied.length) warnings.push({
       code: 'shell-sandbox-denied-check', check: check.name,
-      message: `check "${check.name}" names a path outside this worktree (${check.argv.join(' ').match(SHELL_SANDBOX_DENIED_PATH_RE)[0]}); a shell worker's sandbox denies it and can never run it itself — say so in the job prompt ("integrate runs this") or move the check under the project root.`,
+      message: `check "${check.name}" names a path outside this worktree (${denied[0]}); a shell worker's sandbox denies it and can never run it itself — say so in the job prompt ("integrate runs this") or move the check under the project root.`,
     });
   }
   for (const job of manifest.jobs) {
-    if (job.shell === true && SHELL_SANDBOX_DENIED_PATH_RE.test(job.prompt) && !/integrate runs this/i.test(job.prompt)) warnings.push({
+    if (job.shell !== true) continue;
+    const granted = shellGrantedPathPrefixes({ jobs: [job] }, { env, home });
+    if (shellSandboxDeniedMatches(job.prompt, { grantedPrefixes: granted, home }).length && !/integrate runs this/i.test(job.prompt)) warnings.push({
       code: 'shell-sandbox-denied-prompt-path', jobId: job.id,
       message: `job ${job.id}'s prompt names a path outside this worktree that its own sandbox denies, without saying "integrate runs this".`,
     });
@@ -327,10 +363,19 @@ export function sharedRootFullSuiteWarnings(manifest) {
 
 // Field lesson 152: a check that cannot even start (missing tool/module) is discovered only once
 // the checkout has no dependencies installed; `validate` flags the obvious, cheap-to-check case.
+// Field lesson #219: a package.json with no dependencies/devDependencies/optionalDependencies at
+// all has nothing node_modules could ever satisfy; warning about it teaches the reader to skip
+// warnings. Only a package.json that actually declares at least one dependency can break this way.
+function declaresDependencies(bytes) {
+  let data;
+  try { data = JSON.parse(bytes.toString('utf8')); } catch { return true; }
+  return ['dependencies', 'devDependencies', 'optionalDependencies'].some(key => data && typeof data[key] === 'object' && data[key] !== null && Object.keys(data[key]).length > 0);
+}
 export async function missingDepsWarnings(root, { fsImpl = fs } = {}) {
   const isDir = async relPath => { try { return (await fsImpl.stat(path.join(root, relPath))).isDirectory(); } catch { return false; } };
   const warnings = [];
-  if ((await bytesAt(root, 'package.json')) !== null && !(await isDir('node_modules'))) {
+  const packageJsonBytes = await bytesAt(root, 'package.json');
+  if (packageJsonBytes !== null && declaresDependencies(packageJsonBytes) && !(await isDir('node_modules'))) {
     warnings.push({ code: 'missing-deps', path: 'node_modules', message: 'package.json exists but node_modules is missing; checks may fail to spawn (try npm ci --offline)' });
   }
   if ((await bytesAt(root, 'pyproject.toml')) !== null && !(await isDir('.venv'))) {
@@ -589,7 +634,13 @@ async function refuseInvalidMutants(mutants, readText) {
 
 export function validateManifest(manifest) {
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.jobs) || !manifest.jobs.length || manifest.jobs.length > 256) fail('Manifest requires version: 1 and 1–256 jobs');
-  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract', 'preChecks', 'skillsDir'].includes(key)) fail(`Unknown manifest field: ${key}`);
+  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract', 'preChecks', 'skillsDir', 'allowEmptyContext'].includes(key)) fail(`Unknown manifest field: ${key}`);
+  // Field lesson #221: an empty context file (0 bytes, or whitespace only) is always a mistake —
+  // ask/validate/run refuse it by path — unless the manifest names it here as a deliberate
+  // exception (e.g. a placeholder a job is meant to fill in).
+  if (manifest.allowEmptyContext !== undefined) {
+    if (!Array.isArray(manifest.allowEmptyContext) || manifest.allowEmptyContext.length > 100 || manifest.allowEmptyContext.some(file => typeof file !== 'string' || !file)) fail('allowEmptyContext must be an array of file paths');
+  }
   // A skills source dir named here (or by local config `skills.dir`, absent here) is resolved
   // against the project root later (validate/run time), never here: this check is shape-only.
   if (manifest.skillsDir !== undefined && (typeof manifest.skillsDir !== 'string' || !manifest.skillsDir.trim())) fail('skillsDir must be a non-empty string');
@@ -646,6 +697,11 @@ export function validateManifest(manifest) {
     if (job.networkAllow !== undefined) {
       if (job.shell !== true) fail(`Job ${job.id}: networkAllow is only supported for claude shell jobs`);
       validateNetworkAllow(job.networkAllow, job.id);
+    }
+    // Field lesson #262: a single-port loopback allowlist for the shell sandbox.
+    if (job.loopbackAllow !== undefined) {
+      if (job.shell !== true) fail(`Job ${job.id}: loopbackAllow is only supported for claude shell jobs`);
+      validateLoopbackAllow(job.loopbackAllow, job.id);
     }
     // Every job, CLI or API, must name its model: the runner never falls back to a CLI default
     // (for Claude, that default is the user's own, often the most expensive, model).
@@ -757,7 +813,7 @@ export function validateManifest(manifest) {
       if (job.outputs.length) fail('a web job must be read-only (no outputs)');
     }
     // Unknown command/provider fields cannot create an execution path.
-    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'setup', 'keepScratch', 'deletes', 'skills'].includes(key)) fail(`Unknown job field: ${key}`);
+    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills'].includes(key)) fail(`Unknown job field: ${key}`);
   }
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
   for (const job of manifest.jobs) for (const afterId of job.after ?? []) if (!ids.has(afterId.toLowerCase())) fail(`Job ${job.id} after names unknown job ${afterId}`);
@@ -1018,6 +1074,13 @@ async function listWorkspaceFiles(root) {
   return out;
 }
 
+// Field lesson #223: literal presence on disk, never "differs from base" (outputsChanged also
+// counts a pre-existing, untouched output as changed only when its bytes moved; a job whose
+// context and output are the same pre-existing file, left untouched, must never read as no-output).
+async function anyOutputExists(root, outputs) {
+  for (const file of outputs) if (await bytesAt(root, file) !== null) return true;
+  return false;
+}
 async function outputsChanged(root, job, { existingOnly = false } = {}) {
   for (const file of job.outputs) {
     try {
@@ -1276,7 +1339,7 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
       result = loopbackScanFailedResult(error?.hint ?? null);
       return result;
     }
-    const profileText = shellProfile({ worktree, commonDir, shellDir, scratchDir: scratch.scratchDir, readPaths, cliPaths, proxyPort: proxy.port, extraHomes: hooks.extraHomes ?? [], rootGit, loopbackDenied, config });
+    const profileText = shellProfile({ worktree, commonDir, shellDir, scratchDir: scratch.scratchDir, readPaths, cliPaths, proxyPort: proxy.port, extraHomes: hooks.extraHomes ?? [], rootGit, loopbackDenied, loopbackAllow: job.loopbackAllow, config });
     const profileRelative = `${directory}/${job.id}/sandbox.sb`;
     await write(root, profileRelative, profileText, true);
     const profile = await safePath(root, profileRelative, { internal: true });
@@ -1414,7 +1477,9 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
     // skills.dir), allSkills stays [] and every job's prompt block below is '' — byte-identical
     // to a release before this feature existed.
     const skillsSourceDir = resolveSkillsDir(manifest, loadLocalConfig({ env }), root);
-    const allSkills = skillsSourceDir ? await listSkills(skillsSourceDir) : [];
+    // Field lesson #224: validateProject (already run above) already refused any broken skill a
+    // job here actually attaches; a broken-and-unused one never reaches a job's own prompt/index.
+    const allSkills = skillsSourceDir ? (await listSkills(skillsSourceDir)).filter(skill => !skill.broken) : [];
     const skillsByJob = new Map();
     // Validate/copy every job before spending tokens or starting any workers.
     for (const job of manifest.jobs) {
@@ -1634,6 +1699,25 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           const summary = typeof finalMessage.summary === 'string' && finalMessage.summary.trim() ? finalMessage.summary.trim()
             : typeof finalMessage.file === 'string' && finalMessage.file.trim() ? `needs ${finalMessage.file.trim()}` : 'no summary given';
           result.error = `blocked: ${summary}`.slice(0, 300);
+        } else if (CLI_AGENTS.includes(job.agent) && !finalMessage && typeof result.response === 'string' && /status:\s*blocked/i.test(result.response)) {
+          // Field lesson #223: a worker's prose "Status: BLOCKED" (no JSON envelope at all) is
+          // resolved the same way a JSON blocked envelope would be, naming the file it parses out
+          // of a "Required file: ..." line.
+          const requiredFile = /required file:\s*(\S+)/i.exec(result.response);
+          result.status = 'blocked';
+          record.needFile = requiredFile ? requiredFile[1] : null;
+          result.error = `blocked: ${requiredFile ? `needs ${requiredFile[1]}` : 'no summary given'}`.slice(0, 300);
+        } else if (CLI_AGENTS.includes(job.agent) && job.agent !== 'codex' && job.shell !== true && result.status === 'complete' && !finalMessage && quotesJsonDemand(job.prompt) && job.outputs.length && !(await anyOutputExists(workspaceRoot, job.outputs))) {
+          // Field lesson #223: a job whose own prompt demands a JSON-only final reply, got none
+          // (not even after the re-ask above), and left none of its declared outputs written at
+          // all is never `complete` — it is `failed`, reason `no-output`. Gated on the prompt's own
+          // JSON demand (the same signal `resultMissing`/the re-ask above already use): a job whose
+          // prompt never asked for a JSON reply keeps the older, deliberately lenient contract of
+          // deferring a missing declared output to `integrate` (a worker may still legitimately
+          // remove a file its own outputs replace, per its `deletes` list).
+          result.status = 'failed';
+          record.reason = 'no-output';
+          result.error = 'no-output: worker reported complete with no parsable result and none of its declared outputs written';
         } else if (result.status !== 'blocked' && !result.refusedBeforeStart && CLI_AGENTS.includes(job.agent)) {
           // A job refused before the agent started (setup-failed, loopback-scan-failed) keeps its exact error.
           // Additive only: agentError/agent.log are recorded solely from how the agent process
@@ -1653,7 +1737,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         // Field lesson #201: a setup failure never spawns the worker; `setupFailed` rides along on
         // the job record so inspect can name the phase, instead of an empty error/result/cost that
         // reads identically to a worker that ran and produced nothing.
-        Object.assign(record, { permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt), ...(result.setupFailed ? { setupFailed: true } : {}), ...(result.status === 'timeout' ? { lastActivity: result.lastActivity ?? null } : {}), ...(result.contextInlined ? { contextInlined: result.contextInlined } : {}) });
+        Object.assign(record, { permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt), ...(result.setupFailed ? { setupFailed: true } : {}), ...(result.status === 'timeout' ? { lastActivity: result.lastActivity ?? null } : {}), ...(result.contextInlined ? { contextInlined: result.contextInlined } : {}), ...(result.retriedForLength ? { retriedForLength: true } : {}) });
         await queueSave();
       } catch (error) {
         if (error.keptWorkspace) record.keptWorkspace = error.keptWorkspace;
@@ -2457,7 +2541,27 @@ async function latestRunEnd(roots) {
   }
   return latest;
 }
-export async function noJobRunningWarning({ root, env = process.env, home = os.homedir(), dir, isAlive, now = () => Date.now() } = {}) {
+// Field lesson #227: coordination/TASK.md's own ticket sections (`## <id>: <title>`, a `Status:
+// ...` line, then a numbered/bulleted list of steps) name the next queued ticket's first step —
+// a plain-text scan, never a real markdown parser, same restraint as every other reader here.
+export function nextQueuedTicketHint(text) {
+  const tickets = [];
+  let current = null;
+  for (const rawLine of String(text ?? '').split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const heading = /^##\s+(\S+):\s*(.*)$/.exec(line);
+    if (heading) { current = { id: heading[1], title: heading[2].trim(), status: null, steps: [] }; tickets.push(current); continue; }
+    if (!current) continue;
+    const status = /^status:\s*(.+)$/i.exec(line);
+    if (status) { current.status ??= status[1].trim(); continue; }
+    const step = /^(?:[-*]|\d+[.)])\s+(.+)$/.exec(line);
+    if (step) current.steps.push(step[1].trim());
+  }
+  const next = tickets.find(ticket => /queued/i.test(ticket.status ?? '') && ticket.steps.length);
+  return next ? { id: next.id, title: next.title, step: next.steps[0] } : null;
+}
+export const NEXT_TASK_FILE = 'coordination/TASK.md';
+export async function noJobRunningWarning({ root, env = process.env, home = os.homedir(), dir, isAlive, now = () => Date.now(), taskFile } = {}) {
   let config; try { config = loadLocalConfig({ env, home }); } catch { config = {}; }
   const configured = Array.isArray(config?.metrics?.roots) ? config.metrics.roots.filter(entry => typeof entry === 'string' && entry) : [];
   const roots = (configured.length ? configured : [root]).map(entry => path.resolve(entry));
@@ -2468,7 +2572,15 @@ export async function noJobRunningWarning({ root, env = process.env, home = os.h
   }
   const latest = await latestRunEnd(roots);
   const idleMinutes = latest ? Math.round(((now() - Date.parse(latest)) / 60000) * 10) / 10 : null;
-  return { code: 'no-job-running', idleMinutes, message: `no-job-running: no run under the configured root(s) is active${idleMinutes !== null ? ` (idle ${idleMinutes} min)` : ''}` };
+  // Field lesson #227: an idle gap with only next-seat work queued is worth a hint to start that
+  // work's first (read-only) step, instead of running no job at all during the hand steps.
+  let hint = null;
+  try {
+    const text = await fs.readFile(taskFile ?? path.join(root, NEXT_TASK_FILE), 'utf8');
+    const ticket = nextQueuedTicketHint(text);
+    if (ticket) hint = `swarm next --from ${NEXT_TASK_FILE}: ${ticket.id} — ${ticket.step}`;
+  } catch { /* no TASK.md, or nothing queued: no hint */ }
+  return { code: 'no-job-running', idleMinutes, ...(hint ? { hint } : {}), message: `no-job-running: no run under the configured root(s) is active${idleMinutes !== null ? ` (idle ${idleMinutes} min)` : ''}${hint ? `; ${hint}` : ''}` };
 }
 
 // Keep regression tests in place while reversing only the implementation outputs.
@@ -2665,7 +2777,7 @@ async function contextSiblingUntrackedWarnings(root, job, tracked) {
 
 export async function validateProject(root, manifest, { exec = execFileAsync, liveDir, isAlive, env = process.env, home = os.homedir() } = {}) {
   root=await fs.realpath(root);validateManifest(manifest);
-  const jobs=[], warnings=[...tmpToolPathWarnings(manifest), ...await sharedOutputAcrossOpenJobsWarnings(root, manifest, { liveDir, isAlive }), ...shellSandboxDeniedCheckWarnings(manifest), ...sharedRootFullSuiteWarnings(manifest), ...await cheapTierNotConfiguredModelWarnings(manifest, { env, home })];
+  const jobs=[], warnings=[...tmpToolPathWarnings(manifest), ...await sharedOutputAcrossOpenJobsWarnings(root, manifest, { liveDir, isAlive }), ...shellSandboxDeniedCheckWarnings(manifest, { env, home }), ...sharedRootFullSuiteWarnings(manifest), ...await cheapTierNotConfiguredModelWarnings(manifest, { env, home })];
   const projectFiles = listProjectFiles(root);
   const trackedFiles = new Set(projectFiles);
   const uncovered = [];
@@ -2710,7 +2822,12 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
     const context = [...new Set([...job.context, ...contextGlobExtra])];
     // Throws unknown-skill before anything else runs; paths auto-attach sees the fully expanded
     // context (contextGlob matches included), the same list a job's own prompt block reflects.
-    attachSkillsForJob(skills, { ...job, context });
+    // Field lesson #224: a broken skill (invalid frontmatter field, still parseable YAML) this job
+    // actually attaches (named, or path-matched) refuses by name; one no job here attaches is left
+    // to the skill-invalid-unused warning below instead.
+    for (const skill of attachSkillsForJob(skills, { ...job, context })) {
+      if (skill.broken && skill.attached !== 'index-only') fail(`invalid-skill-frontmatter: ${skill.file}: ${skill.error} (attached by job ${job.id})`);
+    }
     let bytes=0, apiContextBytes=0;
     const files=[];
     const testOutputTexts = new Map();
@@ -2722,6 +2839,10 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
         if (API_AGENTS.includes(job.agent)) fail(`context-not-deliverable: missing context ${file}`);
         fail(`Missing context: ${file}`);
       }
+      // Field lesson #221: an empty context file (0 bytes, or whitespace only) is never real input;
+      // ask/validate/run all refuse it here (validateProject runs at the top of runManifest, which
+      // askRun and the generic `run` both go through), unless the manifest names it deliberately.
+      if (data !== null && context.includes(file) && data.toString('utf8').trim() === '' && !(manifest.allowEmptyContext ?? []).includes(file)) fail(`empty-context-file: ${file}`);
       // The shared contract's text now travels inside the prompt, so codex never needs it from HEAD.
       if (job.agent === 'codex' && context.includes(file) && file !== manifest.contract && !(await isTrackedByGit(root, file, exec))) fail(`Job ${job.id}: codex context file ${file} is not tracked by git (codex sees HEAD only)`);
       bytes+=data?.length??0;
@@ -2764,11 +2885,20 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
     for (const pair of findUncoveredTests(root, { ...job, context }, projectFiles)) uncovered.push({ job: job.id, ...pair });
     jobs.push({id:job.id,agent:job.agent,model:job.model??null,...(job.shell===true?{shell:true}:{}),tier:job.tier??null,tierReason:job.tierReason??null,contextBytes:bytes,outputs:job.outputs,files,contextGlobCounts});
   }
+  // Field lesson #224: reaching here means the per-job loop above never found a broken skill
+  // actually attached (that would already have refused); every broken skill left is unused.
+  for (const skill of skills) if (skill.broken) warnings.push({ code: 'skill-invalid-unused', file: skill.file, message: `skill-invalid-unused: ${skill.file}: ${skill.error}` });
   warnings.push(...await missingDepsWarnings(root));
   // Field lesson #201: a uv.lock path source only fails once `uv sync --offline` cannot find it.
   warnings.push(...await missingLockPathSourceWarnings(root));
   // Field lesson #160: an invalid env file refuses here; a toolchain check with none only warns.
-  warnings.push(...checkNeedsEnvWarnings(manifest, Boolean((await loadSwarmEnv(root)).source)));
+  {
+    // Field lesson #219: an `npm test`/`npm run <script>` check whose script resolves to a plain
+    // `node ...` command never needs a toolchain env of its own.
+    let packageScripts;
+    try { packageScripts = JSON.parse((await bytesAt(root, 'package.json'))?.toString('utf8') ?? '{}').scripts; } catch { packageScripts = undefined; }
+    warnings.push(...checkNeedsEnvWarnings(manifest, Boolean((await loadSwarmEnv(root)).source), { resolvesToPlainNode: npmScriptsResolveToPlainNode(packageScripts) }));
+  }
   // Field lesson #167: a repo whose CI already runs on Windows and has no .swarm/gotchas.md is
   // about to have its next Windows-specific worker rediscover the same platform quirk by hand.
   warnings.push(...await windowsCiGotchasWarnings(root));
@@ -3686,6 +3816,42 @@ async function main() {
     process.stdout.write(await onboardReport(root));
     return;
   }
+  // Field lesson #227: the same next-queued-ticket hint noJobRunningWarning offers, runnable by
+  // hand: `swarm next --from coordination/TASK.md`.
+  if(args[0]==='next'){
+    const flags=args.slice(1);let fromFlag;
+    for(let index=0;index<flags.length;index++){
+      if(flags[index]==='--from'){fromFlag=flags[++index];continue;}
+      fail('Invalid arguments; use --help');
+    }
+    if(!fromFlag)fail('next requires --from FILE');
+    root=await fs.realpath(root);
+    let text;
+    try{text=await fs.readFile(path.resolve(root,fromFlag),'utf8');}catch{text='';}
+    const ticket=nextQueuedTicketHint(text);
+    process.stdout.write(`${JSON.stringify(ticket?{ticket}:{ticket:null})}\n`);
+    return;
+  }
+  // Field lesson #224: validates the skills.dir a repo's local config (or --dir) actually names,
+  // printing every problem by file — the same check a post-install dry run would want, run by hand.
+  if(args[0]==='skills'){
+    if(args[1]!=='check')fail('Invalid arguments; use --help');
+    const flags=args.slice(2);let dirFlag;
+    for(let index=0;index<flags.length;index++){
+      if(flags[index]==='--dir'){dirFlag=flags[++index];continue;}
+      fail('Invalid arguments; use --help');
+    }
+    root=await fs.realpath(root);
+    const config=loadLocalConfig({env:process.env});
+    const dir=dirFlag?path.resolve(root,dirFlag):resolveSkillsDir(null,config,root);
+    if(!dir){process.stdout.write(`${JSON.stringify({status:'ok',dir:null,skills:[],problems:[]})}\n`);return;}
+    const skills=await listSkills(dir);
+    const problems=skills.filter(skill=>skill.broken).map(skill=>({file:skill.file,error:skill.error}));
+    const result={status:problems.length?'problems':'ok',dir,skills:skills.filter(skill=>!skill.broken).map(skill=>({name:skill.name,file:skill.file})),problems};
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    if(problems.length)process.exitCode=1;
+    return;
+  }
   // check-pins is owned by a job that runs in parallel with this one; it is imported lazily, on
   // this command branch only, so this file still loads (and every other command still works) even
   // before tools/check-pins.mjs exists. --root is the same global flag handled above, already
@@ -3958,8 +4124,29 @@ async function main() {
       rest.push(flag);
     }
   }
-  if(rest.length||!['doctor','board','validate','preflight','run','status','monitor','wait','inspect','integrate','cancel','ship','go'].includes(command)||(command==='doctor'?(argument!==undefined&&!['claude','codex',...EXTRA_CLI_AGENTS,...API_AGENTS,'all'].includes(argument)):command==='board'?argument!==undefined:!argument))fail('Invalid arguments; use --help');
+  if(rest.length||!['doctor','board','validate','preflight','run','status','monitor','wait','inspect','integrate','cancel','ship','go'].includes(command)||(command==='doctor'?(argument!==undefined&&!['claude','codex','shell',...EXTRA_CLI_AGENTS,...API_AGENTS,'all'].includes(argument)):command==='board'?argument!==undefined:!argument))fail('Invalid arguments; use --help');
   root=await fs.realpath(root);let result;
+  // Field lesson #225: the effective claude-shell sandbox profile, one command instead of an
+  // inference from a validate warning or `doctor openrouter`.
+  if(command==='doctor'&&argument==='shell'){
+    const config=loadLocalConfig({env:process.env});
+    const home=os.homedir();
+    let loopbackDenied=[];
+    try{loopbackDenied=await scanListeningPorts();}catch{loopbackDenied=[];}
+    const rigPort=await resolveRigServicePort({config}).catch(()=>null);
+    if(rigPort!=null&&!loopbackDenied.includes(rigPort))loopbackDenied=[...loopbackDenied,rigPort].sort((a,b)=>a-b);
+    const keyItem=workerKeyItem(config);
+    result={
+      deniedHomeDirs:effectiveShellDeniedHomeDirs(config),
+      loopbackDenied,
+      loopbackAllow:null,
+      keychainService:keyItem.service,
+      grantedReadPaths:TOOLCHAIN_DIRS.map(part=>path.join(home,part)),
+      skillsDir:resolveSkillsDir(null,config,root),
+    };
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
   if(command==='monitor'&&view){
     let status='running';
     const isTty=Boolean(process.stdout.isTTY);

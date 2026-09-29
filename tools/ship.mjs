@@ -1298,7 +1298,12 @@ export async function ship(options) {
       base.tag.waitedSeconds = waitedMs / 1000;
       if (base.tag.status === 'missing') base.warnings.push(`release tag v${version} not on origin after ${base.tag.waitedSeconds}s`);
     }
-    return { ...base, status: 'merged', mergeSha: merged.mergeCommit?.oid ?? null };
+    // Field lesson #228: a mac-checks row is only trustworthy once it names the exact merge sha —
+    // this line is ready to paste into one, with the merge's own ISO timestamp (the injected
+    // clock, never a fresh Date.now() a test could not control).
+    const mergeSha = merged.mergeCommit?.oid ?? null;
+    const macCheckLine = mergeSha ? `mac-check: ${repo}@${mergeSha} merged ${new Date(now()).toISOString()}` : null;
+    return { ...base, status: 'merged', mergeSha, ...(macCheckLine ? { macCheckLine } : {}) };
   }
   return { ...base, status: 'merge-failed', reason: 'PR not merged' };
 }

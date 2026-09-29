@@ -33,10 +33,13 @@ export const API_HOST = 'api.anthropic.com';
 export const API_PORT = 443;
 export const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
 // Read-only toolchain caches, the codex list minus codex's own config.
-const TOOLCHAIN_DIRS = ['.nvm', '.cache', '.npm', '.local/share/uv', 'Library/Caches'];
+export const TOOLCHAIN_DIRS = ['.nvm', '.cache', '.npm', '.local/share/uv', 'Library/Caches'];
 // Denied even inside a granted readPaths/toolchain subtree: the codex list (generic entries plus
 // any config `deniedHomeDirs`) plus the claude CLI's own stored login and config.
 const shellDeniedHomeDirs = config => [...effectiveDeniedHomeDirs(config), '.claude'];
+// Field lesson #225: `swarm doctor shell` prints the same list, by name, so a profile dry run
+// never has to be inferred from a validate warning.
+export const effectiveShellDeniedHomeDirs = shellDeniedHomeDirs;
 const MACH_DENIED = ['com.apple.SecurityServer', 'com.apple.securityd.xpc', 'com.apple.secd', 'com.apple.security.agent'];
 // Field lesson #142: `uv run`/`npm` walk upward from cwd looking for a workspace root (a
 // pyproject.toml/uv.toml/package.json); the worktree's own ancestors (its enclosing project root
@@ -78,6 +81,13 @@ export function validateNetworkAllow(list, jobId) {
   if (!Array.isArray(list) || list.length > 20) throw Error(`Job ${jobId}: networkAllow must be an array of at most 20 hosts`);
   for (const host of list) if (typeof host !== 'string' || !HOST.test(host)) throw Error(`Job ${jobId}: invalid networkAllow host`);
   if (list.length) throw Error(`Job ${jobId}: networkAllow is not yet supported (1.19.0 shell jobs reach only ${API_HOST}); leave it empty`);
+  return list;
+}
+
+// Field lesson #262: a single-port loopback allowlist for a shell job's sandbox; integers 1-65535
+// only, otherwise `invalid-loopback-allow` (never a silent clamp).
+export function validateLoopbackAllow(list, jobId) {
+  if (!Array.isArray(list) || list.length > 20 || list.some(port => !Number.isInteger(port) || port < 1 || port > 65535)) throw Error(`Job ${jobId}: invalid-loopback-allow`);
   return list;
 }
 
@@ -184,7 +194,7 @@ const quoteRegex = value => value.replace(/[.*+?^${}()|[\]]/g, match => `\\${mat
 // `rootGit` and `loopbackDenied` are both optional and additive: omitted (as by every pre-1.19.0
 // caller), the generated profile is byte-identical to before. `loopbackDenied` undefined leaves
 // the network section untouched; passing an array (even empty) turns on the loopback allowance.
-export function shellProfile({ home = os.homedir(), extraHomes = [], worktree, commonDir, shellDir, scratchDir = null, readPaths = [], cliPaths = [], proxyPort, rootGit = null, loopbackDenied, config = {} }) {
+export function shellProfile({ home = os.homedir(), extraHomes = [], worktree, commonDir, shellDir, scratchDir = null, readPaths = [], cliPaths = [], proxyPort, rootGit = null, loopbackDenied, loopbackAllow, config = {} }) {
   if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) throw Error('shell profile needs a proxy port');
   const homes = [...new Set([home, ...extraHomes].map(sandboxPath))];
   // Field lesson #145: the job's scratch dir (TMPDIR/HOME) lives outside every repo, under the
@@ -210,7 +220,13 @@ export function shellProfile({ home = os.homedir(), extraHomes = [], worktree, c
   // Field lesson #143: shell jobs may open and use their own loopback sockets (tests' own local
   // servers) but never one a service on the host already had listening when the job started; that
   // per-port deny is placed AFTER the general loopback allow so it wins (later rules win).
-  const loopbackRules = loopbackDenied === undefined ? '' :
+  // Field lesson #262: `loopbackAllow` (job field), when set, replaces the blanket "all loopback
+  // minus what was already listening" allowance with a single-port allowlist — only these exact
+  // ports (plus the proxy port, already allowed above) ever get a loopback grant at all. Unset,
+  // today's behavior (loopbackDenied) is byte-identical to before this field existed.
+  const loopbackRules = loopbackAllow !== undefined
+    ? loopbackAllow.filter(port => port !== proxyPort).map(port => `(allow network-bind network-inbound (local ip "localhost:${port}"))\n(allow network-outbound (remote ip "localhost:${port}"))\n`).join('')
+    : loopbackDenied === undefined ? '' :
     '(allow network-bind network-inbound (local ip "localhost:*"))\n(allow network-outbound (remote ip "localhost:*"))\n' +
     loopbackDenied.filter(port => port !== proxyPort).map(port => `(deny network-outbound (remote ip "localhost:${port}"))\n`).join('');
   const rootGitRules = !rootGit ? '' : rootGit.kind === 'dir'

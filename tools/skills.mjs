@@ -28,6 +28,13 @@ function parseScalar(value) {
   if (value.length >= 2 && ((value[0] === '"' && value.endsWith('"')) || (value[0] === "'" && value.endsWith("'")))) return value.slice(1, -1);
   return value;
 }
+// Field lesson #224: `key: [a, b]` (flow-style, one line) is the other shape SKILL.md frontmatter
+// actually uses; a reader that only understood block lists (`- a`) read it as an empty string.
+// No nesting, no quoted commas: split on `,` and parse each item the same way a block list item is.
+function parseInlineList(value) {
+  const inner = value.slice(1, -1).trim();
+  return inner === '' ? [] : inner.split(',').map(parseScalar);
+}
 export function parseYamlSubset(text) {
   const lines = text.split(/\r?\n/).filter(line => line.trim() !== '' && !line.trim().startsWith('#'));
   let i = 0;
@@ -52,7 +59,9 @@ export function parseYamlSubset(text) {
       if (!match) throw new Error(`invalid line: ${line}`);
       const [, key, rest] = match;
       i++;
-      if (rest.trim()) { object[key] = parseScalar(rest); continue; }
+      const trimmedRest = rest.trim();
+      if (trimmedRest.startsWith('[') && trimmedRest.endsWith(']')) { object[key] = parseInlineList(trimmedRest); continue; }
+      if (trimmedRest) { object[key] = parseScalar(trimmedRest); continue; }
       if (i < lines.length && indentOf(lines[i]) > indent) {
         const childIndent = indentOf(lines[i]);
         object[key] = /^-\s?/.test(lines[i].slice(childIndent)) ? parseList(childIndent) : parseBlock(childIndent);
@@ -83,7 +92,9 @@ export function validateSkillFrontmatter(frontmatter, file) {
     const checks = frontmatter.checks;
     if (!checks || typeof checks !== 'object' || Array.isArray(checks)) invalid('invalid checks');
     for (const key of Object.keys(checks)) if (!['filesMustChange', 'resultKeys'].includes(key)) invalid(`unknown checks field ${key}`);
-    for (const key of ['filesMustChange', 'resultKeys']) if (checks[key] !== undefined && (!Array.isArray(checks[key]) || !checks[key].length || checks[key].some(value => typeof value !== 'string' || !value))) invalid(`invalid checks.${key}`);
+    // Field lesson #224: an explicit empty list (`filesMustChange: []`) means "none" — valid, no
+    // check ever runs for it — never the same as the field being invalid or absent.
+    for (const key of ['filesMustChange', 'resultKeys']) if (checks[key] !== undefined && (!Array.isArray(checks[key]) || checks[key].some(value => typeof value !== 'string' || !value))) invalid(`invalid checks.${key}`);
   }
   return frontmatter;
 }
@@ -150,8 +161,20 @@ export async function loadSkillFile(file) {
   let parsed;
   try { parsed = parseSkillFrontmatter(text); }
   catch (error) { fail(`invalid-skill-frontmatter: ${file}: ${error.message}`, 'invalid-skill-frontmatter'); }
-  const frontmatter = validateSkillFrontmatter(parsed.frontmatter, file);
-  return { name: frontmatter.name, description: frontmatter.description, paths: frontmatter.paths ?? [], checks: frontmatter.checks ?? null, body: parsed.body, file, chars: text.length, gitHash: gitBlobHash(Buffer.from(text, 'utf8')) };
+  const chars = text.length, gitHash = gitBlobHash(Buffer.from(text, 'utf8'));
+  try {
+    const frontmatter = validateSkillFrontmatter(parsed.frontmatter, file);
+    return { name: frontmatter.name, description: frontmatter.description, paths: frontmatter.paths ?? [], checks: frontmatter.checks ?? null, body: parsed.body, file, chars, gitHash };
+  } catch (error) {
+    // Field lesson #224: an invalid field (never a structurally unparsable file — that stays a
+    // hard error above) only ever needs to block the jobs that would actually attach this skill.
+    // Its own raw, still-recoverable name/paths (whether or not they themselves are individually
+    // valid) decide that attachment; a job that never names or path-matches it is unaffected.
+    const raw = parsed.frontmatter;
+    const name = typeof raw?.name === 'string' && SKILL_NAME.test(raw.name) ? raw.name : null;
+    const paths = Array.isArray(raw?.paths) ? raw.paths.filter(value => typeof value === 'string' && value) : [];
+    return { broken: true, error: error.message, name, description: '(invalid skill)', paths, checks: null, body: '', file, chars, gitHash };
+  }
 }
 export async function listSkills(sourceDir) {
   let entries;
@@ -161,8 +184,10 @@ export async function listSkills(sourceDir) {
     if (!entry.isDirectory()) continue;
     const skill = await loadSkillFile(path.join(sourceDir, entry.name, 'SKILL.md'));
     if (!skill) continue;
-    if (names.has(skill.name)) fail(`invalid-skill-frontmatter: ${skill.file}: duplicate skill name ${skill.name}`, 'invalid-skill-frontmatter');
-    names.add(skill.name);
+    if (skill.name != null) {
+      if (names.has(skill.name)) fail(`invalid-skill-frontmatter: ${skill.file}: duplicate skill name ${skill.name}`, 'invalid-skill-frontmatter');
+      names.add(skill.name);
+    }
     skills.push(skill);
   }
   return skills;

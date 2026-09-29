@@ -142,9 +142,13 @@ test('the key comes from env, else the keychain item named by config (default pr
   assert.equal(readOpenRouterKey({}, { platform: 'darwin', exec: configuredExec, config: { keychain: { service: 'acme-swarm' } } }), KEY);
   assert.deepEqual(configuredArgv, ['/usr/bin/security', 'find-generic-password', '-s', 'acme-swarm', '-a', 'openrouter.api_key', '-w']);
   assert.equal(apiConfiguration('openrouter', {}, { readKey: () => null }).configured, false);
-  const result = await executeApi(job(), [], { env: { SWARM_LOGS_DIR: await logsDir(t) }, readKey: () => null, fetchImpl: async () => { throw new Error('no request expected'); } });
+  // SWARM_CONFIG is set explicitly (as every other config-reading test in this suite does) so
+  // this never depends on whatever real config a developer machine happens to have.
+  const result = await executeApi(job(), [], { env: { SWARM_CONFIG: '/nonexistent/swarm-config.json', SWARM_LOGS_DIR: await logsDir(t) }, readKey: () => null, fetchImpl: async () => { throw new Error('no request expected'); } });
   assert.equal(result.status, 'failed');
-  assert.match(result.error, /OPENROUTER_API_KEY is required/);
+  // Field lesson #222: named before anything is sent — the env var, the keychain item it looked
+  // up, and the config path it read, not just "is required".
+  assert.match(result.error, /^api-key-missing: OPENROUTER_API_KEY not set; keychain item project-swarm\/openrouter\.api_key not found; config read from/);
 });
 
 test('an echoed key discards the output', async t => {
