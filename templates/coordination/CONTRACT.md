@@ -33,7 +33,7 @@ alongside its UTC-clock tests — a UTC-only suite can pass while the window
 itself is wrong for half the world.
 
 ## Tests
-Where each job's regression test lives; which existing tests it changes.
+Where each job's regression test lives; which existing tests it changes; a done-when naming a diagnostic field names one test per failure class it must distinguish, not just that the field exists.
 
 ## Release
 Which job owns the version bump and CHANGELOG heading, and in which PR.

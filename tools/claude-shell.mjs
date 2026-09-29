@@ -77,9 +77,15 @@ export function expandShellPreset(job) {
 
 // 1.19.0: shell jobs have all network off except the model API. A non-empty allowlist is
 // validated, then refused: it would need per-host proxy rules this release does not ship.
+// Field lesson #238: each entry must be an `https://` URL naming a host (never bare, never any
+// other scheme) — a fetch job names its hosts up front, and only ever over HTTPS.
+const NETWORK_ALLOW_HTTPS_HOST = /^https:\/\/(.+)$/;
 export function validateNetworkAllow(list, jobId) {
   if (!Array.isArray(list) || list.length > 20) throw Error(`Job ${jobId}: networkAllow must be an array of at most 20 hosts`);
-  for (const host of list) if (typeof host !== 'string' || !HOST.test(host)) throw Error(`Job ${jobId}: invalid networkAllow host`);
+  for (const entry of list) {
+    const match = typeof entry === 'string' ? NETWORK_ALLOW_HTTPS_HOST.exec(entry) : null;
+    if (!match || !HOST.test(match[1])) throw Error(`Job ${jobId}: invalid-networkAllow-host: ${JSON.stringify(entry)}`);
+  }
   if (list.length) throw Error(`Job ${jobId}: networkAllow is not yet supported (1.19.0 shell jobs reach only ${API_HOST}); leave it empty`);
   return list;
 }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.31.0
+
+- A claude shell job's `networkAllow` host list now requires an `https://` scheme on each entry, refusing `invalid-networkAllow-host` otherwise (a well-formed https host still refuses as not-yet-supported); a manifest check may set `integrateOnly: true`, skipped by the shell worker's own smoke check and marked `(skipped-integrate-only)` in its prompt instead of gating the job. (lesson 238)
+- `integrate` now tags a check whose output shows `sandbox_apply`/`Operation not permitted` as `sandbox-only`, excluded from fail counts — the orchestrator's own run outside the sandbox is the truth. (lesson 239)
+- `validate` warns `contract-file-not-found` when a shared contract's own `Files:` line names a path missing from the repository root. (lesson 240)
+- `templates/coordination/CONTRACT.md`'s "Tests" section now asks for one test per named failure class, not just that a diagnostic field exists. (lesson 241)
+
 ## 1.30.0
 
 - New `templates/coordination/CONTRACT.md`, an "Event names" table (`event | producer file:line | reader file:line`); `validate` warns `event-reader-no-producer` when a contract lists a read event with no producer. (lesson 229)
