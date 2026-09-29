@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.28.0
+
+- API job envelopes may now name `edits: [{path, find, replace}]` per declared output instead of the whole file; the coordinator applies each edit and refuses `edit-no-match`/`edit-multiple-match` when the find text is missing or ambiguous. Validation now warns `large-output-whole` when an API job declares an output already over 20 KB on disk. (lesson 113)
+- `integrate`, `mutants` and `ship` now print a `no-job-running` warning, naming idle minutes since the latest run ended, when no run under the configured roots (local config `metrics.roots`, else the current `--root`) has status running. `session-metrics` gained `idleGaps()`, listing every gap of 5 minutes or more between recorded windows. (lesson 114)
+- `scout --allow-license "<package>=<license id>"` (repeatable) exempts one named package from the license gate; the exempted pick is marked `licenseException: true` and stays in the report's picks. (lesson 115)
+- `scout --licenses <file or csv>` replaces the built-in license allowlist outright; `scout --kind assets` adds a CC0-1.0/CC-BY-4.0 preset on top (a CC-BY-4.0 pick is marked `attribution: true`). A scout report's `sections: {<heading>: text}` now renders in `report.md` for any extra section the brief asked for. (lesson 116)
+- `ship` now refuses `author-email-mismatch`, naming the commit, when any commit in `<base>..HEAD` has an author or committer email that is neither the repository's configured `user.email` nor a `*@users.noreply.github.com` address; this runs before the push. (lesson 117)
+- `redcheck --commit <sha>` proves one specific commit's own regression coverage on a temporary worktree at HEAD (that commit's diff reverted there, checks run, worktree removed), independent of a run's own recorded base/job bytes; the result names `importOnly: true` when every failure is a missing-export `SyntaxError`. (lesson 118)
+- API adapters (openrouter, openai, lambda, generic) now inline every manifest `context` file into the request with a 60,000-byte per-file cap, recording `contextInlined: [{path, bytes, truncated}]` on the job result; validation refuses `context-not-deliverable` when a tool-free job's context is missing or exceeds a 200,000-byte total cap. A tool-free job whose parsed reply is a bare JSON `null` now fails with reason `null-result` instead of ever being reported complete. (lesson 119)
+
 ## 1.27.0
 
 - New optional worker skills: a manifest `skillsDir` (or local config `skills.dir`) names a

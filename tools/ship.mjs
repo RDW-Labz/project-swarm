@@ -5,8 +5,12 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { packagingChangeWarnings } from './packaging-check.mjs';
 import { loadLocalConfig } from './local-config.mjs';
+
+const execFileAsync = promisify(execFile);
 
 export const SHIP_DEFAULTS = Object.freeze({ pollMs: 20_000, timeoutMs: 45 * 60_000, noCiGraceMs: 5 * 60_000, mergeMethod: 'squash' });
 export const CHECKS_PLACEHOLDER = '<!-- swarm:checks -->';
@@ -331,6 +335,38 @@ async function changedFileNames(exec, root, payloadBase) {
   const stagedRes = await exec('git', ['diff', '--name-only', '--cached'], { cwd: root });
   if (stagedRes && stagedRes.code === 0) for (const line of stagedRes.stdout.split('\n')) if (line.trim()) files.add(line.trim());
   return [...files];
+}
+
+// Field lesson #213: never override git identity (`git -c user.email=...`) to make a push land —
+// the repo's own configured `user.email` decides, and a GitHub noreply address is always fine
+// (it is the address GitHub itself commits under when a UI/API action makes the commit).
+// This runs its own real `git` (never ship's shared, script-driven `exec` seam other checks and
+// tests replay in strict call order) so it can be always-on without reordering every other call.
+const NOREPLY_EMAIL_RE = /^[^@\s]+@users\.noreply\.github\.com$/i;
+export async function defaultAuthorEmailExec(args, { cwd }) {
+  try {
+    const { stdout } = await execFileAsync('git', args, { cwd });
+    return { code: 0, stdout, stderr: '' };
+  } catch (error) {
+    return { code: typeof error.code === 'number' ? error.code : 1, stdout: error.stdout ?? '', stderr: error.stderr ?? String(error.message ?? '') };
+  }
+}
+export async function authorEmailMismatches(root, base, { exec = defaultAuthorEmailExec } = {}) {
+  const configRes = await exec(['config', 'user.email'], { cwd: root });
+  const configuredEmail = configRes.code === 0 ? configRes.stdout.trim() : null;
+  const logRes = await exec(['log', `origin/${base}..HEAD`, '--format=%H%x1f%ae%x1f%ce'], { cwd: root });
+  if (logRes.code !== 0) return [];
+  const mismatches = [];
+  for (const line of logRes.stdout.split('\n')) {
+    if (!line.trim()) continue;
+    const [sha, authorEmail, committerEmail] = line.split('\x1f');
+    for (const email of [authorEmail, committerEmail]) {
+      if (!email || email === configuredEmail || NOREPLY_EMAIL_RE.test(email)) continue;
+      mismatches.push({ sha, email });
+      break;
+    }
+  }
+  return mismatches;
 }
 
 // gh repo view answers through ship's own exec seam, same as every other gh/git call, so tests
@@ -833,6 +869,7 @@ export async function ship(options) {
     resolveUv: resolveUvImpl = resolveUv,
     runId = null, branch = null,
     privateNamesFile = null,
+    authorEmailExec = defaultAuthorEmailExec,
   } = options;
 
   let repo = options.repo;
@@ -924,6 +961,17 @@ export async function ship(options) {
   if (shaRes.code !== 0 || shaRes.stdout.trim() === '') return { ...base, status: 'refused', reason: stepFailed('rev-parse', shaRes) };
   const sha = shaRes.stdout.trim();
   base.sha = sha;
+
+  // Field lesson #213: refuses before push when any commit in this diff carries an author or
+  // committer email that is neither the repo's own configured user.email nor a GitHub noreply
+  // address — never overridden by a coordinator's own `-c user.email=...`.
+  const emailMismatches = await authorEmailMismatches(root, payload.base, { exec: authorEmailExec });
+  if (emailMismatches.length) {
+    return {
+      ...base, status: 'refused', code: 'author-email-mismatch',
+      reason: `author-email-mismatch: ${emailMismatches.map(mismatch => `${mismatch.sha} (${mismatch.email})`).join(', ')}`,
+    };
+  }
 
   // Field lesson 154/156/179: a static gate over the lines this change ADDS to its own test files,
   // before any check spawns them for real; an undocumented binary with no fake/skip seam refuses

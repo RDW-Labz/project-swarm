@@ -11,7 +11,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, parseExtraCli, extraCliDoctor, execViaFile, validateEnvelope, summarizeModels } from './cli-adapters.mjs';
-import { API_AGENTS, apiDoctor, probeLocalProvider, decodeContext, executeApi } from './api-adapters.mjs';
+import { API_AGENTS, apiDoctor, probeLocalProvider, decodeContext, executeApi, applyEdit } from './api-adapters.mjs';
 import { nonBookkeepingOutputs } from './openrouter.mjs';
 
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, parseCodexReply, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
@@ -40,6 +40,12 @@ export const SHELL_SUITE_BOILERPLATE = 'Run only your own new/changed test files
 export const NEW_PERSISTED_FIELD_BOILERPLATE = 'A new stored field states its legacy default and has a from-disk legacy test.';
 const MAX_CONTEXT = 32 * 1024 * 1024;
 const MAX_FILE = 16 * 1024 * 1024;
+// Row #217: the total bytes of context a tool-free (API) job may declare; above this, at least
+// one file cannot ride along inlined (each file is itself capped at CONTEXT_BYTE_CAP).
+const CONTEXT_TOTAL_CAP = 200000;
+// Row #185: a declared output at or under this size on disk is unlikely to hit an API worker's
+// own output-token limit when asked for whole; larger warns toward the `edits` form instead.
+const LARGE_OUTPUT_WHOLE_BYTES = 20000;
 const PROGRESS_INTERVAL = 1000;
 const CLI_AGENTS = ['claude', 'codex', ...EXTRA_CLI_AGENTS];
 export const AGENTS = Object.freeze([...CLI_AGENTS, ...API_AGENTS]);
@@ -1542,7 +1548,18 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
               result=await execute(job,workspaceRoot,providerMessage,{spawnImpl,signal,cancelled,killImpl,onOutput:tracker.onOutput});
             } else result=await executeApi(job, context, { fetchImpl, env, signal, cancelled, skillsBlock: skillsBlockText });
             // Adapter validates the entire exact allowlist before any workspace write.
-            if (result.status === 'complete') for (const file of result.files) await write(workspaceRoot, file.path, file.content, false, record.baseModes[file.path]);
+            if (result.status === 'complete') {
+              for (const file of result.files) await write(workspaceRoot, file.path, file.content, false, record.baseModes[file.path]);
+              // Row #185: an `edits` reply is applied here, against the exact bytes already sitting
+              // in this job's workspace (its declared output's starting content) — never guessed at
+              // by the adapter, which never touches a filesystem.
+              for (const edit of result.edits ?? []) {
+                const current = await bytesAt(workspaceRoot, edit.path);
+                const applied = applyEdit(current === null ? '' : current.toString('utf8'), edit.find, edit.replace);
+                if (applied.error) { result = { ...result, status: 'failed', error: `${applied.error}: ${edit.path}` }; break; }
+                await write(workspaceRoot, edit.path, applied.content, false, record.baseModes[edit.path]);
+              }
+            }
           }
         } finally { tracker?.stop(); }
         await write(root, `${directory}/${job.id}/provider.jsonl`, result.stdout, true);
@@ -1636,7 +1653,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         // Field lesson #201: a setup failure never spawns the worker; `setupFailed` rides along on
         // the job record so inspect can name the phase, instead of an empty error/result/cost that
         // reads identically to a worker that ran and produced nothing.
-        Object.assign(record, { permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt), ...(result.setupFailed ? { setupFailed: true } : {}), ...(result.status === 'timeout' ? { lastActivity: result.lastActivity ?? null } : {}) });
+        Object.assign(record, { permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt), ...(result.setupFailed ? { setupFailed: true } : {}), ...(result.status === 'timeout' ? { lastActivity: result.lastActivity ?? null } : {}), ...(result.contextInlined ? { contextInlined: result.contextInlined } : {}) });
         await queueSave();
       } catch (error) {
         if (error.keptWorkspace) record.keptWorkspace = error.keptWorkspace;
@@ -2422,10 +2439,86 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   } finally { await fs.rmdir(lock); }
 }
 
+// Field lesson #210: a hand step (integrate, mutants, ship) run while no job is actually running
+// anywhere under the roots this coordinator cares about is idle time nobody would choose to
+// spend that way — named up front, with how long it has already been idle, instead of only
+// showing up later as an unexplained gap in session-metrics.
+async function latestRunEnd(roots) {
+  let latest = null;
+  for (const oneRoot of roots) {
+    let entries;
+    try { entries = await fs.readdir(path.join(oneRoot, '.swarm/runs')); } catch { continue; }
+    for (const id of entries) {
+      try {
+        const state = JSON.parse(await fs.readFile(path.join(oneRoot, '.swarm/runs', id, 'state.json'), 'utf8'));
+        if (typeof state.finishedAt === 'string' && (!latest || state.finishedAt > latest)) latest = state.finishedAt;
+      } catch { /* skip unreadable/corrupt state */ }
+    }
+  }
+  return latest;
+}
+export async function noJobRunningWarning({ root, env = process.env, home = os.homedir(), dir, isAlive, now = () => Date.now() } = {}) {
+  let config; try { config = loadLocalConfig({ env, home }); } catch { config = {}; }
+  const configured = Array.isArray(config?.metrics?.roots) ? config.metrics.roots.filter(entry => typeof entry === 'string' && entry) : [];
+  const roots = (configured.length ? configured : [root]).map(entry => path.resolve(entry));
+  const activeRoots = new Set(roots);
+  for (const run of await listLiveRuns({ dir, isAlive })) {
+    let realRoot; try { realRoot = await fs.realpath(run.root); } catch { realRoot = run.root; }
+    if (activeRoots.has(path.resolve(realRoot))) return null;
+  }
+  const latest = await latestRunEnd(roots);
+  const idleMinutes = latest ? Math.round(((now() - Date.parse(latest)) / 60000) * 10) / 10 : null;
+  return { code: 'no-job-running', idleMinutes, message: `no-job-running: no run under the configured root(s) is active${idleMinutes !== null ? ` (idle ${idleMinutes} min)` : ''}` };
+}
+
 // Keep regression tests in place while reversing only the implementation outputs.
 const isTestOutput = file => /(^|\/)tests?\//.test(file) || /(?:\.test\.|\.spec\.|_test\.)/.test(path.basename(file));
 
-export async function redcheckRun(root, id, argv, { spawnImpl = spawn, timeoutMs = 300000, base: baseRef } = {}) {
+// Field lesson #214: a stacked run's own recorded base/job bytes can differ from BOTH the base
+// and this job's own version once a later run has touched the same file again — no longer
+// provable that way ("differs from both base and job versions"). `--commit <sha>` sidesteps run
+// bookkeeping entirely: a temporary worktree at HEAD, that one commit's diff reverted there
+// (never on the coordinator's own tree), the checks run there, then the worktree removed.
+const MISSING_EXPORT_RE = /SyntaxError:.*does not provide an export named/;
+async function redcheckCommitRun(root, id, argv, { spawnImpl, timeoutMs, commit }) {
+  const result = { status: 'error', exitCode: null, restored: [], tail: '', base: `commit:${commit}` };
+  let temporary, worktree, added = false;
+  try {
+    if (!Array.isArray(argv) || !argv.length || argv.some(item => typeof item !== 'string' || item.includes('\0')) || !argv[0]) fail('redcheck requires --test <argv...>');
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1) fail('Invalid redcheck timeout');
+    if (typeof commit !== 'string' || !commit || commit.startsWith('-')) fail('Invalid commit');
+    root = await fs.realpath(root);
+    await readState(root, id); // confirms the run belongs to this repository
+    const sha = (await git(root, ['rev-parse', '--verify', `${commit}^{commit}`])).trim();
+    temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-redcheck-commit-'));
+    worktree = path.join(temporary, 'wt');
+    await git(root, ['worktree', 'add', '--detach', worktree, 'HEAD']);
+    added = true;
+    try {
+      await git(worktree, ['-c', 'user.name=swarm-redcheck', '-c', 'user.email=swarm-redcheck@localhost', 'revert', '--no-commit', '--no-edit', sha]);
+    } catch (error) {
+      fail(`commit revert failed: ${error.message}`);
+    }
+    const check = await runCheck('redcheck', argv, worktree, timeoutMs, spawnImpl, true, () => {}, { ...process.env, ...(await loadSwarmEnv(worktree)).env });
+    result.status = check.status === 'passed' ? 'green' : check.status === 'failed' && Number.isInteger(check.exitCode) ? 'red' : 'error';
+    result.exitCode = check.exitCode;
+    result.tail = check.tail.slice(-2000);
+    if (check.hint) result.hint = check.hint;
+    // Row #214: coarse proof only — every failure line is a missing-export SyntaxError (a later
+    // commit's own code importing something this one added), never a real assertion failure.
+    if (result.status !== 'green' && MISSING_EXPORT_RE.test(result.tail) && !/AssertionError/.test(result.tail)) result.importOnly = true;
+  } catch (error) {
+    result.status = 'error';
+    result.tail = `${result.tail}\n${error.message}`.trim().slice(-2000);
+  } finally {
+    if (added) { try { await git(root, ['worktree', 'remove', '--force', worktree]); } catch { /* best-effort cleanup */ } }
+    if (temporary) await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
+  }
+  return result;
+}
+
+export async function redcheckRun(root, id, argv, { spawnImpl = spawn, timeoutMs = 300000, base: baseRef, commit } = {}) {
+  if (commit !== undefined) return await redcheckCommitRun(root, id, argv, { spawnImpl, timeoutMs, commit });
   const restored = [];
   let lock, locked = false;
   const result = { status: 'error', exitCode: null, restored, tail: '', base: baseRef ?? 'run-base' };
@@ -2618,19 +2711,38 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
     // Throws unknown-skill before anything else runs; paths auto-attach sees the fully expanded
     // context (contextGlob matches included), the same list a job's own prompt block reflects.
     attachSkillsForJob(skills, { ...job, context });
-    let bytes=0;
+    let bytes=0, apiContextBytes=0;
     const files=[];
     const testOutputTexts = new Map();
     for(const file of new Set([...context,...job.outputs])){
       const data=await bytesAt(root,file);
-      if(data===null && context.includes(file)) fail(`Missing context: ${file}`);
+      if(data===null && context.includes(file)) {
+        // Row #217: a tool-free worker has no filesystem of its own — a context file it cannot
+        // read is never deliverable, named the same way as the over-cap case below.
+        if (API_AGENTS.includes(job.agent)) fail(`context-not-deliverable: missing context ${file}`);
+        fail(`Missing context: ${file}`);
+      }
       // The shared contract's text now travels inside the prompt, so codex never needs it from HEAD.
       if (job.agent === 'codex' && context.includes(file) && file !== manifest.contract && !(await isTrackedByGit(root, file, exec))) fail(`Job ${job.id}: codex context file ${file} is not tracked by git (codex sees HEAD only)`);
       bytes+=data?.length??0;
+      if (API_AGENTS.includes(job.agent) && context.includes(file)) apiContextBytes += data?.length ?? 0;
       files.push({path:file,bytes:data===null?0:data.length,exists:data!==null,context:context.includes(file),output:job.outputs.includes(file)});
       if(data !== null && !['claude', 'codex'].includes(job.agent)) decodeContext(data);
       if(bytes>MAX_CONTEXT) fail(`Context exceeds 32 MiB for ${job.id}`);
       if (data !== null && job.outputs.includes(file) && isTestFile(file)) testOutputTexts.set(file, data.toString('utf8'));
+    }
+    // Row #217: the total a tool-free worker's context can carry, inlined text (never a patch);
+    // over this, at least one file cannot be delivered whole and validate refuses up front.
+    if (API_AGENTS.includes(job.agent) && apiContextBytes > CONTEXT_TOTAL_CAP) fail(`context-not-deliverable: context exceeds ${CONTEXT_TOTAL_CAP} bytes for ${job.id} (${apiContextBytes} bytes)`);
+    // Row #185: a declared output already this large on disk, asked of a tool-free worker whole,
+    // risks the same output-length truncation that cost row #185's own incident; the `edits` form
+    // (find/replace) is the way out, but validate cannot know a worker will choose it, so this is
+    // always a warning, never a refusal.
+    if (API_AGENTS.includes(job.agent)) {
+      for (const file of job.outputs) {
+        const info = files.find(entry => entry.path === file);
+        if (info?.exists && info.bytes > LARGE_OUTPUT_WHOLE_BYTES) warnings.push({ code: 'large-output-whole', jobId: job.id, path: file, bytes: info.bytes, message: `${job.id}: declared output ${file} is ${info.bytes} bytes on disk; an API worker asked to return it whole may hit its output-token limit — consider the edits form (find/replace)` });
+      }
     }
     for (const file of job.ignoreTests ?? []) {
       if ((await bytesAt(root, file)) === null) fail(`Job ${job.id}: missing ignoreTests entry: ${file}`);
@@ -2814,7 +2926,16 @@ export async function askRun(root, { model, context = [], agent = 'claude', time
 
 // A read-only web job (GitHub first) that returns raw JSON; the runner, not the model, applies
 // the license gate and writes the report — builders read only the report.
-export async function scoutRun(root, { model, brief, context = [], timeoutMs, maxPicks = 12, goal } = {}, runOptions = {}) {
+// Row #212: `--licenses` may name a file (one license per line, or comma-separated) or a bare
+// comma-separated list; a name that is not an existing readable file is treated as the list itself.
+async function resolveLicensesFlag(root, licenses) {
+  if (licenses === undefined) return null;
+  let text = null;
+  try { text = (await fs.readFile(path.resolve(root, licenses), 'utf8')); } catch { /* not a file: treat the value itself as the list */ }
+  const source = text ?? licenses;
+  return source.split(/[\n,]/).map(entry => entry.trim()).filter(Boolean);
+}
+export async function scoutRun(root, { model, brief, context = [], timeoutMs, maxPicks = 12, goal, allowLicense = [], licenses, kind } = {}, runOptions = {}) {
   if (typeof model !== 'string' || !model.trim()) fail('scout requires --model');
   if (typeof brief !== 'string' || !brief.trim()) fail('scout requires --brief');
   // Field lesson 111: --brief may name any readable path, including one outside root; it is
@@ -2834,7 +2955,10 @@ export async function scoutRun(root, { model, brief, context = [], timeoutMs, ma
   const prompt = scoutPrompt({ brief: briefText, goal: trimmedGoal, maxPicks });
   // Field lesson #194: the brief's own `Allowed licenses: ...` line names the gate's allowlist;
   // only when the brief names none does the fixed code-license list apply.
-  const allowlist = parseAllowedLicenses(briefText);
+  // Row #212: `--licenses` replaces the brief's own allowlist line outright; `--kind assets`
+  // adds its own CC0-1.0/CC-BY-4.0 preset on top (normalizeScoutReport merges the two).
+  const licensesFromFlag = await resolveLicensesFlag(root, licenses);
+  const allowlist = licensesFromFlag ?? parseAllowedLicenses(briefText);
   const { id, job, state } = await runWithIdRetry('scout', runOptions, async id => {
     await write(root, `.swarm/scouts/${id}/brief.md`, briefBytes, true);
     const job = { id, agent: 'claude', model, prompt, context: [...new Set(context)], outputs: [], web: true, ...(timeoutMs !== undefined ? { timeoutMs } : {}) };
@@ -2843,7 +2967,7 @@ export async function scoutRun(root, { model, brief, context = [], timeoutMs, ma
   });
   const record = state.jobs[0];
   const parsed = await jobFinalJson(root, id, id);
-  const normalized = normalizeScoutReport(parsed, { maxPicks, allowlist });
+  const normalized = normalizeScoutReport(parsed, { maxPicks, allowlist, exceptions: allowLicense, kind });
   const actualModel = record.actualModel ?? null;
   const reportRelative = `.swarm/scouts/${id}/report.json`;
   const markdownRelative = `.swarm/scouts/${id}/report.md`;
@@ -3522,13 +3646,15 @@ async function main() {
   const testIndex=args.indexOf('--test');
   const rootIndex=args.findIndex((arg,index)=>arg==='--root'&&(testIndex===-1||index<testIndex));
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] "goal" | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
   if(args[0]==='redcheck'){
     const hasBase=args[2]==='--base';
-    const testAt=hasBase?4:2;
+    // Row #214: --commit SHA is a separate, mutually-exclusive proof mode from --base REF.
+    const hasCommit=args[2]==='--commit';
+    const testAt=(hasBase||hasCommit)?4:2;
     const result=args[testAt]==='--test'
-      ? await redcheckRun(root,args[1],args.slice(testAt+1),hasBase?{base:args[3]}:{})
-      : {status:'error',exitCode:null,restored:[],base:hasBase?args[3]:'run-base',tail:'Usage: swarm redcheck <run-id> [--base REF] --test <argv...>'};
+      ? await redcheckRun(root,args[1],args.slice(testAt+1),hasBase?{base:args[3]}:hasCommit?{commit:args[3]}:{})
+      : {status:'error',exitCode:null,restored:[],base:hasBase?args[3]:hasCommit?`commit:${args[3]}`:'run-base',tail:'Usage: swarm redcheck <run-id> [--base REF] [--commit SHA] --test <argv...>'};
     process.stdout.write(`${JSON.stringify(result)}\n`);
     process.exitCode=result.status==='red'?0:1;
     return;
@@ -3609,7 +3735,8 @@ async function main() {
   // scout has its own flag/positional shape, like ask, and always runs as claude (no --agent flag).
   if(args[0]==='scout'){
     const flags=args.slice(1);
-    let model,briefArg,contextArg,timeoutSeconds,maxPicksArg;
+    let model,briefArg,contextArg,timeoutSeconds,maxPicksArg,licensesArg,kindArg;
+    const allowLicenseArgs=[];
     const positionals=[];
     for(let index=0;index<flags.length;index++){
       const flag=flags[index];
@@ -3617,6 +3744,18 @@ async function main() {
       if(flag==='--brief'){briefArg=flags[++index];continue;}
       if(flag==='--context'){contextArg=flags[++index];continue;}
       if(flag==='--max-picks'){maxPicksArg=flags[++index];continue;}
+      // Row #211: a repeatable per-package license exception; the gate, not a worker's prose,
+      // is what keeps an exempted pick from being rejected again on a later run.
+      if(flag==='--allow-license'){
+        const value=flags[++index];
+        const eq=value?value.indexOf('='):-1;
+        if(!value||eq<=0||eq===value.length-1)fail('--allow-license requires <package>=<license id>');
+        allowLicenseArgs.push({name:value.slice(0,eq),license:value.slice(eq+1)});
+        continue;
+      }
+      // Row #212: replaces the built-in code-license allowlist outright; combined with --kind assets.
+      if(flag==='--licenses'){licensesArg=flags[++index];if(!licensesArg)fail('--licenses requires a file or comma-separated list');continue;}
+      if(flag==='--kind'){kindArg=flags[++index];if(kindArg!=='assets')fail('--kind only accepts "assets"');continue;}
       if(flag==='--timeout'){
         const next=flags[++index];
         if(next===undefined||!/^\d+(\.\d+)?$/.test(next)||Number(next)<=0)fail('--timeout requires a positive number of seconds');
@@ -3627,7 +3766,7 @@ async function main() {
     }
     if(positionals.length!==1)fail('scout requires exactly one goal argument; use --help');
     root=await fs.realpath(root);
-    const result=await scoutRun(root,{model,brief:briefArg,context:contextArg?contextArg.split(','):[],timeoutMs:timeoutSeconds!==undefined?timeoutSeconds*1000:undefined,maxPicks:maxPicksArg!==undefined?Number(maxPicksArg):undefined,goal:positionals[0]});
+    const result=await scoutRun(root,{model,brief:briefArg,context:contextArg?contextArg.split(','):[],timeoutMs:timeoutSeconds!==undefined?timeoutSeconds*1000:undefined,maxPicks:maxPicksArg!==undefined?Number(maxPicksArg):undefined,goal:positionals[0],allowLicense:allowLicenseArgs,licenses:licensesArg,kind:kindArg});
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if(result.status!=='complete')process.exitCode=1;
     return;
@@ -3687,6 +3826,9 @@ async function main() {
     let result;
     try{result=await runMutantsCurrentTree(root,{mutantsFile:mutantsFileArg,mutantCheck:mutantCheckArg,dryRun},spawn,()=>interrupted);}
     finally{process.off('SIGINT',onSigint);}
+    // Field lesson #210: a hand step run while nothing is actually running says so, up front.
+    const mutantsIdleWarning=await noJobRunningWarning({root});
+    if(mutantsIdleWarning)result={...result,warnings:[...(result.warnings??[]),mutantsIdleWarning.message]};
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if(!result.mutantsPassed&&!result.mutantsValid)process.exitCode=1;
     return;
@@ -3870,7 +4012,12 @@ async function main() {
   else if(command==='wait')result=await waitRun(root,argument,{timeoutMs:waitTimeoutSeconds!==null?waitTimeoutSeconds*1000:undefined});
   else if(command==='inspect')result=resultsOnly?await inspectResults(root,argument):await inspectRun(root,argument);
   else if(command==='cancel')result=await cancelRun(root,argument);
-  else if(command==='ship')result=await shipRun(root,argument,shipFlags);
+  else if(command==='ship'){
+    result=await shipRun(root,argument,shipFlags);
+    // Field lesson #210: ship is a hand step; say up front when no job is actually running.
+    const shipIdleWarning=await noJobRunningWarning({root});
+    if(shipIdleWarning)result={...result,warnings:[...(result.warnings??[]),shipIdleWarning.message]};
+  }
   else if(command==='go'){
     if(!ID.test(argument))await warnProjectVersionMismatch(root);
     result=await go(root,argument,goFlags,{
@@ -3899,6 +4046,11 @@ async function main() {
     result=acceptFailedChecks
       ?{...result,status:'integrated-with-failures',warnings:[...(result.warnings??[]),note]}
       :{...result,warnings:[...(result.warnings??[]),`${note} (refusing; pass --accept-failed-checks to integrate anyway)`]};
+  }
+  // Field lesson #210: integrate is a hand step too; say up front when no job is actually running.
+  if(command==='integrate'){
+    const integrateIdleWarning=await noJobRunningWarning({root});
+    if(integrateIdleWarning)result={...result,warnings:[...(result.warnings??[]),integrateIdleWarning.message]};
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if(command==='wait'){if(result.status==='running')process.exitCode=2;else if(['failed','cancelled'].includes(result.status))process.exitCode=1;return;}

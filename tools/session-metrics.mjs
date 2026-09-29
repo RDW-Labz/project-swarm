@@ -66,3 +66,21 @@ export function reworkBySkill(jobs) {
   for (const name of names) result[name] = { withSkill: summarize(jobs.filter(job => hasSkill(job, name))), withoutSkill: summarize(jobs.filter(job => !hasSkill(job, name))) };
   return result;
 }
+
+// Row #210: a coordinator's own idle time between two recorded windows (whatever kind each is —
+// a run, checks, mutants, ask, scout) is exactly the gap between one record's end and the next
+// record's start; only a gap this long is worth a lesson row of its own, so anything shorter is
+// left out rather than padding the list with routine turnaround.
+export function idleGaps(records, { minMinutes = 5 } = {}) {
+  const usable = (records ?? [])
+    .filter(record => typeof record?.startedAt === 'string' && typeof record?.finishedAt === 'string')
+    .sort((a, b) => (a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : 0));
+  const gaps = [];
+  for (let index = 1; index < usable.length; index++) {
+    const start = usable[index - 1].finishedAt;
+    const end = usable[index].startedAt;
+    const minutes = (Date.parse(end) - Date.parse(start)) / 60000;
+    if (Number.isFinite(minutes) && minutes >= minMinutes) gaps.push({ start, end, minutes: Math.round(minutes * 10) / 10 });
+  }
+  return gaps;
+}

@@ -64,7 +64,9 @@ const REJECTED_KEYS = ['name', 'url', 'reason'];
 const MAX_STR = 300;
 
 export function scoutPrompt({ brief, goal, maxPicks }) {
-  const schema = { picks: [{ name: '', url: '', license: '', licenseEvidence: '', commit: '', stars: 0, lastCommit: '', gives: '', fit: SCOUT_FITS[0], where: '', risk: '' }], rejected: [{ name: '', url: '', reason: '' }], top: ['one line'] };
+  // Row #212: `sections` is a free dictionary the model fills only for a heading the brief itself
+  // asks for by name (e.g. "bundling rules"); the fixed Top/Picks/Rejected layout never drops it.
+  const schema = { picks: [{ name: '', url: '', license: '', licenseEvidence: '', commit: '', stars: 0, lastCommit: '', gives: '', fit: SCOUT_FITS[0], where: '', risk: '' }], rejected: [{ name: '', url: '', reason: '' }], top: ['one line'], sections: { 'heading the brief asked for': 'its text' } };
   return [
     'You are scouting for existing open-source code before a build, so it is not rebuilt from scratch. Prefer GitHub first.',
     'Read-only: search and read only; never clone, install, run or log in.',
@@ -81,7 +83,9 @@ export function scoutPrompt({ brief, goal, maxPicks }) {
     `Return at most ${maxPicks} picks. Respond with a JSON object in exactly this shape:`,
     JSON.stringify(schema, null, 2),
     '',
-    'Finish with exactly one JSON line containing the whole report object.'
+    'If the brief itself asks for any other named section (e.g. "bundling rules"), add one entry per',
+    'such heading to `sections`; otherwise leave `sections` empty. Finish with exactly one JSON line',
+    'containing the whole report object.'
   ].join('\n');
 }
 
@@ -91,22 +95,39 @@ const capStr = value => { const trimmed = value.trim(); return trimmed.length > 
 const capValue = (key, value) => (key === 'stars' ? value : typeof value === 'string' ? capStr(value) : null);
 const withPresentKeys = (source, keys) => { const out = {}; for (const key of keys) if (Object.hasOwn(source, key)) out[key] = capValue(key, source[key]); return out; };
 
-export function normalizeScoutReport(raw, { maxPicks = 12, allowlist = null } = {}) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { picks: [], rejected: [], top: [], moved: [] };
+// Row #211: a brief-named per-package license exception is config the gate itself honors, not
+// prose a worker (or a later hand-merge) has to remember to reapply.
+function matchingException(name, license, exceptions) {
+  if (typeof name !== 'string' || typeof license !== 'string') return null;
+  return (exceptions ?? []).find(exception => exception?.name && typeof exception.name === 'string' && exception.name.toLowerCase() === name.toLowerCase() && licenseAllowed(license, [exception.license])) ?? null;
+}
+// Row #212: an asset scout's own preset — CC0-1.0 is a clean allow, CC-BY-4.0 requires attribution
+// (flagged, never silently dropped) — on top of whatever `--licenses` names.
+export const SCOUT_ASSET_LICENSES = Object.freeze(['CC0-1.0', 'CC-BY-4.0']);
+const ASSET_ATTRIBUTION_LICENSE = 'CC-BY-4.0';
+const MAX_SECTION_HEADING = 80, MAX_SECTION_TEXT = 4000, MAX_SECTIONS = 10;
+
+export function normalizeScoutReport(raw, { maxPicks = 12, allowlist = null, exceptions = [], kind = null } = {}) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { picks: [], rejected: [], top: [], moved: [], sections: {} };
   const rawPicks = Array.isArray(raw.picks) ? raw.picks : [];
   const rawRejected = Array.isArray(raw.rejected) ? raw.rejected : [];
   const rawTop = Array.isArray(raw.top) ? raw.top : [];
+  const rawSections = raw.sections && typeof raw.sections === 'object' && !Array.isArray(raw.sections) ? raw.sections : {};
 
+  // Row #212: an assets scout replaces the fixed code-license list with its own preset — CC0-1.0
+  // and CC-BY-4.0 — plus anything else the allowlist already named (a brief line or --licenses).
+  const effectiveAllowlist = kind === 'assets' ? [...new Set([...(allowlist ?? []), ...SCOUT_ASSET_LICENSES])] : allowlist;
   const kept = [], rejected = [], moved = [];
   for (const item of rawPicks) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
     const pick = withPresentKeys(item, PICK_KEYS);
     if (typeof pick.url !== 'string' || !pick.url.startsWith('https://')) { rejected.push({ ...withPresentKeys(pick, ['name', 'url']), reason: 'bad url' }); continue; }
     const license = typeof pick.license === 'string' ? pick.license : undefined;
+    const exception = license ? matchingException(pick.name, license, exceptions) : null;
     // Field lesson #195: the license gate's own rejection keeps every field the worker found (pin,
     // license evidence, peer ranges in `gives`, ...), tagged with which gate moved it and why — the
     // gate relocates a pick, it never drops its facts.
-    if (!license || !licenseAllowed(license, allowlist)) {
+    if (!license || !(licenseAllowed(license, effectiveAllowlist) || exception)) {
       const reason = `license not allowed: ${license || 'none'}`;
       rejected.push({ ...pick, reason, rejectedBy: `license-gate: ${reason}` });
       if (typeof pick.name === 'string') moved.push(pick.name);
@@ -117,6 +138,8 @@ export function normalizeScoutReport(raw, { maxPicks = 12, allowlist = null } = 
     if (typeof pick.lastCommit !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(pick.lastCommit)) pick.lastCommit = null;
     if (!SCOUT_FITS.includes(pick.fit)) pick.fit = 'reference-only';
     if (Object.hasOwn(SCOUT_FLAGGED_LICENSES, license)) pick.flag = SCOUT_FLAGGED_LICENSES[license];
+    if (exception) pick.licenseException = true;
+    if (kind === 'assets' && licenseAllowed(license, [ASSET_ATTRIBUTION_LICENSE])) pick.attribution = true;
     kept.push(pick);
   }
   for (const item of rawRejected) {
@@ -124,7 +147,14 @@ export function normalizeScoutReport(raw, { maxPicks = 12, allowlist = null } = 
     rejected.push(withPresentKeys(item, REJECTED_KEYS));
   }
   const top = rawTop.filter(line => typeof line === 'string').map(capStr).slice(0, 3);
-  return { picks: kept.slice(0, maxPicks), rejected: rejected.slice(0, 20), top, moved };
+  const sections = {};
+  for (const [heading, text] of Object.entries(rawSections)) {
+    if (Object.keys(sections).length >= MAX_SECTIONS) break;
+    if (typeof heading !== 'string' || !heading.trim() || typeof text !== 'string') continue;
+    const key = heading.trim().slice(0, MAX_SECTION_HEADING);
+    sections[key] = text.trim().slice(0, MAX_SECTION_TEXT);
+  }
+  return { picks: kept.slice(0, maxPicks), rejected: rejected.slice(0, 20), top, moved, sections };
 }
 
 // Backslashes first, then pipes, so `\|` in the input cannot close a cell; newlines would end the row.
@@ -155,7 +185,11 @@ export function renderScoutMarkdown(report, { goal, id, model }) {
     '## Rejected',
     '| Name | URL | License | Pin | Reason |',
     '| --- | --- | --- | --- | --- |',
-    ...(rejected.length ? rejected.map(rejectedRow) : ['| (none) | | | | |'])
+    ...(rejected.length ? rejected.map(rejectedRow) : ['| (none) | | | | |']),
   ];
+  // Row #212: a brief-requested section (e.g. "bundling rules") the fixed layout above would
+  // otherwise drop rides along here instead, one heading per entry, in the order the report gave.
+  const sections = report?.sections && typeof report.sections === 'object' ? report.sections : {};
+  for (const [heading, text] of Object.entries(sections)) lines.push('', `## ${heading}`, text);
   return `${lines.join('\n')}\n`;
 }
