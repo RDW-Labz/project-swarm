@@ -9,7 +9,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import { ship } from '../tools/ship.mjs';
+import { shipBranch, parseShipFlags, shipRun, runManifest, integrateRun } from '../tools/swarm.mjs';
+import { git } from '../tools/codex-adapter.mjs';
 
 async function tmp(t, prefix) {
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
@@ -168,6 +171,102 @@ describe('#243: ship rerun-flaky default applies only when every failed check is
     assert.equal(result.status, 'ci-failed', JSON.stringify(result));
     assert.ok(!calls.some(c => c.file === 'gh' && c.args[0] === 'run' && c.args[1] === 'rerun'));
     assert.ok(result.warnings.some(w => w.startsWith('rerun-flaky-skipped:')));
+  });
+});
+
+// --- #243 CLI path: swarm.mjs's shipBranch/shipRun must pass flags.rerunFlaky through as undefined
+// (not `?? 0`) so ship()'s own platform-only default (one rerun) still applies from the CLI. -------
+
+describe('#243: swarm.mjs shipBranch/shipRun pass flags.rerunFlaky through undefined so ship applies its default', () => {
+  test('(f) shipBranch via parseShipFlags with no --rerun-flaky: platform-only CI failure gets exactly one default rerun', async t => {
+    const root = await tmp(t, 'swarm-r-cli-shipbranch-');
+    await git(root, ['init', '-q', '-b', 'main']);
+    await fs.writeFile(path.join(root, 'a.txt'), 'x');
+    await git(root, ['add', '.']);
+    await git(root, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base']);
+    await git(root, ['checkout', '-q', '-b', 'feature-branch']);
+    await fs.writeFile(path.join(root, 'a.txt'), 'y');
+    await git(root, ['add', '.']);
+    await git(root, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'change']);
+    const payloadPath = path.join(root, 'pr.json');
+    await fs.writeFile(payloadPath, JSON.stringify({ title: 't', head: 'feature-branch', base: 'main', body: 'b' }));
+
+    // Same command-matched fake exec style as tests/field-lessons-batch-e.test.mjs's branchRepo
+    // fakeExec and -h's ship175 exec, extended with the dynamic CI-rollup + gh-run seam from case
+    // (a) above (prView answers platform-only once then green; gh run view/rerun as in WINDOWS_LOG).
+    let prViewCalls = 0;
+    const calls = [];
+    const exec = async (file, args, opts) => {
+      calls.push({ file, args, cwd: opts?.cwd });
+      if (file === 'git' && args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return ok('feature-branch\n');
+      if (file === 'git' && args[0] === 'rev-parse') return ok('sha-fixture\n');
+      if (file === 'git' && args[0] === 'remote') return ok('https://github.com/acme/widgets.git');
+      if (file === 'git') return ok('');
+      if (file === 'gh' && args[0] === 'api' && args[1]?.includes('/pulls?head=')) return ok('[]');
+      if (file === 'gh' && args[0] === 'api' && args[1]?.endsWith('/pulls')) return ok(JSON.stringify({ number: 9, html_url: 'https://example.com/pr/9' }));
+      if (file === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        const jsonIdx = args.indexOf('--json');
+        const fields = jsonIdx >= 0 ? args[jsonIdx + 1] : '';
+        if (fields.includes('mergeCommit')) return ok(JSON.stringify({ state: 'MERGED', mergeCommit: { oid: 'merged-sha' } }));
+        prViewCalls++;
+        return prViewCalls === 1 ? rollupOk(PLATFORM_ONLY_ROLLUP) : rollupOk(GREEN_ROLLUP);
+      }
+      if (file === 'gh' && args[0] === 'pr' && args[1] === 'merge') return ok(JSON.stringify({ code: 0 }));
+      if (file === 'gh' && args[0] === 'run') return args[1] === 'view' ? ok(WINDOWS_LOG) : ok('');
+      throw new Error(`unexpected exec: ${file} ${args.join(' ')}`);
+    };
+    const flags = parseShipFlags(['--branch', 'feature-branch', '--pr', payloadPath]);
+    const result = await shipBranch(root, flags, { exec, sleep: async () => {} });
+    assert.notEqual(result.status, 'ci-failed', JSON.stringify(result));
+    assert.equal(result.status, 'merged', JSON.stringify(result));
+    const rerunCalls = calls.filter(c => c.file === 'gh' && c.args[0] === 'run' && c.args[1] === 'rerun');
+    assert.equal(rerunCalls.length, 1);
+    assert.ok(result.warnings.includes('rerun-flaky-default: 1 (platform-only)'));
+  });
+
+  test('(g) shipRun with no rerunFlaky in flags: platform-only CI failure gets exactly one default rerun', async t => {
+    const root = await tmp(t, 'swarm-r-cli-shiprun-');
+    await git(root, ['init', '-q', '-b', 'main']);
+    await git(root, ['config', 'user.name', 'Fixture']);
+    await git(root, ['config', 'user.email', 'fixture@example.invalid']);
+    await fs.writeFile(path.join(root, 'input.txt'), 'original');
+    await fs.writeFile(path.join(root, '.gitignore'), '.swarm/\n');
+    await git(root, ['add', '.']);
+    await git(root, ['-c', 'commit.gpgsign=false', 'commit', '-m', 'base']);
+    const job = { id: 'writer', agent: 'claude', model: 'sonnet', prompt: 'Update input.', context: ['input.txt'], outputs: ['input.txt'] };
+    const fakeAgent = (_cmd, _args, options) => spawn(process.execPath, ['-e', "const fs=require('fs');fs.writeFileSync('input.txt','updated');console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'ok'}));"], options);
+    const state = await runManifest(root, { version: 1, jobs: [job] }, { spawnImpl: fakeAgent });
+    await integrateRun(root, state.id, { noChecks: true });
+    const payloadPath = path.join(root, 'pr.json');
+    await fs.writeFile(payloadPath, JSON.stringify({ title: 'Add feature', head: 'feature-branch', base: 'main', body: 'body text' }));
+
+    let prViewCalls = 0;
+    const calls = [];
+    const exec = async (file, args, opts) => {
+      calls.push({ file, args, cwd: opts?.cwd });
+      if (file === 'git' && args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return ok('feature-branch\n');
+      if (file === 'git' && args[0] === 'rev-parse') return ok('sha-fixture\n');
+      if (file === 'git' && args[0] === 'remote') return ok('https://github.com/acme/widgets.git');
+      if (file === 'git') return ok('');
+      if (file === 'gh' && args[0] === 'api' && args[1]?.includes('/pulls?head=')) return ok('[]');
+      if (file === 'gh' && args[0] === 'api' && args[1]?.endsWith('/pulls')) return ok(JSON.stringify({ number: 9, html_url: 'https://example.com/pr/9' }));
+      if (file === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        const jsonIdx = args.indexOf('--json');
+        const fields = jsonIdx >= 0 ? args[jsonIdx + 1] : '';
+        if (fields.includes('mergeCommit')) return ok(JSON.stringify({ state: 'MERGED', mergeCommit: { oid: 'merged-sha' } }));
+        prViewCalls++;
+        return prViewCalls === 1 ? rollupOk(PLATFORM_ONLY_ROLLUP) : rollupOk(GREEN_ROLLUP);
+      }
+      if (file === 'gh' && args[0] === 'pr' && args[1] === 'merge') return ok(JSON.stringify({ code: 0 }));
+      if (file === 'gh' && args[0] === 'run') return args[1] === 'view' ? ok(WINDOWS_LOG) : ok('');
+      throw new Error(`unexpected exec: ${file} ${args.join(' ')}`);
+    };
+    const result = await shipRun(root, state.id, { payloadPath, requireSections: [], merge: true }, { exec, sleep: async () => {} });
+    assert.notEqual(result.status, 'ci-failed', JSON.stringify(result));
+    assert.equal(result.status, 'merged', JSON.stringify(result));
+    const rerunCalls = calls.filter(c => c.file === 'gh' && c.args[0] === 'run' && c.args[1] === 'rerun');
+    assert.equal(rerunCalls.length, 1);
+    assert.ok(result.warnings.includes('rerun-flaky-default: 1 (platform-only)'));
   });
 });
 
