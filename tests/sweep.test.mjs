@@ -1,3 +1,6 @@
+// Lesson #152: imported directly (not only via the package.json test script) so this file stays
+// hermetic even run alone as `node --test tests/sweep.test.mjs`.
+import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';

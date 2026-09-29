@@ -81,13 +81,26 @@ const NATIVE_MARKER_RE = /-m\s+"?native"?\b/;
 const CI_GUARD_RE = /GITHUB_ACTIONS|runner\.os/;
 const SECRETS_ENV_RE = /secrets\./;
 
-function parseWorkflowSteps(yamlText) {
+// Field lesson #250: `env:` at the workflow root (indent 0, a sibling of `jobs:`) applies to
+// every job; `env:` nested inside one job applies only to that job's own steps. The job-level
+// text is reset the moment a new job key starts under `jobs:` (its own key line sits exactly one
+// indent level under `jobs:`, with no value of its own) — otherwise a secrets-bearing job A `env:`
+// never lets go, and an ordinary job B with no env of its own inherits it and is wrongly skipped.
+export function parseWorkflowSteps(yamlText) {
   const lines = String(yamlText ?? '').split('\n');
   const steps = [];
-  let jobEnvText = '';
+  let workflowEnvText = '', jobEnvText = '';
+  let jobsIndent = null, jobKeyIndent = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (line.trim() === '' || line.trim().startsWith('#')) continue;
+    const indent = line.match(/^ */)[0].length;
+    const jobsMatch = /^(\s*)jobs:\s*$/.exec(line);
+    if (jobsMatch) { jobsIndent = jobsMatch[1].length; jobKeyIndent = null; continue; }
+    if (jobsIndent !== null && indent > jobsIndent) {
+      if (jobKeyIndent === null) jobKeyIndent = indent;
+      if (indent === jobKeyIndent && /^[^\s:]+:\s*$/.test(line.slice(indent))) jobEnvText = '';
+    }
     const envMatch = /^(\s*)env:\s*$/.exec(line);
     if (envMatch) {
       const parentIndent = envMatch[1].length;
@@ -97,7 +110,8 @@ function parseWorkflowSteps(yamlText) {
         if (lines[j].match(/^ */)[0].length <= parentIndent) break;
         body.push(lines[j]);
       }
-      jobEnvText = body.join('\n');
+      if (parentIndent === 0) workflowEnvText = body.join('\n');
+      else jobEnvText = body.join('\n');
       i = j - 1;
       continue;
     }
@@ -122,7 +136,7 @@ function parseWorkflowSteps(yamlText) {
         if (lines[k].match(/^ */)[0].length <= itemIndent) break;
         blockLines.push(lines[k]);
       }
-      steps.push({ blockText: blockLines.join('\n'), jobEnvText });
+      steps.push({ blockText: blockLines.join('\n'), jobEnvText: `${workflowEnvText}\n${jobEnvText}` });
       j = k;
     }
     i = j - 1;

@@ -1775,7 +1775,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           for (const file of await listWorkspaceFiles(workspaceRoot)) {
             if (known.has(file)) continue;
             if (seededHashes?.has(file)) {
-              const bytes = await bytesAt(workspaceRoot, file);
+              const bytes = await bytesAt(workspaceRoot, file, true);
               const hash = bytes === null ? null : digest(bytes);
               if (hash === seededHashes.get(file)) continue;
               droppedWrites.add(file);
@@ -2014,6 +2014,17 @@ const invalidJsonOutputWarnings = state => state.jobs.flatMap(job => (job.invali
 // one (droppedWritesNew, populated only there); a non-shell job's copied workspace never carries
 // that distinction, so job.droppedWritesNew stays undefined and the message is unchanged.
 const droppedWriteWarnings = state => state.jobs.flatMap(job => (job.droppedWrites ?? []).map(file => `dropped write: ${file}${(job.droppedWritesNew ?? []).includes(file) ? ' (new)' : ''} (not in outputs)`));
+// Field lesson #249: a worker's self-reported "changed" entry is prose ("out.txt created",
+// "other.txt (new)"), never a bare path; trimmed, then stripped of one trailing parenthetical,
+// then of one trailing status word (optionally introduced by ":" or "-") to recover the path
+// itself before it is ever compared against job.outputs or shown in a warning.
+const CHANGED_STATUS_WORD_RE = /(?:\s*[:-]\s*|\s+)(?:created|modified|updated|edited|deleted|removed|added|new|changed)$/i;
+function normalizeChangedEntry(raw) {
+  let text = raw.trim();
+  text = text.replace(/\s*\([^()]*\)\s*$/, '').trim();
+  text = text.replace(CHANGED_STATUS_WORD_RE, '').trim();
+  return text;
+}
 // Field lesson #142: a synced venv's own interpreter directory lived under $HOME but inside a
 // denied subtree (e.g. `~/.ssh`); surfaced, never fatal, since the worker may not need it anyway.
 const venvInterpreterWarnings = state => state.jobs.flatMap(job => job.venvInterpreterDenied ?? []);
@@ -3174,9 +3185,14 @@ export async function inspectResults(root, id) {
     // Field lesson 37: a worker's own report of what it changed is a separate signal from an
     // actual workspace diff (droppedWriteWarnings above) — a job may self-report a path it never
     // actually touched, or run on an agent (codex) whose workspace diff is not checked there.
+    // Field lesson #249: that report is prose, not a bare path ("out.txt created", "other.txt
+    // (new)") — compared against job.outputs (and shown in the warning) by its normalized path,
+    // never the raw string, or an output the job actually declared reads as "dropped".
     for (const file of Array.isArray(parsed?.changed) ? parsed.changed : []) {
-      if (typeof file !== 'string' || job.outputs.includes(file)) continue;
-      const droppedWriteLine = `dropped write: ${file} (not in outputs)`;
+      if (typeof file !== 'string') continue;
+      const normalized = normalizeChangedEntry(file);
+      if (job.outputs.includes(normalized)) continue;
+      const droppedWriteLine = `dropped write: ${normalized} (not in outputs)`;
       if (!warnings.includes(droppedWriteLine)) warnings.push(droppedWriteLine);
     }
     const mentioned = new Set();

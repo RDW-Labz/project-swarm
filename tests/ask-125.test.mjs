@@ -1,5 +1,8 @@
 // Field lessons #184, #193 (ask's slice): an API agent's free-text summary is never lost to a
 // JSON-parse mismatch, and two `ask` runs launched in the same millisecond never collide.
+// Lesson #152: imported directly (not only via the package.json test script) so this file stays
+// hermetic even run alone as `node --test tests/ask-125.test.mjs`.
+import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';

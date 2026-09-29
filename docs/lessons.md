@@ -1572,3 +1572,43 @@ rule is enforced or documented.
     reason attached. Enforcement: the CI-derived check reader now skips
     such a step and reports why. Regression coverage is in
     `tests/field-lessons-batch-s.test.mjs`.
+150. **A worker's own report of what it changed was a prose sentence, not
+    a bare path, and a warning meant to flag an undeclared write instead
+    fired on a file the job had actually declared.** The report string
+    carried a trailing status word or a trailing parenthetical the
+    comparison never stripped, so it never matched the declared path it
+    was actually describing. Rule: a self-reported "changed" entry is
+    normalized to its own path (trimmed, one trailing parenthetical
+    dropped, one trailing status word dropped) before it is ever
+    compared against what a job declared, or shown in a warning.
+    Enforcement: the dropped-write check now normalizes each entry
+    first. Regression coverage is in
+    `tests/field-lessons-batch-s.test.mjs`.
+151. **A secrets-bearing `env:` block declared for one job in a CI
+    workflow was still being applied to a second, unrelated job that
+    declared no `env:` of its own**, because the reader that tracks a
+    workflow's own `env:` text never reset it between jobs. An ordinary
+    step in the second job was wrongly treated as CI-only and skipped,
+    just because an earlier, unrelated job happened to reference a
+    secret. Rule: a workflow-level `env:` applies to every job, but a
+    job-level `env:` applies only to that job's own steps, and must be
+    reset the moment a new job starts. Enforcement: the CI workflow
+    reader now scopes and resets job-level environment text at each job
+    boundary, with a test that a second job's parsed steps carry none
+    of an earlier job's environment keys. Regression coverage is in
+    `tests/field-lessons-batch-s.test.mjs`.
+152. **A handful of tests passed in continuous integration and in one
+    long-lived local checkout, but failed the moment they ran from a
+    fresh checkout in a different location.** Each read some piece of
+    the real machine's own state instead of a value the test itself
+    controlled: a personal configuration file, a personal collection of
+    optional add-ons, or an ambient identity setting — all present (with
+    one particular shape) on the machine that had been used for
+    development, and absent or different elsewhere. Rule: a test run
+    must never depend on the real user's home configuration, the real
+    user's optional add-ons directory, the real global identity
+    settings, or where the checkout happens to live; every test isolates
+    all of these for itself. Enforcement: the shared test-isolation setup
+    now isolates the real home configuration and identity settings for
+    every test file that touches them, proven by running the affected
+    tests from a brand-new checkout with an empty home directory.

@@ -13,8 +13,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { runManifest, integrateRun } from '../tools/swarm.mjs';
-import { ciChecksFromWorkflowText, loadChecksFromCi } from '../tools/checks-from-ci.mjs';
+import { runManifest, integrateRun, inspectResults } from '../tools/swarm.mjs';
+import { ciChecksFromWorkflowText, loadChecksFromCi, parseWorkflowSteps } from '../tools/checks-from-ci.mjs';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'field-lessons-s-'));
@@ -37,6 +37,7 @@ function fake(script) {
 }
 const done = `console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'Worker complete'}));`;
 const noWrites = fake(done);
+const doneWithChanged = changed => `console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${JSON.stringify(JSON.stringify({ changed }))}}));`;
 
 // --- #244: dropped-write detection excludes swarm-seeded paths --------------------------------
 
@@ -123,5 +124,110 @@ describe('#247: checks-from-ci skips a CI-only step (native marker), replays an 
     const { checks, skipped } = ciChecksFromWorkflowText('steps:\n  - run: pytest tests/\n');
     assert.deepEqual(checks.map(c => c.argv), [['pytest', 'tests/']]);
     assert.deepEqual(skipped, []);
+  });
+});
+
+// --- #250: job-level env: never leaks into a sibling job's steps ------------------------------
+
+describe('#250: a job-level env: applies only to that job\'s own steps, reset at each job boundary', () => {
+  test('(g) job A env with secrets + job B without env: B\'s pytest is a check, A\'s run lines are ci-only', () => {
+    const yaml = [
+      'jobs:',
+      '  job-a:',
+      '    env:',
+      '      TOKEN: ${{ secrets.X }}',
+      '    steps:',
+      '      - run: npm ci',
+      '  job-b:',
+      '    steps:',
+      '      - run: pytest tests/',
+    ].join('\n');
+    const { checks, skipped } = ciChecksFromWorkflowText(yaml);
+    assert.deepEqual(checks.map(c => c.argv), [['pytest', 'tests/']]);
+    assert.ok(skipped.some(s => s.raw === 'npm ci' && s.reason === 'ci-only'));
+  });
+
+  test('(h) a step whose if: mentions runner.os is ci-only', () => {
+    const yaml = ['steps:', '  - if: runner.os == \'Linux\'', '    run: pytest tests/'].join('\n');
+    const { checks, skipped } = ciChecksFromWorkflowText(yaml);
+    assert.deepEqual(checks, []);
+    assert.deepEqual(skipped, [{ raw: 'pytest tests/', reason: 'ci-only' }]);
+  });
+
+  test('(i) a run line that itself tests $GITHUB_ACTIONS is ci-only', () => {
+    const yaml = ['steps:', '  - run: test "$GITHUB_ACTIONS" = true && pytest tests/'].join('\n');
+    const { checks, skipped } = ciChecksFromWorkflowText(yaml);
+    assert.deepEqual(checks, []);
+    assert.deepEqual(skipped, [{ raw: 'test "$GITHUB_ACTIONS" = true && pytest tests/', reason: 'ci-only' }]);
+  });
+
+  test('(j) a step-level env: with secrets. is ci-only; a sibling step without it replays', () => {
+    const yaml = [
+      'steps:',
+      '  - env:',
+      '      TOKEN: ${{ secrets.X }}',
+      '    run: npm ci',
+      '  - run: pytest tests/',
+    ].join('\n');
+    const { checks, skipped } = ciChecksFromWorkflowText(yaml);
+    assert.deepEqual(checks.map(c => c.argv), [['pytest', 'tests/']]);
+    assert.ok(skipped.some(s => s.raw === 'npm ci' && s.reason === 'ci-only'));
+  });
+
+  test('(k) a workflow-level env: with secrets. makes every step ci-only', () => {
+    const yaml = [
+      'env:',
+      '  TOKEN: ${{ secrets.X }}',
+      'jobs:',
+      '  job-a:',
+      '    steps:',
+      '      - run: pytest tests/',
+    ].join('\n');
+    const { checks, skipped } = ciChecksFromWorkflowText(yaml);
+    assert.deepEqual(checks, []);
+    assert.deepEqual(skipped, [{ raw: 'pytest tests/', reason: 'ci-only' }]);
+  });
+
+  test('(n) two jobs: job 2\'s parsed steps carry none of job 1\'s env keys', () => {
+    const yaml = [
+      'jobs:',
+      '  job-1:',
+      '    env:',
+      '      FOO_TOKEN: ${{ secrets.FOO }}',
+      '      BAR: plain',
+      '    steps:',
+      '      - run: npm ci',
+      '  job-2:',
+      '    env:',
+      '      BAZ: plain2',
+      '    steps:',
+      '      - run: pytest tests/',
+    ].join('\n');
+    const steps = parseWorkflowSteps(yaml);
+    const job2Step = steps.find(step => step.blockText.includes('pytest tests/'));
+    assert.ok(job2Step);
+    assert.ok(!job2Step.jobEnvText.includes('FOO_TOKEN'));
+    assert.ok(!job2Step.jobEnvText.includes('BAR'));
+    assert.ok(job2Step.jobEnvText.includes('BAZ'));
+    const { checks } = ciChecksFromWorkflowText(yaml);
+    assert.ok(checks.some(c => c.raw === 'pytest tests/'));
+  });
+});
+
+// --- #249: a self-reported "changed" entry is normalized before comparing to outputs ----------
+
+describe('#249: inspect --results normalizes a self-reported "changed" entry before comparing it to outputs', () => {
+  test('(l) changed [\'out.txt created\'] with outputs [\'out.txt\']: no dropped-write warning', async t => {
+    const root = await fixture(t);
+    const state = await runManifest(root, manifest([job({ context: [], outputs: ['out.txt'] })]), { spawnImpl: fake(doneWithChanged(['out.txt created'])) });
+    const results = await inspectResults(root, state.id);
+    assert.equal((results.warnings ?? []).some(w => w.startsWith('dropped write')), false);
+  });
+
+  test('(m) changed [\'other.txt (new)\']: warns dropped write: other.txt (not in outputs)', async t => {
+    const root = await fixture(t);
+    const state = await runManifest(root, manifest([job({ context: [], outputs: ['out.txt'] })]), { spawnImpl: fake(doneWithChanged(['other.txt (new)'])) });
+    const results = await inspectResults(root, state.id);
+    assert.ok((results.warnings ?? []).includes('dropped write: other.txt (not in outputs)'));
   });
 });
