@@ -70,20 +70,84 @@ export function splitArgv(line) {
   return tokens;
 }
 
+// Field lesson #247: a step CI itself refuses to run outside a real runner (gated on
+// `GITHUB_ACTIONS`/`runner.os`, a `pytest -m native`-style marker reserved for real hardware, or a
+// job whose `env:` wires in a repo secret) replaying it locally only ever wastes a round-trip on
+// its own refusal; it is never one of ship's own checks. Steps are grouped by their own YAML list
+// item (same block-scalar/one-line `run:` reading `extractRunLines` already does, scoped to just
+// that item) so its `if:` line and any step- or job-level `env:` block travel with its run line(s),
+// without a general YAML parser.
+const NATIVE_MARKER_RE = /-m\s+"?native"?\b/;
+const CI_GUARD_RE = /GITHUB_ACTIONS|runner\.os/;
+const SECRETS_ENV_RE = /secrets\./;
+
+function parseWorkflowSteps(yamlText) {
+  const lines = String(yamlText ?? '').split('\n');
+  const steps = [];
+  let jobEnvText = '';
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === '' || line.trim().startsWith('#')) continue;
+    const envMatch = /^(\s*)env:\s*$/.exec(line);
+    if (envMatch) {
+      const parentIndent = envMatch[1].length;
+      let j = i + 1, body = [];
+      for (; j < lines.length; j++) {
+        if (lines[j].trim() === '') continue;
+        if (lines[j].match(/^ */)[0].length <= parentIndent) break;
+        body.push(lines[j]);
+      }
+      jobEnvText = body.join('\n');
+      i = j - 1;
+      continue;
+    }
+    const stepsMatch = /^(\s*)steps:\s*$/.exec(line);
+    if (!stepsMatch) continue;
+    const listIndent = stepsMatch[1].length;
+    let j = i + 1;
+    while (j < lines.length && (lines[j].trim() === '' || lines[j].trim().startsWith('#'))) j++;
+    // A list item is indented past its own `steps:` key (never at the same or a shallower indent);
+    // the first item's own indent sets what every sibling item below must match.
+    const firstItemMatch = j < lines.length ? /^(\s*)-\s/.exec(lines[j]) : null;
+    if (!firstItemMatch || firstItemMatch[1].length <= listIndent) { i = j - 1; continue; }
+    const itemIndent = firstItemMatch[1].length;
+    while (j < lines.length) {
+      while (j < lines.length && (lines[j].trim() === '' || lines[j].trim().startsWith('#'))) j++;
+      if (j >= lines.length) break;
+      const itemMatch = /^(\s*)-\s/.exec(lines[j]);
+      if (!itemMatch || itemMatch[1].length !== itemIndent) break; // Not a sibling item: this list ended.
+      let k = j + 1, blockLines = [lines[j]];
+      for (; k < lines.length; k++) {
+        if (lines[k].trim() === '') continue;
+        if (lines[k].match(/^ */)[0].length <= itemIndent) break;
+        blockLines.push(lines[k]);
+      }
+      steps.push({ blockText: blockLines.join('\n'), jobEnvText });
+      j = k;
+    }
+    i = j - 1;
+  }
+  return steps;
+}
+
 export function ciChecksFromWorkflowText(yamlText) {
   const checks = [];
   const skipped = [];
   const seen = new Set();
-  for (const raw of extractRunLines(yamlText)) {
-    if (SHELL_OPERATOR_RE.test(raw)) { skipped.push({ raw, reason: 'shell-operator' }); continue; }
-    const argv = splitArgv(raw);
-    if (!argv.length) continue;
-    const program = path.basename(argv[0]);
-    if (!CI_CHECK_PROGRAMS.has(program)) continue;
-    const key = JSON.stringify(argv);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    checks.push({ name: `ci-${checks.length + 1}-${program}`, argv, raw });
+  for (const step of parseWorkflowSteps(yamlText)) {
+    const ciOnly = CI_GUARD_RE.test(step.blockText) || NATIVE_MARKER_RE.test(step.blockText) || SECRETS_ENV_RE.test(step.blockText) || SECRETS_ENV_RE.test(step.jobEnvText);
+    for (const raw of extractRunLines(step.blockText)) {
+      if (ciOnly) { skipped.push({ raw, reason: 'ci-only' }); continue; }
+      if (SHELL_OPERATOR_RE.test(raw)) { skipped.push({ raw, reason: 'shell-operator' }); continue; }
+      const argv = splitArgv(raw);
+      if (!argv.length) continue;
+      const program = path.basename(argv[0]);
+      if (!CI_CHECK_PROGRAMS.has(program)) continue;
+      const key = JSON.stringify(argv);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      checks.push({ name: `ci-${checks.length + 1}-${program}`, argv, raw });
+    }
   }
   return { checks, skipped };
 }

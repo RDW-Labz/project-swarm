@@ -13,8 +13,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { runManifest, integrateRun, undeclaredMutantsFileWarnings } from '../tools/swarm.mjs';
-import { ciChecksFromWorkflowText } from '../tools/checks-from-ci.mjs';
+import { runManifest, integrateRun } from '../tools/swarm.mjs';
+import { ciChecksFromWorkflowText, loadChecksFromCi } from '../tools/checks-from-ci.mjs';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'field-lessons-s-'));
@@ -62,5 +62,66 @@ describe('#244: dropped-write detection excludes swarm-seeded skill copies unles
     assert.deepEqual(state.jobs[0].droppedWritesNew, ['.swarm/skills/formatting/SKILL.md']);
     const result = await integrateRun(root, state.id);
     assert.ok((result.warnings ?? []).includes('dropped write: .swarm/skills/formatting/SKILL.md (new) (not in outputs)'));
+  });
+});
+
+// --- #245: mutant-missing-for-changed-file -----------------------------------------------------
+
+const twoFileJob = (overrides = {}) => ({ id: 'writer', agent: 'claude', model: 'sonnet', prompt: 'Update the assigned files.', context: ['tools/a.js', 'tools/b.js'], outputs: ['tools/a.js', 'tools/b.js'], timeoutMs: 5000, ...overrides });
+const passCheck = { argv: [process.execPath, '-e', 'process.exit(0)'] };
+const editBoth = fake(`fs.writeFileSync('tools/a.js','const a = 2;\\n');fs.writeFileSync('tools/b.js','const b = 2;\\n');${done}`);
+async function twoFileFixture(t) {
+  const root = await fixture(t);
+  await fs.mkdir(path.join(root, 'tools'), { recursive: true });
+  await fs.writeFile(path.join(root, 'tools/a.js'), 'const a = 1;\n');
+  await fs.writeFile(path.join(root, 'tools/b.js'), 'const b = 1;\n');
+  return root;
+}
+
+describe('#245: integrate --mutants warns mutant-missing-for-changed-file for an uncovered changed source file', () => {
+  test('(c) two changed files, mutants for only one: reports the other', async t => {
+    const root = await twoFileFixture(t);
+    const state = await runManifest(root, manifest([twoFileJob()], {
+      mutants: [{ name: 'flip-a', file: 'tools/a.js', find: 'const a = 2;', replace: 'const a = 999;' }],
+      mutantCheck: passCheck,
+    }), { spawnImpl: editBoth });
+    const result = await integrateRun(root, state.id, { mutants: true });
+    assert.deepEqual((result.warnings ?? []).filter(w => w.startsWith('mutant-missing-for-changed-file')), ['mutant-missing-for-changed-file: tools/b.js']);
+  });
+
+  test('(d) two changed files, mutants cover both: no missing-coverage warnings', async t => {
+    const root = await twoFileFixture(t);
+    const state = await runManifest(root, manifest([twoFileJob()], {
+      mutants: [
+        { name: 'flip-a', file: 'tools/a.js', find: 'const a = 2;', replace: 'const a = 999;' },
+        { name: 'flip-b', file: 'tools/b.js', find: 'const b = 2;', replace: 'const b = 999;' },
+      ],
+      mutantCheck: passCheck,
+    }), { spawnImpl: editBoth });
+    const result = await integrateRun(root, state.id, { mutants: true });
+    assert.deepEqual((result.warnings ?? []).filter(w => w.startsWith('mutant-missing-for-changed-file')), []);
+  });
+});
+
+// --- #247: checks-from-ci skips CI-only steps --------------------------------------------------
+
+describe('#247: checks-from-ci skips a CI-only step (native marker), replays an ordinary one', () => {
+  test('(e) a workflow with one native pytest step yields ci-only skip, not a check', async t => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'field-lessons-s-ci-'));
+    t.after(() => fs.rm(dir, { recursive: true, force: true }));
+    await fs.mkdir(path.join(dir, '.github/workflows'), { recursive: true });
+    await fs.writeFile(path.join(dir, '.github/workflows/ci.yml'), 'steps:\n  - run: pytest -m native\n');
+    const { checks, skipped } = ciChecksFromWorkflowText('steps:\n  - run: pytest -m native\n');
+    assert.deepEqual(checks, []);
+    assert.deepEqual(skipped, [{ raw: 'pytest -m native', reason: 'ci-only' }]);
+    const loaded = await loadChecksFromCi(dir);
+    assert.deepEqual(loaded.checks, []);
+    assert.ok(loaded.skipped.some(skip => skip.reason === 'ci-only' && skip.raw === 'pytest -m native'));
+  });
+
+  test('(f) an ordinary pytest step replays normally', () => {
+    const { checks, skipped } = ciChecksFromWorkflowText('steps:\n  - run: pytest tests/\n');
+    assert.deepEqual(checks.map(c => c.argv), [['pytest', 'tests/']]);
+    assert.deepEqual(skipped, []);
   });
 });

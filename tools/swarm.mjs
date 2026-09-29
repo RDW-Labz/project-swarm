@@ -675,6 +675,20 @@ function validateMutantsArray(mutants, warnings = []) {
   return normalized;
 }
 
+// Field lesson #245: a fix that changes two source files but supplies a mutant for only one of
+// them lets the other survive mutagenesis with nothing to prove the change was ever exercised;
+// every non-test source file (under tools/ or src/, never docs/CHANGELOG/package files/manifests,
+// which never match this prefix) a run's own writes touch needs at least one mutant whose `file`
+// matches it — from manifest.mutants, --mutants-file, or a job's own mutantsFile output alike.
+const MUTANT_COVERED_SOURCE_RE = /^(tools|src)\//;
+export function mutantMissingForChangedFileWarnings(changedFiles, mutants) {
+  const covered = new Set((mutants ?? []).map(mutant => mutant.file));
+  return [...new Set(changedFiles ?? [])]
+    .filter(file => MUTANT_COVERED_SOURCE_RE.test(file) && !isTestFile(file) && !covered.has(file))
+    .sort()
+    .map(file => `mutant-missing-for-changed-file: ${file}`);
+}
+
 // Field lesson #161: every mutant's `find` is counted in its target before anything runs — a
 // missing or duplicated find (a block copied with the wrong indentation) or a find equal to its
 // replace can only ever report a meaningless result. `readText(file)` returns the target's text
@@ -2555,6 +2569,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
     // coordinator-supplied `--mutants-file` — is parsed and validated before the first project
     // file is written, alongside every other precondition already checked above.
     let preValidatedMutants = null;
+    let mutantMissingWarnings = [];
     if (mutants) {
       const sourced = [...(manifest.mutants ?? [])];
       for (const job of manifest.jobs) {
@@ -2568,6 +2583,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       if (mutantsFile) sourced.push(...await loadMutantsFileForIntegrate(root, mutantsFile, writes));
       preValidatedMutants = validateMutantsArray(sourced);
       if (!preValidatedMutants.length) fail('No mutants declared in this manifest; add manifest.mutants, a job mutantsFile output, or --mutants-file to use --mutants');
+      mutantMissingWarnings = mutantMissingForChangedFileWarnings(writes.map(change => change.file), preValidatedMutants);
       if (!manifest.mutantCheck) {
         if (!mutantCheck && !preValidatedMutants.every(mutant => mutant.check)) fail('No mutantCheck declared in this manifest; add manifest.mutantCheck, or pass --mutant-check "<argv json>", to use --mutants');
         if (mutantCheck) parseMutantCheckFlag(mutantCheck); // Refuses a malformed --mutant-check before any write too.
@@ -2663,7 +2679,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       }
       Object.assign(state, mutantsResult);
     }
-    const warnings = [...portWarnings, ...preChecksResult.warnings, ...(mutantsResult.mutantsSkippedRedBase ? ['mutants skipped: red base (checks failed)'] : []), ...droppedWriteWarnings(state), ...inventedHashWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)];
+    const warnings = [...portWarnings, ...preChecksResult.warnings, ...(mutantsResult.mutantsSkippedRedBase ? ['mutants skipped: red base (checks failed)'] : []), ...droppedWriteWarnings(state), ...inventedHashWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`), ...mutantMissingWarnings];
     // Field lesson 131: a blocked job's own outputs went in through the same checks as any other;
     // the run is tagged distinctly so a later `inspect`/`ship` never mistakes it for a clean pass,
     // and the blocked reason rides along as ready-made evidence for whatever job comes next.
