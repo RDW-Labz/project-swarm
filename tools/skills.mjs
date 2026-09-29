@@ -177,9 +177,11 @@ export function attachSkillsForJob(skills, job) {
   return skills.map(skill => ({ ...skill, attached: named ? (named.includes(skill.name) ? 'named' : 'index-only') : (anyPathMatchesGlobs(skill.paths, files) ? 'paths' : 'index-only') }));
 }
 
+// An index-only skill (neither named nor paths-matched) points at its own copied file, since its
+// body was never prepended; a named/paths-attached skill keeps the plain name/description line.
 export function skillIndexBlock(skills) {
   if (!skills.length) return '';
-  return `${skills.map(skill => `${SKILLS_INDEX_LABEL}${skill.name} — ${skill.description}`).join('\n')}\n`;
+  return `${skills.map(skill => `${SKILLS_INDEX_LABEL}${skill.name} — ${skill.description}${skill.attached === 'index-only' ? ` — ${SKILLS_DIR_NAME}/${skill.name}/SKILL.md — read it if your job touches this` : ''}`).join('\n')}\n`;
 }
 export function skillPrependBlock(attachedSkills) {
   const bodies = attachedSkills.filter(skill => skill.attached !== 'index-only');

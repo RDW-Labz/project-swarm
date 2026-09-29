@@ -77,7 +77,8 @@ test('every job prompt gets one index line per skill, name and description only'
   await writeSkill(skillsDir, 'formatting', { description: 'Keep files tidy.' });
   const state = await runManifest(root, manifest([job()], { skillsDir }), { spawnImpl: update });
   const message = await fs.readFile(path.join(root, '.swarm/runs', state.id, 'writer/message.txt'), 'utf8');
-  assert.match(message, /Skills in \.swarm\/skills\/: formatting — Keep files tidy\./);
+  const indexLine = message.split('\n').find(line => line.startsWith('Skills in .swarm/skills/: formatting'));
+  assert.equal(indexLine, 'Skills in .swarm/skills/: formatting — Keep files tidy. — .swarm/skills/formatting/SKILL.md — read it if your job touches this');
   assert.ok(!message.includes('Full skill body text.'), 'index-only: the body is never prepended');
 });
 
@@ -87,7 +88,8 @@ test('a named skill prepends its full SKILL.md body', async t => {
   await writeSkill(skillsDir, 'formatting', { body: 'Verbatim body content, unique-marker-93214.' });
   const state = await runManifest(root, manifest([job({ skills: ['formatting'] })], { skillsDir }), { spawnImpl: update });
   const message = await fs.readFile(path.join(root, '.swarm/runs', state.id, 'writer/message.txt'), 'utf8');
-  assert.match(message, /Skills in \.swarm\/skills\/: formatting/);
+  const indexLine = message.split('\n').find(line => line.startsWith('Skills in .swarm/skills/: formatting'));
+  assert.equal(indexLine, 'Skills in .swarm/skills/: formatting — A test skill.', 'named: the index line is unchanged, no path pointer');
   assert.ok(message.includes('Verbatim body content, unique-marker-93214.'));
 });
 
@@ -219,6 +221,10 @@ test('tokenEstimate, size checks, prompt-block builders and gitBlobHash are pure
   const viaPaths = attachSkillsForJob(skills, { context: [], outputs: ['x/main.js'] });
   assert.deepEqual(viaPaths.map(s => s.attached), ['index-only', 'paths']);
   assert.equal(skillIndexBlock([]), '');
+  assert.equal(
+    skillIndexBlock([{ name: 'a', description: 'A.', attached: 'named' }, { name: 'b', description: 'B.', attached: 'index-only' }]),
+    'Skills in .swarm/skills/: a — A.\nSkills in .swarm/skills/: b — B. — .swarm/skills/b/SKILL.md — read it if your job touches this\n',
+  );
   assert.equal(skillPrependBlock(named.map(s => ({ ...s }))), '--- skill a ---\nBody A.\n---\n\n');
   assert.equal(skillsPromptBlock([]), '');
   assert.deepEqual(skillRecordEntries(named), [{ name: 'a', gitHash: undefined, attached: 'named' }, { name: 'b', gitHash: undefined, attached: 'index-only' }]);
