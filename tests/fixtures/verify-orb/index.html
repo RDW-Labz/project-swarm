@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>verify-orb fixture</title>
+</head>
+<body>
+<div id="lamp"></div>
+<div id="message"></div>
+<script type="module">
+  const token = window.__ORB_TOKEN__ || '';
+  async function refresh() {
+    const response = await fetch('/orb', { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) return;
+    const data = await response.json();
+    document.getElementById('lamp').setAttribute('data-look', data.lampLook);
+    document.getElementById('message').textContent = data.message;
+  }
+  refresh();
+  setInterval(refresh, 100);
+</script>
+</body>
+</html>
