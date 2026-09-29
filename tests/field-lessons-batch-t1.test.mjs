@@ -311,15 +311,23 @@ describe('#254: the ship command holds (status held-red-check) on a pre-existing
 // --- #254: validate's check-path-missing warning -----------------------------------------------
 
 describe('#254: validate warns check-path-missing when a check\'s own env PATH= omits a program the orchestrator PATH has', () => {
-  test('(a) a check env PATH missing gh, with gh present on the orchestrator PATH: warns', async t => {
+  // Field lesson #261: this case used to warn about `gh` for a check whose argv never even runs
+  // it (an over-broad warning against every program on the orchestrator's PATH); it now asserts
+  // the #261 behaviour instead: a check whose argv actually runs `gh` with a PATH lacking it still
+  // warns, but a check that never runs `gh` at all never does.
+  test('(a) a check env PATH missing gh, with gh present on the orchestrator PATH: warns only when the check\'s own argv runs gh', async t => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'field-lessons-t1-path-'));
     t.after(() => fs.rm(dir, { recursive: true, force: true }));
     await fs.writeFile(path.join(dir, 'gh'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const narrowDir = await fs.mkdtemp(path.join(os.tmpdir(), 'field-lessons-t1-narrow-'));
     t.after(() => fs.rm(narrowDir, { recursive: true, force: true }));
-    const check = { name: 'ci-check', argv: ['env', `PATH=${narrowDir}`, 'true'] };
-    const warnings = await checkPathMissingWarnings({ checks: [check] }, { env: { PATH: dir } });
+    const invokesGh = { name: 'ci-check', argv: ['env', `PATH=${narrowDir}`, 'gh', 'pr', 'view'] };
+    const warnings = await checkPathMissingWarnings({ checks: [invokesGh] }, { env: { PATH: dir } });
     assert.ok(warnings.some(w => w.message === 'check-path-missing: ci-check: gh'));
+
+    const neverRunsGh = { name: 'ci-check', argv: ['env', `PATH=${narrowDir}`, 'true'] };
+    const noGhWarnings = await checkPathMissingWarnings({ checks: [neverRunsGh] }, { env: { PATH: dir } });
+    assert.ok(!noGhWarnings.some(w => w.prog === 'gh'), JSON.stringify(noGhWarnings));
   });
 
   test('(b) the check\'s own PATH already includes the program: no warning', async t => {

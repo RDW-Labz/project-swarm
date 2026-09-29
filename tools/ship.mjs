@@ -369,6 +369,37 @@ export async function authorEmailMismatches(root, base, { exec = defaultAuthorEm
   return mismatches;
 }
 
+// Field lesson #258: the per-diff private-names scan below judges only the cumulative diff against
+// base, so a term added in one commit and removed again in a later one within the same branch never
+// shows up there at all — yet it still rode into the remote's history the moment that first commit
+// was pushed. Each commit in `origin/<base>..HEAD` gets its own added-lines-and-message scan, run
+// over real git (`defaultAuthorEmailExec`'s own shape: an argv array plus `cwd`, never ship's
+// shared, script-driven `exec` seam) so this can be always-on without reordering every other call's
+// script, exactly like the author-email guard just above.
+export const defaultCommitScanExec = defaultAuthorEmailExec;
+async function privateTermCommitHits(root, base, terms, { exec = defaultCommitScanExec } = {}) {
+  if (!terms.length) return [];
+  const logRes = await exec(['log', '--reverse', `origin/${base}..HEAD`, '--format=%H'], { cwd: root });
+  if (logRes.code !== 0 || !logRes.stdout.trim()) return [];
+  const hits = [];
+  for (const sha of logRes.stdout.split('\n').map(line => line.trim()).filter(Boolean)) {
+    const short = sha.slice(0, 7);
+    const messageRes = await exec(['log', '-1', '--format=%B', sha], { cwd: root });
+    const message = messageRes.code === 0 ? messageRes.stdout : '';
+    const lowerMessage = message.toLowerCase();
+    const messageTerm = terms.find(term => term && lowerMessage.includes(term.toLowerCase()));
+    if (messageTerm) { hits.push({ sha: short, term: messageTerm }); continue; }
+    const diffRes = await exec(['diff', `${sha}~1`, sha, '-U0'], { cwd: root });
+    if (diffRes.code !== 0) continue;
+    for (const { text } of parseAddedLines(diffRes.stdout)) {
+      const lowerText = text.toLowerCase();
+      const lineTerm = terms.find(term => term && lowerText.includes(term.toLowerCase()));
+      if (lineTerm) { hits.push({ sha: short, term: lineTerm }); break; }
+    }
+  }
+  return hits;
+}
+
 // gh repo view answers through ship's own exec seam, same as every other gh/git call, so tests
 // can fake it without a real network call. `PUBLIC` is the only visibility this guard runs for;
 // an unrecognized/erroring answer is treated the same as public — stricter, never a silent skip.
@@ -655,6 +686,30 @@ export function isHeld(body) {
   return false;
 }
 
+// Field lesson #259: a PR held (isHeld(body): first line starts with "**needs ") carries a fixed
+// three-field summary so the hold is actionable without opening the PR: what changed, what could
+// break, and the mutation-check evidence.
+function sectionContent(body, name) {
+  const lines = String(body ?? '').split('\n');
+  const at = lines.findIndex(line => line.startsWith('## ') && headingMatchesName(line.slice(3).trim(), name));
+  if (at === -1) return null;
+  const nextHeading = lines.slice(at + 1).findIndex(line => line.startsWith('## '));
+  const end = nextHeading === -1 ? lines.length : at + 1 + nextHeading;
+  return lines.slice(at + 1, end).join('\n').trim();
+}
+
+export function buildReviewNote(body, prUrl) {
+  if (!isHeld(body)) return null;
+  const summary = sectionContent(body, 'Summary') ?? '';
+  const changed = summary.split('\n').map(line => line.trim()).filter(line => line.startsWith('- ')).slice(0, 2).join('\n');
+  const couldBreakSection = sectionContent(body, 'Could break');
+  const couldBreak = couldBreakSection && couldBreakSection.trim() ? couldBreakSection.trim() : 'FILL IN before sending';
+  const mutationSection = sectionContent(body, 'Mutation check') ?? '';
+  const mutationFirstLine = mutationSection.split('\n').find(line => line.trim() !== '') ?? '';
+  const proof = `${mutationFirstLine} (${prUrl})`;
+  return { changed, couldBreak, proof };
+}
+
 export function missingSections(body, names) {
   const lines = String(body ?? '').split('\n');
   const headings = [];
@@ -894,6 +949,7 @@ export async function ship(options) {
     runId = null, branch = null,
     privateNamesFile = null,
     authorEmailExec = defaultAuthorEmailExec,
+    commitScanExec = defaultCommitScanExec,
   } = options;
 
   let repo = options.repo;
@@ -963,6 +1019,16 @@ export async function ship(options) {
         return {
           ...base, status: 'refused', code: 'private-name-in-diff',
           reason: `private-name-in-diff: ${hits.map(hit => `${hit.file}:${hit.line} (${hit.term})`).join(', ')}`,
+        };
+      }
+      // Field lesson #258: scans every commit ship would actually publish, not just the cumulative
+      // diff above — catches a term that entered and left the branch within its own history. The
+      // term itself is never printed, only its index in the configured list.
+      const commitHits = await privateTermCommitHits(root, payload.base, list.terms, { exec: commitScanExec });
+      if (commitHits.length) {
+        return {
+          ...base, status: 'refused', code: 'private-term-in-commit',
+          reason: `private-term-in-commit: ${commitHits[0].sha} (term #${list.terms.indexOf(commitHits[0].term) + 1})`,
         };
       }
       base.privateNames = { checked: true, hits: 0 };
@@ -1328,7 +1394,16 @@ export async function ship(options) {
   }
   if (rerunAttempts > 0) base.flakyRerun = { attempts: rerunAttempts, result: 'passed', tests: rerunTests ?? [] };
 
-  if (isHeld(body)) return { ...base, status: 'held', reason: 'PR body requests manual review' };
+  if (isHeld(body)) {
+    // Field lesson #259: a held PR gets its three-field summary printed to stderr, right at this
+    // merge-or-hold decision, so it is visible without opening the PR.
+    const reviewNote = buildReviewNote(body, base.url);
+    if (reviewNote) {
+      process.stderr.write(`Changed: ${reviewNote.changed}\nCould break: ${reviewNote.couldBreak}\nProof: ${reviewNote.proof}\n`);
+      return { ...base, status: 'held', reason: 'PR body requests manual review', reviewNote };
+    }
+    return { ...base, status: 'held', reason: 'PR body requests manual review' };
+  }
   if (merge === false) return { ...base, status: 'ready' };
 
   const version = await releaseVersion(exec, root, payload.base);

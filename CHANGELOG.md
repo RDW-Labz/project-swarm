@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.36.0
+
+- A worker result may now report `deviations: [{contract, did, why}]` for a contract MUST it could not meet instead of silently substituting a design; `inspect` warns `contract-deviation: <job>: <contract>` for each, and `integrate` refuses a run with a non-empty `deviations` list unless `--accept-deviation` is passed, which then logs the acceptance in the integrate result. (lesson 256)
+- `templates/coordination/CONTRACT.md`'s "Tests" section now requires one test that forces a new platform-bound dependency's (keychain, OS API) backend to fail on a startup path and proves startup still succeeds, built to be constructed lazily via a factory. (lesson 257)
+- `ship` now scans every commit it would publish (`origin/<base>..HEAD`, not just the cumulative diff) for a configured private term in that commit's own added lines or message, refusing `private-term-in-commit: <sha7>` before any push when found — a term added then removed within the same branch used to slip through the existing cumulative-diff scan entirely. (lesson 258)
+- `ship`'s result for a PR whose body is held (`isHeld(body)`: first line starts with `**needs `) now carries `reviewNote: {changed, couldBreak, proof}` (the Summary's first two bullets, the Could break section or `FILL IN before sending`, and the Mutation check's first line plus the PR URL), also printed to stderr as three lines after the merge-or-hold decision. (lesson 259)
+- `inspect` now warns `self-report-contradiction: <job>: <check>` when a job's own `checksRun` entry says `passed` for a check while the result's own text still names a nonzero fail count for it. (lesson 260)
+- `validate`'s `check-path-missing` warning now fires only for the program a check's own argv actually invokes (after any `env VAR=...` prefix, with `npm` also implying `node`), instead of every program on the orchestrator's own PATH. (lesson 261)
+- A shell job's own `TMPDIR`/`TMP`/`TEMP` now always point at that job's own scratch directory (already granted by the sandbox profile), so a worker's own `fs.mkdtemp(os.tmpdir())` tests run inside the sandbox; a non-shell job's env is unaffected. (lesson 263)
+
 ## 1.35.0
 
 - New optional `swarm verify --orb [--scenario NAME]` step a frontend job can name in its own `checks`: serves that job's own `tests/fixtures/verify-orb/` fixture (a static page plus a tiny `fake-service.mjs`) and runs a saved `tests/orb-scenarios/<name>.json` scenario (selector/text assertions, optional screenshot), driven by Playwright in the toolchain's own Chromium, resolved only from `~/.project-swarm/toolchains` (Playwright + pinned Chromium copied in directly, decision #249) — never a system Node or PATH-resolved npx. The orb token (`SWARM_VERIFY_ORB_TOKEN`) is generated fresh per run and reaches the spawned worker only via that env var, injected into the page context via Playwright's `addInitScript`, never a file. Not wired into `swarm ship` or CI. (T52b, decision #262)
