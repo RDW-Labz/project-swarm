@@ -1612,3 +1612,74 @@ rule is enforced or documented.
     now isolates the real home configuration and identity settings for
     every test file that touches them, proven by running the affected
     tests from a brand-new checkout with an empty home directory.
+153. **A worker's own CLI shell died on a transient provider error, and
+    the orchestrator treated that exactly like a real worker
+    failure**, refusing to salvage its partial (but real) progress even
+    though a second attempt moments later, on an unrelated question,
+    succeeded at once. Rule: a transient provider error (a 5xx or a 429
+    status) is not a worker mistake. Enforcement: a job that ends on
+    such a status is retried once, over its own kept workspace, with a
+    short continuation note, before it is ever scored failed; a
+    salvage of a run also now accepts a failed job whose failure is
+    this kind of transient error and whose kept workspace still holds
+    real output changes. Regression coverage is in
+    `tests/field-lessons-batch-t1.test.mjs`.
+154. **A worker process killed before it ever produced a final result
+    still reported a cost of nothing, even though its own transcript
+    showed real, substantial token usage.** A cost is only ever read
+    from a provider's own final result event; a killed, timed-out, or
+    otherwise interrupted job never emits one, so its real spend went
+    unrecorded. Rule: a job's own transcript is real evidence of spend,
+    even without a final result event. Enforcement: a job that ends
+    with no reported cost now has one estimated from its own
+    transcript (summed per distinct exchange, at a fixed rate per
+    model), naming the estimate as such rather than as a reported
+    figure; a model this cannot rate warns rather than guessing.
+    Regression coverage is in `tests/field-lessons-batch-t1.test.mjs`.
+155. **A batch of automated builds landed on a base that was already
+    failing its own checks, and nothing said so until much later**,
+    when a still-later step needed to tell a pre-existing failure from
+    one a build had just introduced and had no easy way to do it. Rule:
+    a base commit's own health is verified before anything is built on
+    top of it, and a failure discovered afterward is labelled by
+    whether it already existed on that base. Enforcement: dispatching a
+    batch of automated builds now first verifies the base commit's own
+    checks (a repeat run at the same base is answered from a cached
+    verdict, not repeated), refusing to proceed onto a failing base
+    without an explicit, reasoned override; a later failing check is
+    labelled pre-existing or newly introduced by re-running it against
+    that same base. Regression coverage is in
+    `tests/field-lessons-batch-t1.test.mjs`.
+156. **A release step merged a change with a locally failing check,
+    silently, because that same check also happened to fail on the
+    unchanged base** — treated as excused rather than as the
+    environment problem it actually was. Separately, a check's own
+    narrowed environment sometimes left out a program the wider
+    environment plainly had, refusing in a way that read exactly like
+    that program being genuinely absent. Rule: a release step never
+    merges past a non-passing local check without an explicit,
+    deliberate choice to do so, and a check failing the same way on the
+    unchanged base is an environment problem to fix, never a quiet
+    green light. Enforcement: a release step now holds, naming the
+    failing tests, on a check that also fails on the base, unless that
+    is explicitly accepted; validation also now warns when a check's
+    own narrowed environment omits a program the wider environment
+    plainly has. Regression coverage is in
+    `tests/field-lessons-batch-t1.test.mjs`.
+157. **A worker with shell access, given no synced local toolchain of
+    its own, searched the wider disk and ran tests using another,
+    unrelated checkout's leftover environment**, so its own claims of
+    what passed or failed could not be trusted, and it read files well
+    outside anything it was ever given. Rule: a shell worker reads and
+    runs only its own workspace, the shared toolchains directory, and
+    ordinary system paths — never another checkout's environment found
+    by searching. Enforcement: the shell sandbox now denies reading or
+    running anything under a shared temporary-files area apart from a
+    job's own small scratch space; a toolchain sync step now runs in a
+    shell job's own workspace before it starts, with a warning when a
+    job's own checks or instructions plainly need one but declare
+    none; and a job's own report of what it ran must name the actual
+    program path used, with a warning when that path sits outside the
+    job's own workspace. Regression coverage is in
+    `tests/field-lessons-batch-t1.test.mjs` and
+    `tests/field-lessons-batch-t2.test.mjs`.

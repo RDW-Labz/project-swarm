@@ -30,6 +30,7 @@ import { go, commitOutputs, goExitCode } from './go.mjs';
 import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary, listLiveRuns, repoKey, repoPaths } from './board.mjs';
 import { writeSessionMetric } from './session-metrics.mjs';
 import { resolveSkillsDir, listSkills, skillSizeWarnings, refuseOversizeSkills, attachSkillsForJob, skillsPromptBlock, skillRecordEntries, skillCheckFailures, copySkillsInto, assertNoSkillSymlinks, SKILLS_DIR_NAME } from './skills.mjs';
+import { estimateCostFromTranscript } from './rates.mjs';
 
 // Field lesson #202: a shell worker is told up front that the full suite is the orchestrator's own
 // check at integrate, never its own job — so it never spends its last minutes sleep-polling a
@@ -137,6 +138,43 @@ export function runtimeCheckNoShellWarning(job, manifest = null) {
   const flagged = quotesRuntimeFailure(job.prompt) || FLAKY_PROMPT_RE.test(job.prompt) || manifestChecksHaveRepeatConstruct(manifest);
   if (!flagged) return null;
   return { code: 'runtime-check-no-shell', jobId: job.id, message: 'worker cannot reproduce; consider a shell agent or --evidence' };
+}
+
+// Field lesson #254: a check spawned with its own `env PATH=...` prefix (argv[0] === 'env') that
+// silently omits a program the orchestrator's own PATH has (gh, git, node, npm, uv) refuses in a
+// way that reads identically to that program genuinely being absent — the check's env just never
+// forwarded it.
+const CHECK_PATH_PROGRAMS = ['gh', 'git', 'node', 'npm', 'uv'];
+async function programOnPath(program, dirs) {
+  for (const dir of dirs) { try { await fs.access(path.join(dir, program)); return true; } catch { /* try the next dir */ } }
+  return false;
+}
+export async function checkPathMissingWarnings(manifest, { env = process.env } = {}) {
+  const warnings = [];
+  const orchestratorDirs = (env.PATH ?? '').split(path.delimiter).filter(Boolean);
+  for (const check of manifest.checks ?? []) {
+    const argv = check.argv ?? [];
+    if (argv[0] !== 'env') continue;
+    const pathAssignment = argv.slice(1).find(item => typeof item === 'string' && item.startsWith('PATH='));
+    if (!pathAssignment) continue;
+    const checkDirs = pathAssignment.slice('PATH='.length).split(path.delimiter).filter(Boolean);
+    for (const program of CHECK_PATH_PROGRAMS) {
+      if (await programOnPath(program, checkDirs)) continue;
+      if (await programOnPath(program, orchestratorDirs)) warnings.push({ code: 'check-path-missing', check: check.name, prog: program, message: `check-path-missing: ${check.name}: ${program}` });
+    }
+  }
+  return warnings;
+}
+
+// Field lesson #255: a shell job left to search the disk for a python toolchain (no synced venv
+// in its own workspace) may run pytest/ruff/mypy against some other checkout's stale environment
+// instead — a `setup` step (e.g. `uv sync --offline --locked`) is what actually prevents that.
+const PYTHON_TOOL_RE = /\b(python3?|pytest|ruff|mypy|uv)\b/;
+export function shellPythonNoSetupWarning(job, manifest) {
+  if (job.shell !== true || job.setup?.length) return null;
+  const checksText = (manifest?.checks ?? []).map(check => (check.argv ?? []).join(' ')).join(' ');
+  if (!PYTHON_TOOL_RE.test(checksText) && !PYTHON_TOOL_RE.test(job.prompt ?? '')) return null;
+  return { code: 'shell-python-no-setup', jobId: job.id, message: `shell-python-no-setup: ${job.id}` };
 }
 
 // Field lesson 149: a test timeout under 5s is a hang guard masquerading as a timing assertion; a
@@ -1059,6 +1097,9 @@ export function transcriptLastActivity(stdout) {
   return last.command.slice(0, 120);
 }
 
+// Field lesson #248: a 5xx or 429 is the provider's own transient failure, never a worker mistake.
+const isRetryableApiError = status => status === 429 || (typeof status === 'number' && status >= 500 && status < 600);
+
 function summarizeAgentFailure({ exitCode, stdout, stderr }) {
   const stderrTail = redactSecrets((stderr ?? '').slice(-AGENT_LOG_BYTES));
   const stdoutTail = redactSecrets((stdout ?? '').slice(-AGENT_LOG_BYTES));
@@ -1106,11 +1147,24 @@ async function execute(job, cwd, message, { spawnImpl, signal, cancelled, killIm
       // Lesson #46: init only reports the requested model, not what actually ran.
       const { actualModel, modelsSeen, modelMismatch } = summarizeModels(events, job.model);
       const failed = cleanupError || reason || error?.message || (code !== 0 ? `Worker exited ${code}` : null) || parseError || (!result ? 'Worker returned no result event' : null) || (result?.is_error || (result?.subtype && result.subtype !== 'success') ? `Worker result: ${result.subtype || 'error'}` : null);
+      // Field lesson #248: a transient provider error (5xx or 429) reported on the result event
+      // itself is not a worker failure; the job loop above decides the retry, this only surfaces
+      // the status for it to act on.
+      const apiErrorStatus = typeof result?.api_error_status === 'number' ? result.api_error_status : null;
       // Field lesson #193: a cancelled job is killed before its final `result` event ever lands;
       // the last already-streamed event that reported a running cost is still real spend, so a
       // cancelled scout/ask/run reports that instead of a costUsd that only ever meant "no result".
       const lastCostEvent = result ? result : events.findLast(event => typeof event?.total_cost_usd === 'number');
-      resolve({ cleanupError, terminationReason:reason??null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed || null, permissionDenials: Array.isArray(result?.permission_denials) ? result.permission_denials : [], stdout, stderr, response: typeof result?.result === 'string' ? result.result : '', exitCode: code, actualModel: actualModel ?? null, modelsSeen, modelMismatch, usage: result?.usage ?? null, modelUsage: result?.modelUsage ?? null, costUsd: lastCostEvent?.total_cost_usd ?? null, ...(reason === 'timeout' ? { lastActivity: transcriptLastActivity(stdout) } : {}) });
+      let costUsd = lastCostEvent?.total_cost_usd ?? null, costSource = costUsd !== null ? 'reported' : null, costWarning = null;
+      // Field lesson #252: no reported cost (the job died before or without a CLI result event
+      // that carried one) but a real transcript exists — estimate spend from it instead of leaving
+      // costNotReported for a job that plainly spent something.
+      if (costUsd === null) {
+        const estimate = estimateCostFromTranscript(stdout, job.model);
+        if (estimate.costUsd !== null) { costUsd = estimate.costUsd; costSource = 'estimated-from-transcript'; }
+        else if (estimate.usage) costWarning = `cost-rate-unknown: ${job.model}`;
+      }
+      resolve({ cleanupError, terminationReason:reason??null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed || null, permissionDenials: Array.isArray(result?.permission_denials) ? result.permission_denials : [], stdout, stderr, response: typeof result?.result === 'string' ? result.result : '', exitCode: code, actualModel: actualModel ?? null, modelsSeen, modelMismatch, usage: result?.usage ?? null, modelUsage: result?.modelUsage ?? null, costUsd, costSource, ...(costWarning ? { costWarning } : {}), apiErrorStatus, ...(reason === 'timeout' ? { lastActivity: transcriptLastActivity(stdout) } : {}) });
     };
     if (signal?.aborted) { reason = 'cancelled'; return finish(null); }
     try {
@@ -1500,9 +1554,38 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
   }
 }
 
-export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks } = {}) {
+// Field lesson #253: a vendor/pin bump (or any other base commit) that is already red proves
+// nothing once a build lands on it — a real base failure and a worker-introduced one become
+// indistinguishable until a separate base run tells them apart, well after the fact. `run`
+// checks the committed base itself first, caching the verdict by base sha (`.swarm/base-checks/
+// <sha>.json`) so a repeat run at the same sha never repeats the (real) spawn cost.
+export async function runBaseChecks(root, manifest, { spawnImpl = spawn, gitImpl, baseSha: baseShaOverride, env = process.env } = {}) {
+  const checks = manifest.checks ?? [];
+  if (!checks.length) return { baseSha: null, status: 'green', failures: [] };
+  const baseSha = baseShaOverride ?? (await (gitImpl ?? git)(root, ['rev-parse', 'HEAD'])).trim();
+  const cacheRel = `.swarm/base-checks/${baseSha}.json`;
+  const cached = await bytesAt(root, cacheRel, true);
+  if (cached) { try { return JSON.parse(cached.toString('utf8')); } catch { /* recompute below */ } }
+  const failures = [];
+  for (const check of checks) {
+    const outcome = await runCheck(check.name, check.argv, root, check.timeoutMs ?? 300000, spawnImpl, false, () => {}, env);
+    if (outcome.status !== 'passed') failures.push(check.name);
+  }
+  const record = { baseSha, status: failures.length ? 'red' : 'green', failures };
+  await jsonWrite(root, cacheRel, record);
+  return record;
+}
+
+export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks, checkBase = false, acceptRedBase = false, reason, baseChecks = {} } = {}) {
   root = await fs.realpath(root);
   validateManifest(manifest);
+  // Field lesson #253: refuses to dispatch onto a red base unless the caller explicitly accepts
+  // it (with a reason) — before any workspace is even created for a job.
+  if (checkBase) {
+    if (acceptRedBase && !(typeof reason === 'string' && reason.trim())) fail('--accept-red-base requires --reason');
+    const baseResult = await runBaseChecks(root, manifest, { spawnImpl, env, ...baseChecks });
+    if (baseResult.status === 'red' && !acceptRedBase) fail(`Refusing: base is red (${baseResult.failures.join(', ')}); pass --accept-red-base with --reason to run onto it anyway`);
+  }
   if (manifest.jobs.some(job => job.agent === 'codex')) requireCodexPlatform(platform);
   // Decision #154: a shell job never runs unsandboxed and never falls back to the person's own
   // login, so the platform, sandbox-exec and the worker key are all settled before any work.
@@ -1725,6 +1808,16 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
               }
             }
           }
+          // Field lesson #248: a claude job (not codex, not a sandboxed shell job) that ended on a
+          // transient provider error (api_error, status 5xx/429) is not a worker failure — retried
+          // once, over this same (kept) workspace, with a continuation note, before it is ever
+          // scored as failed. Only one retry ever, regardless of what it in turn ends with.
+          if (job.agent === 'claude' && job.shell !== true && isRetryableApiError(result.apiErrorStatus)) {
+            record.retries = 1;
+            record.retryReason = `api_error ${result.apiErrorStatus}`;
+            const continuationMessage = `${message}\n\nContinuation: your previous attempt ended with a transient provider error (api_error ${result.apiErrorStatus}); continue from the current state of this same workspace.`;
+            result = await execute(job, workspaceRoot, continuationMessage, { spawnImpl, signal, cancelled, killImpl, onOutput: tracker.onOutput });
+          }
         } finally { tracker?.stop(); }
         await write(root, `${directory}/${job.id}/provider.jsonl`, result.stdout, true);
         await write(root, `${directory}/${job.id}/stderr.log`, result.stderr, true);
@@ -1851,7 +1944,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         // Field lesson #201: a setup failure never spawns the worker; `setupFailed` rides along on
         // the job record so inspect can name the phase, instead of an empty error/result/cost that
         // reads identically to a worker that ran and produced nothing.
-        Object.assign(record, { permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt), ...(result.setupFailed ? { setupFailed: true } : {}), ...(result.status === 'timeout' ? { lastActivity: result.lastActivity ?? null } : {}), ...(result.contextInlined ? { contextInlined: result.contextInlined } : {}), ...(result.retriedForLength ? { retriedForLength: true } : {}) });
+        Object.assign(record, { permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, ...(result.costSource ? { costSource: result.costSource } : {}), ...(result.costWarning ? { costWarning: result.costWarning } : {}), finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt), ...(result.setupFailed ? { setupFailed: true } : {}), ...(result.status === 'timeout' ? { lastActivity: result.lastActivity ?? null } : {}), ...(result.contextInlined ? { contextInlined: result.contextInlined } : {}), ...(result.retriedForLength ? { retriedForLength: true } : {}) });
         await queueSave();
       } catch (error) {
         if (error.keptWorkspace) record.keptWorkspace = error.keptWorkspace;
@@ -2028,7 +2121,10 @@ function normalizeChangedEntry(raw) {
 // Field lesson #142: a synced venv's own interpreter directory lived under $HOME but inside a
 // denied subtree (e.g. `~/.ssh`); surfaced, never fatal, since the worker may not need it anyway.
 const venvInterpreterWarnings = state => state.jobs.flatMap(job => job.venvInterpreterDenied ?? []);
-const runWarnings = (state, extra = []) => [...modelMismatchWarnings(state), ...codexEnvelopeFallbackWarnings(state), ...permissionDenialWarnings(state), ...invalidJsonOutputWarnings(state), ...droppedWriteWarnings(state), ...venvInterpreterWarnings(state), ...extra];
+// Field lesson #252: a transcript existed (real usage lines) but named a model this rate table
+// does not recognize — costUsd stays null, but that absence is worth a warning, not silence.
+const costRateUnknownWarnings = state => state.jobs.filter(job => job.costWarning).map(job => job.costWarning);
+const runWarnings = (state, extra = []) => [...modelMismatchWarnings(state), ...codexEnvelopeFallbackWarnings(state), ...permissionDenialWarnings(state), ...invalidJsonOutputWarnings(state), ...droppedWriteWarnings(state), ...venvInterpreterWarnings(state), ...costRateUnknownWarnings(state), ...extra];
 // A provider that never reports usage.total_tokens (or never ran) reports null, not 0: absence
 // of evidence, not evidence of zero cost.
 const jobTokens = record => typeof record?.usage?.total_tokens === 'number' ? record.usage.total_tokens : null;
@@ -2160,6 +2256,28 @@ const CHECK_ERRORED_STATUSES = new Set(['spawn-error', 'unrunnable', 'cannot-run
 // worker, never a real assertion failure.
 const SANDBOX_ONLY_RE = /sandbox_apply|Operation not permitted/;
 
+// Field lesson #253: re-runs one failing check's own argv against the committed base's tree (a
+// throwaway detached worktree, same shape as the flake-on-base check just below) to tell a
+// failure this integration introduced from one that was already there.
+async function originForCheck(root, baseCommit, check, integratedFiles, newFiles, resolvedProgram, spawnImpl, env) {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-origin-'));
+  const checkout = path.join(temporary, 'base');
+  let added = false;
+  try {
+    await git(root, ['worktree', 'add', '--detach', checkout, baseCommit]);
+    added = true;
+    const baseArgvRaw = expandCheckArgv(check.argv, integratedFiles, newFiles, checkout).argv;
+    const baseArgv = resolvedProgram ? [resolvedProgram, ...baseArgvRaw.slice(1)] : baseArgvRaw;
+    const probe = await runCheck(check.name, baseArgv, checkout, check.timeoutMs ?? 300000, spawnImpl, false, () => {}, env);
+    return probe.status === 'passed' ? 'new' : 'pre-existing';
+  } catch {
+    // Base could not be verified either way; never claim pre-existing without proof.
+    return 'new';
+  } finally {
+    try { if (added) await git(root, ['worktree', 'remove', '--force', checkout]); } catch { /* best-effort cleanup */ }
+    await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
+  }
+}
 async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { baseCommit, noFlakeCheck = false, portBase, preChecks = [], extraEnv = {} } = {}) {
   // Field lesson #160: the root's .swarm/env.json (extraEnv) reaches every check, never PATH/HOME.
   const env = portBase != null || Object.keys(extraEnv).length ? { ...process.env, ...extraEnv, ...(portBase != null ? { SWARM_PORT_BASE: String(portBase) } : {}) } : process.env;
@@ -2244,12 +2362,19 @@ async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { b
         }
       }
     }
-    results.push({ ...result, runs, ...(result.status !== 'passed' ? { failedRun: runs } : {}) });
+    // Field lesson #253: only a genuine `failed` (never skipped/errored/sandbox-only) is worth
+    // the cost of a base re-run; those other statuses were never a real red-vs-green verdict.
+    // The flake-on-base run just above already answers this exact question when it ran (same
+    // failing check, same base commit) — reused instead of spawning a second, redundant base run.
+    const origin = result.status !== 'failed' || !baseCommit ? null
+      : result.flakeOnBase ? (result.flakeOnBase.failed > 0 ? 'pre-existing' : 'new')
+      : await originForCheck(root, baseCommit, check, integratedFiles, newFiles, resolvedProgram, spawnImpl, env);
+    results.push({ ...result, runs, ...(origin ? { origin } : {}), ...(result.status !== 'passed' ? { failedRun: runs } : {}) });
   }
   // Field lesson 110: a compact per-check failure summary (name + last few failing lines,
   // capped) so a coordinator does not have to open the full tail to see what broke.
   const NOT_PASSED = ['failed', 'timeout', 'spawn-error', 'unrunnable', 'cannot-run'];
-  const failures = results.filter(check => NOT_PASSED.includes(check.status)).map(check => ({ name: check.name, lines: lastFailureLines(check.tail) }));
+  const failures = results.filter(check => NOT_PASSED.includes(check.status)).map(check => ({ name: check.name, lines: lastFailureLines(check.tail), ...(check.origin ? { origin: check.origin } : {}) }));
   // Field lesson 138 (tool half): a check that never started is invalid evidence, not a red
   // check; surfaced distinctly so a caller (integrate/selfCheck) can refuse to score it as either.
   const checksErrored = results.some(check => CHECK_ERRORED_STATUSES.has(check.status));
@@ -2479,7 +2604,11 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   // done (the transcript shows it sleep-polling a background full suite the boilerplate now
   // forbids) may still have every output sitting in its kept workspace; --salvage lets those
   // through the same conflict/snapshot checks as any other job, instead of a hand copy.
-  const jobsAcceptable = job => job.status === 'complete' || (acceptBlocked && job.status === 'blocked') || (salvage && job.status === 'timeout' && job.keptWorkspace);
+  // Field lesson #248: a job whose one retry still ended on a transient provider error stays
+  // `failed`, named by its own `retryReason` (`api_error <status>`) — --salvage accepts that one
+  // the same way it accepts a timed-out job, when its kept workspace actually has output changes.
+  const isApiErrorFailure = job => job.status === 'failed' && typeof job.retryReason === 'string' && job.retryReason.startsWith('api_error') && job.keptWorkspace;
+  const jobsAcceptable = job => job.status === 'complete' || (acceptBlocked && job.status === 'blocked') || (salvage && ((job.status === 'timeout' && job.keptWorkspace) || isApiErrorFailure(job)));
   if (state.root !== root || state.id !== id) fail('Run belongs to another repository');
   // Field lesson 120: a run left `integrationStatus: 'partial'` by an earlier failure that struck
   // after its files were already written (preChecks/checks/mutants) may be retried; only a fully
@@ -2514,7 +2643,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       // Field lesson #202: a timed-out job's declared outputs, when salvaged, sit in its kept
       // workspace (a worktree, for a shell/codex job; the same workspace, for any other job) —
       // never in the normal proposal workspace, which a timeout never got to write.
-      const readRoot = salvage && job.status === 'timeout' && job.keptWorkspace ? job.keptWorkspace : workspaceRoot;
+      const readRoot = salvage && ((job.status === 'timeout' && job.keptWorkspace) || isApiErrorFailure(job)) ? job.keptWorkspace : workspaceRoot;
       if (readRoot === job.keptWorkspace) job.salvaged = true;
       // Field lesson 128: the job's own context, concatenated once, is the only source a worker
       // could have copied a real sha/provenance string from verbatim.
@@ -2956,7 +3085,7 @@ async function contextSiblingUntrackedWarnings(root, job, tracked) {
 
 export async function validateProject(root, manifest, { exec = execFileAsync, liveDir, isAlive, env = process.env, home = os.homedir() } = {}) {
   root=await fs.realpath(root);validateManifest(manifest);
-  const jobs=[], warnings=[...tmpToolPathWarnings(manifest), ...await sharedOutputAcrossOpenJobsWarnings(root, manifest, { liveDir, isAlive }), ...shellSandboxDeniedCheckWarnings(manifest, { env, home }), ...sharedRootFullSuiteWarnings(manifest), ...await cheapTierNotConfiguredModelWarnings(manifest, { env, home })];
+  const jobs=[], warnings=[...tmpToolPathWarnings(manifest), ...await sharedOutputAcrossOpenJobsWarnings(root, manifest, { liveDir, isAlive }), ...shellSandboxDeniedCheckWarnings(manifest, { env, home }), ...sharedRootFullSuiteWarnings(manifest), ...await cheapTierNotConfiguredModelWarnings(manifest, { env, home }), ...await checkPathMissingWarnings(manifest, { env })];
   const projectFiles = listProjectFiles(root);
   const trackedFiles = new Set(projectFiles);
   const uncovered = [];
@@ -3009,6 +3138,10 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
     warnings.push(...undeclaredMutantsFileWarnings(job));
     const testsWarning = testsWithoutShellWarning(job);
     if (testsWarning) warnings.push(testsWarning);
+    // Field lesson #255: a shell job running Python checks with no setup step may fall back to
+    // searching the disk for a toolchain instead of using its own synced workspace.
+    const pythonSetupWarning = shellPythonNoSetupWarning(job, manifest);
+    if (pythonSetupWarning) warnings.push(pythonSetupWarning);
     // Field lesson 127/148: a job that outputs a dependency/version file with no preChecks
     // declared to resync the environment leaves the next checks run pointed at a stale install.
     const staleEnvWarning = staleEnvRiskWarning(manifest, job);
@@ -3134,7 +3267,7 @@ export async function inspectRun(root,id){
     // Field lesson #201: a setup failure never spawns the worker (empty error/result/cost, exactly
     // like a job that never ran) — inspect names the phase and the setup log's own tail here.
     const setupErrorTail=record.setupFailed?(await bytesAt(root,`.swarm/runs/${id}/${job.id}/setup.log`,true))?.toString('utf8').split('\n').slice(-20).join('\n')??null:null;
-    jobs.push({id:job.id,agent:job.agent,model:job.model??null,...(job.shell===true?{shell:true,checksRun:Array.isArray(parsedResult?.checksRun)?parsedResult.checksRun:null,proxyRefused:record.proxyRefused??[],loopbackDenied:record.loopbackDenied??[]}:{}),tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,...(record.agentError?{agentError:record.agentError}:{}),...(record.resultMissing?{resultMissing:true}:{}),...(record.setupFailed?{phase:'setup',setupError:setupErrorTail}:{}),result:displayResult(parsedResult),costUsd:typeof record.costUsd==='number'?record.costUsd:null,costPer1kOutputTokens:costPer1kOutputTokens(record),tokens:jobTokens(record),modelsSeen:record.modelsSeen??[],modelMismatch:record.modelMismatch??false});
+    jobs.push({id:job.id,agent:job.agent,model:job.model??null,...(job.shell===true?{shell:true,checksRun:Array.isArray(parsedResult?.checksRun)?parsedResult.checksRun:null,proxyRefused:record.proxyRefused??[],loopbackDenied:record.loopbackDenied??[]}:{}),tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,...(record.agentError?{agentError:record.agentError}:{}),...(record.resultMissing?{resultMissing:true}:{}),...(record.setupFailed?{phase:'setup',setupError:setupErrorTail}:{}),result:displayResult(parsedResult),costUsd:typeof record.costUsd==='number'?record.costUsd:null,...(record.costSource==='estimated-from-transcript'?{costSource:record.costSource}:{}),costPer1kOutputTokens:costPer1kOutputTokens(record),tokens:jobTokens(record),modelsSeen:record.modelsSeen??[],modelMismatch:record.modelMismatch??false});
     const workspaceRoot=await safePath(root,`.swarm/workspaces/${id}/${job.id}`,{internal:true});
     // Field lesson 128: the same invented-hash scan integrate runs, surfaced here before any file
     // is actually written, so a made-up sha is visible at inspect time too.
@@ -3182,6 +3315,15 @@ export async function inspectResults(root, id) {
         }
       } catch (error) { warnings.push(`resultFile unreadable: ${job.id}: ${error.message}`); }
     }
+    // Field lesson #255: a shell worker's own reported test-run interpreter naming a path outside
+    // its workspace means it ran (or read) some other checkout's toolchain, not its own.
+    if (typeof parsed?.interpreter === 'string' && parsed.interpreter.trim()) {
+      const resolvedInterpreter = path.resolve(parsed.interpreter);
+      const resolvedWorkspace = path.resolve(workspace);
+      if (resolvedInterpreter !== resolvedWorkspace && !resolvedInterpreter.startsWith(resolvedWorkspace + path.sep)) {
+        warnings.push(`interpreter-outside-workspace: ${job.id}: ${parsed.interpreter}`);
+      }
+    }
     // Field lesson 37: a worker's own report of what it changed is a separate signal from an
     // actual workspace diff (droppedWriteWarnings above) — a job may self-report a path it never
     // actually touched, or run on an agent (codex) whose workspace diff is not checked there.
@@ -3219,7 +3361,7 @@ export async function inspectResults(root, id) {
       }
       outputs.push(info);
     }
-    jobs.push({ id: record.id, status: record.status, ...(job.shell === true ? { shell: true, checksRun: Array.isArray(parsed?.checksRun) ? parsed.checksRun : null } : {}), ...(record.agentError ? { agentError: record.agentError } : {}), ...(record.resultMissing ? { resultMissing: true } : {}), model: record.model ?? null, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, tokens: jobTokens(record), result: resultSource === 'file' ? parsed : displayResult(parsed), resultSource, outputs });
+    jobs.push({ id: record.id, status: record.status, ...(job.shell === true ? { shell: true, checksRun: Array.isArray(parsed?.checksRun) ? parsed.checksRun : null } : {}), ...(record.agentError ? { agentError: record.agentError } : {}), ...(record.resultMissing ? { resultMissing: true } : {}), model: record.model ?? null, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, ...(record.costSource === 'estimated-from-transcript' ? { costSource: record.costSource } : {}), tokens: jobTokens(record), result: resultSource === 'file' ? parsed : displayResult(parsed), resultSource, outputs });
   }
   return { runId: id, status: state.status, tokens: tokensTotal(jobs.map(job => job.tokens)), costNotReported: costNotReported(jobs), warnings, jobs };
 }
@@ -3689,12 +3831,15 @@ const SHIP_FLAGS_WITH_VALUE = new Set(['--repo', '--pr', '--require-section', '-
 // Pure CLI-flag parsing, kept separate from ship() execution so it is directly testable.
 export function parseShipFlags(flags) {
   let repo, payloadPath, mergeMethod, timeoutMs, pollMs, tagTimeoutMs, noFlakeCheck, branch, merge = true, privateNamesFile;
-  let checksFromCi, checksFromCiPath, rerunFlaky;
+  let checksFromCi, checksFromCiPath, rerunFlaky, acceptPreExisting = false;
   const requireSections = [], checks = [], exemptions = [];
   for (let index = 0; index < flags.length; index++) {
     const flag = flags[index];
     if (flag === '--no-flake-check') { noFlakeCheck = true; continue; }
     if (flag === '--no-merge') { merge = false; continue; }
+    // Field lesson #254: without this, a check whose failure also reproduces on the base holds
+    // ship (status `held-red-check`) instead of quietly waving a red local check through.
+    if (flag === '--accept-pre-existing') { acceptPreExisting = true; continue; }
     // Field lesson #177: an optional trailing path (the CI workflow to read `run:` steps from);
     // omitted, it defaults to .github/workflows/ci.yml relative to the ship root.
     if (flag === '--checks-from-ci') {
@@ -3748,6 +3893,7 @@ export function parseShipFlags(flags) {
     ...(rerunFlaky !== undefined ? { rerunFlaky } : {}),
     ...(exemptions.length ? { exemptions } : {}),
     ...(privateNamesFile !== undefined ? { privateNamesFile } : {}),
+    ...(acceptPreExisting ? { acceptPreExisting } : {}),
   };
 }
 
@@ -3850,6 +3996,7 @@ export async function shipBranch(root, flags, { spawnImpl = spawn, exec = shipEx
     noCiGraceMs: SHIP_DEFAULTS.noCiGraceMs,
     rerunFlaky: flags.rerunFlaky,
     exemptions: flags.exemptions ?? [],
+    acceptPreExisting: flags.acceptPreExisting ?? false,
     privateNamesFile: flags.privateNamesFile ?? null,
     portBase, portWarnings,
     extraWarnings: [...ciWarnings, ...(checks.length ? [] : ['no-checks: ship --branch ran no local checks; pass --check \'<argv json>\' or --checks-from-ci'])],
@@ -3917,6 +4064,7 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
     noCiGraceMs: SHIP_DEFAULTS.noCiGraceMs,
     rerunFlaky: flags.rerunFlaky,
     exemptions: flags.exemptions ?? [],
+    acceptPreExisting: flags.acceptPreExisting ?? false,
     privateNamesFile: flags.privateNamesFile ?? null,
     portBase, portWarnings,
     extraWarnings: ciWarnings,
@@ -3935,12 +4083,12 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
 
 // Shared by the `run` command and `go`'s run stage: validate, confirm every used agent is
 // configured, then run to completion, announcing the run id via onRunning as soon as it exists.
-async function runManifestChecked(root, manifest, onRunning) {
+async function runManifestChecked(root, manifest, onRunning, { checkBase = false, acceptRedBase = false, reason } = {}) {
   await validateProject(root, manifest);
   for (const agent of new Set(manifest.jobs.map(job => job.agent))) { const check = await doctor({ agent }); if (check.configured === false) fail(`${agent} is not configured; run doctor ${agent}`); }
   const controller = new AbortController(), abort = () => controller.abort();
   process.on('SIGINT', abort); process.on('SIGTERM', abort); let announced = false;
-  try { return await runManifest(root, manifest, { signal: controller.signal, onState: state => { if (!announced) { announced = true; onRunning?.(state); } } }); }
+  try { return await runManifest(root, manifest, { signal: controller.signal, onState: state => { if (!announced) { announced = true; onRunning?.(state); } }, checkBase, acceptRedBase, reason }); }
   finally { process.off('SIGINT', abort); process.off('SIGTERM', abort); }
 }
 
@@ -3996,7 +4144,7 @@ async function main() {
   const testIndex=args.indexOf('--test');
   const rootIndex=args.findIndex((arg,index)=>arg==='--root'&&(testIndex===-1||index<testIndex));
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
   if(args[0]==='redcheck'){
     const hasBase=args[2]==='--base';
     // Row #214: --commit SHA is a separate, mutually-exclusive proof mode from --base REF.
@@ -4328,12 +4476,17 @@ async function main() {
   // validate/run's --evidence names a local file whose failures block is appended to every job
   // prompt before validation/execution; stripped here for the same reason as monitor/integrate above.
   let evidenceFlag;
+  // Field lesson #253: `run`'s own base-check gate; --accept-red-base always needs --reason.
+  let acceptRedBaseFlag=false,redBaseReason;
   if(command==='validate'||command==='run'){
     const flags=rest.splice(0,rest.length);
     for(let index=0;index<flags.length;index++){
       if(flags[index]==='--evidence'){evidenceFlag=flags[++index];if(!evidenceFlag)fail('--evidence requires a value');continue;}
+      if(command==='run'&&flags[index]==='--accept-red-base'){acceptRedBaseFlag=true;continue;}
+      if(command==='run'&&flags[index]==='--reason'){redBaseReason=flags[++index];if(!redBaseReason)fail('--reason requires a value');continue;}
       rest.push(flags[index]);
     }
+    if(acceptRedBaseFlag&&!redBaseReason)fail('--accept-red-base requires --reason');
   }
   // inspect's --results is a read-only reduced view; stripped here for the same reason as above.
   let resultsOnly=false;
@@ -4413,7 +4566,7 @@ async function main() {
       if(probeFailures.length)fail(`Check interpreter probe failed: ${probeFailures.map(preflightMod.describeProbeFailure).join('; ')}`);
       result=await validateProject(root,manifest);
     }
-    else result=await runManifestChecked(root,manifest,state=>process.stdout.write(`${JSON.stringify({id:state.id,status:'running'})}\n`));
+    else result=await runManifestChecked(root,manifest,state=>process.stdout.write(`${JSON.stringify({id:state.id,status:'running'})}\n`),{checkBase:true,acceptRedBase:acceptRedBaseFlag,reason:redBaseReason});
   }else if(command==='status')result=await readState(root,argument);
   else if(command==='monitor')result=summarizeRun(await readState(root,argument));
   else if(command==='wait')result=await waitRun(root,argument,{timeoutMs:waitTimeoutSeconds!==null?waitTimeoutSeconds*1000:undefined});

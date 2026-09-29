@@ -820,7 +820,7 @@ export const SHIP_USAGE = [
   '       swarm ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [flags]',
   'Flags: [--repo OWNER/NAME] [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase]',
   '       [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check]',
-  '       [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [--private-names FILE]',
+  '       [--checks-from-ci [PATH]] [--rerun-flaky N] [--accept-pre-existing] [--exempt GUARD:FILE=REASON]... [--private-names FILE]',
   `Exempt guards: ${EXEMPTION_GUARD_IDS.join(', ')}`,
   'Prints one JSON result naming its runId (or branch for --branch); exit 0 when merged, held or ready.',
 ].join('\n') + '\n';
@@ -883,6 +883,10 @@ export async function ship(options) {
     packagingChanges = [], checkArgvs = [], extraWarnings = [],
     rerunFlaky,
     exemptions = [],
+    // Field lesson #254: the `ship` *command* (shipRun/shipBranch, below) always passes this
+    // explicitly (false unless --accept-pre-existing is given); ship() itself defaults permissive
+    // so every existing direct caller/test that never touches this option is unaffected.
+    acceptPreExisting = true,
     runChecks, exec, sleep, now = () => Date.now(),
     env = process.env,
     home = os.homedir(),
@@ -1110,6 +1114,15 @@ export async function ship(options) {
     }
   }
   base.timing.checksSeconds = round1(now() - checksStart);
+
+  // Field lesson #254: a check that fails the same way on the base is an environment problem to
+  // fix, never a green light — ship holds (never merges) past it unless the caller explicitly
+  // says to ship anyway, naming exactly which failing test ids (or check names) it is accepting.
+  const preExistingChecks = checks.filter(result => result.status === 'pre-existing');
+  if (preExistingChecks.length && !acceptPreExisting) {
+    const names = preExistingChecks.flatMap(result => (result.failingTests?.length ? result.failingTests.map(test => test.id) : [result.name]));
+    return { ...base, status: 'held-red-check', checks, reason: `held-red-check: ${names.join(', ')}; pass --accept-pre-existing to ship anyway` };
+  }
 
   let body = fillChecks(payload.body, checks);
   if (usedExemptions.length) body = appendExemptionsSection(body, usedExemptions);

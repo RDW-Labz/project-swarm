@@ -9,7 +9,7 @@ import http from 'node:http';
 import net from 'node:net';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { sandboxPath, validateReadPaths, effectiveDeniedHomeDirs } from './codex-adapter.mjs';
+import { sandboxPath, validateReadPaths, effectiveDeniedHomeDirs, defaultTmpRoots } from './codex-adapter.mjs';
 import { NO_STASH_LINE, MUTANTS_BY_HAND_LINE } from './swarm-env.mjs';
 import { loadLocalConfig } from './local-config.mjs';
 
@@ -200,7 +200,7 @@ const quoteRegex = value => value.replace(/[.*+?^${}()|[\]]/g, match => `\\${mat
 // `rootGit` and `loopbackDenied` are both optional and additive: omitted (as by every pre-1.19.0
 // caller), the generated profile is byte-identical to before. `loopbackDenied` undefined leaves
 // the network section untouched; passing an array (even empty) turns on the loopback allowance.
-export function shellProfile({ home = os.homedir(), extraHomes = [], worktree, commonDir, shellDir, scratchDir = null, readPaths = [], cliPaths = [], proxyPort, rootGit = null, loopbackDenied, loopbackAllow, config = {} }) {
+export function shellProfile({ home = os.homedir(), extraHomes = [], worktree, commonDir, shellDir, scratchDir = null, readPaths = [], cliPaths = [], proxyPort, rootGit = null, loopbackDenied, loopbackAllow, config = {}, tmpRoots = defaultTmpRoots() }) {
   if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) throw Error('shell profile needs a proxy port');
   const homes = [...new Set([home, ...extraHomes].map(sandboxPath))];
   // Field lesson #145: the job's scratch dir (TMPDIR/HOME) lives outside every repo, under the
@@ -238,11 +238,18 @@ export function shellProfile({ home = os.homedir(), extraHomes = [], worktree, c
   const rootGitRules = !rootGit ? '' : rootGit.kind === 'dir'
     ? `(allow file-read* ${filter('subpath', rootGit.path)})\n`
     : `(allow file-read* ${filter('literal', rootGit.path)})\n(allow file-read* ${filter('subpath', rootGit.gitDir)})\n(allow file-read* ${filter('subpath', rootGit.commonDir)})\n`;
+  // Field lesson #255: read and exec are denied under every OS temp dir by default; the job's own
+  // scratch dir (TMPDIR/HOME, already in `reads`/`writes` above, holding a worker's own pip/uv
+  // build-isolation tmp files too) is the only exception this adapter needs, so another job's or
+  // another checkout's own scratch data placed in a sibling temp directory is never visible.
+  const tmpDeny = [...new Set(tmpRoots.map(sandboxPath))].map(file => filter('subpath', file)).join(' ');
   return '(version 1)\n(allow default)\n' +
     `(deny network*)\n(allow network-outbound (remote ip "localhost:${proxyPort}"))\n` +
     loopbackRules +
     `(deny file-read* file-write* ${homes.map(h => filter('subpath', h)).join(' ')})\n` +
+    `(deny file-read* process-exec ${tmpDeny})\n` +
     `(allow file-read* ${[...ancestors].map(file => filter('literal', file)).join(' ')} ${reads.map(file => filter('subpath', file)).join(' ')})\n` +
+    `(allow process-exec ${reads.map(file => filter('subpath', file)).join(' ')})\n` +
     rootGitRules +
     `(allow file-read-metadata ${worktreeAncestors.map(dir => filter('literal', dir)).join(' ')})\n` +
     `(allow file-read* ${worktreeAncestors.flatMap(dir => ANCESTOR_LOOKUP_FILES.map(name => filter('literal', path.join(dir, name)))).join(' ')})\n` +
