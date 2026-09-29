@@ -268,6 +268,7 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 - [Setup and troubleshooting](docs/setup.md)
 - [Workflow recipes and coordinator prompts](docs/workflows.md)
 - [Manifest and command reference](docs/manifest-reference.md)
+- [Worker skills](docs/worker-skills.md)
 - [Modifying the runner and adding providers](docs/extending.md)
 - [Automation handoff integration study](docs/automation-integration-study.md)
 - [Real-world website case study](docs/case-study.md)

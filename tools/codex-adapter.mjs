@@ -62,14 +62,14 @@ export function codexArgs(job, { profile, worktree, lastMessage, message }) {
   if (typeof job.model !== 'string' || !CODEX_MODEL.test(job.model)) throw Error('codex requires a valid explicit model');
   return ['-f', sandboxPath(profile), 'codex', 'exec', '-m', job.model, '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '--ephemeral', '-C', sandboxPath(worktree), '-o', sandboxPath(lastMessage), message];
 }
-export function codexMessage(job, { contract = null, gotchas = '' } = {}) {
+export function codexMessage(job, { contract = null, gotchas = '', skills = '' } = {}) {
   const base = `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(job.context)}. You may edit only these declared outputs: ${JSON.stringify(job.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.\nRead only the files in your context; other reads may be denied.\nIf a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\n`;
   const contractSection = contract ? `Shared contract (${contract.path}). Read it first; it wins over any other file:\n${contract.text}\n\n` : '';
   const testEnvironment = job.testEnv ? `Test environment (already set): ${Object.entries(job.testEnv).map(([key, value]) => `${key}=${value}`).join(', ')}\n` : '';
   // Field lesson #163: codex has a shell too, and the stash stack is shared by every worktree.
   // Field lesson #170: never hand-revert a mutant with checkout/restore; run `swarm mutants`.
   // Field lesson #167: known platform gotchas for this project, when a .swarm/gotchas.md exists.
-  return `${base}${contractSection}${testEnvironment}${NO_STASH_LINE}\n${MUTANTS_BY_HAND_LINE}\n${gotchas}TASK:\n${job.prompt}\n`;
+  return `${base}${contractSection}${testEnvironment}${NO_STASH_LINE}\n${MUTANTS_BY_HAND_LINE}\n${gotchas}${skills}TASK:\n${job.prompt}\n`;
 }
 const tryObject = text => { try { const value = JSON.parse(text); return value && typeof value === 'object' && !Array.isArray(value) ? value : null; } catch { return null; } };
 const CODEX_FENCE = /```[a-zA-Z]*[ \t]*\n([\s\S]*?)\n[ \t]*```/g;

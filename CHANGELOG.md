@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.27.0
+
+- New optional worker skills: a manifest `skillsDir` (or local config `skills.dir`) names a
+  directory of `<name>/SKILL.md` files (frontmatter `name`, `description`, optional `paths`,
+  optional `checks`). Every job prompt (claude, claude shell, codex, API) gains one index line per
+  skill; a job's own `skills: [...]` list, or else a frontmatter `paths:` glob matching that job's
+  own context/outputs, prepends that skill's full body (an empty `skills: []` still overrides
+  auto-attach, leaving every skill index-only). The source directory is copied into each job's own
+  workspace/worktree at `.swarm/skills/` (already git-ignored; refuses any symlink instead of
+  copying it). `integrate` fails a job naming `skill-check-failed: <skill>: <what>` when an
+  attached skill's own `checks.filesMustChange`/`checks.resultKeys` are not met by that job's
+  changed files/result — never bypassed by `--accept-failed-checks`. A job's own record gains
+  `skills: [{name, gitHash, attached}]` (`gitHash` matches `git hash-object`); `validate` warns
+  `skill-over-800` and refuses `skill-over-1200` on a skill's own estimated token size (never
+  trimming it), and refuses `invalid-skill-frontmatter`/`unknown-skill` up front. New
+  `tools/skills.mjs`; `tools/session-metrics.mjs` gains `reworkBySkill`, comparing jobs with vs
+  without a given skill by the share needing a follow-up job on the same outputs within 24h.
+  Absent, every prompt stays byte-identical to before this feature existed. Tests in
+  `tests/worker-skills.test.mjs` (lesson #112).
+- Fixed: an index-only skill's own line gave no way to find its full instructions, only its name
+  and description. That line now ends with its copied path and a pointer,
+  `.swarm/skills/<name>/SKILL.md — read it if your job touches this`; a named/paths-attached
+  skill's line is unchanged. Tests in `tests/worker-skills.test.mjs`.
+
 ## 1.26.1
 
 - Local config now lives outside the install checkout: default path is `$XDG_CONFIG_HOME/project-swarm/config.json` (when set and absolute) else `~/.config/project-swarm/config.json`; `SWARM_CONFIG` still wins. A leftover file at the old `~/.project-swarm/config.json` (inside the install clone) refuses with `config-inside-install` instead of being read, and any resolved config file found inside a git work tree refuses with `config-inside-repo`.
