@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Codex's outer macOS seatbelt, not its prompt or built-in sandbox, is the boundary.
 import fs from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { NO_STASH_LINE, MUTANTS_BY_HAND_LINE } from './swarm-env.mjs';
@@ -27,6 +28,16 @@ export function effectiveDeniedHomeDirs(config = {}) {
 }
 const deniedPaths = (home, config = {}) => effectiveDeniedHomeDirs(config).map(part => path.join(home, part));
 const within = (file, parent) => file === parent || file.startsWith(`${parent}/`);
+// Field lesson #255: both the raw and realpath'd form of the current process's own os.tmpdir(),
+// alongside /tmp and /private/tmp, since macOS resolves /tmp and /var through symlinks into
+// /private and a profile rule written against one spelling may not match the other at the VFS
+// layer. Exported so both adapters (and tests) share one definition of "the OS temp dirs".
+export function defaultTmpRoots() {
+  const raw = os.tmpdir();
+  let real = raw;
+  try { real = realpathSync(raw); } catch { /* raw kept as the sole spelling */ }
+  return [...new Set(['/private/tmp', '/tmp', raw, real])];
+}
 export function validateReadPaths(paths = [], home = os.homedir(), config = {}) {
   home = sandboxPath(home);
   if (!Array.isArray(paths) || paths.length > 100) throw Error('readPaths must be an array of at most 100 absolute paths');
@@ -41,7 +52,7 @@ export async function resolveReadPaths(paths = [], home = os.homedir(), config =
   // Reject aliases into denied directories as well as their literal spellings.
   return validateReadPaths(await Promise.all(validated.map(file => fs.realpath(file))), home, config);
 }
-export function codexProfile({ home = os.homedir(), worktree, commonDir, metadataDir, readPaths = [], config = {} }) {
+export function codexProfile({ home = os.homedir(), worktree, commonDir, metadataDir, readPaths = [], config = {}, tmpRoots = defaultTmpRoots() }) {
   home = sandboxPath(home);
   const reads = [worktree, commonDir, ...['.codex', '.nvm', '.cache', '.npm', '.local/share/uv', 'Library/Caches'].map(p => path.join(home, p)), ...validateReadPaths(readPaths, home, config)].map(sandboxPath);
   const writes = [worktree, metadataDir, ...['.codex', '.cache', '.npm'].map(p => path.join(home, p)), '/private/tmp', '/private/var/folders'].map(sandboxPath);
@@ -52,8 +63,16 @@ export function codexProfile({ home = os.homedir(), worktree, commonDir, metadat
     while (within(parent, home)) { ancestors.add(parent); if (parent === home) break; parent = path.dirname(parent); }
   }
   const writable = [...writes.map(file => filter('subpath', file)), '(literal "/dev/null")', '(regex #"^/dev/tty.*$")'].join(' ');
+  // Field lesson #255: read and exec are denied under every OS temp dir by default; codex has no
+  // job-scoped scratch dir of its own, so the only exception it needs is `worktree` and
+  // `commonDir` (metadataDir is always a subpath of commonDir), already granted below via `reads`
+  // wherever they happen to sit — a fixture root under the OS temp dir stays readable, but a
+  // sibling temp directory (another checkout's own scratch data) never does.
+  const tmpDeny = [...new Set(tmpRoots.map(sandboxPath))].map(file => filter('subpath', file)).join(' ');
   return `(version 1)\n(allow default)\n(deny file-read* file-write* ${filter('subpath', home)})\n` +
+    `(deny file-read* process-exec ${tmpDeny})\n` +
     `(allow file-read* ${[...ancestors].map(file => filter('literal', file)).join(' ')} ${reads.map(file => filter('subpath', file)).join(' ')} ${filter('literal', path.join(home, '.gitconfig'))})\n` +
+    `(allow process-exec ${reads.map(file => filter('subpath', file)).join(' ')})\n` +
     `(allow file-write* ${writable})\n(deny file-write* (require-not (require-any ${writable})))\n` +
     `(deny file-read* file-write* ${deniedPaths(home, config).map(file => filter('subpath', file)).join(' ')})\n` +
     '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd.xpc"))\n';

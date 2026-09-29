@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.34.0
+
+- A claude job that ends `api_error` with status 5xx or 429 is now retried once, over its own kept workspace, with a continuation note (`retries: 1`, `retryReason: "api_error <status>"`); `integrate --salvage` now also accepts a `failed` run whose failure is `api_error` and whose kept workspace has output changes. (lesson 248)
+- A job's `costUsd` is now estimated from its own provider.jsonl transcript (summed usage over unique assistant message ids, output tokens estimated from content size when the stream's own count is partial, at a fixed per-model USD/MTok rate) whenever it ends with no reported cost, marked `costSource: "estimated-from-transcript"`; an unrecognized model warns `cost-rate-unknown: <model>` instead of guessing a rate. (lesson 252)
+- `run` now runs a manifest's own `checks` against the committed base first (cached by base sha in `.swarm/base-checks/<sha>.json`) and refuses to dispatch onto a red base unless `--accept-red-base` is passed with `--reason`; `integrate` now labels each failing check's `failures[].origin` `pre-existing` or `new` by re-running it against the base. (lesson 253)
+- `ship` now holds (status `held-red-check`, no merge, naming the failing test ids) on a check whose failure also reproduces on the base, unless `--accept-pre-existing` is passed; `validate` warns `check-path-missing: <check>: <prog>` when a check's own `env PATH=` omits a program (gh, git, node, npm, uv) the orchestrator's own PATH has. (lesson 254)
+- `validate` warns `shell-python-no-setup: <job>` for a shell job whose checks or prompt run python/uv/pytest with no `setup` step declared; `inspect` warns `interpreter-outside-workspace: <job>: <path>` when a job's own reported test-run interpreter names a path outside its workspace. (lesson 255)
+- The claude/codex shell sandbox profile now denies file-read and process-exec under `/private/tmp`, `/tmp` and `$TMPDIR` except a job's own scratch directory and the swarm's own temp files, so a shell worker can no longer read or execute another checkout's toolchain by searching the disk for one. (lesson 255)
+
 ## 1.33.0
 
 - `inspect`/`integrate` no longer report a swarm-seeded file (e.g. a worker-skill copy under `.swarm/skills/**`) as a dropped write unless its content no longer matches what was actually seeded, comparing by path and content hash instead of reporting every seeded path a job never wrote. (lesson 244)
