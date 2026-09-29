@@ -1265,3 +1265,113 @@ rule is enforced or documented.
     empty result from such a worker is now reported as failed rather
     than finished. Regression coverage is in
     `tests/field-lessons-batch-n.test.mjs`.
+120. **A dependency-installation warning and a toolchain-environment
+    warning both fired when nothing they warned about could actually
+    break.** One fired on a manifest with no dependencies at all; the
+    other fired on a check that only ever ran a plain script interpreter
+    needing no extra environment. Rule: a warning fires only when the
+    thing it warns about can actually break. Enforcement: the dependency
+    warning now fires only when a manifest actually declares
+    dependencies; the toolchain warning now recognizes a script that
+    resolves to a plain interpreter call and skips it. Regression
+    coverage is in `tests/field-lessons-batch-o.test.mjs`.
+121. **A shipping guard refused a run for a scratch file that was never
+    actually part of what got pushed.** The guard read a run's own
+    declared-output list instead of the actual pushed diff, so a
+    git-ignored bookkeeping file always tripped it even though it was
+    never committed. Rule: a diff guard checks the diff, not a list of
+    what a run merely declared. Enforcement: the guard now reads the
+    actual pushed diff (plus anything staged) and no longer refuses a
+    file that was never committed. Regression coverage is in
+    `tests/field-lessons-batch-o.test.mjs`.
+122. **An empty reference file was sent to a worker as if it were real
+    input.** A platform difference in a text-processing tool silently
+    produced a zero-byte file, and it was handed to a worker anyway; the
+    worker reported back blocked only after it had already spent effort
+    reading everything else. Rule: an empty context file is a mistake,
+    never real input. Enforcement: an empty (0-byte or whitespace-only)
+    reference file now refuses up front, naming the file, before any
+    worker starts. Regression coverage is in
+    `tests/field-lessons-batch-o.test.mjs`.
+123. **A tool-free worker failed instantly with a vague "incomplete or
+    unexpected response" message, but no request had actually reached
+    the provider at all.** The real cause was a missing credential after
+    a configuration path moved; nothing in the failure said so. Rule: a
+    request that never reached the provider must say so; a missing
+    credential is named before any request is even attempted.
+    Enforcement: a missing credential now refuses up front, naming where
+    it looked; the generic incomplete-response error is now used only
+    once a real provider response exists, and an empty successful
+    response is now named plainly instead of read as malformed.
+    Regression coverage is in `tests/field-lessons-batch-o.test.mjs`.
+124. **A worker that replied in plain prose instead of the requested
+    structured answer, having produced nothing at all, was still
+    recorded as finished successfully.** A missing declared result and a
+    missing declared output together should never read as success.
+    Rule: a worker with no usable result and no output actually produced
+    is never reported as finished successfully; a plain-language refusal
+    is still a refusal. Enforcement: that combination is now recorded as
+    failed with a specific reason, and a plain-language refusal naming
+    what it needs is now parsed into the same structured refusal a
+    well-formed one would produce. Regression coverage is in
+    `tests/field-lessons-batch-o.test.mjs`.
+125. **One broken shared instruction file, sitting in a directory shared
+    across every project, blocked every single task in every project —
+    including tasks that would never have used it at all.** A field
+    meant to say "none" was mistaken for missing, and a compact list
+    format was silently read as empty. Rule: an explicit "none" is
+    valid, not missing; a shared broken resource should only ever block
+    the tasks that would actually use it. Enforcement: an explicit empty
+    list in that instruction format is now accepted; a compact list is
+    now parsed correctly; and a broken shared instruction file now only
+    blocks a task that actually references it, warning everywhere else
+    instead of refusing. A new check validates such a directory
+    directly, on demand. Regression coverage is in
+    `tests/field-lessons-batch-o.test.mjs`.
+126. **A sandbox warning kept firing on a path that the sandbox
+    actually allowed.** The warning had no idea that a shared toolchain
+    location was specifically granted, so it repeated itself every
+    single time regardless. Separately, there was no single place to see
+    what a sandboxed worker's access actually looked like; it had to be
+    pieced together by hand. Rule: a path a sandbox actually grants is
+    never denied; the effective access a sandbox grants should be one
+    command away. Enforcement: the warning now recognizes granted paths
+    and stays quiet about them; a new diagnostic command prints the
+    whole effective sandbox profile as structured output. Regression
+    coverage is in `tests/field-lessons-batch-o.test.mjs`.
+127. **A reasoning-capable worker was cut off mid-answer at a fixed
+    output budget that never accounted for its own internal reasoning
+    consuming part of that budget.** Rule: a reasoning model's output
+    budget must cover its internal reasoning as well as its actual
+    reply. Enforcement: reasoning-capable models now get a larger
+    default output budget; a response cut off with literally no reply
+    text at all now gets exactly one automatic retry at double the
+    budget, still bounded by the same spending cap. Regression coverage
+    is in `tests/field-lessons-batch-o.test.mjs`.
+128. **During a stretch when no automated task was running at all, only
+    hand-run steps happened one after another, wasting time nothing was
+    actively working during.** The only queued work at that point
+    belonged to a different, not-yet-started track of work, and nothing
+    suggested starting it. Rule: when the only queued work belongs to a
+    not-yet-started track, its first, read-only step should start during
+    idle stretches instead of nothing running at all. Enforcement: the
+    idle-time warning now offers a hint naming that first step, and the
+    same hint is available as its own on-demand command. Regression
+    coverage is in `tests/field-lessons-batch-o.test.mjs`.
+129. **A sandboxed worker's local-network access stayed wide open to
+    every unused local port by default, an accepted risk noted for
+    future tightening.** Rule: a sandbox's local-network access should
+    be narrowable to only the ports a task actually needs, without
+    changing today's default for a task that does not ask for it.
+    Enforcement: a task may now name the exact local ports its sandbox
+    is allowed to use; naming none leaves today's broader default
+    unchanged. Regression coverage is in
+    `tests/field-lessons-batch-o.test.mjs`.
+130. **A record meant to prompt a follow-up check after a merge was
+    written with only vague instructions, so the check ran against the
+    wrong state entirely, well before the real change had even
+    landed.** Rule: a post-merge follow-up record must name the exact
+    resulting state, not vague instructions to pull and restart.
+    Enforcement: shipping now prints the exact merged state plus a
+    ready-to-use line naming it, right after a merge completes.
+    Regression coverage is in `tests/field-lessons-batch-o.test.mjs`.

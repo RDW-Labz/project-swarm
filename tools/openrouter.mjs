@@ -157,4 +157,19 @@ export function assertCompleteChatResponse(body) {
   return body;
 }
 
+// Field lesson #226: a reasoning model's output budget covers its thinking plus its reply, so the
+// default for a DeepSeek reasoning model is double the generic default; any explicit
+// job.maxOutputTokens still wins outright.
+export function defaultMaxOutputTokens(model) {
+  return typeof model === 'string' && model.startsWith('deepseek/') ? 16000 : 8192;
+}
+
+// Field lesson #226: `finish_reason: "length"` with no reply text at all (not merely truncated
+// text) is the one case worth one automatic retry at double the limit — anything with at least
+// some content is left as a plain truncation error, never silently retried into a second spend.
+export function isEmptyLengthTruncation(body) {
+  const choice = Array.isArray(body?.choices) ? body.choices[0] : null;
+  return choice?.finish_reason === 'length' && (typeof choice.message?.content !== 'string' || choice.message.content.trim() === '');
+}
+
 export { OpenRouterError };

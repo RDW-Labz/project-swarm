@@ -144,7 +144,9 @@ test('the key comes from env, else the keychain item named by config (default pr
   assert.equal(apiConfiguration('openrouter', {}, { readKey: () => null }).configured, false);
   const result = await executeApi(job(), [], { env: { SWARM_LOGS_DIR: await logsDir(t) }, readKey: () => null, fetchImpl: async () => { throw new Error('no request expected'); } });
   assert.equal(result.status, 'failed');
-  assert.match(result.error, /OPENROUTER_API_KEY is required/);
+  // Field lesson #222: named before anything is sent — the env var, the keychain item it looked
+  // up, and the config path it read, not just "is required".
+  assert.match(result.error, /^api-key-missing: OPENROUTER_API_KEY not set; keychain item project-swarm\/openrouter\.api_key not found; config read from/);
 });
 
 test('an echoed key discards the output', async t => {
