@@ -2,7 +2,7 @@
 // Tool-free, one-request workers. Transport injection is for tests, never manifests.
 import { randomBytes } from 'node:crypto';
 import { OPENROUTER_ENDPOINT, OPENROUTER_KEY_ENV, openRouterKeyItem, readOpenRouterKey, providerPolicy, assertRequestBody, assertBookkeepingOnly, fetchPricing, worstCaseUsd, ledgerPath, readLedger, spentSoFar, assertWithinCaps, appendLedger, assertCompleteChatResponse, describeIncompleteChatResponse, isEmptyLengthTruncation, defaultMaxOutputTokens, OpenRouterError } from './openrouter.mjs';
-import { loadLocalConfig, defaultConfigPath } from './local-config.mjs';
+import { loadLocalConfig, resolveConfigPath } from './local-config.mjs';
 export const API_AGENTS = ['openai', 'gemini', 'ollama', 'lambda', 'openrouter'];
 const MAX_RESPONSE = 16 * 1024 * 1024;
 class AdapterError extends Error {}
@@ -202,7 +202,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       // Field lesson #222: named before anything is sent — the env var this agent reads, plus
       // (openrouter only, the one adapter with a keychain fallback) the exact keychain item and
       // config path it looked in, so a stale/moved config is provable without a failed request.
-      const configPath = env.SWARM_CONFIG || defaultConfigPath({ env });
+      const configPath = resolveConfigPath({ env });
       const detail = job.agent === 'openrouter'
         ? (() => { const item = openRouterKeyItem(loadLocalConfig({ env })); return `${config.keyName} not set; keychain item ${item.service}/${item.account} not found; config read from ${configPath}`; })()
         : `${config.keyName} is required`;

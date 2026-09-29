@@ -188,14 +188,26 @@ test('a symlink anywhere in the skills source dir refuses instead of copying', a
   assert.match(state.error, /symlink refused/);
 });
 
-test('invalid frontmatter refuses naming the file', async t => {
+// Field lesson #224: an invalid-but-parseable skill unused by any job only warns
+// (skill-invalid-unused); a job that actually attaches it by name is still refused, naming the file.
+test('invalid frontmatter: unused warns skill-invalid-unused, a job that attaches it refuses naming the file', async t => {
   const root = await fixture(t);
   const skillsDir = path.join(root, 'skills');
   await fs.mkdir(path.join(skillsDir, 'broken'), { recursive: true });
   const file = path.join(skillsDir, 'broken/SKILL.md');
-  await fs.writeFile(file, '---\ndescription: missing a name\n---\nBody.\n');
-  await assert.rejects(listSkills(skillsDir), new RegExp(`invalid-skill-frontmatter: ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-  await assert.rejects(validateProject(root, manifest([job()], { skillsDir })), /invalid-skill-frontmatter/);
+  await fs.writeFile(file, '---\nname: broken\ndescription: has an unknown field\nunknownField: yes\n---\nBody.\n');
+
+  const skills = await listSkills(skillsDir);
+  assert.equal(skills.length, 1);
+  assert.equal(skills[0].broken, true);
+
+  const unusedReport = await validateProject(root, manifest([job()], { skillsDir }));
+  assert.ok(unusedReport.warnings.some(w => w.code === 'skill-invalid-unused' && w.file === file), JSON.stringify(unusedReport.warnings));
+
+  await assert.rejects(
+    validateProject(root, manifest([job({ skills: ['broken'] })], { skillsDir })),
+    new RegExp(`invalid-skill-frontmatter: ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+  );
 });
 
 test('the small YAML subset parses scalars, lists and one nested map', () => {

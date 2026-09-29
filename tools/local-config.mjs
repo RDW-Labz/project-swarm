@@ -12,7 +12,11 @@ import path from 'node:path';
 // file living inside a git checkout is neither private nor safe from being overwritten. The default
 // now lives under XDG (or `~/.config` when XDG_CONFIG_HOME is unset or relative); `SWARM_CONFIG`
 // still wins over either.
-export function defaultConfigPath({ home = os.homedir(), env = process.env } = {}) {
+// `home` defaults from the same `env` every other part of the path resolves from (env.HOME, same
+// as env.XDG_CONFIG_HOME just below), never straight from the live process's os.homedir() — a
+// caller that passes an isolated env (a test harness, a sandboxed job) gets an isolated home too,
+// instead of the resolution silently reading past it to the real machine.
+export function defaultConfigPath({ env = process.env, home = env.HOME || os.homedir() } = {}) {
   if (env.XDG_CONFIG_HOME && path.isAbsolute(env.XDG_CONFIG_HOME)) return path.join(env.XDG_CONFIG_HOME, 'project-swarm', 'config.json');
   return path.join(home, '.config', 'project-swarm', 'config.json');
 }
@@ -33,7 +37,14 @@ function gitWorkTreeTop(dir) {
   }
 }
 
-export function loadLocalConfig({ home = os.homedir(), env = process.env } = {}) {
+// The file loadLocalConfig actually reads, without its side effects (the old-install-path throw,
+// the parse). A caller that only needs to name the path in a message — never a second, drifting
+// copy of the same `env.SWARM_CONFIG || defaultConfigPath(...)` logic — uses this instead.
+export function resolveConfigPath({ env = process.env, home = env.HOME || os.homedir() } = {}) {
+  return env.SWARM_CONFIG || defaultConfigPath({ env, home });
+}
+
+export function loadLocalConfig({ env = process.env, home = env.HOME || os.homedir() } = {}) {
   let file = env.SWARM_CONFIG;
   if (!file) {
     const oldPath = oldInstallConfigPath(home);

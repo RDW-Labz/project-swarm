@@ -166,6 +166,24 @@ test('#222: executeApi names the openrouter keychain item and config path in api
   assert.match(result.error, /^api-key-missing: OPENROUTER_API_KEY not set; keychain item .+\/openrouter\.api_key not found; config read from \/tmp\/does-not-exist-swarm-config\.json/);
 });
 
+test('#222 follow-up: api-key-missing config path resolves from the passed env, never the real machine home', async t => {
+  const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-fake-home-'));
+  t.after(() => fs.rm(fakeHome, { recursive: true, force: true }));
+  const decoyDir = path.join(fakeHome, '.config', 'project-swarm');
+  await fs.mkdir(decoyDir, { recursive: true });
+  const decoyConfigFile = path.join(decoyDir, 'config.json');
+  // A decoy the real machine's home never has: if the code fell back to the live os.homedir()
+  // instead of the isolated env it was handed, this service name would never show up.
+  await fs.writeFile(decoyConfigFile, JSON.stringify({ keychain: { service: 'decoy-service' } }));
+  const result = await executeApi(job({ agent: 'openrouter', model: 'anthropic/claude', outputs: ['report.md'] }), [], {
+    env: { HOME: fakeHome }, readKey: () => null,
+    fetchImpl: async () => { throw new Error('must not be called'); },
+  });
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /keychain item decoy-service\/openrouter\.api_key/);
+  assert.ok(result.error.endsWith(`config read from ${decoyConfigFile}`), result.error);
+});
+
 test('#222: an empty 200 body names empty-body instead of a generic malformed-JSON error', async t => {
   const reply = () => new Response('', { status: 200, headers: { 'content-type': 'application/json' } });
   const result = await executeApi(job({ agent: 'openai', outputs: ['report.md'] }), [], {
