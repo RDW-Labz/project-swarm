@@ -89,6 +89,16 @@ test('resolveOrbToolchain: never falls back to a system Node or PATH-resolved np
   });
 });
 
+test('resolveOrbToolchain: a toolchain playwright at the wrong version is reported missing, never silently accepted', async () => {
+  const access = async () => {};
+  const readFile = async file => (file.endsWith('playwright/package.json') ? JSON.stringify({ version: '1.58.2' }) : Promise.reject(Error('ENOENT')));
+  await assert.rejects(resolveOrbToolchain({ home: '/fake-home', access, readFile }), error => {
+    assert.match(error.message, /playwright:/);
+    assert.match(error.message, /1\.58\.2/);
+    return true;
+  });
+});
+
 // --- test 4: token never lands in a file, under the worktree or the run's own scratch dir -------
 
 test('runVerifyOrb: after a full pass run, the token appears in no file under the worktree or the scratch dir', { skip: CHROMIUM_SKIP }, async t => {
@@ -164,13 +174,22 @@ function fakeChild({ stdout = '', exitCode = 0 } = {}) {
 test('runOrbWorker: spawns the toolchain\'s own Node (never the running process\'s own Node), token only in env, never in argv', async () => {
   let seenCmd, seenArgs, seenEnv;
   const spawnImpl = (cmd, args, options) => { seenCmd = cmd; seenArgs = args; seenEnv = options.env; return fakeChild({ stdout: JSON.stringify({ status: 'pass', screenshotWritten: false }) }); };
-  const toolchain = { nodeBin: '/fake/toolchain/node/bin/node', browserBin: '/fake/chrome' };
-  const outcome = await runOrbWorker({ toolchain, params: { browserBin: toolchain.browserBin }, token: 'SUPER-SECRET-TOKEN', spawnImpl });
+  const toolchain = { nodeBin: '/fake/toolchain/node/bin/node', browsersPath: '/fake/toolchain/ms-playwright' };
+  const outcome = await runOrbWorker({ toolchain, params: { nodeModulesDir: '/fake/toolchain/node_modules' }, token: 'SUPER-SECRET-TOKEN', spawnImpl });
   assert.equal(outcome.status, 'pass');
   assert.equal(seenCmd, toolchain.nodeBin);
   assert.notEqual(seenCmd, process.execPath);
   assert.equal(seenEnv[ORB_TOKEN_ENV], 'SUPER-SECRET-TOKEN');
   assert.equal(seenArgs.some(arg => String(arg).includes('SUPER-SECRET-TOKEN')), false);
+});
+
+test('runOrbWorker: sets PLAYWRIGHT_BROWSERS_PATH from the resolved toolchain and blocks any browser download', async () => {
+  let seenEnv;
+  const spawnImpl = (cmd, args, options) => { seenEnv = options.env; return fakeChild({ stdout: JSON.stringify({ status: 'pass', screenshotWritten: false }) }); };
+  const toolchain = { nodeBin: '/fake/toolchain/node/bin/node', browsersPath: '/fake/toolchain/ms-playwright' };
+  await runOrbWorker({ toolchain, params: { nodeModulesDir: '/fake/toolchain/node_modules' }, token: 't', spawnImpl });
+  assert.equal(seenEnv.PLAYWRIGHT_BROWSERS_PATH, toolchain.browsersPath);
+  assert.equal(seenEnv.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD, '1');
 });
 
 test('runOrbWorker: a worker that reports no output raises, naming its exit code and stderr', async () => {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// T52b: a tiny stand-in for desktop-app's tests/fakeService.ts, just enough to back the scout's
+// T52b: a tiny stand-in for the app's frontend tests/fakeService.ts, just enough to back the scout's
 // proved Home scenario. `setOrbState` is the fake service's own method a scenario's `setup` calls
 // by name (`{"call":"setOrbState","args":[...]}`); `handleRequest` answers the fixture page's own
 // `/orb` fetch, bearer-token-gated on exactly the token `verify-orb.mjs` generated for this run.
