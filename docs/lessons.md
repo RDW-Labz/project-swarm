@@ -1501,3 +1501,28 @@ rule is enforced or documented.
     case, not merely proof that the field exists. Enforcement: the
     shared task template's own test-plan section now asks for exactly
     that. Template change only; no code check.
+144. **A spend-cap contract said the cap held before each paid call, and
+    the work that followed it checked the cap once per case using a
+    one-call worst case, while a single case could make several paid
+    calls in a row — a gap every worker's own regression tests missed,
+    caught only at review.** Rule: a spend-cap or limit contract must
+    name the exact unit that is checked (each paid call, not each
+    case/task) and require one test where a single case makes several
+    such calls, tripping the cap mid-way through that one case rather
+    than only across accumulated cases. Enforcement: the shared
+    contract template's own test-plan section now asks for exactly
+    that. Template change only; no code check.
+145. **A one-off platform-only failure in a file a change never touched
+    still stopped the ship outright, even though the tool already
+    recognized and named it as platform-only; a person had to notice the
+    label and manually trigger a rerun each time.** Rule: a platform-only
+    failure in an untouched file earns one automatic rerun before a
+    person is asked to look, while an explicit rerun-count setting
+    (including "never rerun") always overrides that default, and a
+    failure that recurs after the automatic rerun still blocks. Enforcement:
+    the release tool now defaults to exactly one automatic rerun when
+    every failing check is platform-only and no explicit rerun count was
+    given, naming the default in a warning; an explicit setting always
+    wins, and a failing check already inside the change's own diff is
+    still never rerun. Regression coverage is in
+    `tests/field-lessons-batch-r.test.mjs`.

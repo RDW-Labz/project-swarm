@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.32.0
+
+- `templates/coordination/CONTRACT.md`'s "Tests" section now names the unit a spend-cap or limit contract checks (each request, not each case/task) and requires one test where a single case trips the cap mid-way, not accumulated across cases. (lesson 242)
+- `ship` now defaults `--rerun-flaky` to one automatic rerun when every failed check is platform-only and the flag is not given (an explicit `--rerun-flaky N`, including 0, always wins), warning `rerun-flaky-default: 1 (platform-only)` when the default applies. (lesson 243)
+
 ## 1.31.0
 
 - A claude shell job's `networkAllow` host list now requires an `https://` scheme on each entry, refusing `invalid-networkAllow-host` otherwise (a well-formed https host still refuses as not-yet-supported); a manifest check may set `integrateOnly: true`, skipped by the shell worker's own smoke check and marked `(skipped-integrate-only)` in its prompt instead of gating the job. (lesson 238)

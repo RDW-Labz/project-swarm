@@ -33,7 +33,7 @@ alongside its UTC-clock tests — a UTC-only suite can pass while the window
 itself is wrong for half the world.
 
 ## Tests
-Where each job's regression test lives; which existing tests it changes; a done-when naming a diagnostic field names one test per failure class it must distinguish, not just that the field exists.
+Where each job's regression test lives; which existing tests it changes; a done-when naming a diagnostic field names one test per failure class it must distinguish, not just that the field exists. For a spend-cap or limit contract, name the unit that is checked (each request, not each case/task) and require one test where a single case trips the cap mid-way, not accumulated across cases.
 
 ## Release
 Which job owns the version bump and CHANGELOG heading, and in which PR.
