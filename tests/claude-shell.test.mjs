@@ -169,8 +169,10 @@ test('validate refuses shell on non-claude agents and gates shell-only fields', 
   assert.throws(() => validateManifest(manifest([shellJob({ readPaths: [`${os.homedir()}/.ssh`] })])), /denied home/);
   assert.throws(() => validateManifest(manifest([shellJob({ testEnv: { HOME: '/x' } })])), /reserved for the shell sandbox/);
   assert.doesNotThrow(() => validateManifest(manifest([shellJob({ networkAllow: [] })])));
-  assert.throws(() => validateManifest(manifest([shellJob({ networkAllow: ['registry.npmjs.org'] })])), /networkAllow is not yet supported/);
-  assert.throws(() => validateManifest(manifest([shellJob({ networkAllow: ['bad host'] })])), /invalid networkAllow host/);
+  assert.throws(() => validateManifest(manifest([shellJob({ networkAllow: ['https://registry.npmjs.org'] })])), /networkAllow is not yet supported/);
+  assert.throws(() => validateManifest(manifest([shellJob({ networkAllow: ['registry.npmjs.org'] })])), /invalid-networkAllow-host/);
+  assert.throws(() => validateManifest(manifest([shellJob({ networkAllow: ['http://registry.npmjs.org'] })])), /invalid-networkAllow-host/);
+  assert.throws(() => validateManifest(manifest([shellJob({ networkAllow: ['https://bad host'] })])), /invalid-networkAllow-host/);
   assert.throws(() => validateManifest(manifest([plainJob({ networkAllow: [] })])), /only supported for claude shell jobs/);
   assert.throws(() => validateNetworkAllow('x', 'j'), /array/);
   assert.throws(() => validateManifest(manifest([shellJob({ preset: 'opus-shell' , shell: false })])), /invalid preset/);

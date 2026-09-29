@@ -1461,3 +1461,43 @@ rule is enforced or documented.
     anything that spends money. Enforcement: the coordination guide and
     the onboarding instructions both now state this rule at the point
     work begins. Regression coverage is in `tests/kickoff.test.mjs`.
+140. **A sandboxed worker had no way to declare the few outside hosts one
+    task genuinely needed, and a check known to only ever work outside
+    the sandbox had no way to say so, leaving it either dropped from the
+    plan or left to block a job it could never pass from inside.** Rule:
+    a check known to run only at the later, unsandboxed step says so
+    instead of gating a job that can never satisfy it from inside; a job
+    that needs outside hosts still goes to a tool-enabled worker, since
+    per-host access from the sandbox is not built yet. Enforcement: a
+    check may now be marked as running only at that later step, skipped
+    by the sandboxed worker and named as such in its own instructions;
+    the (still refused) allowed-host list now also refuses any entry not
+    written as a secure, named address. Regression coverage is in
+    `tests/field-lessons-batch-q.test.mjs`.
+141. **A full check run performed inside an already-sandboxed worker
+    showed several failures that were purely the host's own security
+    layer refusing a nested sandbox call, not a real problem with the
+    change, and nothing separated those from genuine failures short of
+    opening each one by hand.** Rule: a failure whose own output names
+    that exact kind of nested-sandbox refusal is not a real failure and
+    must never be counted as one. Enforcement: the check runner now
+    recognizes that specific wording in a failing check's own output and
+    tags the result sandbox-only, excluded from the fail count.
+    Regression coverage is in `tests/field-lessons-batch-q.test.mjs`.
+142. **A shared task brief pointed to certain files as evidence a fix had
+    landed, and one of those paths did not actually exist in the
+    project, discovered only once someone went looking for it by
+    hand.** Rule: a shared brief's own file references are checked
+    against the real project before anyone trusts them. Enforcement:
+    validation now reads a shared brief's own file references and warns
+    when one names a path missing from the project. Regression coverage
+    is in `tests/field-lessons-batch-q.test.mjs`.
+143. **A task's own success criterion named a diagnostic field to check,
+    and the work that followed satisfied that literal wording while
+    still never proving the one real case the field existed to catch,
+    caught only at review.** Rule: a success criterion naming a
+    diagnostic field must also say which real case it needs to tell
+    apart, and the test plan for it should ask for one test per such
+    case, not merely proof that the field exists. Enforcement: the
+    shared task template's own test-plan section now asks for exactly
+    that. Template change only; no code check.
