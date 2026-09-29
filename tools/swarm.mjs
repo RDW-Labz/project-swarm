@@ -675,6 +675,20 @@ function validateMutantsArray(mutants, warnings = []) {
   return normalized;
 }
 
+// Field lesson #245: a fix that changes two source files but supplies a mutant for only one of
+// them lets the other survive mutagenesis with nothing to prove the change was ever exercised;
+// every non-test source file (under tools/ or src/, never docs/CHANGELOG/package files/manifests,
+// which never match this prefix) a run's own writes touch needs at least one mutant whose `file`
+// matches it — from manifest.mutants, --mutants-file, or a job's own mutantsFile output alike.
+const MUTANT_COVERED_SOURCE_RE = /^(tools|src)\//;
+export function mutantMissingForChangedFileWarnings(changedFiles, mutants) {
+  const covered = new Set((mutants ?? []).map(mutant => mutant.file));
+  return [...new Set(changedFiles ?? [])]
+    .filter(file => MUTANT_COVERED_SOURCE_RE.test(file) && !isTestFile(file) && !covered.has(file))
+    .sort()
+    .map(file => `mutant-missing-for-changed-file: ${file}`);
+}
+
 // Field lesson #161: every mutant's `find` is counted in its target before anything runs — a
 // missing or duplicated find (a block copied with the wrong indentation) or a find equal to its
 // replace can only ever report a meaningless result. `readText(file)` returns the target's text
@@ -1550,6 +1564,10 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
     // silently discarded by integrate (it only ever writes declared outputs); recording each
     // context file's starting hash here lets job completion notice such a dropped write.
     const contextHashesByJob = new Map();
+    // Field lesson #244: each seeded skill file's own path + content hash, keyed by job id, so the
+    // dropped-write scan below can tell an untouched swarm-seeded copy apart from one a worker
+    // actually edited, instead of reporting every seeded path as a dropped write.
+    const seededHashesByJob = new Map();
     // Field lesson 126s: resolved once per run; absent (no manifest skillsDir or config
     // skills.dir), allSkills stays [] and every job's prompt block below is '' — byte-identical
     // to a release before this feature existed.
@@ -1581,7 +1599,10 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
       }
       // Copied once per job, alongside its declared context/outputs; a job that runs in its own
       // git worktree (codex, claude shell) instead gets its own copy once that worktree exists.
-      if (skillsSourceDir && !usesWorktree(job)) await copySkillsInto(skillsSourceDir, path.join(workspaceRoot, SKILLS_DIR_NAME));
+      if (skillsSourceDir && !usesWorktree(job)) {
+        const seeded = await copySkillsInto(skillsSourceDir, path.join(workspaceRoot, SKILLS_DIR_NAME));
+        seededHashesByJob.set(job.id, new Map(seeded.map(({ file, hash }) => [`${SKILLS_DIR_NAME}/${file}`, hash])));
+      }
       contextHashesByJob.set(job.id, contextHashes);
       state.jobs.push({ id: job.id, agent: job.agent, model: job.model ?? null, ...(job.shell === true ? { shell: true } : {}), workspace, outputs: job.outputs, baseHashes, baseModes, baseWorkspace, queuedAt: new Date().toISOString(), startedAt:null, finishedAt:null, durationMs:null, status: 'queued', progress: null, keptWorkspace: null, envelopeFallback: null, ...(allSkills.length ? { skills: skillRecordEntries(attachedSkills) } : {}) });
     }
@@ -1738,7 +1759,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         // hashes and file list to catch this — a modified context file, or any wholly new file,
         // that is not itself a declared output.
         if (result.status === 'complete' && !usesWorktree(job)) {
-          const droppedWrites = new Set();
+          const droppedWrites = new Set(), droppedWritesNew = new Set();
           const contextHashes = contextHashesByJob.get(job.id) ?? {};
           for (const file of job.context) {
             if (job.outputs.includes(file)) continue;
@@ -1747,8 +1768,23 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
             if (hash !== contextHashes[file]) droppedWrites.add(file);
           }
           const known = new Set([...job.context, ...job.outputs]);
-          for (const file of await listWorkspaceFiles(workspaceRoot)) if (!known.has(file)) droppedWrites.add(file);
-          if (droppedWrites.size) record.droppedWrites = [...droppedWrites].sort();
+          // Field lesson #244: a file swarm itself seeded (e.g. .swarm/skills/**) is never a dropped
+          // write on its own — the job wrote none of them — unless its content no longer matches
+          // what was actually seeded, meaning a worker did edit it.
+          const seededHashes = seededHashesByJob.get(job.id);
+          for (const file of await listWorkspaceFiles(workspaceRoot)) {
+            if (known.has(file)) continue;
+            if (seededHashes?.has(file)) {
+              const bytes = await bytesAt(workspaceRoot, file, true);
+              const hash = bytes === null ? null : digest(bytes);
+              if (hash === seededHashes.get(file)) continue;
+              droppedWrites.add(file);
+              droppedWritesNew.add(file);
+              continue;
+            }
+            droppedWrites.add(file);
+          }
+          if (droppedWrites.size) { record.droppedWrites = [...droppedWrites].sort(); if (droppedWritesNew.size) record.droppedWritesNew = [...droppedWritesNew].sort(); }
         }
         // Field lesson 19: a worker's own "blocked" envelope, or the first sign of why it
         // crashed, is the only evidence of what actually happened; it must survive past a later
@@ -1978,6 +2014,17 @@ const invalidJsonOutputWarnings = state => state.jobs.flatMap(job => (job.invali
 // one (droppedWritesNew, populated only there); a non-shell job's copied workspace never carries
 // that distinction, so job.droppedWritesNew stays undefined and the message is unchanged.
 const droppedWriteWarnings = state => state.jobs.flatMap(job => (job.droppedWrites ?? []).map(file => `dropped write: ${file}${(job.droppedWritesNew ?? []).includes(file) ? ' (new)' : ''} (not in outputs)`));
+// Field lesson #249: a worker's self-reported "changed" entry is prose ("out.txt created",
+// "other.txt (new)"), never a bare path; trimmed, then stripped of one trailing parenthetical,
+// then of one trailing status word (optionally introduced by ":" or "-") to recover the path
+// itself before it is ever compared against job.outputs or shown in a warning.
+const CHANGED_STATUS_WORD_RE = /(?:\s*[:-]\s*|\s+)(?:created|modified|updated|edited|deleted|removed|added|new|changed)$/i;
+function normalizeChangedEntry(raw) {
+  let text = raw.trim();
+  text = text.replace(/\s*\([^()]*\)\s*$/, '').trim();
+  text = text.replace(CHANGED_STATUS_WORD_RE, '').trim();
+  return text;
+}
 // Field lesson #142: a synced venv's own interpreter directory lived under $HOME but inside a
 // denied subtree (e.g. `~/.ssh`); surfaced, never fatal, since the worker may not need it anyway.
 const venvInterpreterWarnings = state => state.jobs.flatMap(job => job.venvInterpreterDenied ?? []);
@@ -2533,6 +2580,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
     // coordinator-supplied `--mutants-file` — is parsed and validated before the first project
     // file is written, alongside every other precondition already checked above.
     let preValidatedMutants = null;
+    let mutantMissingWarnings = [];
     if (mutants) {
       const sourced = [...(manifest.mutants ?? [])];
       for (const job of manifest.jobs) {
@@ -2546,6 +2594,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       if (mutantsFile) sourced.push(...await loadMutantsFileForIntegrate(root, mutantsFile, writes));
       preValidatedMutants = validateMutantsArray(sourced);
       if (!preValidatedMutants.length) fail('No mutants declared in this manifest; add manifest.mutants, a job mutantsFile output, or --mutants-file to use --mutants');
+      mutantMissingWarnings = mutantMissingForChangedFileWarnings(writes.map(change => change.file), preValidatedMutants);
       if (!manifest.mutantCheck) {
         if (!mutantCheck && !preValidatedMutants.every(mutant => mutant.check)) fail('No mutantCheck declared in this manifest; add manifest.mutantCheck, or pass --mutant-check "<argv json>", to use --mutants');
         if (mutantCheck) parseMutantCheckFlag(mutantCheck); // Refuses a malformed --mutant-check before any write too.
@@ -2641,7 +2690,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       }
       Object.assign(state, mutantsResult);
     }
-    const warnings = [...portWarnings, ...preChecksResult.warnings, ...(mutantsResult.mutantsSkippedRedBase ? ['mutants skipped: red base (checks failed)'] : []), ...droppedWriteWarnings(state), ...inventedHashWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)];
+    const warnings = [...portWarnings, ...preChecksResult.warnings, ...(mutantsResult.mutantsSkippedRedBase ? ['mutants skipped: red base (checks failed)'] : []), ...droppedWriteWarnings(state), ...inventedHashWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`), ...mutantMissingWarnings];
     // Field lesson 131: a blocked job's own outputs went in through the same checks as any other;
     // the run is tagged distinctly so a later `inspect`/`ship` never mistakes it for a clean pass,
     // and the blocked reason rides along as ready-made evidence for whatever job comes next.
@@ -3136,9 +3185,14 @@ export async function inspectResults(root, id) {
     // Field lesson 37: a worker's own report of what it changed is a separate signal from an
     // actual workspace diff (droppedWriteWarnings above) — a job may self-report a path it never
     // actually touched, or run on an agent (codex) whose workspace diff is not checked there.
+    // Field lesson #249: that report is prose, not a bare path ("out.txt created", "other.txt
+    // (new)") — compared against job.outputs (and shown in the warning) by its normalized path,
+    // never the raw string, or an output the job actually declared reads as "dropped".
     for (const file of Array.isArray(parsed?.changed) ? parsed.changed : []) {
-      if (typeof file !== 'string' || job.outputs.includes(file)) continue;
-      const droppedWriteLine = `dropped write: ${file} (not in outputs)`;
+      if (typeof file !== 'string') continue;
+      const normalized = normalizeChangedEntry(file);
+      if (job.outputs.includes(normalized)) continue;
+      const droppedWriteLine = `dropped write: ${normalized} (not in outputs)`;
       if (!warnings.includes(droppedWriteLine)) warnings.push(droppedWriteLine);
     }
     const mentioned = new Set();

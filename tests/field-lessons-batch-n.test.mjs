@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Swarm batch N: field lessons 185, 210-214, 217 (see .swarm-manifests/contract-n.md).
+// Lesson #152: imported directly (not only via the package.json test script) so this file stays
+// hermetic even run alone as `node --test tests/field-lessons-batch-n.test.mjs`.
+import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';

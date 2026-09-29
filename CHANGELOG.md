@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.33.0
+
+- `inspect`/`integrate` no longer report a swarm-seeded file (e.g. a worker-skill copy under `.swarm/skills/**`) as a dropped write unless its content no longer matches what was actually seeded, comparing by path and content hash instead of reporting every seeded path a job never wrote. (lesson 244)
+- `integrate --mutants` (and validation of a run's mutants sources, including a job's own `mutantsFile` output) now warns `mutant-missing-for-changed-file: <file>` for each changed non-test source file under `tools/` or `src/` with no mutant covering it. (lesson 245)
+- `templates/coordination/CONTRACT.md`'s "Tests" section now requires naming where blocking I/O now runs (a worker thread vs. the event loop) when code moves it into or out of `async` context, plus one test that a concurrent task keeps running. (lesson 246)
+- `--checks-from-ci` now skips a CI-only step (its run line or job `if:` mentioning `GITHUB_ACTIONS`/`runner.os`, a `pytest -m native`-style marker, or a `secrets.`-referencing `env:`), reporting `checks-from-ci-skipped (ci-only)` instead of replaying it locally; a workflow-level `env:` applies to every job while a job-level `env:` applies only to that job's own steps. (lesson 247)
+- `inspect --results` now normalizes a worker's self-reported "changed" entry (trimming it, then dropping one trailing parenthetical and one trailing status word) to its own path before comparing it against a job's declared outputs, instead of warning `dropped write` for an output the job actually declared. (lesson 249)
+- `--checks-from-ci`'s workflow reader now resets a job's own `env:` text at each new job key under `jobs:`, so a secrets-bearing `env:` in one job never leaks into a sibling job with no `env:` of its own. (lesson 250)
+- The test suite now isolates the real home swarm config, the real user's skills directory, and the real git identity for every test, so a test that passed only in one long-lived checkout (never a fresh one) is caught. (lesson 251)
+
 ## 1.32.0
 
 - `templates/coordination/CONTRACT.md`'s "Tests" section now names the unit a spend-cap or limit contract checks (each request, not each case/task) and requires one test where a single case trips the cap mid-way, not accumulated across cases. (lesson 242)

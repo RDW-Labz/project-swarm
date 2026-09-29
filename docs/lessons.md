@@ -1526,3 +1526,89 @@ rule is enforced or documented.
     wins, and a failing check already inside the change's own diff is
     still never rerun. Regression coverage is in
     `tests/field-lessons-batch-r.test.mjs`.
+146. **Copies a tool itself placed into a job's own workspace were reported
+    as if the job had written them.** A batch of otherwise ordinary
+    warnings about unexplained files buried the one that actually
+    mattered, because every copy the tool had seeded there on the job's
+    behalf (never touched by the job at all) triggered the very same
+    warning as a real stray write. Rule: a file a tool seeds into a
+    workspace is never reported as that job's own dropped write, unless
+    its content no longer matches what was actually seeded there, which
+    is the one real sign something else edited it. Enforcement: dropped-
+    write detection now compares a seeded path against the content hash
+    recorded at seed time, before ever flagging it. Regression coverage
+    is in `tests/field-lessons-batch-s.test.mjs`.
+147. **A change touched two source files, but only one of them ever got a
+    mutant.** Mutation testing reported a clean result, and a fix's own
+    regression tests passed, while the second changed file's logic was
+    never exercised by any mutant at all — found only once a reviewer
+    traced which file each mutant actually targeted. Rule: every non-test
+    source file a change touches needs at least one mutant of its own; a
+    changed file with none is named as a gap, not silently passed over.
+    Enforcement: mutant validation now warns of a changed source file
+    with no covering mutant, at the same point a run's mutants are
+    checked. Regression coverage is in
+    `tests/field-lessons-batch-s.test.mjs`.
+148. **A fix moved a blocking call into asynchronous code and kept
+    calling it exactly the same way as before.** Every existing test
+    passed, because none of them ever ran anything else at the same
+    time; only once the change reached a real concurrent caller did the
+    now-genuine wait visibly stall everything sharing that same thread.
+    Rule: a change that moves blocking work into or out of asynchronous
+    code must say where that work now actually runs (a background
+    thread versus the main event loop) and needs one test proving a
+    second, unrelated task keeps making progress while it is in flight.
+    Enforcement: the shared contract template's own test-plan section
+    now asks for exactly that. Template change only; no code check.
+149. **A test step that only ever runs inside real continuous-integration
+    was replayed on a plain local machine and simply refused to run
+    there.** The step's own guard (checking for a CI-only environment
+    variable) correctly stopped it before anything unsafe happened, but
+    the wasted round-trip cost real time before the mistake was even
+    understood. Rule: a step gated on a CI-only signal — a CI-only
+    environment variable, an operating-system check reserved for a
+    runner, a marker meant only for real hardware, or a secret value —
+    is never replayed locally; it is named and skipped instead, with the
+    reason attached. Enforcement: the CI-derived check reader now skips
+    such a step and reports why. Regression coverage is in
+    `tests/field-lessons-batch-s.test.mjs`.
+150. **A worker's own report of what it changed was a prose sentence, not
+    a bare path, and a warning meant to flag an undeclared write instead
+    fired on a file the job had actually declared.** The report string
+    carried a trailing status word or a trailing parenthetical the
+    comparison never stripped, so it never matched the declared path it
+    was actually describing. Rule: a self-reported "changed" entry is
+    normalized to its own path (trimmed, one trailing parenthetical
+    dropped, one trailing status word dropped) before it is ever
+    compared against what a job declared, or shown in a warning.
+    Enforcement: the dropped-write check now normalizes each entry
+    first. Regression coverage is in
+    `tests/field-lessons-batch-s.test.mjs`.
+151. **A secrets-bearing `env:` block declared for one job in a CI
+    workflow was still being applied to a second, unrelated job that
+    declared no `env:` of its own**, because the reader that tracks a
+    workflow's own `env:` text never reset it between jobs. An ordinary
+    step in the second job was wrongly treated as CI-only and skipped,
+    just because an earlier, unrelated job happened to reference a
+    secret. Rule: a workflow-level `env:` applies to every job, but a
+    job-level `env:` applies only to that job's own steps, and must be
+    reset the moment a new job starts. Enforcement: the CI workflow
+    reader now scopes and resets job-level environment text at each job
+    boundary, with a test that a second job's parsed steps carry none
+    of an earlier job's environment keys. Regression coverage is in
+    `tests/field-lessons-batch-s.test.mjs`.
+152. **A handful of tests passed in continuous integration and in one
+    long-lived local checkout, but failed the moment they ran from a
+    fresh checkout in a different location.** Each read some piece of
+    the real machine's own state instead of a value the test itself
+    controlled: a personal configuration file, a personal collection of
+    optional add-ons, or an ambient identity setting — all present (with
+    one particular shape) on the machine that had been used for
+    development, and absent or different elsewhere. Rule: a test run
+    must never depend on the real user's home configuration, the real
+    user's optional add-ons directory, the real global identity
+    settings, or where the checkout happens to live; every test isolates
+    all of these for itself. Enforcement: the shared test-isolation setup
+    now isolates the real home configuration and identity settings for
+    every test file that touches them, proven by running the affected
+    tests from a brand-new checkout with an empty home directory.
