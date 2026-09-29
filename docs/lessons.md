@@ -1675,10 +1675,9 @@ rule is enforced or documented.
     ordinary system paths — never another checkout's environment found
     by searching. Enforcement: the shell sandbox now denies reading or
     running anything under a shared temporary-files area apart from a
-    job's own small scratch space; a toolchain sync step now runs in a
-    shell job's own workspace before it starts, with a warning when a
-    job's own checks or instructions plainly need one but declare
-    none; and a job's own report of what it ran must name the actual
+    job's own small scratch space; validation now warns when a shell
+    job's own checks or instructions plainly need a toolchain sync
+    step but declare none; and a job's own report of what it ran must name the actual
     program path used, with a warning when that path sits outside the
     job's own workspace. Regression coverage is in
     `tests/field-lessons-batch-t1.test.mjs` and
