@@ -38,6 +38,9 @@ export const BOOKKEEPING_OUTPUTS = Object.freeze([
   /(^|\/)[^/]*mutants[^/]*\.json$/,
   /(^|\/)[^/]*-metrics\.md$/,
   /(^|\/)[^/]*metrics[^/]*\.jsonl?$/,
+  // Field lesson #230: manifests (mutants files, PR payloads, etc.) live here; a contract or any
+  // other design-content .md still does not match this and goes to a cheap Claude tier instead.
+  /(^|\/)\.swarm-manifests\/[^/]*\.md$/,
 ]);
 
 class OpenRouterError extends Error {}
@@ -72,7 +75,7 @@ export function nonBookkeepingOutputs(model, outputs) {
 }
 export function assertBookkeepingOnly(job) {
   const bad = nonBookkeepingOutputs(job.model, job.outputs);
-  if (bad.length) fail(`Job ${job.id}: ${job.model} is for bookkeeping jobs only (PR payloads, changelogs, mutants files, metrics); refused outputs: ${bad.join(', ')}`);
+  if (bad.length) fail(`Job ${job.id}: ${job.model} is for bookkeeping jobs only (PR payloads, changelogs, mutants files, metrics, .swarm-manifests/*.md); a contract or other .md with design content goes to a cheap Claude tier instead; refused outputs: ${bad.join(', ')}`);
 }
 
 // The key: env first (tests, CI), else the keychain on macOS. Never logged, never returned
