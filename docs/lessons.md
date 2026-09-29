@@ -1452,3 +1452,12 @@ rule is enforced or documented.
     start is now called out plainly instead of being scored as a real
     failure of the change. Regression coverage is in
     `tests/field-lessons-batch-p.test.mjs`.
+139. **A pasted standing approval already covering queued work was still
+    held for a second confirmation round trip, only because an unrelated
+    policy change arrived bundled in the same message.** Rule: work
+    already recorded and queued is pre-approved and can start right
+    away; a fresh typed confirmation is needed only for genuinely new
+    requests, secrets, credentials, material meant for publication, or
+    anything that spends money. Enforcement: the coordination guide and
+    the onboarding instructions both now state this rule at the point
+    work begins. Regression coverage is in `tests/kickoff.test.mjs`.

@@ -10,6 +10,7 @@
 - `ship` refuses `release-version-mismatch` when a PR title naming a release version disagrees with package.json, or the CHANGELOG top heading is still `Unreleased`. (lesson 234)
 - `templates/coordination/CONTRACT.md` gains a "Time zones" line; `validate` warns `utc-only-window-tests` when a job's own output touches a date-window comparison and no test in its context/outputs mentions a non-UTC zone. (lesson 235)
 - `integrate` now runs manifest `preChecks` before its own checks on every run (not only when a lockfile changed); a preCheck that cannot even start (ENOENT/127) refuses `checks-not-runnable` instead of being scored as a red base; `--mutants-file` now resolves against the run's own not-yet-written outputs when the root copy is absent. (lesson 236)
+- `templates/coordination/ORCHESTRATOR.md` and `docs/kickoff.md` now both state that work already in TASK.md is pre-approved at boot and can start right away; a typed confirm is needed only for new tickets, secrets, model keys, public lessons, and anything that spends credits or money. (lesson 237)
 
 ## 1.29.0
 

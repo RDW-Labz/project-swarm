@@ -214,12 +214,14 @@ test('#223: a CLI job whose prompt demands a JSON-only reply, gets none, and wri
   assert.match(state.jobs[0].error, /no-output/);
 });
 
-test('#223: without the prompt\'s own JSON demand, the same no-JSON/no-output reply keeps today\'s complete status (deferred to integrate)', async t => {
+test('#223: without the prompt\'s own JSON demand, the same no-JSON/no-output reply keeps today\'s complete status (deferred to integrate, #232: never-written, not a delete)', async t => {
   const root = await fixture(t);
   const script = `console.log(${claudeResultEvent('Looks done, no issues found.')})`;
   const state = await runManifest(root, manifest([job({ id: 'no-out-lenient', outputs: ['missing.txt'] })]), { spawnImpl: fakeClaude(script) });
   assert.equal(state.jobs[0].status, 'complete');
-  await assert.rejects(integrateRun(root, state.id), /Missing output/);
+  const result = await integrateRun(root, state.id);
+  assert.equal(result.status, 'integrated');
+  assert.ok(result.warnings.some(w => w === 'output-never-written: missing.txt'), JSON.stringify(result.warnings));
 });
 
 test('#223: a CLI job\'s prose "Status: BLOCKED" reply (no JSON) is parsed into blocked/needFile', async t => {

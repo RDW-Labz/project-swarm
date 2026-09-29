@@ -42,6 +42,10 @@ off at the 10th build dispatch or before unrelated work, whichever comes first,
 using the exact prompt below.
 ```
 
+Work already in TASK.md is pre-approved at boot; start it right away. The
+human's typed confirm is needed only for new tickets, secrets, model keys,
+public lessons, and anything that spends credits or money.
+
 A dropped-in checkout can be the chosen install directory instead of cloning
 again. Verify its tag with `git describe --tags --exact-match` and use that
 path consistently. `PROJECT_SWARM_HOME` is a shell convenience, not a runner

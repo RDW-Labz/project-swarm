@@ -63,21 +63,23 @@ test('a bad spawn (missing binary) is classified spawn-error with a hint and ret
   assert.equal(calls, 2);
 });
 
-test('a check whose own binary does not exist yet gets one preChecks run and one retry, ending green once the preCheck creates it', async t => {
+test('a check whose own binary does not exist yet gets one preChecks run before checks, passing on the first try (#236: preChecks run first)', async t => {
   const root = await fixture(t);
   const helperScript = path.join(root, 'helper.mjs');
   // A dynamic import of a missing ESM module surfaces Node's own ERR_MODULE_NOT_FOUND, exactly
-  // the case lesson #152 names, distinct from a plain nonzero-exit failure.
+  // the case lesson #152 names, distinct from a plain nonzero-exit failure — except #236 now runs
+  // preChecks in root before checks ever run, so the helper exists in time and no retry is needed.
   const checks = [{ name: 'helper', argv: [process.execPath, '--input-type=module', '-e', 'await import(process.argv[1]);', helperScript] }];
   const preChecks = [[process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(helperScript)}, 'console.log(0)')`]];
   const state = await runManifest(root, manifest([job()], { checks, preChecks }), { spawnImpl: update });
   const result = await integrateRun(root, state.id, { spawnImpl: spawn });
+  assert.equal(result.preChecks.length, 1);
+  assert.equal(result.preChecks[0].status, 'passed');
   assert.equal(result.checks[0].status, 'passed');
-  assert.equal(result.checks[0].retriedAfterError, true);
+  assert.equal(result.checks[0].retriedAfterError, undefined);
   assert.equal(result.checksPassed, true);
   assert.equal(result.checksErrored, false);
-  assert.equal(result.retryPreChecks.length, 1);
-  assert.equal(result.retryPreChecks[0].status, 'passed');
+  assert.equal(result.retryPreChecks, undefined);
 });
 
 test('CLI integrate exits non-zero when checksErrored, even without --require-checks', async t => {

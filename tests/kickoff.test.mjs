@@ -74,3 +74,10 @@ test('kickoff supplies generic seats, provider consent, budget, and exact handof
  assert.ok(seat.includes('You are orchestrator. Read coordination/ORCHESTRATOR.md, then coordination/HANDOFF.md,\nthen coordination/TASK.md. Confirm the done-when in one line, then continue.\nPaste that into a fresh terminal. This chat is done.'));
  for(const word of ['10th build dispatch','tierReason','one writer per file','mutation','swarm-lessons.md'])assert.ok(seat.includes(word),word);
 });
+test('#237: boot pre-approval paragraph is present in both the orchestrator template and kickoff.md',async()=>{
+ const preApproval="Work already in TASK.md is pre-approved at boot; start it right away. The\nhuman's typed confirm is needed only for new tickets, secrets, model keys,\npublic lessons, and anything that spends credits or money.";
+ const seat=await fs.readFile(path.join(root,'templates/coordination/ORCHESTRATOR.md'),'utf8');
+ const kickoff=await fs.readFile(path.join(root,'docs/kickoff.md'),'utf8');
+ assert.ok(seat.includes(preApproval));
+ assert.ok(kickoff.includes(preApproval));
+});

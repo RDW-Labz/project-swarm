@@ -203,7 +203,7 @@ export async function installProject(targetDirectory,{source=packageRoot,agentFi
  if(!registry.includes(root)){registry.push(root);await fs.writeFile(registryPath,`${JSON.stringify(registry,null,2)}\n`);}
  const added=[],kept=[];
  const pairs=(await fs.readdir(path.join(installRoot,'examples'))).filter(f=>f.endsWith('.json')).sort().map(file=>[`examples/${file}`,`coordination/swarm-${file}`]);
- for(const file of ['ORCHESTRATOR.md','HANDOFF.md','TASK.md','swarm-lessons.md'])pairs.push([`templates/coordination/${file}`,`coordination/${file}`]);
+ for(const file of ['ORCHESTRATOR.md','HANDOFF.md','TASK.md','swarm-lessons.md','CONTRACT.md'])pairs.push([`templates/coordination/${file}`,`coordination/${file}`]);
  for(const [from,to] of pairs){
   const destination=await safeTarget(root,to,{createParents:true});
   try{
