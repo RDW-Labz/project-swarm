@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `ship --preflight`: every pre-push content guard runs in one pass and reports all failures (E2)
+
 ## 1.38.0
 
 - The default shell job scratch base (`SWARM_SCRATCH_ROOT`, else the existing `SWARM_INSTALL_ROOT` override, else `XDG_STATE_HOME`) is now `~/.project-swarm-scratch`, never `~/.project-swarm` (the install checkout itself, which can carry its own `.git`); `version --check` now proves this at install-check time, reporting `scratchOutsideRepo: true|false` (and, when false, `scratchRoot`) instead of only ever surfacing it on a shell job's first refusal. (lesson 280)

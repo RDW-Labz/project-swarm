@@ -436,6 +436,66 @@ export async function repoVisibility(exec, repo, { cwd } = {}) {
   }
 }
 
+// E2: every pre-push guard that inspects branch CONTENT (never CI/PR state) collected into one
+// pass, run in full every time — unlike ship()'s own sequential checks below, nothing here
+// short-circuits on the first hit, so a caller sees every violation at once instead of fixing them
+// one ship attempt at a time. Mirrors ship()'s own exemption handling (scratch/undocumented-binary/
+// git-ignored-fixture) so a used exemption excuses the same file here too.
+export async function preflightReport({
+  root, payloadBase, exec, env = process.env, home = os.homedir(),
+  privateNamesFile = null, integratedFiles = [], repo = null, exemptions = [],
+  authorEmailExec = defaultAuthorEmailExec, commitScanExec = defaultCommitScanExec,
+} = {}) {
+  const failures = [];
+  const findExemption = (guard, file) => exemptions.find(exemption => exemption.guard === guard && exemption.file === file);
+
+  const list = await loadPrivateNames(root, privateNamesFile, { env, home });
+  if (list.found && list.pathGlobs.length) {
+    const changed = await changedFileNames(exec, root, payloadBase);
+    const pathHits = findPrivatePathHits(changed, list.pathGlobs);
+    if (pathHits.length) {
+      failures.push({ code: 'private-path-in-diff', reason: `private-path-in-diff: ${pathHits.map(hit => `${hit.file} matches path:${hit.glob}`).join(', ')}` });
+    }
+  }
+  if (list.found && list.terms.length) {
+    const visibility = repo ? await repoVisibility(exec, repo, { cwd: root }) : null;
+    if (visibility !== 'PRIVATE' && visibility !== 'INTERNAL') {
+      const addedByFile = await addedLinesForFiles(exec, root, payloadBase, integratedFiles);
+      const nameHits = findPrivateNameHits(addedByFile, list.terms);
+      if (nameHits.length) {
+        failures.push({ code: 'private-name-in-diff', reason: `private-name-in-diff: ${nameHits.map(hit => `${hit.file}:${hit.line} (${hit.term})`).join(', ')}` });
+      }
+      const commitHits = await privateTermCommitHits(root, payloadBase, list.terms, { exec: commitScanExec });
+      if (commitHits.length) {
+        failures.push({ code: 'private-term-in-commit', reason: `private-term-in-commit: ${commitHits[0].sha} (term #${list.terms.indexOf(commitHits[0].term) + 1})` });
+      }
+    }
+  }
+
+  const emailMismatches = await authorEmailMismatches(root, payloadBase, { exec: authorEmailExec });
+  if (emailMismatches.length) {
+    failures.push({ code: 'author-email-mismatch', reason: `author-email-mismatch: ${emailMismatches.map(mismatch => `${mismatch.sha} (${mismatch.email})`).join(', ')}` });
+  }
+
+  const scratchFiles = (await addedScratchFiles(exec, root, payloadBase)).filter(file => !findExemption('scratch', file));
+  if (scratchFiles.length) {
+    failures.push({ code: 'scratch-file-in-diff', reason: `scratch-file-in-diff: ${scratchFiles.join(', ')}; scratch files (PR bodies, payloads, manifests, *.out) never enter a commit; remove it, or pass --exempt scratch:<file>=<reason>` });
+  }
+
+  const integratedTestFiles = await readAddedTestFileLines(exec, root, payloadBase, integratedFiles);
+  const undocumented = undocumentedBinaryWarnings(integratedTestFiles).filter(w => !findExemption('undocumented-binary', w.file));
+  if (undocumented.length) {
+    failures.push({ code: 'undocumented-binary', reason: `test file spawns undocumented binary with no fake/skip seam: ${undocumented.map(w => `${w.file} -> ${w.bin}`).join(', ')}; fix the cause, or pass --exempt <guard>:<file>=<reason>` });
+  }
+
+  const gitIgnored = (await gitIgnoredFixtureWarnings(exec, integratedTestFiles, root)).filter(w => !findExemption('git-ignored-fixture', w.file));
+  if (gitIgnored.length) {
+    failures.push({ code: 'test-reads-git-ignored-path', reason: `test-reads-git-ignored-path: ${gitIgnored.map(w => `${w.file} -> ${w.path}`).join(', ')}; move the fixture into a tracked path, or pass --exempt git-ignored-fixture:<file>=<reason>` });
+  }
+
+  return { ok: failures.length === 0, failures };
+}
+
 // Unified diff (-U0) added lines, each with the new-file line number it lands on.
 function parseAddedLines(diffText) {
   const added = [];
@@ -1079,6 +1139,9 @@ export async function ship(options) {
     privateNamesFile = null,
     authorEmailExec = defaultAuthorEmailExec,
     commitScanExec = defaultCommitScanExec,
+    // E2: `--preflight` runs every pre-push content guard in one pass and reports every failure
+    // instead of pushing; it never reaches the push/PR steps below.
+    preflight = false,
   } = options;
 
   let repo = options.repo;
@@ -1111,6 +1174,20 @@ export async function ship(options) {
     base.repo = repo;
   } else if (originRepo && repo !== originRepo) base.warnings.push(`--repo ${repo} differs from origin ${originRepo}`);
 
+  // E2: every pre-push content guard, collected and run without short-circuiting. `ship
+  // --preflight` prints this and exits without ever pushing; an ordinary ship still refuses on
+  // its own first hit (below, unchanged) but attaches the full `failures` list to that refusal.
+  const collectPreflight = () => preflightReport({
+    root, payloadBase: payload.base, exec, env, home,
+    privateNamesFile, integratedFiles, repo, exemptions, authorEmailExec, commitScanExec,
+  });
+  if (preflight) {
+    const report = await collectPreflight();
+    process.stdout.write(`${JSON.stringify({ status: 'preflight', ok: report.ok, failures: report.failures })}\n`);
+    process.exitCode = report.ok ? 0 : 1;
+    return { ...base, status: 'preflight', ok: report.ok, failures: report.failures };
+  }
+
   // Field lesson #197: a private-names list (`<root>/coordination/private-names.txt`, or
   // --private-names FILE) is scanned against only the lines this diff ADDS, and only for a repo
   // gh reports public; a private/internal repo already limits who can see it, so this is skipped
@@ -1130,6 +1207,7 @@ export async function ship(options) {
       return {
         ...base, status: 'refused', code: 'private-path-in-diff',
         reason: `private-path-in-diff: ${pathHits.map(hit => `${hit.file} matches path:${hit.glob}`).join(', ')}`,
+        failures: (await collectPreflight()).failures,
       };
     }
   }
@@ -1148,6 +1226,7 @@ export async function ship(options) {
         return {
           ...base, status: 'refused', code: 'private-name-in-diff',
           reason: `private-name-in-diff: ${hits.map(hit => `${hit.file}:${hit.line} (${hit.term})`).join(', ')}`,
+          failures: (await collectPreflight()).failures,
         };
       }
       // Field lesson #258: scans every commit ship would actually publish, not just the cumulative
@@ -1158,6 +1237,7 @@ export async function ship(options) {
         return {
           ...base, status: 'refused', code: 'private-term-in-commit',
           reason: `private-term-in-commit: ${commitHits[0].sha} (term #${list.terms.indexOf(commitHits[0].term) + 1})`,
+          failures: (await collectPreflight()).failures,
         };
       }
       base.privateNames = { checked: true, hits: 0 };
@@ -1222,6 +1302,7 @@ export async function ship(options) {
     return {
       ...base, status: 'refused', code: 'author-email-mismatch',
       reason: `author-email-mismatch: ${emailMismatches.map(mismatch => `${mismatch.sha} (${mismatch.email})`).join(', ')}`,
+      failures: (await collectPreflight()).failures,
     };
   }
 
@@ -1286,18 +1367,21 @@ export async function ship(options) {
     return {
       ...base, status: 'refused', code: 'scratch-file-in-diff',
       reason: `scratch-file-in-diff: ${scratchFiles.join(', ')}; scratch files (PR bodies, payloads, manifests, *.out) never enter a commit; remove it, or pass --exempt scratch:<file>=<reason>`,
+      failures: (await collectPreflight()).failures,
     };
   }
   if (undocumentedBinaries.length) {
     return {
-      ...base, status: 'refused',
+      ...base, status: 'refused', code: 'undocumented-binary',
       reason: `test file spawns undocumented binary with no fake/skip seam: ${undocumentedBinaries.map(w => `${w.file} -> ${w.bin}`).join(', ')}; fix the cause, or pass --exempt <guard>:<file>=<reason>`,
+      failures: (await collectPreflight()).failures,
     };
   }
   if (gitIgnoredFixtures.length) {
     return {
       ...base, status: 'refused', code: 'test-reads-git-ignored-path',
       reason: `test-reads-git-ignored-path: ${gitIgnoredFixtures.map(w => `${w.file} -> ${w.path}`).join(', ')}; move the fixture into a tracked path, or pass --exempt git-ignored-fixture:<file>=<reason>`,
+      failures: (await collectPreflight()).failures,
     };
   }
 
