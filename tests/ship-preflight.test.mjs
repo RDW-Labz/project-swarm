@@ -9,7 +9,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { ship, preflightReport } from '../tools/ship.mjs';
+import { parseShipFlags } from '../tools/swarm.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -182,4 +184,74 @@ test('preflightReport: ok:true and empty failures on a clean branch', async t =>
   const { exec } = realGitExec(dir);
   const report = await preflightReport({ root: dir, payloadBase: 'main', exec, repo: 'acme/widgets', integratedFiles: [] });
   assert.deepEqual(report, { ok: true, failures: [] });
+});
+
+// --- CLI wiring: `swarm ship --preflight` must reach ship() through the parser ------------------
+// 1.39.0 shipped the option on ship() and the CHANGELOG line, but the `ship` subcommand parser
+// never learned the flag, so the documented command refused with `Unknown flag: --preflight`.
+
+const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'tools', 'swarm.mjs');
+
+test('parseShipFlags accepts --preflight as a boolean and passes preflight: true through', () => {
+  assert.equal(parseShipFlags(['--branch', 'feature', '--pr', 'pr.json', '--preflight']).preflight, true);
+  assert.equal(parseShipFlags(['--preflight', '--branch', 'feature', '--pr', 'pr.json']).preflight, true);
+  assert.ok(!('preflight' in parseShipFlags(['--branch', 'feature', '--pr', 'pr.json'])), 'absent flag leaves the option out, as every other boolean ship flag does');
+});
+
+// Fake gh: passes the binary preflight and answers the one visibility question the private-names
+// guard asks; anything else is a test failure (nothing here may reach GitHub).
+async function fakeGhDir(t) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ship-preflight-gh-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  await fs.writeFile(path.join(dir, 'gh'), `#!/bin/sh
+if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then echo "gh version 2.60.0 (2024-10-01)"; exit 0; fi
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo '{"visibility":"PUBLIC"}'; exit 0; fi
+echo "Unexpected fake gh invocation: $*" >&2
+exit 1
+`, { mode: 0o755 });
+  return dir;
+}
+
+// A branch `feature` off the base with the three violations, an origin URL git can answer
+// `remote get-url` for (never contacted), and a payload whose head names that branch.
+async function cliFixture(t) {
+  const { dir, git } = await realRepo(t);
+  git('checkout', '-q', '-b', 'feature');
+  await addViolations(dir, git);
+  git('remote', 'add', 'origin', 'https://github.com/acme/widgets.git');
+  await fs.writeFile(path.join(dir, 'pr.json'), JSON.stringify({ title: 'Add feature', head: 'feature', base: 'main', body: 'body text' }));
+  const ghDir = await fakeGhDir(t);
+  const env = { ...process.env, PATH: `${ghDir}${path.delimiter}${process.env.PATH ?? ''}` };
+  const run = async (...shipArgs) => {
+    try {
+      const { stdout } = await execFileAsync(process.execPath, [CLI, '--root', dir, 'ship', ...shipArgs], { env, cwd: dir });
+      return { code: 0, stdout };
+    } catch (err) {
+      return { code: err.code, stdout: err.stdout ?? '' };
+    }
+  };
+  return { dir, run };
+}
+
+test('CLI: swarm ship --preflight --branch ... is accepted by the parser and prints the preflight report', async t => {
+  const { run } = await cliFixture(t);
+  const { code, stdout } = await run('--preflight', '--branch', 'feature', '--repo', 'acme/widgets', '--pr', 'pr.json');
+  const lines = stdout.trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(!lines.some(line => line.status === 'error' && /Unknown flag/.test(line.error ?? '')), stdout);
+  const report = lines.find(line => line.status === 'preflight');
+  assert.ok(report, `expected a preflight report line, got: ${stdout}`);
+  assert.equal(report.ok, false);
+  assert.deepEqual(report.failures.map(f => f.code).sort(), ['private-name-in-diff', 'private-term-in-commit', 'test-reads-git-ignored-path']);
+  assert.equal(code, 1);
+});
+
+test('CLI: swarm ship --branch ... without --preflight still refuses on its first hit as before', async t => {
+  const { run } = await cliFixture(t);
+  const { code, stdout } = await run('--branch', 'feature', '--repo', 'acme/widgets', '--pr', 'pr.json');
+  const lines = stdout.trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(!lines.some(line => line.status === 'preflight'), stdout);
+  const result = lines.at(-1);
+  assert.equal(result.status, 'refused', stdout);
+  assert.equal(result.code, 'private-name-in-diff');
+  assert.equal(code, 1);
 });

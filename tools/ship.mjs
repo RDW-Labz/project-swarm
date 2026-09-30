@@ -1032,7 +1032,7 @@ export const SHIP_USAGE = [
   '       swarm ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [flags]',
   'Flags: [--repo OWNER/NAME] [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase]',
   '       [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check]',
-  '       [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--accept-pre-existing] [--exempt GUARD:FILE=REASON]... [--private-names FILE]',
+  '       [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--accept-pre-existing] [--preflight] [--exempt GUARD:FILE=REASON]... [--private-names FILE]',
   `Exempt guards: ${EXEMPTION_GUARD_IDS.join(', ')}`,
   'Prints one JSON result naming its runId (or branch for --branch); exit 0 when merged, held or ready.',
 ].join('\n') + '\n';

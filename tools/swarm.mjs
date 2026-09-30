@@ -4400,7 +4400,7 @@ const SHIP_FLAGS_WITH_VALUE = new Set(['--repo', '--pr', '--require-section', '-
 // Pure CLI-flag parsing, kept separate from ship() execution so it is directly testable.
 export function parseShipFlags(flags) {
   let repo, payloadPath, mergeMethod, timeoutMs, pollMs, tagTimeoutMs, noFlakeCheck, branch, merge = true, privateNamesFile;
-  let checksFromCi, checksFromCiPath, rerunFlaky, acceptPreExisting = false, perTestTimeoutSeconds;
+  let checksFromCi, checksFromCiPath, rerunFlaky, acceptPreExisting = false, perTestTimeoutSeconds, preflight = false;
   const requireSections = [], checks = [], exemptions = [];
   for (let index = 0; index < flags.length; index++) {
     const flag = flags[index];
@@ -4409,6 +4409,9 @@ export function parseShipFlags(flags) {
     // Field lesson #254: without this, a check whose failure also reproduces on the base holds
     // ship (status `held-red-check`) instead of quietly waving a red local check through.
     if (flag === '--accept-pre-existing') { acceptPreExisting = true; continue; }
+    // E2 (1.39.0): `ship --preflight` runs every pre-push content guard in one pass and reports
+    // every failure without pushing; ship() already knew the option, the parser did not.
+    if (flag === '--preflight') { preflight = true; continue; }
     // Field lesson #177: an optional trailing path (the CI workflow to read `run:` steps from);
     // omitted, it defaults to .github/workflows/ci.yml relative to the ship root.
     if (flag === '--checks-from-ci') {
@@ -4466,6 +4469,7 @@ export function parseShipFlags(flags) {
     ...(exemptions.length ? { exemptions } : {}),
     ...(privateNamesFile !== undefined ? { privateNamesFile } : {}),
     ...(acceptPreExisting ? { acceptPreExisting } : {}),
+    ...(preflight ? { preflight } : {}),
   };
 }
 
@@ -4570,6 +4574,7 @@ export async function shipBranch(root, flags, { spawnImpl = spawn, exec = shipEx
     perTestTimeoutSeconds: flags.perTestTimeoutSeconds,
     exemptions: flags.exemptions ?? [],
     acceptPreExisting: flags.acceptPreExisting ?? false,
+    preflight: flags.preflight ?? false,
     privateNamesFile: flags.privateNamesFile ?? null,
     portBase, portWarnings,
     extraWarnings: [...ciWarnings, ...(checks.length ? [] : ['no-checks: ship --branch ran no local checks; pass --check \'<argv json>\' or --checks-from-ci'])],
@@ -4639,6 +4644,7 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
     perTestTimeoutSeconds: flags.perTestTimeoutSeconds,
     exemptions: flags.exemptions ?? [],
     acceptPreExisting: flags.acceptPreExisting ?? false,
+    preflight: flags.preflight ?? false,
     privateNamesFile: flags.privateNamesFile ?? null,
     portBase, portWarnings,
     extraWarnings: ciWarnings,
@@ -4718,7 +4724,7 @@ async function main() {
   const testIndex=args.indexOf('--test');
   const rootIndex=args.findIndex((arg,index)=>arg==='--root'&&(testIndex===-1||index<testIndex));
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | squash --branch BRANCH [--base REF] | onboard\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | squash --branch BRANCH [--base REF] | onboard\n');return;}
   if(args[0]==='redcheck'){
     const hasBase=args[2]==='--base';
     // Row #214: --commit SHA is a separate, mutually-exclusive proof mode from --base REF.

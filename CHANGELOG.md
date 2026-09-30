@@ -42,6 +42,7 @@
   is now inlined directly into every codex prompt; `validate` now warns
   `codex-required-read-missing: Job <id>: AGENTS.md names <file> (tracked), not in this job's
   context` for a tracked AGENTS.md doc a codex job's own context omits. (lesson 288)
+- `swarm ship --preflight` is now accepted by the CLI parser (it was only reachable from `ship()` directly)
 
 ## 1.38.0
 
