@@ -59,16 +59,25 @@ test('createShellScratchDir makes tmp/ and home/ under a fresh 0700 dir, with no
   }
 });
 
-test('createShellScratchDir refuses with scratch-inside-repo when the OS tmp scan finds a repo, and again when the install root itself does, walking up to /', async () => {
+test('createShellScratchDir refuses with scratch-inside-repo when the OS tmp scan finds a repo, falls back to the OS tmp dir when the install root is a checkout, and still scans the dir it built, walking up to /', async () => {
   const noopMkdir = async () => {};
   const noopChmod = async () => {};
   const access = async file => { if (file === '/home/project/.git') return; throw Error('ENOENT'); };
   await assert.rejects(createShellScratchDir({ runId: 'r', jobId: 'j' }, { tmpdir: () => '/home/project/sub/tmp', realpath: async value => value, access }), /scratch-inside-repo/);
-  // The OS tmp dir itself is clean here, but the new install-root base resolves inside a repo: the
-  // original upward scan is layered on top of it too (not replaced), so it still refuses.
+  // The OS tmp dir itself is clean here, but the install root is a git checkout (the documented
+  // `git clone` install): the scratch dir is a mkdtemp'd dir under the OS tmp dir instead, never
+  // anything under the install root.
   const installAccess = async file => { if (file === '/install/root/.git') return; throw Error('ENOENT'); };
+  const made = [];
+  const fakeMkdtemp = async prefix => { made.push(prefix); return `${prefix}abc123`; };
+  const fallback = await createShellScratchDir({ runId: 'r', jobId: 'j' }, { tmpdir: () => '/no/repo/here', realpath: async value => value, access: installAccess, mkdtemp: fakeMkdtemp, mkdir: noopMkdir, chmod: noopChmod, env: { SWARM_INSTALL_ROOT: '/install/root' } });
+  assert.deepEqual(made, ['/no/repo/here/swarm-r-j-']);
+  assert.equal(fallback.scratchDir, '/no/repo/here/swarm-r-j-abc123');
+  // The upward scan stays layered over whatever dir was actually built: one whose realpath lands
+  // inside a repo is still refused.
+  const intoRepo = async value => (value.startsWith('/no/repo/here/install-root/tmp') ? '/home/project/scratch' : value);
   await assert.rejects(
-    createShellScratchDir({ runId: 'r', jobId: 'j' }, { tmpdir: () => '/no/repo/here', realpath: async value => value, access: installAccess, mkdir: noopMkdir, chmod: noopChmod, env: { SWARM_INSTALL_ROOT: '/install/root' } }),
+    createShellScratchDir({ runId: 'r', jobId: 'j' }, { tmpdir: () => '/no/repo/here', realpath: intoRepo, access, mkdir: noopMkdir, chmod: noopChmod, env: { SWARM_INSTALL_ROOT: '/no/repo/here/install-root' } }),
     /scratch-inside-repo/,
   );
   // An OS tmp dir and install root with no repo ancestor at all never refuses; the scratch dir
