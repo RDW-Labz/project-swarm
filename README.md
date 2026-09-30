@@ -15,10 +15,10 @@ or another agent with file and command access. The worker adapter does not
 need to match the orchestrator. Paste this into your agent at project start:
 
 ```text
-Use Project Swarm 1.19.0 for this project. Read docs/kickoff.md in the toolkit
+Use Project Swarm 1.37.0 for this project. Read docs/kickoff.md in the toolkit
 and perform its kickoff workflow. Ask me up front which model providers may
 receive project code and what spend ceiling applies; wait before model calls.
-Install from tag v1.19.0 in ~/.project-swarm, run tools/install.mjs --user,
+Install from tag v1.37.0 in ~/.project-swarm, run tools/install.mjs --user,
 link this project, run doctor, validate and run the read-only and writing smoke
 jobs, inspect and integrate the reviewed writing output. Read the installed
 SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
@@ -77,7 +77,7 @@ Release 1.19.0 adds claude shell jobs (`shell: true`, or model `sonnet-shell`/`o
 ## Shared install
 
 ```sh
-git clone --branch v1.19.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git ~/.project-swarm
+git clone --branch v1.37.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git ~/.project-swarm
 node ~/.project-swarm/tools/install.mjs --user
 node ~/.project-swarm/tools/install.mjs /absolute/path/to/project
 node ~/.project-swarm/current/tools/swarm.mjs --root /absolute/path/to/project doctor all
@@ -96,7 +96,7 @@ You need **Node.js 20.3+**, macOS/Linux/WSL, and one configured provider. For Cl
 Clone the public repository. No GitHub account or access invitation is required:
 
 ```sh
-git clone --branch v1.19.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git
+git clone --branch v1.37.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git
 cd project-swarm
 npm test
 npm run check

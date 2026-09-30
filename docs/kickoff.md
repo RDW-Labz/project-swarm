@@ -11,13 +11,13 @@ Replace PROJECT and GOAL with your project directory and intended outcome.
 This is a request to perform the installation and checks, not merely describe them.
 
 ```text
-Set up Project Swarm 1.15.0 for PROJECT and use it to deliver GOAL.
+Set up Project Swarm 1.37.0 for PROJECT and use it to deliver GOAL.
 Before sending code or making model calls, ask me which model providers may
 receive this project's code and what spend ceiling applies. Record my answers;
 wait for them before dispatch. Never ask me to paste secrets into chat.
-Check Node >=20.3. Install the shared toolkit from tag v1.15.0 at
+Check Node >=20.3. Install the shared toolkit from tag v1.37.0 at
 ~/.project-swarm (or my chosen install directory). For a new installation:
-git clone --branch v1.15.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git ~/.project-swarm
+git clone --branch v1.37.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git ~/.project-swarm
 If the directory already exists, verify its identity and version first; preserve
 local edits, and ask before upgrading unless I have already authorized it.
 Run node ~/.project-swarm/tools/install.mjs --user, then

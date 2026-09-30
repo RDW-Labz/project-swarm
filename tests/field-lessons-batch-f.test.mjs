@@ -107,8 +107,16 @@ describe('L166: shipRun wires integratedFiles into ship(), so the #147 lock chec
     // A stale lock must exist: without one, lesson #183 explicitly warns and skips npm ci.
     await fs.writeFile(path.join(root, 'package-lock.json'), '{}');
 
-    // A fake npm on PATH ahead of the real one: always fails npm-lock-check's `npm ci --dry-run`.
+    // Fake gh passes the binary preflight only; fake npm fails npm-lock-check's `npm ci --dry-run`.
     const binDir = await tmp(t, 'swarm-166-bin-');
+    await fs.writeFile(path.join(binDir, 'gh'), `#!/bin/sh
+if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+  echo "gh version 2.60.0 (2024-10-01)"
+  exit 0
+fi
+echo "Unexpected fake gh invocation: $*" >&2
+exit 1
+`, { mode: 0o755 });
     const marker = path.join(binDir, 'npm-called');
     await fs.writeFile(path.join(binDir, 'npm'), `#!/bin/sh\ntouch ${JSON.stringify(marker)}\necho "npm ci can only install packages when your package.json and package-lock.json are in sync" >&2\nexit 1\n`, { mode: 0o755 });
 
