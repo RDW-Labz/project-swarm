@@ -177,18 +177,29 @@ export function installRootTmpDir({ env = process.env, home = os.homedir() } = {
 // inside a project checkout at all; the original upward `.git` scan stays as a defensive assertion
 // (layered, not replaced — it should never fire on either path) run once over the OS tmp dir it used
 // to build from, and once more over the new install-root base.
-async function assertOutsideRepo(start, access) {
+// The documented install is itself a `git clone` into the install root, though, so that base is
+// only used when the install root is not inside a checkout; otherwise the scratch dir is a fresh
+// `mkdtemp` under the OS tmp dir (the #145 layout), which the first scan has already cleared.
+async function insideRepo(start, access) {
   for (let dir = start; ; dir = path.dirname(dir)) {
-    let insideRepo = true;
-    try { await access(path.join(dir, '.git')); } catch { insideRepo = false; }
-    if (insideRepo) throw Error('scratch-inside-repo');
-    if (dir === path.parse(dir).root) break;
+    try { await access(path.join(dir, '.git')); return true; } catch { /* keep walking up */ }
+    if (dir === path.parse(dir).root) return false;
   }
 }
+async function assertOutsideRepo(start, access) {
+  if (await insideRepo(start, access)) throw Error('scratch-inside-repo');
+}
 export async function createShellScratchDir({ runId, jobId }, { tmpdir = os.tmpdir, mkdtemp = fs.mkdtemp, realpath = fs.realpath, access = file => fs.access(file), mkdir = fs.mkdir, chmod = fs.chmod, env = process.env, home = os.homedir() } = {}) {
-  await assertOutsideRepo(await realpath(tmpdir()), access);
-  const runDir = path.join(installRootTmpDir({ env, home }), 'tmp', runId, jobId);
-  await mkdir(runDir, { recursive: true, mode: 0o700 });
+  const osTmp = await realpath(tmpdir());
+  await assertOutsideRepo(osTmp, access);
+  const installRoot = installRootTmpDir({ env, home });
+  let runDir;
+  if (await insideRepo(await realpath(installRoot).catch(() => installRoot), access)) {
+    runDir = await mkdtemp(path.join(osTmp, `swarm-${runId}-${jobId}-`));
+  } else {
+    runDir = path.join(installRoot, 'tmp', runId, jobId);
+    await mkdir(runDir, { recursive: true, mode: 0o700 });
+  }
   await chmod(runDir, 0o700);
   const scratchDir = await realpath(runDir);
   await assertOutsideRepo(scratchDir, access);
