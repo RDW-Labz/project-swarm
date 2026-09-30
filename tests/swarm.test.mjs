@@ -554,6 +554,20 @@ test('a manifest with no contract field validates exactly as before', () => {
 
 // --- ship: CLI wiring -----------------------------------------------------------------------
 
+async function makeFakeGhDir(t) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-fake-gh-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  await fs.writeFile(path.join(dir, 'gh'), `#!/bin/sh
+if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+  echo "gh version 2.60.0 (2024-10-01)"
+  exit 0
+fi
+echo "Unexpected fake gh invocation: $*" >&2
+exit 1
+`, { mode: 0o755 });
+  return dir;
+}
+
 test('parseShipFlags maps every flag to ship() options and rejects an unknown flag', () => {
   assert.deepEqual(
     parseShipFlags(['--repo', 'acme/widgets', '--pr', 'pr.json', '--require-section', 'Summary', '--require-section', 'Tests', '--no-merge', '--merge-method', 'rebase', '--timeout', '30', '--poll', '5']),
@@ -573,6 +587,13 @@ test('shipExitCode is 0 only for merged/held/ready, and 1 for every refusal or f
 
 test('shipRun refuses a completed run that has not yet been integrated', async t => {
   const root = await fixture(t);
+  const dir = await makeFakeGhDir(t);
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  });
+  process.env.PATH = `${dir}${path.delimiter}${originalPath ?? ''}`;
   const state = await runManifest(root, manifest(), { spawnImpl: update });
   await fs.writeFile(path.join(root, 'pr.json'), JSON.stringify({ title: 't', head: 'h', base: 'main', body: 'b' }));
   await assert.rejects(
@@ -583,9 +604,10 @@ test('shipRun refuses a completed run that has not yet been integrated', async t
 
 test('CLI ship refuses an un-integrated run and exits 1 without touching git/gh', async t => {
   const root = await fixture(t);
+  const dir = await makeFakeGhDir(t);
   const state = await runManifest(root, manifest(), { spawnImpl: update, id: 'ship-not-integrated' });
   await fs.writeFile(path.join(root, 'pr.json'), JSON.stringify({ title: 't', head: 'h', base: 'main', body: 'b' }));
-  await assert.rejects(execFileAsync(process.execPath, [CLI, '--root', root, 'ship', state.id, '--repo', 'acme/widgets', '--pr', 'pr.json']), error => {
+  await assert.rejects(execFileAsync(process.execPath, [CLI, '--root', root, 'ship', state.id, '--repo', 'acme/widgets', '--pr', 'pr.json'], { env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}` } }), error => {
     assert.equal(error.code, 1);
     assert.match(JSON.parse(error.stderr).error, /must be integrated/);
     return true;
