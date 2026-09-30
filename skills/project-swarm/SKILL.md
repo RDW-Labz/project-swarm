@@ -21,7 +21,7 @@ agents can follow AGENTS.md or CLAUDE.md. The shared installed skill lives at
 `<install>/current/skills/project-swarm/SKILL.md`, even without agent homes.
 
 Follow [Agent kickoff](references/kickoff.md) for a new project: install from
-v1.19.0, run `install.mjs --user`, link, doctor, and the read-only and writing
+v1.37.0, run `install.mjs --user`, link, doctor, and the read-only and writing
 smoke tests. Ask up front which providers may receive code and the spend
 ceiling; record answers before model calls. Fill TASK.md from the goal, keep
 HANDOFF.md and TASK.md current after every dispatch, log swarm-lessons.md,
