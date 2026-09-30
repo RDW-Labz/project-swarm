@@ -34,6 +34,16 @@ export const API_PORT = 443;
 export const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
 // Read-only toolchain caches, the codex list minus codex's own config.
 export const TOOLCHAIN_DIRS = ['.nvm', '.cache', '.npm', '.local/share/uv', 'Library/Caches'];
+// Field lesson #278: an offline `uv lock`/`uv sync` (field lesson #142, UV_OFFLINE forced whenever
+// `uvCacheDir` is set) only ever reads its cache, never writes it — so it needs to be pointed at
+// the real, shared, already-warm cache, not a fresh empty per-run directory. The real cache
+// (`~/.cache/uv` on Linux, `~/Library/Caches/uv` on macOS) already lives inside one of
+// TOOLCHAIN_DIRS's own subtrees, already granted read access as a whole subtree in `shellProfile`;
+// pointing UV_CACHE_DIR there needs no profile change at all. An explicit UV_CACHE_DIR always wins.
+export function resolveSharedUvCacheDir({ env = process.env, home = os.homedir(), platform = process.platform } = {}) {
+  if (env.UV_CACHE_DIR) return env.UV_CACHE_DIR;
+  return path.join(home, platform === 'darwin' ? 'Library/Caches/uv' : '.cache/uv');
+}
 // Denied even inside a granted readPaths/toolchain subtree: the codex list (generic entries plus
 // any config `deniedHomeDirs`) plus the claude CLI's own stored login and config.
 const shellDeniedHomeDirs = config => [...effectiveDeniedHomeDirs(config), '.claude'];
@@ -162,10 +172,16 @@ export async function scanListeningPorts({ exec = execFileAsync } = {}) {
   return [...ports];
 }
 
-// Field lesson #263r (reopens #145): "the swarm install root" the same way the toolchains dir
-// already resolves it — an env override, else `~/.project-swarm` — never a config key of its own.
-export function installRootTmpDir({ env = process.env, home = os.homedir() } = {}) {
-  return env.SWARM_INSTALL_ROOT || path.join(home, '.project-swarm');
+// Field lesson #280 (reopens #263r/#145): "the swarm install root" is itself a git checkout (the
+// 1.37.0 default), so a scratch base that merely lives "under the install root" can still resolve
+// inside a repo. The scratch base is now a sibling of the install checkout, never a child of it:
+// `SWARM_SCRATCH_ROOT`, then the existing `SWARM_INSTALL_ROOT` override (unchanged), then
+// `XDG_STATE_HOME`, else `~/.project-swarm-scratch` — never `~/.project-swarm`.
+export function scratchRootDir({ env = process.env, home = os.homedir() } = {}) {
+  if (env.SWARM_SCRATCH_ROOT) return env.SWARM_SCRATCH_ROOT;
+  if (env.SWARM_INSTALL_ROOT) return env.SWARM_INSTALL_ROOT;
+  if (env.XDG_STATE_HOME) return path.join(env.XDG_STATE_HOME, 'project-swarm');
+  return path.join(home, '.project-swarm-scratch');
 }
 
 // Field lesson #145: a shell job's own TMPDIR/HOME must never resolve inside any git repo — some
@@ -173,11 +189,12 @@ export function installRootTmpDir({ env = process.env, home = os.homedir() } = {
 // controlled. The parent used to walk from the realpath of os.tmpdir() up to `/` looking for a
 // `.git` entry, then `mkdtemp` its scratch dir right there — which the reopened lesson #263r found
 // can itself still land inside (or be refused by) a git-aware path check on some machines. The
-// scratch dir now lives under a per-run directory of the swarm install root instead, which is never
+// scratch dir now lives under a per-run directory of the scratch root instead, which is never
 // inside a project checkout at all; the original upward `.git` scan stays as a defensive assertion
 // (layered, not replaced — it should never fire on either path) run once over the OS tmp dir it used
-// to build from, and once more over the new install-root base.
-async function assertOutsideRepo(start, access) {
+// to build from, and once more over the new scratch-root base. Exported (field lesson #280) so
+// `version --check` can reuse this exact assertion instead of a second copy.
+export async function assertScratchOutsideRepo(start, access) {
   for (let dir = start; ; dir = path.dirname(dir)) {
     let insideRepo = true;
     try { await access(path.join(dir, '.git')); } catch { insideRepo = false; }
@@ -186,12 +203,12 @@ async function assertOutsideRepo(start, access) {
   }
 }
 export async function createShellScratchDir({ runId, jobId }, { tmpdir = os.tmpdir, mkdtemp = fs.mkdtemp, realpath = fs.realpath, access = file => fs.access(file), mkdir = fs.mkdir, chmod = fs.chmod, env = process.env, home = os.homedir() } = {}) {
-  await assertOutsideRepo(await realpath(tmpdir()), access);
-  const runDir = path.join(installRootTmpDir({ env, home }), 'tmp', runId, jobId);
+  await assertScratchOutsideRepo(await realpath(tmpdir()), access);
+  const runDir = path.join(scratchRootDir({ env, home }), 'tmp', runId, jobId);
   await mkdir(runDir, { recursive: true, mode: 0o700 });
   await chmod(runDir, 0o700);
   const scratchDir = await realpath(runDir);
-  await assertOutsideRepo(scratchDir, access);
+  await assertScratchOutsideRepo(scratchDir, access);
   const tmp = path.join(scratchDir, 'tmp'), home2 = path.join(scratchDir, 'home');
   await mkdir(tmp, { recursive: true, mode: 0o700 });
   await mkdir(home2, { recursive: true, mode: 0o700 });

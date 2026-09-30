@@ -325,7 +325,7 @@ export function findPrivatePathHits(files, pathGlobs) {
 // `<root>/coordination/private-names.txt`, then the local config's `privateNames` (an absolute
 // path). A config-named file that does not exist is a refusal (`missing: true`), not a silent
 // "no list" — an owner who bothered to name a list meant for it to be checked.
-async function loadPrivateNames(root, file, { env = process.env, home = os.homedir() } = {}) {
+export async function loadPrivateNames(root, file, { env = process.env, home = os.homedir() } = {}) {
   const load = async (target) => {
     const text = await fs.readFile(target, 'utf8');
     const { terms, pathGlobs } = splitPrivateNameLines(parsePrivateNames(text));
@@ -493,6 +493,29 @@ export function findPrivateNameHits(addedByFile, terms) {
   return hits;
 }
 
+// Field lesson #262: a contract or job prompt is not a diff (no added-lines-only semantics), so
+// this scans the whole text, line by line, the same term-matching shape as findPrivateNameHits.
+export function findPrivateNameHitsInText(file, text, terms) {
+  const hits = [];
+  const lines = String(text ?? '').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const lowerText = lines[i].toLowerCase();
+    for (const term of terms) if (term && lowerText.includes(term.toLowerCase())) { hits.push({ file, line: i + 1, term }); break; }
+  }
+  return hits;
+}
+
+// Field lesson #266 (orchestrator answer #2): an explicit, exact-path config list, checked
+// against the files this PR actually integrates; a config with no list configured never refuses.
+const MODEL_VERIFICATION_SECTION_RE = /^##\s*model verification\b/im;
+export function modelRouteFilesMissingVerification(files, modelRouteFiles, body) {
+  const configured = new Set(modelRouteFiles ?? []);
+  if (!configured.size) return null;
+  const hits = (files ?? []).filter(file => configured.has(file));
+  if (!hits.length) return null;
+  return MODEL_VERIFICATION_SECTION_RE.test(String(body ?? '')) ? null : hits;
+}
+
 export function parseExemptFlag(value) {
   const raw = String(value ?? '');
   const colon = raw.indexOf(':');
@@ -599,7 +622,7 @@ export async function resolveGhAndGit(exec) {
   return { ok: true };
 }
 
-function githubRepo(url) {
+export function githubRepo(url) {
   const match = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)\/?$/.exec(url);
   const repo = match?.[1].replace(/\.git$/, '');
   return repo && REPO_RE.test(repo) ? repo : null;
@@ -775,6 +798,24 @@ function expandArgvForRoot(argv, integratedFiles, root) {
   return expanded;
 }
 
+// Field lesson #275: the whole check argv can fail to even produce a readable verdict on the
+// throwaway base worktree for reasons that have nothing to do with the PR's own failing tests (a
+// slow full suite, an unrelated local-only failure elsewhere) — leaving baseStatus stuck at
+// `unknown` forever. Scoping the base re-run to just the failing tests' own files (appended to the
+// argv, same as a caller would type them by hand) still lets --accept-pre-existing get a real
+// verdict for those tests specifically.
+export function scopedBaseArgv(argv, failingTests) {
+  // `failingTests` is a plain array of test id strings at `verifyPreExistingOnBase`'s own call
+  // site below (same shape as the `for (const id of failingTests)` loop further down); a `{id}`
+  // object (the shape a `tests`/`failingTests` RESULT entry carries elsewhere in ship()) is
+  // accepted too, so this reads naturally from either one.
+  const files = [...new Set(failingTests.map(test => {
+    const id = typeof test === 'string' ? test : test.id;
+    return id.includes('::') ? id.split('::')[0] : id.includes(' > ') ? id.split(' > ')[0] : id;
+  }))];
+  return files.length ? [...argv, ...files] : argv;
+}
+
 // Field lesson #177(c): a check that already fails on the base commit's own tree (e.g. CI running
 // a formatter check it never enforced before, so files were already unformatted) proves nothing
 // about what this change broke, and blocking the ship on it just costs a wasted re-ship once the
@@ -791,7 +832,7 @@ export async function verifyPreExistingOnBase({ root, argv, integratedFiles, bas
     const addRes = await exec('git', ['worktree', 'add', '--detach', checkout, baseSha], { cwd: root });
     if (addRes.code !== 0) return { checked: false };
     added = true;
-    const expanded = expandArgvForRoot(argv, integratedFiles, checkout);
+    const expanded = expandArgvForRoot(failingTests.length ? scopedBaseArgv(argv, failingTests) : argv, integratedFiles, checkout);
     if (!expanded || !expanded.length) return { checked: false };
     const result = await exec(expanded[0], expanded.slice(1), { cwd: checkout, ...(env ? { env } : {}) });
     const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
@@ -820,6 +861,40 @@ export function extractFailingTestFiles(text) {
     while ((match = re.exec(source))) files.add(match[1]);
   }
   return [...files];
+}
+
+// Field lesson #273: a test near the CI per-test timeout is a flake waiting to happen. Once CI is
+// green, ship reads every check run's own FULL log (never --log-failed — a passing run's own
+// pytest `--durations` line only ever appears in the full log) and warns when a test this PR
+// itself added ate more than a configured share of the per-test timeout on any platform.
+async function addedTestFileNames(exec, root, payloadBase) {
+  // This is a heads-up feature, never a refusal (see slowNewTestWarnings below) — an `exec` that
+  // throws for either call here (a repo shape it does not model, a transient git error) is treated
+  // the same as one that resolves cleanly with nothing to report: no new test files found.
+  try {
+    const baseRes = await exec('git', ['merge-base', `origin/${payloadBase}`, 'HEAD'], { cwd: root }).catch(() => null);
+    const baseSha = baseRes && baseRes.code === 0 ? baseRes.stdout.trim() : null;
+    if (!baseSha) return [];
+    const diffRes = await exec('git', ['diff', '--name-only', '--diff-filter=A', `${baseSha}...HEAD`], { cwd: root }).catch(() => null);
+    if (!diffRes || diffRes.code !== 0) return [];
+    return diffRes.stdout.split('\n').map(line => line.trim()).filter(line => line && TEST_FILE_RE.test(line));
+  } catch {
+    return [];
+  }
+}
+const PYTEST_DURATION_LINE = /^(\d+\.\d\d)s\s+(?:call|setup|teardown)\s+(\S+)\s*$/gm;
+export function parsePytestDurations(text) {
+  const entries = []; PYTEST_DURATION_LINE.lastIndex = 0;
+  let match; while ((match = PYTEST_DURATION_LINE.exec(String(text ?? '')))) entries.push({ id: match[2], seconds: Number(match[1]) });
+  return entries;
+}
+export function slowNewTestWarnings(durations, newTestFiles, perTestTimeoutSeconds) {
+  const files = new Set(newTestFiles), threshold = perTestTimeoutSeconds * 0.3, warnings = [];
+  for (const { id, seconds } of durations) {
+    const file = id.includes('::') ? id.split('::')[0] : id;
+    if (files.has(file) && seconds > threshold) warnings.push(`slow-new-test: ${id} ${seconds}s`);
+  }
+  return warnings;
 }
 
 // Field lesson #192: the test ids a check's output names as failing — pytest `FAILED f::t`, node's
@@ -897,7 +972,7 @@ export const SHIP_USAGE = [
   '       swarm ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [flags]',
   'Flags: [--repo OWNER/NAME] [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase]',
   '       [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check]',
-  '       [--checks-from-ci [PATH]] [--rerun-flaky N] [--accept-pre-existing] [--exempt GUARD:FILE=REASON]... [--private-names FILE]',
+  '       [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--accept-pre-existing] [--exempt GUARD:FILE=REASON]... [--private-names FILE]',
   `Exempt guards: ${EXEMPTION_GUARD_IDS.join(', ')}`,
   'Prints one JSON result naming its runId (or branch for --branch); exit 0 when merged, held or ready.',
 ].join('\n') + '\n';
@@ -912,6 +987,9 @@ export function renderChecks(results) {
     let line = `${result.name} -> ${result.status}`;
     if (result.status === 'failed' && result.exitCode != null) line += ` (exit ${result.exitCode})`;
     if (result.flakeOnBase) line += ` — flake on base: ${result.flakeOnBase.failed}/${result.flakeOnBase.runs} (${result.flakeOnBase.file})`;
+    // Field lesson #275: names the exact test ids a `pre-existing` verdict was reached for, in the
+    // PR's own Checks section — reachable now that the base re-run can be scoped to just them.
+    if (result.status === 'pre-existing' && result.failingTests?.length) line += ` — pre-existing on base: ${result.failingTests.map(t => t.id).join(', ')}`;
     lines.push(line);
     if (result.status === 'failed' && result.tail) lines.push(...String(result.tail).split('\n').slice(-20));
   }
@@ -944,6 +1022,33 @@ export function summarizeRollup(rollup) {
   return { total: items.length, pending, failed, passed };
 }
 
+const FLAKE_LOG_FILE = '.swarm/flake-log.json';
+const FLAKE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+async function loadFlakeLog(root) { try { return JSON.parse(await fs.readFile(path.join(root, FLAKE_LOG_FILE), 'utf8')); } catch { return {}; } }
+// Field lesson #279 (orchestrator answer #6): a hit counts as "recent" only within a rolling
+// 14-day window; older hits are never deleted (kept in the file for history) but are ignored when
+// deciding whether a file is a repeat offender. A legacy entry saved before `hitTimestamps`
+// existed carries none, so it defaults to zero recent hits — its old count never silently
+// promotes it to a repeat offender the moment this ships.
+async function recordFlakeHits(root, files, now = () => new Date().toISOString()) {
+  const log = await loadFlakeLog(root);
+  const nowIso = now();
+  const nowMs = new Date(nowIso).getTime();
+  const repeatOffenders = [];
+  for (const file of files) {
+    const entry = log[file] ?? { hitTimestamps: [] };
+    entry.hitTimestamps = [...(entry.hitTimestamps ?? []), nowIso];
+    entry.lastSeenAt = nowIso;
+    entry.hits = entry.hitTimestamps.length;
+    const recentHits = entry.hitTimestamps.filter(ts => nowMs - new Date(ts).getTime() < FLAKE_WINDOW_MS).length;
+    log[file] = entry;
+    if (recentHits >= 2) repeatOffenders.push({ file, hits: recentHits });
+  }
+  await fs.mkdir(path.join(root, '.swarm'), { recursive: true });
+  await fs.writeFile(path.join(root, FLAKE_LOG_FILE), JSON.stringify(log, null, 2));
+  return repeatOffenders;
+}
+
 export async function ship(options) {
   const {
     root, payloadPath,
@@ -959,6 +1064,8 @@ export async function ship(options) {
     integratedFiles = [],
     packagingChanges = [], checkArgvs = [], extraWarnings = [],
     rerunFlaky,
+    // Field lesson #273: an explicit --per-test-timeout always wins over the local config default.
+    perTestTimeoutSeconds,
     exemptions = [],
     // Field lesson #254: the `ship` *command* (shipRun/shipBranch, below) always passes this
     // explicitly (false unless --accept-pre-existing is given); ship() itself defaults permissive
@@ -1054,6 +1161,23 @@ export async function ship(options) {
         };
       }
       base.privateNames = { checked: true, hits: 0 };
+    }
+  }
+
+  // Field lesson #266 (orchestrator answer #2): local config's own `modelRouteFiles` names exact
+  // paths a model/provider route change lives in; a PR touching one of them refuses unless its
+  // body carries a `## Model verification` section — stricter than validate's own warn-only regex
+  // heuristic, which stays warn-only. A config with no `modelRouteFiles` (a pre-#266 config on
+  // disk) behaves as an empty list: this never refuses.
+  {
+    let modelRouteConfig;
+    try { modelRouteConfig = loadLocalConfig({ env, home }); } catch { modelRouteConfig = {}; }
+    const hits = modelRouteFilesMissingVerification(integratedFiles, modelRouteConfig?.modelRouteFiles, payload.body);
+    if (hits) {
+      return {
+        ...base, status: 'refused', code: 'model-route-verification-missing',
+        reason: `model-route-verification-missing: ${hits.join(', ')}; add a "## Model verification" section to the PR body naming the real streaming smoke test that was run`,
+      };
     }
   }
 
@@ -1386,26 +1510,17 @@ export async function ship(options) {
   // flaky test elsewhere) gets up to `rerunFlaky` automatic reruns of just the failed jobs before
   // it blocks the ship; a failing test that IS in the diff is never rerun (a real regression).
   // Field lesson #243: an explicit --rerun-flaky (including 0) always wins; when the flag is
-  // absent (rerunFlaky undefined here), ship defaults to one automatic rerun only when every
-  // failed check is platform-only, and to zero otherwise.
+  // absent (rerunFlaky undefined here), ship defaults to one automatic rerun when every failed
+  // check is platform-only.
+  // Field lesson #279: the default also applies when every failing test's own file is one this PR
+  // never touches (a flaky failure anywhere else in the repo) — which needs the failing-test log
+  // fetch to happen FIRST, once per loop iteration, so both defaults can read from that one fetch
+  // instead of the log fetch only ever running after the platform-only default was already decided.
   let rerunAttempts = 0, rerunTests = null, defaultRerunWarned = false;
   while (ci.failed.length > 0) {
     // Field lesson 151: named up front so the next job starts from "this OS only", not a guess.
     const platformOnly = platformOnlyFailures(ciRollup);
     for (const entry of platformOnly) base.warnings.push(`platform-only failure: ${entry.os}: ${entry.testIds.join(', ')}`);
-    let effectiveRerunFlaky = rerunFlaky;
-    if (effectiveRerunFlaky === undefined) {
-      const platformOnlyNames = new Set(platformOnly.flatMap(entry => entry.testIds));
-      const allPlatformOnly = ci.failed.every(name => platformOnlyNames.has(name));
-      effectiveRerunFlaky = allPlatformOnly ? 1 : 0;
-      if (allPlatformOnly && !defaultRerunWarned) {
-        base.warnings.push('rerun-flaky-default: 1 (platform-only)');
-        defaultRerunWarned = true;
-      }
-    }
-    if (!(effectiveRerunFlaky > 0 && rerunAttempts < effectiveRerunFlaky)) {
-      return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}`, ...(rerunTests ? { flakyRerun: { attempts: rerunAttempts, result: 'failed', tests: rerunTests } } : {}) };
-    }
     const runIds = failedRunIds(ciRollup, ci.failed);
     const logs = [];
     for (const id of runIds) {
@@ -1414,6 +1529,20 @@ export async function ship(options) {
     }
     rerunTests = [...new Set(logs.flatMap(extractFailingTestFiles))];
     const inDiff = rerunTests.some(test => integratedFiles.some(file => file === test || file.endsWith(`/${test}`) || test.endsWith(`/${file}`)));
+    let effectiveRerunFlaky = rerunFlaky;
+    if (effectiveRerunFlaky === undefined) {
+      const platformOnlyNames = new Set(platformOnly.flatMap(entry => entry.testIds));
+      const allPlatformOnly = ci.failed.every(name => platformOnlyNames.has(name));
+      const untouchedFile = rerunTests.length > 0 && !inDiff;
+      effectiveRerunFlaky = (allPlatformOnly || untouchedFile) ? 1 : 0;
+      if (effectiveRerunFlaky === 1 && !defaultRerunWarned) {
+        base.warnings.push(`rerun-flaky-default: 1 (${allPlatformOnly ? 'platform-only' : 'file-not-in-diff'})`);
+        defaultRerunWarned = true;
+      }
+    }
+    if (!(effectiveRerunFlaky > 0 && rerunAttempts < effectiveRerunFlaky)) {
+      return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}`, ...(rerunAttempts > 0 ? { flakyRerun: { attempts: rerunAttempts, result: 'failed', tests: rerunTests } } : {}) };
+    }
     if (inDiff) {
       base.warnings.push(`rerun-flaky-skipped: failing test is in this PR's diff: ${rerunTests.join(', ')}`);
       return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}` };
@@ -1421,6 +1550,9 @@ export async function ship(options) {
     rerunAttempts++;
     base.timing.rerunCount = rerunAttempts;
     for (const id of runIds) await exec('gh', ['run', 'rerun', id, '--failed', '--repo', repo], { cwd: root });
+    // Field lesson #279: a flake log per repo names a repeat offender so a fix job gets dispatched
+    // after enough hits, instead of every flaky test being rerun forever with nothing else changing.
+    base.warnings.push(...(await recordFlakeHits(root, rerunTests)).map(o => `flake-repeat-offender: ${o.file} (${o.hits} hits); dispatch a fix job`));
     await sleep(pollMs);
     const settled = await waitForCi();
     if (settled.terminal) return settled.terminal;
@@ -1428,6 +1560,25 @@ export async function ship(options) {
     base.ci = ci;
   }
   if (rerunAttempts > 0) base.flakyRerun = { attempts: rerunAttempts, result: 'passed', tests: rerunTests ?? [] };
+
+  // Field lesson #273: now that CI is fully green, read every check run's own FULL log (never
+  // --log-failed — a passing run's own pytest --durations line only ever shows up there) and warn
+  // when a test this PR itself added ate more than a configured share of the per-test timeout on
+  // any platform; ship still ships either way, this is only a heads-up for a follow-up fix.
+  {
+    const passedNames = (ciRollup ?? []).map(item => item.name ?? item.context ?? 'unknown');
+    const passedRunIds = failedRunIds(ciRollup, passedNames);
+    const fullLogs = [];
+    for (const id of passedRunIds) {
+      const logRes = await exec('gh', ['run', 'view', id, '--repo', repo], { cwd: root }).catch(() => null);
+      if (logRes && logRes.code === 0) fullLogs.push(logRes.stdout);
+    }
+    const durations = fullLogs.flatMap(parsePytestDurations);
+    const newTestFiles = await addedTestFileNames(exec, root, payload.base);
+    let ciConfig; try { ciConfig = loadLocalConfig({ env, home }); } catch { ciConfig = {}; }
+    const effectivePerTestTimeoutSeconds = perTestTimeoutSeconds ?? ciConfig?.ci?.perTestTimeoutSeconds ?? 30;
+    base.warnings.push(...slowNewTestWarnings(durations, newTestFiles, effectivePerTestTimeoutSeconds));
+  }
 
   if (isHeld(body)) {
     // Field lesson #259: a held PR gets its three-field summary printed to stderr, right at this

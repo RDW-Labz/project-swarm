@@ -12,7 +12,7 @@ import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { validateManifest, runManifest } from '../tools/swarm.mjs';
-import { shellProfile, shellEnvironment, resolveVenvInterpreterHome, startConnectProxy } from '../tools/claude-shell.mjs';
+import { shellProfile, shellEnvironment, resolveVenvInterpreterHome, startConnectProxy, resolveSharedUvCacheDir } from '../tools/claude-shell.mjs';
 import { git } from '../tools/codex-adapter.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -200,12 +200,19 @@ test('validate refuses a shell job testEnv that sets UV_OFFLINE', () => {
 test('a real run sets the offline toolchain env for the worker', async t => {
   const root = await repo(t);
   const seen = [];
-  const state = await runManifest(root, manifest([shellJob()]), { platform: 'darwin', spawnImpl: fakeShellSpawn(workerDone, seen), env: runEnv, keyExec: noKeychain, shellHooks: hooks });
+  // The orchestrator's own parent env is stripped of UV_CACHE_DIR here (field lesson #278's
+  // explicit-override branch would otherwise win when this test itself runs nested inside a swarm
+  // shell sandbox that already sets one), so this exercises the real per-HOME default.
+  const { UV_CACHE_DIR: _ignoredParentUvCacheDir, ...parentEnvNoUvCache } = runEnv;
+  const state = await runManifest(root, manifest([shellJob()]), { platform: 'darwin', spawnImpl: fakeShellSpawn(workerDone, seen), env: parentEnvNoUvCache, keyExec: noKeychain, shellHooks: hooks });
   assert.equal(state.status, 'complete', state.jobs[0].error ?? '');
   const [launch] = seen;
   assert.equal(launch.options.env.UV_OFFLINE, '1');
   assert.equal(launch.options.env.UV_PYTHON_DOWNLOADS, 'never');
-  assert.match(launch.options.env.UV_CACHE_DIR, /shell\/uv-cache$/);
+  // Field lesson #278: UV_CACHE_DIR now names the real, shared per-user uv cache under HOME,
+  // never the job's own per-run shellDir.
+  assert.equal(launch.options.env.UV_CACHE_DIR, resolveSharedUvCacheDir({ env: parentEnvNoUvCache, home: parentEnvNoUvCache.HOME ?? os.homedir() }));
+  assert.doesNotMatch(launch.options.env.UV_CACHE_DIR, /shell\/uv-cache$/);
   assert.equal(launch.options.env.npm_config_offline, 'true');
 });
 

@@ -1859,3 +1859,188 @@ rule is enforced or documented.
     documented, reasoned way to excuse a specific file); review performs
     the same scan and warns instead of refusing. Regression coverage is in
     `tests/field-lessons-batch-v.test.mjs`.
+171. **A shell job's own scratch directory lived under the install
+    checkout by default, which the install checkout being its own git
+    repository could still place it inside of.** A prior fix moved a
+    shell job's scratch base under the install root instead of the OS
+    temp directory, but "the install root" is itself a git checkout on
+    a default install, so the very defensive check meant to keep
+    scratch data outside any repository could fire on the first job a
+    fresh install ever ran. Rule: a scratch base must be proven outside
+    any repository at install-check time, not only discovered the first
+    time a job hits it. Enforcement: the default scratch base is now a
+    sibling of the install checkout, never a path inside it, honoring
+    the same override an operator could already set; a version-check
+    command now runs the identical outside-repository assertion itself
+    and reports the result, instead of a job only ever finding out by
+    refusing. Regression coverage is in
+    `tests/field-lessons-batch-w.test.mjs`.
+172. **A shared contract or a job's own prompt could name a private
+    term and still reach a public repository, because the existing
+    private-names scan only ever looked at the lines a change would
+    add to a diff.** A contract file and a job prompt are both read
+    by, and can both leak into, a public repository long before any
+    diff exists to scan. Rule: a contract or a job prompt for a public
+    repository passes the same private-names scan a diff already gets,
+    before any job is ever dispatched. Enforcement: dispatching a
+    manifest now scans the shared contract's own text and every job's
+    own prompt text against the configured private-names list,
+    refusing before any workspace is created when a term is found, and
+    skipping the scan entirely once the target repository is confirmed
+    non-public. Regression coverage is in
+    `tests/field-lessons-batch-w.test.mjs`.
+173. **An evaluator's own test could report a clean pass while never
+    once exercising the very attack path it exists to catch, because
+    its test used only hand-built fixtures instead of the real data it
+    will actually see in production.** A gate that only ever saw
+    fixture data built to be clean, or built to be caught, proves
+    nothing about whether it can tell the two apart on a real input.
+    Rule: a test for any evaluator or gate must run on the real data it
+    will see in production and prove the attack path itself actually
+    ran, not merely that the final verdict came back as expected.
+    Enforcement: the shared contract template now requires exactly that
+    real-data test for every evaluator or gate a batch adds or changes,
+    together with a standard mutant that forces the evaluator to treat
+    every case as clean, which that same test must then kill.
+174. **A live service's own checkout had its HEAD changed by hand to
+    set up a comparison, sitting detached for a time before being
+    restored.** Nothing in the tooling stopped a person from treating a
+    live service's checkout the same as a disposable one, even though
+    changing its HEAD by hand risks the service reading a half-updated
+    tree while it keeps running. Rule: a checkout a running service
+    depends on is never changed by hand; a standing warning names it
+    before that happens again. Enforcement: validating or running a
+    manifest now warns when its target root has a live service
+    listening on its own configured port, naming both the root and the
+    port and pointing at a worktree as the safe alternative, reusing
+    the existing port-probing configuration instead of adding a second
+    list to keep in sync. Regression coverage is in
+    `tests/field-lessons-batch-w.test.mjs`.
+175. **A model or provider route was switched to a new value after
+    only a listing call confirmed the new option existed, and every
+    real message sent through that route then failed once it reached
+    production.** A listing call and a real streaming message travel
+    through completely different code paths in most clients, so
+    confirming an option is listed proves nothing about whether a real
+    message can actually complete through it. Rule: a model or provider
+    route change needs one real message sent through the project's own
+    client, on the same code path production uses, before it ever
+    lands. Enforcement: validating a manifest now warns when a job
+    changes a file that looks like a model or provider route and no
+    declared check looks like that real smoke test; separately, an
+    explicitly configured list of route files now makes publishing the
+    change refuse outright unless its own description names the
+    verification that was actually run. Regression coverage is in
+    `tests/field-lessons-batch-w.test.mjs`.
+176. **A validator gained a second bound check on a file that already
+    had one mutant covering it, and the new comparison went completely
+    untested, because coverage was only ever tracked once per file,
+    never once per line.** A file-level coverage count reads as
+    satisfied the moment any one comparison on that file has a mutant,
+    even while a second, unrelated comparison added later has none at
+    all. Rule: a mutant is required for every pass-bar comparison a
+    change adds, not just once per file that comparison happens to live
+    in. Enforcement: mutation testing now also warns, at the line
+    level, when a new or changed comparison operator has no mutant
+    whose own target text actually touches that exact line, layered
+    over the existing file-level warning rather than replacing it.
+    Regression coverage is in `tests/field-lessons-batch-w.test.mjs`.
+177. **A mutant a real test suite genuinely caught was still reported
+    as unproven, because the classification trusted only one specific
+    exit code as a real failure; separately, a mutant went unproven a
+    second time after an unrelated formatting step silently rewrote its
+    own target file first.** Some test runners report a real failure
+    under a different exit code than the one classification already
+    recognized, and a formatting step run before mutation testing can
+    rewrite a mutant's own target text without anything noticing before
+    the mutant is scored. Rule: a test runner's own known failure exit
+    code, paired with a real failure line in its own output, counts as
+    a kill; a formatting step that runs before mutation testing must
+    never be allowed to rewrite a mutant's own target file unnoticed.
+    Enforcement: mutation testing now recognizes a wider, named set of
+    known test-failure exit codes together with a real failure line in
+    the output as a kill, reports an invalid mutant separately from a
+    genuine build failure, and warns whenever a step run before
+    mutation testing changed the bytes of a file a mutant targets.
+    Regression coverage is in `tests/field-lessons-batch-w.test.mjs`.
+178. **A new test landed right at the edge of a per-test CI timeout,
+    passing on one machine and timing out on another the moment
+    anything nearby ran a little slower.** A test's own duration was
+    never checked against the timeout it shares with every other test
+    on that platform, so a test that already used most of the budget
+    looked fine right up until it didn't. Rule: a newly added test's
+    own duration is checked against a configured share of the per-test
+    timeout before it gets the chance to surprise CI later on a
+    slightly slower run. Enforcement: publishing a change now reads
+    every check run's own timing output and warns by name and duration
+    when a test this change added used more than that configured share
+    of the timeout on any platform. Regression coverage is in
+    `tests/field-lessons-batch-w.test.mjs`.
+179. **Accepting a known pre-existing failure could not reach a
+    verdict at all, because proving it re-ran a whole, possibly slow
+    or unrelated, suite on the base instead of just the failing tests
+    in question.** A full-suite re-run on a throwaway base checkout can
+    fail to produce any usable result for reasons that have nothing to
+    do with the specific tests being excused, leaving the decision
+    stuck with no way forward. Rule: a base comparison is scoped to
+    just the tests actually in question, not the whole suite around
+    them. Enforcement: accepting a pre-existing failure now re-runs the
+    base check scoped to just the failing tests' own files, and the
+    resulting summary names exactly which test ids that verdict
+    covers. Regression coverage is in
+    `tests/field-lessons-batch-w.test.mjs`.
+180. **Squashing a branch by hand onto a base that had since moved
+    risked bringing someone else's already-merged changes into the
+    index.** Resetting a branch's history onto whatever a base
+    reference currently points at, instead of the shared point where
+    the branch actually diverged, can silently stage far more than the
+    branch itself ever changed. Rule: a squash always resets to the
+    shared point of divergence, never a base reference that may have
+    moved since, and refuses the moment anything unexpected ends up
+    staged. Enforcement: a new command resets a branch's index to its
+    own point of divergence from the base and refuses, undoing itself
+    first, whenever the newly staged files include one the branch
+    never touched there; it only stages and prints the file list,
+    never committing on its own. Regression coverage is in
+    `tests/field-lessons-batch-w.test.mjs`.
+181. **Spend crossed both a warn and a cap threshold in a single day
+    before anyone noticed, because nothing tracked a running total
+    across everything dispatched that day.** Spend was only ever
+    summed after the fact, at handoff, so a threshold meant to stop
+    further spending had already been crossed many dispatches earlier
+    with nothing to flag it in the moment. Rule: a running daily spend
+    total is checked before every dispatch, not tallied after the
+    fact. Enforcement: a configurable warn and cap threshold are now
+    checked against a running total, summed across every registered
+    project's own dispatches since the start of the day, before a run,
+    a question, or a scouting sweep ever starts, refusing at the cap
+    unless explicitly overridden with a stated reason. Regression
+    coverage is in `tests/field-lessons-batch-w.test.mjs`.
+182. **An offline package-cache step failed inside a sandbox even
+    though the exact same command succeeded instantly outside it.** The
+    sandbox pointed the cache variable at a fresh, empty, per-run
+    directory instead of the real one already warmed by everyday use,
+    so an offline step had nothing to read from no matter how many
+    times it had already succeeded elsewhere. Rule: an offline step
+    needs to run where its already-warm cache actually lives, not a
+    new empty directory invented for the occasion. Enforcement: the
+    sandbox now points that cache variable at the real, shared cache
+    directory under the real machine's own home (already readable by
+    the sandbox) instead of a fresh per-run one beside the job's own
+    workspace. Regression coverage is in
+    `tests/field-lessons-batch-w.test.mjs`.
+183. **A default retry for a flaky-looking CI failure covered only one
+    narrow pattern of it, missing a failure in a file the change never
+    touched at all.** A failure on a file completely outside a change's
+    own diff is just as clearly unrelated to that change as a failure
+    that only happens on one platform, yet only the platform-specific
+    pattern ever triggered an automatic retry, leaving every other kind
+    of unrelated failure to block the change by hand. Rule: a default
+    retry should cover any failure clearly unrelated to the change
+    itself, not just one specific pattern of it. Enforcement: the
+    default retry now also applies when a failing test's own file is
+    one the change never touched, and a failure that keeps recurring
+    in the same file across separate attempts is now logged and
+    flagged by name for a follow-up fix, instead of being rerun forever
+    with nothing else ever changing. Regression coverage is in
+    `tests/field-lessons-batch-w.test.mjs`.

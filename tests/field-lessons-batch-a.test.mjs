@@ -302,7 +302,10 @@ describe('L117: mutants runs killed/survived/invalid mutation testing directly o
     const result = await runMutantsCurrentTree(root, { mutantsFile: mutantsPath, mutantCheck }, spawn);
     assert.equal(result.mutantsSummary.killed, 1);
     assert.equal(result.mutantsSummary.survived, 1);
-    assert.equal(result.mutantsSummary.invalid, 1);
+    // Field lesson #274: a collection/usage-error exit (here 3, never 1 or cargo's 101) is
+    // 'invalid-build', distinct from an 'invalid-find' mutant whose find didn't match once.
+    assert.equal(result.mutantsSummary['invalid-build'], 1);
+    assert.equal(result.mutantsSummary['invalid-find'], 0);
     assert.equal(result.mutantsPassed, false);
     const killed = result.mutants.find(m => m.name === 'off-by-one');
     assert.equal(killed.status, 'killed');
@@ -311,7 +314,7 @@ describe('L117: mutants runs killed/survived/invalid mutation testing directly o
     assert.equal(survived.status, 'survived');
     assert.equal(survived.firstFailingLine, null);
     const invalid = result.mutants.find(m => m.name === 'usage-error');
-    assert.equal(invalid.status, 'invalid');
+    assert.equal(invalid.status, 'invalid-build');
     assert.equal(invalid.firstFailingLine, null);
     assert.equal(await fs.readFile(path.join(root, 'target.js'), 'utf8'), original);
   });
