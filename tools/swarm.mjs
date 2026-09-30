@@ -24,7 +24,7 @@ import { packagingWithoutBuildCheckWarning, packagingKeyChanges, packagingChange
 import { scoutPrompt, normalizeScoutReport, renderScoutMarkdown, briefPathCandidates, parseAllowedLicenses } from './scout.mjs';
 import { parseGoals, extractKnownRepos, gatherAreaCandidates, sweepPrompt, normalizeSweepArea, renderShortlistMarkdown, resolveBriefPath as resolveSweepBriefPath } from './sweep.mjs';
 import { findUncoveredTests, listProjectFiles, suggestIgnoreTests, contextDirectoryWarnings, registryPinningWarnings, isTestFile } from './context-check.mjs';
-import { ship, SHIP_DEFAULTS, resolveGhAndGit, parsePrPayload, resolveToolchainBin, parseExemptFlag, toolchainCheckEnv, shipHelpRequested, SHIP_USAGE } from './ship.mjs';
+import { ship, SHIP_DEFAULTS, resolveGhAndGit, parsePrPayload, resolveToolchainBin, parseExemptFlag, toolchainCheckEnv, shipHelpRequested, SHIP_USAGE, TEST_FILE_RE, gitIgnoredFixtureWarnings } from './ship.mjs';
 import { loadChecksFromCi, checkNotInCiWarnings, DEFAULT_CI_PATH } from './checks-from-ci.mjs';
 import { go, commitOutputs, goExitCode } from './go.mjs';
 import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary, listLiveRuns, repoKey, repoPaths } from './board.mjs';
@@ -646,6 +646,15 @@ async function safePath(root, value, { internal = false, parents = false } = {})
     if (!info && parents && index < parts.length - 1) { try { await fs.mkdir(current); } catch (error) { if (error.code !== 'EEXIST') throw error; const created=await fs.lstat(current); if (!created.isDirectory() || created.isSymbolicLink()) fail(`Unsafe parent: ${value}`); } }
   }
   return current;
+}
+
+// #271: a dropped write is saved for salvage. Only swarm-internal copies (`.swarm/...`, e.g. a
+// seeded skill) may bypass the reserved-path guard; any other reserved or secret path is never
+// read, so a real secret file is never copied into the run folder (returns null = not saved).
+async function droppedBytesAt(root, value) {
+  const internal = value === '.swarm' || value.startsWith('.swarm/');
+  try { return await bytesAt(root, value, internal); }
+  catch (error) { if (!internal && /Reserved|secret/i.test(String(error?.message))) return null; throw error; }
 }
 
 async function bytesAt(root, value, internal = false) {
@@ -1408,6 +1417,36 @@ async function worktreeStatusMap(worktree) {
   return map;
 }
 
+// Field lesson #271: a dropped write (an edit outside job.outputs) is saved to
+// `.swarm/runs/<id>/dropped/<path>` at the moment it is detected, so a run that would otherwise
+// refuse over one can still be salvaged instead of the edit only ever surviving inside a workspace
+// integrate never looks at again. A base copy still on disk gets a unified diff alongside it
+// (`<path>.diff`); a `git diff --no-index` for a shell/worktree job (a real git checkout is on
+// hand), a synthetic `--- a/<path>` / `+++ b/<path>` stub for a copied workspace job, which has none.
+async function saveDroppedWrite(root, id, file, afterBytes, baseBytes, { useGit = false } = {}) {
+  const dest = await safePath(root, `.swarm/runs/${id}/dropped/${file}`, { internal: true, parents: true });
+  if (afterBytes === null) { await fs.rm(dest, { force: true }); return; }
+  await fs.mkdir(path.dirname(dest), { recursive: true });
+  await fs.writeFile(dest, afterBytes);
+  if (baseBytes === null) return;
+  const diff = useGit ? await gitDiffNoIndexBytes(file, baseBytes, afterBytes) : syntheticDiff(file, baseBytes, afterBytes);
+  if (diff) await fs.writeFile(`${dest}.diff`, diff);
+}
+async function gitDiffNoIndexBytes(file, baseBytes, afterBytes) {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-dropped-diff-'));
+  try {
+    const before = path.join(tmpDir, 'before'), after = path.join(tmpDir, 'after');
+    await fs.writeFile(before, baseBytes);
+    await fs.writeFile(after, afterBytes);
+    try { return await git(tmpDir, ['diff', '--no-index', '--', before, after]); }
+    catch (error) { return typeof error.stdout === 'string' ? error.stdout : null; }
+  } finally { await fs.rm(tmpDir, { recursive: true, force: true }); }
+}
+function syntheticDiff(file, baseBytes, afterBytes) {
+  const before = baseBytes.toString('utf8').split('\n'), after = afterBytes.toString('utf8').split('\n');
+  return `--- a/${file}\n+++ b/${file}\n@@ -1,${before.length} +1,${after.length} @@\n${before.map(line => `-${line}`).join('\n')}\n${after.map(line => `+${line}`).join('\n')}\n`;
+}
+
 async function executeClaudeShellJob(root, directory, job, proposalRoot, dependencyFiles, message, options) {
   const hooks = options.shellHooks ?? {};
   const workerKey = options.workerKey;
@@ -1532,7 +1571,15 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
         dropped.push(file);
         if (!beforeStatus.has(file)) droppedNew.push(file);
       }
-      if (dropped.length) { result.droppedWrites = dropped.sort(); if (droppedNew.length) result.droppedWritesNew = droppedNew.sort(); }
+      if (dropped.length) {
+        result.droppedWrites = dropped.sort(); if (droppedNew.length) result.droppedWritesNew = droppedNew.sort();
+        const runId = path.basename(directory);
+        for (const file of dropped) {
+          const afterBytes = await droppedBytesAt(worktree, file);
+          const baseBytes = await droppedBytesAt(root, file);
+          await saveDroppedWrite(root, runId, file, afterBytes, baseBytes, { useGit: true });
+        }
+      }
       const outputs = [], leaked = [];
       for (const file of job.outputs) {
         const bytes = await bytesAt(worktree, file);
@@ -1572,6 +1619,13 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
 // indistinguishable until a separate base run tells them apart, well after the fact. `run`
 // checks the committed base itself first, caching the verdict by base sha (`.swarm/base-checks/
 // <sha>.json`) so a repeat run at the same sha never repeats the (real) spawn cost.
+// Field lesson #268: every path-like token a failing check's own stdout/stderr names — a stack
+// trace, a `FAILED tests/...` line — so a red base whose only failures already sit in this run's
+// own declared outputs can be told apart from one that names something else entirely.
+const FAILURE_LOCATION_RE = /[A-Za-z0-9_.\/-]+\.[A-Za-z0-9]+(?::\d+(?:-\d+)?)?/g;
+function extractFailureLocations(text) {
+  return [...new Set([...String(text ?? '').matchAll(FAILURE_LOCATION_RE)].map(match => match[0].replace(/:\d+(-\d+)?$/, '')))];
+}
 export async function runBaseChecks(root, manifest, { spawnImpl = spawn, gitImpl, baseSha: baseShaOverride, env = process.env } = {}) {
   const checks = manifest.checks ?? [];
   if (!checks.length) return { baseSha: null, status: 'green', failures: [] };
@@ -1580,11 +1634,15 @@ export async function runBaseChecks(root, manifest, { spawnImpl = spawn, gitImpl
   const cached = await bytesAt(root, cacheRel, true);
   if (cached) { try { return JSON.parse(cached.toString('utf8')); } catch { /* recompute below */ } }
   const failures = [];
+  const failureLocations = {};
   for (const check of checks) {
     const outcome = await runCheck(check.name, check.argv, root, check.timeoutMs ?? 300000, spawnImpl, false, () => {}, env);
-    if (outcome.status !== 'passed') failures.push(check.name);
+    if (outcome.status !== 'passed') {
+      failures.push(check.name);
+      failureLocations[check.name] = extractFailureLocations(`${outcome.tail ?? ''}\n${outcome.hint ?? ''}`);
+    }
   }
-  const record = { baseSha, status: failures.length ? 'red' : 'green', failures };
+  const record = { baseSha, status: failures.length ? 'red' : 'green', failures, failureLocations };
   await jsonWrite(root, cacheRel, record);
   return record;
 }
@@ -1592,12 +1650,28 @@ export async function runBaseChecks(root, manifest, { spawnImpl = spawn, gitImpl
 export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks, checkBase = false, acceptRedBase = false, reason, baseChecks = {} } = {}) {
   root = await fs.realpath(root);
   validateManifest(manifest);
+  // Every worktree of one repo shares a board key; refuse before touching anything if another
+  // live run already claims one of this run's declared outputs.
+  const declaredOutputs = manifest.jobs.flatMap(job => job.outputs);
+  let redBaseAutoAccept = null;
   // Field lesson #253: refuses to dispatch onto a red base unless the caller explicitly accepts
   // it (with a reason) — before any workspace is even created for a job.
   if (checkBase) {
     if (acceptRedBase && !(typeof reason === 'string' && reason.trim())) fail('--accept-red-base requires --reason');
     const baseResult = await runBaseChecks(root, manifest, { spawnImpl, env, ...baseChecks });
-    if (baseResult.status === 'red' && !acceptRedBase) fail(`Refusing: base is red (${baseResult.failures.join(', ')}); pass --accept-red-base with --reason to run onto it anyway`);
+    if (baseResult.status === 'red' && !acceptRedBase) {
+      // Field lesson #268: a red base whose every failing location is already covered by this
+      // run's own declared outputs (a vendor/pin bump this same run means to fix, say) proceeds
+      // without the flag — logged as a warning, never silently treated as green.
+      const rawLocations = [...new Set(Object.values(baseResult.failureLocations ?? {}).flat())];
+      const locations = [];
+      for (const location of rawLocations) {
+        if (declaredOutputs.includes(location) || (await bytesAt(root, location).catch(() => null)) !== null) locations.push(location);
+      }
+      const covered = locations.length > 0 && locations.every(location => declaredOutputs.includes(location));
+      if (!covered) fail(`Refusing: base is red (${baseResult.failures.join(', ')}); pass --accept-red-base with --reason to run onto it anyway`);
+      redBaseAutoAccept = `red-base-auto-accepted: every failing check location is covered by this run's own outputs: ${locations.join(', ')}`;
+    }
   }
   if (manifest.jobs.some(job => job.agent === 'codex')) requireCodexPlatform(platform);
   // Decision #154: a shell job never runs unsandboxed and never falls back to the person's own
@@ -1610,9 +1684,6 @@ export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl,
   }
   if (typeof id !== 'string' || !ID.test(id)) fail('Invalid run id');
   if (!Number.isInteger(progressIntervalMs) || progressIntervalMs < 50 || progressIntervalMs > 60000) fail('progressIntervalMs must be 50–60000');
-  // Every worktree of one repo shares a board key; refuse before touching anything if another
-  // live run already claims one of this run's declared outputs.
-  const declaredOutputs = manifest.jobs.flatMap(job => job.outputs);
   const conflicts = await findWriterConflicts({ runId: id, root, outputs: declaredOutputs, dir: liveDirOpt });
   if (conflicts.length) {
     const [first] = conflicts;
@@ -1620,13 +1691,13 @@ export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl,
   }
   await registerLiveRun({ runId: id, root, outputs: declaredOutputs, dir: liveDirOpt });
   try {
-    return await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, workerKey, shellHooks });
+    return await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, workerKey, shellHooks, redBaseAutoAccept });
   } finally {
     await unregisterLiveRun(id, { dir: liveDirOpt });
   }
 }
 
-async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, workerKey, shellHooks }) {
+async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, workerKey, shellHooks, redBaseAutoAccept = null }) {
   const cleanup = new AbortController();
   signal = signal ? AbortSignal.any([signal, cleanup.signal]) : cleanup.signal;
   let workers = [];
@@ -1634,7 +1705,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   await safePath(root, `${directory}/state.json`, { internal: true, parents: true });
   const claim = await safePath(root, `${directory}/claim`, { internal: true });
   await fs.writeFile(claim, '', { flag: 'wx' });
-  const state = { version: 1, id, root, concurrency: manifest.concurrency??2, peakConcurrency: 0, status: 'running', startedAt: new Date().toISOString(), jobs: [] };
+  const state = { version: 1, id, root, concurrency: manifest.concurrency??2, peakConcurrency: 0, status: 'running', startedAt: new Date().toISOString(), jobs: [], ...(redBaseAutoAccept ? { redBaseAutoAccept } : {}) };
   // Field lesson #202: two shell jobs each told to run the full suite, sharing one root, is a
   // manifest-shape problem known before any worker starts — surfaced on every state write.
   const manifestWarnings = sharedRootFullSuiteWarnings(manifest);
@@ -1881,7 +1952,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           for (const file of await listWorkspaceFiles(workspaceRoot)) {
             if (known.has(file)) continue;
             if (seededHashes?.has(file)) {
-              const bytes = await bytesAt(workspaceRoot, file, true);
+              const bytes = await droppedBytesAt(workspaceRoot, file);
               const hash = bytes === null ? null : digest(bytes);
               if (hash === seededHashes.get(file)) continue;
               droppedWrites.add(file);
@@ -1890,7 +1961,14 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
             }
             droppedWrites.add(file);
           }
-          if (droppedWrites.size) { record.droppedWrites = [...droppedWrites].sort(); if (droppedWritesNew.size) record.droppedWritesNew = [...droppedWritesNew].sort(); }
+          if (droppedWrites.size) {
+            record.droppedWrites = [...droppedWrites].sort(); if (droppedWritesNew.size) record.droppedWritesNew = [...droppedWritesNew].sort();
+            for (const file of droppedWrites) {
+              const afterBytes = await droppedBytesAt(workspaceRoot, file);
+              const baseBytes = await droppedBytesAt(root, file);
+              await saveDroppedWrite(root, id, file, afterBytes, baseBytes);
+            }
+          }
         }
         // Field lesson 19: a worker's own "blocked" envelope, or the first sign of why it
         // crashed, is the only evidence of what actually happened; it must survive past a later
@@ -2125,10 +2203,14 @@ const droppedWriteWarnings = state => state.jobs.flatMap(job => (job.droppedWrit
 // then of one trailing status word (optionally introduced by ":" or "-") to recover the path
 // itself before it is ever compared against job.outputs or shown in a warning.
 const CHANGED_STATUS_WORD_RE = /(?:\s*[:-]\s*|\s+)(?:created|modified|updated|edited|deleted|removed|added|new|changed)$/i;
-function normalizeChangedEntry(raw) {
+export function normalizeChangedEntry(raw) {
   let text = raw.trim();
   text = text.replace(/\s*\([^()]*\)\s*$/, '').trim();
   text = text.replace(CHANGED_STATUS_WORD_RE, '').trim();
+  // Field lesson #270: a self-reported path may still carry a trailing `:line` or `:start-end`
+  // reference (the same shape a stack trace or a test failure line names); stripped last so
+  // `src/x.py:1009` matches the declared output `src/x.py` instead of reading as a whole new file.
+  text = text.replace(/:\d+(-\d+)?$/, '').trim();
   return text;
 }
 // Field lesson #142: a synced venv's own interpreter directory lived under $HOME but inside a
@@ -2137,7 +2219,10 @@ const venvInterpreterWarnings = state => state.jobs.flatMap(job => job.venvInter
 // Field lesson #252: a transcript existed (real usage lines) but named a model this rate table
 // does not recognize — costUsd stays null, but that absence is worth a warning, not silence.
 const costRateUnknownWarnings = state => state.jobs.filter(job => job.costWarning).map(job => job.costWarning);
-const runWarnings = (state, extra = []) => [...modelMismatchWarnings(state), ...codexEnvelopeFallbackWarnings(state), ...permissionDenialWarnings(state), ...invalidJsonOutputWarnings(state), ...droppedWriteWarnings(state), ...venvInterpreterWarnings(state), ...costRateUnknownWarnings(state), ...extra];
+// Field lesson #268: a red base this run auto-accepted (every failing location already covered by
+// its own declared outputs) is never silent — surfaced the same way any other run-level warning is.
+const redBaseAutoAcceptWarnings = state => state.redBaseAutoAccept ? [state.redBaseAutoAccept] : [];
+const runWarnings = (state, extra = []) => [...modelMismatchWarnings(state), ...codexEnvelopeFallbackWarnings(state), ...permissionDenialWarnings(state), ...invalidJsonOutputWarnings(state), ...droppedWriteWarnings(state), ...venvInterpreterWarnings(state), ...costRateUnknownWarnings(state), ...redBaseAutoAcceptWarnings(state), ...extra];
 // A provider that never reports usage.total_tokens (or never ran) reports null, not 0: absence
 // of evidence, not evidence of zero cost.
 const jobTokens = record => typeof record?.usage?.total_tokens === 'number' ? record.usage.total_tokens : null;
@@ -2615,7 +2700,14 @@ async function loadJobResultData(root, id, declared, readRoot) {
   return responseBytes ? parseFinalJson(responseBytes.toString('utf8')) : null;
 }
 
-export async function integrateRun(root, id, { noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, salvage = false, acceptDeviation = false } = {}) {
+// Field lesson #269: a worker's own `deviations` array may hold plain strings, not just
+// `{contract, did, why}` objects — rendered unchanged here rather than read as `.contract`
+// (`undefined` for a string) or spread character-by-character into a char-indexed object.
+function deviationText(deviation) {
+  return typeof deviation === 'string' ? deviation : deviation?.contract ?? JSON.stringify(deviation);
+}
+
+export async function integrateRun(root, id, { noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, salvage = false, acceptDeviation = false, acceptDropped = false, salvageDropped = false } = {}) {
   root = await fs.realpath(root);
   // Field lesson #202: a job's own timed-out worker declares nothing missing — it simply never got
   // to say so — so a salvage always re-checks against the real checkout, same as any other job;
@@ -2678,8 +2770,25 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       const resultForDeviations = await loadJobResultData(root, id, declared, readRoot);
       const jobDeviations = Array.isArray(resultForDeviations?.deviations) ? resultForDeviations.deviations : [];
       if (jobDeviations.length) {
-        if (!acceptDeviation) fail(`contract-deviation: ${declared.id}: ${jobDeviations.map(deviation => deviation.contract).join(', ')}`);
-        for (const deviation of jobDeviations) acceptedDeviations.push({ job: declared.id, ...deviation });
+        if (!acceptDeviation) fail(`contract-deviation: ${declared.id}: ${jobDeviations.map(deviationText).join(', ')}`);
+        for (const deviation of jobDeviations) acceptedDeviations.push({ job: declared.id, ...(typeof deviation === 'string' ? { contract: deviation } : deviation) });
+      }
+      // Field lesson #271: a dropped write (an edit outside this job's declared outputs) refuses
+      // integrate unless explicitly accepted or salvaged, checked here, before any project file is
+      // written, the same way the deviations gate just above does.
+      if (job.droppedWrites?.length && !acceptDropped && !salvageDropped) {
+        fail(`dropped-writes: ${declared.id}: ${job.droppedWrites.join(', ')}; pass --accept-dropped to proceed without them, or --salvage-dropped to apply them`);
+      }
+      if (job.droppedWrites?.length && salvageDropped) {
+        for (const file of job.droppedWrites) {
+          const saved = await bytesAt(root, `.swarm/runs/${id}/dropped/${file}`, true);
+          if (saved === null) continue;
+          const current = await bytesAt(root, file);
+          const currentMode = current === null ? 0o644 : (await fs.stat(await safePath(root, file))).mode & 0o777;
+          writes.push({ file, bytes: saved, previous: current, mode: currentMode });
+          jobChangedFiles.push(file);
+          if (current === null) newFiles.push(file);
+        }
       }
       // Field lesson 128: the job's own context, concatenated once, is the only source a worker
       // could have copied a real sha/provenance string from verbatim.
@@ -3291,7 +3400,7 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   return {status:'valid',root,jobs,warnings};
 }
 
-export async function inspectRun(root,id){
+export async function inspectRun(root,id,{spawnImpl=spawn,programOnPathImpl=programOnPath,exec=shipExec,env=process.env}={}){
   root=await fs.realpath(root);const state=await readState(root,id);
   if(state.root!==root||state.id!==id) fail('Run belongs to another repository');
   const manifest=validateManifest(JSON.parse(await bytesAt(root,`.swarm/runs/${id}/manifest.json`,true)));
@@ -3299,6 +3408,11 @@ export async function inspectRun(root,id){
   const jobs=[];
   const inventedHashWarnings=[];
   const persistedFieldWarnings=[];
+  // Field lesson #268/#272: a file-only job's own proposed test-file output is worth a collect-only
+  // preflight (a bad import fails cheap here instead of only at redcheck), and every job's own
+  // proposed test-file output is worth a git-ignored-fixture scan — both surfaced as warnings only.
+  const collectOnlyWarnings=[];
+  const fixtureWarnings=[];
   for(const job of manifest.jobs){
     const record=state.jobs.find(j=>j.id===job.id);if(!record)fail('Missing job record');
     // tier/tierReason are validated metadata only; they never change which model ran.
@@ -3319,9 +3433,25 @@ export async function inspectRun(root,id){
       files.push({job:job.id,jobStatus:record.status,path:file,baseHash:record.baseHashes[file],currentHash,proposedHash,bytes:proposed?.length??0,status:record.status!=='complete'?'blocked':proposed===null?'missing':state.integratedAt&&currentHash===proposedHash?'applied':conflict?'conflict':currentHash===proposedHash?'unchanged':'ready'});
       if(proposed!==null)for(const hash of inventedHashesIn(proposed.toString('utf8'),current?.toString('utf8')??'',contextText))inventedHashWarnings.push(`invented-hash: ${job.id}: ${file}: ${hash}`);
       if(proposed!==null)persistedFieldWarnings.push(...undeclaredPersistedFieldWarnings(job,parsedResult,file,current?.toString('utf8')??'',proposed.toString('utf8')));
+      if(proposed!==null&&TEST_FILE_RE.test(file)){
+        for(const warning of await gitIgnoredFixtureWarnings(exec,new Map([[file,proposed.toString('utf8')]]),root)) fixtureWarnings.push(`git-ignored-fixture: ${job.id}: ${warning.file} -> ${warning.path}`);
+        if(!job.shell){
+          if(/\.(mjs|js|ts)$/i.test(file)){
+            const outcome=await runCheck('collect-only',['node','--check',file],workspaceRoot,15000,spawnImpl,true,()=>{},env);
+            if(outcome.status!=='passed') collectOnlyWarnings.push(`collect-only-failed: ${job.id}: ${file}: ${(outcome.tail??'').split('\n').find(line=>line.trim())??''}`);
+          } else if(file.toLowerCase().endsWith('.py')){
+            const dirs=(env.PATH??'').split(path.delimiter).filter(Boolean);
+            if(!(await programOnPathImpl('pytest',dirs))) collectOnlyWarnings.push(`collect-only-skipped: ${job.id}: pytest not on PATH`);
+            else {
+              const outcome=await runCheck('collect-only',['python','-m','pytest','--collect-only','-q',file],workspaceRoot,30000,spawnImpl,true,()=>{},env);
+              if(outcome.status!=='passed') collectOnlyWarnings.push(`collect-only-failed: ${job.id}: ${file}: ${(outcome.tail??'').split('\n').find(line=>line.trim())??''}`);
+            }
+          }
+        }
+      }
     }
   }
-  return {id,status:state.status,integratedAt:state.integratedAt??null,tokens:tokensTotal(jobs.map(job=>job.tokens)),costNotReported:costNotReported(jobs),warnings:[...runWarnings(state),...inventedHashWarnings,...persistedFieldWarnings],jobs,files};
+  return {id,status:state.status,integratedAt:state.integratedAt??null,tokens:tokensTotal(jobs.map(job=>job.tokens)),costNotReported:costNotReported(jobs),warnings:[...runWarnings(state),...inventedHashWarnings,...persistedFieldWarnings,...collectOnlyWarnings,...fixtureWarnings],jobs,files};
 }
 
 // Lesson #48: a coordinator asking only "did it work, what did it say" should not have to
@@ -3359,7 +3489,10 @@ export async function inspectResults(root, id) {
     // field is, so a reviewer sees them at inspect time, before integrate ever decides whether to
     // accept them.
     for (const deviation of Array.isArray(parsed?.deviations) ? parsed.deviations : []) {
-      if (deviation && typeof deviation.contract === 'string' && deviation.contract) warnings.push(`contract-deviation: ${job.id}: ${deviation.contract}`);
+      // Field lesson #269: a bare-string deviation used to fail this `.contract` guard silently
+      // (dropping it from the warning list entirely, not just rendering it oddly).
+      const text = typeof deviation === 'string' ? deviation : (typeof deviation?.contract === 'string' ? deviation.contract : null);
+      if (text) warnings.push(`contract-deviation: ${job.id}: ${text}`);
     }
     // Field lesson #260: a job's own checksRun entry can say "passed" for a check whose own result
     // text still names a nonzero fail count — self-contradicting evidence a per-job status field
@@ -4499,7 +4632,7 @@ async function main() {
   }
   // integrate's checks/mutants flags are read-only selection of whether/how checks run; strip
   // them here so the generic argument-count check below still fails on anything else.
-  let noChecks=false,requireChecks=false,acceptFailedChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag,acceptBlocked=false,salvage=false,acceptDeviation=false;
+  let noChecks=false,requireChecks=false,acceptFailedChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag,acceptBlocked=false,salvage=false,acceptDeviation=false,acceptDropped=false,salvageDropped=false;
   if(command==='integrate'){
     const flags=rest.splice(0,rest.length);
     for(let index=0;index<flags.length;index++){
@@ -4518,8 +4651,14 @@ async function main() {
       // Field lesson #256: an owner decision to integrate a run whose own result reported a
       // non-empty deviations list anyway — logged in the integrate result, never silent.
       if(flag==='--accept-deviation'){acceptDeviation=true;continue;}
+      // Field lesson #271: a dropped write (an edit outside this job's declared outputs) refuses
+      // integrate unless one of these is passed — proceed without it, or apply it from where it
+      // was saved the moment it was detected.
+      if(flag==='--accept-dropped'){acceptDropped=true;continue;}
+      if(flag==='--salvage-dropped'){salvageDropped=true;continue;}
       rest.push(flag);
     }
+    if(acceptDropped&&salvageDropped)fail('--accept-dropped and --salvage-dropped cannot be combined');
     if(noChecks&&requireChecks)fail('--no-checks and --require-checks cannot be combined');
     if(noChecks&&salvage)fail('--no-checks and --salvage cannot be combined');
     if(noChecks&&acceptFailedChecks)fail('--no-checks and --accept-failed-checks cannot be combined');
@@ -4676,7 +4815,7 @@ async function main() {
       ship: (goRoot,id,goShipFlags)=>shipRun(goRoot,id,goShipFlags),
     });
   }
-  else result=await integrateRun(root,argument,{noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation});
+  else result=await integrateRun(root,argument,{noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptDropped,salvageDropped});
   // Field lesson #203: a failed check at integrate used to be a quiet field (`status: "integrated"`,
   // exit 0) unless the coordinator remembered --require-checks; refusing (or, with the escape
   // hatch, at least saying so loudly) is now the default. --require-checks stays an accepted no-op

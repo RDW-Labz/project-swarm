@@ -53,11 +53,15 @@ test('A: --mutants-file loads post-build mutants from an external file when the 
   // This exact 'find' string only exists because the build job above just wrote it; it could not
   // have been declared in the manifest before the run.
   await fs.writeFile(mutantsPath, JSON.stringify([{ name: 'off-by-one', file: 'built.js', find: 'v<=10', replace: 'v<10' }]));
-  const result = await integrateRun(root, state.id, {
+  const mutantOptions = {
     mutants: true,
     mutantsFile: mutantsPath,
     mutantCheck: JSON.stringify([process.execPath, '-e', "process.exit(require('fs').readFileSync('built.js','utf8').includes('v<=10')?0:1)"]),
-  });
+  };
+  // The fixture's own `fake` helper always writes input.txt too, which this job never declares as
+  // an output: a dropped write integrate now refuses unless explicitly accepted.
+  await assert.rejects(integrateRun(root, state.id, mutantOptions), /dropped-writes: writer: input\.txt/);
+  const result = await integrateRun(root, state.id, { ...mutantOptions, acceptDropped: true });
   assert.equal(result.mutantsSummary.killed, 1);
   assert.equal(await fs.readFile(path.join(root, 'built.js'), 'utf8'), 'function ok(v){return v<=10}');
 });

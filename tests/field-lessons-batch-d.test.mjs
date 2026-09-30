@@ -174,7 +174,8 @@ describe("dropped writes: inspect/integrate warn when a job's own report, or its
     assert.deepEqual(state.jobs[0].droppedWrites, ['extra.txt']);
     const inspected = await inspectRun(root, state.id);
     assert.ok(inspected.warnings.includes('dropped write: extra.txt (not in outputs)'));
-    const integrated = await integrateRun(root, state.id);
+    await assert.rejects(integrateRun(root, state.id), /dropped-writes: writer: extra\.txt/);
+    const integrated = await integrateRun(root, state.id, { acceptDropped: true });
     assert.ok(integrated.warnings.includes('dropped write: extra.txt (not in outputs)'));
     assert.equal(await fs.readFile(path.join(root, 'extra.txt'), 'utf8').catch(() => null), null, 'a dropped write is never integrated');
   });

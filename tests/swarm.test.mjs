@@ -84,7 +84,8 @@ test('checks all conflicts before writing any output', async t => {
 test('supports new output files and excludes undeclared worker files', async t => {
   const root = await fixture(t);
   const state = await runManifest(root, manifest([job({ outputs: ['new/answer.txt'] })]), { spawnImpl: fake(`fs.mkdirSync('new');fs.writeFileSync('new/answer.txt','answer');fs.writeFileSync('unassigned.txt','discard'); ${done}`) });
-  assert.deepEqual((await integrateRun(root, state.id)).files, ['new/answer.txt']);
+  await assert.rejects(integrateRun(root, state.id), /dropped-writes: writer: unassigned\.txt/);
+  assert.deepEqual((await integrateRun(root, state.id, { acceptDropped: true })).files, ['new/answer.txt']);
   await assert.rejects(fs.access(path.join(root, 'unassigned.txt')));
 });
 

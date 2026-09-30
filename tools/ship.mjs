@@ -141,7 +141,7 @@ export function platformOnlyFailures(rollup) {
 // Field lesson 154/156: a test file that shells out to a host tool needs either a documented
 // binary, or a fake/skip seam nearby; one that reads a swarm-exported env var (SWARM_PORT_BASE)
 // needs a stub or unset hint instead of silently depending on the swarm runner's own port block.
-const TEST_FILE_RE = /(^|\/)(tests?|__tests__|specs?)\/|\.(test|spec)\.[A-Za-z0-9]+$|(^|\/)test_[^/]+\.py$/i;
+export const TEST_FILE_RE = /(^|\/)(tests?|__tests__|specs?)\/|\.(test|spec)\.[A-Za-z0-9]+$|(^|\/)test_[^/]+\.py$/i;
 // Field lesson #179: `ps` is a documented POSIX binary (macOS/Linux); a test that spawns it on
 // Windows still needs its own fake/skip seam or a `--exempt` — this allowlist never claims `ps`
 // is available there.
@@ -169,6 +169,28 @@ export function swarmEnvInTestWarnings(fileTexts) {
   const warnings = [];
   for (const [file, text] of fileTexts) {
     for (const name of SWARM_EXPORTED_ENV_VARS) if (text.includes(name)) warnings.push({ file, name });
+  }
+  return warnings;
+}
+
+// Field lesson #272: a test file that reads a path git would never track (a fixture dropped under
+// a `.gitignore`d directory, say) passes for whoever wrote it and fails for anyone who checks the
+// branch out fresh — the fixture simply never arrived. Scans the same added-lines text the other
+// test-file guards already use for a quoted path-like literal (a `/` plus a file extension), then
+// asks git whether that path is ignored.
+const PATH_LITERAL_RE = /['"`]([A-Za-z0-9_.-]*(?:\/[A-Za-z0-9_.-]+)+\.[A-Za-z0-9]+)['"`]/g;
+export async function gitIgnoredFixtureWarnings(exec, fileTexts, root) {
+  const warnings = [];
+  for (const [file, text] of fileTexts) {
+    const seen = new Set();
+    for (const match of text.matchAll(PATH_LITERAL_RE)) {
+      const candidate = match[1];
+      if (seen.has(candidate)) continue;
+      seen.add(candidate);
+      let result;
+      try { result = await exec('git', ['check-ignore', '-q', '--', candidate], { cwd: root }); } catch { continue; }
+      if (result && result.code === 0) warnings.push({ file, path: candidate });
+    }
   }
   return warnings;
 }
@@ -217,7 +239,7 @@ async function readAddedTestFileLines(exec, root, payloadBase, integratedFiles) 
 // Field lesson #179: `--exempt <guard>:<file>=<reason>` — an owner decision, so the reason is
 // required and must say something real (trimmed, >= 10 characters). Give each diff guard a stable
 // id so an exemption names exactly which one it excuses.
-export const EXEMPTION_GUARD_IDS = ['undocumented-binary', 'env-var', 'scratch'];
+export const EXEMPTION_GUARD_IDS = ['undocumented-binary', 'env-var', 'scratch', 'git-ignored-fixture'];
 
 // Field lesson #180: a worker committed a scratch PR body (`.pr-body.md`) into a release; it only
 // showed up one branch later. A diff that ADDS a file matching one of these patterns refuses with
@@ -1109,6 +1131,13 @@ export async function ship(options) {
     if (exemption) { noteExemptionUsed(exemption); continue; }
     undocumentedBinaries.push(warning);
   }
+  // Field lesson #272: a test file's own added lines naming a path git would refuse to track.
+  const gitIgnoredFixtures = [];
+  for (const warning of await gitIgnoredFixtureWarnings(exec, integratedTestFiles, root)) {
+    const exemption = findExemption('git-ignored-fixture', warning.file);
+    if (exemption) { noteExemptionUsed(exemption); continue; }
+    gitIgnoredFixtures.push(warning);
+  }
   for (const warning of rawEnvWarnings) {
     const exemption = findExemption('env-var', warning.file);
     if (exemption) { noteExemptionUsed(exemption); continue; }
@@ -1139,6 +1168,12 @@ export async function ship(options) {
     return {
       ...base, status: 'refused',
       reason: `test file spawns undocumented binary with no fake/skip seam: ${undocumentedBinaries.map(w => `${w.file} -> ${w.bin}`).join(', ')}; fix the cause, or pass --exempt <guard>:<file>=<reason>`,
+    };
+  }
+  if (gitIgnoredFixtures.length) {
+    return {
+      ...base, status: 'refused', code: 'test-reads-git-ignored-path',
+      reason: `test-reads-git-ignored-path: ${gitIgnoredFixtures.map(w => `${w.file} -> ${w.path}`).join(', ')}; move the fixture into a tracked path, or pass --exempt git-ignored-fixture:<file>=<reason>`,
     };
   }
 

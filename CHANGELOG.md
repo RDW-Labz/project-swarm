@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.37.0
+
+- A shell job's own scratch directory (its `TMPDIR`/`HOME`) now lives under a per-run directory of the swarm install root (`~/.project-swarm` by default, honoring `SWARM_INSTALL_ROOT`) instead of the OS temp dir, which the reopened lesson found can itself still land inside, or be refused by, a git-aware path check; the existing upward `.git` scan stays as a defensive assertion, layered over both the OS temp dir and the new base. (lesson 263r)
+- `run` now auto-accepts a red base (no `--accept-red-base` needed) when every failing check's own failing location is already covered by this run's own declared outputs, warning `red-base-auto-accepted: ...` instead of silently passing; `inspect` now runs a collect-only preflight (`node --check`, or `python -m pytest --collect-only -q` when pytest is on PATH) against a file-only job's own proposed test-file output, warning `collect-only-failed: <job>: <file>: <line>` on a bad import or `collect-only-skipped: <job>: pytest not on PATH` when it cannot check. (lesson 268)
+- A worker's own reported `deviations` array may now hold a plain string, not just a `{contract, did, why}` object; `integrate`'s refusal and accepted-deviation record, and `inspect`'s own warning, all render a string deviation as its own real text instead of an empty or char-indexed value. (lesson 269)
+- `inspect`/`integrate` no longer report a false `dropped write` warning for a worker's own self-reported path that carries a trailing `:line` or `:start-end` reference (e.g. `src/x.py:1009`); it is normalized to its bare path, same as an output the job actually declared, before being compared. (lesson 270)
+- A dropped write (a workspace/worktree edit outside a job's declared outputs) is now saved to `.swarm/runs/<id>/dropped/<path>` (plus a diff alongside it, when a base copy exists) the moment it is detected; `integrate` now refuses a run with any unaccepted dropped write (`dropped-writes: <job>: <path>`) unless `--accept-dropped` (proceed without it) or `--salvage-dropped` (apply it from where it was saved) is passed. (lesson 271)
+- `ship` now refuses (`test-reads-git-ignored-path: <file> -> <path>`) when a test file's own added lines reference a path git would refuse to track (a fixture dropped under a `.gitignore`d directory), unless `--exempt git-ignored-fixture:<file>=<reason>`; `inspect` warns the same way (`git-ignored-fixture: <job>: <file> -> <path>`) instead of refusing. (lesson 272)
+
 ## 1.36.0
 
 - A worker result may now report `deviations: [{contract, did, why}]` for a contract MUST it could not meet instead of silently substituting a design; `inspect` warns `contract-deviation: <job>: <contract>` for each, and `integrate` refuses a run with a non-empty `deviations` list unless `--accept-deviation` is passed, which then logs the acceptance in the integrate result. (lesson 256)
