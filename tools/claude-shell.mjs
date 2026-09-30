@@ -162,25 +162,40 @@ export async function scanListeningPorts({ exec = execFileAsync } = {}) {
   return [...ports];
 }
 
+// Field lesson #263r (reopens #145): "the swarm install root" the same way the toolchains dir
+// already resolves it — an env override, else `~/.project-swarm` — never a config key of its own.
+export function installRootTmpDir({ env = process.env, home = os.homedir() } = {}) {
+  return env.SWARM_INSTALL_ROOT || path.join(home, '.project-swarm');
+}
+
 // Field lesson #145: a shell job's own TMPDIR/HOME must never resolve inside any git repo — some
 // tools (pytest included) refuse to write scratch data under a path that is itself version
-// controlled. The parent walks from the realpath of os.tmpdir() up to `/` looking for a `.git`
-// entry before ever creating the per-job scratch dir; `mkdtemp` then makes it, mode 0700.
-export async function createShellScratchDir({ runId, jobId }, { tmpdir = os.tmpdir, mkdtemp = fs.mkdtemp, realpath = fs.realpath, access = file => fs.access(file), mkdir = fs.mkdir, chmod = fs.chmod } = {}) {
-  const base = await realpath(tmpdir());
-  for (let dir = base; ; dir = path.dirname(dir)) {
+// controlled. The parent used to walk from the realpath of os.tmpdir() up to `/` looking for a
+// `.git` entry, then `mkdtemp` its scratch dir right there — which the reopened lesson #263r found
+// can itself still land inside (or be refused by) a git-aware path check on some machines. The
+// scratch dir now lives under a per-run directory of the swarm install root instead, which is never
+// inside a project checkout at all; the original upward `.git` scan stays as a defensive assertion
+// (layered, not replaced — it should never fire on either path) run once over the OS tmp dir it used
+// to build from, and once more over the new install-root base.
+async function assertOutsideRepo(start, access) {
+  for (let dir = start; ; dir = path.dirname(dir)) {
     let insideRepo = true;
     try { await access(path.join(dir, '.git')); } catch { insideRepo = false; }
     if (insideRepo) throw Error('scratch-inside-repo');
     if (dir === path.parse(dir).root) break;
   }
-  const created = await mkdtemp(path.join(base, `swarm-${runId}-${jobId}-`));
-  await chmod(created, 0o700);
-  const scratchDir = await realpath(created);
-  const tmp = path.join(scratchDir, 'tmp'), home = path.join(scratchDir, 'home');
+}
+export async function createShellScratchDir({ runId, jobId }, { tmpdir = os.tmpdir, mkdtemp = fs.mkdtemp, realpath = fs.realpath, access = file => fs.access(file), mkdir = fs.mkdir, chmod = fs.chmod, env = process.env, home = os.homedir() } = {}) {
+  await assertOutsideRepo(await realpath(tmpdir()), access);
+  const runDir = path.join(installRootTmpDir({ env, home }), 'tmp', runId, jobId);
+  await mkdir(runDir, { recursive: true, mode: 0o700 });
+  await chmod(runDir, 0o700);
+  const scratchDir = await realpath(runDir);
+  await assertOutsideRepo(scratchDir, access);
+  const tmp = path.join(scratchDir, 'tmp'), home2 = path.join(scratchDir, 'home');
   await mkdir(tmp, { recursive: true, mode: 0o700 });
-  await mkdir(home, { recursive: true, mode: 0o700 });
-  return { scratchDir, tmp, home };
+  await mkdir(home2, { recursive: true, mode: 0o700 });
+  return { scratchDir, tmp, home: home2 };
 }
 
 export const RIG_SERVICE_DEFAULT_PORT = 4405;

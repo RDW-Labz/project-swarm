@@ -1769,3 +1769,93 @@ rule is enforced or documented.
     environment sets its temp-directory variables to its own scratch
     directory; an unsandboxed job's environment is unaffected. Regression
     coverage is in `tests/field-lessons-batch-u.test.mjs`.
+165. **A sandboxed job's scratch directory still occasionally landed
+    somewhere a version-control-aware path check could reach, or refuse.**
+    An earlier fix already moved a sandboxed job's own scratch directory
+    off the plain system temp path, but the underlying system temp
+    location itself turned out to still be reachable by, or subject to,
+    that same kind of check on some machines, so the same class of
+    failure came back in the field. Rule: a sandboxed job's scratch
+    directory belongs under the orchestrator's own install location, a
+    place no project checkout ever occupies, not merely off the plain
+    system temp path; a defensive check for the earlier failure mode stays
+    in place alongside the new one rather than being removed. Enforcement:
+    the scratch directory is now created as a per-run, per-job directory
+    under the orchestrator's own install root (overridable by one
+    environment variable), while the original safety scan is kept as a
+    second, belt-and-suspenders check. Regression coverage is in
+    `tests/field-lessons-batch-v.test.mjs`.
+166. **A red starting point silently blocked a run whose whole point was
+    to fix it, or silently waved one through that could not tell the
+    difference.** A run meant to repair a known-broken starting point had
+    to pass an explicit override every single time, even though the
+    failures were already fully accounted for by what that run itself was
+    about to change; separately, nothing checked a proposed test file for
+    an import error before it was ever handed to a real test run, so a
+    typo surfaced only much later. Rule: a run may proceed past a known-bad
+    starting point without a manual override only when every one of its
+    failures is already covered by what that run itself declares it will
+    change, and a proposed test file's own importability is worth checking
+    cheaply before it is trusted. Enforcement: a run now compares each
+    failing check's own named locations against its own declared outputs
+    and proceeds, with a logged warning, only when every location is
+    covered; review separately performs a lightweight, collection-only
+    dry run of a proposed test file, warning on a bad import or noting
+    when the language's own collection tool is unavailable to check with.
+    Regression coverage is in `tests/field-lessons-batch-v.test.mjs`.
+167. **A plain piece of text reported as a deviation rendered as nothing,
+    or as a jumble of individual characters.** A worker's own report of a
+    contract rule it could not meet was expected to always arrive as a
+    structured entry with named fields, but a plain line of text reported
+    the same way instead read as blank in a refusal message and, once
+    accepted, turned into an object keyed by character position rather
+    than any real field. Rule: a reported deviation is real text a person
+    needs to read, however it happens to be shaped, and every place that
+    displays or records one must render that text intact. Enforcement:
+    every place that turns a deviation into a message or a stored record
+    now recognizes a plain line of text as a deviation in its own right,
+    displaying and recording it exactly as given instead of assuming one
+    fixed shape. Regression coverage is in
+    `tests/field-lessons-batch-v.test.mjs`.
+168. **A worker's own line number attached to a path made that path look
+    unfamiliar.** A worker reporting what it changed sometimes appended a
+    line number, or a line range, to an otherwise perfectly ordinary path,
+    and that small addition was enough to make review treat a declared,
+    expected path as if it were a surprise edit outside the job's own
+    scope. Rule: a trailing line reference is not part of a path's
+    identity and must be removed before that path is judged against
+    anything else. Enforcement: the same normalizing step that already
+    trimmed other trailing decorations from a self-reported path now also
+    strips a trailing line number or line range, so a path differing from
+    a declared one only by that suffix is recognized as the same path.
+    Regression coverage is in `tests/field-lessons-batch-v.test.mjs`.
+169. **An edit outside a job's declared scope vanished the moment the run
+    was refused, with no way back short of asking the worker to redo it.**
+    An edit made outside a job's own declared outputs was already detected
+    and could block a run from landing, but nothing preserved the edit
+    itself anywhere; a person facing that refusal could only discard it or
+    re-run the job and hope for a cleaner result, even when the edit
+    itself might have been perfectly reasonable and worth keeping. Rule: a
+    detected out-of-scope edit is saved in full, not just flagged, the
+    moment it is found, so a person facing it later has a real choice
+    between discarding it and deliberately applying it. Enforcement: an
+    out-of-scope edit's full content (plus a comparison against the
+    original where one is available) is saved to a per-run location as
+    soon as it is detected; landing the run now refuses outright on any
+    unaddressed one unless a person explicitly chooses to proceed without
+    it or to apply it from where it was saved. Regression coverage is in
+    `tests/field-lessons-batch-v.test.mjs`.
+170. **A test that reads its own fixture from a path nobody actually
+    commits works for whoever wrote it and fails for everyone else.** A
+    test file referenced a fixture sitting under a directory version
+    control was told to ignore, so the fixture existed only on the
+    machine that happened to write the test, and disappeared the moment
+    anyone else checked the branch out fresh. Rule: a test file's own
+    fixture references must name a path version control will actually
+    carry along with the test, never one it has been told to skip. Enforcement:
+    publishing a change now scans a test file's own newly added lines for
+    a quoted, file-like path and checks whether version control would
+    ignore it, refusing before anything ships when it finds one (with a
+    documented, reasoned way to excuse a specific file); review performs
+    the same scan and warns instead of refusing. Regression coverage is in
+    `tests/field-lessons-batch-v.test.mjs`.

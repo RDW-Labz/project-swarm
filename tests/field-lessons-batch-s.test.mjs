@@ -61,7 +61,8 @@ describe('#244: dropped-write detection excludes swarm-seeded skill copies unles
     const state = await runManifest(root, manifest([job()], { skillsDir }), { spawnImpl: edit });
     assert.deepEqual(state.jobs[0].droppedWrites, ['.swarm/skills/formatting/SKILL.md']);
     assert.deepEqual(state.jobs[0].droppedWritesNew, ['.swarm/skills/formatting/SKILL.md']);
-    const result = await integrateRun(root, state.id);
+    await assert.rejects(integrateRun(root, state.id), /dropped-writes: writer: \.swarm\/skills\/formatting\/SKILL\.md/);
+    const result = await integrateRun(root, state.id, { acceptDropped: true });
     assert.ok((result.warnings ?? []).includes('dropped write: .swarm/skills/formatting/SKILL.md (new) (not in outputs)'));
   });
 });

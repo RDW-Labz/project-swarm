@@ -59,13 +59,25 @@ test('createShellScratchDir makes tmp/ and home/ under a fresh 0700 dir, with no
   }
 });
 
-test('createShellScratchDir refuses with scratch-inside-repo when os.tmpdir() resolves inside a repo, walking up to /', async () => {
+test('createShellScratchDir refuses with scratch-inside-repo when the OS tmp scan finds a repo, and again when the install root itself does, walking up to /', async () => {
+  const noopMkdir = async () => {};
+  const noopChmod = async () => {};
   const access = async file => { if (file === '/home/project/.git') return; throw Error('ENOENT'); };
   await assert.rejects(createShellScratchDir({ runId: 'r', jobId: 'j' }, { tmpdir: () => '/home/project/sub/tmp', realpath: async value => value, access }), /scratch-inside-repo/);
-  // A tmp root with no repo ancestor at all never refuses.
+  // The OS tmp dir itself is clean here, but the new install-root base resolves inside a repo: the
+  // original upward scan is layered on top of it too (not replaced), so it still refuses.
+  const installAccess = async file => { if (file === '/install/root/.git') return; throw Error('ENOENT'); };
+  await assert.rejects(
+    createShellScratchDir({ runId: 'r', jobId: 'j' }, { tmpdir: () => '/no/repo/here', realpath: async value => value, access: installAccess, mkdir: noopMkdir, chmod: noopChmod, env: { SWARM_INSTALL_ROOT: '/install/root' } }),
+    /scratch-inside-repo/,
+  );
+  // An OS tmp dir and install root with no repo ancestor at all never refuses; the scratch dir
+  // lives under the install root's own tmp/<runId>/<jobId>, never a mkdtemp'd sibling of the OS tmp dir.
   const neverFinds = async () => { throw Error('ENOENT'); };
-  const clean = await createShellScratchDir({ runId: 'r', jobId: 'j' }, { tmpdir: () => '/no/repo/here', realpath: async value => value, access: neverFinds, mkdtemp: async prefix => `${prefix}abc123`, chmod: async () => {}, mkdir: async () => {} });
-  assert.equal(clean.scratchDir, '/no/repo/here/swarm-r-j-abc123');
+  const clean = await createShellScratchDir({ runId: 'r', jobId: 'j' }, { tmpdir: () => '/no/repo/here', realpath: async value => value, access: neverFinds, mkdir: noopMkdir, chmod: noopChmod, env: { SWARM_INSTALL_ROOT: '/no/repo/here/install-root' } });
+  assert.equal(clean.scratchDir, '/no/repo/here/install-root/tmp/r/j');
+  assert.equal(clean.tmp, path.join(clean.scratchDir, 'tmp'));
+  assert.equal(clean.home, path.join(clean.scratchDir, 'home'));
 });
 
 // --- shellProfile: the scratch allow -------------------------------------------------------------
