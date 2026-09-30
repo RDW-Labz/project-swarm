@@ -36,4 +36,4 @@ Where each job's regression test lives; which existing tests it changes; a done-
 ## Mutants
 Every evaluator/gate this batch adds or changes gets a standard mutant: force it to treat every case as clean (or every input as passing); the Tests section's own real-data test above must kill it.
 ## Release
-Which job owns the version bump and CHANGELOG heading, and in which PR.
+Which job owns the version bump and CHANGELOG heading, and in which PR. Before the first real push on a public repo, run `ship --preflight` once (every guard, one pass) instead of shipping and fixing guards one at a time; use `swarm squash --branch` for a pre-PR squash, never a hand `git reset --soft`, so the merge-base is always recomputed fresh against the current base.

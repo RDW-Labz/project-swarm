@@ -1,8 +1,47 @@
 # Changelog
 
-## Unreleased
+## 1.39.0
 
 - `ship --preflight`: every pre-push content guard runs in one pass and reports all failures (E2)
+- A new top-level manifest `resources` (at most 50 file paths) names a file that should be copied
+  into every job's own workspace/worktree even when it is untracked; `validate`/`run` now refuse
+  `resource-missing: <path>` for a declared one absent from the repo root (`resource-is-directory:
+  <path>` for one naming a directory) and refuse `prompt-path-not-in-workspace: Job <id>'s prompt
+  names <file>, ...` when a job's own prompt names a real, on-disk repo-relative path covered by
+  neither tracked files, this job's own context, nor `manifest.resources` — the 281 incident spent
+  real shell-job dollars discovering a missing path only after the worker had already started.
+  (lesson 281)
+- A job may now declare `privateData: true`, withholding its own transcript (`response.txt`) and
+  failure log (`agent.log`) from disk (a fixed placeholder text is written instead; `inspect` shows
+  `transcript: "withheld"`); a new local config `privateData.paths` (glob list) now refuses
+  `privateData-required: Job <id> touches a configured private path without privateData: true`
+  before such a job ever dispatches. (lesson 282)
+- `validate`/`run` now refuse `<skill>: resultKeys missing <key>` before a job ever dispatches when
+  its own prompt's declared final-JSON shape (`Return JSON only, ...: {...}`) omits a key an
+  attached skill's own `checks.resultKeys` requires, closing the gap where only `integrate` caught
+  this — after the job had already spent. (lesson 283)
+- `templates/coordination/CONTRACT.md`'s own `## Release` section now names `ship --preflight` and
+  `swarm squash --branch` directly, instead of a batch rediscovering either by hand; no code change
+  (both already exist). (lesson 284)
+- A tool-free API job with `outputs: []` whose prompt plainly asks for real written content now
+  refuses `openrouter-empty-outputs-content: Job <id> has outputs: [] but its prompt asks for real
+  content; ...` before any request is ever sent; a truncated OpenRouter response's own error now
+  names the prompt's size (`... (prompt <n> chars)`). (lesson 285)
+- A plain `claude` job whose own CLI prints a weekly/usage/rate-limit message instead of
+  stream-json now resolves job status `provider-limit` (naming the reported reset time) instead of
+  a generic `Worker exited N`; `run`/`ask` now refuse `claude-provider-limit: resets <time>; pass
+  --ignore-provider-limit to proceed anyway` for any further claude job until that time, and
+  `board` reports the same marker. (lesson 286)
+- A shell job's sandbox now grants write access to a linked-worktree project root's real git dir
+  (its `gitDir`/`commonDir`), so a worker's own `git commit` there can actually succeed; `validate`
+  now warns `linked-worktree-commit: Job <id>'s prompt asks it to commit; ...` when a shell job's
+  prompt asks it to commit against such a root. (lesson 287)
+- A codex job's own prompt now carries a waiver for any doc its repo's own AGENTS.md names that is
+  not shown inline, in its declared context, or under `.swarm/skills` — it no longer needs to
+  refuse over a read it was never going to be denied; a root `AGENTS.workspace.md`, when present,
+  is now inlined directly into every codex prompt; `validate` now warns
+  `codex-required-read-missing: Job <id>: AGENTS.md names <file> (tracked), not in this job's
+  context` for a tracked AGENTS.md doc a codex job's own context omits. (lesson 288)
 
 ## 1.38.0
 
