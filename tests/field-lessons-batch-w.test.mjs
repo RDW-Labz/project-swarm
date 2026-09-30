@@ -651,16 +651,25 @@ describe('#278: the sandbox\'s UV_CACHE_DIR points at the real, shared, read-onl
     };
     const shellHooksForRun = { access: async () => {}, resolveClaude: async () => '/opt/fake-claude/bin/claude.exe', scanListeningPorts: async () => [] };
     const shellJobSpec = { id: 'builder', agent: 'claude', model: 'sonnet', shell: true, prompt: 'x', context: ['input.txt'], outputs: ['output.txt'], timeoutMs: 10000 };
+    // A CI runner's own setup-uv step can export UV_CACHE_DIR (and sometimes
+    // UV_PYTHON_INSTALL_DIR/UV_TOOL_DIR) into the ambient process env; stripped here (same pattern
+    // as tests/shell-setup.test.mjs's own parentEnvNoUvCache) so this exercises the real per-HOME
+    // default, never an explicit-override branch winning by accident.
+    const { UV_CACHE_DIR: _ignoredUvCacheDir, UV_PYTHON_INSTALL_DIR: _ignoredUvPythonInstallDir, UV_TOOL_DIR: _ignoredUvToolDir, ...parentEnvNoUvVars } = process.env;
+    const runEnvForThisTest = { ...parentEnvNoUvVars, HOME: realHome, SWARM_CLAUDE_WORKER_API_KEY: 'sk-FAKE-uvcache-0000' };
     const state = await runManifest(root, { version: 1, jobs: [shellJobSpec] }, {
       platform: 'darwin',
       spawnImpl: fakeUvCacheSpawn,
-      env: { PATH: process.env.PATH, HOME: realHome, SWARM_CLAUDE_WORKER_API_KEY: 'sk-FAKE-uvcache-0000' },
+      env: runEnvForThisTest,
       keyExec: () => assert.fail('the real keychain must never be read in tests'),
       shellHooks: shellHooksForRun,
     });
     assert.equal(state.status, 'complete', state.jobs[0].error ?? '');
     const [launch] = seen;
-    assert.equal(launch.options.env.UV_CACHE_DIR, path.join(realHome, 'Library/Caches/uv'));
+    // Computed with the same helper the code uses (field lesson #278), never a hard-coded macOS
+    // path, so this holds on a Linux CI runner's own process.platform too.
+    assert.equal(launch.options.env.UV_CACHE_DIR, resolveSharedUvCacheDir({ env: runEnvForThisTest, home: realHome }));
+    assert.ok(!launch.options.env.UV_CACHE_DIR.startsWith(realHome + '/.project-swarm-scratch'), launch.options.env.UV_CACHE_DIR);
   });
 });
 
