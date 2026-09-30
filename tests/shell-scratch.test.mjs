@@ -131,7 +131,11 @@ test('a real run wires the scratch dir into the env and profile, then removes it
   const scratchDir = state.jobs[0].scratchDir;
   assert.ok(scratchDir, 'scratchDir is recorded on the job');
   assert.equal(scratchDir.startsWith(root), false, 'the scratch dir is outside the project');
-  assert.equal(scratchDir.includes('.swarm'), false, 'the scratch dir is outside the run tree too');
+  // Field lesson #280: the scratch base now lives at scratchRootDir()/tmp/<runId>/<jobId>, a
+  // sibling of the install checkout; the invariant is that it's never nested inside this
+  // project's own `.swarm/runs` tree (a plain substring check on '.swarm' is too broad — the
+  // real HOME the scratch dir sits under is free to contain that literal text itself).
+  assert.equal(scratchDir.startsWith(path.join(root, '.swarm')), false, 'the scratch dir is outside the run tree too');
   assert.equal(launch.options.env.HOME, path.join(scratchDir, 'home'));
   assert.equal(launch.options.env.TMPDIR, path.join(scratchDir, 'tmp'));
   assert.equal(launch.options.env.TMP, launch.options.env.TMPDIR);

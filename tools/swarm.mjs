@@ -15,7 +15,7 @@ import { API_AGENTS, apiDoctor, probeLocalProvider, decodeContext, executeApi, a
 import { nonBookkeepingOutputs } from './openrouter.mjs';
 
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, parseCodexReply, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
-import { expandShellPreset, validateNetworkAllow, validateLoopbackAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterDirs, resolveRootGitInfo, scanListeningPorts, resolveRigServicePort, createShellScratchDir, shellMessage, containsKey, redactKey, effectiveShellDeniedHomeDirs, workerKeyItem, TOOLCHAIN_DIRS } from './claude-shell.mjs';
+import { expandShellPreset, validateNetworkAllow, validateLoopbackAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterDirs, resolveRootGitInfo, scanListeningPorts, resolveRigServicePort, createShellScratchDir, shellMessage, containsKey, redactKey, effectiveShellDeniedHomeDirs, workerKeyItem, TOOLCHAIN_DIRS, scratchRootDir, assertScratchOutsideRepo, resolveSharedUvCacheDir } from './claude-shell.mjs';
 import { portBlockFor, resolvePortBlock } from './ports.mjs';
 import { loadLocalConfig } from './local-config.mjs';
 import { loadSwarmEnv, envPrintText, checkNeedsEnvWarnings, npmScriptsResolveToPlainNode, NO_STASH_LINE, MUTANTS_BY_HAND_LINE, MUTANTS_SHAPE, gitGuardScript, findRealGit, materializeGitGuard } from './swarm-env.mjs';
@@ -24,7 +24,7 @@ import { packagingWithoutBuildCheckWarning, packagingKeyChanges, packagingChange
 import { scoutPrompt, normalizeScoutReport, renderScoutMarkdown, briefPathCandidates, parseAllowedLicenses } from './scout.mjs';
 import { parseGoals, extractKnownRepos, gatherAreaCandidates, sweepPrompt, normalizeSweepArea, renderShortlistMarkdown, resolveBriefPath as resolveSweepBriefPath } from './sweep.mjs';
 import { findUncoveredTests, listProjectFiles, suggestIgnoreTests, contextDirectoryWarnings, registryPinningWarnings, isTestFile } from './context-check.mjs';
-import { ship, SHIP_DEFAULTS, resolveGhAndGit, parsePrPayload, resolveToolchainBin, parseExemptFlag, toolchainCheckEnv, shipHelpRequested, SHIP_USAGE, TEST_FILE_RE, gitIgnoredFixtureWarnings } from './ship.mjs';
+import { ship, SHIP_DEFAULTS, resolveGhAndGit, parsePrPayload, resolveToolchainBin, parseExemptFlag, toolchainCheckEnv, shipHelpRequested, SHIP_USAGE, TEST_FILE_RE, gitIgnoredFixtureWarnings, loadPrivateNames, repoVisibility, githubRepo, findPrivateNameHitsInText } from './ship.mjs';
 import { loadChecksFromCi, checkNotInCiWarnings, DEFAULT_CI_PATH } from './checks-from-ci.mjs';
 import { go, commitOutputs, goExitCode } from './go.mjs';
 import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary, listLiveRuns, repoKey, repoPaths } from './board.mjs';
@@ -747,6 +747,28 @@ export function mutantMissingForChangedFileWarnings(changedFiles, mutants) {
     .filter(file => MUTANT_COVERED_SOURCE_RE.test(file) && !isTestFile(file) && !covered.has(file))
     .sort()
     .map(file => `mutant-missing-for-changed-file: ${file}`);
+}
+
+// Field lesson #267: a mutant per pass-bar comparison, not one per changed file — the above warns
+// at file granularity only, so a validator gaining a second comparison on an already-covered file
+// (e.g. an added `<=` bound next to an existing `<` one already covered) never warns on its own.
+// Only a NEW or changed line (absent from `previous`) counts, so an untouched comparison line one
+// commit's own formatting shuffled past is never flagged.
+const COMPARISON_LINE_RE = /[<>]=?|[!=]==?/;
+export function mutantMissingForComparisonLineWarnings(writes, mutants) {
+  const warnings = [];
+  for (const change of writes) {
+    if (!MUTANT_COVERED_SOURCE_RE.test(change.file) || isTestFile(change.file) || change.bytes === null) continue;
+    const fileMutants = (mutants ?? []).filter(mutant => mutant.file === change.file);
+    const previousLines = new Set((change.previous?.toString('utf8') ?? '').split('\n'));
+    const lines = change.bytes.toString('utf8').split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!COMPARISON_LINE_RE.test(line) || previousLines.has(line)) continue;
+      if (!fileMutants.some(mutant => line.includes(mutant.find))) warnings.push(`mutant-missing-for-comparison: ${change.file}:${i + 1}`);
+    }
+  }
+  return warnings;
 }
 
 // Field lesson #161: every mutant's `find` is counted in its target before anything runs — a
@@ -1544,7 +1566,11 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
     const guardDir = path.join(shellDir, 'bin');
     await fs.mkdir(guardDir, { recursive: true });
     await fs.writeFile(path.join(guardDir, 'git'), gitGuardScript(await findRealGit(parentEnv.PATH, { exclude: guardDir })), { mode: 0o755 });
-    const env = { ...shellEnvironment({ parentEnv, home, tmp, configDir, proxyPort: proxy.port, apiKey: workerKey, testEnv: job.testEnv, userId: `swarm-worker:${job.id}`, portBase: options.portBase, uvCacheDir: path.join(shellDir, 'uv-cache'), swarmEnv: options.swarmEnv, pathPrefix: guardDir, uvPythonInstallDir }), ...(hooks.baseUrlFromProxy ? { ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxy.port}` } : {}) };
+    // Field lesson #278: uvCacheDir points at the real, shared, already-warm uv cache under the
+    // real machine home (`realHome` above) — never `home` (the job's own per-run scratch home,
+    // `scratch.home`), which is exactly the fresh, empty, per-run directory the bug was — so an
+    // offline `uv lock`/`uv sync` inside the sandbox can actually find its registry metadata.
+    const env = { ...shellEnvironment({ parentEnv, home, tmp, configDir, proxyPort: proxy.port, apiKey: workerKey, testEnv: job.testEnv, userId: `swarm-worker:${job.id}`, portBase: options.portBase, uvCacheDir: resolveSharedUvCacheDir({ env: parentEnv, home: realHome }), swarmEnv: options.swarmEnv, pathPrefix: guardDir, uvPythonInstallDir }), ...(hooks.baseUrlFromProxy ? { ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxy.port}` } : {}) };
     // Field lesson #158: before any worker token is spent, the first manifest check is started
     // once inside this exact profile and env (minus the worker key). One that cannot even start
     // (missing tool, hidden interpreter, sandbox denial) refuses the job; a red or slow one is fine.
@@ -1650,6 +1676,7 @@ export async function runBaseChecks(root, manifest, { spawnImpl = spawn, gitImpl
 export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks, checkBase = false, acceptRedBase = false, reason, baseChecks = {} } = {}) {
   root = await fs.realpath(root);
   validateManifest(manifest);
+  await privateNamesDispatchGuard(root, manifest, { env });
   // Every worktree of one repo shares a board key; refuse before touching anything if another
   // live run already claims one of this run's declared outputs.
   const declaredOutputs = manifest.jobs.flatMap(job => job.outputs);
@@ -1708,7 +1735,9 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   const state = { version: 1, id, root, concurrency: manifest.concurrency??2, peakConcurrency: 0, status: 'running', startedAt: new Date().toISOString(), jobs: [], ...(redBaseAutoAccept ? { redBaseAutoAccept } : {}) };
   // Field lesson #202: two shell jobs each told to run the full suite, sharing one root, is a
   // manifest-shape problem known before any worker starts — surfaced on every state write.
-  const manifestWarnings = sharedRootFullSuiteWarnings(manifest);
+  // Field lesson #265: a live rig-service checkout is named the same way, on the same warnings path.
+  const liveWarning = await liveServiceCheckoutWarning(root, { env });
+  const manifestWarnings = [...sharedRootFullSuiteWarnings(manifest), ...(liveWarning ? [liveWarning.message] : [])];
   const save = async () => { state.warnings = runWarnings(state, manifestWarnings); state.summary = summarizeRun(state); await jsonWrite(root, `${directory}/state.json`, state); onState(state); };
   // Serialize status writes when several workers finish at once.
   let writes = Promise.resolve();
@@ -2240,6 +2269,37 @@ async function jobFinalJson(root, id, jobId) {
   return parseFinalJson(bytes ? bytes.toString('utf8') : '');
 }
 
+// Field lesson #277: a running daily spend total, checked before every dispatch — the same
+// `state.jobs[].costUsd` field waitRun already sums for one run, summed here across every run
+// under every root named in .swarm-projects.json, filtered to a run started at/after today's UTC
+// midnight (never the process's own local time zone).
+export async function todaySpendUsd(root, { now = () => new Date() } = {}) {
+  const dayStart = new Date(now()); dayStart.setUTCHours(0, 0, 0, 0);
+  const roots = [...new Set([root, ...(await readProjectsRegistry(root))])];
+  let total = 0;
+  for (const projectRoot of roots) {
+    let ids; try { ids = await fs.readdir(path.join(projectRoot, '.swarm/runs')); } catch { continue; }
+    for (const id of ids) {
+      let state; try { state = await readState(projectRoot, id); } catch { continue; }
+      if (!state.startedAt || new Date(state.startedAt) < dayStart) continue;
+      for (const job of state.jobs ?? []) if (typeof job.costUsd === 'number') total += job.costUsd;
+    }
+  }
+  return Math.round(total * 100) / 100;
+}
+// A config with neither `spend.warnUsd` nor `spend.dailyCapUsd` set (a pre-#277 config on disk,
+// or one that never opted in) never even sums the day's spend — this never spends time computing
+// a total nobody configured a threshold for.
+export async function spendGuard(root, { env = process.env, home = os.homedir(), now } = {}) {
+  const config = loadLocalConfig({ env, home });
+  const warnUsd = config?.spend?.warnUsd, capUsd = config?.spend?.dailyCapUsd;
+  if (warnUsd === undefined && capUsd === undefined) return { spendUsd: null, status: 'ok' };
+  const spendUsd = await todaySpendUsd(root, { now });
+  if (capUsd !== undefined && spendUsd >= capUsd) return { spendUsd, status: 'cap', message: `spend-cap: today's spend $${spendUsd} >= cap $${capUsd}; pass --over-cap --reason TEXT to proceed anyway` };
+  if (warnUsd !== undefined && spendUsd >= warnUsd) return { spendUsd, status: 'warn', message: `spend-warn: today's spend $${spendUsd} >= warn $${warnUsd}` };
+  return { spendUsd, status: 'ok' };
+}
+
 // Polls saved run state only; it never touches provider processes itself, so a wait can be
 // interrupted and re-run without side effects on the run it is watching.
 export async function waitRun(root, id, { timeoutMs, pollMs = 1000, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now } = {}) {
@@ -2499,16 +2559,26 @@ async function runMutant(root, mutant, sharedCheckSpec, spawnImpl, env = process
   const mode = (await fs.stat(await safePath(root, mutant.file))).mode & 0o777;
   const text = original.toString('utf8');
   const count = text.split(mutant.find).length - 1;
-  if (count !== 1) return { name: mutant.name, file: mutant.file, status: 'error', exitCode: null, durationMs: Date.now() - start, tail: `find matched ${count} times`, ...checkFields };
+  // Field lesson #274: an invalid mutant (its find didn't match exactly once) is a distinct cause
+  // from a build failure below; both used to collapse into the same 'error'/'invalid' status.
+  if (count !== 1) return { name: mutant.name, file: mutant.file, status: 'invalid-find', exitCode: null, durationMs: Date.now() - start, tail: `find matched ${count} times`, ...checkFields };
   const mutated = Buffer.from(text.replace(mutant.find, mutant.replace), 'utf8');
   const originalHash = digest(original);
   try {
     await write(root, mutant.file, mutated, false, mode);
     const result = await runCheck(mutant.name, expandRootArgv(checkSpec.argv, root), root, checkSpec.timeoutMs ?? 300000, spawnImpl, false, () => {}, env);
-    // Field lesson 136: a real test failure exits 1 (pytest, vitest, jest and mocha all agree on
-    // this); any other non-passing exit is the check's own usage/collection error (pytest 2-5, a
-    // config error, "no tests ran") and never counts as a kill, no matter how it reads in a tail.
-    const status = result.status === 'passed' ? 'survived' : result.status === 'failed' ? (result.exitCode === 1 ? 'killed' : 'invalid') : 'error';
+    // Field lesson 136 (refined by #274): pytest/vitest/jest/mocha/node --test all exit 1
+    // unambiguously on a real test failure (their own usage/collection errors use a different exit,
+    // per lesson 136's own comment above), so exit 1 alone is still always a kill, exactly as
+    // before. `cargo test`'s exit 101 is the ambiguous one — a `cargo build` failure exits 101 too
+    // — so only that exit additionally requires a real failure line in the tail before it counts as
+    // a kill; without one it's a build failure, not a kill.
+    const AMBIGUOUS_TEST_FAILURE_EXIT = new Set([101]);
+    const TEST_FAILURE_TAIL_RE = /FAILED|test result: FAILED|failures:|not ok \d|[✗✖]/;
+    const status = result.status === 'passed' ? 'survived'
+      : result.status === 'failed'
+        ? (result.exitCode === 1 || (AMBIGUOUS_TEST_FAILURE_EXIT.has(result.exitCode) && TEST_FAILURE_TAIL_RE.test(result.tail ?? '')) ? 'killed' : 'invalid-build')
+        : 'error';
     return { name: mutant.name, file: mutant.file, status, exitCode: result.exitCode, durationMs: result.durationMs, tail: result.tail, ...checkFields };
   } finally {
     await write(root, mutant.file, original, false, mode);
@@ -2644,16 +2714,17 @@ export async function runMutantsCurrentTree(root, { mutantsFile, mutantCheck, dr
   const results = [];
   for (const mutant of mutants) {
     if (isInterrupted()) break;
+    // Field lesson #274: `runMutant` now reports killed/survived/invalid-find/invalid-build/error
+    // directly (an invalid-find mutant and a build failure used to collapse into one 'invalid').
     const raw = await runMutant(root, mutant, checkSpec, spawnImpl, env);
-    const status = raw.status === 'error' ? 'invalid' : raw.status;
-    results.push({ ...raw, status, firstFailingLine: status === 'killed' ? firstFailureLine(raw.tail) : null, ...(mutant.killedBy !== undefined ? { killedBy: mutant.killedBy } : {}) });
+    results.push({ ...raw, firstFailingLine: raw.status === 'killed' ? firstFailureLine(raw.tail) : null, ...(mutant.killedBy !== undefined ? { killedBy: mutant.killedBy } : {}) });
   }
-  const summary = { killed: 0, survived: 0, invalid: 0 };
-  for (const result of results) summary[result.status]++;
+  const summary = { killed: 0, survived: 0, 'invalid-find': 0, 'invalid-build': 0, error: 0 };
+  for (const result of results) summary[result.status] = (summary[result.status] ?? 0) + 1;
   // Field lesson #199: a worker's claimed killedBy is only ever documentation; compared here
   // against what actually failed (the mutant's own tail) so a wrong claim is at least visible.
   warnings.push(...killedByMismatchWarnings(results));
-  return { ...(warnings.length ? { warnings } : {}), mutants: results, mutantsSummary: summary, mutantsPassed: summary.survived === 0 && summary.invalid === 0 };
+  return { ...(warnings.length ? { warnings } : {}), mutants: results, mutantsSummary: summary, mutantsPassed: summary.survived === 0 && summary['invalid-find'] === 0 && summary['invalid-build'] === 0 && summary.error === 0 };
 }
 
 function killedByMismatchWarnings(results) {
@@ -2869,6 +2940,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       preValidatedMutants = validateMutantsArray(sourced);
       if (!preValidatedMutants.length) fail('No mutants declared in this manifest; add manifest.mutants, a job mutantsFile output, or --mutants-file to use --mutants');
       mutantMissingWarnings = mutantMissingForChangedFileWarnings(writes.map(change => change.file), preValidatedMutants);
+      mutantMissingWarnings.push(...mutantMissingForComparisonLineWarnings(writes, preValidatedMutants));
       if (!manifest.mutantCheck) {
         if (!mutantCheck && !preValidatedMutants.every(mutant => mutant.check)) fail('No mutantCheck declared in this manifest; add manifest.mutantCheck, or pass --mutant-check "<argv json>", to use --mutants');
         if (mutantCheck) parseMutantCheckFlag(mutantCheck); // Refuses a malformed --mutant-check before any write too.
@@ -2919,6 +2991,12 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
     // least surfaced instead of silently stale.
     const lockfileChanged = state.integratedFiles.some(file => ENV_RESYNC_TRIGGER_NAMES.has(path.basename(file)));
     const preChecksResult = { preChecks: [], warnings: [] };
+    // Field lesson #274: a formatter run as part of preChecks (e.g. `cargo fmt`) can rewrite a
+    // mutant-target file's bytes on disk before any mutant is applied, invalidating its own
+    // `find` with no refusal anywhere; a snapshot taken here, before preChecks run, is compared
+    // against the same files once preChecks finish, below.
+    const mutantTargetFiles = mutants && preValidatedMutants?.length ? [...new Set(preValidatedMutants.map(mutant => mutant.file))] : [];
+    const preFormatBytes = mutantTargetFiles.length ? new Map(await Promise.all(mutantTargetFiles.map(async file => [file, await bytesAt(root, file)]))) : new Map();
     // Field lesson #236: preChecks (a fresh worktree's own `uv sync --offline --locked`, say) run
     // on every integrate, not only when this particular run happened to touch a lockfile — a run
     // whose own diff never moved a lockfile byte still needs its checked-out environment synced
@@ -2927,6 +3005,14 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       for (const [index, argv] of manifest.preChecks.entries()) preChecksResult.preChecks.push(await runCheck(argv.join(' ').slice(0, 60) || `preCheck-${index + 1}`, expandRootArgv(argv, root), root, 300000, spawnImpl, false, () => {}, portEnv));
     } else if (lockfileChanged) {
       preChecksResult.warnings.push('lockfile changed, env not synced');
+    }
+    if (mutants && preValidatedMutants?.length) {
+      const changed = [];
+      for (const file of mutantTargetFiles) {
+        const after = await bytesAt(root, file);
+        if (after?.toString('utf8') !== preFormatBytes.get(file)?.toString('utf8')) changed.push(file);
+      }
+      preChecksResult.warnings.push(...changed.map(file => `formatter-changed-mutant-target: ${file}`));
     }
     state.preChecks = preChecksResult.preChecks;
     if (preChecksResult.warnings.length) state.preCheckWarnings = preChecksResult.warnings;
@@ -3037,6 +3123,17 @@ export async function noJobRunningWarning({ root, env = process.env, home = os.h
     if (ticket) hint = `swarm next --from ${NEXT_TASK_FILE}: ${ticket.id} — ${ticket.step}`;
   } catch { /* no TASK.md, or nothing queued: no hint */ }
   return { code: 'no-job-running', idleMinutes, ...(hint ? { hint } : {}), message: `no-job-running: no run under the configured root(s) is active${idleMinutes !== null ? ` (idle ${idleMinutes} min)` : ''}${hint ? `; ${hint}` : ''}` };
+}
+
+// Field lesson #265: never change HEAD in a live checkout by hand; swarm's own worktree helpers
+// never touch a live checkout's HEAD at all, so the nearest hook is a standing warning naming a
+// root a live service (rig-service) is actually running from, reusing the existing
+// `rig.portFile` config/probe instead of inventing a new config nobody would keep in sync.
+export async function liveServiceCheckoutWarning(root, { config, env = process.env, home = os.homedir() } = {}) {
+  const cfg = config ?? loadLocalConfig({ env, home });
+  const port = await resolveRigServicePort({ config: cfg, env, home });
+  if (port === null) return null;
+  return { code: 'protected-checkout-live-service', message: `protected-checkout-live-service: ${root} has a live rig service on port ${port}; never run git checkout/reset/stash here by hand — worktrees only` };
 }
 
 // Keep regression tests in place while reversing only the implementation outputs.
@@ -3231,9 +3328,54 @@ async function contextSiblingUntrackedWarnings(root, job, tracked) {
   return warnings.sort((a, b) => (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0));
 }
 
+// Field lesson #262: reuses, never duplicates, the existing #197/#211 private-names machinery —
+// a contract or job prompt for a PUBLIC repo is scanned before dispatch, the same list `ship`
+// already checks the diff against. With no list configured, this never spends a git/gh call.
+export async function privateNamesDispatchGuard(root, manifest, { exec = execFileAsync, env = process.env, home = os.homedir() } = {}) {
+  const list = await loadPrivateNames(root, null, { env, home });
+  if (!list.terms.length) return;
+  let originStdout;
+  try { originStdout = (await exec('git', ['remote', 'get-url', 'origin'], { cwd: root })).stdout.trim(); } catch { return; }
+  const repo = githubRepo(originStdout);
+  if (!repo) return;
+  const shipExecShape = async (cmd, args, opts) => {
+    try { const r = await exec(cmd, args, opts); return { code: 0, stdout: r.stdout, stderr: r.stderr ?? '' }; }
+    catch (e) { return { code: typeof e.code === 'number' ? e.code : 1, stdout: e.stdout ?? '', stderr: e.stderr ?? String(e.message ?? e) }; }
+  };
+  if ((await repoVisibility(shipExecShape, repo, { cwd: root })) !== 'PUBLIC') return;
+  if (manifest.contract) {
+    const contractText = (await bytesAt(root, manifest.contract))?.toString('utf8') ?? '';
+    const hits = findPrivateNameHitsInText(manifest.contract, contractText, list.terms);
+    if (hits.length) fail(`private-term-in-contract: ${hits[0].file}:${hits[0].line}`);
+  }
+  for (const job of manifest.jobs) {
+    if (typeof job.prompt !== 'string') continue;
+    const hits = findPrivateNameHitsInText(`job:${job.id}`, job.prompt, list.terms);
+    if (hits.length) fail(`private-term-in-prompt: ${hits[0].file}:${hits[0].line}`);
+  }
+}
+
+// Field lesson #266: no generic way to run a project's own chat client from here (every
+// project's client differs); the nearest hook is the same shape as #159's
+// packagingWithoutBuildCheckWarning — warn when a changed file looks like a model/provider route
+// and no declared check looks like the real-client smoke test the row's Rule requires. The regex
+// heuristic is a guess and will both over- and under-match unusual repo layouts (open question,
+// not settled); it only ever warns.
+const MODEL_ROUTE_FILE_RE = /model.*(route|provider|client)|(route|provider|client).*model/i;
+const MODEL_ROUTE_SMOKE_CHECK_RE = /model-route-smoke|streaming-smoke/;
+export function modelRouteChangeNoSmokeTestWarning(manifest, job) {
+  const changed = (job.outputs ?? []).filter(file => MODEL_ROUTE_FILE_RE.test(file));
+  if (!changed.length) return null;
+  const hasSmokeCheck = (manifest.checks ?? []).some(check => check.name === 'model-route-smoke' || check.argv.some(arg => MODEL_ROUTE_SMOKE_CHECK_RE.test(arg)));
+  if (hasSmokeCheck) return null;
+  return { code: 'model-route-no-smoke-test', jobId: job.id, files: changed, message: `model-route-no-smoke-test: Job ${job.id} changes ${changed.join(', ')}; declare a check named model-route-smoke (or an argv containing model-route-smoke/streaming-smoke) that sends one real streaming message through the project's own client before this route change lands` };
+}
+
 export async function validateProject(root, manifest, { exec = execFileAsync, liveDir, isAlive, env = process.env, home = os.homedir() } = {}) {
   root=await fs.realpath(root);validateManifest(manifest);
-  const jobs=[], warnings=[...tmpToolPathWarnings(manifest), ...await sharedOutputAcrossOpenJobsWarnings(root, manifest, { liveDir, isAlive }), ...shellSandboxDeniedCheckWarnings(manifest, { env, home }), ...sharedRootFullSuiteWarnings(manifest), ...await cheapTierNotConfiguredModelWarnings(manifest, { env, home }), ...await checkPathMissingWarnings(manifest, { env })];
+  await privateNamesDispatchGuard(root, manifest, { exec, env, home });
+  const liveWarning = await liveServiceCheckoutWarning(root, { env, home });
+  const jobs=[], warnings=[...(liveWarning ? [liveWarning.message] : []), ...tmpToolPathWarnings(manifest), ...await sharedOutputAcrossOpenJobsWarnings(root, manifest, { liveDir, isAlive }), ...shellSandboxDeniedCheckWarnings(manifest, { env, home }), ...sharedRootFullSuiteWarnings(manifest), ...await cheapTierNotConfiguredModelWarnings(manifest, { env, home }), ...await checkPathMissingWarnings(manifest, { env })];
   const projectFiles = listProjectFiles(root);
   const trackedFiles = new Set(projectFiles);
   const uncovered = [];
@@ -3298,6 +3440,11 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
     // ship a package that does not build.
     const packagingWarning = packagingWithoutBuildCheckWarning(manifest, job);
     if (packagingWarning) warnings.push(packagingWarning);
+    // Field lesson #266: a model/provider route change needs a real streaming smoke test before
+    // it lands; warn when a job changes a file that looks like one and no declared check looks
+    // like the real-client smoke test this needs.
+    const modelRouteWarning = modelRouteChangeNoSmokeTestWarning(manifest, job);
+    if (modelRouteWarning) warnings.push(modelRouteWarning);
     // contextGlob is expanded here (validate/run time), never at manifest-write time, so a job
     // can pick up files a build step later adds to a shared directory without editing the manifest.
     // Field lesson 115: also echoes, per pattern, how many files it matched.
@@ -3830,8 +3977,36 @@ export async function swarmVersion(root,{check=false}={}){
       result.latest=null;
       result.checkError=String(error.message??error).split('\n')[0].slice(0,200);
     }
+    // Field lesson #280: proven at install-check time, not first dispatch — the same regression
+    // the reopened #263r shell-job failure showed only shows up on a shell job's own first refusal.
+    const root2 = scratchRootDir({ env: process.env });
+    try { await assertScratchOutsideRepo(root2, file => fs.access(file)); result.scratchOutsideRepo = true; }
+    catch { result.scratchOutsideRepo = false; result.scratchRoot = root2; }
   }
   return result;
+}
+
+// Field lesson #276: `git reset --soft` onto a moved main (instead of the merge-base) can bring
+// someone else's already-merged changes into the index; this resets to the merge-base only, and
+// refuses (undoing itself) when the newly staged diff names any file the branch's own merge-base
+// diff did not. It only stages — the file list is printed before anything is ever committed.
+export async function squashBranch(root, { branch, base = 'origin/main', exec = execFileAsync } = {}) {
+  root = await fs.realpath(root);
+  if (typeof branch !== 'string' || !branch.trim()) fail('swarm squash requires --branch');
+  const currentBranch = (await exec('git', ['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' })).stdout.trim();
+  if (currentBranch !== branch) fail(`swarm squash: HEAD is on ${currentBranch}, not --branch ${branch}; check it out first`);
+  const mergeBaseRes = await exec('git', ['-C', root, 'merge-base', 'HEAD', base], { encoding: 'utf8' }).catch(() => null);
+  if (!mergeBaseRes) fail(`swarm squash: could not find a merge-base between HEAD and ${base}`);
+  const mergeBase = mergeBaseRes.stdout.trim();
+  const expectedFiles = new Set((await exec('git', ['-C', root, 'diff', '--name-only', mergeBase, 'HEAD'], { encoding: 'utf8' })).stdout.split('\n').map(l => l.trim()).filter(Boolean));
+  await exec('git', ['-C', root, 'reset', '--soft', mergeBase], { encoding: 'utf8' });
+  const stagedFiles = (await exec('git', ['-C', root, 'diff', '--name-only', '--cached'], { encoding: 'utf8' })).stdout.split('\n').map(l => l.trim()).filter(Boolean);
+  const unexpected = stagedFiles.filter(file => !expectedFiles.has(file));
+  if (unexpected.length) {
+    await exec('git', ['-C', root, 'reset', '--soft', 'HEAD@{1}'], { encoding: 'utf8' }).catch(() => {});
+    fail(`squash-unexpected-files: ${unexpected.join(', ')}; undone, nothing committed`);
+  }
+  return { branch, mergeBase, files: stagedFiles };
 }
 
 // Moves this shared install itself to the newest release tag. Refuses on local edits to the
@@ -4019,12 +4194,12 @@ export function shipExitCode(status) {
   return ['merged', 'held', 'ready'].includes(status) ? 0 : 1;
 }
 
-const SHIP_FLAGS_WITH_VALUE = new Set(['--repo', '--pr', '--require-section', '--merge-method', '--timeout', '--poll', '--tag-timeout', '--branch', '--check', '--rerun-flaky', '--exempt', '--private-names']);
+const SHIP_FLAGS_WITH_VALUE = new Set(['--repo', '--pr', '--require-section', '--merge-method', '--timeout', '--poll', '--tag-timeout', '--branch', '--check', '--rerun-flaky', '--exempt', '--private-names', '--per-test-timeout']);
 
 // Pure CLI-flag parsing, kept separate from ship() execution so it is directly testable.
 export function parseShipFlags(flags) {
   let repo, payloadPath, mergeMethod, timeoutMs, pollMs, tagTimeoutMs, noFlakeCheck, branch, merge = true, privateNamesFile;
-  let checksFromCi, checksFromCiPath, rerunFlaky, acceptPreExisting = false;
+  let checksFromCi, checksFromCiPath, rerunFlaky, acceptPreExisting = false, perTestTimeoutSeconds;
   const requireSections = [], checks = [], exemptions = [];
   for (let index = 0; index < flags.length; index++) {
     const flag = flags[index];
@@ -4065,6 +4240,8 @@ export function parseShipFlags(flags) {
     // the flag is absent so ship() can apply its own platform-only default instead of always 0;
     // an explicit value (including 0) always wins over that default.
     else if (flag === '--rerun-flaky') { if (!/^\d+$/.test(value)) fail('--rerun-flaky requires a non-negative integer'); rerunFlaky = Number(value); }
+    // Field lesson #273 (orchestrator answer #3): overrides local config's ci.perTestTimeoutSeconds.
+    else if (flag === '--per-test-timeout') { if (!/^\d+(\.\d+)?$/.test(value) || Number(value) <= 0) fail('--per-test-timeout requires a positive number of seconds'); perTestTimeoutSeconds = Number(value); }
     // Field lesson #179: an owner decision to excuse one file from one diff guard, with a reason.
     else if (flag === '--exempt') {
       const parsed = parseExemptFlag(value);
@@ -4084,6 +4261,7 @@ export function parseShipFlags(flags) {
     ...(branch ? { branch, checks } : {}),
     ...(checksFromCi ? { checksFromCi, ...(checksFromCiPath !== undefined ? { checksFromCiPath } : {}) } : {}),
     ...(rerunFlaky !== undefined ? { rerunFlaky } : {}),
+    ...(perTestTimeoutSeconds !== undefined ? { perTestTimeoutSeconds } : {}),
     ...(exemptions.length ? { exemptions } : {}),
     ...(privateNamesFile !== undefined ? { privateNamesFile } : {}),
     ...(acceptPreExisting ? { acceptPreExisting } : {}),
@@ -4188,6 +4366,7 @@ export async function shipBranch(root, flags, { spawnImpl = spawn, exec = shipEx
     timeoutMs: flags.timeoutMs ?? SHIP_DEFAULTS.timeoutMs,
     noCiGraceMs: SHIP_DEFAULTS.noCiGraceMs,
     rerunFlaky: flags.rerunFlaky,
+    perTestTimeoutSeconds: flags.perTestTimeoutSeconds,
     exemptions: flags.exemptions ?? [],
     acceptPreExisting: flags.acceptPreExisting ?? false,
     privateNamesFile: flags.privateNamesFile ?? null,
@@ -4256,6 +4435,7 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
     timeoutMs: flags.timeoutMs ?? SHIP_DEFAULTS.timeoutMs,
     noCiGraceMs: SHIP_DEFAULTS.noCiGraceMs,
     rerunFlaky: flags.rerunFlaky,
+    perTestTimeoutSeconds: flags.perTestTimeoutSeconds,
     exemptions: flags.exemptions ?? [],
     acceptPreExisting: flags.acceptPreExisting ?? false,
     privateNamesFile: flags.privateNamesFile ?? null,
@@ -4337,7 +4517,7 @@ async function main() {
   const testIndex=args.indexOf('--test');
   const rootIndex=args.findIndex((arg,index)=>arg==='--root'&&(testIndex===-1||index<testIndex));
   if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | onboard\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | squash --branch BRANCH [--base REF] | onboard\n');return;}
   if(args[0]==='redcheck'){
     const hasBase=args[2]==='--base';
     // Row #214: --commit SHA is a separate, mutually-exclusive proof mode from --base REF.
@@ -4369,6 +4549,19 @@ async function main() {
     }
     root=await fs.realpath(root);
     const result=useProjects?await updateProjects(root,{projects:dirs.length?dirs:undefined,yes}):await updateInstall(root);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
+  if(args[0]==='squash'){
+    const flags=args.slice(1);let branchArg,baseArg;
+    for(let index=0;index<flags.length;index++){
+      if(flags[index]==='--branch'){branchArg=flags[++index];continue;}
+      if(flags[index]==='--base'){baseArg=flags[++index];continue;}
+      fail('Invalid arguments; use --help');
+    }
+    if(!branchArg)fail('swarm squash requires --branch');
+    root=await fs.realpath(root);
+    const result=await squashBranch(root,{branch:branchArg,...(baseArg?{base:baseArg}:{})});
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }
@@ -4437,13 +4630,16 @@ async function main() {
   // dispatched entirely here rather than sharing the generic [command,argument,...rest] path below.
   if(args[0]==='ask'){
     const flags=args.slice(1);
-    let model,contextArg,agent='claude',timeoutSeconds;
+    let model,contextArg,agent='claude',timeoutSeconds,overCapArg=false,reasonArg;
     const positionals=[];
     for(let index=0;index<flags.length;index++){
       const flag=flags[index];
       if(flag==='--model'){model=flags[++index];continue;}
       if(flag==='--context'){contextArg=flags[++index];continue;}
       if(flag==='--agent'){agent=flags[++index];continue;}
+      // Field lesson #277: same spend-cap override shape as `run`.
+      if(flag==='--over-cap'){overCapArg=true;continue;}
+      if(flag==='--reason'){reasonArg=flags[++index];if(!reasonArg)fail('--reason requires a value');continue;}
       if(flag==='--timeout'){
         const next=flags[++index];
         if(next===undefined||!/^\d+(\.\d+)?$/.test(next)||Number(next)<=0)fail('--timeout requires a positive number of seconds');
@@ -4453,7 +4649,13 @@ async function main() {
       positionals.push(flag);
     }
     if(positionals.length!==1)fail('ask requires exactly one question argument; use --help');
+    if(overCapArg&&!reasonArg)fail('--over-cap requires --reason');
     root=await fs.realpath(root);
+    const askGuard=await spendGuard(root,{env:process.env});
+    if(askGuard.status==='cap'){
+      if(!overCapArg||!reasonArg)fail(askGuard.message);
+      process.stdout.write(`${JSON.stringify({warning:askGuard.message})}\n`);
+    }else if(askGuard.status==='warn')process.stdout.write(`${JSON.stringify({warning:askGuard.message})}\n`);
     const result=await askRun(root,{model,context:contextArg?contextArg.split(','):[],agent,timeoutMs:timeoutSeconds!==undefined?timeoutSeconds*1000:undefined,question:positionals[0]});
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if(result.status!=='complete')process.exitCode=1;
@@ -4480,7 +4682,7 @@ async function main() {
   // scout has its own flag/positional shape, like ask, and always runs as claude (no --agent flag).
   if(args[0]==='scout'){
     const flags=args.slice(1);
-    let model,briefArg,contextArg,timeoutSeconds,maxPicksArg,licensesArg,kindArg;
+    let model,briefArg,contextArg,timeoutSeconds,maxPicksArg,licensesArg,kindArg,overCapArg=false,reasonArg;
     const allowLicenseArgs=[];
     const positionals=[];
     for(let index=0;index<flags.length;index++){
@@ -4489,6 +4691,10 @@ async function main() {
       if(flag==='--brief'){briefArg=flags[++index];continue;}
       if(flag==='--context'){contextArg=flags[++index];continue;}
       if(flag==='--max-picks'){maxPicksArg=flags[++index];continue;}
+      // Field lesson #277: same spend-cap override shape as `run`; scout's own per-sweep maxUsd
+      // (unrelated to this) is unaffected — the stricter of the two stops a sweep either way.
+      if(flag==='--over-cap'){overCapArg=true;continue;}
+      if(flag==='--reason'){reasonArg=flags[++index];if(!reasonArg)fail('--reason requires a value');continue;}
       // Row #211: a repeatable per-package license exception; the gate, not a worker's prose,
       // is what keeps an exempted pick from being rejected again on a later run.
       if(flag==='--allow-license'){
@@ -4510,7 +4716,13 @@ async function main() {
       positionals.push(flag);
     }
     if(positionals.length!==1)fail('scout requires exactly one goal argument; use --help');
+    if(overCapArg&&!reasonArg)fail('--over-cap requires --reason');
     root=await fs.realpath(root);
+    const scoutGuard=await spendGuard(root,{env:process.env});
+    if(scoutGuard.status==='cap'){
+      if(!overCapArg||!reasonArg)fail(scoutGuard.message);
+      process.stdout.write(`${JSON.stringify({warning:scoutGuard.message})}\n`);
+    }else if(scoutGuard.status==='warn')process.stdout.write(`${JSON.stringify({warning:scoutGuard.message})}\n`);
     const result=await scoutRun(root,{model,brief:briefArg,context:contextArg?contextArg.split(','):[],timeoutMs:timeoutSeconds!==undefined?timeoutSeconds*1000:undefined,maxPicks:maxPicksArg!==undefined?Number(maxPicksArg):undefined,goal:positionals[0],allowLicense:allowLicenseArgs,licenses:licensesArg,kind:kindArg});
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if(result.status!=='complete')process.exitCode=1;
@@ -4697,16 +4909,20 @@ async function main() {
   // prompt before validation/execution; stripped here for the same reason as monitor/integrate above.
   let evidenceFlag;
   // Field lesson #253: `run`'s own base-check gate; --accept-red-base always needs --reason.
-  let acceptRedBaseFlag=false,redBaseReason;
+  // Field lesson #277: `run`'s own spend-cap override reuses this same --reason flag rather than
+  // inventing a second one; --over-cap always needs --reason too.
+  let acceptRedBaseFlag=false,redBaseReason,overCapFlag=false;
   if(command==='validate'||command==='run'){
     const flags=rest.splice(0,rest.length);
     for(let index=0;index<flags.length;index++){
       if(flags[index]==='--evidence'){evidenceFlag=flags[++index];if(!evidenceFlag)fail('--evidence requires a value');continue;}
       if(command==='run'&&flags[index]==='--accept-red-base'){acceptRedBaseFlag=true;continue;}
       if(command==='run'&&flags[index]==='--reason'){redBaseReason=flags[++index];if(!redBaseReason)fail('--reason requires a value');continue;}
+      if(command==='run'&&flags[index]==='--over-cap'){overCapFlag=true;continue;}
       rest.push(flags[index]);
     }
     if(acceptRedBaseFlag&&!redBaseReason)fail('--accept-red-base requires --reason');
+    if(overCapFlag&&!redBaseReason)fail('--over-cap requires --reason');
   }
   // inspect's --results is a read-only reduced view; stripped here for the same reason as above.
   let resultsOnly=false;
@@ -4770,7 +4986,7 @@ async function main() {
     result=argument==='all'?await doctorAll({probeLocal}):await doctor({agent:argument??'claude',probeLocal});
     result.warnings=await (await import('./preflight.mjs')).projectToolWarnings(root);
   }
-  else if(command==='board')result=await boardSummary();
+  else if(command==='board')result={...await boardSummary(),spendUsd:await todaySpendUsd(root)};
   else if(command==='run'||command==='validate'||command==='preflight'){
     if(command==='run'||command==='validate')await warnProjectVersionMismatch(root);
     const manifestArgument=resolveManifestArgument(root,argument);
@@ -4786,7 +5002,15 @@ async function main() {
       if(probeFailures.length)fail(`Check interpreter probe failed: ${probeFailures.map(preflightMod.describeProbeFailure).join('; ')}`);
       result=await validateProject(root,manifest);
     }
-    else result=await runManifestChecked(root,manifest,state=>process.stdout.write(`${JSON.stringify({id:state.id,status:'running'})}\n`),{checkBase:true,acceptRedBase:acceptRedBaseFlag,reason:redBaseReason});
+    else{
+      // Field lesson #277: checked before every `run` dispatch, never only summed at handoff.
+      const guard=await spendGuard(root,{env:process.env});
+      if(guard.status==='cap'){
+        if(!overCapFlag||!redBaseReason)fail(guard.message);
+        process.stdout.write(`${JSON.stringify({warning:guard.message})}\n`);
+      }else if(guard.status==='warn')process.stdout.write(`${JSON.stringify({warning:guard.message})}\n`);
+      result=await runManifestChecked(root,manifest,state=>process.stdout.write(`${JSON.stringify({id:state.id,status:'running'})}\n`),{checkBase:true,acceptRedBase:acceptRedBaseFlag,reason:redBaseReason});
+    }
   }else if(command==='status')result=await readState(root,argument);
   else if(command==='monitor')result=summarizeRun(await readState(root,argument));
   else if(command==='wait')result=await waitRun(root,argument,{timeoutMs:waitTimeoutSeconds!==null?waitTimeoutSeconds*1000:undefined});

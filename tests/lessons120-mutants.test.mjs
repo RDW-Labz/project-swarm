@@ -78,9 +78,9 @@ test('a mutant run that exits via a collection/usage error is invalid, never kil
   // real-test-failure exit (1) — never a genuine assertion failure.
   const mutantCheck = JSON.stringify([process.execPath, '-e', "process.exit(require('fs').readFileSync('target.js','utf8').includes('v<=10')?0:4)"]);
   const result = await runMutantsCurrentTree(root, { mutantsFile: mutantsPath, mutantCheck }, spawn);
-  assert.equal(result.mutants[0].status, 'invalid');
+  assert.equal(result.mutants[0].status, 'invalid-build');
   assert.equal(result.mutants[0].exitCode, 4);
-  assert.deepEqual(result.mutantsSummary, { killed: 0, survived: 0, invalid: 1 });
+  assert.deepEqual(result.mutantsSummary, { killed: 0, survived: 0, 'invalid-find': 0, 'invalid-build': 1, error: 0 });
   assert.equal(result.mutantsPassed, false);
   assert.equal(await fs.readFile(path.join(root, 'target.js'), 'utf8'), original);
 });
