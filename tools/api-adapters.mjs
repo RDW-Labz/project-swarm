@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Tool-free, one-request workers. Transport injection is for tests, never manifests.
 import { randomBytes } from 'node:crypto';
-import { OPENROUTER_ENDPOINT, OPENROUTER_KEY_ENV, openRouterKeyItem, readOpenRouterKey, providerPolicy, assertRequestBody, assertBookkeepingOnly, fetchPricing, worstCaseUsd, ledgerPath, readLedger, spentSoFar, assertWithinCaps, appendLedger, assertCompleteChatResponse, describeIncompleteChatResponse, isEmptyLengthTruncation, defaultMaxOutputTokens, OpenRouterError } from './openrouter.mjs';
+import { OPENROUTER_ENDPOINT, OPENROUTER_KEY_ENV, openRouterKeyItem, readOpenRouterKey, providerPolicy, assertRequestBody, assertBookkeepingOnly, emptyOutputsContentRefusal, fetchPricing, worstCaseUsd, ledgerPath, readLedger, spentSoFar, assertWithinCaps, appendLedger, assertCompleteChatResponse, describeIncompleteChatResponse, isEmptyLengthTruncation, defaultMaxOutputTokens, OpenRouterError } from './openrouter.mjs';
 import { loadLocalConfig, resolveConfigPath } from './local-config.mjs';
 export const API_AGENTS = ['openai', 'gemini', 'ollama', 'lambda', 'openrouter'];
 const MAX_RESPONSE = 16 * 1024 * 1024;
+// Field lesson #285: the exact truncation error describeIncompleteChatResponse/
+// assertCompleteChatResponse already produce; a prompt-size suffix is appended only to this one.
+const TRUNCATION_RE = /truncated: finish_reason length/;
 class AdapterError extends Error {}
 const fail = message => { throw new AdapterError(message); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -196,7 +199,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     if (signal?.aborted) { abort('cancelled'); fail('Request cancelled'); }
     timer = setTimeout(() => abort('timeout'), job.timeoutMs ?? 300000);
     poll = setInterval(() => { Promise.resolve(cancelled()).then(value => { if (value) abort('cancelled'); }).catch(() => abort('Cancellation check failed')); }, 100);
-    if (job.agent === 'openrouter') assertBookkeepingOnly(job);
+    if (job.agent === 'openrouter') { assertBookkeepingOnly(job); emptyOutputsContentRefusal(job); }
     const config = apiConfiguration(job.agent, env, { readKey });
     if (!config.configured) {
       // Field lesson #222: named before anything is sent — the env var this agent reads, plus
@@ -273,6 +276,8 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     if (credentials.some(key => retainedStrings.some(value => value.includes(key)))) fail('Provider response contained a credential; output discarded');
     return { status: 'complete', error: null, files: envelope.files, edits, contextInlined, response: envelope.summary, actualModel: result.actualModel, usage: result.usage, modelUsage: null, costUsd: job.agent === 'openrouter' && Number.isFinite(Number(result.usage?.cost)) ? Number(result.usage.cost) : null, exitCode: null, stderr: '', ...(retriedForLength ? { retriedForLength: true } : {}), stdout: JSON.stringify({ type: 'result', provider: job.agent, status: 'complete', actualModel: result.actualModel, usage: result.usage, ...(result.provider ? { upstream: result.provider } : {}) }) + '\n' };
   } catch (error) {
-    return { status: reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : 'failed', error: reason || (error instanceof AdapterError || error instanceof OpenRouterError ? error.message : 'Provider processing failed; details omitted to protect credentials'), files: [], edits: [], contextInlined, stdout: '', stderr: '', response: '', actualModel: null, usage: null, modelUsage: null, costUsd: null, exitCode: null };
+    // Field lesson #285: a truncated-response error otherwise gives no sense of scale; the prompt
+    // size rides along so a too-small maxOutputTokens is provable without guessing.
+    return { status: reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : 'failed', error: (() => { const message = reason || (error instanceof AdapterError || error instanceof OpenRouterError ? error.message : 'Provider processing failed; details omitted to protect credentials'); return TRUNCATION_RE.test(message) ? `${message} (prompt ${job.prompt.length} chars)` : message; })(), files: [], edits: [], contextInlined, stdout: '', stderr: '', response: '', actualModel: null, usage: null, modelUsage: null, costUsd: null, exitCode: null };
   } finally { clearTimeout(timer); clearInterval(poll); signal?.removeEventListener('abort', onAbort); }
 }

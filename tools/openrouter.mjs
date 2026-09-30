@@ -49,6 +49,17 @@ const fail = message => { throw new OpenRouterError(message); };
 export const isAnthropicModel = model => typeof model === 'string' && model.startsWith('anthropic/');
 export const isBookkeepingOnlyModel = model => typeof model === 'string' && model.startsWith('deepseek/');
 
+// Field lesson #285: outputSchema already forces files/edits to be empty when outputs: [] — every
+// character of real content such a job can ever return rides in one summary string, capped at its
+// own output-token limit. A prompt plainly asking for substantial written output has nowhere else
+// for it to go, so it refuses before any request is ever sent (never spends against the caps).
+const CONTENT_REQUEST_RE = /\b(write|draft|list|summarize|summarise|report|document|describe|compile|produce)\b/i;
+export function emptyOutputsContentRefusal(job) {
+  if ((job.outputs?.length ?? 0) > 0) return;
+  if (!CONTENT_REQUEST_RE.test(job.prompt ?? '')) return;
+  fail(`openrouter-empty-outputs-content: Job ${job.id} has outputs: [] but its prompt asks for real content; a job with no declared output file can only ever return a short summary string capped at its own output-token limit — declare an output file for the content instead`);
+}
+
 // The provider block every request carries. require_parameters keeps OpenRouter from routing to
 // a provider that would silently drop response_format.
 export function providerPolicy(model) {

@@ -239,7 +239,10 @@ export function shellProfile({ home = os.homedir(), extraHomes = [], worktree, c
   // OS tmp dir, not under `shellDir`; it needs its own read+write grant, placed with the other
   // writable-path allows so the final keychain/.claude*/securityd denies still win.
   const reads = [worktree, commonDir, shellDir, ...(scratchDir ? [scratchDir] : []), ...cliPaths, ...homes.flatMap(h => TOOLCHAIN_DIRS.map(part => path.join(h, part))), ...validateReadPaths(readPaths, homes[0], config)].map(sandboxPath);
-  const writes = [worktree, shellDir, ...(scratchDir ? [scratchDir] : [])].map(sandboxPath);
+  // Field lesson #287: a linked-worktree root's real git dir (this worktree's own shape) is
+  // readable via rootGitRules below but not writable by default; a `git commit` there needs to
+  // write index.lock/HEAD/logs/HEAD (gitDir) and new objects/refs/heads/<branch> (commonDir).
+  const writes = [worktree, shellDir, ...(scratchDir ? [scratchDir] : []), ...(rootGit?.kind === 'file' ? [rootGit.gitDir, rootGit.commonDir] : [])].map(sandboxPath);
   const filter = (kind, file) => `(${kind} "${sandboxPath(file)}")`;
   const ancestors = new Set(homes);
   for (const file of reads) for (const h of homes) {

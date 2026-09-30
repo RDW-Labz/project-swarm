@@ -2044,3 +2044,103 @@ rule is enforced or documented.
     flagged by name for a follow-up fix, instead of being rerun forever
     with nothing else ever changing. Regression coverage is in
     `tests/field-lessons-batch-w.test.mjs`.
+184. **A dispatched job's own prompt named a real file on disk that was
+    never actually copied into its workspace, because nothing tracked,
+    declared, or contextual named it either.** The file existed, so a
+    human reading the prompt assumed it would be there; the worker
+    discovered only after starting that it was not, after real money
+    had already been spent. Rule: a prompt naming a real, on-disk path
+    that is covered by neither tracked files, declared context, nor an
+    explicit declared resource is refused before dispatch, not
+    discovered by the worker. Enforcement: a new manifest field lists
+    extra files to copy into every job's own workspace; a missing
+    declared file (or one that names a directory) refuses at validate
+    time, and an un-declared path a prompt names that exists on disk
+    is refused the same way. Regression coverage is in
+    `tests/field-lessons-batch-x.test.mjs`.
+185. **A worker's own transcript, saved to disk by default, sometimes
+    carried sensitive data a person never meant to leave their own
+    machine.** Every worker's reply and failure log were written to a
+    shared run directory the same way regardless of what they
+    contained. Rule: a job may declare that its own transcript must
+    never be written to disk, and a configured sensitive path may
+    require that declaration before a job touching it is allowed to
+    run at all. Enforcement: such a job's saved reply and failure log
+    are replaced with a fixed placeholder on disk (the real text is
+    still used in memory for that same run), and a job whose own
+    context or outputs match a configured sensitive path without the
+    declaration refuses before it ever starts. Regression coverage is
+    in `tests/field-lessons-batch-x.test.mjs`.
+186. **A job's own prompt asked its worker to return a JSON reply
+    missing a field a later check required, and nothing caught it
+    until well after the job had already been dispatched and paid
+    for.** The shape a result had to carry was only ever checked once
+    the run was already being integrated. Rule: a declared result
+    shape is checked against a prompt's own stated reply shape before
+    a job ever dispatches, not only once its real result is read back.
+    Enforcement: a job's own prompt is parsed for the JSON shape it
+    promises to return and compared against every attached
+    requirement at validate time, refusing before dispatch on a
+    mismatch. Regression coverage is in
+    `tests/field-lessons-batch-x.test.mjs`.
+187. **A one-pass pre-push guard and a fresh-merge-base squash command
+    both already existed, but nothing pointed a batch at either one
+    before it shipped.** A batch re-learned, by hand, the order these
+    two steps should run in. Rule: a shared contract template names
+    the already-built tools to use, and in what order, instead of
+    leaving each batch to rediscover them. Enforcement: the shared
+    contract template's own release guidance now names both commands
+    directly. No code changed; this is a documentation-only entry.
+188. **A tool-free worker job with no declared output file was asked
+    for a substantial piece of real written content, which had
+    nowhere to go but a short, capped summary field.** The job could
+    only ever return a small fraction of what was asked for, silently
+    truncated, with no declared file to hold the rest. Rule: a job
+    with no declared output file may only ever be asked a short
+    question, never for substantial written content. Enforcement: a
+    job with no declared outputs whose prompt plainly asks for
+    written content (a summary, a report, a draft) now refuses before
+    any request is sent; a response that was cut off for running out
+    of room now states the size of what was sent in, so the cause is
+    provable instead of guessed at. Regression coverage is in
+    `tests/field-lessons-batch-x.test.mjs`.
+189. **A worker CLI's own plan-limit message, printed instead of its
+    usual structured output, was scored as an ordinary job failure.**
+    The real cause (a provider-side quota, not a mistake in the job or
+    the worker) was buried under a generic exit-code error, and
+    nothing stopped the next job from being dispatched straight into
+    the same outage. Rule: a worker CLI's own quota or plan-limit
+    message is a provider outage, not a job failure, and once seen it
+    should stop further dispatches until the provider's own reported
+    reset time, not rely on a person noticing the pattern by hand.
+    Enforcement: this message is now detected and recorded with its
+    own distinct status and the provider's reported reset time; a
+    further dispatch that would need the same provider refuses until
+    that time unless explicitly overridden. Regression coverage is in
+    `tests/field-lessons-batch-x.test.mjs`.
+190. **A sandboxed worker could read a project root's real git
+    metadata but not write to it, so a job asked to commit from a
+    linked working copy of that root could never actually succeed.**
+    The read access alone was not enough for the one operation a
+    commit actually needs. Rule: a sandbox that grants read access to
+    a linked working copy's real git metadata for one operation grants
+    write access for the same reason, scoped just as narrowly.
+    Enforcement: a worker's sandbox now grants write access to exactly
+    those paths when the project root is itself a linked working
+    copy; a warning names the grant whenever a job's own prompt asks
+    it to commit under this condition. Regression coverage is in
+    `tests/field-lessons-batch-x.test.mjs`.
+191. **A worker was told not to read anything outside a fixed list, then
+    handed a repository whose own instructions told it to read
+    something else first — and refused instead of testing whether that
+    read would actually succeed.** The blanket rule and the
+    repository's own real instructions pointed in different
+    directions, and the worker resolved the conflict by giving up.
+    Rule: a worker's own read restriction should name its real
+    exceptions up front, not leave a worker to infer when the rule
+    does not actually apply. Enforcement: a worker's own prompt now
+    states plainly which required reads named by the repository's own
+    instructions are genuinely out of reach, and inlines the ones that
+    are not; a warning separately names a required, trackable read
+    that a job's own declared inputs still omit. Regression coverage
+    is in `tests/field-lessons-batch-x.test.mjs`.

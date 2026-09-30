@@ -142,7 +142,12 @@ test('a resultKeys check missing from the result fails integrate, and --accept-f
   const skillsDir = path.join(root, 'skills');
   await writeSkill(skillsDir, 'reporter', { checks: { resultKeys: ['approved'] } });
   const worker = fake(`fs.writeFileSync('input.txt','updated'); ${done(JSON.stringify({ summary: 'ok' }))}`);
-  const state = await runManifest(root, manifest([job({ skills: ['reporter'] })], { skillsDir }), { spawnImpl: worker });
+  // Field lesson #283: the prompt's own declared JSON shape must name the required key so the new
+  // dispatch-time check (dispatchResultKeysRefusal) lets this job run at all; the worker's actual
+  // result still omits it, so integrate's own (pre-existing) resultKeys check is what this test
+  // exercises, unchanged.
+  const reporterJob = job({ skills: ['reporter'], prompt: 'Update the assigned file. Return JSON only, max 5 lines: {"approved": true}' });
+  const state = await runManifest(root, manifest([reporterJob], { skillsDir }), { spawnImpl: worker });
   await assert.rejects(integrateRun(root, state.id), /skill-check-failed: reporter: resultKeys missing approved/);
   await assert.rejects(
     execFileAsync(process.execPath, [CLI, '--root', root, 'integrate', state.id, '--accept-failed-checks']),
