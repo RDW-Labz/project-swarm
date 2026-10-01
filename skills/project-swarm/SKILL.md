@@ -117,6 +117,15 @@ Capture observed failures as private-safe lessons and route rules into current p
 - `lesson publish` appends safe shipped entries for one version.
 - `lesson import` converts legacy rows without duplicating ids.
 
+### UI-test jobs
+
+For UI-test assignments, keep element waits below the enclosing test timeout.
+Diagnose a hang with a long `--testTimeout` so an individual wait can fail and
+name the stuck step. Held-response fakes must offer snapshot-at-release when
+the real service can serve a request after a later event; capturing at request
+time cannot reproduce that order. If a harness view triggers an intended HTTP
+error, add it to that view's expected-errors list.
+
 ## Completion and reuse
 
 Run `node --test tests/*.test.mjs` to validate isolation checks, conflicts, result errors, timeout, cancellation, integration, and advisory preflight. For a first connection, perform one read-only and one small writing smoke exchange and inspect their responses before assigning substantial work. Integrate only the writing output you reviewed. Report which provider/model actually answered, what changed, checks run, and any limits.
