@@ -1,0 +1,79 @@
+{
+  "jobs": [
+    {
+      "id": "t80-core",
+      "context": [
+        "docs/_swarm/t80-contract.md",
+        "docs/_swarm/t80-brief.md",
+        "tools/swarm.mjs",
+        "tools/gotchas.mjs",
+        "tools/skills.mjs",
+        "docs/worker-skills.md",
+        "docs/_swarm/worker-rules-SKILL.md",
+        "docs/_swarm/debugging-SKILL.md",
+        "docs/_swarm/queued-lessons.md",
+        "docs/_swarm/lessons-sample-rows.md",
+        "tests/field-lessons-batch-y.test.mjs",
+        "tests/_isolate-config.mjs",
+        "package.json"
+      ],
+      "outputs": [
+        "tools/lessons.mjs",
+        "tests/field-lesson-t80-core.test.mjs"
+      ],
+      "summary": "Implement the contract's shared parser/store/privacy/clock/import-parser exports and add, list, set, routing, id continuity, and queue-warning helper in tools/lessons.mjs. Add and run isolated core node:test coverage with exact error and no-write assertions, including the guards for mutants (a), (b), and (e), without editing any other job's files.",
+      "dependsOn": []
+    },
+    {
+      "id": "t80-ship",
+      "context": [
+        "docs/_swarm/t80-contract.md",
+        "docs/_swarm/t80-brief.md",
+        "tools/swarm.mjs",
+        "docs/_swarm/queued-lessons.md",
+        "docs/_swarm/lessons-sample-rows.md",
+        "docs/lessons.md",
+        "docs/_swarm/worker-rules-SKILL.md",
+        "docs/_swarm/debugging-SKILL.md",
+        "tests/field-lessons-batch-y.test.mjs",
+        "tests/_isolate-config.mjs",
+        "package.json"
+      ],
+      "outputs": [
+        "tools/lessons-publish.mjs",
+        "tests/field-lesson-t80-ship.test.mjs"
+      ],
+      "summary": "Implement manifest, check, publish, and import in tools/lessons-publish.mjs using only the interfaces fixed in contract section 3, with deterministic legacy handling and conservative public safety checks. Add and run isolated ship node:test coverage for validator-compatible manifests, installed-tree findings, idempotent import/publish, and mutants (c) and (d), leaving existing archives and A's module unchanged.",
+      "dependsOn": ["t80-core"]
+    },
+    {
+      "id": "t80-wire-docs",
+      "context": [
+        "docs/_swarm/t80-contract.md",
+        "docs/_swarm/t80-brief.md",
+        "tools/swarm.mjs",
+        "tools/gotchas.mjs",
+        "tools/skills.mjs",
+        "docs/worker-skills.md",
+        "docs/_swarm/worker-rules-SKILL.md",
+        "docs/_swarm/debugging-SKILL.md",
+        "tests/field-lessons-batch-y.test.mjs",
+        "tests/_isolate-config.mjs",
+        "skills/project-swarm/SKILL.md",
+        "README.md",
+        "CHANGELOG.md",
+        "package.json"
+      ],
+      "outputs": [
+        "tools/swarm.mjs",
+        "skills/project-swarm/SKILL.md",
+        "README.md",
+        "CHANGELOG.md",
+        "package.json",
+        "tests/field-lesson-t80-cli.test.mjs"
+      ],
+      "summary": "Wire all lesson CLI branches, usage, exact error envelopes, validator callbacks, and the run lesson-queue warning using A/B names only as specified in contract section 3, then update the bounded skill section, README paragraph and kickoff pins, changelog, and package version for 1.41.0. Add and run isolated child-process CLI and fake-run tests covering every new flag, manifest-to-validate handoff, preserved existing help, queue warnings, and release documentation without changing the other two modules.",
+      "dependsOn": ["t80-core", "t80-ship"]
+    }
+  ]
+}
