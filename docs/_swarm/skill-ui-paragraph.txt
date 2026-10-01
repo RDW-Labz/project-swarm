@@ -1,0 +1,6 @@
+For UI-test assignments, keep element waits below the enclosing test timeout.
+Diagnose a hang with a long `--testTimeout` so an individual wait can fail and
+name the stuck step. Held-response fakes must offer snapshot-at-release when
+the real service can serve a request after a later event; capturing at request
+time cannot reproduce that order. If a harness view triggers an intended HTTP
+error, add it to that view's expected-errors list.
