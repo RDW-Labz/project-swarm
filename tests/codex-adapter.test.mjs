@@ -116,6 +116,32 @@ test('Codex scratch allow follows tmp deny and stays inside the write allowlist 
   for (const scratchDir of ['relative', '/bad"path', '/bad\\path', '/bad\npath']) assert.throws(() => codexProfile({ home: '/Users/example', worktree: '/repo/job', commonDir: '/repo/.git', metadataDir: '/repo/.git/worktrees/job', scratchDir }), /sandbox path/);
 });
 
+test('Codex scratch ancestor metadata follows tmp deny for raw and resolved paths (lesson #299)', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-codex-profile-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const scratchDir = path.join(root, 'run-0000-writer').replace(/^\/private\/var\//, '/var/');
+  const lines = codexProfile({ home: '/Users/example', worktree: '/repo/job', commonDir: '/repo/.git', metadataDir: '/repo/.git/worktrees/job', scratchDir }).trim().split('\n');
+  const metadataLines = lines.filter(line => line.startsWith('(allow file-read-metadata '));
+  assert.equal(metadataLines.length, 1, 'one metadata-only grant covers all scratch ancestors');
+  const metadata = metadataLines[0];
+  const expected = new Set();
+  for (const spelling of [scratchDir, await fs.realpath(scratchDir)]) {
+    const parts = spelling.split('/').filter(Boolean);
+    parts.forEach((_, index) => expected.add(`(literal "/${parts.slice(0, index + 1).join('/')}")`));
+  }
+  const literals = metadata.match(/\(literal "[^"]+"\)/g);
+  assert.equal(literals.length, expected.size, 'shared ancestors are deduplicated');
+  assert.deepEqual(new Set(literals), expected, 'every prefix through scratch is granted, excluding root');
+  assert.equal(metadata, `(allow file-read-metadata ${literals.join(' ')})`, 'ancestors get literal metadata access only');
+  if (scratchDir.startsWith('/var/folders/')) {
+    for (const prefix of ['/private', '/private/var', '/private/var/folders', '/var', '/var/folders']) assert.ok(metadata.includes(`(literal "${prefix}")`));
+  }
+  const denyIndex = lines.findIndex(line => line.startsWith('(deny file-read* process-exec '));
+  const allowIndex = lines.findIndex(line => line.startsWith('(allow file-read* file-write* process-exec '));
+  assert.ok(denyIndex >= 0 && allowIndex > denyIndex);
+  assert.equal(lines.indexOf(metadata), allowIndex + 1, 'metadata grant immediately follows scratch allow after tmp deny');
+});
+
 test('Codex scratch grants both symlink spellings after tmp deny and validates the resolved path', async t => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-codex-profile-')));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

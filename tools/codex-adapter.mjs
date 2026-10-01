@@ -77,9 +77,15 @@ export function codexProfile({ home = os.homedir(), worktree, commonDir, metadat
   // tmpDeny. Keep it in `writes` too so the later write restriction does not deny it again.
   // macOS resolves /var into /private/var at the kernel boundary; grant both spellings.
   const scratchAllow = scratchPaths.length ? `(allow file-read* file-write* process-exec ${scratchPaths.map(file => filter('subpath', file)).join(' ')})\n` : '';
+  // realpath needs metadata for every ancestor, including those hidden by tmpDeny.
+  const scratchAncestors = new Set();
+  for (const file of scratchPaths) {
+    for (let ancestor = file; ancestor !== path.parse(ancestor).root; ancestor = path.dirname(ancestor)) scratchAncestors.add(sandboxPath(ancestor));
+  }
+  const scratchMetadataAllow = scratchAncestors.size ? `(allow file-read-metadata ${[...scratchAncestors].map(file => filter('literal', file)).join(' ')})\n` : '';
   return `(version 1)\n(allow default)\n(deny file-read* file-write* ${filter('subpath', home)})\n` +
     `(deny file-read* process-exec ${tmpDeny})\n` +
-    scratchAllow +
+    scratchAllow + scratchMetadataAllow +
     `(allow file-read* ${[...ancestors].map(file => filter('literal', file)).join(' ')} ${reads.map(file => filter('subpath', file)).join(' ')} ${filter('literal', path.join(home, '.gitconfig'))})\n` +
     `(allow process-exec ${reads.map(file => filter('subpath', file)).join(' ')})\n` +
     `(allow file-write* ${writable})\n(deny file-write* (require-not (require-any ${writable})))\n` +
