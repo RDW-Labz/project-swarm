@@ -2941,7 +2941,7 @@ function deviationText(deviation) {
   return typeof deviation === 'string' ? deviation : deviation?.contract ?? JSON.stringify(deviation);
 }
 
-export async function integrateRun(root, id, { noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, salvage = false, acceptDeviation = false, acceptDropped = false, salvageDropped = false } = {}) {
+export async function integrateRun(root, id, { noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, salvage = false, acceptDeviation = false, acceptDropped = false, salvageDropped = false, jobs = undefined, privateNamesFile = undefined } = {}) {
   root = await fs.realpath(root);
   // Field lesson #202: a job's own timed-out worker declares nothing missing — it simply never got
   // to say so — so a salvage always re-checks against the real checkout, same as any other job;
@@ -2966,7 +2966,15 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   // completed integration refuses outright. Checked before the completeness gate below so a run
   // already integrated (blocked or otherwise) always reports that, not a generic status mismatch.
   if (state.integratedAt && state.integrationStatus !== 'partial') fail('Run already integrated');
-  if (!((acceptBlocked || salvage) ? state.jobs.every(jobsAcceptable) : state.status === 'complete')) fail(`Only a complete${acceptBlocked ? ' or blocked' : ''}${salvage ? ' or timed-out (with salvageable output)' : ''} run from this repository can be integrated`);
+  // Lesson 298: --jobs flag to integrate only named jobs
+  if (jobs) {
+    for (const jobId of jobs) {
+      const job = state.jobs.find(j => j.id === jobId);
+      if (!job) fail(`Job not found: ${jobId}`);
+      if (job.status !== 'complete') fail(`Job not complete: ${jobId}`);
+    }
+  }
+  if (!((acceptBlocked || salvage) ? (jobs ? state.jobs.filter(j => jobs.includes(j.id)).every(jobsAcceptable) : state.jobs.every(jobsAcceptable)) : (jobs ? state.jobs.filter(j => jobs.includes(j.id)).every(j => j.status === 'complete') : state.status === 'complete'))) fail(`Only a complete${acceptBlocked ? ' or blocked' : ''}${salvage ? ' or timed-out (with salvageable output)' : ''} run from this repository can be integrated`);
   await workerKeyGuard(root, id, state, { env, keyExec });
   const manifest = validateManifest(JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true)));
   if (state.jobs.length !== manifest.jobs.length) fail('Job records do not match manifest');
@@ -2988,9 +2996,18 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   const skillsSourceDirAtIntegrate = resolveSkillsDir(manifest, loadLocalConfig({ env }), root);
   const skillDefsByName = new Map((skillsSourceDirAtIntegrate ? await listSkills(skillsSourceDirAtIntegrate) : []).map(skill => [skill.name, skill]));
   try {
+    const jobsToIntegrate = jobs ? state.jobs.filter(j => jobs.includes(j.id)) : state.jobs;
+    const integratedJobs = [];
+    const skippedJobs = [];
     for (const [index, job] of state.jobs.entries()) {
-      const jobChangedFiles = [];
       const declared = manifest.jobs[index];
+      const shouldIntegrate = !jobs || jobs.includes(job.id);
+      if (!shouldIntegrate) {
+        skippedJobs.push(job.id);
+        continue;
+      }
+      const jobChangedFiles = [];
+      integratedJobs.push(job.id);
       const expectedWorkspace = `.swarm/workspaces/${id}/${declared.id}`;
       if (job.id !== declared.id || job.workspace !== expectedWorkspace || !jobsAcceptable(job) || JSON.stringify(job.outputs) !== JSON.stringify(declared.outputs)) fail('Worker metadata does not match manifest');
       const workspaceRoot = await safePath(root, expectedWorkspace, { internal: true });
@@ -3224,7 +3241,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
     // state), never merely swallowed by --accept-deviation.
     if (acceptedDeviations.length) state.acceptedDeviations = acceptedDeviations;
     await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
-    return { id, status: 'integrated', integrationStatus: state.integrationStatus, files: state.integratedFiles, portBase, ...(preChecksResult.preChecks.length ? { preChecks: preChecksResult.preChecks } : {}), ...(warnings.length ? { warnings } : {}), ...checksResult, ...mutantsResult, ...(blockedJobs.length ? { blockedEvidence: blockedJobs.map(job => ({ name: job.id, lines: [job.error ?? 'blocked'] })) } : {}), ...(salvagedJobs.length ? { salvaged: true, salvagedJobs: salvagedJobs.map(job => job.id) } : {}), ...(acceptedDeviations.length ? { acceptedDeviations } : {}) };
+    return { id, status: 'integrated', integrationStatus: state.integrationStatus, files: state.integratedFiles, portBase, ...(preChecksResult.preChecks.length ? { preChecks: preChecksResult.preChecks } : {}), ...(warnings.length ? { warnings } : {}), ...checksResult, ...mutantsResult, ...(blockedJobs.length ? { blockedEvidence: blockedJobs.map(job => ({ name: job.id, lines: [job.error ?? 'blocked'] })) } : {}), ...(salvagedJobs.length ? { salvaged: true, salvagedJobs: salvagedJobs.map(job => job.id) } : {}), ...(acceptedDeviations.length ? { acceptedDeviations } : {}), ...(jobs ? { integratedJobs, skippedJobs } : {}) };
   } finally { await fs.rmdir(lock); }
 }
 
