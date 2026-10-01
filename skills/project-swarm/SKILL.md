@@ -117,15 +117,6 @@ Capture observed failures as private-safe lessons and route rules into current p
 - `lesson publish` appends safe shipped entries for one version.
 - `lesson import` converts legacy rows without duplicating ids.
 
-### UI-test jobs
-
-For UI-test assignments, keep element waits below the enclosing test timeout.
-Diagnose a hang with a long `--testTimeout` so an individual wait can fail and
-name the stuck step. Held-response fakes must offer snapshot-at-release when
-the real service can serve a request after a later event; capturing at request
-time cannot reproduce that order. If a harness view triggers an intended HTTP
-error, add it to that view's expected-errors list.
-
 ## Completion and reuse
 
 Run `node --test tests/*.test.mjs` to validate isolation checks, conflicts, result errors, timeout, cancellation, integration, and advisory preflight. For a first connection, perform one read-only and one small writing smoke exchange and inspect their responses before assigning substantial work. Integrate only the writing output you reviewed. Report which provider/model actually answered, what changed, checks run, and any limits.
@@ -141,6 +132,15 @@ For a product feature that starts agent work automatically, test readiness acros
 When adding an operator pause/resume control, agree on its boundary across new work, queued descendants, in-flight work, and manual or independently scheduled work. Test that a stale settings form cannot undo a newer pause, paused jobs retain their retry budgets and discovery cursor, and queued paused work does not starve eligible work. Review lock ordering and connection-pool use together: a transaction waiting on queries outside its own connection can exhaust the pool under concurrent requests. Distinguish reproduced failures from review risks; see the pause/resume follow-up in the [automation integration study](references/automation-integration-study.md).
 
 When a bounded agent run can commit work before acknowledging its task, preflight the budget for both the effect and its receipt/response. Report remaining turns and tool calls from the limits actually enforced, and reserve completion capacity where the workflow requires it; do not assume more budget fixes wasted turns. Test a successful late effect followed by a failed parent run, then a retry that reads persisted task/child state and reuses the existing work. Distinguish a failed run from a rolled-back effect. Use controlled fixtures to prove these boundaries, and label any separate live-provider planning check as synthetic rather than evidence of customer outcomes or a measured speedup. See the turn-budget follow-up in the [automation integration study](references/automation-integration-study.md).
+
+### UI-test jobs
+
+For UI-test assignments, keep element waits below the enclosing test timeout.
+Diagnose a hang with a long `--testTimeout` so an individual wait can fail and
+name the stuck step. Held-response fakes must offer snapshot-at-release when
+the real service can serve a request after a later event; capturing at request
+time cannot reproduce that order. If a harness view triggers an intended HTTP
+error, add it to that view's expected-errors list.
 
 ## Execute an active work queue
 
