@@ -2144,3 +2144,79 @@ rule is enforced or documented.
     are not; a warning separately names a required, trackable read
     that a job's own declared inputs still omit. Regression coverage
     is in `tests/field-lessons-batch-x.test.mjs`.
+192. **An output placed under a shared or test directory could still carry a
+    private term with nothing catching it before integration.** A job's
+    declared output landed under a shared skills directory or a fixtures/tests
+    path and carried a private name or term, the same category an existing
+    diff-wide scan already caught elsewhere, but that scan never looked at
+    these directories specifically. Rule: any output under a shared, fixtures
+    or tests path is scanned against the same private-names list used
+    elsewhere, before it is ever integrated. Enforcement: `validate`/
+    `integrate` now refuse `private-name` for an output under `shared/`,
+    `fixtures/` or `tests/` whose content matches a configured private term.
+    Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.
+193. **A job's declared outputs could exceed what the model could actually
+    return, discovered only once the request itself came back truncated.** An
+    API job's own declared output files, summed, exceeded its configured
+    output-token cap, so a run that looked valid at dispatch time was destined
+    to come back cut off. Rule: a job's declared outputs are sized against its
+    own output cap before it ever dispatches, not after. Enforcement:
+    `validate` now warns and refuses `output-cap-too-small` when a job's
+    estimated declared-output size exceeds its configured `maxOutputTokens`.
+    Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.
+194. **A skill's own required result keys were never checked against the
+    actual API envelope shape.** A job carried an attached skill that declared
+    required result keys, but the envelope schema built for an API job never
+    required them, so a reply missing one of those keys could still pass
+    validation. Rule: an attached skill's own required result keys are part of
+    the envelope's required schema, not a separate, unchecked promise. 
+    Enforcement: the API envelope now requires a `result` object, and
+    `validate` injects an attached skill's own `resultKeys` into that schema
+    before a job ever dispatches. Regression coverage is in
+    `tests/field-lessons-batch-y.test.mjs`.
+195. **An invalid envelope reply left no trace once it was rejected.** When
+    the OpenRouter/API adapter rejected a structurally invalid envelope, the
+    raw reply that caused the rejection was discarded, leaving nothing to
+    diagnose beyond a generic error message. Rule: a rejected raw reply is
+    worth keeping, not discarding, since it is the only evidence of what the
+    model actually sent back. Enforcement: an invalid envelope's raw reply is
+    now saved to a per-run, per-job file for diagnosis instead of being
+    dropped. Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.
+196. **A whole run had to be integrated together even when only some of its
+    jobs had actually finished.** A batch run with several jobs could not be
+    integrated at all once any one job failed, even though its other jobs had
+    completed cleanly and did not overlap in their outputs, forcing a wait for
+    a full re-run instead of taking the finished work. Rule: a batch run's own
+    complete, non-overlapping jobs can be integrated on their own, named
+    explicitly rather than assumed. Enforcement: `integrate RUN --jobs
+    <id,...>` integrates only the named complete jobs of a run whose other
+    jobs failed, refusing with a message naming the flag when a partial run is
+    integrated without it. Regression coverage is in
+    `tests/field-lessons-batch-y.test.mjs`.
+197. **A sandboxed test run could not create its own temp directory where the
+    sandbox would actually allow it.** The test suite's own setup created its
+    temporary directory using the plain OS default, which a sandboxed worker
+    could not write to, so a sandboxed job attempting to run tests had no
+    writable location for them at all. Rule: a test suite's own temp directory
+    honors an explicit override before falling back to the OS default, so a
+    sandboxed caller can point it somewhere writable. Enforcement: the test
+    suite's shared setup now honors a dedicated test-temp environment variable
+    (falling back to the ordinary temp-directory variable) when creating its
+    own temp directory. Regression coverage is in
+    `tests/field-lessons-batch-y.test.mjs`.
+198. **A sandboxed job's scratch directory was not reliably reachable from
+    inside its own sandbox.** A per-job scratch directory created outside the
+    repository still was not consistently readable or writable from inside a
+    sandboxed job, because the directory could be granted only in the form it
+    was created with, while the job's own runtime resolved it through a
+    different, equivalent path (for example a symlinked temp root), and an
+    ancestor directory needed for the job's own path resolution was not
+    granted either. Rule: a scratch-directory grant covers every real path a
+    sandboxed job could use to reach it, including a resolved-symlink form and
+    the metadata reads its own ancestors need, and the job's environment names
+    that directory consistently. Enforcement: the sandbox profile now grants
+    a per-job scratch directory in both its raw and resolved-symlink forms,
+    plus ancestor file-read-metadata access; the job's environment exports the
+    standard temp-directory variables pointing at it, and the directory is
+    removed once the job finishes unless an explicit keep-temp override is
+    set. Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.
