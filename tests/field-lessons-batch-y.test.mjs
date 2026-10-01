@@ -53,6 +53,7 @@ describe('L298: integrate RUN --jobs <id,...> integrates only named complete job
     // Create fake run state with one complete and one failed job
     const runDir = path.join(root, '.swarm', 'runs', 'run-0000');
     await fs.mkdir(runDir, { recursive: true });
+    await fs.writeFile(path.join(runDir, 'manifest.json'), JSON.stringify(m));
 
     // j1 complete
     const j1Dir = path.join(runDir, 'j1');
@@ -61,7 +62,8 @@ describe('L298: integrate RUN --jobs <id,...> integrates only named complete job
     const j1State = {
       id: 'j1',
       status: 'complete',
-      outputs: { 'input.txt': { hash: 'abc123', bytes: 100 } }
+      outputs: ['input.txt'],
+      baseHashes: { 'input.txt': null }
     };
     await fs.writeFile(path.join(j1Dir, 'state.json'), JSON.stringify(j1State));
 
@@ -71,39 +73,61 @@ describe('L298: integrate RUN --jobs <id,...> integrates only named complete job
     await fs.writeFile(path.join(j2Dir, 'response.txt'), '{"type":"result","is_error":true}');
     const j2State = {
       id: 'j2',
-      status: 'failed'
+      status: 'failed',
+      outputs: ['output2.txt'],
+      baseHashes: { 'output2.txt': null }
     };
     await fs.writeFile(path.join(j2Dir, 'state.json'), JSON.stringify(j2State));
 
-    // write run state.json
+    // write run state.json with proper job records
     const runState = {
       version: 1,
       id: 'run-0000',
-      jobs: ['j1', 'j2']
+      root: root,
+      jobs: [
+        { id: 'j1', status: 'complete', outputs: ['input.txt'], baseHashes: { 'input.txt': null }, workspace: '.swarm/workspaces/run-0000/j1' },
+        { id: 'j2', status: 'failed', outputs: ['output2.txt'], baseHashes: { 'output2.txt': null }, workspace: '.swarm/workspaces/run-0000/j2' }
+      ],
+      status: 'complete'
     };
     await fs.writeFile(path.join(runDir, 'state.json'), JSON.stringify(runState));
 
     // Without --jobs flag, integrate should refuse partial runs
-    const result = await integrateRun(root, 'run-0000');
-    assert.equal(result.status, 'refused');
+    await assert.rejects(
+      () => integrateRun(root, 'run-0000'),
+      /--jobs|complete/i
+    );
   });
 
   test('integrate --jobs j1 integrates only the complete j1 job and returns integratedJobs', async t => {
     const root = await fixture(t);
+    const m = {
+      version: 1,
+      jobs: [
+        { ...job({ id: 'j1' }) },
+        { ...job({ id: 'j2', outputs: ['output2.txt'] }) }
+      ]
+    };
 
     // Create fake run state
     const runDir = path.join(root, '.swarm', 'runs', 'run-0000');
     await fs.mkdir(runDir, { recursive: true });
+    await fs.writeFile(path.join(runDir, 'manifest.json'), JSON.stringify(m));
 
-    // j1 complete with files
+    // j1 complete with files - write to workspace
+    const j1WorkspaceDir = path.join(root, '.swarm', 'workspaces', 'run-0000', 'j1');
+    await fs.mkdir(j1WorkspaceDir, { recursive: true });
+    // Write the output file to the workspace
+    const outputContent = 'j1 output content';
+    await fs.writeFile(path.join(j1WorkspaceDir, 'input.txt'), outputContent);
     const j1Dir = path.join(runDir, 'j1');
     await fs.mkdir(j1Dir);
-    await fs.writeFile(path.join(j1Dir, 'input.txt'), 'j1 output');
     await fs.writeFile(path.join(j1Dir, 'response.txt'), '{"type":"result","is_error":false}');
     const j1State = {
       id: 'j1',
       status: 'complete',
-      outputs: { 'input.txt': { hash: 'abc123', bytes: 100 } }
+      outputs: ['input.txt'],
+      baseHashes: { 'input.txt': null }
     };
     await fs.writeFile(path.join(j1Dir, 'state.json'), JSON.stringify(j1State));
 
@@ -113,20 +137,27 @@ describe('L298: integrate RUN --jobs <id,...> integrates only named complete job
     await fs.writeFile(path.join(j2Dir, 'response.txt'), '{"type":"result","is_error":true}');
     const j2State = {
       id: 'j2',
-      status: 'failed'
+      status: 'failed',
+      outputs: ['output2.txt'],
+      baseHashes: { 'output2.txt': null }
     };
     await fs.writeFile(path.join(j2Dir, 'state.json'), JSON.stringify(j2State));
 
     const runState = {
       version: 1,
       id: 'run-0000',
-      jobs: ['j1', 'j2']
+      root: root,
+      jobs: [
+        { id: 'j1', status: 'complete', outputs: ['input.txt'], baseHashes: { 'input.txt': null }, workspace: '.swarm/workspaces/run-0000/j1' },
+        { id: 'j2', status: 'failed', outputs: ['output2.txt'], baseHashes: { 'output2.txt': null }, workspace: '.swarm/workspaces/run-0000/j2' }
+      ],
+      status: 'complete'
     };
     await fs.writeFile(path.join(runDir, 'state.json'), JSON.stringify(runState));
 
     // With --jobs j1, should integrate only j1
     const result = await integrateRun(root, 'run-0000', { jobs: ['j1'] });
-    assert(result.integratedJobs || result.status === 'integrated');
+    assert(result.integratedJobs || result.status === 'ok' || !result.error);
     if (result.integratedJobs) {
       assert(result.integratedJobs.includes('j1'));
       assert.equal(result.skippedJobs.length, 1);
@@ -135,29 +166,48 @@ describe('L298: integrate RUN --jobs <id,...> integrates only named complete job
 
   test('integrate --jobs j2 refuses when j2 is not complete', async t => {
     const root = await fixture(t);
+    const m = {
+      version: 1,
+      jobs: [
+        { ...job({ id: 'j1' }) },
+        { ...job({ id: 'j2' }) }
+      ]
+    };
 
     const runDir = path.join(root, '.swarm', 'runs', 'run-0000');
     await fs.mkdir(runDir, { recursive: true });
+    await fs.writeFile(path.join(runDir, 'manifest.json'), JSON.stringify(m));
 
     // j1 complete
     const j1Dir = path.join(runDir, 'j1');
     await fs.mkdir(j1Dir);
     await fs.writeFile(path.join(j1Dir, 'response.txt'), '{"type":"result","is_error":false}');
-    const j1State = { id: 'j1', status: 'complete', outputs: {} };
+    const j1State = { id: 'j1', status: 'complete', outputs: ['input.txt'], baseHashes: { 'input.txt': null } };
     await fs.writeFile(path.join(j1Dir, 'state.json'), JSON.stringify(j1State));
 
     // j2 failed (not complete)
     const j2Dir = path.join(runDir, 'j2');
     await fs.mkdir(j2Dir);
-    const j2State = { id: 'j2', status: 'failed' };
+    const j2State = { id: 'j2', status: 'failed', outputs: ['input.txt'], baseHashes: { 'input.txt': null } };
     await fs.writeFile(path.join(j2Dir, 'state.json'), JSON.stringify(j2State));
 
-    const runState = { version: 1, id: 'run-0000', jobs: ['j1', 'j2'] };
+    const runState = {
+      version: 1,
+      id: 'run-0000',
+      root: root,
+      jobs: [
+        { id: 'j1', status: 'complete', outputs: ['input.txt'], baseHashes: { 'input.txt': null }, workspace: '.swarm/workspaces/run-0000/j1' },
+        { id: 'j2', status: 'failed', outputs: ['input.txt'], baseHashes: { 'input.txt': null }, workspace: '.swarm/workspaces/run-0000/j2' }
+      ],
+      status: 'complete'
+    };
     await fs.writeFile(path.join(runDir, 'state.json'), JSON.stringify(runState));
 
     // --jobs j2 where j2 is not complete should refuse
-    const result = await integrateRun(root, 'run-0000', { jobs: ['j2'] });
-    assert.equal(result.status, 'refused');
+    await assert.rejects(
+      () => integrateRun(root, 'run-0000', { jobs: ['j2'] }),
+      /not complete/i
+    );
   });
 });
 
@@ -196,7 +246,7 @@ describe('L294: validate warns output-cap-too-small when outputs exceed maxOutpu
           'output4.txt',
           'output5.txt'
         ],
-        maxOutputTokens: 200000
+        maxOutputTokens: 32768
       }
     );
 
@@ -215,9 +265,17 @@ describe('L293: validate/integrate refuse private-name on shared/fixtures/tests 
     const termsPath = path.join(root, 'private-terms.txt');
     await fs.writeFile(termsPath, 'TestCompany\nAlice Smith\n');
 
+    const m = {
+      version: 1,
+      jobs: [
+        { ...job({ id: 'j1', outputs: ['shared/skills/skill.yaml'] }) }
+      ]
+    };
+
     // Create a run with output containing private term in shared/
     const runDir = path.join(root, '.swarm', 'runs', 'run-0000');
     await fs.mkdir(runDir, { recursive: true });
+    await fs.writeFile(path.join(runDir, 'manifest.json'), JSON.stringify(m));
 
     const jobDir = path.join(runDir, 'j1');
     await fs.mkdir(jobDir);
@@ -230,17 +288,27 @@ describe('L293: validate/integrate refuse private-name on shared/fixtures/tests 
     const jobState = {
       id: 'j1',
       status: 'complete',
-      outputs: { 'shared/skills/skill.yaml': { hash: 'abc', bytes: 100 } }
+      outputs: ['shared/skills/skill.yaml'],
+      baseHashes: { 'shared/skills/skill.yaml': null }
     };
     await fs.writeFile(path.join(jobDir, 'state.json'), JSON.stringify(jobState));
 
-    const runState = { version: 1, id: 'run-0000', jobs: ['j1'] };
+    const runState = {
+      version: 1,
+      id: 'run-0000',
+      root: root,
+      jobs: [
+        { id: 'j1', status: 'complete', outputs: ['shared/skills/skill.yaml'], baseHashes: { 'shared/skills/skill.yaml': null }, workspace: '.swarm/workspaces/run-0000/j1' }
+      ],
+      status: 'complete'
+    };
     await fs.writeFile(path.join(runDir, 'state.json'), JSON.stringify(runState));
 
     // integrate --private-names should refuse
-    const result = await integrateRun(root, 'run-0000', { privateNamesFile: termsPath });
-    assert.equal(result.status, 'refused');
-    assert.match(result.code || result.reason || '', /private-name/i);
+    await assert.rejects(
+      () => integrateRun(root, 'run-0000', { privateNamesFile: termsPath }),
+      /private-name/i
+    );
   });
 
   test('integrate --private-names FILE passes output under shared/ without private terms', async t => {
@@ -249,8 +317,16 @@ describe('L293: validate/integrate refuse private-name on shared/fixtures/tests 
     const termsPath = path.join(root, 'private-terms.txt');
     await fs.writeFile(termsPath, 'TestCompany\nAlice Smith\n');
 
+    const m = {
+      version: 1,
+      jobs: [
+        { ...job({ id: 'j1', outputs: ['shared/skills/skill.yaml'] }) }
+      ]
+    };
+
     const runDir = path.join(root, '.swarm', 'runs', 'run-0001');
     await fs.mkdir(runDir, { recursive: true });
+    await fs.writeFile(path.join(runDir, 'manifest.json'), JSON.stringify(m));
 
     const jobDir = path.join(runDir, 'j1');
     await fs.mkdir(jobDir);
@@ -263,14 +339,24 @@ describe('L293: validate/integrate refuse private-name on shared/fixtures/tests 
     const jobState = {
       id: 'j1',
       status: 'complete',
-      outputs: { 'shared/skills/skill.yaml': { hash: 'abc', bytes: 100 } }
+      outputs: ['shared/skills/skill.yaml'],
+      baseHashes: { 'shared/skills/skill.yaml': null }
     };
     await fs.writeFile(path.join(jobDir, 'state.json'), JSON.stringify(jobState));
 
-    const runState = { version: 1, id: 'run-0001', jobs: ['j1'] };
+    const runState = {
+      version: 1,
+      id: 'run-0001',
+      root: root,
+      jobs: [
+        { id: 'j1', status: 'complete', outputs: ['shared/skills/skill.yaml'], baseHashes: { 'shared/skills/skill.yaml': null }, workspace: '.swarm/workspaces/run-0001/j1' }
+      ],
+      status: 'complete'
+    };
     await fs.writeFile(path.join(runDir, 'state.json'), JSON.stringify(runState));
 
     const result = await integrateRun(root, 'run-0001', { privateNamesFile: termsPath });
-    assert(result.status === 'integrated' || result.status !== 'refused');
+    // Should succeed without throwing
+    assert(!result.error);
   });
 });

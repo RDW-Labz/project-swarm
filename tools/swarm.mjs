@@ -1097,6 +1097,14 @@ export function validateManifest(manifest) {
   const cycle = detectAfterCycle(manifest.jobs);
   if (cycle) fail(`after cycle: ${cycle.join(' -> ')}`);
   for (const a of writers) for (const b of writers) if (a !== b && b.startsWith(`${a}/`)) fail(`Overlapping output paths: ${a}, ${b}`);
+  // Field lesson #294: check output capacity for API agents with maxOutputTokens
+  for (const job of manifest.jobs) {
+    if (job.maxOutputTokens && API_AGENTS.includes(job.agent)) {
+      // Estimate output size: ~500 tokens per output file
+      const estimatedTokens = (job.outputs ?? []).length * 500;
+      if (estimatedTokens > job.maxOutputTokens) fail(`output-cap-too-small: Job ${job.id}: ${job.outputs.length} outputs estimated at ~${estimatedTokens} tokens exceed maxOutputTokens ${job.maxOutputTokens}`);
+    }
+  }
   return manifest;
 }
 
@@ -2168,6 +2176,11 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         // Field lesson #282: finalMessage/parseFinalJson above already read result.response in
         // memory; only the on-disk copy is ever withheld.
         await write(root, `${directory}/${job.id}/response.txt`, job.privateData === true ? PRIVATE_DATA_WITHHELD_TEXT : result.response, true);
+        // Lesson 296: save raw response when envelope validation failed
+        if (result.invalidResponseText) {
+          await write(root, `${directory}/${job.id}/response-invalid.txt`, result.invalidResponseText, true);
+          if (!result.error) result.error = `Invalid structured output envelope; raw response saved to ${directory}/${job.id}/response-invalid.txt`;
+        }
         if (finalMessage?.status === 'blocked') {
           result.status = 'blocked';
           const summary = typeof finalMessage.summary === 'string' && finalMessage.summary.trim() ? finalMessage.summary.trim()
@@ -2974,6 +2987,11 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       if (job.status !== 'complete') fail(`Job not complete: ${jobId}`);
     }
   }
+  // Check if run can be integrated: either all jobs complete, or --jobs specified with complete named jobs
+  const hasIncompleteJobs = state.jobs.some(j => !jobsAcceptable(j));
+  if (hasIncompleteJobs && !jobs) {
+    fail(`Only a complete${acceptBlocked ? ' or blocked' : ''}${salvage ? ' or timed-out (with salvageable output)' : ''} run from this repository can be integrated; pass --jobs <id,...> to integrate only specific complete jobs`);
+  }
   if (!((acceptBlocked || salvage) ? (jobs ? state.jobs.filter(j => jobs.includes(j.id)).every(jobsAcceptable) : state.jobs.every(jobsAcceptable)) : (jobs ? state.jobs.filter(j => jobs.includes(j.id)).every(j => j.status === 'complete') : state.status === 'complete'))) fail(`Only a complete${acceptBlocked ? ' or blocked' : ''}${salvage ? ' or timed-out (with salvageable output)' : ''} run from this repository can be integrated`);
   await workerKeyGuard(root, id, state, { env, keyExec });
   const manifest = validateManifest(JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true)));
@@ -2995,6 +3013,8 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   // reflects the frontmatter as it stands now, not as it stood when the job ran.
   const skillsSourceDirAtIntegrate = resolveSkillsDir(manifest, loadLocalConfig({ env }), root);
   const skillDefsByName = new Map((skillsSourceDirAtIntegrate ? await listSkills(skillsSourceDirAtIntegrate) : []).map(skill => [skill.name, skill]));
+  // Field lesson #293: load private names once for all output files
+  const privateNamesList = privateNamesFile ? await loadPrivateNames(root, privateNamesFile, { env }) : { terms: [] };
   try {
     const jobsToIntegrate = jobs ? state.jobs.filter(j => jobs.includes(j.id)) : state.jobs;
     const integratedJobs = [];
@@ -3071,6 +3091,16 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
           continue;
         }
         const outputHash = digest(output);
+        // Field lesson #293: check that outputs under shared/, fixtures/, tests/ don't contain private names
+        if (privateNamesFile) {
+          const PROTECTED_DIRS = ['shared/', 'fixtures/', 'tests/'];
+          const isProtected = PROTECTED_DIRS.some(dir => file.startsWith(dir));
+          if (isProtected) {
+            const text = output.toString('utf8');
+            const hits = findPrivateNameHitsInText(file, text, privateNamesList.terms);
+            if (hits.length) fail(`private-name: ${hits[0].file}:${hits[0].line}: ${hits[0].term}`);
+          }
+        }
         // Field lesson 120: a retry of a `partial` integration must not refuse just because this
         // file already equals what this same run wrote last time; only a file that genuinely
         // differs from both base and the proposed output is a real conflict.

@@ -21,3 +21,8 @@ process.env.SWARM_REAL_HOME = process.env.HOME || os.homedir();
 const isolateHome = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-test-home-'));
 process.env.HOME = isolateHome;
 delete process.env.XDG_CONFIG_HOME;
+
+// Lesson #299: create a test temp directory under SWARM_TEST_TMP if set, else TMPDIR, else OS tmp
+const testTmpBase = process.env.SWARM_TEST_TMP || process.env.TMPDIR || os.tmpdir();
+const testTmpDir = fs.mkdtempSync(path.join(testTmpBase, 'swarm-test-tmp-'));
+process.env.SWARM_TEST_TMP = testTmpDir;

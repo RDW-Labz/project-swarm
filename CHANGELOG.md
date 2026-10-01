@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `integrate RUN --jobs <id,...>` integrates only the named complete jobs (and refuses with a message mentioning `--jobs` when a partial run is integrated without the flag), enabling batch runs where individual jobs can be integrated separately as they complete. (lesson 298)
+- `validate` now fails when an API job's declared outputs exceed its `maxOutputTokens` cap, estimated at ~500 tokens per output file. (lesson 294)
+- `validate`/`integrate` now refuse outputs under `shared/`, `fixtures/` or `tests/` containing terms from the private-names file (same list as the #254 DeepSeek guard). (lesson 293)
+- When the OpenRouter/API adapter rejects a structurally invalid envelope, the raw reply is now saved to `.swarm/runs/<id>/<job>/response-invalid.txt` for diagnosis. (lesson 296)
+- `tests/_isolate-config.mjs` now honours `SWARM_TEST_TMP` (or `TMPDIR`) for creating its test temp directory, enabling codex jobs to run tests in a sandbox-writable workspace. (lesson 299)
+
 ## 1.39.0
 
 - `ship --preflight`: every pre-push content guard runs in one pass and reports all failures (E2)
