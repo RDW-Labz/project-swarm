@@ -4,9 +4,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { validateManifest, integrateRun, runManifest } from '../tools/swarm.mjs';
 import { git } from '../tools/codex-adapter.mjs';
+
+// Mirrors the internal `digest` helper in tools/swarm.mjs so hand-built run fixtures carry a
+// baseHashes value that actually matches what integrateRun will compute for the fixture's
+// committed bytes, instead of a placeholder `null` that only happens to work when the base file
+// never existed.
+const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
 const job = (extra = {}) => ({
   id: 'writer',
@@ -123,11 +130,14 @@ describe('L298: integrate RUN --jobs <id,...> integrates only named complete job
     const j1Dir = path.join(runDir, 'j1');
     await fs.mkdir(j1Dir);
     await fs.writeFile(path.join(j1Dir, 'response.txt'), '{"type":"result","is_error":false}');
+    // input.txt was committed as 'original' by fixture(); baseHashes must reflect that real
+    // snapshot or integrate correctly refuses the hand-built fixture as a conflict.
+    const inputBaseHash = sha256(Buffer.from('original'));
     const j1State = {
       id: 'j1',
       status: 'complete',
       outputs: ['input.txt'],
-      baseHashes: { 'input.txt': null }
+      baseHashes: { 'input.txt': inputBaseHash }
     };
     await fs.writeFile(path.join(j1Dir, 'state.json'), JSON.stringify(j1State));
 
@@ -148,7 +158,7 @@ describe('L298: integrate RUN --jobs <id,...> integrates only named complete job
       id: 'run-0000',
       root: root,
       jobs: [
-        { id: 'j1', status: 'complete', outputs: ['input.txt'], baseHashes: { 'input.txt': null }, workspace: '.swarm/workspaces/run-0000/j1' },
+        { id: 'j1', status: 'complete', outputs: ['input.txt'], baseHashes: { 'input.txt': inputBaseHash }, workspace: '.swarm/workspaces/run-0000/j1' },
         { id: 'j2', status: 'failed', outputs: ['output2.txt'], baseHashes: { 'output2.txt': null }, workspace: '.swarm/workspaces/run-0000/j2' }
       ],
       status: 'complete'
@@ -280,8 +290,11 @@ describe('L293: validate/integrate refuse private-name on shared/fixtures/tests 
     const jobDir = path.join(runDir, 'j1');
     await fs.mkdir(jobDir);
 
-    // Create output under shared/ with a private term
-    const sharedDir = path.join(jobDir, 'shared', 'skills');
+    // integrate reads a job's outputs from its real workspace (.swarm/workspaces/<run>/<job>/...),
+    // never from the run's own record directory (.swarm/runs/<run>/<job>/) — that one only ever
+    // holds response.txt/state.json. Write the proposed output where integrate actually looks.
+    const workspaceDir = path.join(root, '.swarm', 'workspaces', 'run-0000', 'j1');
+    const sharedDir = path.join(workspaceDir, 'shared', 'skills');
     await fs.mkdir(sharedDir, { recursive: true });
     await fs.writeFile(path.join(sharedDir, 'skill.yaml'), 'name: TestCompany Secret Skill\n');
 
@@ -331,8 +344,9 @@ describe('L293: validate/integrate refuse private-name on shared/fixtures/tests 
     const jobDir = path.join(runDir, 'j1');
     await fs.mkdir(jobDir);
 
-    // Create clean output without private terms
-    const sharedDir = path.join(jobDir, 'shared', 'skills');
+    // Same real-workspace layout as the refusal case above: clean output, no private terms.
+    const workspaceDir = path.join(root, '.swarm', 'workspaces', 'run-0001', 'j1');
+    const sharedDir = path.join(workspaceDir, 'shared', 'skills');
     await fs.mkdir(sharedDir, { recursive: true });
     await fs.writeFile(path.join(sharedDir, 'skill.yaml'), 'name: Generic Clean Skill\n');
 
