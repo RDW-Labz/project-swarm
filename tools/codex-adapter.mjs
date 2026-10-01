@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Codex's outer macOS seatbelt, not its prompt or built-in sandbox, is the boundary.
 import fs from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { mkdirSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { NO_STASH_LINE, MUTANTS_BY_HAND_LINE } from './swarm-env.mjs';
@@ -55,7 +55,13 @@ export async function resolveReadPaths(paths = [], home = os.homedir(), config =
 export function codexProfile({ home = os.homedir(), worktree, commonDir, metadataDir, scratchDir, readPaths = [], config = {}, tmpRoots = defaultTmpRoots() }) {
   home = sandboxPath(home);
   const reads = [worktree, commonDir, ...['.codex', '.nvm', '.cache', '.npm', '.local/share/uv', 'Library/Caches'].map(p => path.join(home, p)), ...validateReadPaths(readPaths, home, config)].map(sandboxPath);
-  const writes = [worktree, metadataDir, ...(scratchDir === undefined ? [] : [scratchDir]), ...['.codex', '.cache', '.npm'].map(p => path.join(home, p)), '/private/tmp', '/private/var/folders'].map(sandboxPath);
+  let scratchPaths = [];
+  if (scratchDir !== undefined) {
+    const raw = sandboxPath(scratchDir);
+    mkdirSync(raw, { recursive: true });
+    scratchPaths = [...new Set([raw, sandboxPath(realpathSync.native(raw))])];
+  }
+  const writes = [worktree, metadataDir, ...scratchPaths, ...['.codex', '.cache', '.npm'].map(p => path.join(home, p)), '/private/tmp', '/private/var/folders'].map(sandboxPath);
   const filter = (kind, file) => `(${kind} "${sandboxPath(file)}")`;
   const ancestors = new Set([home]);
   for (const file of [...reads, metadataDir]) {
@@ -69,7 +75,8 @@ export function codexProfile({ home = os.homedir(), worktree, commonDir, metadat
   const tmpDeny = [...new Set(tmpRoots.map(sandboxPath))].map(file => filter('subpath', file)).join(' ');
   // Lesson #299: sandbox-exec uses the last matching rule; this exact scratch grant must follow
   // tmpDeny. Keep it in `writes` too so the later write restriction does not deny it again.
-  const scratchAllow = scratchDir === undefined ? '' : `(allow file-read* file-write* process-exec ${filter('subpath', scratchDir)})\n`;
+  // macOS resolves /var into /private/var at the kernel boundary; grant both spellings.
+  const scratchAllow = scratchPaths.length ? `(allow file-read* file-write* process-exec ${scratchPaths.map(file => filter('subpath', file)).join(' ')})\n` : '';
   return `(version 1)\n(allow default)\n(deny file-read* file-write* ${filter('subpath', home)})\n` +
     `(deny file-read* process-exec ${tmpDeny})\n` +
     scratchAllow +

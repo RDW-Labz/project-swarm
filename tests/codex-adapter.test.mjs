@@ -100,8 +100,10 @@ test('profile grants exact scopes and ends with sensitive path and keychain serv
   assert.ok(configured.trim().split('\n').slice(-2)[0].includes('"/Users/example/.acme-app"'));
 });
 
-test('Codex scratch allow follows tmp deny and stays inside the write allowlist (lesson #299)', () => {
-  const scratchDir = '/private/tmp/swarm-codex/run-0000-writer';
+test('Codex scratch allow follows tmp deny and stays inside the write allowlist (lesson #299)', async t => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-codex-profile-')));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const scratchDir = path.join(root, 'run-0000-writer');
   const profile = codexProfile({ home: '/Users/example', worktree: '/repo/job', commonDir: '/repo/.git', metadataDir: '/repo/.git/worktrees/job', scratchDir, tmpRoots: ['/private/tmp', '/tmp'] });
   const lines = profile.trim().split('\n');
   const deny = '(deny file-read* process-exec (subpath "/private/tmp") (subpath "/tmp"))';
@@ -112,6 +114,32 @@ test('Codex scratch allow follows tmp deny and stays inside the write allowlist 
   assert.ok(lines.find(line => line.startsWith('(deny file-write* (require-not')).includes(`(subpath "${scratchDir}")`), 'later write restriction must not override scratch access');
   assert.ok(!lines.some(line => line.startsWith('(allow file-read* file-write* process-exec') && line.includes('(subpath "/private/tmp/swarm-codex")')));
   for (const scratchDir of ['relative', '/bad"path', '/bad\\path', '/bad\npath']) assert.throws(() => codexProfile({ home: '/Users/example', worktree: '/repo/job', commonDir: '/repo/.git', metadataDir: '/repo/.git/worktrees/job', scratchDir }), /sandbox path/);
+});
+
+test('Codex scratch grants both symlink spellings after tmp deny and validates the resolved path', async t => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-codex-profile-')));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const target = path.join(root, 'resolved');
+  const alias = path.join(root, 'alias');
+  await fs.mkdir(target);
+  await fs.symlink(target, alias, 'dir');
+  const scratchDir = path.join(alias, 'run-0000-writer');
+  const resolved = path.join(target, 'run-0000-writer');
+  const options = { home: '/Users/example', worktree: '/repo/job', commonDir: '/repo/.git', metadataDir: '/repo/.git/worktrees/job', scratchDir, tmpRoots: [root] };
+  const lines = codexProfile(options).trim().split('\n');
+  const denyIndex = lines.indexOf(`(deny file-read* process-exec (subpath "${root}"))`);
+  assert.ok(denyIndex >= 0);
+  for (const spelling of [scratchDir, resolved]) {
+    const subpath = `(subpath "${spelling}")`;
+    assert.ok(lines.findIndex(line => line.startsWith('(allow file-read* file-write* process-exec ') && line.includes(subpath)) > denyIndex, 'each scratch spelling must override the tmp deny');
+    assert.ok(lines.find(line => line.startsWith('(deny file-write* (require-not')).includes(subpath), 'each spelling must survive the later write restriction');
+  }
+  assert.equal(await fs.realpath(scratchDir), resolved, 'scratch is created before resolving');
+  const unsafeTarget = path.join(root, 'bad"path');
+  const unsafeAlias = path.join(root, 'unsafe-alias');
+  await fs.mkdir(unsafeTarget);
+  await fs.symlink(unsafeTarget, unsafeAlias, 'dir');
+  assert.throws(() => codexProfile({ ...options, scratchDir: unsafeAlias }), /sandbox path/);
 });
 
 test('readPaths is Codex-only, absolute, safe and cannot name denied directories', () => {
