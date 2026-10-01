@@ -1,0 +1,77 @@
+{
+  "jobs": [
+    {
+      "id": "t81-ship-pipeline",
+      "context": [
+        "docs/_swarm/t81-brief.md",
+        "docs/_swarm/t81-contract.md",
+        "docs/_swarm/t80-contract.md",
+        "tools/ship.mjs",
+        "tools/swarm.mjs",
+        "tests/field-lessons-batch-y.test.mjs",
+        "tests/_isolate-config.mjs",
+        "package.json"
+      ],
+      "outputs": [
+        "tools/ship.mjs",
+        "tools/pipeline.mjs",
+        "tests/field-lesson-t81-pipeline.test.mjs"
+      ],
+      "summary": "Implement required-context CI waiting, the shared environment-failure classifier, required-section stub refusal, and the durable ticket pipeline using the contract's injected callbacks. Add isolated fake-boundary tests for stage stopping, resume, bounded commits, required-only waiting and ship refusals, preserving existing ship behavior.",
+      "dependsOn": []
+    },
+    {
+      "id": "t81-adapters",
+      "context": [
+        "docs/_swarm/t81-brief.md",
+        "docs/_swarm/t81-contract.md",
+        "docs/_swarm/t80-contract.md",
+        "tools/codex-adapter.mjs",
+        "tools/claude-shell.mjs",
+        "tools/swarm.mjs",
+        "tests/field-lessons-batch-y.test.mjs",
+        "tests/_isolate-config.mjs",
+        "package.json"
+      ],
+      "outputs": [
+        "tools/codex-adapter.mjs",
+        "tools/claude-shell.mjs",
+        "tests/field-lesson-t81-adapters.test.mjs"
+      ],
+      "summary": "Implement shared environment preparation, strict dependency read/exec grants, streaming evidence sinks, codex retry helpers and manifest-check prompt guidance within the two adapter files. Test the exported helpers with fake processes and files, including privacy preservation, setup ordering, output-write retry vetoes and a maximum of one retry; C owns all swarm.mjs call sites.",
+      "dependsOn": []
+    },
+    {
+      "id": "t81-wire-scaffold",
+      "context": [
+        "docs/_swarm/t81-brief.md",
+        "docs/_swarm/t81-contract.md",
+        "docs/_swarm/t80-contract.md",
+        "tools/swarm.mjs",
+        "tools/ship.mjs",
+        "tools/codex-adapter.mjs",
+        "tools/claude-shell.mjs",
+        "tests/field-lessons-batch-y.test.mjs",
+        "tests/_isolate-config.mjs",
+        "package.json",
+        "CHANGELOG.md",
+        "README.md",
+        "skills/project-swarm/SKILL.md"
+      ],
+      "outputs": [
+        "tools/swarm.mjs",
+        "tools/scaffold.mjs",
+        "skills/project-swarm/SKILL.md",
+        "README.md",
+        "CHANGELOG.md",
+        "package.json",
+        "tests/field-lesson-t81-cli.test.mjs"
+      ],
+      "summary": "Wire A/B interfaces into command dispatch, usage, run sync/evidence/retry, check classification, inspect tails and ticket callbacks, then implement both scaffolds with the existing validation and result paths. Add isolated fake-boundary CLI tests and the 1.42.0 release edits, limiting Workflow additions to two lines and preserving all fixed T80 names and behavior.",
+      "dependsOn": [
+        "t81-ship-pipeline",
+        "t81-adapters"
+      ]
+    }
+  ]
+}
