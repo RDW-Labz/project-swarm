@@ -52,10 +52,10 @@ export async function resolveReadPaths(paths = [], home = os.homedir(), config =
   // Reject aliases into denied directories as well as their literal spellings.
   return validateReadPaths(await Promise.all(validated.map(file => fs.realpath(file))), home, config);
 }
-export function codexProfile({ home = os.homedir(), worktree, commonDir, metadataDir, readPaths = [], config = {}, tmpRoots = defaultTmpRoots() }) {
+export function codexProfile({ home = os.homedir(), worktree, commonDir, metadataDir, scratchDir, readPaths = [], config = {}, tmpRoots = defaultTmpRoots() }) {
   home = sandboxPath(home);
   const reads = [worktree, commonDir, ...['.codex', '.nvm', '.cache', '.npm', '.local/share/uv', 'Library/Caches'].map(p => path.join(home, p)), ...validateReadPaths(readPaths, home, config)].map(sandboxPath);
-  const writes = [worktree, metadataDir, ...['.codex', '.cache', '.npm'].map(p => path.join(home, p)), '/private/tmp', '/private/var/folders'].map(sandboxPath);
+  const writes = [worktree, metadataDir, ...(scratchDir === undefined ? [] : [scratchDir]), ...['.codex', '.cache', '.npm'].map(p => path.join(home, p)), '/private/tmp', '/private/var/folders'].map(sandboxPath);
   const filter = (kind, file) => `(${kind} "${sandboxPath(file)}")`;
   const ancestors = new Set([home]);
   for (const file of [...reads, metadataDir]) {
@@ -63,14 +63,16 @@ export function codexProfile({ home = os.homedir(), worktree, commonDir, metadat
     while (within(parent, home)) { ancestors.add(parent); if (parent === home) break; parent = path.dirname(parent); }
   }
   const writable = [...writes.map(file => filter('subpath', file)), '(literal "/dev/null")', '(regex #"^/dev/tty.*$")'].join(' ');
-  // Field lesson #255: read and exec are denied under every OS temp dir by default; codex has no
-  // job-scoped scratch dir of its own, so the only exception it needs is `worktree` and
-  // `commonDir` (metadataDir is always a subpath of commonDir), already granted below via `reads`
-  // wherever they happen to sit — a fixture root under the OS temp dir stays readable, but a
-  // sibling temp directory (another checkout's own scratch data) never does.
+  // Field lesson #255: read and exec are denied under every OS temp dir by default, with
+  // access to the worktree/commonDir and the one job-scoped scratch directory granted below.
+  // Sibling temp directories (another checkout's scratch data) remain denied.
   const tmpDeny = [...new Set(tmpRoots.map(sandboxPath))].map(file => filter('subpath', file)).join(' ');
+  // Lesson #299: sandbox-exec uses the last matching rule; this exact scratch grant must follow
+  // tmpDeny. Keep it in `writes` too so the later write restriction does not deny it again.
+  const scratchAllow = scratchDir === undefined ? '' : `(allow file-read* file-write* process-exec ${filter('subpath', scratchDir)})\n`;
   return `(version 1)\n(allow default)\n(deny file-read* file-write* ${filter('subpath', home)})\n` +
     `(deny file-read* process-exec ${tmpDeny})\n` +
+    scratchAllow +
     `(allow file-read* ${[...ancestors].map(file => filter('literal', file)).join(' ')} ${reads.map(file => filter('subpath', file)).join(' ')} ${filter('literal', path.join(home, '.gitconfig'))})\n` +
     `(allow process-exec ${reads.map(file => filter('subpath', file)).join(' ')})\n` +
     `(allow file-write* ${writable})\n(deny file-write* (require-not (require-any ${writable})))\n` +

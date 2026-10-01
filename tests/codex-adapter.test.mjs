@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -99,6 +100,20 @@ test('profile grants exact scopes and ends with sensitive path and keychain serv
   assert.ok(configured.trim().split('\n').slice(-2)[0].includes('"/Users/example/.acme-app"'));
 });
 
+test('Codex scratch allow follows tmp deny and stays inside the write allowlist (lesson #299)', () => {
+  const scratchDir = '/private/tmp/swarm-codex/run-0000-writer';
+  const profile = codexProfile({ home: '/Users/example', worktree: '/repo/job', commonDir: '/repo/.git', metadataDir: '/repo/.git/worktrees/job', scratchDir, tmpRoots: ['/private/tmp', '/tmp'] });
+  const lines = profile.trim().split('\n');
+  const deny = '(deny file-read* process-exec (subpath "/private/tmp") (subpath "/tmp"))';
+  const allow = `(allow file-read* file-write* process-exec (subpath "${scratchDir}"))`;
+  assert.ok(lines.includes(deny), 'other OS tmp paths remain denied');
+  assert.ok(lines.includes(allow), 'only the job scratch subpath gets the combined grant');
+  assert.ok(lines.indexOf(allow) > lines.indexOf(deny), 'last matching sandbox rule wins');
+  assert.ok(lines.find(line => line.startsWith('(deny file-write* (require-not')).includes(`(subpath "${scratchDir}")`), 'later write restriction must not override scratch access');
+  assert.ok(!lines.some(line => line.startsWith('(allow file-read* file-write* process-exec') && line.includes('(subpath "/private/tmp/swarm-codex")')));
+  for (const scratchDir of ['relative', '/bad"path', '/bad\\path', '/bad\npath']) assert.throws(() => codexProfile({ home: '/Users/example', worktree: '/repo/job', commonDir: '/repo/.git', metadataDir: '/repo/.git/worktrees/job', scratchDir }), /sandbox path/);
+});
+
 test('readPaths is Codex-only, absolute, safe and cannot name denied directories', () => {
   const home = os.homedir();
   for (const paths of [null, 'path', ['relative'], ['/bad"path'], ['/bad\\path'], ['/bad\npath'], Array(101).fill('/opt')]) assert.throws(() => validateManifest(manifest({ readPaths: paths })));
@@ -156,6 +171,34 @@ test('HEAD worktree runs with null stdin, collects only declared outputs, integr
   await assert.rejects(fs.access(path.join(root, 'extra.txt')));
 });
 
+for (const keep of [false, true]) test(`Codex creates scratch before spawn, exports temp env, records it and ${keep ? 'keeps' : 'removes'} it after completion (lesson #299)`, async t => {
+  const root = await fixture(t);
+  const id = `scratch-${path.basename(root)}`;
+  const scratchDir = path.join(os.tmpdir(), 'swarm-codex', `${id}-writer`);
+  t.after(() => fs.rm(scratchDir, { recursive: true, force: true }));
+  let spawned = false;
+  const state = await runManifest(root, manifest({ testEnv: { TMPDIR: '/unused', TMP: '/unused', TEMP: '/unused', SWARM_TEST_TMP: '/unused', TEST_MARKER: 'kept' } }), {
+    id, platform: 'darwin', env: { ...process.env, SWARM_KEEP_TMP: keep ? '1' : '0' },
+    spawnImpl: fake(`import os from 'node:os'; fs.mkdtempSync(os.tmpdir() + '/check-'); fs.writeFileSync(os.tmpdir() + '/marker', 'scratch'); ${success}`, (_command, _args, options) => {
+      spawned = true;
+      assert.ok(statSync(scratchDir).isDirectory(), 'scratch exists before spawn');
+      assert.ok(!scratchDir.startsWith(root + path.sep), 'scratch is outside the repository');
+      for (const key of ['TMPDIR', 'TMP', 'TEMP', 'SWARM_TEST_TMP']) assert.equal(options.env[key], scratchDir);
+      assert.equal(options.env.TEST_MARKER, 'kept');
+      assert.equal(options.env.PATH, process.env.PATH);
+    }),
+  });
+  assert.equal(spawned, true);
+  assert.equal(state.status, 'complete', state.error ?? state.jobs[0]?.error);
+  assert.equal(state.jobs[0].scratchDir, scratchDir);
+  assert.equal((await inspectRun(root, state.id)).jobs[0].scratchDir, scratchDir);
+  const profile = await fs.readFile(path.join(root, '.swarm/runs', id, 'writer/sandbox.sb'), 'utf8');
+  const realTmp = await fs.realpath(os.tmpdir());
+  assert.ok(profile.includes(`(allow file-read* file-write* process-exec (subpath "${path.join(realTmp, 'swarm-codex', `${id}-writer`)}"))`));
+  if (keep) assert.equal(await fs.readFile(path.join(scratchDir, 'marker'), 'utf8'), 'scratch');
+  else await assert.rejects(fs.access(scratchDir), { code: 'ENOENT' });
+});
+
 for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-output', 'symlink-output', 'launch-error']) test(`Codex removes worktree and blocks proposals after ${scenario}, except a malformed envelope with no worktree evidence, which is kept (lessons #41, #64)`, async t => {
   const root = await fixture(t);
   let launched = false;
@@ -163,7 +206,7 @@ for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-
   const script = scenario === 'failed' ? 'process.exit(7)' : scenario === 'malformed' ? `fs.writeFileSync(result,'bad json')` : scenario === 'missing-output' ? `fs.unlinkSync('output.txt');fs.writeFileSync(result,${JSON.stringify(envelope)})` : scenario === 'symlink-output' ? `fs.unlinkSync('output.txt');fs.symlinkSync('other.txt','output.txt');fs.writeFileSync(result,${JSON.stringify(envelope)})` : 'setInterval(()=>{},1000)';
   const signals = [];
   const state = await runManifest(root, manifest({ timeoutMs: scenario === 'timeout' ? 100 : 5000 }), {
-    platform: 'darwin', signal: controller.signal,
+    platform: 'darwin', signal: controller.signal, env: { ...process.env, SWARM_KEEP_TMP: '0' },
     killImpl: (pid, signal) => { signals.push({ pid, signal }); return process.kill(pid, signal); },
     spawnImpl: (...args) => {
       launched = true;
@@ -174,6 +217,8 @@ for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-
     },
   });
   assert.equal(launched, true);
+  assert.equal(state.jobs[0].scratchDir, path.join(os.tmpdir(), 'swarm-codex', `${state.id}-writer`));
+  await assert.rejects(fs.access(state.jobs[0].scratchDir), { code: 'ENOENT' });
   assert.equal(state.jobs[0].status, ['timeout', 'cancelled'].includes(scenario) ? scenario : 'failed');
   if (['timeout', 'cancelled'].includes(scenario)) assert.ok(signals.some(call => call.pid < 0 && call.signal === 'SIGTERM'));
   const worktree = path.join(root, '.swarm/runs', state.id, 'worktrees/writer');
