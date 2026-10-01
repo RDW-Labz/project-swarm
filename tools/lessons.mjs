@@ -11,7 +11,7 @@ const KEYS = ['id', 'date', 'area', 'evidence', 'rule', 'fix', 'public', 'status
 const STATES = ['queued', 'built', 'shipped', 'dropped'];
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const AREA = /^[a-z0-9][a-z0-9-]{0,63}$/;
-const FIELD_NAMES = [...KEYS, 'arguments', 'command', 'file', 'private-names', 'queued', 'shipped', 'older-than', 'agent', 'model', 'tier', 'stale-days', 'installed', 'from', 'root', 'registry', 'manifest', 'help'];
+const FIELD_NAMES = [...KEYS, 'reopen', 'arguments', 'command', 'file', 'private-names', 'queued', 'shipped', 'older-than', 'agent', 'model', 'tier', 'stale-days', 'installed', 'from', 'root', 'registry', 'manifest', 'help'];
 const OPTION_FIELDS = { storeFile: 'file', publishFile: 'file', privateNamesFile: 'private-names', olderThan: 'older-than', staleDays: 'stale-days' };
 const fieldName = key => FIELD_NAMES.includes(OPTION_FIELDS[key] ?? key) ? (OPTION_FIELDS[key] ?? key) : 'arguments';
 const argsError = field => lessonError('lesson-args', { field });
@@ -58,7 +58,8 @@ function validDate(value) {
     && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
 }
 function rowProblem(row) {
-  if (!row || typeof row !== 'object' || Array.isArray(row) || Object.keys(row).length !== KEYS.length || KEYS.some(key => !Object.hasOwn(row, key))) return 'arguments';
+  if (!row || typeof row !== 'object' || Array.isArray(row) || Object.keys(row).length !== KEYS.length + (Object.hasOwn(row, 'reopen') ? 1 : 0) || KEYS.some(key => !Object.hasOwn(row, key))) return 'arguments';
+  if (Object.hasOwn(row, 'reopen') && (typeof row.reopen !== 'string' || !/^[a-z]+$/i.test(row.reopen))) return 'reopen';
   if (!Number.isSafeInteger(row.id) || row.id < 1) return 'id';
   if (!validDate(row.date)) return 'date';
   for (const key of ['area', 'evidence', 'rule', 'fix']) if (!nonempty(row[key])) return key;
@@ -69,7 +70,7 @@ function rowProblem(row) {
   if (row.version !== null && !VERSION.test(row.version)) return 'version';
   return null;
 }
-function orderedRow(row) { return Object.fromEntries(KEYS.map(key => [key, row[key]])); }
+function orderedRow(row) { return Object.fromEntries([...KEYS, ...(Object.hasOwn(row, 'reopen') ? ['reopen'] : [])].map(key => [key, row[key]])); }
 function validateRows(rows) {
   const ids = new Set();
   if (!Array.isArray(rows)) throw lessonError('lesson-store-invalid', { line: 1 });
@@ -269,11 +270,11 @@ const markerRE = /\b(Swarm\s+fix|Rule|Fix|Status):(?:\*\*|__)?\s*/gi;
 function markers(text) { return [...text.matchAll(markerRE)]; }
 function beforeMarker(text, index) { return text.slice(0, index).replace(/(?:\*\*|__)$/, '').trim(); }
 
-export function parseLegacyLessons(text) {
+function parseLegacyRows(text, records, diagnostics) {
   const rows = [], seen = new Map();
-  for (const [offset, line] of String(text).split(/\r?\n/).entries()) {
+  for (const [offset, line, parsedCells, reopen] of records ?? String(text).split(/\r?\n/).entries()) {
     if (!/^\s*\|?\s*[+-]?\d/.test(line) || !line.includes('|')) continue;
-    const cells = tableCells(line);
+    const cells = parsedCells ?? tableCells(line);
     // Numeric narrative outside a table is not a data row.
     if (!/^[+-]?\d/.test(cells[0] ?? '')) continue;
     if (!line.trim().startsWith('|') && !/^[+-]?\d+(?:\.\d+)?$/.test(cells[0])) continue;
@@ -296,7 +297,10 @@ export function parseLegacyLessons(text) {
         const value = (found[m + 1] ? tail.replace(/(?:\*\*|__)$/, '') : tail).trim();
         if (label === 'status') {
           const parsed = /^([a-z]+)\b(?:\s+([^\s()]+))?/i.exec(value);
-          if (!parsed || !STATES.includes(parsed[1].toLowerCase())) throw invalid();
+          if (!parsed || !STATES.includes(parsed[1].toLowerCase())) {
+            if (!records) throw invalid();
+            status = 'queued'; version = null; continue;
+          }
           status = parsed[1].toLowerCase();
           version = ['built', 'shipped'].includes(status) && VERSION.test(parsed[2] ?? '') ? parsed[2] : null;
         } else if (label === 'rule') rule = value;
@@ -307,6 +311,8 @@ export function parseLegacyLessons(text) {
         if (/^(queued|built|shipped|dropped)(?:\s|$)/i.test(body)) {
           const [state, ver] = body.split(/\s+/); status = state.toLowerCase();
           version = ['built', 'shipped'].includes(status) && VERSION.test(ver ?? '') ? ver : null;
+        } else if (records && i === 5 && !found.length && body) {
+          status = 'queued'; version = null;
         } else if (body) unlabeled.push({ body, index: i });
       }
     }
@@ -314,15 +320,66 @@ export function parseLegacyLessons(text) {
     const evidenceCells = unlabeled.filter(cell => cell.index < firstLabeled && firstLabeled !== Infinity);
     if (!fix && remaining.length) fix = remaining.pop().body;
     evidence = [evidence, ...evidenceCells.map(cell => cell.body), ...remaining.map(cell => cell.body)].filter(Boolean).join('\n');
-    rule = (rule || happened).replace(/\s+/g, ' ').trim();
+    rule = (rule || happened || (records ? 'legacy lesson ' + id : '')).replace(/\s+/g, ' ').trim();
     fix = fix || rule;
     evidence = evidence || `legacy lesson ${id}`;
     const row = { id, date, area: 'tool', evidence, rule, fix, public: null, status, test: null, version };
-    if (rowProblem(row)) throw invalid();
+    if (reopen) row.reopen = reopen;
+    if (rowProblem(row)) {
+      if (!records) throw invalid();
+      diagnostics.skipped.push({ line: offset + 1, reason: 'invalid-row' }); continue;
+    }
     const encoded = JSON.stringify(row);
-    if (seen.has(id)) { if (seen.get(id) !== encoded) throw invalid(); continue; }
+    if (seen.has(id)) {
+      if (records) diagnostics.skipped.push({ line: offset + 1, reason: 'duplicate-id' });
+      else if (seen.get(id) !== encoded) throw invalid();
+      continue;
+    }
     seen.set(id, encoded); rows.push(row);
   }
+  return rows;
+}
+
+// Keep the array return contract; import callers can also collect row diagnostics.
+export function parseLegacyLessons(text, diagnostics = {}) {
+  diagnostics.padded = []; diagnostics.overflow = []; diagnostics.skipped = [];
+  const lines = String(text).split(/\r?\n/);
+  const header = /^\s*\|\s*#\s*\|\s*Date\s*\|\s*What happened\s*\|\s*Evidence\s*\|\s*Proposed swarm fix\s*\|\s*Status\s*\|\s*$/i;
+  const start = lines.findIndex(line => header.test(line));
+  if (start < 0) throw lessonError('lesson-import-invalid', { line: 1 });
+  const rowStart = /^\s*\|\s*(\d+)([a-z]*)\s*\|/i;
+  const logical = [];
+  let current;
+  for (let offset = start + 1; offset < lines.length; offset++) {
+    const line = lines[offset], match = rowStart.exec(line);
+    if (match) {
+      current = { offset, line, id: Number(match[1]), reopen: match[2] };
+      logical.push(current);
+    } else if (current) {
+      if (header.test(line) || /^\s*#{1,6}\s/.test(line) || (!line.trim() && current.line.trimEnd().endsWith('|'))) break;
+      current.line += '\n' + line;
+    }
+  }
+  // Plain ids win even when their reopened counterpart appears earlier.
+  const plain = new Set(logical.filter(row => !row.reopen).map(row => row.id));
+  const records = [];
+  for (const { offset, line, id, reopen } of logical) {
+    const cells = tableCells(line);
+    if (cells.length < 6) {
+      diagnostics.padded.push(id);
+      while (cells.length < 6) cells.push('');
+    } else if (cells.length > 6) {
+      diagnostics.overflow.push(id);
+      cells.splice(5, cells.length - 5, cells.slice(5).join(' | '));
+    }
+    const reason = !Number.isSafeInteger(id) || id < 1 ? 'invalid-id'
+      : reopen && plain.has(id) ? 'duplicate-id' : !validDate(cells[1]) ? 'invalid-date' : null;
+    if (reason) { diagnostics.skipped.push({ line: offset + 1, reason }); continue; }
+    cells[0] = String(id);
+    records.push([offset, line, cells, reopen]);
+  }
+  const rows = parseLegacyRows('', records, diagnostics);
+  diagnostics.skipped.sort((a, b) => a.line - b.line);
   return rows;
 }
 
@@ -397,7 +454,7 @@ async function addPlan(root, options, privacy, now) {
   try { if (!(await fs.stat(root)).isDirectory()) throw ioError('root'); } catch { throw ioError('root'); }
   const file = storePath(root, options), before = await readBytes(file), rows = parseStore(before);
   const legacyBytes = await readBytes(path.join(root, LEGACY), 'from');
-  const legacy = legacyBytes === null ? [] : parseLegacyLessons(legacyBytes.toString('utf8'));
+  const legacy = legacyBytes === null ? [] : parseLegacyRows(legacyBytes.toString('utf8'));
   let maximum = 0;
   for (const row of [...rows, ...legacy]) maximum = Math.max(maximum, row.id);
   if (maximum === Number.MAX_SAFE_INTEGER) throw lessonError('lesson-id-overflow');
