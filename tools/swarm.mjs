@@ -1888,7 +1888,8 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   // manifest-shape problem known before any worker starts — surfaced on every state write.
   // Field lesson #265: a live rig-service checkout is named the same way, on the same warnings path.
   const liveWarning = await liveServiceCheckoutWarning(root, { env });
-  const manifestWarnings = [...sharedRootFullSuiteWarnings(manifest), ...(liveWarning ? [liveWarning.message] : [])];
+  const { lessonQueueWarnings } = await import('./lessons.mjs');
+  const manifestWarnings = [...sharedRootFullSuiteWarnings(manifest), ...(liveWarning ? [liveWarning.message] : []), ...await lessonQueueWarnings(root)];
   const save = async () => { state.warnings = runWarnings(state, manifestWarnings); state.summary = summarizeRun(state); await jsonWrite(root, `${directory}/state.json`, state); onState(state); };
   // Serialize status writes when several workers finish at once.
   let writes = Promise.resolve();
@@ -4779,8 +4780,31 @@ async function main() {
   const args=process.argv.slice(2);let root=defaultRoot(ownRoot);
   const testIndex=args.indexOf('--test');
   const rootIndex=args.findIndex((arg,index)=>arg==='--root'&&(testIndex===-1||index<testIndex));
-  if(rootIndex!==-1){if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--'))fail('--root requires a project directory');root=args[rootIndex+1];args.splice(rootIndex,2);}
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | squash --branch BRANCH [--base REF] | onboard\n');return;}
+  if(rootIndex!==-1){
+    if(!args[rootIndex+1]||args[rootIndex+1].startsWith('--')){
+      if(args[0]==='lesson'){process.stderr.write(`${JSON.stringify({status:'error',code:'lesson-args',field:'root'})}\n`);process.exitCode=1;return;}
+      fail('--root requires a project directory');
+    }
+    root=args[rootIndex+1];args.splice(rootIndex,2);
+  }
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | squash --branch BRANCH [--base REF] | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list [--queued|--shipped] [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE]\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');return;}
+  if(args[0]==='lesson'){
+    try{
+      const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
+      const options=parseLessonArgs(args.slice(1));
+      if(options.help){process.stdout.write(LESSON_USAGE);return;}
+      try{root=await fs.realpath(root);}catch{throw lessonError('lesson-io',{field:'root'});}
+      const result=['manifest','check','publish','import'].includes(options.command)
+        ? await (await import('./lessons-publish.mjs')).runLessonShip(root,options,{validateManifest,validateProject})
+        : await runLessonCore(root,options);
+      process.stdout.write(result.stdout);
+      process.exitCode=result.exitCode;
+    }catch(error){
+      process.stderr.write(`${JSON.stringify(error.lessonError??{status:'error',code:'lesson-io',field:'command'})}\n`);
+      process.exitCode=1;
+    }
+    return;
+  }
   if(args[0]==='redcheck'){
     const hasBase=args[2]==='--base';
     // Row #214: --commit SHA is a separate, mutually-exclusive proof mode from --base REF.
@@ -5287,7 +5311,12 @@ async function main() {
         if(!overCapFlag||!redBaseReason)fail(guard.message);
         process.stdout.write(`${JSON.stringify({warning:guard.message})}\n`);
       }else if(guard.status==='warn')process.stdout.write(`${JSON.stringify({warning:guard.message})}\n`);
-      result=await runManifestChecked(root,manifest,state=>process.stdout.write(`${JSON.stringify({id:state.id,status:'running'})}\n`),{checkBase:true,acceptRedBase:acceptRedBaseFlag,reason:redBaseReason});
+      try{
+        result=await runManifestChecked(root,manifest,state=>process.stdout.write(`${JSON.stringify({id:state.id,status:'running'})}\n`),{checkBase:true,acceptRedBase:acceptRedBaseFlag,reason:redBaseReason});
+      }catch(error){
+        if(!error.lessonError)throw error;
+        process.stderr.write(`${JSON.stringify(error.lessonError)}\n`);process.exitCode=1;return;
+      }
     }
   }else if(command==='status')result=await readState(root,argument);
   else if(command==='monitor')result=summarizeRun(await readState(root,argument));
