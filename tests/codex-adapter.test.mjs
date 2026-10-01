@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -99,6 +100,74 @@ test('profile grants exact scopes and ends with sensitive path and keychain serv
   assert.ok(configured.trim().split('\n').slice(-2)[0].includes('"/Users/example/.acme-app"'));
 });
 
+test('Codex scratch allow follows tmp deny and stays inside the write allowlist (lesson #299)', async t => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-codex-profile-')));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const scratchDir = path.join(root, 'run-0000-writer');
+  const profile = codexProfile({ home: '/Users/example', worktree: '/repo/job', commonDir: '/repo/.git', metadataDir: '/repo/.git/worktrees/job', scratchDir, tmpRoots: ['/private/tmp', '/tmp'] });
+  const lines = profile.trim().split('\n');
+  const deny = '(deny file-read* process-exec (subpath "/private/tmp") (subpath "/tmp"))';
+  const allow = `(allow file-read* file-write* process-exec (subpath "${scratchDir}"))`;
+  assert.ok(lines.includes(deny), 'other OS tmp paths remain denied');
+  assert.ok(lines.includes(allow), 'only the job scratch subpath gets the combined grant');
+  assert.ok(lines.indexOf(allow) > lines.indexOf(deny), 'last matching sandbox rule wins');
+  assert.ok(lines.find(line => line.startsWith('(deny file-write* (require-not')).includes(`(subpath "${scratchDir}")`), 'later write restriction must not override scratch access');
+  assert.ok(!lines.some(line => line.startsWith('(allow file-read* file-write* process-exec') && line.includes('(subpath "/private/tmp/swarm-codex")')));
+  for (const scratchDir of ['relative', '/bad"path', '/bad\\path', '/bad\npath']) assert.throws(() => codexProfile({ home: '/Users/example', worktree: '/repo/job', commonDir: '/repo/.git', metadataDir: '/repo/.git/worktrees/job', scratchDir }), /sandbox path/);
+});
+
+test('Codex scratch ancestor metadata follows tmp deny for raw and resolved paths (lesson #299)', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-codex-profile-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const scratchDir = path.join(root, 'run-0000-writer').replace(/^\/private\/var\//, '/var/');
+  const lines = codexProfile({ home: '/Users/example', worktree: '/repo/job', commonDir: '/repo/.git', metadataDir: '/repo/.git/worktrees/job', scratchDir }).trim().split('\n');
+  const metadataLines = lines.filter(line => line.startsWith('(allow file-read-metadata '));
+  assert.equal(metadataLines.length, 1, 'one metadata-only grant covers all scratch ancestors');
+  const metadata = metadataLines[0];
+  const expected = new Set();
+  for (const spelling of [scratchDir, await fs.realpath(scratchDir)]) {
+    const parts = spelling.split('/').filter(Boolean);
+    parts.forEach((_, index) => expected.add(`(literal "/${parts.slice(0, index + 1).join('/')}")`));
+  }
+  const literals = metadata.match(/\(literal "[^"]+"\)/g);
+  assert.equal(literals.length, expected.size, 'shared ancestors are deduplicated');
+  assert.deepEqual(new Set(literals), expected, 'every prefix through scratch is granted, excluding root');
+  assert.equal(metadata, `(allow file-read-metadata ${literals.join(' ')})`, 'ancestors get literal metadata access only');
+  if (scratchDir.startsWith('/var/folders/')) {
+    for (const prefix of ['/private', '/private/var', '/private/var/folders', '/var', '/var/folders']) assert.ok(metadata.includes(`(literal "${prefix}")`));
+  }
+  const denyIndex = lines.findIndex(line => line.startsWith('(deny file-read* process-exec '));
+  const allowIndex = lines.findIndex(line => line.startsWith('(allow file-read* file-write* process-exec '));
+  assert.ok(denyIndex >= 0 && allowIndex > denyIndex);
+  assert.equal(lines.indexOf(metadata), allowIndex + 1, 'metadata grant immediately follows scratch allow after tmp deny');
+});
+
+test('Codex scratch grants both symlink spellings after tmp deny and validates the resolved path', async t => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-codex-profile-')));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const target = path.join(root, 'resolved');
+  const alias = path.join(root, 'alias');
+  await fs.mkdir(target);
+  await fs.symlink(target, alias, 'dir');
+  const scratchDir = path.join(alias, 'run-0000-writer');
+  const resolved = path.join(target, 'run-0000-writer');
+  const options = { home: '/Users/example', worktree: '/repo/job', commonDir: '/repo/.git', metadataDir: '/repo/.git/worktrees/job', scratchDir, tmpRoots: [root] };
+  const lines = codexProfile(options).trim().split('\n');
+  const denyIndex = lines.indexOf(`(deny file-read* process-exec (subpath "${root}"))`);
+  assert.ok(denyIndex >= 0);
+  for (const spelling of [scratchDir, resolved]) {
+    const subpath = `(subpath "${spelling}")`;
+    assert.ok(lines.findIndex(line => line.startsWith('(allow file-read* file-write* process-exec ') && line.includes(subpath)) > denyIndex, 'each scratch spelling must override the tmp deny');
+    assert.ok(lines.find(line => line.startsWith('(deny file-write* (require-not')).includes(subpath), 'each spelling must survive the later write restriction');
+  }
+  assert.equal(await fs.realpath(scratchDir), resolved, 'scratch is created before resolving');
+  const unsafeTarget = path.join(root, 'bad"path');
+  const unsafeAlias = path.join(root, 'unsafe-alias');
+  await fs.mkdir(unsafeTarget);
+  await fs.symlink(unsafeTarget, unsafeAlias, 'dir');
+  assert.throws(() => codexProfile({ ...options, scratchDir: unsafeAlias }), /sandbox path/);
+});
+
 test('readPaths is Codex-only, absolute, safe and cannot name denied directories', () => {
   const home = os.homedir();
   for (const paths of [null, 'path', ['relative'], ['/bad"path'], ['/bad\\path'], ['/bad\npath'], Array(101).fill('/opt')]) assert.throws(() => validateManifest(manifest({ readPaths: paths })));
@@ -156,6 +225,34 @@ test('HEAD worktree runs with null stdin, collects only declared outputs, integr
   await assert.rejects(fs.access(path.join(root, 'extra.txt')));
 });
 
+for (const keep of [false, true]) test(`Codex creates scratch before spawn, exports temp env, records it and ${keep ? 'keeps' : 'removes'} it after completion (lesson #299)`, async t => {
+  const root = await fixture(t);
+  const id = `scratch-${path.basename(root)}`;
+  const scratchDir = path.join(os.tmpdir(), 'swarm-codex', `${id}-writer`);
+  t.after(() => fs.rm(scratchDir, { recursive: true, force: true }));
+  let spawned = false;
+  const state = await runManifest(root, manifest({ testEnv: { TMPDIR: '/unused', TMP: '/unused', TEMP: '/unused', SWARM_TEST_TMP: '/unused', TEST_MARKER: 'kept' } }), {
+    id, platform: 'darwin', env: { ...process.env, SWARM_KEEP_TMP: keep ? '1' : '0' },
+    spawnImpl: fake(`import os from 'node:os'; fs.mkdtempSync(os.tmpdir() + '/check-'); fs.writeFileSync(os.tmpdir() + '/marker', 'scratch'); ${success}`, (_command, _args, options) => {
+      spawned = true;
+      assert.ok(statSync(scratchDir).isDirectory(), 'scratch exists before spawn');
+      assert.ok(!scratchDir.startsWith(root + path.sep), 'scratch is outside the repository');
+      for (const key of ['TMPDIR', 'TMP', 'TEMP', 'SWARM_TEST_TMP']) assert.equal(options.env[key], scratchDir);
+      assert.equal(options.env.TEST_MARKER, 'kept');
+      assert.equal(options.env.PATH, process.env.PATH);
+    }),
+  });
+  assert.equal(spawned, true);
+  assert.equal(state.status, 'complete', state.error ?? state.jobs[0]?.error);
+  assert.equal(state.jobs[0].scratchDir, scratchDir);
+  assert.equal((await inspectRun(root, state.id)).jobs[0].scratchDir, scratchDir);
+  const profile = await fs.readFile(path.join(root, '.swarm/runs', id, 'writer/sandbox.sb'), 'utf8');
+  const realTmp = await fs.realpath(os.tmpdir());
+  assert.ok(profile.includes(`(allow file-read* file-write* process-exec (subpath "${path.join(realTmp, 'swarm-codex', `${id}-writer`)}"))`));
+  if (keep) assert.equal(await fs.readFile(path.join(scratchDir, 'marker'), 'utf8'), 'scratch');
+  else await assert.rejects(fs.access(scratchDir), { code: 'ENOENT' });
+});
+
 for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-output', 'symlink-output', 'launch-error']) test(`Codex removes worktree and blocks proposals after ${scenario}, except a malformed envelope with no worktree evidence, which is kept (lessons #41, #64)`, async t => {
   const root = await fixture(t);
   let launched = false;
@@ -163,7 +260,7 @@ for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-
   const script = scenario === 'failed' ? 'process.exit(7)' : scenario === 'malformed' ? `fs.writeFileSync(result,'bad json')` : scenario === 'missing-output' ? `fs.unlinkSync('output.txt');fs.writeFileSync(result,${JSON.stringify(envelope)})` : scenario === 'symlink-output' ? `fs.unlinkSync('output.txt');fs.symlinkSync('other.txt','output.txt');fs.writeFileSync(result,${JSON.stringify(envelope)})` : 'setInterval(()=>{},1000)';
   const signals = [];
   const state = await runManifest(root, manifest({ timeoutMs: scenario === 'timeout' ? 100 : 5000 }), {
-    platform: 'darwin', signal: controller.signal,
+    platform: 'darwin', signal: controller.signal, env: { ...process.env, SWARM_KEEP_TMP: '0' },
     killImpl: (pid, signal) => { signals.push({ pid, signal }); return process.kill(pid, signal); },
     spawnImpl: (...args) => {
       launched = true;
@@ -174,6 +271,8 @@ for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-
     },
   });
   assert.equal(launched, true);
+  assert.equal(state.jobs[0].scratchDir, path.join(os.tmpdir(), 'swarm-codex', `${state.id}-writer`));
+  await assert.rejects(fs.access(state.jobs[0].scratchDir), { code: 'ENOENT' });
   assert.equal(state.jobs[0].status, ['timeout', 'cancelled'].includes(scenario) ? scenario : 'failed');
   if (['timeout', 'cancelled'].includes(scenario)) assert.ok(signals.some(call => call.pid < 0 && call.signal === 'SIGTERM'));
   const worktree = path.join(root, '.swarm/runs', state.id, 'worktrees/writer');
