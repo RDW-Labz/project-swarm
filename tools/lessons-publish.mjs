@@ -252,9 +252,10 @@ async function importLessons(root, options, privacy) {
   const from = path.resolve(root, options.from ?? 'coordination/swarm-lessons.md');
   let source;
   try { source = await fs.readFile(from, 'utf8'); } catch { throw io('from'); }
-  const incoming = parseLegacyLessons(source).sort((a, b) => a.id - b.id);
+  const diagnostics = {};
+  const incoming = parseLegacyLessons(source, diagnostics).sort((a, b) => a.id - b.id);
   const rows = await readLessons(root, options), present = new Set(rows.map(row => row.id));
-  const imported = [], skipped = [];
+  const imported = [], skipped = [...diagnostics.skipped];
   for (const row of incoming) {
     if (present.has(row.id)) {
       await assertLessonPrivateSafe(root, { id: row.id }, privacy);
@@ -266,7 +267,7 @@ async function importLessons(root, options, privacy) {
   // Coordinator-approved provisional interface: writeLessons owns the writer lock;
   // this read/merge/write sequence has no shared read lock. Repeated ids are skipped.
   if (imported.length) await writeLessons(root, rows, { ...privacy, storeFile: options.storeFile });
-  return json({ status: 'ok', imported, skipped });
+  return json({ status: 'ok', imported, skipped, padded: diagnostics.padded, overflow: diagnostics.overflow });
 }
 
 export async function runLessonShip(root, options, deps = {}) {
