@@ -235,16 +235,22 @@ describe('T80 core lessons', () => {
     assert.equal(rows[3].evidence, 'Incident.\nrun-0000|sample');
     assert.equal(rows[3].fix, 'Final fix.');
     assert.equal(rows[3].status, 'dropped');
-    assert.deepEqual(parseLegacyLessons(legacy9003 + legacy9003), [rows[0]]);
+    assert.deepEqual(parseLegacyLessons(header + legacy9003 + legacy9003), [rows[0]]);
+    for (const alternate of [
+      '# | Date | What happened | Evidence | Proposed swarm fix | Status\n',
+      '| Id | When | Incident | Proof | Change | State |\n|---|---|---|---|---|---|\n',
+      'Id | When | Incident | Proof | Change | State\n--- | --- | --- | --- | --- | ---\n',
+      '| 1 | 2 | 3 | 4 | 5 | 6 |\n|---|\n',
+    ]) assert.deepEqual(parseLegacyLessons(alternate + legacy9003), [rows[0]]);
     for (const source of [legacy9003.replace('Status: queued', 'Status: strange'), legacy9003.replace('9003', '9007199254740992'), legacy9003.replace('9003', '-9003'), legacy9003 + legacy9003.replace('Guard', 'Change'), '| 9007 | broken |\n']) {
       assert.throws(() => parseLegacyLessons(source), error => error.lessonError.code === 'lesson-import-invalid');
     }
-    const fallback = parseLegacyLessons('| 9008 | 2000-01-02 | Incident. | Only fix. |\n| 9009 | 2000-01-02 | | Rule: Keep input. | Status: queued |\n');
+    const fallback = parseLegacyLessons(header + '| 9008 | 2000-01-02 | Incident. | Only fix. |\n| 9009 | 2000-01-02 | | Rule: Keep input. | Status: queued |\n');
     assert.equal(fallback[0].rule, 'Incident.');
     assert.equal(fallback[0].fix, 'Only fix.');
     assert.equal(fallback[1].evidence, 'legacy lesson 9009');
     assert.equal(fallback[1].fix, 'Keep input.');
-    const bold = parseLegacyLessons('| 9010 | 2000-01-02 | Incident. | Fix: Keep **formatting** Status: queued |\n');
+    const bold = parseLegacyLessons(header + '| 9010 | 2000-01-02 | Incident. | Fix: Keep **formatting** Status: queued |\n');
     assert.equal(bold[0].fix, 'Keep **formatting**');
   });
 

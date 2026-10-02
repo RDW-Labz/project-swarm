@@ -344,8 +344,14 @@ function parseLegacyRows(text, records, diagnostics) {
 export function parseLegacyLessons(text, diagnostics = {}) {
   diagnostics.padded = []; diagnostics.overflow = []; diagnostics.skipped = [];
   const lines = String(text).split(/\r?\n/);
-  const header = /^\s*\|\s*#\s*\|\s*Date\s*\|\s*What happened\s*\|\s*Evidence\s*\|\s*Proposed swarm fix\s*\|\s*Status\s*\|\s*$/i;
-  const start = lines.findIndex(line => header.test(line));
+  const header = /^\s*\|?\s*#\s*\|\s*Date\s*\|\s*What happened\s*\|\s*Evidence\s*\|\s*Proposed swarm fix\s*\|\s*Status\s*\|?\s*$/i;
+  const separator = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+  const isHeader = offset => {
+    const line = lines[offset], cells = tableCells(line);
+    return header.test(line) || (line.includes('|') && cells.length > 1 && cells.some(Boolean)
+      && !separator.test(line) && separator.test(lines[offset + 1] ?? ''));
+  };
+  const start = lines.findIndex((line, offset) => isHeader(offset));
   if (start < 0) throw lessonError('lesson-import-invalid', { line: 1 });
   const rowStart = /^\s*\|\s*(\d+)([a-z]*)\s*\|/i;
   const logical = [];
@@ -356,7 +362,7 @@ export function parseLegacyLessons(text, diagnostics = {}) {
       current = { offset, line, id: Number(match[1]), reopen: match[2] };
       logical.push(current);
     } else if (current) {
-      if (header.test(line) || /^\s*#{1,6}\s/.test(line) || (!line.trim() && current.line.trimEnd().endsWith('|'))) break;
+      if (isHeader(offset) || /^\s*#{1,6}\s/.test(line) || (!line.trim() && current.line.trimEnd().endsWith('|'))) break;
       current.line += '\n' + line;
     }
   }
