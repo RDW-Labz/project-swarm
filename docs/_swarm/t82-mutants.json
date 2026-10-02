@@ -1,0 +1,57 @@
+[
+  {
+    "name": "a drop --jobs from integrate flag loop",
+    "file": "tools/swarm.mjs",
+    "find": "      if(flag==='--jobs'||flag.startsWith('--jobs=')){\n        const value=flag==='--jobs'?flags[++index]:flag.slice('--jobs='.length);\n        if(integrateJobs!==undefined||typeof value!=='string'||!value.split(',').every(id=>ID.test(id)))fail('--jobs requires a comma-separated list of job ids, once');\n        integrateJobs=value.split(',');continue;\n      }\n",
+    "replace": "",
+    "check": [
+      "node",
+      "--test",
+      "tests/field-lessons-batch-aa-core.test.mjs"
+    ]
+  },
+  {
+    "name": "b skip output cap for openrouter",
+    "file": "tools/swarm.mjs",
+    "find": "    if (!API_AGENTS.includes(job.agent) || job.shell === true) continue;\n",
+    "replace": "    if (job.agent === 'openrouter' || !API_AGENTS.includes(job.agent) || job.shell === true) continue;\n",
+    "check": [
+      "node",
+      "--test",
+      "tests/field-lessons-batch-aa-core.test.mjs"
+    ]
+  },
+  {
+    "name": "c apply output cap to codex",
+    "file": "tools/swarm.mjs",
+    "find": "    if (!API_AGENTS.includes(job.agent) || job.shell === true) continue;\n",
+    "replace": "    if ((!API_AGENTS.includes(job.agent) && job.agent !== 'codex') || job.shell === true) continue;\n",
+    "check": [
+      "node",
+      "--test",
+      "tests/field-lessons-batch-aa-core.test.mjs"
+    ]
+  },
+  {
+    "name": "d stop recording finishReason",
+    "file": "tools/api-adapters.mjs",
+    "find": "      finishReason = next;\n",
+    "replace": "      finishReason = null;\n",
+    "check": [
+      "node",
+      "--test",
+      "tests/field-lessons-batch-aa-core.test.mjs"
+    ]
+  },
+  {
+    "name": "e dry run writes the store",
+    "file": "tools/lessons-publish.mjs",
+    "find": "  if (options.dryRun) {\n",
+    "replace": "  if (options.dryRun) {\n    if (imported.length) await writeLessons(root, rows, { ...privacy, storeFile: options.storeFile });\n",
+    "check": [
+      "node",
+      "--test",
+      "tests/field-lessons-batch-aa-lessons.test.mjs"
+    ]
+  }
+]
