@@ -54,7 +54,9 @@ export function loadLocalConfig({ env = process.env, home = env.HOME || os.homed
     file = defaultConfigPath({ home, env });
   }
   const top = gitWorkTreeTop(path.dirname(file));
-  if (top) throw Error(`config-inside-repo: ${file} is inside the git work tree ${top}`);
+  // Sandbox-local config is allowed only under the work tree's designated scratch directories.
+  const sandboxConfig = top && ['.swarm-tmp', '.swarm'].some(dir => path.relative(top, path.resolve(file)).startsWith(dir + path.sep));
+  if (top && !sandboxConfig) throw Error(`config-inside-repo: ${file} is inside the git work tree ${top}`);
   let text;
   try { text = fs.readFileSync(file, 'utf8'); }
   catch { return {}; }
