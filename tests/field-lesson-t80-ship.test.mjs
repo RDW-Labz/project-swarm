@@ -391,9 +391,17 @@ describe('T80 ship commands', () => {
     ]) {
       await f.write('coordination/swarm-lessons.md', source);
       const result = await f.cli('lesson', 'import');
-      const expected = source.includes(privateTerms9001) ? { code: 'private-name', field: 'fix' }
-        : { code: 'lesson-import-invalid', line: 1 };
-      failure(result, expected);
+      if (source.includes(privateTerms9001)) {
+        assert.deepEqual(result, { stdout: line({ status: 'ok', imported: [9003], skipped: [{ id: 9004, line: 4, reason: 'private-name', field: 'fix' }], padded: [9003, 9004], overflow: [] }), stderr: '', exitCode: 0 });
+        const rows = await readLessons(f.root);
+        assert.ok(rows.some(row => row.id === 9003));
+        assert.ok(!rows.some(row => row.id === 9004));
+        assert.ok(!result.stdout.includes(privateTerms9001));
+        assert.ok(!(await f.read(store)).includes(privateTerms9001));
+        await f.store([queued9001]);
+      } else {
+        failure(result, { code: 'lesson-import-invalid', line: 1 });
+      }
       assert.equal(await f.read(store), before);
     }
     await f.write('coordination/swarm-lessons.md', legacyHeader + legacy9003.replace('9003', '9001').replace('Guard input.', privateTerms9001));

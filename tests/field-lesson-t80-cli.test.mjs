@@ -247,9 +247,9 @@ describe('T80 lesson CLI wiring', () => {
     assert.equal(await f.read('docs/public.md'), before);
     await f.write('coordination/legacy.md', '# | Date | What happened | Evidence | Proposed swarm fix | Status\n' + legacy9003);
     const importArgs = ['lesson', 'import', '--from', 'coordination/legacy.md', '--file', 'coordination/imported.jsonl', ...common];
-    assert.deepEqual(jsonSuccess(await f.cli(...importArgs)), { status: 'ok', imported: [9003], skipped: [] });
+    assert.deepEqual(jsonSuccess(await f.cli(...importArgs)), { status: 'ok', imported: [9003], skipped: [], padded: [], overflow: [] });
     const imported = await f.read('coordination/imported.jsonl');
-    assert.deepEqual(jsonSuccess(await f.cli(...importArgs)), { status: 'ok', imported: [], skipped: [9003] });
+    assert.deepEqual(jsonSuccess(await f.cli(...importArgs)), { status: 'ok', imported: [], skipped: [9003], padded: [], overflow: [] });
     assert.equal(await f.read('coordination/imported.jsonl'), imported);
     assert.equal(JSON.parse(imported).date, '2000-01-03');
   });
