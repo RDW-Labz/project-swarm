@@ -15,10 +15,10 @@ or another agent with file and command access. The worker adapter does not
 need to match the orchestrator. Paste this into your agent at project start:
 
 ```text
-Use Project Swarm 1.37.0 for this project. Read docs/kickoff.md in the toolkit
+Use Project Swarm 1.43.0 for this project. Read docs/kickoff.md in the toolkit
 and perform its kickoff workflow. Ask me up front which model providers may
 receive project code and what spend ceiling applies; wait before model calls.
-Install from tag v1.37.0 in ~/.project-swarm, run tools/install.mjs --user,
+Install from tag v1.43.0 in ~/.project-swarm, run tools/install.mjs --user,
 link this project, run doctor, validate and run the read-only and writing smoke
 jobs, inspect and integrate the reviewed writing output. Read the installed
 SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
@@ -35,6 +35,10 @@ Cursor also discovers `.cursor/rules/project-swarm.mdc`; other agents can
 follow the linked project's AGENTS.md or CLAUDE.md pointer.
 See the [anonymized field report](docs/field-report.md) for evidence and limits.
 The [lessons file](docs/lessons.md) is the loop: every real-run friction becomes an entry plus, where possible, a tool check and a test.
+
+`swarm ticket MANIFEST --pr PAYLOAD` runs the guarded pipeline through ship, stops at the first red stage, and resumes with `--resume RUN`. Use `swarm scaffold job` to generate validated job manifests and `swarm scaffold pr` for PR payloads with an explicit mutation stub that must be replaced with evidence before shipping a required mutation section.
+
+`swarm lesson add` captures clock-stamped, private-safe evidence and routes its rule into an existing worker skill or gotchas; tool lessons stay queued. Use `lesson list` and `lesson set` to track the queue, `lesson manifest` to declare a bounded fix with a regression test, and `lesson check` to audit stale lessons and installed test files. `lesson publish --version V` appends safe shipped entries to the public archive, while `lesson import [--from FILE] [--dry-run] [--verbose]` converts legacy rows idempotently or previews counts and per-row verdicts without writing.
 
 Release 1.16.0 adds post-build mutants (`integrate --mutants --mutants-file`
 and a job-declared `mutantsFile` output), an `agentError`/`agent.log` capture
@@ -226,11 +230,13 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 | `check-pins` | Find stale internal version pins against what a project actually vendors |
 | `ship` | Push reviewed work, create/update its PR, wait for CI, merge when authorized |
 | `go` | Chain run, integration, optional commit and ship |
+| `ticket MANIFEST --pr PAYLOAD` | Run, inspect, integrate, check, commit bounded files, and ship; resume with `--resume RUN` |
+| `scaffold job` / `scaffold pr` | Generate validated job manifests or PR payloads with explicit mutation stubs |
 | `version` / `update` | Inspect or upgrade the shared install; never use `--root` |
 | `onboard` | Explain workflow and local provider configuration |
 
 - `doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local]` — check compatibility/configuration and root tool exclusions; no network by default. `--probe-local` checks only loopback HTTP health with a short timeout and no credentials; cloud keys remain configuration-only. Omitted provider means Claude.
-- `validate <manifest>` — check schema, paths, files, and size limits; no run or model call. A refusal for an uncovered test names exactly which tests to add via `suggestedIgnoreTests: {"<jobId>": ["tests/...", ...]}` in its JSON, ready to paste into `ignoreTests`.
+- `validate <manifest>` — check schema, paths, files, and size limits; no run or model call. Single-request API outputs default to 61440 bytes total and 15360 per existing file; override job `outputCapBytes` or config `outputCap`, otherwise `output-cap-exceeded` directs oversized work to codex or smaller outputs; shell agents are exempt. A refusal for an uncovered test names exactly which tests to add via `suggestedIgnoreTests: {"<jobId>": ["tests/...", ...]}` in its JSON, ready to paste into `ignoreTests`.
 - `preflight <manifest>` — validate and flag oversized jobs, repeated context, and snapshot dependencies before dispatch. Warnings support coordinator judgment; they do not automatically split or launch jobs.
 - `run <manifest>` — start workers and save the exchange. Refuses to start if another live run in the same repository (any of its worktrees) is already writing one of this run's declared outputs, with no override; see `board` below. A job may declare `after: [ids]` so it starts only once those jobs complete; see [the manifest reference](docs/manifest-reference.md#after). When the manifest sets `contract`, a `codex` job's prompt also gets that file's current text injected directly, ahead of the task itself.
 - `ask --model M --context f1,f2,... [--agent claude] [--timeout S] "question"` — build and run one read-only job in memory, wait for it, and print `{"id","status","model","actualModel","modelMismatch","costUsd","result"}` (`result` is the worker's parsed final JSON, or `null` plus `error`). Refuses with no `--model`, no `--context`, or an empty question; `--agent` defaults to `claude` and never allows `codex`. See [the manifest reference](docs/manifest-reference.md#ask).
@@ -247,7 +253,7 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
   # scroll-anim     claude  -       -     > running    9s    1
   ```
 - `inspect <run-id>` — inspect proposed outputs and conflicts without importing; carries a top-level `warnings` array noting any job whose reported model didn't match what was requested. Add `--results` to print just `{"runId","status","warnings":[...],"jobs":[{"id","status","model","actualModel","modelMismatch","costUsd","result"}]}` and nothing else. `wait` and both forms of `inspect` also report each job's `tokens` (`usage.total_tokens`, or `null`) plus run-level `tokens` (their sum, or `null`) and `costNotReported` (ids of jobs with no reported `costUsd`).
-- `integrate <run-id>` — import reviewed, declared outputs from a successful run, then run the manifest's optional `checks` (format, tests) right after writing files; add `--no-checks` to skip them or `--require-checks` to fail the command when a check fails. A `checks`/`mutantCheck` argv item may contain `{root}` anywhere inside it, expanding to the run's absolute project root, so parallel runs never share a build/output folder. A check may set `repeat` (1–20) to rerun its argv until the first failure, and `{new}`/`{new:.ext}` expand to files that did not exist before the run started. See [the manifest reference](docs/manifest-reference.md#repeat).
+- `integrate <run-id> [--jobs <id,...>]` — import reviewed, declared outputs from a successful run (or only named complete jobs from a partial run; `--jobs=a,b` is also accepted before or after the run id), then run the manifest's optional `checks` (format, tests) right after writing files; add `--no-checks` to skip them or `--require-checks` to fail the command when a check fails. A `checks`/`mutantCheck` argv item may contain `{root}` anywhere inside it, expanding to the run's absolute project root, so parallel runs never share a build/output folder. A check may set `repeat` (1–20) to rerun its argv until the first failure, and `{new}`/`{new:.ext}` expand to files that did not exist before the run started. See [the manifest reference](docs/manifest-reference.md#repeat).
 - `cancel <run-id>` — request shutdown of that runner's owned workers.
 - `board` — print a read-only snapshot, `{"runs": [...]}`, of every live run this machine's user is tracking across every worktree of every repository, pruning any whose process is no longer alive. This is also what `run` consults to refuse a second writer. See [the manifest reference](docs/manifest-reference.md#board).
 - `ship <run-id> --repo OWNER/NAME --pr payload.json` — for an already-integrated run: push its branch, open or update the pull request, re-run the manifest's `checks` and fill them into the PR body, wait for CI, and merge once green. Refuses on a dirty tree, a failed check, a missing required `--require-section`, or a rejected push; never merges a PR body that opens with a `**needs ` human-review marker. Resolves `gh`/`git` up front and refuses at once with a plain "not found on PATH" (or the spawn error text) when either is missing; a `pr list failed` reason always names stderr, or `(empty)`. Add `--no-merge` to stop at a green `ready` state, `--merge-method squash|merge|rebase` (default `squash`), or `--timeout`/`--poll` (seconds) to tune CI waiting. A repeatable `--exempt <guard>:<file>=<reason>` excuses one file from one test-file diff guard (`undocumented-binary` or `env-var`), logs and lists the used exemption in the PR body's `## Exemptions` section. Against a repo `gh` reports public, `ship` also refuses before pushing when the diff adds a line matching a private-names list (`coordination/private-names.txt` in the project root, or `--private-names FILE`; one term per line, `#` comments ignored, case-insensitive substring match against only the lines the diff adds), naming each hit's file, line and matched term without ever echoing the line itself. `ship --help` (and `-h`) prints usage and exits 0 in any argument position. See [the manifest reference](docs/manifest-reference.md#ship).

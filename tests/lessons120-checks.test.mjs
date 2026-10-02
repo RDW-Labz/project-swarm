@@ -28,22 +28,33 @@ function fake(script) {
 const done = `console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'Worker complete'}));`;
 const update = fake(`fs.writeFileSync('input.txt','updated'); ${done}`);
 
-// --- lesson #152: a check that exits 127 is unrunnable, with a hint, not a plain failure -------
+// --- lesson #152: a check that exits 127 is check-env-missing, with a hint, not a plain failure -------
 
-test('a check that exits 127 is classified unrunnable with a hint, not failed, and checksErrored is true', async t => {
+test('a check that exits 127 is classified check-env-missing with a hint, not failed, and checksErrored is true', async t => {
   const root = await fixture(t);
   let calls = 0;
   const spawnImpl = (command, args, options) => { if (command === process.execPath) calls++; return spawn(command, args, options); };
   const checks = [{ name: 'missing-tool', argv: [process.execPath, '-e', 'process.exit(127)'] }];
   const state = await runManifest(root, manifest([job()], { checks }), { spawnImpl: update });
   const result = await integrateRun(root, state.id, { spawnImpl });
-  assert.equal(result.checks[0].status, 'unrunnable');
+  assert.equal(result.checks[0].status, 'check-env-missing');
   assert.match(result.checks[0].hint, /npm ci|uv sync/);
   assert.equal(result.checksPassed, false);
   assert.equal(result.checksErrored, true);
   // one initial run plus exactly one automatic retry, since no preChecks were declared
   assert.equal(calls, 2);
   assert.equal(result.checks[0].retriedAfterError, true);
+});
+
+test('a legacy missing-module failure outside the T81 classifier remains unrunnable', async t => {
+  const root = await fixture(t);
+  const checks = [{ name: 'legacy9001', argv: [process.execPath, '-e', 'console.error("ERR_MODULE_NOT_FOUND");process.exit(1)'] }];
+  const state = await runManifest(root, manifest([job()], { checks }), { spawnImpl: update });
+  const result = await integrateRun(root, state.id, { spawnImpl: spawn });
+  assert.equal(result.checks[0].status, 'unrunnable');
+  assert.match(result.checks[0].hint, /npm ci|uv sync/);
+  assert.equal(result.checksPassed, false);
+  assert.equal(result.checksErrored, true);
 });
 
 // --- lesson #134/#138: a bad spawn is spawn-error, distinct from failed, and also retries once --

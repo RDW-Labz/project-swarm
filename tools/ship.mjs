@@ -14,6 +14,15 @@ const execFileAsync = promisify(execFile);
 
 export const SHIP_DEFAULTS = Object.freeze({ pollMs: 20_000, timeoutMs: 45 * 60_000, noCiGraceMs: 5 * 60_000, mergeMethod: 'squash' });
 export const CHECKS_PLACEHOLDER = '<!-- swarm:checks -->';
+export const STUB_SECTION_RE = /<!-- swarm:stub(?:\s+[^>]*?)?\s*-->/;
+
+export function classifyCheckEnvironment({ exitCode, head }) {
+  const firstLines = String(head ?? '').replace(/\r\n/g, '\n').split('\n').slice(0, 3).join('\n');
+  if (exitCode === 127 || (exitCode === 2 && /Failed to spawn|command not found|No such file or directory/i.test(firstLines))) {
+    return { code: 'check-env-missing', hint: 'run uv sync --locked / npm ci in this worktree or pass --sync' };
+  }
+  return null;
+}
 export const SWARM_MARKER_RE = /<!-- swarm:[a-z0-9_-]+ -->/g;
 
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -445,8 +454,12 @@ export async function preflightReport({
   root, payloadBase, exec, env = process.env, home = os.homedir(),
   privateNamesFile = null, integratedFiles = [], repo = null, exemptions = [],
   authorEmailExec = defaultAuthorEmailExec, commitScanExec = defaultCommitScanExec,
+  body = '', requireSections = [],
 } = {}) {
   const failures = [];
+  for (const section of requireSections) {
+    if (STUB_SECTION_RE.test(sectionContent(body, section) ?? '')) failures.push({ code: 'stub-section', section, reason: `stub-section: ${section}` });
+  }
   const findExemption = (guard, file) => exemptions.find(exemption => exemption.guard === guard && exemption.file === file);
 
   const list = await loadPrivateNames(root, privateNamesFile, { env, home });
@@ -896,6 +909,7 @@ export async function verifyPreExistingOnBase({ root, argv, integratedFiles, bas
     if (!expanded || !expanded.length) return { checked: false };
     const result = await exec(expanded[0], expanded.slice(1), { cwd: checkout, ...(env ? { env } : {}) });
     const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+    if (classifyCheckEnvironment({ exitCode: result.code, head: output })) return { checked: false };
     const tests = [];
     for (const id of failingTests) tests.push({ id, baseStatus: await baseStatusForTest(id, output, result.code, checkout) });
     return { checked: true, alsoFails: result.code !== 0, output, tests };
@@ -1031,7 +1045,7 @@ export const SHIP_USAGE = [
   'Usage: swarm ship RUN --pr PAYLOAD.json [flags]',
   '       swarm ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [flags]',
   'Flags: [--repo OWNER/NAME] [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase]',
-  '       [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check]',
+  '       [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--wait-required-only]',
   '       [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--accept-pre-existing] [--preflight] [--exempt GUARD:FILE=REASON]... [--private-names FILE]',
   `Exempt guards: ${EXEMPTION_GUARD_IDS.join(', ')}`,
   'Prints one JSON result naming its runId (or branch for --branch); exit 0 when merged, held or ready.',
@@ -1113,6 +1127,7 @@ export async function ship(options) {
   const {
     root, payloadPath,
     requireSections = [],
+    waitRequiredOnly = false,
     merge = true,
     mergeMethod = SHIP_DEFAULTS.mergeMethod,
     pollMs = SHIP_DEFAULTS.pollMs,
@@ -1150,6 +1165,8 @@ export async function ship(options) {
   const checkEnv = toolchainCheckEnv({ env, home });
   const base = { ...(runId ? { runId } : {}), ...(branch ? { branch } : {}), warnings: [...portWarnings, ...extraWarnings], tag: { name: null, status: 'skipped', waitedSeconds: 0 }, status: null, repo, pr: null, url: null, sha: null, mergeSha: null, checks: null, ci: null, reason: null, portBase, privateNames: null, timing: { checksSeconds: 0, ciWaitSeconds: 0, attempts: 0, rerunCount: 0 } };
 
+  if (waitRequiredOnly) Object.assign(base, { requiredContexts: null, pendingAtMerge: [], waitedForRequiredOnly: false });
+
   if (!VALID_MERGE_METHODS.has(mergeMethod)) return { ...base, status: 'refused', reason: 'invalid merge method' };
   for (const [name, value] of [['pollMs', pollMs], ['timeoutMs', timeoutMs], ['noCiGraceMs', noCiGraceMs]]) {
     if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return { ...base, status: 'refused', reason: `invalid ${name}` };
@@ -1174,16 +1191,38 @@ export async function ship(options) {
     base.repo = repo;
   } else if (originRepo && repo !== originRepo) base.warnings.push(`--repo ${repo} differs from origin ${originRepo}`);
 
+  if (waitRequiredOnly) {
+    try {
+      const required = await exec('gh', ['api', `repos/${repo}/branches/${encodeURIComponent(payload.base)}/protection/required_status_checks`], { cwd: root });
+      if (required.code !== 0) {
+        if (!/\bHTTP[ :]+404\b/.test(`${required.stderr ?? ''} ${required.stdout ?? ''}`)) throw new Error('required contexts request failed');
+      } else {
+        const data = JSON.parse(required.stdout);
+        if (data !== null) {
+          if (typeof data !== 'object' || Array.isArray(data) ||
+              (!Array.isArray(data.contexts) && !Array.isArray(data.checks)) ||
+              (data.contexts !== undefined && (!Array.isArray(data.contexts) || data.contexts.some(name => typeof name !== 'string' || !name))) ||
+              (data.checks !== undefined && (!Array.isArray(data.checks) || data.checks.some(check => typeof check?.context !== 'string' || !check.context)))) throw new Error('invalid required contexts response');
+          const names = [...new Set([...(data.contexts ?? []), ...(data.checks ?? []).map(check => check.context)])];
+          if (names.length) Object.assign(base, { requiredContexts: names, waitedForRequiredOnly: true });
+        }
+      }
+    } catch {
+      return { ...base, status: 'refused', code: 'required-contexts-unavailable', reason: 'required-contexts-unavailable: cannot read base branch protection' };
+    }
+  }
+
   // E2: every pre-push content guard, collected and run without short-circuiting. `ship
   // --preflight` prints this and exits without ever pushing; an ordinary ship still refuses on
   // its own first hit (below, unchanged) but attaches the full `failures` list to that refusal.
   const collectPreflight = () => preflightReport({
     root, payloadBase: payload.base, exec, env, home,
     privateNamesFile, integratedFiles, repo, exemptions, authorEmailExec, commitScanExec,
+    body: payload.body, requireSections,
   });
   if (preflight) {
     const report = await collectPreflight();
-    process.stdout.write(`${JSON.stringify({ status: 'preflight', ok: report.ok, failures: report.failures })}\n`);
+    process.stdout.write(`${JSON.stringify({ status: 'preflight', ok: report.ok, failures: report.failures, ...(waitRequiredOnly ? { requiredContexts: base.requiredContexts, pendingAtMerge: [], waitedForRequiredOnly: base.waitedForRequiredOnly } : {}) })}\n`);
     process.exitCode = report.ok ? 0 : 1;
     return { ...base, status: 'preflight', ok: report.ok, failures: report.failures };
   }
@@ -1393,6 +1432,17 @@ export async function ship(options) {
   const checksStart = now();
   const checks = await runChecks({ env: checkEnv });
   base.checks = checks;
+  for (let index = 0; index < checks.length; index++) {
+    const check = checks[index];
+    if (['cancelled', 'timeout', 'cleanup-failed'].includes(check.status)) continue;
+    const environment = classifyCheckEnvironment({ exitCode: check.exitCode, head: check.head ?? check.output ?? check.tail });
+    if (environment) checks[index] = { ...check, ...environment, status: 'check-env-missing' };
+  }
+  const missingEnvironment = checks.find(check => check.status === 'check-env-missing');
+  if (missingEnvironment) {
+    base.timing.checksSeconds = round1(now() - checksStart);
+    return { ...base, status: 'checks-failed', ...classifyCheckEnvironment({ exitCode: 127 }), reason: 'check-env-missing' };
+  }
 
   // Field lesson #177(c): before blocking on any failing check, verify it against the base
   // commit's own tree; one that fails there too is reported `pre-existing` (still listed, no
@@ -1437,6 +1487,8 @@ export async function ship(options) {
   if (usedExemptions.length) body = appendExemptionsSection(body, usedExemptions);
   if (checks.some(result => result.status === 'failed')) return { ...base, status: 'checks-failed', reason: 'checks failed' };
 
+  const stubSection = requireSections.find(section => STUB_SECTION_RE.test(sectionContent(body, section) ?? ''));
+  if (stubSection !== undefined) return { ...base, status: 'refused', code: 'stub-section', section: stubSection, reason: `stub-section: ${stubSection}`, failures: (await collectPreflight()).failures };
   const missing = missingSections(body, requireSections);
   if (missing.length > 0) {
     const reasons = missing.map(section => {
@@ -1547,6 +1599,7 @@ export async function ship(options) {
   // by reference with every already-built `{...base}` result, so updating it here still lands on a
   // terminal result this same call already returned.
   let ciWaitMs = 0;
+  let pendingOptional = [];
   async function waitForCi() {
     const roundStart = now();
     base.timing.attempts += 1;
@@ -1569,9 +1622,17 @@ export async function ship(options) {
         }
       }
       if (view) {
-        const summary = summarizeRollup(view.statusCheckRollup);
+        const fullRollup = Array.isArray(view.statusCheckRollup) ? view.statusCheckRollup : [];
+        let selectedRollup = base.requiredContexts ? fullRollup.filter(item => base.requiredContexts.includes(item.name ?? item.context)) : fullRollup;
+        const summary = summarizeRollup(selectedRollup);
+        if (base.requiredContexts) {
+          const missingNames = base.requiredContexts.filter(name => !selectedRollup.some(item => (item.name ?? item.context) === name));
+          summary.total += missingNames.length;
+          summary.pending += missingNames.length;
+        }
         const headMatches = view.headRefOid === sha;
-        if (headMatches && summary.total > 0 && summary.pending === 0) return { ci: summary, ciRollup: view.statusCheckRollup };
+        if (headMatches && base.requiredContexts) pendingOptional = [...new Set(fullRollup.filter(item => !base.requiredContexts.includes(item.name ?? item.context) && summarizeRollup([item]).pending > 0).map(item => item.name ?? item.context ?? 'unknown'))];
+        if (headMatches && summary.total > 0 && summary.pending === 0) return { ci: summary, ciRollup: selectedRollup };
         const elapsed = now() - start;
         if (headMatches && summary.total === 0 && elapsed >= noCiGraceMs) return { terminal: { ...base, status: 'no-ci', reason: 'no CI detected', ci: summary } };
         if (elapsed >= timeoutMs) return { terminal: { ...base, status: 'timeout', reason: 'timed out waiting for checks', ci: summary } };
@@ -1691,6 +1752,7 @@ export async function ship(options) {
   }
   if (!merged) return { ...base, status: 'merge-failed', reason: stepFailed('post-merge view', mergedRes, originRepo) };
   if (merged.state === 'MERGED') {
+    if (base.requiredContexts) base.pendingAtMerge = pendingOptional;
     if (version && tagTimeoutMs > 0) {
       const start = now();
       let waitedMs = 0;
