@@ -5,7 +5,7 @@ import { parsePrPayload } from './ship.mjs';
 
 export const SCAFFOLD_USAGE = [
   'Usage: swarm [--root PROJECT] scaffold job --id X --agent A --model M --tier cheap|mid|expensive',
-  '       --context a,b --outputs c,d [--prompt-file F] [--ticket docs/TICKETS.md#T81] [--out F]',
+  '       --context a,b --outputs c,d [--command "swarm command"] [--prompt-file F] [--ticket docs/TICKETS.md#T81] [--out F]',
   '       swarm [--root PROJECT] scaffold pr --from RUN --title T [--repo O/R] [--out F]',
   '       scaffold [job|pr] [--help|-h]',
 ].join('\n') + '\n';
@@ -23,7 +23,7 @@ export function parseScaffoldArgs(argv) {
   if (argv.includes('--help') || argv.includes('-h')) return { help: true };
   const options = {}, seen = new Set();
   const common = { '--root': 'root', '--out': 'out' };
-  const job = { '--id': 'id', '--agent': 'agent', '--model': 'model', '--tier': 'tier', '--context': 'context', '--outputs': 'outputs', '--prompt-file': 'promptFile', '--ticket': 'ticket' };
+  const job = { '--id': 'id', '--agent': 'agent', '--model': 'model', '--tier': 'tier', '--context': 'context', '--outputs': 'outputs', '--prompt-file': 'promptFile', '--ticket': 'ticket', '--command': 'swarmCommand' };
   const pr = { '--from': 'from', '--title': 'title', '--repo': 'repo' };
   // Global --root is accepted before or after the subcommand.
   for (let index = 0; index < argv.length; index++) {
@@ -51,6 +51,55 @@ export function parseScaffoldArgs(argv) {
   if (options.from && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(options.from)) invalid('invalid run id');
   if (options.repo && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(options.repo)) invalid('invalid repo');
   return options;
+}
+
+// Lesson 327: derive command ownership from the installed CLI dispatch, not a second table.
+export async function commandHandlers() {
+  const source = await fs.readFile(new URL('./swarm.mjs', import.meta.url), 'utf8');
+  const imports = new Map();
+  for (const match of source.matchAll(/import\s*\{([^}]+)\}\s*from\s*['"]\.\/([^'"]+)['"]/g)) {
+    for (const name of match[1].split(',')) imports.set(name.trim().split(/\s+as\s+/).at(-1), 'tools/' + match[2]);
+  }
+  const localHandlers = [...source.matchAll(/^(?:export )?(?:async )?function (\w+)\(/gm)].map(match => match[1]);
+  const main = source.slice(source.indexOf('async function main()'));
+  const branches = [...main.matchAll(/^  (?:if\s*\(|(?:}\s*)?else if\s*\(|case\s+['"])/gm)];
+  const handlers = new Map();
+  for (const [index, branch] of branches.entries()) {
+    const block = main.slice(branch.index, branches[index + 1]?.index ?? main.length);
+    const condition = block.split('\n')[0];
+    const commands = [...condition.matchAll(/(?:args\[0\]|command|newCommand)\s*===\s*['"]([a-z][a-z-]*)['"]|case\s+['"]([a-z][a-z-]*)['"]/g)].map(match => match[1] ?? match[2]);
+    const modules = new Set();
+    if (localHandlers.some(name => new RegExp('\\b' + name + '\\s*\\(').test(block))) modules.add('tools/swarm.mjs');
+    for (const match of block.matchAll(/import\(['"]\.\/([^'"]+)['"]\)/g)) modules.add('tools/' + match[1]);
+    for (const [name, module] of imports) if (new RegExp('\\b' + name + '\\b').test(block)) modules.add(module);
+    for (const command of commands) {
+      const files = handlers.get(command) ?? new Set();
+      for (const module of modules) files.add(module);
+      handlers.set(command, files);
+      // A subcommand table may dispatch to a different module than the parent parser.
+      for (const route of block.matchAll(/\[([^\]]+)\]\.includes\(options\.command\)\s*\?\s*await\s*\(await import\(['"]\.\/([^'"]+)['"]\)\)/g)) {
+        for (const verb of route[1].matchAll(/['"]([a-z][a-z-]*)['"]/g)) handlers.set(command + ' ' + verb[1], new Set(['tools/' + route[2]]));
+      }
+    }
+  }
+  // Commands implemented in this entry point have no separate imported handler.
+  return new Map([...handlers].map(([command, modules]) => [command, modules.size ? [...modules].sort() : ['tools/swarm.mjs']]));
+}
+function namedCommand(text, handlers) {
+  const command = text.trim().replace(/^swarm\s+/, '');
+  return [...handlers.keys()].sort((a, b) => b.length - a.length).find(name => command === name || command.startsWith(name + ' '));
+}
+export function commandHandlerWarnings(job, handlers) {
+  const commands = new Set();
+  for (const match of job.prompt.matchAll(/\x60([^\x60\n]+)\x60|\bswarm\s+([a-z][a-z-]*(?:\s+[a-z][a-z-]*)?)/g)) {
+    const command = namedCommand(match[1] ?? match[2], handlers);
+    if (command) commands.add(command);
+  }
+  const declared = new Set([...job.context, ...job.outputs]);
+  return [...commands].flatMap(command => (handlers.get(command) ?? []).filter(file => !declared.has(file)).map(file => ({
+    code: 'command-handler-not-in-job', jobId: job.id, command, path: file,
+    message: 'command-handler-not-in-job: Job ' + job.id + ': swarm ' + command + ' handler ' + file + ' is in neither context nor outputs',
+  })));
 }
 
 // New scaffold paths stay inside the selected root and never traverse symlinks.
@@ -84,6 +133,12 @@ export async function scaffoldJob(root, options, deps) {
   try {
     root = await fs.realpath(root);
     const context = [...options.context];
+    if (options.swarmCommand) {
+      const handlers = await commandHandlers();
+      const command = namedCommand(options.swarmCommand, handlers);
+      if (!command) invalid('unknown swarm command: ' + options.swarmCommand);
+      for (const file of handlers.get(command)) if (!context.includes(file)) context.push(file);
+    }
     inputFile = options.promptFile ?? root;
     let prompt = options.promptFile ? await fs.readFile(await safeFile(root, options.promptFile), 'utf8') : 'Implement the declared outputs using the supplied context.';
     if (options.ticket) {
