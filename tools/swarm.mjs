@@ -1612,7 +1612,8 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
     throw error;
   } finally {
     if (scratchDir && (options.env ?? process.env).SWARM_KEEP_TMP !== '1') await fs.rm(scratchDir, { recursive: true, force: true });
-    if (added && (!result || result.status !== 'complete') && await outputsChanged(worktree, baseline)) {
+    // Deletions veto retries, but only surviving edits justify retaining a failed worktree.
+    if (added && (!result || result.status !== 'complete') && await outputsChanged(worktree, baseline, { existingOnly: true })) {
       keepWorktree = true;
       if (result) result.keptWorkspace = worktree;
     }
@@ -2018,7 +2019,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
       // gets them here, alongside its declared context/outputs.
       if (!usesWorktree(job)) for (const { file, bytes, mode } of resourcePayload) await write(workspaceRoot, file, bytes, false, mode);
       contextHashesByJob.set(job.id, contextHashes);
-      state.jobs.push({ id: job.id, agent: job.agent, model: job.model ?? null, ...(job.shell === true ? { shell: true } : {}), workspace, outputs: job.outputs, baseHashes, baseModes, baseWorkspace, queuedAt: new Date().toISOString(), startedAt:null, finishedAt:null, durationMs:null, status: 'queued', retries: 0, retryReason: null, progress: null, keptWorkspace: null, envelopeFallback: null, ...(allSkills.length ? { skills: skillRecordEntries(attachedSkills) } : {}) });
+      state.jobs.push({ id: job.id, agent: job.agent, model: job.model ?? null, ...(job.shell === true ? { shell: true } : {}), workspace, outputs: job.outputs, baseHashes, baseModes, baseWorkspace, queuedAt: new Date().toISOString(), startedAt:null, finishedAt:null, durationMs:null, status: 'queued', progress: null, keptWorkspace: null, envelopeFallback: null, ...(allSkills.length ? { skills: skillRecordEntries(attachedSkills) } : {}) });
     }
     await save();
 
@@ -2351,7 +2352,11 @@ export async function readState(root, id) {
   const bytes = await bytesAt(root, `.swarm/runs/${id}/state.json`, true);
   if (!bytes) fail(`Unknown run: ${id}`);
   const state = JSON.parse(bytes);
-  for (const job of state.jobs ?? []) { job.retries ??= 0; job.retryReason ??= null; }
+  // Read defaults must not become persisted retry evidence when this state is saved again.
+  for (const job of state.jobs ?? []) {
+    if (job.retries == null) Object.defineProperty(job, 'retries', { value: 0, writable: true, configurable: true });
+    if (job.retryReason == null) Object.defineProperty(job, 'retryReason', { value: null, writable: true, configurable: true });
+  }
   return state;
 }
 
@@ -2660,6 +2665,7 @@ export function runCheck(name, argv, cwd, timeoutMs, spawnImpl, characterTail = 
     } catch { finish('spawn-error', null); }
   });
 }
+// Legacy tool/module failures outside T81 classification remain unrunnable.
 const UNRUNNABLE_RE = /command not found|ERR_MODULE_NOT_FOUND/i;
 const CHECK_ERRORED_STATUSES = new Set(['spawn-error', 'unrunnable', 'cannot-run', 'check-env-missing']);
 // Field lesson #239: macOS refusing a nested sandbox_apply call inside an already-sandboxed
