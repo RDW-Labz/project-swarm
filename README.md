@@ -15,10 +15,10 @@ or another agent with file and command access. The worker adapter does not
 need to match the orchestrator. Paste this into your agent at project start:
 
 ```text
-Use Project Swarm 1.37.0 for this project. Read docs/kickoff.md in the toolkit
+Use Project Swarm 1.41.0 for this project. Read docs/kickoff.md in the toolkit
 and perform its kickoff workflow. Ask me up front which model providers may
 receive project code and what spend ceiling applies; wait before model calls.
-Install from tag v1.37.0 in ~/.project-swarm, run tools/install.mjs --user,
+Install from tag v1.41.0 in ~/.project-swarm, run tools/install.mjs --user,
 link this project, run doctor, validate and run the read-only and writing smoke
 jobs, inspect and integrate the reviewed writing output. Read the installed
 SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
@@ -35,6 +35,8 @@ Cursor also discovers `.cursor/rules/project-swarm.mdc`; other agents can
 follow the linked project's AGENTS.md or CLAUDE.md pointer.
 See the [anonymized field report](docs/field-report.md) for evidence and limits.
 The [lessons file](docs/lessons.md) is the loop: every real-run friction becomes an entry plus, where possible, a tool check and a test.
+
+`swarm lesson add` captures clock-stamped, private-safe evidence and routes its rule into an existing worker skill or gotchas; tool lessons stay queued. Use `lesson list` and `lesson set` to track the queue, `lesson manifest` to declare a bounded fix with a regression test, and `lesson check` to audit stale lessons and installed test files. `lesson publish --version V` appends safe shipped entries to the public archive, while `lesson import` converts legacy rows idempotently.
 
 Release 1.16.0 adds post-build mutants (`integrate --mutants --mutants-file`
 and a job-declared `mutantsFile` output), an `agentError`/`agent.log` capture

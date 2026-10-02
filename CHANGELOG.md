@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.41.0
+
+- `lesson add` captures clock-stamped, private-safe lessons and routes rules into existing skills or gotchas with an 800-token skill cap.
+- `lesson list` / `lesson set` track lifecycle, version, and regression coverage; `run` warns about queued lessons.
+- `lesson manifest` emits a validated bounded fix with its regression test; `lesson check` reports stale queued lessons and missing installed tests.
+- `lesson publish --version V` appends safe shipped entries idempotently; `lesson import` preserves legacy ids and dates without duplicating rows.
+
 ## 1.40.0
 
 - `integrate RUN --jobs <id,...>` integrates only the named complete jobs (and refuses with a message mentioning `--jobs` when a partial run is integrated without the flag), enabling batch runs where individual jobs can be integrated separately as they complete. (lesson 298)
