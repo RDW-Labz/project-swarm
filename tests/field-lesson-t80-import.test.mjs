@@ -168,3 +168,86 @@ describe('T80 lenient lesson import', () => {
     });
   });
 });
+
+describe('T80 lesson import skips private rows', () => {
+  const privateTerm = 'zzzfakeclient';
+
+  test('private evidence skips only the middle row and imports both clean rows', async t => {
+    const root = await lessonFixture(t, header + row(9001)
+      + row(9002).replace('Evidence.', privateTerm) + row(9003));
+    await put(root, 'coordination/private-names.txt', privateTerm + '\n');
+    assert.deepEqual(await cli(root, ['import']), {
+      stdout: line({ status: 'ok', imported: [9001, 9003], skipped: [
+        { id: 9002, line: 4, reason: 'private-name', field: 'evidence' },
+      ], padded: [], overflow: [] }), stderr: '', exitCode: 0,
+    });
+    assert.deepEqual(await readLessons(root), [lesson(9001), lesson(9003)]);
+    assert.equal(await fs.readFile(path.join(root, store), 'utf8'), [lesson(9001), lesson(9003)].map(line).join(''));
+  });
+
+  test('private fix reports the fix field and preserves existing id handling', async t => {
+    const root = await lessonFixture(t, header
+      + row(9001).replace('Guard input.', privateTerm)
+      + row(9002).replace('Guard input.', privateTerm) + row(9003));
+    await put(root, 'coordination/private-names.txt', privateTerm + '\n');
+    await put(root, store, line(lesson(9001)));
+    assert.deepEqual(await cli(root, ['import']), {
+      stdout: line({ status: 'ok', imported: [9003], skipped: [9001,
+        { id: 9002, line: 4, reason: 'private-name', field: 'fix' },
+      ], padded: [], overflow: [] }), stderr: '', exitCode: 0,
+    });
+    assert.deepEqual(await readLessons(root), [lesson(9001), lesson(9003)]);
+  });
+
+  test('all private rows return ok with no imports or store writes', async t => {
+    const root = await lessonFixture(t, header + [9001, 9002, 9003]
+      .map(id => row(id).replace('Evidence.', privateTerm)).join(''));
+    await put(root, 'coordination/private-names.txt', privateTerm + '\n');
+    assert.deepEqual(await cli(root, ['import']), {
+      stdout: line({ status: 'ok', imported: [], skipped: [
+        { id: 9001, line: 3, reason: 'private-name', field: 'evidence' },
+        { id: 9002, line: 4, reason: 'private-name', field: 'evidence' },
+        { id: 9003, line: 5, reason: 'private-name', field: 'evidence' },
+      ], padded: [], overflow: [] }), stderr: '', exitCode: 0,
+    });
+    assert.deepEqual(await readLessons(root), []);
+    await assert.rejects(fs.stat(path.join(root, store)), { code: 'ENOENT' });
+  });
+
+  test('private terms never appear in the JSON result or stored bytes', async t => {
+    const root = await lessonFixture(t, header + row(9001)
+      + row(9002).replace('Evidence.', privateTerm)
+      + row(9003).replace('Guard input.', privateTerm));
+    await put(root, 'coordination/private-names.txt', privateTerm + '\n');
+    const result = await cli(root, ['import']);
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stderr, '');
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.status, 'ok');
+    assert.deepEqual(parsed.imported, [9001]);
+    assert.equal(parsed.skipped.length, 2);
+    assert.ok(!JSON.stringify(result).includes(privateTerm));
+    assert.ok(!JSON.stringify(parsed).includes(privateTerm));
+    assert.ok(!(await fs.readFile(path.join(root, store), 'utf8')).includes(privateTerm));
+    assert.deepEqual(await readLessons(root), [lesson(9001)]);
+  });
+
+  test('private skip lines follow accepted source occurrences before id sorting', async t => {
+    const root = await lessonFixture(t, row(9001) + header
+      + row('9001r')
+      + row(9002).replace('Observed.', 'Observed.\nAgain.')
+      + row(9001).replace('2000-01-02', '2000-02-30')
+      + row('009001').replace('Evidence.', privateTerm)
+      + row(9001));
+    await put(root, 'coordination/private-names.txt', privateTerm + '\n');
+    assert.deepEqual(await cli(root, ['import']), {
+      stdout: line({ status: 'ok', imported: [9002], skipped: [
+        { line: 4, reason: 'duplicate-id' },
+        { line: 7, reason: 'invalid-date' },
+        { line: 9, reason: 'duplicate-id' },
+        { id: 9001, line: 8, reason: 'private-name', field: 'evidence' },
+      ], padded: [], overflow: [] }), stderr: '', exitCode: 0,
+    });
+    assert.deepEqual(await readLessons(root), [lesson(9002, { evidence: 'Observed.\nAgain.\nEvidence.' })]);
+  });
+});

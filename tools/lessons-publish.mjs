@@ -256,12 +256,25 @@ async function importLessons(root, options, privacy) {
   const incoming = parseLegacyLessons(source, diagnostics).sort((a, b) => a.id - b.id);
   const rows = await readLessons(root, options), present = new Set(rows.map(row => row.id));
   const imported = [], skipped = [...diagnostics.skipped];
+  const lines = source.split(/\r?\n/), sourceLines = new Map();
+  const rejectedLines = new Set(diagnostics.skipped.map(item => item.line));
+  const start = lines.findIndex(line => /^\s*\|\s*#\s*\|\s*Date\s*\|\s*What happened\s*\|\s*Evidence\s*\|\s*Proposed swarm fix\s*\|\s*Status\s*\|\s*$/i.test(line));
+  // Parser diagnostics exclude invalid and duplicate occurrences of an id.
+  for (let offset = start + 1; offset < lines.length; offset++) {
+    const match = /^\s*\|\s*(\d+)([a-z]*)\s*\|/i.exec(lines[offset]);
+    if (match && !rejectedLines.has(offset + 1) && !sourceLines.has(Number(match[1]))) sourceLines.set(Number(match[1]), offset + 1);
+  }
   for (const row of incoming) {
     if (present.has(row.id)) {
       await assertLessonPrivateSafe(root, { id: row.id }, privacy);
       skipped.push(row.id); continue;
     }
-    await assertLessonPrivateSafe(root, row, privacy);
+    try { await assertLessonPrivateSafe(root, row, privacy); }
+    catch (error) {
+      if (error.lessonError?.code !== 'private-name') throw error;
+      skipped.push({ id: row.id, line: sourceLines.get(row.id), reason: 'private-name', field: error.lessonError.field });
+      continue;
+    }
     rows.push(row); imported.push(row.id);
   }
   // Coordinator-approved provisional interface: writeLessons owns the writer lock;
