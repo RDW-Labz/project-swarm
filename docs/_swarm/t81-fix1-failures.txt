@@ -1,0 +1,278 @@
+# npm test on WIP 374e053 (T81 adapters + pipeline + wire landed): 1283/1290, four real reds (the private-term red is docs/_swarm, dropped at ship). Raw node:test output, local paths.
+
+=== not ok 93 - codexMessage with no contract includes the blocked rule
+  ---
+  duration_ms: 0.857959
+  location: '<repo>/tests/codex-adapter.test.mjs:60:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+      'You are a fresh worker in a detached git worktree. Read these context files first: ["input.txt"]. You may edit only these declared outputs: ["output.txt"]. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.\n' +
+        'Read only the files in your context; other reads may be denied.\n' +
+        'If a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n' +
+        '\n' +
+        'Any doc your own AGENTS.md names that is not shown inline above, not in your context list, and not under .swarm/skills lives outside this worktree; you do not need to fetch it or ask for it — proceed using only what is provided here.\n' +
+    +   'Manifest checks: none declared; run relevant tests. Run these; fix red before you return; report checksRun.\n' +
+    +   'Report checksRun as [{"name":"NAME","status":"passed|failed|not run"}]. Checks marked not run must stay not run; do not evade path restrictions or run orchestrator-only checks.\n' +
+        'Never run `git stash` or `git stash pop`: the stash stack is shared by every worktree and session of this repository. To set work aside, make a temporary WIP commit (`git commit -m WIP`, later `git reset --soft HEAD~1`) where commits are allowed, or copy the file aside.\n' +
+        'Never hand-revert a mutant (`git checkout <file>` or `git restore <file>`) to undo it: run mutants with `swarm mutants`, never by hand.\n' +
+        'TASK:\n' +
+        'Update the output and test it.\n'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: |-
+    You are a fresh worker in a detached git worktree. Read these context files first: ["input.txt"]. You may edit only these declared outputs: ["output.txt"]. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.
+    Read only the files in your context; other reads may be denied.
+    If a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.
+    
+    Any doc your own AGENTS.md names that is not shown inline above, not in your context list, and not under .swarm/skills lives outside this worktree; you do not need to fetch it or ask for it — proceed using only what is provided here.
+    Never run `git stash` or `git stash pop`: the stash stack is shared by every worktree and session of this repository. To set work aside, make a temporary WIP commit (`git commit -m WIP`, later `git reset --soft HEAD~1`) where commits are allowed, or copy the file aside.
+    Never hand-revert a mutant (`git checkout <file>` or `git restore <file>`) to undo it: run mutants with `swarm mutants`, never by hand.
+    TASK:
+    Update the output and test it.
+    
+  actual: |-
+    You are a fresh worker in a detached git worktree. Read these context files first: ["input.txt"]. You may edit only these declared outputs: ["output.txt"]. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.
+    Read only the files in your context; other reads may be denied.
+    If a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.
+    
+    Any doc your own AGENTS.md names that is not shown inline above, not in your context list, and not under .swarm/skills lives outside this worktree; you do not need to fetch it or ask for it — proceed using only what is provided here.
+    Manifest checks: none declared; run relevant tests. Run these; fix red before you return; report checksRun.
+    Report checksRun as [{"name":"NAME","status":"passed|failed|not run"}]. Checks marked not run must stay not run; do not evade path restrictions or run orchestrator-only checks.
+    Never run `git stash` or `git stash pop`: the stash stack is shared by every worktree and session of this repository. To set work aside, make a temporary WIP commit (`git commit -m WIP`, later `git reset --soft HEAD~1`) where commits are allowed, or copy the file aside.
+    Never hand-revert a mutant (`git checkout <file>` or `git restore <file>`) to undo it: run mutants with `swarm mutants`, never by hand.
+    TASK:
+    Update the output and test it.
+    
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (<repo>/tests/codex-adapter.test.mjs:63:10)
+    Test.runInAsyncScope (node:async_hooks:206:9)
+  ...
+# Subtest: codexMessage with contract includes section before prompt with text verbatim
+ok 94 - codexMessage with contract includes section before prompt with text verbatim
+  ---
+  duration_ms: 0.105458
+  ...
+# Subtest: profile grants exact scopes and ends with sensitive path and keychain service denies
+ok 95 - profile grants exact scopes and ends with sensitive path and keychain service denies
+  ---
+  duration_ms: 1.08325
+  ...
+# Subtest: Codex scratch allow follows tmp deny and stays inside the write allowlist (lesson \#299)
+ok 96 - Codex scratch allow follows tmp deny and stays inside the write allowlist (lesson \#299)
+  ---
+  duration_ms: 9.784
+  ...
+
+=== not ok 110 - Codex removes worktree and blocks proposals after missing-output, except a malformed envelope with no worktree evidence, which is kept (lessons \#41, \#64)
+  ---
+  duration_ms: 763.161042
+  location: '<repo>/tests/codex-adapter.test.mjs:256:125'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  operator: 'rejects'
+  stack: |-
+    async removed (<repo>/tests/codex-adapter.test.mjs:45:3)
+    async TestContext.<anonymous> (<repo>/tests/codex-adapter.test.mjs:286:5)
+  ...
+# Subtest: Codex removes worktree and blocks proposals after symlink-output, except a malformed envelope with no worktree evidence, which is kept (lessons \#41, \#64)
+ok 111 - Codex removes worktree and blocks proposals after symlink-output, except a malformed envelope with no worktree evidence, which is kept (lessons \#41, \#64)
+  ---
+  duration_ms: 664.095875
+  ...
+# Subtest: Codex removes worktree and blocks proposals after launch-error, except a malformed envelope with no worktree evidence, which is kept (lessons \#41, \#64)
+ok 112 - Codex removes worktree and blocks proposals after launch-error, except a malformed envelope with no worktree evidence, which is kept (lessons \#41, \#64)
+  ---
+  duration_ms: 735.411625
+  ...
+# Subtest: a real run threads config deniedHomeDirs into the generated sandbox profile
+ok 113 - a real run threads config deniedHomeDirs into the generated sandbox profile
+  ---
+  duration_ms: 797.682417
+  ...
+# Subtest: Codex proposals retain ordinary conflict detection
+ok 114 - Codex proposals retain ordinary conflict detection
+  ---
+  duration_ms: 800.453834
+  ...
+# Subtest: a reply with extra final-JSON keys beyond files_changed/notes completes cleanly, not just with a warning (lesson \#64)
+ok 115 - a reply with extra final-JSON keys beyond files_changed/notes completes cleanly, not just with a warning (lesson \#64)
+  ---
+  duration_ms: 871.929416
+  ...
+# Subtest: a reply with no parseable JSON but worktree changes to declared outputs falls back to a worktree result and keeps the worktree (lesson \#64)
+ok 116 - a reply with no parseable JSON but worktree changes to declared outputs falls back to a worktree result and keeps the worktree (lesson \#64)
+  ---
+  duration_ms: 708.680042
+  ...
+# Subtest: validate and preflight warn about staged, unstaged, untracked and ignored declared paths only
+ok 117 - validate and preflight warn about staged, unstaged, untracked and ignored declared paths only
+  ---
+  duration_ms: 898.97925
+  ...
+# Subtest: cancellation marker removes running Codex worktree and never creates queued worktree
+ok 118 - cancellation marker removes running Codex worktree and never creates queued worktree
+  ---
+  duration_ms: 850.406667
+  ...
+# Subtest: resolved readPaths aliases cannot grant a forbidden directory
+ok 119 - resolved readPaths aliases cannot grant a forbidden directory
+  ---
+  duration_ms: 304.531667
+  ...
+# Subtest: both evidence-shaped replies parse as bare top-level objects (no files_changed/notes schema required)
+ok 120 - both evidence-shaped replies parse as bare top-level objects (no files_changed/notes schema required)
+  ---
+  duration_ms: 2.055083
+  ...
+# Subtest: the last fenced block wins over an earlier one (documented last-fence rule)
+ok 121 - the last fenced block wins over an earlier one (documented last-fence rule)
+  ---
+  duration_ms: 0.1785
+  ...
+# Subtest: prose with a trailing bare object still parses when there is no fence
+
+===     not ok 3 - (c) a non-retryable status (404) is never retried
+      ---
+      duration_ms: 256.373917
+      location: '<repo>/tests/field-lessons-batch-t1.test.mjs:93:3'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly equal:
+        
+        0 !== undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual: 0
+      operator: 'strictEqual'
+      stack: |-
+        TestContext.<anonymous> (<repo>/tests/field-lessons-batch-t1.test.mjs:102:12)
+      ...
+    1..3
+not ok 382 - \#248: an api_error (5xx/429) result is retried once with a continuation note
+  ---
+  duration_ms: 981.955959
+  type: 'suite'
+  location: '<repo>/tests/field-lessons-batch-t1.test.mjs:54:1'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: \#252: costUsd is estimated from provider.jsonl when no CLI result event ever reports one
+    # Subtest: (a) estimateCostFromTranscript sums usage over unique assistant message ids and estimates output tokens from content size when the stream count is partial
+    ok 1 - (a) estimateCostFromTranscript sums usage over unique assistant message ids and estimates output tokens from content size when the stream count is partial
+      ---
+      duration_ms: 0.273208
+      ...
+    # Subtest: (b) an unknown model reports costUsd null (never a made-up rate)
+    ok 2 - (b) an unknown model reports costUsd null (never a made-up rate)
+      ---
+      duration_ms: 0.067209
+      ...
+    # Subtest: (c) a job cancelled mid-stream (no result event) reports an estimated cost, not costNotReported
+    ok 3 - (c) a job cancelled mid-stream (no result event) reports an estimated cost, not costNotReported
+      ---
+      duration_ms: 2373.060958
+      ...
+    # Subtest: (d) an unrecognized model with a real transcript warns cost-rate-unknown instead of silence
+    ok 4 - (d) an unrecognized model with a real transcript warns cost-rate-unknown instead of silence
+      ---
+      duration_ms: 2355.310375
+      ...
+    1..4
+ok 383 - \#252: costUsd is estimated from provider.jsonl when no CLI result event ever reports one
+  ---
+  duration_ms: 4729.02125
+  type: 'suite'
+  ...
+# Subtest: \#253: run refuses a red base without --accept-red-base --reason; the base-check is cached by sha
+    # Subtest: (a) runBaseChecks caches its verdict by base sha: a second call at the same sha never re-spawns
+    ok 1 - (a) runBaseChecks caches its verdict by base sha: a second call at the same sha never re-spawns
+      ---
+      duration_ms: 26.325916
+      ...
+    # Subtest: (b) run refuses to dispatch onto a red base without --accept-red-base
+    ok 2 - (b) run refuses to dispatch onto a red base without --accept-red-base
+      ---
+      duration_ms: 31.857166
+      ...
+    # Subtest: (c) --accept-red-base without --reason refuses
+    ok 3 - (c) --accept-red-base without --reason refuses
+      ---
+      duration_ms: 3.929125
+
+=== not ok 553 - a check that exits 127 is classified unrunnable with a hint, not failed, and checksErrored is true
+  ---
+  duration_ms: 374.811542
+  location: '<repo>/tests/lessons120-checks.test.mjs:33:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'check-env-missing'
+    - 'unrunnable'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'unrunnable'
+  actual: 'check-env-missing'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (<repo>/tests/lessons120-checks.test.mjs:40:10)
+  ...
+# Subtest: a bad spawn (missing binary) is classified spawn-error with a hint and retried exactly once
+ok 554 - a bad spawn (missing binary) is classified spawn-error with a hint and retried exactly once
+  ---
+  duration_ms: 296.9855
+  ...
+# Subtest: a check whose own binary does not exist yet gets one preChecks run before checks, passing on the first try (\#236: preChecks run first)
+ok 555 - a check whose own binary does not exist yet gets one preChecks run before checks, passing on the first try (\#236: preChecks run first)
+  ---
+  duration_ms: 345.231916
+  ...
+# Subtest: CLI integrate exits non-zero when checksErrored, even without --require-checks
+ok 556 - CLI integrate exits non-zero when checksErrored, even without --require-checks
+  ---
+  duration_ms: 407.120292
+  ...
+# Subtest: validate warns stale-env-risk for a version-only pyproject.toml bump with no preChecks declared
+ok 557 - validate warns stale-env-risk for a version-only pyproject.toml bump with no preChecks declared
+  ---
+  duration_ms: 36.1445
+  ...
+# Subtest: validate does not warn stale-env-risk when the manifest declares preChecks
+ok 558 - validate does not warn stale-env-risk when the manifest declares preChecks
+  ---
+  duration_ms: 36.818416
+  ...
+# Subtest: validate warns tight-test-timeout for a timeout literal under 5s in a test file, silent for the same line outside tests/
+ok 559 - validate warns tight-test-timeout for a timeout literal under 5s in a test file, silent for the same line outside tests/
+  ---
+  duration_ms: 82.12375
+  ...
+# Subtest: validate warns tight-test-timeout for a short JS setTimeout in a test file
+ok 560 - validate warns tight-test-timeout for a short JS setTimeout in a test file
+  ---
+  duration_ms: 50.416042
+  ...
+# Subtest: validate warns runtime-check-no-shell when a check argv contains a repeat construct (seq N) and the job has no shell
+ok 561 - validate warns runtime-check-no-shell when a check argv contains a repeat construct (seq N) and the job has no shell
+  ---
+  duration_ms: 43.435166
+  ...
+# Subtest: runtime-check-no-shell stays silent for a doc-only job even with a repeat-construct check
+ok 562 - runtime-check-no-shell stays silent for a doc-only job even with a repeat-construct check
+  ---
+  duration_ms: 37.321916
+  ...
+# Subtest: runtime-check-no-shell fires when the prompt names a race/flaky bug and the job has no shell
+ok 563 - runtime-check-no-shell fires when the prompt names a race/flaky bug and the job has no shell
+  ---
+  duration_ms: 37.697334
+  ...
