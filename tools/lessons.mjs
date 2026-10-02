@@ -11,8 +11,8 @@ const KEYS = ['id', 'date', 'area', 'evidence', 'rule', 'fix', 'public', 'status
 const STATES = ['queued', 'built', 'shipped', 'dropped'];
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const AREA = /^[a-z0-9][a-z0-9-]{0,63}$/;
-const FIELD_NAMES = [...KEYS, 'reopen', 'arguments', 'command', 'file', 'private-names', 'queued', 'shipped', 'older-than', 'agent', 'model', 'tier', 'stale-days', 'installed', 'from', 'root', 'registry', 'manifest', 'help'];
-const OPTION_FIELDS = { storeFile: 'file', publishFile: 'file', privateNamesFile: 'private-names', olderThan: 'older-than', staleDays: 'stale-days' };
+const FIELD_NAMES = [...KEYS, 'reopen', 'arguments', 'command', 'file', 'private-names', 'queued', 'shipped', 'older-than', 'agent', 'model', 'tier', 'stale-days', 'installed', 'from', 'dry-run', 'verbose', 'root', 'registry', 'manifest', 'help'];
+const OPTION_FIELDS = { storeFile: 'file', publishFile: 'file', privateNamesFile: 'private-names', olderThan: 'older-than', staleDays: 'stale-days', dryRun: 'dry-run' };
 const fieldName = key => FIELD_NAMES.includes(OPTION_FIELDS[key] ?? key) ? (OPTION_FIELDS[key] ?? key) : 'arguments';
 const argsError = field => lessonError('lesson-args', { field });
 const ioError = field => lessonError('lesson-io', { field });
@@ -24,7 +24,7 @@ export const LESSON_USAGE = `Usage: swarm [--root PROJECT] lesson COMMAND [optio
   manifest ID --agent A --model M [--tier cheap|mid|expensive]
   check [--stale-days DAYS] [--installed DIR]
   publish --version V
-  import [--from FILE]
+  import [--from FILE] [--dry-run] [--verbose]
 Common: --file PATH --private-names FILE --help -h
 --file selects the JSONL store, except publish where it selects the public Markdown file.
 `;
@@ -85,7 +85,7 @@ export function parseLessonArgs(argv) {
   const commands = {
     add: ['area', 'evidence', 'rule', 'fix', 'public'], list: ['queued', 'shipped', 'area', 'older-than'],
     set: ['status', 'version', 'test'], manifest: ['agent', 'model', 'tier'],
-    check: ['stale-days', 'installed'], publish: ['version'], import: ['from']
+    check: ['stale-days', 'installed'], publish: ['version'], import: ['from', 'dry-run', 'verbose']
   };
   if (argv.length === 1 && ['--help', '-h'].includes(argv[0])) return { help: true };
   const command = argv[0];
@@ -105,8 +105,8 @@ export function parseLessonArgs(argv) {
     if (seen.has(key)) throw argsError(key);
     seen.add(key);
     const mapped = key === 'file' ? (command === 'publish' ? 'publishFile' : 'storeFile')
-      : ({ 'private-names': 'privateNamesFile', 'older-than': 'olderThan', 'stale-days': 'staleDays' }[key] ?? key);
-    if (key === 'queued' || key === 'shipped') { options[mapped] = true; continue; }
+      : ({ 'private-names': 'privateNamesFile', 'older-than': 'olderThan', 'stale-days': 'staleDays', 'dry-run': 'dryRun' }[key] ?? key);
+    if (key === 'queued' || key === 'shipped' || key === 'dry-run' || key === 'verbose') { options[mapped] = true; continue; }
     const value = argv[++i];
     if (value === undefined || value.startsWith('--') || value === '-h') throw argsError(key);
     options[mapped] = value;

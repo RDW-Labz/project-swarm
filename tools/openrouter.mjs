@@ -150,6 +150,12 @@ export function assertWithinCaps({ worstUsd, spent }) {
   if (spent.today + worstUsd > DAY_CAP_USD) fail(`OpenRouter day cap: $${spent.today.toFixed(4)} spent today + $${worstUsd.toFixed(4)} worst case > $${DAY_CAP_USD}; request refused`);
 }
 
+// Lesson 325: retain provider termination metadata even when content validation fails.
+export function responseFinishReason(body) {
+  const reasons = [body?.choices?.[0]?.finish_reason, body?.finish_reason, body?.stop_reason];
+  return reasons.find(reason => typeof reason === 'string') ?? null;
+}
+
 // Row #185: a tool-free worker is never left with a generic "incomplete, refused, truncated, or
 // unexpected" — the finish reason the provider actually gave rides along in the error, so a
 // truncated (maxOutputTokens too small) reply reads e.g. "truncated: finish_reason length"
