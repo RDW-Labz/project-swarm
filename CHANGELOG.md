@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.42.0
+
+- `ship --wait-required-only` waits for protected required checks while optional checks continue; ordinary ship and unprotected branches retain the full wait.
+- `ticket` runs the guarded run, inspect, integrate, checks, bounded commit, and ship stages with a durable resume journal.
+- Shell worktrees link dependencies read-only or prepare isolated environments with `run --sync`; missing check environments refuse instead of counting as pre-existing failures.
+- Shell adapters retain streaming evidence, inspect shows failed stderr tails, and Codex retries one transient connection failure only before any output changes.
+- `scaffold job` validates context coverage and `scaffold pr` creates reviewable payloads whose mutation stub refuses required-section shipping.
+
 ## 1.41.0
 
 - `lesson add` captures clock-stamped, private-safe lessons and routes rules into existing skills or gotchas with an 800-token skill cap.
