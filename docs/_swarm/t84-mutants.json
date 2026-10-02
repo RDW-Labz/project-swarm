@@ -1,0 +1,57 @@
+[
+  {
+    "name": "a handler check skipped",
+    "file": "tools/swarm.mjs",
+    "find": "    warnings.push(...commandHandlerWarnings(job, handlers));",
+    "replace": "    void 0;",
+    "check": [
+      "node",
+      "--test",
+      "tests/field-lessons-batch-ab-core.test.mjs"
+    ]
+  },
+  {
+    "name": "b blocked outputs still checked",
+    "file": "tools/swarm.mjs",
+    "find": "    const jobsToIntegrate = state.jobs.filter(j => (!jobs || jobs.includes(j.id)) && !(acceptBlocked && j.status === 'blocked'));",
+    "replace": "    const jobsToIntegrate = state.jobs.filter(j => (!jobs || jobs.includes(j.id)));",
+    "check": [
+      "node",
+      "--test",
+      "tests/field-lessons-batch-ab-core.test.mjs"
+    ]
+  },
+  {
+    "name": "c swarm paths not stripped",
+    "file": "tools/swarm.mjs",
+    "find": "      if (ignoreSwarmPaths && (text.startsWith('.swarm/') || text.startsWith(path.join(cwd, '.swarm') + path.sep))) {",
+    "replace": "      if (false) {",
+    "check": [
+      "node",
+      "--test",
+      "tests/field-lessons-batch-ab-core.test.mjs"
+    ]
+  },
+  {
+    "name": "d missing paths still flagged",
+    "file": "tools/ship.mjs",
+    "find": "      try { await fs.access(path.resolve(root, candidate)); } catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') continue; throw error; }",
+    "replace": "      void 0;",
+    "check": [
+      "node",
+      "--test",
+      "tests/field-lessons-batch-ab-core.test.mjs"
+    ]
+  },
+  {
+    "name": "e warning at model default",
+    "file": "tools/swarm.mjs",
+    "find": "      if (job.maxOutputTokens < modelDefault) warnings.push({ code: 'max-output-below-model-default', jobId: job.id, maxOutputTokens: job.maxOutputTokens, modelDefault, message: 'max-output-below-model-default: Job ' + job.id + ': maxOutputTokens ' + job.maxOutputTokens + ' is below model default ' + modelDefault });",
+    "replace": "      if (job.maxOutputTokens <= modelDefault) warnings.push({ code: 'max-output-below-model-default', jobId: job.id, maxOutputTokens: job.maxOutputTokens, modelDefault, message: 'max-output-below-model-default: Job ' + job.id + ': maxOutputTokens ' + job.maxOutputTokens + ' is below model default ' + modelDefault });",
+    "check": [
+      "node",
+      "--test",
+      "tests/field-lessons-batch-ab-core.test.mjs"
+    ]
+  }
+]
