@@ -1,0 +1,38 @@
+    not ok 4 - L325 finishReason persists each response to state and inspect reads legacy null
+      ---
+      duration_ms: 629.881375
+      location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ab/tests/field-lessons-batch-aa-core.test.mjs:323:3'
+      failureType: 'testCodeFailure'
+      error: |-
+        {"id":"run-0000","status":"failed","integratedAt":null,"tokens":null,"costNotReported":["9001"],"warnings":[],"jobs":[{"stderrTail":null,"id":"9001","agent":"openrouter","model":"model9001","tier":null,"tierReason":null,"status":"failed","finishReason":"content_filter","result":null,"transcript":"saved","costUsd":null,"costPer1kOutputTokens":null,"tokens":null,"modelsSeen":[],"modelMismatc
+        
+        
+        1 !== 0
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 0
+      actual: 1
+      operator: 'strictEqual'
+      stack: |-
+        parsed (file:///Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ab/tests/field-lessons-batch-aa-core.test.mjs:110:10)
+        TestContext.<anonymous> (file:///Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ab/tests/field-lessons-batch-aa-core.test.mjs:349:23)
+        async Test.run (node:internal/test_runner/test:797:9)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:526:7)
+      ...
+    1..4
+not ok 287 - \#185: validate warns large-output-whole for a big declared output on an API job with no edits form requested
+  ---
+  duration_ms: 2.853583
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ab/tests/field-lessons-batch-n.test.mjs:69:1'
+  failureType: 'testCodeFailure'
+  error: 'output-cap-exceeded: Job api-job: total 20001 bytes (cap 61440); perFile cap 15360; report.md: 20001 bytes; route this job to agent codex (edits in place) or split the outputs'
+  code: 'output-cap-exceeded'
+  stack: |-
+    validateProject (file:///Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ab/tools/swarm.mjs:3709:47)
+    async TestContext.<anonymous> (file:///Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ab/tests/field-lessons-batch-n.test.mjs:72:18)
+    async Test.run (node:internal/test_runner/test:797:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:526:7)
+  ...
+# Subtest: \#217: executeApi inlines a context file into the request body and records contextInlined
+ok 288 - \#217: executeApi inlines a context file into the request body and records contextInlined
