@@ -2261,3 +2261,51 @@ rule is enforced or documented.
     with `--verbose` while preserving every existing file and leaving a
     missing store absent. Regression coverage is in
     `tests/field-lessons-batch-aa-lessons.test.mjs`.
+204. **A command change was assigned without the file that actually handled it.**
+    The contract named the wrong module and applied a size cap outside its
+    intended scope. Rule: trace command dispatch to its handler before
+    assigning files, and quote size caps only for the files they govern.
+    Enforcement: `scaffold job --command <name>` resolves handler files into
+    context, and validation warns `command-handler-not-in-job` when a named
+    command's handler is absent from both context and outputs; shipped in
+    1.44.0. Regression coverage is in
+    `tests/field-lessons-batch-ab-core.test.mjs`.
+205. **An accepted blocked job's unwritten outputs were mistaken for deletions.**
+    Missing files from an unfinished job prevented completed work from being
+    integrated. Rule: accepting a blocked job skips that job entirely,
+    including its outputs; an unwritten output is not a deletion.
+    Enforcement: `integrate --accept-blocked` excludes blocked jobs' outputs
+    from missing-output and undeclared-delete checks, and `--jobs` excludes
+    unselected jobs' outputs from those checks; shipped in 1.44.0.
+    Regression coverage is in `tests/field-lessons-batch-ab-core.test.mjs`.
+206. **A manual service restart left availability and version unverified.**
+    Platform-specific launch commands failed, and the startup log did not
+    identify the running version. Rule: a restart checks the green gate first,
+    then stops, updates, syncs, starts detached, and verifies port and version
+    through one portable command. Enforcement: a project-side restart script
+    refuses unless the nightly gate is green, performs the restart in one
+    command, writes a version banner at startup, and prints a one-line
+    verified result. Regression coverage is in a shell test beside the script.
+207. **Temporary job copies were scanned as if they were project source.**
+    Project checks reported failures from nested working copies unrelated to
+    the change. Rule: job working copies live outside the project root, and
+    diagnostics from internal run directories are identified separately.
+    Enforcement: shell adapters create job working copies in external scratch
+    directories; shipping and integration checks strip diagnostic lines whose
+    paths start with `.swarm/` and warn `check-hit-swarm-dir` instead of
+    failing on those lines; shipped in 1.44.0. Regression coverage is in
+    `tests/field-lessons-batch-ab-core.test.mjs`.
+208. **Runtime test paths were mistaken for ignored fixtures.**
+    A preflight rejected references to files that tests create only while
+    running. Rule: a fixture warning requires a referenced path that both
+    exists in the working tree and is ignored by version control.
+    Enforcement: `git-ignored-fixture` checks path existence before checking
+    ignore status, leaving absent runtime paths unflagged; shipped in 1.44.0.
+    Regression coverage is in `tests/field-lessons-batch-ab-core.test.mjs`.
+209. **A manually lowered output cap cut off a single-request job.**
+    The request exhausted its budget even though the model's default allowed
+    enough room. Rule: never set a single-request job's output cap below the
+    model default, since reasoning can consume part of that budget.
+    Enforcement: validation warns `max-output-below-model-default` and names
+    both the configured cap and the model default; shipped in 1.44.0.
+    Regression coverage is in `tests/field-lessons-batch-ab-core.test.mjs`.
