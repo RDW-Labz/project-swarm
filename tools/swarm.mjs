@@ -12,7 +12,7 @@ import { promisify, isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, parseExtraCli, extraCliDoctor, execViaFile, validateEnvelope, summarizeModels } from './cli-adapters.mjs';
 import { API_AGENTS, apiDoctor, probeLocalProvider, decodeContext, executeApi, applyEdit } from './api-adapters.mjs';
-import { nonBookkeepingOutputs } from './openrouter.mjs';
+import { nonBookkeepingOutputs, defaultMaxOutputTokens } from './openrouter.mjs';
 
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, parseCodexReply, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
 import { expandShellPreset, validateNetworkAllow, validateLoopbackAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterDirs, resolveRootGitInfo, scanListeningPorts, resolveRigServicePort, createShellScratchDir, shellMessage, containsKey, redactKey, effectiveShellDeniedHomeDirs, workerKeyItem, TOOLCHAIN_DIRS, scratchRootDir, assertScratchOutsideRepo, resolveSharedUvCacheDir } from './claude-shell.mjs';
@@ -28,9 +28,9 @@ import { ship, SHIP_DEFAULTS, resolveGhAndGit, parsePrPayload, resolveToolchainB
 import { loadChecksFromCi, checkNotInCiWarnings, DEFAULT_CI_PATH } from './checks-from-ci.mjs';
 import { go, commitOutputs, goExitCode } from './go.mjs';
 import { TICKET_USAGE, parseTicketArgs, ticketPipeline } from './pipeline.mjs';
-import { SCAFFOLD_USAGE, parseScaffoldArgs, scaffoldJob, scaffoldPr } from './scaffold.mjs';
+import { SCAFFOLD_USAGE, parseScaffoldArgs, scaffoldJob, scaffoldPr, commandHandlers, commandHandlerWarnings } from './scaffold.mjs';
 import { prepareWorkspaceEnvironment, createAdapterLogSink, runCodexWithRetry } from './codex-adapter.mjs';
-import { classifyCheckEnvironment } from './ship.mjs';
+import { classifyCheckEnvironment, swarmCheckWarnings } from './ship.mjs';
 import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary, listLiveRuns, repoKey, repoPaths } from './board.mjs';
 import { writeSessionMetric } from './session-metrics.mjs';
 import { resolveSkillsDir, listSkills, skillSizeWarnings, refuseOversizeSkills, attachSkillsForJob, skillsPromptBlock, skillRecordEntries, skillCheckFailures, copySkillsInto, assertNoSkillSymlinks, anyPathMatchesGlobs, SKILLS_DIR_NAME } from './skills.mjs';
@@ -1515,9 +1515,15 @@ async function smokeCheckInSandbox(root, directory, job, worktree, profile, env,
 
 // The retained proposal workspace contains only declared outputs. The runnable checkout is
 // disposable unless a fallback requires it or a failed worker changed declared outputs.
+// Lessons 41/64: kept worktrees stay under .swarm/runs/<id>/worktrees/ for inspection (decision
+// #345); lesson 330 instead strips .swarm/ lines from check output and warns swarm-dir-not-ignored.
+async function jobWorktreePath(root, directory, jobId) {
+  return safePath(root, `${directory}/worktrees/${jobId}`, { internal: true, parents: true });
+}
+
 export async function executeCodexJob(root, directory, job, proposalRoot, options) {
   const gitImpl = options.gitImpl ?? git;
-  const worktree = await safePath(root, `${directory}/worktrees/${job.id}`, { internal: true, parents: true });
+  const worktree = await jobWorktreePath(root, directory, job.id);
   const commonDir = await fs.realpath((await gitImpl(root, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim());
   let added = false, keepWorktree = false, result, scratchDir;
   const baseline = { outputs: job.outputs, baseHashes: {}, baseModes: {} };
@@ -1688,7 +1694,7 @@ function syntheticDiff(file, baseBytes, afterBytes) {
 async function executeClaudeShellJob(root, directory, job, proposalRoot, dependencyFiles, message, options) {
   const hooks = options.shellHooks ?? {};
   const workerKey = options.workerKey;
-  const worktree = await safePath(root, `${directory}/worktrees/${job.id}`, { internal: true, parents: true });
+  const worktree = await jobWorktreePath(root, directory, job.id);
   const commonDir = await fs.realpath((await git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim());
   let added = false, keepWorktree = false, result, proxy = null, scratch = null;
   const baseline = { outputs: job.outputs, baseHashes: {}, baseModes: {} };
@@ -1956,7 +1962,8 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   // Field lesson #265: a live rig-service checkout is named the same way, on the same warnings path.
   const liveWarning = await liveServiceCheckoutWarning(root, { env });
   const { lessonQueueWarnings } = await import('./lessons.mjs');
-  const manifestWarnings = [...sharedRootFullSuiteWarnings(manifest), ...(liveWarning ? [liveWarning.message] : []), ...await lessonQueueWarnings(root)];
+  const swarmDirWarning = await swarmDirNotIgnoredWarning(root);
+  const manifestWarnings = [...sharedRootFullSuiteWarnings(manifest), ...(liveWarning ? [liveWarning.message] : []), ...await lessonQueueWarnings(root), ...(swarmDirWarning ? [swarmDirWarning] : [])];
   const save = async () => { state.warnings = runWarnings(state, manifestWarnings); state.summary = summarizeRun(state); await jsonWrite(root, `${directory}/state.json`, state); onState(state); };
   // Serialize status writes when several workers finish at once.
   let writes = Promise.resolve();
@@ -2616,11 +2623,13 @@ function expandRootArgv(argv, root) {
   return argv.map(item => item.split('{root}').join(root));
 }
 
-export function runCheck(name, argv, cwd, timeoutMs, spawnImpl, characterTail = false, onOutput = () => {}, env = process.env, { cancelled, killImpl } = {}) {
+export function runCheck(name, argv, cwd, timeoutMs, spawnImpl, characterTail = false, onOutput = () => {}, env = process.env, { cancelled, killImpl, ignoreSwarmPaths = false } = {}) {
   return new Promise(resolve => {
     const start = Date.now();
     let chunks = [], size = 0, settled = false, child, timer, poll, reason, termination;
     let headBytes = Buffer.alloc(0), headDone = false;
+    let swarmLineCount = 0, hasOtherOutput = false;
+    let pendingLine = Buffer.alloc(0);
     // Redcheck promises characters; existing integration checks promise bytes.
     const retainedBytes = characterTail ? CHECK_TAIL * 4 : CHECK_TAIL;
     // Bound retained memory while keeping enough data for the requested tail.
@@ -2634,6 +2643,23 @@ export function runCheck(name, argv, cwd, timeoutMs, spawnImpl, characterTail = 
       onOutput(data);
       chunks.push(data); size += data.length;
       while (chunks.length > 1 && size - chunks[0].length >= retainedBytes) size -= chunks.shift().length;
+    };
+    // Count every line before tail truncation, preserving the existing combined stream order.
+    const filteredLine = line => {
+      const text = line.toString('utf8').replace(/\x1b\[[0-9;]*m/g, '').trimStart();
+      if (ignoreSwarmPaths && (text.startsWith('.swarm/') || text.startsWith(path.join(cwd, '.swarm') + path.sep))) {
+        swarmLineCount++;
+        return;
+      }
+      if (text.trim()) hasOtherOutput = true;
+      push(line);
+    };
+    const receive = data => {
+      if (!ignoreSwarmPaths) { push(data); return; }
+      let pending = Buffer.concat([pendingLine, data]);
+      let end;
+      while ((end = pending.indexOf(10)) !== -1) { filteredLine(pending.subarray(0, end + 1)); pending = pending.subarray(end + 1); }
+      pendingLine = pending;
     };
     // Field lesson 139: a check's own child may itself spawn descendants (a test harness, a
     // bundler); stopChild kills the whole group it leads, the same guarantee execute() already
@@ -2649,6 +2675,7 @@ export function runCheck(name, argv, cwd, timeoutMs, spawnImpl, characterTail = 
       settled = true;
       clearTimeout(timer); clearInterval(poll);
       const cleanup = await (termination ?? Promise.resolve({ error: null }));
+      if (pendingLine.length) filteredLine(pendingLine);
       const combined = Buffer.concat(chunks);
       const tail = characterTail ? combined.toString('utf8').slice(-CHECK_TAIL) : combined.length > CHECK_TAIL ? combined.subarray(combined.length - CHECK_TAIL).toString('utf8') : combined.toString('utf8');
       // reason is recorded synchronously in stop(), before any signal is ever sent, so it always
@@ -2657,19 +2684,20 @@ export function runCheck(name, argv, cwd, timeoutMs, spawnImpl, characterTail = 
       // requested cancel/timeout didn't happen) or a same-tick close/exit event would misreport a
       // real cancellation as a plain failure.
       const head = headBytes.toString('utf8').replaceAll('\r\n', '\n').replace(/\r$/, '').split('\n').slice(0, 3).join('\n');
+      if (ignoreSwarmPaths && swarmLineCount > 0 && !hasOtherOutput && status === 'failed' && exitCode > 0 && exitCode !== 127) status = 'passed';
       const environment = !reason && !cleanup.error ? classifyCheckEnvironment({ exitCode, head }) : null;
       const finalStatus = reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : cleanup.error ? 'cleanup-failed'
         : environment ? 'check-env-missing' : status === 'failed' && UNRUNNABLE_RE.test(tail) ? 'unrunnable' : status;
       const hint = finalStatus === 'spawn-error' ? `could not start ${argv[0]}: pass the test command as separate argv tokens`
         : finalStatus === 'unrunnable' ? `${argv[0]} could not run (missing tool/module): try npm ci --offline or uv sync --offline`
         : undefined;
-      resolve({ name, status: finalStatus, exitCode, durationMs: Date.now() - start, tail, head, ...(hint ? { hint } : {}), ...(environment ?? {}) });
+      resolve({ name, status: finalStatus, exitCode, durationMs: Date.now() - start, tail, head, ...(swarmLineCount ? { swarmLineCount } : {}), ...(hint ? { hint } : {}), ...(environment ?? {}) });
     };
     try {
       const [program, ...rest] = argv;
       child = spawnImpl(program, rest, { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'], env });
       child.on('error', () => finish('spawn-error', null));
-      for (const stream of [child.stdout, child.stderr]) stream?.on('data', data => push(Buffer.isBuffer(data) ? data : Buffer.from(data)));
+      for (const stream of [child.stdout, child.stderr]) stream?.on('data', data => receive(Buffer.isBuffer(data) ? data : Buffer.from(data)));
       child.on('close', code => finish(code === 0 ? 'passed' : 'failed', code));
       timer = setTimeout(() => stop('timeout'), timeoutMs);
       if (cancelled) poll = setInterval(async () => { try { if (!settled && await cancelled()) stop('cancelled'); } catch { stop('cancelled'); } }, 100);
@@ -2740,7 +2768,7 @@ async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { b
     const runArgv = resolvedProgram ? [resolvedProgram, ...argv.slice(1)] : argv;
     // repeat runs the same check up to `repeat` times and stops at the first non-passing run.
     const repeat = check.repeat ?? 1;
-    let result, runs = 0, failedFile, outputWindow = '';
+    let result, runs = 0, failedFile, outputWindow = '', swarmLineCount = 0;
     const identifyTest = data => {
       if (failedFile) return;
       outputWindow += data.toString('utf8');
@@ -2749,13 +2777,16 @@ async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { b
     };
     for (let attempt = 1; attempt <= repeat; attempt++) {
       runs = attempt; failedFile = undefined; outputWindow = '';
-      result = await runCheck(check.name, runArgv, root, check.timeoutMs ?? 300000, spawnImpl, false, identifyTest, env);
+      result = await runCheck(check.name, runArgv, root, check.timeoutMs ?? 300000, spawnImpl, false, identifyTest, env, { ignoreSwarmPaths: true });
+      swarmLineCount += result.swarmLineCount ?? 0;
       if (result.status !== 'passed') break;
     }
     if (CHECK_ERRORED_STATUSES.has(result.status)) {
       if (preChecks.length) await runPreChecksOnce();
-      result = { ...await runCheck(check.name, runArgv, root, check.timeoutMs ?? 300000, spawnImpl, false, () => {}, env), retriedAfterError: true };
+      result = { ...await runCheck(check.name, runArgv, root, check.timeoutMs ?? 300000, spawnImpl, false, () => {}, env, { ignoreSwarmPaths: true }), retriedAfterError: true };
+      swarmLineCount += result.swarmLineCount ?? 0;
     }
+    if (swarmLineCount) result.swarmLineCount = swarmLineCount;
     // Field lesson #239: the orchestrator's own run outside the sandbox is the truth — a check
     // whose output shows it never really ran (macOS denying a nested sandbox_apply call) is tagged
     // sandbox-only rather than folded into a real failure count.
@@ -3070,8 +3101,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   if (salvage && noChecks) fail('--no-checks and --salvage cannot be combined');
   const state = await readState(root, id);
   // Field lesson 131: a job that stopped `blocked` (an out-of-scope break it could not fix itself)
-  // may still have written every one of its own declared outputs; --accept-blocked lets those
-  // outputs through the same conflict/snapshot checks as any other job, instead of a hand copy.
+  // is accepted by --accept-blocked; outputs it never wrote are skipped (lesson 328).
   // Field lesson #202: a job that only hit its own timeout while its declared outputs were already
   // done (the transcript shows it sleep-polling a background full suite the boilerplate now
   // forbids) may still have every output sitting in its kept workspace; --salvage lets those
@@ -3124,12 +3154,12 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   // Field lesson #293: load private names once for all output files
   const privateNamesList = privateNamesFile ? await loadPrivateNames(root, privateNamesFile, { env }) : { terms: [] };
   try {
-    const jobsToIntegrate = jobs ? state.jobs.filter(j => jobs.includes(j.id)) : state.jobs;
+    const jobsToIntegrate = state.jobs.filter(j => !jobs || jobs.includes(j.id));
     const integratedJobs = [];
     const skippedJobs = [];
     for (const [index, job] of state.jobs.entries()) {
       const declared = manifest.jobs[index];
-      const shouldIntegrate = !jobs || jobs.includes(job.id);
+      const shouldIntegrate = jobsToIntegrate.includes(job);
       if (!shouldIntegrate) {
         skippedJobs.push(job.id);
         continue;
@@ -3177,6 +3207,9 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
         const currentHash = current === null ? null : digest(current);
         const currentMode=current===null?0o644:(await fs.stat(await safePath(root,file))).mode & 0o777;
         const output = await bytesAt(readRoot, file);
+        // Field lesson 328: a blocked job's unwritten output is skipped, never a missing-output,
+        // undeclared-delete or declared-delete; what it did write still integrates (lesson 131).
+        if (output === null && acceptBlocked && job.status === 'blocked') continue;
         if (output === null) {
           // Field lesson #232: absent from base too means this was never written, not deleted —
           // the orchestrator's own typo case (a declared output that never existed anywhere), kept
@@ -3368,8 +3401,8 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       }
       Object.assign(state, mutantsResult);
     }
-    const warnings = [...portWarnings, ...preChecksResult.warnings, ...(mutantsResult.mutantsSkippedRedBase ? ['mutants skipped: red base (checks failed)'] : []), ...droppedWriteWarnings(state), ...inventedHashWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`), ...mutantMissingWarnings];
-    // Field lesson 131: a blocked job's own outputs went in through the same checks as any other;
+    const warnings = [...swarmCheckWarnings(checksResult.checks), ...portWarnings, ...preChecksResult.warnings, ...(mutantsResult.mutantsSkippedRedBase ? ['mutants skipped: red base (checks failed)'] : []), ...droppedWriteWarnings(state), ...inventedHashWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`), ...mutantMissingWarnings];
+    // Field lesson 328: unwritten blocked outputs were skipped; retain the distinct integration status;
     // the run is tagged distinctly so a later `inspect`/`ship` never mistakes it for a clean pass,
     // and the blocked reason rides along as ready-made evidence for whatever job comes next.
     const blockedJobs = state.jobs.filter(job => job.status === 'blocked');
@@ -3452,6 +3485,22 @@ export async function liveServiceCheckoutWarning(root, { config, env = process.e
   const port = await resolveRigServicePort({ config: cfg, env, home });
   if (port === null) return null;
   return { code: 'protected-checkout-live-service', message: `protected-checkout-live-service: ${root} has a live rig service on port ${port}; never run git checkout/reset/stash here by hand — worktrees only` };
+}
+
+// Field lesson 330 (decision #345): worktrees stay under .swarm/runs/, so a root lint/test config
+// that never mentions .swarm may sweep them up; best-effort, named once per run. A pyproject.toml
+// counts only when it configures pytest.
+const SWARM_DIR_IGNORE_CONFIGS = ['eslint.config.js', 'eslint.config.mjs', 'eslint.config.cjs', 'eslint.config.ts', '.eslintignore', 'vitest.config.js', 'vitest.config.mjs', 'vitest.config.cjs', 'vitest.config.ts', 'vitest.config.mts', 'pyproject.toml', 'pytest.ini'];
+export async function swarmDirNotIgnoredWarning(root) {
+  const found = [];
+  for (const file of SWARM_DIR_IGNORE_CONFIGS) {
+    let text;
+    try { text = (await fs.readFile(path.join(root, file), 'utf8')); } catch { continue; }
+    if (file === 'pyproject.toml' && !text.includes('[tool.pytest')) continue;
+    if (text.includes('.swarm')) return null;
+    found.push(file);
+  }
+  return found.length ? `swarm-dir-not-ignored: ${found.join(', ')} never names .swarm/; job worktrees under .swarm/runs/ may be linted or collected` : null;
 }
 
 // Keep regression tests in place while reversing only the implementation outputs.
@@ -3751,7 +3800,13 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   // Field lesson #288: the repo's own root AGENTS.md, read once so a codex job's missing required
   // read can be named without re-reading it per job.
   const agentsMdText = (await bytesAt(root, 'AGENTS.md'))?.toString('utf8') ?? null;
+  const handlers = await commandHandlers();
   for(const job of manifest.jobs){
+    warnings.push(...commandHandlerWarnings(job, handlers));
+    if (API_AGENTS.includes(job.agent) && job.shell !== true && job.maxOutputTokens !== undefined) {
+      const modelDefault = job.agent === 'openrouter' ? defaultMaxOutputTokens(job.model) : 8192;
+      if (job.maxOutputTokens < modelDefault) warnings.push({ code: 'max-output-below-model-default', jobId: job.id, maxOutputTokens: job.maxOutputTokens, modelDefault, message: 'max-output-below-model-default: Job ' + job.id + ': maxOutputTokens ' + job.maxOutputTokens + ' is below model default ' + modelDefault });
+    }
     // Field lesson #231: computed and refused here, before this job (or any job after it) ever
     // runs — a job cap is enforced by code, never by prompt text asking a worker to stop itself.
     if (job.maxCredits !== undefined) {
@@ -4974,7 +5029,7 @@ async function main() {
     }
     root=args[rootIndex+1];args.splice(rootIndex,2);
   }
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | squash --branch BRANCH [--base REF] | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list [--queued|--shipped] [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE);return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | squash --branch BRANCH [--base REF] | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list [--queued|--shipped] [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');

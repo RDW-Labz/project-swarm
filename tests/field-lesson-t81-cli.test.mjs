@@ -299,6 +299,7 @@ describe('T81 Codex worktree wiring', () => {
     const order = [];
     const gitImpl = async (_cwd, args) => {
       if (args[0] === 'worktree' && args[1] === 'add') {
+        assert.equal(args[3], worktree);
         await fs.mkdir(path.join(worktree, '.git'), { recursive: true });
         for (const file of ['output9001.mjs', 'pyproject.toml', 'package-lock.json']) await fs.writeFile(path.join(worktree, file), await f.read(file));
         return '';
@@ -344,6 +345,7 @@ describe('T81 Codex worktree wiring', () => {
     const replies = [], retries = [];
     const gitImpl = async (_cwd, args) => {
       if (args[0] === 'worktree' && args[1] === 'add') {
+        assert.equal(args[3], worktree);
         await fs.mkdir(path.join(worktree, '.git'), { recursive: true });
         await fs.writeFile(path.join(worktree, 'output9001.mjs'), await f.read('output9001.mjs'));
         return '';

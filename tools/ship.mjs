@@ -196,6 +196,7 @@ export async function gitIgnoredFixtureWarnings(exec, fileTexts, root) {
       const candidate = match[1];
       if (seen.has(candidate)) continue;
       seen.add(candidate);
+      try { await fs.access(path.resolve(root, candidate)); } catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') continue; throw error; }
       let result;
       try { result = await exec('git', ['check-ignore', '-q', '--', candidate], { cwd: root }); } catch { continue; }
       if (result && result.code === 0) warnings.push({ file, path: candidate });
@@ -1048,11 +1049,18 @@ export const SHIP_USAGE = [
   '       [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--wait-required-only]',
   '       [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--accept-pre-existing] [--preflight] [--exempt GUARD:FILE=REASON]... [--private-names FILE]',
   `Exempt guards: ${EXEMPTION_GUARD_IDS.join(', ')}`,
+  'git-ignored-fixture: only existing ignored paths; --exempt git-ignored-fixture:<file>=<reason>.',
+  'check-hit-swarm-dir: ignores check lines whose path starts with .swarm/ and reports their count.',
   'Prints one JSON result naming its runId (or branch for --branch); exit 0 when merged, held or ready.',
 ].join('\n') + '\n';
 
 export function shipHelpRequested(args) {
   return (args ?? []).some(arg => arg === '--help' || arg === '-h');
+}
+
+export function swarmCheckWarnings(checks) {
+  const count = checks.reduce((sum, check) => sum + (check.swarmLineCount ?? 0), 0);
+  return count ? ['check-hit-swarm-dir: ignored ' + count + ' check output lines under .swarm/'] : [];
 }
 
 export function renderChecks(results) {
@@ -1432,6 +1440,7 @@ export async function ship(options) {
   const checksStart = now();
   const checks = await runChecks({ env: checkEnv });
   base.checks = checks;
+  base.warnings.push(...swarmCheckWarnings(checks));
   for (let index = 0; index < checks.length; index++) {
     const check = checks[index];
     if (['cancelled', 'timeout', 'cleanup-failed'].includes(check.status)) continue;
