@@ -28,6 +28,7 @@ const shipped9002 = {
   public: 'Validate input to prevent partial writes.', test: 'tests/field-lesson-9002.test.mjs',
 };
 const legacy9003 = '| 9003 | 2000-01-02 | Observed failure. Rule: Validate input. | run-0000 | **Swarm fix:** Guard input. Status: queued |\n';
+const legacyHeader = '| Id | When | Incident | Proof | Change | State |\n|---|---|---|---|---|---|\n';
 const manifest9001 = { command: 'manifest', id: 9001, agent: 'claude', model: 'sonnet' };
 const publish9001 = { command: 'publish', version: '1.41.0' };
 const initialArchive = '# Field lessons\n\n198. **Keep existing entries.**\n    Enforcement: recorded.\n';
@@ -350,7 +351,7 @@ describe('T80 ship commands', () => {
     await f.write('coordination/swarm-lessons.md', source);
     await f.store([queued9001]);
     const result = success(await f.cli('lesson', 'import'));
-    assert.deepEqual(result, { status: 'ok', imported: [9003, 9004, 9005, 9006, 9007, 9008], skipped: [] });
+    assert.deepEqual(result, { status: 'ok', imported: [9003, 9004, 9005, 9006, 9007, 9008], skipped: [], padded: [9003, 9004, 9007, 9008], overflow: [] });
     const rows = await readLessons(f.root);
     assert.deepEqual(rows[0], queued9001);
     assert.deepEqual(rows[1], { ...queued9001, id: 9003, evidence: 'Observed failure.\nrun-0000', fix: 'Guard input.' });
@@ -368,13 +369,13 @@ describe('T80 ship commands', () => {
     assert.equal(rows[5].fix, 'Only fix.');
     assert.equal(rows[6].evidence, 'legacy lesson 9008');
     const before = await f.read(store);
-    assert.deepEqual(success(await f.cli('lesson', 'import')), { status: 'ok', imported: [], skipped: [9003, 9004, 9005, 9006, 9007, 9008] });
+    assert.deepEqual(success(await f.cli('lesson', 'import')), { status: 'ok', imported: [], skipped: [9003, 9004, 9005, 9006, 9007, 9008], padded: [9003, 9004, 9007, 9008], overflow: [] });
     assert.equal(await f.read(store), before);
     assert.equal(await f.read('coordination/swarm-lessons.md'), source);
     await assert.rejects(fs.stat(path.join(f.root, '.swarm/gotchas.md')), { code: 'ENOENT' });
     await assert.rejects(fs.stat(path.join(f.root, 'coordination/skills')), { code: 'ENOENT' });
-    await f.write('coordination/legacy.md', legacy9003);
-    assert.deepEqual(success(await f.cli('lesson', 'import', '--from', 'coordination/legacy.md', '--file', 'coordination/selected.jsonl')), { status: 'ok', imported: [9003], skipped: [] });
+    await f.write('coordination/legacy.md', legacyHeader + legacy9003);
+    assert.deepEqual(success(await f.cli('lesson', 'import', '--from', 'coordination/legacy.md', '--file', 'coordination/selected.jsonl')), { status: 'ok', imported: [9003], skipped: [], padded: [9003], overflow: [] });
     assert.equal(await f.read(store), before);
   });
 
@@ -383,7 +384,7 @@ describe('T80 ship commands', () => {
     await f.store([queued9001]);
     const before = await f.read(store);
     for (const source of [
-      legacy9003 + legacy9003.replace('9003', '9004').replace('Guard input.', privateTerms9001),
+      legacyHeader + legacy9003 + legacy9003.replace('9003', '9004').replace('Guard input.', privateTerms9001),
       legacy9003.replace('Status: queued', 'Status: unknown'),
       legacy9003.replace('2000-01-02', '2000-02-30'),
       legacy9003 + legacy9003.replace('Guard input.', 'Different fix.'),
@@ -391,16 +392,16 @@ describe('T80 ship commands', () => {
       await f.write('coordination/swarm-lessons.md', source);
       const result = await f.cli('lesson', 'import');
       const expected = source.includes(privateTerms9001) ? { code: 'private-name', field: 'fix' }
-        : { code: 'lesson-import-invalid', line: source.startsWith(legacy9003) ? 2 : 1 };
+        : { code: 'lesson-import-invalid', line: 1 };
       failure(result, expected);
       assert.equal(await f.read(store), before);
     }
-    await f.write('coordination/swarm-lessons.md', legacy9003.replace('9003', '9001').replace('Guard input.', privateTerms9001));
-    assert.deepEqual(success(await f.cli('lesson', 'import')), { status: 'ok', imported: [], skipped: [9001] });
+    await f.write('coordination/swarm-lessons.md', legacyHeader + legacy9003.replace('9003', '9001').replace('Guard input.', privateTerms9001));
+    assert.deepEqual(success(await f.cli('lesson', 'import')), { status: 'ok', imported: [], skipped: [9001], padded: [9001], overflow: [] });
     assert.equal(await f.read(store), before);
     failure(await f.cli('lesson', 'import', '--from', 'missing.md'), { code: 'lesson-io', field: 'from' });
     await f.write('coordination/swarm-lessons.md', '# No rows.\n');
-    assert.deepEqual(success(await f.cli('lesson', 'import', '--file', 'absent/rows.jsonl')), { status: 'ok', imported: [], skipped: [] });
+    failure(await f.cli('lesson', 'import', '--file', 'absent/rows.jsonl'), { code: 'lesson-import-invalid', line: 1 });
     await assert.rejects(fs.stat(path.join(f.root, 'absent')), { code: 'ENOENT' });
   });
 });
