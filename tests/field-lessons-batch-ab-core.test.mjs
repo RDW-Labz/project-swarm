@@ -331,7 +331,9 @@ describe('L332 model output defaults', () => {
     const modelDefault = defaultMaxOutputTokens(model);
     assert.equal(modelDefault, 16000, 'reasoning default covers thinking (lesson 226)');
     for (const maxOutputTokens of [modelDefault - 1, modelDefault, undefined]) {
-      await f.write('9001.json', json(manifest({ model, ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }) })));
+      const payload = '.swarm-manifests/9001-payload.md';
+      await f.write(payload, '9001');
+      await f.write('9001.json', json(manifest({ model, outputs: [payload], ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }) })));
       const warnings = warningCode(parsed(await f.cli('validate', '9001.json')), 'max-output-below-model-default');
       assert.equal(warnings.length, maxOutputTokens === modelDefault - 1 ? 1 : 0, String(maxOutputTokens));
       if (warnings.length) {
