@@ -1,0 +1,165 @@
+not ok 70 - a shell job runs the whole claude process under sandbox-exec in a worktree and inspect shows shell + checksRun
+not ok 103 - HEAD worktree runs with null stdin, collects only declared outputs, integrates and removes checkout
+not ok 109 - Codex removes worktree and blocks proposals after malformed, except a malformed envelope with no worktree evidence, which is kept (lessons \#41, \#64)
+not ok 117 - a reply with no parseable JSON but worktree changes to declared outputs falls back to a worktree result and keeps the worktree (lesson \#64)
+not ok 137 - C: the tracked tree has no whole-word, case-insensitive occurrence of a configured private term
+not ok 198 - L332 model output defaults
+not ok 418 - \#272: ship refuses (inspect warns) a changed test file naming a git-ignored path
+not ok 542 - failed Codex jobs keep a changed declared output in their actual worktree
+not ok 599 - integrate --accept-blocked applies a blocked job's declared outputs, tags integrated-blocked, and carries the reason forward
+not ok 601 - integrate --accept-blocked still refuses a run whose saved job outputs differ from the manifest
+not ok 780 - baseline ship() refuses on the first violation only, private-name-in-diff, before any push
+not ok 781 - --preflight reports all three violations in one report, never touching the remote
+not ok 786 - CLI: swarm ship --preflight --branch ... is accepted by the parser and prints the preflight report
+
+not ok 70 - a shell job runs the whole claude process under sandbox-exec in a worktree and inspect shows shell + checksRun
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/claude-shell.test.mjs:233:1'
+  error: |-
+    + actual - expected
+    + '/private/var/folders/g8/54q7r2m56nddtr0mp_6z9www0000gn/T/swarm-worktrees/05f4033e0472a3ed-1790912462317-1029f0b1/builder'
+    - '/private/var/folders/g8/54q7r2m56nddtr0mp_6z9www0000gn/T/swarm-shell-9XBtQL/.swarm/runs/1790912462317-1029f0b1/worktrees/builder'
+  name: 'AssertionError'
+  expected: '/private/var/folders/g8/54q7r2m56nddtr0mp_6z9www0000gn/T/swarm-shell-9XBtQL/.swarm/runs/1790912462317-1029f0b1/worktrees/builder'
+  actual: '/private/var/folders/g8/54q7r2m56nddtr0mp_6z9www0000gn/T/swarm-worktrees/05f4033e0472a3ed-1790912462317-1029f0b1/builder'
+ok 71 - a shell worktree starts from the current bytes of declared files, uncommitted edits included
+ok 72 - a key echoed by the worker is redacted from logs, flagged, and integrate refuses the run
+ok 73 - an output holding the key fails the job and is never copied for integration
+ok 74 - integrate and ship refuse a run whose saved files hold the key, checked before any write
+
+not ok 103 - HEAD worktree runs with null stdin, collects only declared outputs, integrates and removes checkout
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/codex-adapter.test.mjs:208:1'
+  error: |-
+    + actual - expected
+    + '/private/var/folders/g8/54q7r2m56nddtr0mp_6z9www0000gn/T/swarm-worktrees/90afac8c14e5591e-1790912461428-a1e843aa/writer'
+    - '/private/var/folders/g8/54q7r2m56nddtr0mp_6z9www0000gn/T/swarm-codex-Zbdlp4/.swarm/runs/1790912461428-a1e843aa/worktrees/writer'
+  name: 'AssertionError'
+  expected: '/private/var/folders/g8/54q7r2m56nddtr0mp_6z9www0000gn/T/swarm-codex-Zbdlp4/.swarm/runs/1790912461428-a1e843aa/worktrees/writer'
+  actual: '/private/var/folders/g8/54q7r2m56nddtr0mp_6z9www0000gn/T/swarm-worktrees/90afac8c14e5591e-1790912461428-a1e843aa/writer'
+ok 104 - Codex creates scratch before spawn, exports temp env, records it and removes it after completion (lesson \#299)
+ok 105 - Codex creates scratch before spawn, exports temp env, records it and keeps it after completion (lesson \#299)
+ok 106 - Codex removes worktree and blocks proposals after failed, except a malformed envelope with no worktree evidence, which is kept (lessons \#41, \#64)
+ok 107 - Codex removes worktree and blocks proposals after timeout, except a malformed envelope with no worktree evidence, which is kept (lessons \#41, \#64)
+
+not ok 109 - Codex removes worktree and blocks proposals after malformed, except a malformed envelope with no worktree evidence, which is kept (lessons \#41, \#64)
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/codex-adapter.test.mjs:264:148'
+  error: "ENOENT: no such file or directory, access '/private/var/folders/g8/54q7r2m56nddtr0mp_6z9www0000gn/T/swarm-codex-fnqXFI/.swarm/runs/1790912465839-12c192c7/worktrees/writer'"
+ok 110 - Codex removes worktree and blocks proposals after missing-output, except a malformed envelope with no worktree evidence, which is kept (lessons \#41, \#64)
+ok 111 - Codex removes worktree and blocks proposals after missing-output-blip, except a malformed envelope with no worktree evidence, which is kept (lessons \#41, \#64)
+ok 112 - Codex removes worktree and blocks proposals after symlink-output, except a malformed envelope with no worktree evidence, which is kept (lessons \#41, \#64)
+ok 113 - Codex removes worktree and blocks proposals after launch-error, except a malformed envelope with no worktree evidence, which is kept (lessons \#41, \#64)
+ok 114 - a real run threads config deniedHomeDirs into the generated sandbox profile
+ok 115 - Codex proposals retain ordinary conflict detection
+
+not ok 117 - a reply with no parseable JSON but worktree changes to declared outputs falls back to a worktree result and keeps the worktree (lesson \#64)
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/codex-adapter.test.mjs:342:1'
+  error: "ENOENT: no such file or directory, access '/private/var/folders/g8/54q7r2m56nddtr0mp_6z9www0000gn/T/swarm-codex-USIZT5/.swarm/runs/1790912471532-4e3c1ebf/worktrees/writer'"
+ok 118 - validate and preflight warn about staged, unstaged, untracked and ignored declared paths only
+ok 119 - cancellation marker removes running Codex worktree and never creates queued worktree
+ok 120 - resolved readPaths aliases cannot grant a forbidden directory
+ok 121 - both evidence-shaped replies parse as bare top-level objects (no files_changed/notes schema required)
+ok 122 - the last fenced block wins over an earlier one (documented last-fence rule)
+ok 123 - prose with a trailing bare object still parses when there is no fence
+
+not ok 137 - C: the tracked tree has no whole-word, case-insensitive occurrence of a configured private term
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/config-private-names.test.mjs:299:1'
+  error: |-
+    + actual - expected
+    + [
+    +   'docs/_swarm/t84-lessons-327-330.md: oasis',
+    +   'docs/_swarm/t84-lessons-327-330.md: agent-core',
+    +   'docs/_swarm/t84-lessons-327-330.md: desktop-app'
+    + ]
+    - []
+  name: 'AssertionError'
+  expected:
+  actual:
+ok 138 - isTestFile recognizes test directories, JS/TS suffixes, Python and Go conventions
+
+    not ok 1 - L332 deepseek warns below 16000 and not at the default
+      location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/field-lessons-batch-ab-core.test.mjs:312:3'
+      error: |-
+      name: 'AssertionError'
+      expected: 0
+      actual: 1
+    ok 2 - L332 help documents every new flag and warning
+not ok 198 - L332 model output defaults
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/field-lessons-batch-ab-core.test.mjs:311:1'
+  error: '1 subtest failed'
+
+    not ok 1 - (j) a test file referencing a git-ignored fixture path refuses before any push
+      location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/field-lessons-batch-v.test.mjs:229:3'
+      error: |-
+        + actual - expected
+        + 'ready'
+        - 'refused'
+      name: 'AssertionError'
+      expected: 'refused'
+      actual: 'ready'
+    ok 2 - (k) a test file referencing a tracked fixture path proceeds past this guard
+    not ok 3 - (l) inspectRun warns git-ignored-fixture for a job's own proposed test file
+      location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/field-lessons-batch-v.test.mjs:254:3'
+      error: '["collect-only-skipped: writer: pytest not on PATH"]'
+      name: 'AssertionError'
+
+not ok 418 - \#272: ship refuses (inspect warns) a changed test file naming a git-ignored path
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/field-lessons-batch-v.test.mjs:228:1'
+  error: '2 subtests failed'
+    ok 1 - (m) every failing check location covered by this run's own outputs proceeds, warning red-base-auto-accepted
+    ok 2 - (n) a failing location outside this run's own outputs still refuses
+    ok 3 - (o) inspectRun warns collect-only-failed for a proposed test file with a bad import
+    ok 4 - (p) inspectRun skips a python collect-only check, naming why, and never spawns pytest
+ok 419 - \#268: a covered red base auto-accepts with a warning; inspect collect-only-checks a proposed test file
+    ok 1 - (q) createShellScratchDir bases the scratch dir on SWARM_INSTALL_ROOT, not the (faked) OS tmp dir
+
+not ok 542 - failed Codex jobs keep a changed declared output in their actual worktree
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/lessons.test.mjs:500:1'
+  error: |-
+    + actual - expected
+    + '/private/var/folders/g8/54q7r2m56nddtr0mp_6z9www0000gn/T/swarm-worktrees/3b0730e4df9db3a7-1790912488692-240fbf8c/writer'
+    - '/private/var/folders/g8/54q7r2m56nddtr0mp_6z9www0000gn/T/swarm-lessons-codex-Qx5FmU/.swarm/runs/1790912488692-240fbf8c/worktrees/writer'
+  name: 'AssertionError'
+  expected: '/private/var/folders/g8/54q7r2m56nddtr0mp_6z9www0000gn/T/swarm-lessons-codex-Qx5FmU/.swarm/runs/1790912488692-240fbf8c/worktrees/writer'
+  actual: '/private/var/folders/g8/54q7r2m56nddtr0mp_6z9www0000gn/T/swarm-worktrees/3b0730e4df9db3a7-1790912488692-240fbf8c/writer'
+ok 543 - Codex output-validation failures preserve other completed declared files
+ok 544 - L1 mutation section warns without manifest mutants and still ships
+ok 545 - L2 derives GitHub origins, warns for mismatch and diagnoses every HTTP redirect
+ok 546 - L3 waits for a version tag, times out with warning, and supports disabling the wait
+
+not ok 599 - integrate --accept-blocked applies a blocked job's declared outputs, tags integrated-blocked, and carries the reason forward
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/lessons120-mutants.test.mjs:114:1'
+  error: |-
+    + actual - expected
+    + []
+    - [
+    -   'input.txt'
+    - ]
+  name: 'AssertionError'
+  expected:
+  actual:
+ok 600 - a fully complete run is tagged integrationStatus complete even with --accept-blocked passed
+not ok 601 - integrate --accept-blocked still refuses a run whose saved job outputs differ from the manifest
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/lessons120-mutants.test.mjs:141:1'
+
+not ok 780 - baseline ship() refuses on the first violation only, private-name-in-diff, before any push
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/ship-preflight.test.mjs:111:1'
+  error: |-
+    + actual - expected
+    -   'test-reads-git-ignored-path'
+  name: 'AssertionError'
+  expected:
+  actual:
+not ok 781 - --preflight reports all three violations in one report, never touching the remote
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/ship-preflight.test.mjs:128:1'
+  error: |-
+    + actual - expected
+
+not ok 786 - CLI: swarm ship --preflight --branch ... is accepted by the parser and prints the preflight report
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/ship-preflight.test.mjs:236:1'
+  error: |-
+    + actual - expected
+    -   'test-reads-git-ignored-path'
+  name: 'AssertionError'
+  expected:
+  actual:
+ok 787 - CLI: swarm ship --branch ... without --preflight still refuses on its first hit as before
+ok 788 - parsePrPayload: happy path returns exactly the four fields
