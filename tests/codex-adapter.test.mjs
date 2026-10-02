@@ -8,7 +8,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { CODEX_FLAGS, codexArgs, codexMessage, codexProfile, codexEnvironment, codexUsage, parseCodexReply, validateReadPaths, resolveReadPaths, git, CODEX_OUT_OF_REPO_DOCS_WAIVER_LINE } from '../tools/codex-adapter.mjs';
 import { NO_STASH_LINE, MUTANTS_BY_HAND_LINE } from '../tools/swarm-env.mjs';
-import { validateManifest, validateProject, runManifest, inspectRun, waitRun, integrateRun, doctor, cancelRun } from '../tools/swarm.mjs';
+import { validateManifest, validateProject, runManifest, readState, inspectRun, waitRun, integrateRun, doctor, cancelRun } from '../tools/swarm.mjs';
 import { preflightProject } from '../tools/preflight.mjs';
 
 const job = (overrides = {}) => ({ id: 'writer', agent: 'codex', model: 'test-model', prompt: 'Update the output and test it.', context: ['input.txt'], outputs: ['output.txt'], timeoutMs: 5000, ...overrides });
@@ -60,7 +60,7 @@ test('Codex argv always includes explicit model, all required flags, prompt and 
 test('codexMessage with no contract includes the blocked rule', () => {
   const j = job();
   const message = codexMessage(j, { contract: null });
-  assert.equal(message, `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(j.context)}. You may edit only these declared outputs: ${JSON.stringify(j.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.\nRead only the files in your context; other reads may be denied.\nIf a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\n${CODEX_OUT_OF_REPO_DOCS_WAIVER_LINE}${NO_STASH_LINE}\n${MUTANTS_BY_HAND_LINE}\nTASK:\n${j.prompt}\n`);
+  assert.equal(message, `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(j.context)}. You may edit only these declared outputs: ${JSON.stringify(j.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.\nRead only the files in your context; other reads may be denied.\nIf a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\n${CODEX_OUT_OF_REPO_DOCS_WAIVER_LINE}Manifest checks: none declared; run relevant tests. Run these; fix red before you return; report checksRun.\nReport checksRun as [{"name":"NAME","status":"passed|failed|not run"}]. Checks marked not run must stay not run; do not evade path restrictions or run orchestrator-only checks.\n${NO_STASH_LINE}\n${MUTANTS_BY_HAND_LINE}\nTASK:\n${j.prompt}\n`);
   const messageImplicit = codexMessage(j);
   assert.equal(messageImplicit, message);
 });
@@ -220,7 +220,15 @@ test('HEAD worktree runs with null stdin, collects only declared outputs, integr
   assert.deepEqual(await fs.readdir(path.join(root, state.jobs[0].workspace)), ['output.txt']);
   await removed(root, state);
   assert.equal((await inspectRun(root, state.id)).files[0].status, 'ready');
+  const stateFile = path.join(root, '.swarm/runs', state.id, 'state.json');
+  const before = JSON.parse(await fs.readFile(stateFile, 'utf8'));
+  for (const key of ['retries', 'retryReason']) assert.equal(Object.hasOwn(before.jobs[0], key), false);
+  const loaded = await readState(root, state.id);
+  assert.equal(loaded.jobs[0].retries, 0);
+  assert.equal(loaded.jobs[0].retryReason, null);
   assert.deepEqual((await integrateRun(root, state.id)).files, ['output.txt']);
+  const after = JSON.parse(await fs.readFile(stateFile, 'utf8'));
+  for (const key of ['retries', 'retryReason']) assert.equal(Object.hasOwn(after.jobs[0], key), false);
   assert.equal(await fs.readFile(path.join(root, 'other.txt'), 'utf8'), 'unassigned source');
   await assert.rejects(fs.access(path.join(root, 'extra.txt')));
 });
@@ -253,17 +261,18 @@ for (const keep of [false, true]) test(`Codex creates scratch before spawn, expo
   else await assert.rejects(fs.access(scratchDir), { code: 'ENOENT' });
 });
 
-for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-output', 'symlink-output', 'launch-error']) test(`Codex removes worktree and blocks proposals after ${scenario}, except a malformed envelope with no worktree evidence, which is kept (lessons #41, #64)`, async t => {
+for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-output', 'missing-output-blip', 'symlink-output', 'launch-error']) test(`Codex removes worktree and blocks proposals after ${scenario}, except a malformed envelope with no worktree evidence, which is kept (lessons #41, #64)`, async t => {
   const root = await fixture(t);
-  let launched = false;
+  let launched = false, launches = 0;
   const controller = new AbortController();
-  const script = scenario === 'failed' ? 'process.exit(7)' : scenario === 'malformed' ? `fs.writeFileSync(result,'bad json')` : scenario === 'missing-output' ? `fs.unlinkSync('output.txt');fs.writeFileSync(result,${JSON.stringify(envelope)})` : scenario === 'symlink-output' ? `fs.unlinkSync('output.txt');fs.symlinkSync('other.txt','output.txt');fs.writeFileSync(result,${JSON.stringify(envelope)})` : 'setInterval(()=>{},1000)';
+  const script = scenario === 'missing-output-blip' ? `process.stderr.write('workspace routing discovery failed\\n');fs.writeFileSync(result,${JSON.stringify(JSON.stringify({ files_changed: ['output9001.txt'], notes: [] }))})` : scenario === 'failed' ? 'process.exit(7)' : scenario === 'malformed' ? `fs.writeFileSync(result,'bad json')` : scenario === 'missing-output' ? `fs.unlinkSync('output.txt');fs.writeFileSync(result,${JSON.stringify(envelope)})` : scenario === 'symlink-output' ? `fs.unlinkSync('output.txt');fs.symlinkSync('other.txt','output.txt');fs.writeFileSync(result,${JSON.stringify(envelope)})` : 'setInterval(()=>{},1000)';
   const signals = [];
-  const state = await runManifest(root, manifest({ timeoutMs: scenario === 'timeout' ? 100 : 5000 }), {
+  const state = await runManifest(root, manifest({ timeoutMs: scenario === 'timeout' ? 100 : 5000, ...(scenario === 'missing-output-blip' ? { outputs: ['output9001.txt'] } : {}) }), {
     platform: 'darwin', signal: controller.signal, env: { ...process.env, SWARM_KEEP_TMP: '0' },
     killImpl: (pid, signal) => { signals.push({ pid, signal }); return process.kill(pid, signal); },
     spawnImpl: (...args) => {
       launched = true;
+      launches++;
       if (scenario === 'launch-error') throw Error('fake launch error');
       const child = fake(script)(...args);
       if (scenario === 'cancelled') setTimeout(() => controller.abort(), 40);
@@ -271,6 +280,15 @@ for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-
     },
   });
   assert.equal(launched, true);
+  assert.equal(launches, scenario === 'missing-output-blip' ? 2 : 1);
+  if (scenario === 'missing-output-blip') {
+    assert.equal(state.jobs[0].retries, 1);
+    assert.equal(state.jobs[0].retryReason, 'codex-blip: workspace routing discovery failed');
+    assert.match(state.jobs[0].error, /Missing output.*output9001.txt/);
+    const saved = JSON.parse(await fs.readFile(path.join(root, '.swarm/runs', state.id, 'state.json'), 'utf8'));
+    assert.equal(saved.jobs[0].retries, 1);
+    assert.equal(saved.jobs[0].retryReason, state.jobs[0].retryReason);
+  }
   assert.equal(state.jobs[0].scratchDir, path.join(os.tmpdir(), 'swarm-codex', `${state.id}-writer`));
   await assert.rejects(fs.access(state.jobs[0].scratchDir), { code: 'ENOENT' });
   assert.equal(state.jobs[0].status, ['timeout', 'cancelled'].includes(scenario) ? scenario : 'failed');

@@ -15,10 +15,10 @@ or another agent with file and command access. The worker adapter does not
 need to match the orchestrator. Paste this into your agent at project start:
 
 ```text
-Use Project Swarm 1.41.0 for this project. Read docs/kickoff.md in the toolkit
+Use Project Swarm 1.42.0 for this project. Read docs/kickoff.md in the toolkit
 and perform its kickoff workflow. Ask me up front which model providers may
 receive project code and what spend ceiling applies; wait before model calls.
-Install from tag v1.41.0 in ~/.project-swarm, run tools/install.mjs --user,
+Install from tag v1.42.0 in ~/.project-swarm, run tools/install.mjs --user,
 link this project, run doctor, validate and run the read-only and writing smoke
 jobs, inspect and integrate the reviewed writing output. Read the installed
 SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
@@ -35,6 +35,8 @@ Cursor also discovers `.cursor/rules/project-swarm.mdc`; other agents can
 follow the linked project's AGENTS.md or CLAUDE.md pointer.
 See the [anonymized field report](docs/field-report.md) for evidence and limits.
 The [lessons file](docs/lessons.md) is the loop: every real-run friction becomes an entry plus, where possible, a tool check and a test.
+
+`swarm ticket MANIFEST --pr PAYLOAD` runs the guarded pipeline through ship, stops at the first red stage, and resumes with `--resume RUN`. Use `swarm scaffold job` to generate validated job manifests and `swarm scaffold pr` for PR payloads with an explicit mutation stub that must be replaced with evidence before shipping a required mutation section.
 
 `swarm lesson add` captures clock-stamped, private-safe evidence and routes its rule into an existing worker skill or gotchas; tool lessons stay queued. Use `lesson list` and `lesson set` to track the queue, `lesson manifest` to declare a bounded fix with a regression test, and `lesson check` to audit stale lessons and installed test files. `lesson publish --version V` appends safe shipped entries to the public archive, while `lesson import` converts legacy rows idempotently.
 
@@ -228,6 +230,8 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 | `check-pins` | Find stale internal version pins against what a project actually vendors |
 | `ship` | Push reviewed work, create/update its PR, wait for CI, merge when authorized |
 | `go` | Chain run, integration, optional commit and ship |
+| `ticket MANIFEST --pr PAYLOAD` | Run, inspect, integrate, check, commit bounded files, and ship; resume with `--resume RUN` |
+| `scaffold job` / `scaffold pr` | Generate validated job manifests or PR payloads with explicit mutation stubs |
 | `version` / `update` | Inspect or upgrade the shared install; never use `--root` |
 | `onboard` | Explain workflow and local provider configuration |
 
