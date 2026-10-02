@@ -277,6 +277,23 @@ async function importLessons(root, options, privacy) {
     }
     rows.push(row); imported.push(row.id);
   }
+  if (options.dryRun) {
+    const skippedPrivate = skipped.filter(item => item?.reason === 'private-name');
+    const summary = {
+      status: 'ok', dryRun: true, imported: imported.length,
+      padded: diagnostics.padded.length, overflow: diagnostics.overflow.length,
+      skippedPrivate: skippedPrivate.length,
+    };
+    if (options.verbose) {
+      const accepted = new Set(imported), privateIds = new Set(skippedPrivate.map(item => item.id));
+      const padded = new Set(diagnostics.padded), overflow = new Set(diagnostics.overflow);
+      summary.rows = incoming.filter(row => accepted.has(row.id) || privateIds.has(row.id)).map(row => ({
+        id: row.id,
+        verdict: privateIds.has(row.id) ? 'skipped-private' : overflow.has(row.id) ? 'overflow' : padded.has(row.id) ? 'padded' : 'import',
+      }));
+    }
+    return json(summary);
+  }
   // Coordinator-approved provisional interface: writeLessons owns the writer lock;
   // this read/merge/write sequence has no shared read lock. Repeated ids are skipped.
   if (imported.length) await writeLessons(root, rows, { ...privacy, storeFile: options.storeFile });

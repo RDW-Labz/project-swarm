@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.43.0
+
+- `integrate RUN --jobs <id,...>` now accepts named jobs through the CLI, with either value form before or after the run id. (lesson 324)
+- `validate` refuses oversized existing single-request API outputs with `output-cap-exceeded`; job `outputCapBytes` or config `outputCap` override the 61440-byte total and 15360-byte per-file defaults, while shell agents remain exempt. (lesson 325)
+- API requests record the last provider `finishReason` in job state, including length retries; `inspect` reports it for incomplete jobs. (lesson 325)
+- `lesson import --dry-run` previews lenient imports and private-row skips without writing; `--verbose` adds per-row verdicts. (lesson 326)
+
 ## 1.42.0
 
 - `ship --wait-required-only` waits for protected required checks while optional checks continue; ordinary ship and unprotected branches retain the full wait.

@@ -2220,3 +2220,44 @@ rule is enforced or documented.
     standard temp-directory variables pointing at it, and the directory is
     removed once the job finishes unless an explicit keep-temp override is
     set. Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.
+199. **A failed worker discarded the evidence needed to explain its missing outputs.**
+    A shell worker exited without its declared files, leaving only a byte
+    count instead of the diagnostic text. Rule: unsuccessful jobs retain
+    their output streams, and transient connection failures may retry only
+    before any output changes. Enforcement: shell adapters save both streams,
+    inspection shows failed stderr tails, and a recognized connection failure
+    gets one retry when outputs are unchanged; shipped in 1.42.0.
+    Regression coverage is in `tests/field-lesson-t81-adapters.test.mjs`.
+200. **A check that could not start was mistaken for a pre-existing failure.**
+    Missing dependencies prevented checks from executing on both the current
+    worktree and its base. Rule: an unavailable check environment is an
+    environment error, never evidence of an existing code failure.
+    Enforcement: missing executables refuse as `check-env-missing`, with
+    dependency setup guidance and explicit `--sync` preparation; shipped
+    in 1.42.0. Regression coverage is in
+    `tests/field-lesson-t81-pipeline.test.mjs`.
+201. **A documented selection flag never reached its working implementation.**
+    Direct function tests passed while the command-line parser rejected the
+    advertised option. Rule: every public flag is tested through the real
+    argument path, including command-specific parsing. Enforcement:
+    `integrate` accepts `--jobs <id,...>` and its equals form before or
+    after the run argument, and tests check documented integration flags.
+    Regression coverage is in `tests/field-lessons-batch-aa-core.test.mjs`.
+202. **Whole-file responses truncated after output requirements exceeded the request budget.**
+    Existing file sizes exposed requests that could not return their complete
+    outputs, but validation ignored those bytes and job state omitted the
+    provider's stop reason. Rule: bound existing outputs before single-request
+    dispatch and preserve the last response's completion reason.
+    Enforcement: validation applies configurable total and per-file byte caps
+    with `output-cap-exceeded`, exempts agents that edit in place, and stores
+    `finishReason` for inspection of incomplete jobs, including retries.
+    Regression coverage is in `tests/field-lessons-batch-aa-core.test.mjs`.
+203. **A hand-written table needed a preview before its irregular rows were imported.**
+    Short rows, overflow cells, continuations, and private content exposed
+    gaps that uniform examples missed. Rule: converters cover real input
+    shapes, skip private rows individually, and offer a preview without writes.
+    Enforcement: `lesson import --dry-run` shares the lenient parser and
+    privacy checks with import, reports counts, and adds per-row verdicts
+    with `--verbose` while preserving every existing file and leaving a
+    missing store absent. Regression coverage is in
+    `tests/field-lessons-batch-aa-lessons.test.mjs`.
