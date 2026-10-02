@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.44.0
+
+- `scaffold job --command` adds command handler modules to context; `validate` warns `command-handler-not-in-job` when a command named in a job prompt has a handler in neither context nor outputs. (lesson 327)
+- `integrate --accept-blocked` excludes a blocked job's unwritten outputs, and `integrate --jobs` unselected jobs' outputs, from missing-output and undeclared-delete checks; a blocked job's written outputs still integrate, and one with no writes contributes no files or refusals. (lesson 328)
+- `ship` and `integrate` strip check-output lines whose paths start with `.swarm/` from pass/fail decisions and report one `check-hit-swarm-dir` warning with the count; `run` warns `swarm-dir-not-ignored` once when the root eslint/vitest/pytest config never names `.swarm`. Job worktrees stay under `.swarm/runs/<id>/worktrees/`. (lesson 330)
+- `ship` preflight reports `git-ignored-fixture` only for referenced paths that exist and are git-ignored; absent runtime paths are exempt, and `--exempt git-ignored-fixture:<file>=<reason>` remains available. (lesson 331)
+- `validate` warns `max-output-below-model-default` when an API/OpenRouter job explicitly sets `maxOutputTokens` below its model default, naming both values, from the same default table the API adapters use. (lesson 332)
+
 ## 1.43.0
 
 - `integrate RUN --jobs <id,...>` now accepts named jobs through the CLI, with either value form before or after the run id. (lesson 324)
