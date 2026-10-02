@@ -346,11 +346,15 @@ describe('L325 finishReason', () => {
       'console.log(JSON.stringify({status: result.status, finishReason: state.jobs[0].finishReason}));',
     ].join('\n'));
     assert.equal(parsed(result).finishReason, 'content_filter');
-    const inspected = parsed(await f.cli('inspect', 'run-0000'));
+    const inspectResult = await f.cli('inspect', 'run-0000');
+    assert.equal(inspectResult.code, 1, inspectResult.stderr + inspectResult.stdout);
+    const inspected = JSON.parse(inspectResult.stdout);
     assert.equal(inspected.jobs[0].finishReason, 'content_filter');
     const state = JSON.parse(await f.read('.swarm/runs/run-0000/state.json'));
     delete state.jobs[0].finishReason;
     await f.write('.swarm/runs/run-0000/state.json', json(state));
-    assert.equal(parsed(await f.cli('inspect', 'run-0000')).jobs[0].finishReason, null);
+    const legacyInspectResult = await f.cli('inspect', 'run-0000');
+    assert.equal(legacyInspectResult.code, 1, legacyInspectResult.stderr + legacyInspectResult.stdout);
+    assert.equal(JSON.parse(legacyInspectResult.stdout).jobs[0].finishReason, null);
   });
 });
