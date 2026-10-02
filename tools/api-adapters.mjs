@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Tool-free, one-request workers. Transport injection is for tests, never manifests.
 import { randomBytes } from 'node:crypto';
-import { OPENROUTER_ENDPOINT, OPENROUTER_KEY_ENV, openRouterKeyItem, readOpenRouterKey, providerPolicy, assertRequestBody, assertBookkeepingOnly, emptyOutputsContentRefusal, fetchPricing, worstCaseUsd, ledgerPath, readLedger, spentSoFar, assertWithinCaps, appendLedger, assertCompleteChatResponse, describeIncompleteChatResponse, isEmptyLengthTruncation, defaultMaxOutputTokens, OpenRouterError } from './openrouter.mjs';
+import { OPENROUTER_ENDPOINT, OPENROUTER_KEY_ENV, openRouterKeyItem, readOpenRouterKey, providerPolicy, assertRequestBody, assertBookkeepingOnly, emptyOutputsContentRefusal, fetchPricing, worstCaseUsd, ledgerPath, readLedger, spentSoFar, assertWithinCaps, appendLedger, assertCompleteChatResponse, describeIncompleteChatResponse, isEmptyLengthTruncation, defaultMaxOutputTokens, responseFinishReason, OpenRouterError } from './openrouter.mjs';
 import { loadLocalConfig, resolveConfigPath } from './local-config.mjs';
 export const API_AGENTS = ['openai', 'gemini', 'ollama', 'lambda', 'openrouter'];
 const MAX_RESPONSE = 16 * 1024 * 1024;
@@ -239,14 +239,14 @@ export function inlineContext(context, { byteCap = CONTEXT_BYTE_CAP } = {}) {
   return { inlined, contextInlined };
 }
 
-export async function executeApi(job, context, { fetchImpl = fetch, env = process.env, signal, cancelled = async () => false, readKey = readOpenRouterKey, now = () => new Date(), skillsBlock = '', attachedSkills = [] } = {}) {
-  const controller = new AbortController(); let reason = null;
+export async function executeApi(job, context, { fetchImpl = fetch, env = process.env, signal, cancelled = async () => false, readKey = readOpenRouterKey, now = () => new Date(), skillsBlock = '', attachedSkills = [], onFinishReason = async () => {} } = {}) {
+  const controller = new AbortController(); let reason = null, finishReason = null;
   const abort = why => { if (!reason) { reason = why; controller.abort(); } };
   const onAbort = () => abort('cancelled');
   let timer, poll;
   const { inlined: cappedContext, contextInlined } = inlineContext(context);
   try {
-    if (signal?.aborted || await cancelled()) return { status: 'cancelled', error: 'cancelled', files: [], stdout: '', stderr: '', response: '' };
+    if (signal?.aborted || await cancelled()) return { status: 'cancelled', error: 'cancelled', finishReason, files: [], stdout: '', stderr: '', response: '' };
     signal?.addEventListener('abort', onAbort, { once: true });
     if (signal?.aborted) { abort('cancelled'); fail('Request cancelled'); }
     timer = setTimeout(() => abort('timeout'), job.timeoutMs ?? 300000);
@@ -283,7 +283,17 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       assertWithinCaps({ worstUsd, spent: spentSoFar(readLedger(ledger), { jobId: job.id, day: stamp.toISOString().slice(0, 10) }) });
       spend = { ledger, worstUsd, stamp };
     }
+    const credentials = [...['OPENAI_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OLLAMA_API_KEY', 'LAMBDA_API_KEY', OPENROUTER_KEY_ENV].map(key => env[key]), job.agent === 'openrouter' ? config.key : null].filter(value => typeof value === 'string' && value.length > 0);
+    const recordFinishReason = async bodyJson => {
+      const next = responseFinishReason(bodyJson);
+      // Metadata is retained before content validation, so apply the same credential guard here.
+      if (next !== null && credentials.some(key => next.includes(key))) fail('Provider response contained a credential; output discarded');
+      finishReason = next;
+      await onFinishReason(finishReason);
+    };
     const sendRequest = async () => {
+      finishReason = null;
+      await onFinishReason(finishReason);
       try { return await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), redirect: 'error', signal: controller.signal }); }
       catch { fail('Provider transport failed; check endpoint, connectivity, and redirect policy'); }
     };
@@ -291,6 +301,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     let result, retriedForLength = false;
     try {
       let bodyJson = await readJson(response);
+      await recordFinishReason(bodyJson);
       // Field lesson #226: `finish_reason: "length"` with literally no reply text gets one
       // automatic retry at double the limit, itself re-checked against the job's own $ cap first —
       // never a second spend the cap would have refused outright the first time.
@@ -301,6 +312,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
         body.max_tokens = doubledLimit;
         response = await sendRequest();
         bodyJson = await readJson(response);
+        await recordFinishReason(bodyJson);
         retriedForLength = true;
       }
       result = extract(job.agent, bodyJson);
@@ -314,7 +326,6 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     }
     if (reason || signal?.aborted || await cancelled()) fail('Request cancelled');
     // Raw responses/headers/errors are never logged. Reject echoed auth before saving any output.
-    const credentials = [...['OPENAI_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OLLAMA_API_KEY', 'LAMBDA_API_KEY', OPENROUTER_KEY_ENV].map(key => env[key]), job.agent === 'openrouter' ? config.key : null].filter(value => typeof value === 'string' && value.length > 0);
     if (credentials.some(key => key.length >= 8 && JSON.stringify(result).includes(key))) fail('Provider response contained a credential; output discarded');
     let envelope; try { envelope = JSON.parse(result.text); } catch { fail('Worker returned malformed structured output'); }
     // Row #217: a worker that parsed to a bare JSON `null` (no envelope at all) never counts as
@@ -335,12 +346,12 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     if (credentials.some(key => retainedStrings.some(value => value.includes(key)))) fail('Provider response contained a credential; output discarded');
     // Lesson 295: Include result object as last JSON line in response.txt (via response field)
     const responseText = envelope.result ? `${envelope.summary}\n${JSON.stringify(envelope.result)}\n` : envelope.summary;
-    return { status: 'complete', error: null, files: envelope.files, edits, contextInlined, response: responseText, actualModel: result.actualModel, usage: result.usage, modelUsage: null, costUsd: job.agent === 'openrouter' && Number.isFinite(Number(result.usage?.cost)) ? Number(result.usage.cost) : null, exitCode: null, stderr: '', ...(retriedForLength ? { retriedForLength: true } : {}), stdout: JSON.stringify({ type: 'result', provider: job.agent, status: 'complete', actualModel: result.actualModel, usage: result.usage, ...(result.provider ? { upstream: result.provider } : {}) }) + '\n' };
+    return { status: 'complete', error: null, finishReason, files: envelope.files, edits, contextInlined, response: responseText, actualModel: result.actualModel, usage: result.usage, modelUsage: null, costUsd: job.agent === 'openrouter' && Number.isFinite(Number(result.usage?.cost)) ? Number(result.usage.cost) : null, exitCode: null, stderr: '', ...(retriedForLength ? { retriedForLength: true } : {}), stdout: JSON.stringify({ type: 'result', provider: job.agent, status: 'complete', actualModel: result.actualModel, usage: result.usage, ...(result.provider ? { upstream: result.provider } : {}) }) + '\n' };
   } catch (error) {
     // Field lesson #285: a truncated-response error otherwise gives no sense of scale; the prompt
     // size rides along so a too-small maxOutputTokens is provable without guessing.
     const message = reason || (error instanceof AdapterError || error instanceof OpenRouterError ? error.message : 'Provider processing failed; details omitted to protect credentials');
-    const result = { status: reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : 'failed', error: TRUNCATION_RE.test(message) ? `${message} (prompt ${job.prompt.length} chars)` : message, files: [], edits: [], contextInlined, stdout: '', stderr: '', response: '', actualModel: null, usage: null, modelUsage: null, costUsd: null, exitCode: null };
+    const result = { finishReason, status: reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : 'failed', error: TRUNCATION_RE.test(message) ? `${message} (prompt ${job.prompt.length} chars)` : message, files: [], edits: [], contextInlined, stdout: '', stderr: '', response: '', actualModel: null, usage: null, modelUsage: null, costUsd: null, exitCode: null };
     // Lesson 296: Include invalidResponseText for validation errors so swarm can write response-invalid.txt
     if (error instanceof AdapterError && error.invalidResponseText) {
       result.invalidResponseText = error.invalidResponseText;

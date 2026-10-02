@@ -51,6 +51,16 @@ const CONTEXT_TOTAL_CAP = 200000;
 // Row #185: a declared output at or under this size on disk is unlikely to hit an API worker's
 // own output-token limit when asked for whole; larger warns toward the `edits` form instead.
 const LARGE_OUTPUT_WHOLE_BYTES = 20000;
+const OUTPUT_CAP_BYTES = Object.freeze({ total: 61440, perFile: 15360 });
+function validateOutputCap(cap, label) {
+  if (!cap || typeof cap !== 'object' || Array.isArray(cap) ||
+      Object.keys(cap).some(key => !['total', 'perFile'].includes(key)) ||
+      !['total', 'perFile'].every(key => Number.isSafeInteger(cap[key]) && cap[key] > 0)) {
+    throw Object.assign(new Error(`invalid-output-cap: ${label} requires positive integer total and perFile`), { code: 'invalid-output-cap' });
+  }
+  return cap;
+}
+
 const PROGRESS_INTERVAL = 1000;
 const CLI_AGENTS = ['claude', 'codex', ...EXTRA_CLI_AGENTS];
 export const AGENTS = Object.freeze([...CLI_AGENTS, ...API_AGENTS]);
@@ -1013,6 +1023,7 @@ export function validateManifest(manifest) {
     // local config's privateData.paths), this is only the field's own shape.
     if (job.privateData !== undefined && typeof job.privateData !== 'boolean') fail(`Job ${job.id}: privateData must be true or false`);
     if (job.maxOutputTokens !== undefined && (!API_AGENTS.includes(job.agent) || !Number.isInteger(job.maxOutputTokens) || job.maxOutputTokens < 256 || job.maxOutputTokens > 32768)) fail('maxOutputTokens is API-only and must be 256–32768');
+    if (API_AGENTS.includes(job.agent) && job.outputCapBytes !== undefined) validateOutputCap(job.outputCapBytes, `Job ${job.id}: outputCapBytes`);
     // Field lesson #231: a job cap enforced in code, never by prompt text alone; a job that
     // declares maxCredits with no readable creditPreflight refuses at validate/run time, before
     // any spend, rather than trusting a worker's own step to stop itself.
@@ -1094,7 +1105,7 @@ export function validateManifest(manifest) {
       if (job.outputs.length) fail('a web job must be read-only (no outputs)');
     }
     // Unknown command/provider fields cannot create an execution path.
-    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData'].includes(key)) fail(`Unknown job field: ${key}`);
+    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes'].includes(key)) fail(`Unknown job field: ${key}`);
   }
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
   for (const job of manifest.jobs) for (const afterId of job.after ?? []) if (!ids.has(afterId.toLowerCase())) fail(`Job ${job.id} after names unknown job ${afterId}`);
@@ -2125,7 +2136,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
               const providerMessage=extraCliMessage(job,context);
               await write(root,`${directory}/${job.id}/message.txt`,providerMessage,true);
               result=await execute(job,workspaceRoot,providerMessage,{spawnImpl,signal,cancelled,killImpl,onOutput:tracker.onOutput});
-            } else result=await executeApi(job, context, { fetchImpl, env, signal, cancelled, skillsBlock: skillsBlockText });
+            } else result=await executeApi(job, context, { fetchImpl, env, signal, cancelled, skillsBlock: skillsBlockText, onFinishReason: async finishReason => { record.finishReason = finishReason; await queueSave(); } });
             // Adapter validates the entire exact allowlist before any workspace write.
             if (result.status === 'complete') {
               for (const file of result.files) await write(workspaceRoot, file.path, file.content, false, record.baseModes[file.path]);
@@ -2290,7 +2301,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         // Field lesson #201: a setup failure never spawns the worker; `setupFailed` rides along on
         // the job record so inspect can name the phase, instead of an empty error/result/cost that
         // reads identically to a worker that ran and produced nothing.
-        Object.assign(record, { ...(result.code ? { code: result.code, ...(result.path ? { path: result.path } : {}), ...(result.stream ? { stream: result.stream } : {}) } : {}), permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, ...(result.costSource ? { costSource: result.costSource } : {}), ...(result.costWarning ? { costWarning: result.costWarning } : {}), finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt), ...(result.setupFailed ? { setupFailed: true } : {}), ...(result.status === 'timeout' ? { lastActivity: result.lastActivity ?? null } : {}), ...(result.contextInlined ? { contextInlined: result.contextInlined } : {}), ...(result.retriedForLength ? { retriedForLength: true } : {}) });
+        Object.assign(record, { ...(result.code ? { code: result.code, ...(result.path ? { path: result.path } : {}), ...(result.stream ? { stream: result.stream } : {}) } : {}), ...(API_AGENTS.includes(job.agent) ? { finishReason: result.finishReason ?? null } : {}), permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, ...(result.costSource ? { costSource: result.costSource } : {}), ...(result.costWarning ? { costWarning: result.costWarning } : {}), finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt), ...(result.setupFailed ? { setupFailed: true } : {}), ...(result.status === 'timeout' ? { lastActivity: result.lastActivity ?? null } : {}), ...(result.contextInlined ? { contextInlined: result.contextInlined } : {}), ...(result.retriedForLength ? { retriedForLength: true } : {}) });
         // Field lesson #286: persisted once, at the root (survives across runs, unlike
         // .swarm/runs/<id>/), so the next dispatch refuses instead of spending on the same outage.
         if (result.status === 'provider-limit') await jsonWrite(root, '.swarm/claude-provider-limit.json', { resetsAt: result.resetsAt, detectedAt: new Date().toISOString() });
@@ -3680,6 +3691,23 @@ export function modelRouteChangeNoSmokeTestWarning(manifest, job) {
 
 export async function validateProject(root, manifest, { exec = execFileAsync, liveDir, isAlive, env = process.env, home = os.homedir() } = {}) {
   root=await fs.realpath(root);validateManifest(manifest);
+  // Lesson 325: existing outputs must fit a single-request API worker before dispatch.
+  const capConfig = loadLocalConfig({ env, home });
+  for (const job of manifest.jobs) {
+    if (!API_AGENTS.includes(job.agent) || job.shell === true) continue;
+    const configuredCap = capConfig.outputCap === undefined ? OUTPUT_CAP_BYTES : validateOutputCap(capConfig.outputCap, 'outputCap');
+    const cap = job.outputCapBytes ?? configuredCap;
+    const sizes = [];
+    for (const file of job.outputs) {
+      const target = await safePath(root, file);
+      let info;
+      try { info = await fs.stat(target); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      if (info.isFile()) sizes.push({ file, bytes: info.size });
+    }
+    const total = sizes.reduce((sum, entry) => sum + entry.bytes, 0);
+    const offending = sizes.filter(entry => entry.bytes > cap.perFile || (total > cap.total && entry.bytes > 0));
+    if (offending.length) throw Object.assign(new Error(`output-cap-exceeded: Job ${job.id}: total ${total} bytes (cap ${cap.total}); perFile cap ${cap.perFile}; ${offending.map(entry => `${entry.file}: ${entry.bytes} bytes`).join(', ')}; route this job to agent codex (edits in place) or split the outputs`), { code: 'output-cap-exceeded' });
+  }
   await privateNamesDispatchGuard(root, manifest, { exec, env, home });
   const liveWarning = await liveServiceCheckoutWarning(root, { env, home });
   const jobs=[], warnings=[...(liveWarning ? [liveWarning.message] : []), ...tmpToolPathWarnings(manifest), ...await sharedOutputAcrossOpenJobsWarnings(root, manifest, { liveDir, isAlive }), ...shellSandboxDeniedCheckWarnings(manifest, { env, home }), ...sharedRootFullSuiteWarnings(manifest), ...await cheapTierNotConfiguredModelWarnings(manifest, { env, home }), ...await checkPathMissingWarnings(manifest, { env })];
@@ -3939,7 +3967,7 @@ export async function inspectRun(root,id,{spawnImpl=spawn,programOnPathImpl=prog
     // Field lesson #201: a setup failure never spawns the worker (empty error/result/cost, exactly
     // like a job that never ran) — inspect names the phase and the setup log's own tail here.
     const setupErrorTail=record.setupFailed?(await bytesAt(root,`.swarm/runs/${id}/${job.id}/setup.log`,true))?.toString('utf8').split('\n').slice(-20).join('\n')??null:null;
-    jobs.push({...await failedStderrTail(root,id,job,record),id:job.id,agent:job.agent,model:job.model??null,...(job.agent==='codex'&&record.scratchDir?{scratchDir:record.scratchDir}:{}),...(job.shell===true?{shell:true,checksRun:Array.isArray(parsedResult?.checksRun)?parsedResult.checksRun:null,proxyRefused:record.proxyRefused??[],loopbackDenied:record.loopbackDenied??[]}:{}),tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,...(record.agentError?{agentError:record.agentError}:{}),...(record.resultMissing?{resultMissing:true}:{}),...(record.setupFailed?{phase:'setup',setupError:setupErrorTail}:{}),result:displayResult(parsedResult),transcript:job.privateData===true?'withheld':'saved',costUsd:typeof record.costUsd==='number'?record.costUsd:null,...(record.costSource==='estimated-from-transcript'?{costSource:record.costSource}:{}),costPer1kOutputTokens:costPer1kOutputTokens(record),tokens:jobTokens(record),modelsSeen:record.modelsSeen??[],modelMismatch:record.modelMismatch??false});
+    jobs.push({...await failedStderrTail(root,id,job,record),id:job.id,agent:job.agent,model:job.model??null,...(job.agent==='codex'&&record.scratchDir?{scratchDir:record.scratchDir}:{}),...(job.shell===true?{shell:true,checksRun:Array.isArray(parsedResult?.checksRun)?parsedResult.checksRun:null,proxyRefused:record.proxyRefused??[],loopbackDenied:record.loopbackDenied??[]}:{}),tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,...(record.status!=='complete'?{finishReason:record.finishReason??null}:{}),...(record.agentError?{agentError:record.agentError}:{}),...(record.resultMissing?{resultMissing:true}:{}),...(record.setupFailed?{phase:'setup',setupError:setupErrorTail}:{}),result:displayResult(parsedResult),transcript:job.privateData===true?'withheld':'saved',costUsd:typeof record.costUsd==='number'?record.costUsd:null,...(record.costSource==='estimated-from-transcript'?{costSource:record.costSource}:{}),costPer1kOutputTokens:costPer1kOutputTokens(record),tokens:jobTokens(record),modelsSeen:record.modelsSeen??[],modelMismatch:record.modelMismatch??false});
     const workspaceRoot=await safePath(root,`.swarm/workspaces/${id}/${job.id}`,{internal:true});
     // Field lesson 128: the same invented-hash scan integrate runs, surfaced here before any file
     // is actually written, so a made-up sha is visible at inspect time too.
@@ -4073,7 +4101,7 @@ export async function inspectResults(root, id) {
       }
       outputs.push(info);
     }
-    jobs.push({ ...await failedStderrTail(root, id, job, record), id: record.id, status: record.status, ...(job.shell === true ? { shell: true, checksRun: Array.isArray(parsed?.checksRun) ? parsed.checksRun : null } : {}), ...(record.agentError ? { agentError: record.agentError } : {}), ...(record.resultMissing ? { resultMissing: true } : {}), model: record.model ?? null, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, ...(record.costSource === 'estimated-from-transcript' ? { costSource: record.costSource } : {}), tokens: jobTokens(record), result: resultSource === 'file' ? parsed : displayResult(parsed), resultSource, outputs, transcript: job.privateData === true ? 'withheld' : 'saved' });
+    jobs.push({ ...await failedStderrTail(root, id, job, record), id: record.id, status: record.status, ...(record.status !== 'complete' ? { finishReason: record.finishReason ?? null } : {}), ...(job.shell === true ? { shell: true, checksRun: Array.isArray(parsed?.checksRun) ? parsed.checksRun : null } : {}), ...(record.agentError ? { agentError: record.agentError } : {}), ...(record.resultMissing ? { resultMissing: true } : {}), model: record.model ?? null, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd: typeof record.costUsd === 'number' ? record.costUsd : null, ...(record.costSource === 'estimated-from-transcript' ? { costSource: record.costSource } : {}), tokens: jobTokens(record), result: resultSource === 'file' ? parsed : displayResult(parsed), resultSource, outputs, transcript: job.privateData === true ? 'withheld' : 'saved' });
   }
   return { runId: id, status: state.status, tokens: tokensTotal(jobs.map(job => job.tokens)), costNotReported: costNotReported(jobs), warnings, jobs };
 }
@@ -4946,7 +4974,7 @@ async function main() {
     }
     root=args[rootIndex+1];args.splice(rootIndex,2);
   }
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | squash --branch BRANCH [--base REF] | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list [--queued|--shipped] [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE]\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE);return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | squash --branch BRANCH [--base REF] | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list [--queued|--shipped] [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE);return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
@@ -5276,7 +5304,7 @@ async function main() {
   }
   const probeLocal=args[0]==='doctor'&&args.includes('--probe-local');
   if(probeLocal)args.splice(args.indexOf('--probe-local'),1);
-  const [command,argument,...rest]=args;
+  let [command,argument,...rest]=args;
   // monitor keeps its JSON snapshot as the default; --view/--watch are read-only human rendering
   // extras consumed here so the generic argument-count check below still fails on anything else.
   let view=false,watchSeconds=null;
@@ -5296,11 +5324,17 @@ async function main() {
   }
   // integrate's checks/mutants flags are read-only selection of whether/how checks run; strip
   // them here so the generic argument-count check below still fails on anything else.
-  let noChecks=false,requireChecks=false,acceptFailedChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag,acceptBlocked=false,salvage=false,acceptDeviation=false,acceptDropped=false,salvageDropped=false;
+  let noChecks=false,requireChecks=false,acceptFailedChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag,acceptBlocked=false,salvage=false,acceptDeviation=false,acceptDropped=false,salvageDropped=false,integrateJobs;
   if(command==='integrate'){
-    const flags=rest.splice(0,rest.length);
+    const flags=[...(argument === undefined ? [] : [argument]),...rest.splice(0,rest.length)];
+    argument=undefined;
     for(let index=0;index<flags.length;index++){
       const flag=flags[index];
+      if(flag==='--jobs'||flag.startsWith('--jobs=')){
+        const value=flag==='--jobs'?flags[++index]:flag.slice('--jobs='.length);
+        if(integrateJobs!==undefined||typeof value!=='string'||!value.split(',').every(id=>ID.test(id)))fail('--jobs requires a comma-separated list of job ids, once');
+        integrateJobs=value.split(',');continue;
+      }
       if(flag==='--no-flake-check'){noFlakeCheck=true;continue;}
       if(flag==='--no-checks'){noChecks=true;continue;}
       // Field lesson #203: --require-checks is kept as an accepted no-op alias for checks — that
@@ -5322,6 +5356,7 @@ async function main() {
       if(flag==='--salvage-dropped'){salvageDropped=true;continue;}
       rest.push(flag);
     }
+    argument=rest.shift();
     if(acceptDropped&&salvageDropped)fail('--accept-dropped and --salvage-dropped cannot be combined');
     if(noChecks&&requireChecks)fail('--no-checks and --require-checks cannot be combined');
     if(noChecks&&salvage)fail('--no-checks and --salvage cannot be combined');
@@ -5506,7 +5541,7 @@ async function main() {
       ship: (goRoot,id,goShipFlags)=>shipRun(goRoot,id,goShipFlags),
     });
   }
-  else result=await integrateRun(root,argument,{noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptDropped,salvageDropped});
+  else result=await integrateRun(root,argument,{noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptDropped,salvageDropped,jobs:integrateJobs});
   // Field lesson #203: a failed check at integrate used to be a quiet field (`status: "integrated"`,
   // exit 0) unless the coordinator remembered --require-checks; refusing (or, with the escape
   // hatch, at least saying so loudly) is now the default. --require-checks stays an accepted no-op
