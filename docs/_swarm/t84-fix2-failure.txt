@@ -1,0 +1,13 @@
+not ok 198 - L332 model output defaults
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/field-lessons-batch-ab-core.test.mjs:324:1'
+  error: '1 subtest failed'
+# Subtest: L108: SKILL.md UI-job guidance covers intended HTTP errors on a harness view
+ok 200 - L108: SKILL.md UI-job guidance covers intended HTTP errors on a harness view
+    not ok 1 - L332 warns below the model default from the real table and not at it
+      location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/field-lessons-batch-ab-core.test.mjs:325:3'
+      error: |-
+      expected: 0
+      actual: 1
+not ok 198 - L332 model output defaults
+  location: '/Users/prime/Documents/repos-projects/oasis/worktrees/swarm-ac/tests/field-lessons-batch-ab-core.test.mjs:324:1'
+  error: '1 subtest failed'
