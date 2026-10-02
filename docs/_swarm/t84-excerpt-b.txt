@@ -1,0 +1,101 @@
+  // completed integration refuses outright. Checked before the completeness gate below so a run
+  // already integrated (blocked or otherwise) always reports that, not a generic status mismatch.
+  if (state.integratedAt && state.integrationStatus !== 'partial') fail('Run already integrated');
+  // Lesson 298: --jobs flag to integrate only named jobs
+  if (jobs) {
+    for (const jobId of jobs) {
+      const job = state.jobs.find(j => j.id === jobId);
+      if (!job) fail(`Job not found: ${jobId}`);
+      if (job.status !== 'complete') fail(`Job not complete: ${jobId}`);
+    }
+  }
+  // Check if run can be integrated: either all jobs complete, or --jobs specified with complete named jobs
+  const hasIncompleteJobs = state.jobs.some(j => !jobsAcceptable(j));
+  if (hasIncompleteJobs && !jobs) {
+    fail(`Only a complete${acceptBlocked ? ' or blocked' : ''}${salvage ? ' or timed-out (with salvageable output)' : ''} run from this repository can be integrated; pass --jobs <id,...> to integrate only specific complete jobs`);
+  }
+  if (!((acceptBlocked || salvage) ? (jobs ? state.jobs.filter(j => jobs.includes(j.id)).every(jobsAcceptable) : state.jobs.every(jobsAcceptable)) : (jobs ? state.jobs.filter(j => jobs.includes(j.id)).every(j => j.status === 'complete') : state.status === 'complete'))) fail(`Only a complete${acceptBlocked ? ' or blocked' : ''}${salvage ? ' or timed-out (with salvageable output)' : ''} run from this repository can be integrated`);
+  await workerKeyGuard(root, id, state, { env, keyExec });
+  const manifest = validateManifest(JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true)));
+  if (state.jobs.length !== manifest.jobs.length) fail('Job records do not match manifest');
+  const lock = await safePath(root, '.swarm/integration.lock', { internal: true });
+  await fs.mkdir(lock); // Other coordinators must finish before integrating.
+  const writes = [];
+  const newFiles = [];
+  const jobMutantsBytes = new Map();
+  const inventedHashWarnings = [];
+  // Field lesson #256: a worker's own reported deviations from a contract MUST it could not meet —
+  // never silently substituted — read before any project file is written.
+  const acceptedDeviations = [];
+  // Field lesson #232: an output absent from both base and workspace was simply never written by
+  // its job (a manifest typo, most likely), never the same thing as a worker deleting a file base
+  // already had; collected here instead of failing so a valid run still integrates.
+  const neverWrittenOutputs = [];
+  // Field lesson 126s: the same source dir a run itself resolved, re-read fresh here so a check
+  // reflects the frontmatter as it stands now, not as it stood when the job ran.
+  const skillsSourceDirAtIntegrate = resolveSkillsDir(manifest, loadLocalConfig({ env }), root);
+  const skillDefsByName = new Map((skillsSourceDirAtIntegrate ? await listSkills(skillsSourceDirAtIntegrate) : []).map(skill => [skill.name, skill]));
+  // Field lesson #293: load private names once for all output files
+  const privateNamesList = privateNamesFile ? await loadPrivateNames(root, privateNamesFile, { env }) : { terms: [] };
+  try {
+    const jobsToIntegrate = state.jobs.filter(j => !jobs || jobs.includes(j.id));
+    const integratedJobs = [];
+    const skippedJobs = [];
+    for (const [index, job] of state.jobs.entries()) {
+      const declared = manifest.jobs[index];
+      const shouldIntegrate = jobsToIntegrate.includes(job);
+      if (!shouldIntegrate) {
+        skippedJobs.push(job.id);
+        continue;
+      }
+      const jobChangedFiles = [];
+      integratedJobs.push(job.id);
+      const expectedWorkspace = `.swarm/workspaces/${id}/${declared.id}`;
+      if (job.id !== declared.id || job.workspace !== expectedWorkspace || !jobsAcceptable(job) || JSON.stringify(job.outputs) !== JSON.stringify(declared.outputs)) fail('Worker metadata does not match manifest');
+      const workspaceRoot = await safePath(root, expectedWorkspace, { internal: true });
+      // Field lesson #202: a timed-out job's declared outputs, when salvaged, sit in its kept
+      // workspace (a worktree, for a shell/codex job; the same workspace, for any other job) —
+      // never in the normal proposal workspace, which a timeout never got to write.
+      const readRoot = salvage && ((job.status === 'timeout' && job.keptWorkspace) || isApiErrorFailure(job)) ? job.keptWorkspace : workspaceRoot;
+      if (readRoot === job.keptWorkspace) job.salvaged = true;
+      // Field lesson #256: refuses before any file is written when a job's own result reports a
+      // non-empty deviations list and the caller has not explicitly accepted it.
+      const resultForDeviations = await loadJobResultData(root, id, declared, readRoot);
+      const jobDeviations = Array.isArray(resultForDeviations?.deviations) ? resultForDeviations.deviations : [];
+      if (jobDeviations.length) {
+        if (!acceptDeviation) fail(`contract-deviation: ${declared.id}: ${jobDeviations.map(deviationText).join(', ')}`);
+        for (const deviation of jobDeviations) acceptedDeviations.push({ job: declared.id, ...(typeof deviation === 'string' ? { contract: deviation } : deviation) });
+      }
+      // Field lesson #271: a dropped write (an edit outside this job's declared outputs) refuses
+      // integrate unless explicitly accepted or salvaged, checked here, before any project file is
+      // written, the same way the deviations gate just above does.
+      if (job.droppedWrites?.length && !acceptDropped && !salvageDropped) {
+        fail(`dropped-writes: ${declared.id}: ${job.droppedWrites.join(', ')}; pass --accept-dropped to proceed without them, or --salvage-dropped to apply them`);
+      }
+      if (job.droppedWrites?.length && salvageDropped) {
+        for (const file of job.droppedWrites) {
+          const saved = await bytesAt(root, `.swarm/runs/${id}/dropped/${file}`, true);
+          if (saved === null) continue;
+          const current = await bytesAt(root, file);
+          const currentMode = current === null ? 0o644 : (await fs.stat(await safePath(root, file))).mode & 0o777;
+          writes.push({ file, bytes: saved, previous: current, mode: currentMode });
+          jobChangedFiles.push(file);
+          if (current === null) newFiles.push(file);
+        }
+      }
+      // Field lesson 128: the job's own context, concatenated once, is the only source a worker
+      // could have copied a real sha/provenance string from verbatim.
+      const contextText = (await Promise.all(declared.context.map(async file => (await bytesAt(root, file))?.toString('utf8') ?? ''))).join('\n');
+      for (const file of declared.outputs) {
+        const current = await bytesAt(root, file);
+        const currentHash = current === null ? null : digest(current);
+        const currentMode=current===null?0o644:(await fs.stat(await safePath(root,file))).mode & 0o777;
+        const output = await bytesAt(readRoot, file);
+        // Field lesson 328: a blocked job's unwritten output is skipped, never a missing-output,
+        // undeclared-delete or declared-delete; what it did write still integrates (lesson 131).
+        if (output === null && acceptBlocked && job.status === 'blocked') continue;
+        if (output === null) {
+          // Field lesson #232: absent from base too means this was never written, not deleted —
+          // the orchestrator's own typo case (a declared output that never existed anywhere), kept
+          // distinct from the real undeclared-delete guard just below.
+          if (current === null) {
