@@ -13,8 +13,8 @@
   {
     "name": "b blocked outputs still checked",
     "file": "tools/swarm.mjs",
-    "find": "    const jobsToIntegrate = state.jobs.filter(j => (!jobs || jobs.includes(j.id)) && !(acceptBlocked && j.status === 'blocked'));",
-    "replace": "    const jobsToIntegrate = state.jobs.filter(j => (!jobs || jobs.includes(j.id)));",
+    "find": "        if (output === null && acceptBlocked && job.status === 'blocked') continue;",
+    "replace": "        void 0;",
     "check": [
       "node",
       "--test",
