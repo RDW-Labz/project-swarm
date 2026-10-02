@@ -11,9 +11,10 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { runCheck, runChecksForRun } from '../tools/swarm.mjs';
+import { runCheck, runChecksForRun, swarmDirNotIgnoredWarning } from '../tools/swarm.mjs';
 import { commandHandlers } from '../tools/scaffold.mjs';
 import { preflightReport, ship } from '../tools/ship.mjs';
+import { defaultMaxOutputTokens } from '../tools/openrouter.mjs';
 
 const exec = promisify(execFile);
 const runner = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
@@ -197,7 +198,7 @@ describe('L328 skipped job outputs', () => {
     assert.equal(await f.read('9001.txt'), '9001');
   });
 
-  test('L328 blocked writes and declared deletes are skipped too', async t => {
+  test('L328 blocked writes still integrate while unwritten blocked deletes are skipped', async t => {
     const f = await fixture(t);
     await f.saveRun();
     await f.write('.swarm/workspaces/run-0000/9002/9002.txt', '9004');
@@ -211,8 +212,9 @@ describe('L328 skipped job outputs', () => {
     state.jobs[1].baseHashes['9003.txt'] = hash('9003');
     await f.write('.swarm/runs/run-0000/state.json', json(state));
     const result = parsed(await f.cli('integrate', 'run-0000', '--accept-blocked'));
-    assert.deepEqual(result.files, ['9001.txt']);
-    assert.equal(await f.read('9002.txt'), '9002');
+    // Lesson 131: what a blocked job did write still integrates; only its unwritten outputs skip.
+    assert.deepEqual(result.files, ['9001.txt', '9002.txt']);
+    assert.equal(await f.read('9002.txt'), '9004');
     assert.equal(await f.read('9003.txt'), '9003');
   });
 });
@@ -257,6 +259,17 @@ describe('L330 check output', () => {
     assert.equal(silent.status, 'failed');
     const missing = await runCheck('9001', ['9001'], f.root, 1000, fakeCheck([['stdout', '.swarm/runs/run-0000/9001: error\n']], 127), false, () => {}, f.env, { ignoreSwarmPaths: true });
     assert.equal(missing.status, 'check-env-missing');
+  });
+
+  test('L330 run warns swarm-dir-not-ignored only when a root config never names .swarm', async t => {
+    const f = await fixture(t);
+    assert.equal(await swarmDirNotIgnoredWarning(f.root), null);
+    await f.write('pyproject.toml', '[project]\nname = "9001"\n');
+    assert.equal(await swarmDirNotIgnoredWarning(f.root), null);
+    await f.write('eslint.config.mjs', 'export default [];\n');
+    assert.match(await swarmDirNotIgnoredWarning(f.root), /^swarm-dir-not-ignored: eslint\.config\.mjs/);
+    await f.write('eslint.config.mjs', "export default [{ ignores: ['.swarm/**'] }];\n");
+    assert.equal(await swarmDirNotIgnoredWarning(f.root), null);
   });
 
   test('L330 ship reports the same filtered check warning', async t => {
@@ -309,17 +322,25 @@ describe('L331 ignored fixture preflight', () => {
 });
 
 describe('L332 model output defaults', () => {
-  test('L332 deepseek warns below 16000 and not at the default', async t => {
+  test('L332 warns below the model default from the real table and not at it', async t => {
     const f = await fixture(t);
-    for (const maxOutputTokens of [6000, 16000, 16001, undefined]) {
-      await f.write('9001.json', json(manifest({ model: 'deepseek/deepseek-r1', ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }) })));
-      const warnings = warningCode(parsed(await f.cli('validate', '9001.json')), 'max-output-below-model-default');
-      assert.equal(warnings.length, maxOutputTokens === 6000 ? 1 : 0);
-      if (warnings.length) {
-        assert.match(warnings[0].message, /6000/);
-        assert.match(warnings[0].message, /16000/);
+    // The real table (tools/openrouter.mjs, used by tools/api-adapters.mjs): reasoning and
+    // non-reasoning models have different defaults, so neither is hard-coded here.
+    for (const model of ['deepseek/deepseek-r1', 'model9001']) {
+      const modelDefault = defaultMaxOutputTokens(model);
+      assert.ok(Number.isInteger(modelDefault) && modelDefault > 1, model);
+      for (const maxOutputTokens of [modelDefault - 1, modelDefault, undefined]) {
+        await f.write('9001.json', json(manifest({ model, ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }) })));
+        const warnings = warningCode(parsed(await f.cli('validate', '9001.json')), 'max-output-below-model-default');
+        assert.equal(warnings.length, maxOutputTokens === modelDefault - 1 ? 1 : 0, model + ' ' + maxOutputTokens);
+        if (warnings.length) {
+          assert.equal(warnings[0].modelDefault, modelDefault);
+          assert.match(warnings[0].message, new RegExp('\\b' + (modelDefault - 1) + '\\b'));
+          assert.match(warnings[0].message, new RegExp('\\b' + modelDefault + '\\b'));
+        }
       }
     }
+    assert.ok(defaultMaxOutputTokens('deepseek/deepseek-r1') >= 16000, 'reasoning default covers thinking (lesson 226)');
     await f.write('9001.json', json(manifest({ agent: 'claude', maxOutputTokens: 6000 })));
     const invalid = await f.cli('validate', '9001.json');
     assert.equal(invalid.code, 1);

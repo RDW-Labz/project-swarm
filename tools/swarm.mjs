@@ -1515,14 +1515,10 @@ async function smokeCheckInSandbox(root, directory, job, worktree, profile, env,
 
 // The retained proposal workspace contains only declared outputs. The runnable checkout is
 // disposable unless a fallback requires it or a failed worker changed declared outputs.
-// Lesson 330: project-wide tools must never discover a worker checkout under .swarm.
+// Lessons 41/64: kept worktrees stay under .swarm/runs/<id>/worktrees/ for inspection (decision
+// #345); lesson 330 instead strips .swarm/ lines from check output and warns swarm-dir-not-ignored.
 async function jobWorktreePath(root, directory, jobId) {
-  const parent = path.join(os.tmpdir(), 'swarm-worktrees', digest(root).slice(0, 16) + '-' + path.basename(directory));
-  await assertScratchOutsideRepo(parent, file => fs.access(file));
-  await fs.mkdir(parent, { recursive: true });
-  const realParent = await fs.realpath(parent);
-  await assertScratchOutsideRepo(realParent, file => fs.access(file));
-  return path.join(realParent, jobId);
+  return safePath(root, `${directory}/worktrees/${jobId}`, { internal: true, parents: true });
 }
 
 export async function executeCodexJob(root, directory, job, proposalRoot, options) {
@@ -1966,7 +1962,8 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   // Field lesson #265: a live rig-service checkout is named the same way, on the same warnings path.
   const liveWarning = await liveServiceCheckoutWarning(root, { env });
   const { lessonQueueWarnings } = await import('./lessons.mjs');
-  const manifestWarnings = [...sharedRootFullSuiteWarnings(manifest), ...(liveWarning ? [liveWarning.message] : []), ...await lessonQueueWarnings(root)];
+  const swarmDirWarning = await swarmDirNotIgnoredWarning(root);
+  const manifestWarnings = [...sharedRootFullSuiteWarnings(manifest), ...(liveWarning ? [liveWarning.message] : []), ...await lessonQueueWarnings(root), ...(swarmDirWarning ? [swarmDirWarning] : [])];
   const save = async () => { state.warnings = runWarnings(state, manifestWarnings); state.summary = summarizeRun(state); await jsonWrite(root, `${directory}/state.json`, state); onState(state); };
   // Serialize status writes when several workers finish at once.
   let writes = Promise.resolve();
@@ -3104,7 +3101,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   if (salvage && noChecks) fail('--no-checks and --salvage cannot be combined');
   const state = await readState(root, id);
   // Field lesson 131: a job that stopped `blocked` (an out-of-scope break it could not fix itself)
-  // is accepted by --accept-blocked, but its outputs are skipped entirely (lesson 328).
+  // is accepted by --accept-blocked; outputs it never wrote are skipped (lesson 328).
   // Field lesson #202: a job that only hit its own timeout while its declared outputs were already
   // done (the transcript shows it sleep-polling a background full suite the boilerplate now
   // forbids) may still have every output sitting in its kept workspace; --salvage lets those
@@ -3157,7 +3154,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   // Field lesson #293: load private names once for all output files
   const privateNamesList = privateNamesFile ? await loadPrivateNames(root, privateNamesFile, { env }) : { terms: [] };
   try {
-    const jobsToIntegrate = state.jobs.filter(j => (!jobs || jobs.includes(j.id)) && !(acceptBlocked && j.status === 'blocked'));
+    const jobsToIntegrate = state.jobs.filter(j => !jobs || jobs.includes(j.id));
     const integratedJobs = [];
     const skippedJobs = [];
     for (const [index, job] of state.jobs.entries()) {
@@ -3210,6 +3207,9 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
         const currentHash = current === null ? null : digest(current);
         const currentMode=current===null?0o644:(await fs.stat(await safePath(root,file))).mode & 0o777;
         const output = await bytesAt(readRoot, file);
+        // Field lesson 328: a blocked job's unwritten output is skipped, never a missing-output,
+        // undeclared-delete or declared-delete; what it did write still integrates (lesson 131).
+        if (output === null && acceptBlocked && job.status === 'blocked') continue;
         if (output === null) {
           // Field lesson #232: absent from base too means this was never written, not deleted —
           // the orchestrator's own typo case (a declared output that never existed anywhere), kept
@@ -3402,7 +3402,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       Object.assign(state, mutantsResult);
     }
     const warnings = [...swarmCheckWarnings(checksResult.checks), ...portWarnings, ...preChecksResult.warnings, ...(mutantsResult.mutantsSkippedRedBase ? ['mutants skipped: red base (checks failed)'] : []), ...droppedWriteWarnings(state), ...inventedHashWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`), ...mutantMissingWarnings];
-    // Field lesson 328: blocked outputs were skipped; retain the distinct integration status;
+    // Field lesson 328: unwritten blocked outputs were skipped; retain the distinct integration status;
     // the run is tagged distinctly so a later `inspect`/`ship` never mistakes it for a clean pass,
     // and the blocked reason rides along as ready-made evidence for whatever job comes next.
     const blockedJobs = state.jobs.filter(job => job.status === 'blocked');
@@ -3485,6 +3485,22 @@ export async function liveServiceCheckoutWarning(root, { config, env = process.e
   const port = await resolveRigServicePort({ config: cfg, env, home });
   if (port === null) return null;
   return { code: 'protected-checkout-live-service', message: `protected-checkout-live-service: ${root} has a live rig service on port ${port}; never run git checkout/reset/stash here by hand — worktrees only` };
+}
+
+// Field lesson 330 (decision #345): worktrees stay under .swarm/runs/, so a root lint/test config
+// that never mentions .swarm may sweep them up; best-effort, named once per run. A pyproject.toml
+// counts only when it configures pytest.
+const SWARM_DIR_IGNORE_CONFIGS = ['eslint.config.js', 'eslint.config.mjs', 'eslint.config.cjs', 'eslint.config.ts', '.eslintignore', 'vitest.config.js', 'vitest.config.mjs', 'vitest.config.cjs', 'vitest.config.ts', 'vitest.config.mts', 'pyproject.toml', 'pytest.ini'];
+export async function swarmDirNotIgnoredWarning(root) {
+  const found = [];
+  for (const file of SWARM_DIR_IGNORE_CONFIGS) {
+    let text;
+    try { text = (await fs.readFile(path.join(root, file), 'utf8')); } catch { continue; }
+    if (file === 'pyproject.toml' && !text.includes('[tool.pytest')) continue;
+    if (text.includes('.swarm')) return null;
+    found.push(file);
+  }
+  return found.length ? `swarm-dir-not-ignored: ${found.join(', ')} never names .swarm/; job worktrees under .swarm/runs/ may be linted or collected` : null;
 }
 
 // Keep regression tests in place while reversing only the implementation outputs.
@@ -5013,7 +5029,7 @@ async function main() {
     }
     root=args[rootIndex+1];args.splice(rootIndex,2);
   }
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | squash --branch BRANCH [--base REF] | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list [--queued|--shipped] [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked skips blocked outputs; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | run MANIFEST [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | squash --branch BRANCH [--base REF] | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list [--queued|--shipped] [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');

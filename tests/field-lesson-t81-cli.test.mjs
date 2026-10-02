@@ -295,13 +295,11 @@ describe('T81 Codex worktree wiring', () => {
     await f.write('pyproject.toml', '[project]\nname = "9001"\nversion = "0.0.0"\n');
     await f.write('package-lock.json', '{"lockfileVersion":3}\n');
     await fs.mkdir(path.join(f.root, '.git'), { recursive: true });
-    let worktree;
-    t.after(async () => { if (worktree) await fs.rm(path.dirname(worktree), { recursive: true, force: true }); });
+    const worktree = path.join(f.root, '.swarm/runs/run-0000/worktrees/output9001');
     const order = [];
     const gitImpl = async (_cwd, args) => {
       if (args[0] === 'worktree' && args[1] === 'add') {
-        worktree = args[3];
-        assert.ok(path.relative(f.root, worktree).startsWith('..' + path.sep));
+        assert.equal(args[3], worktree);
         await fs.mkdir(path.join(worktree, '.git'), { recursive: true });
         for (const file of ['output9001.mjs', 'pyproject.toml', 'package-lock.json']) await fs.writeFile(path.join(worktree, file), await f.read(file));
         return '';
@@ -342,14 +340,12 @@ describe('T81 Codex worktree wiring', () => {
     const { executeCodexJob } = await import('../tools/swarm.mjs');
     const f = await fixture(t);
     await fs.mkdir(path.join(f.root, '.git'), { recursive: true });
-    let worktree;
-    t.after(async () => { if (worktree) await fs.rm(path.dirname(worktree), { recursive: true, force: true }); });
+    const worktree = path.join(f.root, '.swarm/runs/run-0000/worktrees/output9001');
     let attempts = 0;
     const replies = [], retries = [];
     const gitImpl = async (_cwd, args) => {
       if (args[0] === 'worktree' && args[1] === 'add') {
-        worktree = args[3];
-        assert.ok(path.relative(f.root, worktree).startsWith('..' + path.sep));
+        assert.equal(args[3], worktree);
         await fs.mkdir(path.join(worktree, '.git'), { recursive: true });
         await fs.writeFile(path.join(worktree, 'output9001.mjs'), await f.read('output9001.mjs'));
         return '';

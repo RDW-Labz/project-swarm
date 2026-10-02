@@ -45,11 +45,13 @@ async function realRepo(t) {
 
 // Adds three violations at once: the private term in an earlier commit's own message, the same
 // term in a later commit's added test-file lines, and (in that same test file) a quoted path git
-// would refuse to track.
+// would refuse to track. Lesson 331: the ignored fixture exists on disk, so it is not a runtime path.
 function addViolations(dir, git) {
   git('commit', '-q', '--allow-empty', '-m', `note: ${FAKE_TERM} mentioned here`);
   git('rev-parse', 'HEAD');
   return fs.mkdir(path.join(dir, 'tests'), { recursive: true }).then(async () => {
+    await fs.mkdir(path.join(dir, '.swarm-manifests'), { recursive: true });
+    await fs.writeFile(path.join(dir, '.swarm-manifests/fixture.json'), '{}\n');
     await fs.writeFile(path.join(dir, 'tests/test_thing.py'), [
       `# reference: ${FAKE_TERM}`,
       'def test_placeholder():',
@@ -184,6 +186,17 @@ test('preflightReport: ok:true and empty failures on a clean branch', async t =>
   const { exec } = realGitExec(dir);
   const report = await preflightReport({ root: dir, payloadBase: 'main', exec, repo: 'acme/widgets', integratedFiles: [] });
   assert.deepEqual(report, { ok: true, failures: [] });
+});
+
+test('preflightReport: an ignored path the test only creates at runtime (absent on disk) is not flagged (lesson 331)', async t => {
+  const { dir, git } = await realRepo(t);
+  await fs.mkdir(path.join(dir, 'tests'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'tests/test_runtime.py'), 'def test_runtime():\n    path = ".swarm-manifests/runtime.json"\n    assert path\n');
+  git('add', 'tests/test_runtime.py');
+  git('commit', '-q', '-m', 'add runtime test');
+  const { exec } = realGitExec(dir);
+  const report = await preflightReport({ root: dir, payloadBase: 'main', exec, repo: 'acme/widgets', integratedFiles: ['tests/test_runtime.py'] });
+  assert.ok(!report.failures.some(f => f.code === 'test-reads-git-ignored-path'), JSON.stringify(report));
 });
 
 // --- CLI wiring: `swarm ship --preflight` must reach ship() through the parser ------------------
