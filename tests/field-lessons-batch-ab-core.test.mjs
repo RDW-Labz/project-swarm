@@ -324,23 +324,22 @@ describe('L331 ignored fixture preflight', () => {
 describe('L332 model output defaults', () => {
   test('L332 warns below the model default from the real table and not at it', async t => {
     const f = await fixture(t);
-    // The real table (tools/openrouter.mjs, used by tools/api-adapters.mjs): reasoning and
-    // non-reasoning models have different defaults, so neither is hard-coded here.
-    for (const model of ['deepseek/deepseek-r1', 'model9001']) {
-      const modelDefault = defaultMaxOutputTokens(model);
-      assert.ok(Number.isInteger(modelDefault) && modelDefault > 1, model);
-      for (const maxOutputTokens of [modelDefault - 1, modelDefault, undefined]) {
-        await f.write('9001.json', json(manifest({ model, ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }) })));
-        const warnings = warningCode(parsed(await f.cli('validate', '9001.json')), 'max-output-below-model-default');
-        assert.equal(warnings.length, maxOutputTokens === modelDefault - 1 ? 1 : 0, model + ' ' + maxOutputTokens);
-        if (warnings.length) {
-          assert.equal(warnings[0].modelDefault, modelDefault);
-          assert.match(warnings[0].message, new RegExp('\\b' + (modelDefault - 1) + '\\b'));
-          assert.match(warnings[0].message, new RegExp('\\b' + modelDefault + '\\b'));
-        }
+    // Lesson 226: a reasoning model's own default (deepseek/deepseek-r1: 16000 from the real
+    // table in tools/openrouter.mjs) covers its thinking plus its reply; placeholder test model
+    // names (e.g. 'model9001') are not in that table and have no default to assert against.
+    const model = 'deepseek/deepseek-r1';
+    const modelDefault = defaultMaxOutputTokens(model);
+    assert.equal(modelDefault, 16000, 'reasoning default covers thinking (lesson 226)');
+    for (const maxOutputTokens of [modelDefault - 1, modelDefault, undefined]) {
+      await f.write('9001.json', json(manifest({ model, ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }) })));
+      const warnings = warningCode(parsed(await f.cli('validate', '9001.json')), 'max-output-below-model-default');
+      assert.equal(warnings.length, maxOutputTokens === modelDefault - 1 ? 1 : 0, String(maxOutputTokens));
+      if (warnings.length) {
+        assert.equal(warnings[0].modelDefault, modelDefault);
+        assert.match(warnings[0].message, new RegExp('\\b' + (modelDefault - 1) + '\\b'));
+        assert.match(warnings[0].message, new RegExp('\\b' + modelDefault + '\\b'));
       }
     }
-    assert.ok(defaultMaxOutputTokens('deepseek/deepseek-r1') >= 16000, 'reasoning default covers thinking (lesson 226)');
     await f.write('9001.json', json(manifest({ agent: 'claude', maxOutputTokens: 6000 })));
     const invalid = await f.cli('validate', '9001.json');
     assert.equal(invalid.code, 1);
