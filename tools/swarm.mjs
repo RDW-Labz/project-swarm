@@ -930,7 +930,7 @@ export function validateManifest(manifest) {
     if (!Array.isArray(manifest.checks) || manifest.checks.length > 10) fail('checks must be an array of at most 10 checks');
     for (const check of manifest.checks) {
       if (!check || typeof check !== 'object') fail('Invalid check');
-      for (const key of Object.keys(check)) if (!['name', 'argv', 'timeoutMs', 'repeat', 'flakeRuns', 'integrateOnly'].includes(key)) fail(`Unknown check field: ${key}`);
+      for (const key of Object.keys(check)) if (!['name', 'argv', 'timeoutMs', 'repeat', 'flakeRuns', 'integrateOnly', 'base'].includes(key)) fail(`Unknown check field: ${key}`);
       if (typeof check.name !== 'string' || !CHECK_NAME.test(check.name)) fail(`Invalid check name: ${check?.name}`);
       if (!Array.isArray(check.argv) || !check.argv.length) fail(`Check argv must be a non-empty array: ${check.name}`);
       if (check.argv.some(item => typeof item !== 'string')) fail(`Check argv items must be strings: ${check.name}`);
@@ -940,6 +940,8 @@ export function validateManifest(manifest) {
       // Field lesson #238: a check that only ever runs outside the sandbox (needs network the
       // shell worker never gets) is skipped there and reported skipped-integrate-only, never a fail.
       if (check.integrateOnly !== undefined && typeof check.integrateOnly !== 'boolean') fail(`Check integrateOnly must be true or false: ${check.name}`);
+      // `base: false` keeps a check out of `run`'s own base-check gate (it still runs at integrate).
+      if (check.base !== undefined && typeof check.base !== 'boolean') fail(`Check base must be true or false: ${check.name}`);
     }
   }
   // Field lesson 109: env-sync commands to run before `checks` whenever integration touches a
@@ -1876,23 +1878,40 @@ const FAILURE_LOCATION_RE = /[A-Za-z0-9_.\/-]+\.[A-Za-z0-9]+(?::\d+(?:-\d+)?)?/g
 function extractFailureLocations(text) {
   return [...new Set([...String(text ?? '').matchAll(FAILURE_LOCATION_RE)].map(match => match[0].replace(/:\d+(-\d+)?$/, '')))];
 }
+// A base check has no integrated/new file list, so a check naming one of those placeholders is
+// never spawned at base (the literal `{integrated}` would reach the tool as a file name and read
+// red); it is recorded as skipped with its reason. So is a check that opts out with `base: false`.
+const INTEGRATE_ONLY_PLACEHOLDER_RE = /^\{(?:integrated|new)(?::[^}]+)?\}$/;
+function baseCheckSkipReason(check) {
+  if (check.base === false) return 'base: false';
+  const placeholder = check.argv.find(arg => INTEGRATE_ONLY_PLACEHOLDER_RE.test(arg));
+  return placeholder ? `integrate-only placeholder ${placeholder}` : null;
+}
 export async function runBaseChecks(root, manifest, { spawnImpl = spawn, gitImpl, baseSha: baseShaOverride, env = process.env } = {}) {
   const checks = manifest.checks ?? [];
   if (!checks.length) return { baseSha: null, status: 'green', failures: [] };
   const baseSha = baseShaOverride ?? (await (gitImpl ?? git)(root, ['rev-parse', 'HEAD'])).trim();
   const cacheRel = `.swarm/base-checks/${baseSha}.json`;
+  // The cached verdict belongs to one set of checks: a record from different checks (or from an
+  // older runner that ran placeholders literally, with no checksKey at all) is recomputed.
+  const checksKey = digest(JSON.stringify(checks.map(check => [check.name, check.argv, check.base ?? true])));
   const cached = await bytesAt(root, cacheRel, true);
-  if (cached) { try { return JSON.parse(cached.toString('utf8')); } catch { /* recompute below */ } }
+  if (cached) {
+    try { const record = JSON.parse(cached.toString('utf8')); if (record.checksKey === checksKey) return record; } catch { /* recompute below */ }
+  }
   const failures = [];
   const failureLocations = {};
+  const skipped = [];
   for (const check of checks) {
-    const outcome = await runCheck(check.name, check.argv, root, check.timeoutMs ?? 300000, spawnImpl, false, () => {}, env);
+    const skipReason = baseCheckSkipReason(check);
+    if (skipReason) { skipped.push({ name: check.name, reason: skipReason }); continue; }
+    const outcome = await runCheck(check.name, expandRootArgv(check.argv, root), root, check.timeoutMs ?? 300000, spawnImpl, false, () => {}, env);
     if (outcome.status !== 'passed') {
       failures.push(check.name);
       failureLocations[check.name] = extractFailureLocations(`${outcome.tail ?? ''}\n${outcome.hint ?? ''}`);
     }
   }
-  const record = { baseSha, status: failures.length ? 'red' : 'green', failures, failureLocations };
+  const record = { baseSha, checksKey, status: failures.length ? 'red' : 'green', failures, failureLocations, skipped };
   await jsonWrite(root, cacheRel, record);
   return record;
 }
