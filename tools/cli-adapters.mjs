@@ -8,6 +8,36 @@ import { validateEnvelope, outputSchema } from './api-adapters.mjs';
 export const EXTRA_CLI_AGENTS = ['hermes', 'qwen'];
 const MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,119}$/;
 const MODEL_ALIASES = ['haiku', 'sonnet', 'opus', 'fable'];
+// Lesson 347: source text and ordinary assistant messages are never quota signals.
+// The plain-text fallback is deliberately a complete provider line, not a substring.
+const CLAUDE_QUOTA_RE = /^(?:you(?:'ve| have) hit your |(?:weekly|usage|rate) limit exceeded[;: ·-]*)(?:(?:weekly|usage|rate) limit[;: ·-]*)?(?:it )?resets?\s+([A-Za-z0-9 :+()/-]{1,60})[.!]?$/i;
+export function detectClaudeQuotaLimit(text) {
+  const match = CLAUDE_QUOTA_RE.exec(String(text ?? '').trim());
+  return match ? { resetsAt: match[1].trim() } : null;
+}
+export function claudeQuotaSignal(stdout, stderr, exitCode, events) {
+  for (const event of events) {
+    if (event?.type === 'assistant' && event.error === 'rate_limit') {
+      for (const part of event.message?.content ?? []) {
+        const limit = part.type === 'text' ? detectClaudeQuotaLimit(part.text) : null;
+        if (limit) return limit;
+      }
+    }
+    if (event?.type === 'error' && ['rate_limit_error', 'rate_limit'].includes(event.error?.type)) {
+      const limit = detectClaudeQuotaLimit(event.error.message);
+      if (limit) return limit;
+    }
+    if (event?.type === 'result' && event.is_error === true) {
+      for (const message of Array.isArray(event.errors) ? event.errors : []) {
+        const limit = detectClaudeQuotaLimit(message);
+        if (limit) return limit;
+      }
+    }
+  }
+  if (!Number.isInteger(exitCode) || exitCode === 0) return null;
+  const lastStderr = String(stderr ?? '').trim().split('\n').at(-1);
+  return detectClaudeQuotaLimit(lastStderr) ?? (!events.length ? detectClaudeQuotaLimit(stdout) : null);
+}
 // A short alias (the request) only needs to appear in the full id; an explicit id must match exactly or be a prefix.
 export function modelMatches(requested, id) {
   if (typeof requested !== 'string' || typeof id !== 'string') return true;

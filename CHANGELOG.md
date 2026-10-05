@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.45.1
+
+- Claude `provider-limit` classification uses provider error events or standalone diagnostics on a failed exit; limit strings quoted from context files remain worker data. (lesson 347)
+- `integrate` reports parsed result keys, source and text on skill-check failures; result-shape mismatches warn when all outputs exist, with `--accept-result-shape` for explicit acceptance. Debugging attaches only for fix prompts or an explicit manifest skill selection. (lesson 349)
+- `ship --branch` refuses `branch-not-ahead` before checks when no commits are ahead of its base; `clean-branch --from REF --exclude GLOB` stages a rename-aware copy including additions, modifications and deletions on a clean destination. (lesson 350)
+
 ## 1.45.0
 
 - Config `worktreesOutsideRoot: true` (default off) places codex and claude-shell job worktrees in a per-run scratch dir outside the repository root (`<scratch root>/worktrees/<repo>-<hash>/<run>/<job>`, override with config `worktreesDir`), so root-level lint, test and search tools never see swarm copies; `run` skips `swarm-dir-not-ignored` when it is on. (T86, lesson 330, decision #345)
