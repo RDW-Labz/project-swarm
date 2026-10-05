@@ -336,6 +336,50 @@ describe('T81 Codex worktree wiring', () => {
     assert.deepEqual(order, []);
   });
 
+  test('T81 sync precedes worker at a recorded worktreePath outside the root', async t => {
+    const { executeCodexJob } = await import('../tools/swarm.mjs');
+    const f = await fixture(t);
+    await f.write('pyproject.toml', '[project]\nname = "9001"\nversion = "0.0.0"\n');
+    await f.write('package-lock.json', '{"lockfileVersion":3}\n');
+    await fs.mkdir(path.join(f.root, '.git'), { recursive: true });
+    const worktree = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-t86-worktree-')));
+    t.after(() => fs.rm(worktree, { recursive: true, force: true }));
+    const order = [];
+    let recordedBeforeWorktreeAdd;
+    const onWorktreePath = async recordedPath => { recordedBeforeWorktreeAdd = recordedPath; };
+    const gitImpl = async (_cwd, args) => {
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        assert.equal(args[3], worktree);
+        assert.equal(recordedBeforeWorktreeAdd, worktree, 'onWorktreePath recorded the path before worktree add');
+        await fs.mkdir(path.join(worktree, '.git'), { recursive: true });
+        for (const file of ['output9001.mjs', 'pyproject.toml', 'package-lock.json']) await fs.writeFile(path.join(worktree, file), await f.read(file));
+        return '';
+      }
+      if (args.includes('--git-common-dir')) return path.join(f.root, '.git');
+      if (args.includes('--absolute-git-dir')) return path.join(worktree, '.git');
+      if (args[0] === 'worktree' && args[1] === 'remove') return '';
+      assert.fail(JSON.stringify(args));
+    };
+    const spawnImpl = (program, args, options) => {
+      order.push([program, ...args]);
+      const child = child9001();
+      if (program !== 'sandbox-exec') {
+        assert.equal(options.env.ANTHROPIC_API_KEY, undefined);
+        assert.equal(options.env.SWARM_CLAUDE_WORKER_API_KEY, undefined);
+      }
+      queueMicrotask(() => {
+        child.stdout.end(); child.stderr.end(); child.emit('close', program === 'sandbox-exec' ? 2 : 0);
+      });
+      return child;
+    };
+    const job = { ...job9001(), agent: 'codex', setup: [['9003']] };
+    const options = { sync: true, gitImpl, spawnImpl, portBase: 9001, cancelled: () => false, env: f.env, swarmEnv: {}, worktreePath: worktree, onWorktreePath };
+    const result = await executeCodexJob(f.root, '.swarm/runs/run-0000', job, path.join(f.root, '.swarm/workspaces/run-0000/output9001'), options);
+    assert.equal(result.status, 'failed');
+    assert.deepEqual(order.slice(0, 3), [['uv', 'sync', '--locked'], ['npm', 'ci'], ['9003']]);
+    assert.equal(order[3][0], 'sandbox-exec');
+  });
+
   test('T81 Codex retry call site retains failed stderr and uses fresh reply paths', async t => {
     const { executeCodexJob } = await import('../tools/swarm.mjs');
     const f = await fixture(t);
