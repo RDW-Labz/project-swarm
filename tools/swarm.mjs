@@ -71,6 +71,19 @@ const CHECK_NAME = /^[A-Za-z0-9 ._-]{1,60}$/;
 const CHECK_TAIL = 2000;
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const fail = message => { throw new Error(message); };
+// Field lesson #344: a contract worker's hand-written `editOutputs` surfaced a bare
+// "Unknown job field" with no pointer to the real field; suggest a close known name.
+function unknownJobFieldMessage(name, knownFields) {
+  const lower = name.toLowerCase();
+  const substringMatch = knownFields.find(field => lower.includes(field.toLowerCase()));
+  const suggestion = substringMatch ?? knownFields.reduce((best, field) => {
+    const distance = levenshteinDistance(lower, field.toLowerCase());
+    return distance <= 3 && (!best || distance < best.distance) ? { field, distance } : best;
+  }, null)?.field;
+  if (!suggestion) return `Unknown job field: ${name}`;
+  const note = suggestion === 'outputs' ? ` Outputs that already exist are edited in place; there is no ${name} field)` : ')';
+  return `Unknown job field: ${name} (did you mean ${suggestion}?${note}`;
+}
 const runId = () => `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
 // Field lesson #193: several `ask`/`scout` runs launched in the same millisecond used to get the
 // identical id `<prefix>-<ms>`; a random suffix (like plain `run`'s own id above) makes two runs
@@ -1105,7 +1118,8 @@ export function validateManifest(manifest) {
       if (job.outputs.length) fail('a web job must be read-only (no outputs)');
     }
     // Unknown command/provider fields cannot create an execution path.
-    for (const key of Object.keys(job)) if (!['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes'].includes(key)) fail(`Unknown job field: ${key}`);
+    const knownJobFields = ['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes'];
+    for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
   }
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
   for (const job of manifest.jobs) for (const afterId of job.after ?? []) if (!ids.has(afterId.toLowerCase())) fail(`Job ${job.id} after names unknown job ${afterId}`);
@@ -1121,6 +1135,21 @@ export function validateManifest(manifest) {
     }
   }
   return manifest;
+}
+
+// Plain edit distance (insert/delete/substitute), used only to suggest a known job field.
+function levenshteinDistance(a, b) {
+  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const temp = prev[j];
+      prev[j] = a[i - 1] === b[j - 1] ? diagonal : 1 + Math.min(diagonal, prev[j], prev[j - 1]);
+      diagonal = temp;
+    }
+  }
+  return prev[b.length];
 }
 
 // DFS cycle detection over `after`; returns the cycle path (e.g. ['a','b','a']) or null.

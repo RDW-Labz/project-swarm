@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.44.1
+
+- lesson add never fails on a malformed legacy markdown row: the legacy table is parsed only for the next id, a parse failure falls back to a regex scan of the ids and surfaces as warning legacy-table-unparsed (field lesson #346).
+- validate names the nearest known job field when a manifest uses an unknown one, for example editOutputs → outputs (field lesson #344).
+
 ## 1.44.0
 
 - `scaffold job --command` adds command handler modules to context; `validate` warns `command-handler-not-in-job` when a command named in a job prompt has a handler in neither context nor outputs. (lesson 327)
