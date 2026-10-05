@@ -7,8 +7,25 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { execute } from '../tools/swarm.mjs';
+import { claudeQuotaSignal } from '../tools/cli-adapters.mjs';
 
 const limit = "You've hit your weekly limit · resets Oct 2 at 6pm";
+
+test('L347 successful exit ignores quoted stdout and a final stderr limit line without events', () => {
+  const stdout = JSON.stringify({ text: limit });
+  assert.equal(claudeQuotaSignal(stdout, `worker output\n${limit}`, 0, []), null);
+});
+
+test('L347 failed exit ignores ordinary assistant text and quoted file content', () => {
+  const stdout = JSON.stringify({ text: limit });
+  const events = [{ type: 'assistant', message: { content: [{ type: 'text', text: limit }] } }];
+  assert.equal(claudeQuotaSignal(stdout, `${limit}\nworker failed`, 1, events), null);
+});
+
+test('L347 failed exit accepts an exact final stderr limit line without events', () => {
+  assert.deepEqual(claudeQuotaSignal('', `worker failed\n${limit}`, 1, []), { resetsAt: 'Oct 2 at 6pm' });
+});
+
 async function run(t, script) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'lesson-347-')));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
