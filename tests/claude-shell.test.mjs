@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { claudeArgs, validateManifest, validateProject, runManifest, inspectRun, inspectResults, integrateRun, shipRun, askRun, readState } from '../tools/swarm.mjs';
+import { claudeArgs, validateManifest, validateProject, runManifest, inspectRun, inspectResults, integrateRun, shipRun, askRun, readState, resolveWorktree } from '../tools/swarm.mjs';
 import { SHELL_TOOLS, WORKER_KEY_ITEM, claudeShellArgs, shellProfile, shellEnvironment, resolveWorkerKey, startConnectProxy, expandShellPreset, validateNetworkAllow, requireShellPlatform } from '../tools/claude-shell.mjs';
 import { git } from '../tools/codex-adapter.mjs';
 
@@ -239,7 +239,7 @@ test('a shell job runs the whole claude process under sandbox-exec in a worktree
   // with the worker key stripped from its env; the worker launch comes after it.
   const [smoke] = seen;
   const launch = seen.find(call => call.args[2] === FAKE_BIN);
-  const worktree = path.join(root, '.swarm/runs', state.id, 'worktrees/builder');
+  const worktree = resolveWorktree(state, state.jobs[0]);
   const shellDir = path.join(root, '.swarm/runs', state.id, 'builder/shell');
   const profilePath = path.join(root, '.swarm/runs', state.id, 'builder/sandbox.sb');
   assert.deepEqual(smoke.args, ['-f', profilePath, 'npm', 'test']);
