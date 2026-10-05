@@ -137,22 +137,31 @@ test('a filesMustChange check with no matching changed file fails integrate as s
   await assert.rejects(integrateRun(root, state.id), /skill-check-failed: coverage: filesMustChange docs\/\*\.md matched no changed file/);
 });
 
-test('a resultKeys check missing from the result fails integrate, and --accept-failed-checks does not bypass it', async t => {
+test('a missing resultKeys entry warns when outputs exist, but missing outputs refuse even with --accept-failed-checks', async t => {
   const root = await fixture(t);
   const skillsDir = path.join(root, 'skills');
   await writeSkill(skillsDir, 'reporter', { checks: { resultKeys: ['approved'] } });
   const worker = fake(`fs.writeFileSync('input.txt','updated'); ${done(JSON.stringify({ summary: 'ok' }))}`);
   // Field lesson #283: the prompt's own declared JSON shape must name the required key so the new
   // dispatch-time check (dispatchResultKeysRefusal) lets this job run at all; the worker's actual
-  // result still omits it, so integrate's own (pre-existing) resultKeys check is what this test
-  // exercises, unchanged.
+  // result still omits it, so this exercises integrate's lesson #349 result-shape handling.
   const reporterJob = job({ skills: ['reporter'], prompt: 'Update the assigned file. Return JSON only, max 5 lines: {"approved": true}' });
   const state = await runManifest(root, manifest([reporterJob], { skillsDir }), { spawnImpl: worker });
-  await assert.rejects(integrateRun(root, state.id), /skill-check-failed: reporter: resultKeys missing approved/);
+  const result = await integrateRun(root, state.id);
+  assert.equal(result.status, 'integrated');
+  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), 'updated');
+  const warning = result.warnings.find(value => value.includes('result-shape-warning'));
+  assert.match(warning, /reporter: resultKeys missing approved/);
+  assert.match(warning, /parsed keys \["summary"\]/);
+
+  const missingRoot = await fixture(t);
+  const missingState = await runManifest(missingRoot, manifest([{ ...reporterJob, outputs: ['input.txt', 'missing.txt'] }], { skillsDir }), { spawnImpl: worker });
+  await assert.rejects(integrateRun(missingRoot, missingState.id), /skill-check-failed: reporter: resultKeys missing approved/);
   await assert.rejects(
-    execFileAsync(process.execPath, [CLI, '--root', root, 'integrate', state.id, '--accept-failed-checks']),
+    execFileAsync(process.execPath, [CLI, '--root', missingRoot, 'integrate', missingState.id, '--accept-failed-checks']),
     error => { assert.equal(error.code, 1); assert.match(error.stderr, /skill-check-failed: reporter: resultKeys missing approved/); return true; },
   );
+  assert.equal(await fs.readFile(path.join(missingRoot, 'input.txt'), 'utf8'), 'original');
 });
 
 test('job state records skills with a real git hash-object id and how each was attached', async t => {
