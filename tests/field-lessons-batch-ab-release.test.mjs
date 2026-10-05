@@ -8,17 +8,21 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
-describe('release: 1.45.0', () => {
-  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.45.0', async () => {
+describe('release: 1.46.1', () => {
+  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.46.1', async () => {
     const [pkgText, lockText, changelog] = await Promise.all(
       ['package.json', 'package-lock.json', 'CHANGELOG.md'].map(file => fs.readFile(path.join(root, file), 'utf8')),
     );
     const pkg = JSON.parse(pkgText);
     const lock = JSON.parse(lockText);
-    assert.equal(pkg.version, '1.46.0');
-    assert.equal(lock.version, '1.46.0');
-    assert.equal(lock.packages[''].version, '1.46.0');
-    assert.match(changelog, /^# Changelog\n\n## 1\.46\.0\n/);
+    assert.equal(pkg.version, '1.46.1');
+    assert.equal(lock.version, '1.46.1');
+    assert.equal(lock.packages[''].version, '1.46.1');
+    assert.match(changelog, /^# Changelog\n\n## 1\.46\.1\n/);
+    const section = changelog.split('## 1.46.1\n')[1].split('\n## ')[0];
+    const bullets = section.split('\n').filter(line => line.startsWith('- '));
+    assert.equal(bullets.length, 3);
+    for (const [index, lesson] of [347, 349, 350].entries()) assert.ok(bullets[index].endsWith(`(lesson ${lesson})`));
   });
 
   test('the five release lessons name flags and warnings present in command source', async () => {

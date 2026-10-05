@@ -15,10 +15,10 @@ or another agent with file and command access. The worker adapter does not
 need to match the orchestrator. Paste this into your agent at project start:
 
 ```text
-Use Project Swarm 1.46.0 for this project. Read docs/kickoff.md in the toolkit
+Use Project Swarm 1.46.1 for this project. Read docs/kickoff.md in the toolkit
 and perform its kickoff workflow. Ask me up front which model providers may
 receive project code and what spend ceiling applies; wait before model calls.
-Install from tag v1.46.0 in ~/.project-swarm, run tools/install.mjs --user,
+Install from tag v1.46.1 in ~/.project-swarm, run tools/install.mjs --user,
 link this project, run doctor, validate and run the read-only and writing smoke
 jobs, inspect and integrate the reviewed writing output. Read the installed
 SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
@@ -229,11 +229,16 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 | `sweep` | Research several areas with a dispatch cost threshold |
 | `check-pins` | Find stale internal version pins against what a project actually vendors |
 | `ship` | Push reviewed work, create/update its PR, wait for CI, merge when authorized |
+| `clean-branch --from REF [--exclude GLOB]...` | Stage source changes on the current clean branch, preserving renames and deletions |
 | `go` | Chain run, integration, optional commit and ship |
 | `ticket MANIFEST --pr PAYLOAD` | Run, inspect, integrate, check, commit bounded files, and ship; resume with `--resume RUN` |
 | `scaffold job` / `scaffold pr` | Generate validated job manifests or PR payloads with explicit mutation stubs |
 | `version` / `update` | Inspect or upgrade the shared install; never use `--root` |
 | `onboard` | Explain workflow and local provider configuration |
+
+`clean-branch --from wip --exclude docs/_swarm` copies committed source changes onto the current clean branch and stages them for review. It uses `git diff --name-status -M` and a binary patch to preserve renames, deletions and file modes; exclusions accept Git pathspec globs and can be repeated. Create and check out the destination branch first, then review and commit the staged diff. `ship --branch` refuses `branch-not-ahead` before running checks when the branch has no commits over its base.
+
+Integration reports the parsed keys, source and a bounded text excerpt for skill result-shape failures. When every declared output exists, the shape failure becomes a warning; `integrate RUN --accept-result-shape` explicitly accepts other result-key mismatches. File-change requirements and integration conflicts still apply. The debugging skill attaches automatically only when the prompt requests a fix; `skills: ["debugging"]` explicitly opts in from the manifest.
 
 - `doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local]` — check compatibility/configuration and root tool exclusions; no network by default. `--probe-local` checks only loopback HTTP health with a short timeout and no credentials; cloud keys remain configuration-only. Omitted provider means Claude.
 - `validate <manifest>` — check schema, paths, files, and size limits; no run or model call. Warnings include `command-handler-not-in-job` for a named command whose handler is absent from context and outputs, and `max-output-below-model-default` for an explicit API/OpenRouter token cap below its model default (16000 for reasoning models), naming both values. Single-request API outputs default to 61440 bytes total and 15360 per existing file; override job `outputCapBytes` or config `outputCap`, otherwise `output-cap-exceeded` directs oversized work to codex or smaller outputs; shell agents are exempt. A refusal for an uncovered test names exactly which tests to add via `suggestedIgnoreTests: {"<jobId>": ["tests/...", ...]}` in its JSON, ready to paste into `ignoreTests`.
