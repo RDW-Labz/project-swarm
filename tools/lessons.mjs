@@ -460,7 +460,22 @@ async function addPlan(root, options, privacy, now) {
   try { if (!(await fs.stat(root)).isDirectory()) throw ioError('root'); } catch { throw ioError('root'); }
   const file = storePath(root, options), before = await readBytes(file), rows = parseStore(before);
   const legacyBytes = await readBytes(path.join(root, LEGACY), 'from');
-  const legacy = legacyBytes === null ? [] : parseLegacyRows(legacyBytes.toString('utf8'));
+  let legacy = [], warnings = [];
+  if (legacyBytes !== null) {
+    const legacyText = legacyBytes.toString('utf8');
+    try { legacy = parseLegacyRows(legacyText); }
+    catch (error) {
+      if (!error.lessonError) throw error;
+      // A malformed legacy row must not block add; fall back to a cheap id scan over the raw text.
+      let fallbackMax = 0;
+      for (const legacyLine of legacyText.split(/\r?\n/)) {
+        const match = /^\s*\|\s*(\d+)\s*\|/.exec(legacyLine);
+        if (match) fallbackMax = Math.max(fallbackMax, Number(match[1]));
+      }
+      legacy = fallbackMax > 0 ? [{ id: fallbackMax }] : [];
+      warnings = [{ code: 'legacy-table-unparsed', line: error.lessonError.line }];
+    }
+  }
   let maximum = 0;
   for (const row of [...rows, ...legacy]) maximum = Math.max(maximum, row.id);
   if (maximum === Number.MAX_SAFE_INTEGER) throw lessonError('lesson-id-overflow');
@@ -472,7 +487,7 @@ async function addPlan(root, options, privacy, now) {
     await assertLessonPrivateSafe(root, { area: route.relative }, privacy);
     if (await canonicalTarget(file) === await canonicalTarget(route.file)) throw lessonError('lesson-route-invalid');
   }
-  return { file, before, row, route };
+  return { file, before, row, route, warnings };
 }
 
 export async function runLessonCore(root, options, deps = {}) {
@@ -484,10 +499,10 @@ export async function runLessonCore(root, options, deps = {}) {
       // Preflight before even acquiring the lock; repeat under it for fresh id allocation.
       await addPlan(root, options, privacy, now);
       return await withStoreLock(storePath(root, options), async () => {
-        const { file, before, row, route } = await addPlan(root, options, privacy, now);
+        const { file, before, row, route, warnings } = await addPlan(root, options, privacy, now);
         const text = (before?.toString('utf8') ?? '') + JSON.stringify(row) + '\n';
         await replaceFiles([...(route ? [route] : []), { file, before, text }]);
-        return { stdout: JSON.stringify({ status: 'ok', lesson: row, routedTo: route?.relative ?? null }) + '\n', exitCode: 0 };
+        return { stdout: JSON.stringify({ status: 'ok', lesson: row, routedTo: route?.relative ?? null, ...(warnings?.length ? { warnings } : {}) }) + '\n', exitCode: 0 };
       });
     }
     await assertLessonPrivateSafe(root, options, privacy);
