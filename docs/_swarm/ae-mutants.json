@@ -1,0 +1,41 @@
+[
+ {
+  "name": "(347) quota text classified regardless of exit code",
+  "file": "tools/cli-adapters.mjs",
+  "find": "  if (!Number.isInteger(exitCode) || exitCode === 0) return null;",
+  "replace": "  if (false) return null;",
+  "check": [
+   "node",
+   "--import",
+   "./tests/_isolate-config.mjs",
+   "--test",
+   "tests/field-lesson-347.test.mjs"
+  ]
+ },
+ {
+  "name": "(349) refuse although every output exists",
+  "file": "tools/swarm.mjs",
+  "find": "          if (fileFailures.length || (!outputsExist && !acceptResultShape)) fail(",
+  "replace": "          if (fileFailures.length || !acceptResultShape) fail(",
+  "check": [
+   "node",
+   "--import",
+   "./tests/_isolate-config.mjs",
+   "--test",
+   "tests/field-lesson-349.test.mjs"
+  ]
+ },
+ {
+  "name": "(350) ship accepts a branch that is not ahead",
+  "file": "tools/swarm.mjs",
+  "find": "  if (ahead === '0') return { ...refused(`branch-not-ahead:",
+  "replace": "  if (false) return { ...refused(`branch-not-ahead:",
+  "check": [
+   "node",
+   "--import",
+   "./tests/_isolate-config.mjs",
+   "--test",
+   "tests/field-lesson-350.test.mjs"
+  ]
+ }
+]
