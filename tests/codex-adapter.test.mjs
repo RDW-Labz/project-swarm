@@ -8,7 +8,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { CODEX_FLAGS, codexArgs, codexMessage, codexProfile, codexEnvironment, codexUsage, parseCodexReply, validateReadPaths, resolveReadPaths, git, CODEX_OUT_OF_REPO_DOCS_WAIVER_LINE } from '../tools/codex-adapter.mjs';
 import { NO_STASH_LINE, MUTANTS_BY_HAND_LINE } from '../tools/swarm-env.mjs';
-import { validateManifest, validateProject, runManifest, readState, inspectRun, waitRun, integrateRun, doctor, cancelRun } from '../tools/swarm.mjs';
+import { validateManifest, validateProject, runManifest, readState, inspectRun, waitRun, integrateRun, doctor, cancelRun, resolveWorktree } from '../tools/swarm.mjs';
 import { preflightProject } from '../tools/preflight.mjs';
 
 const job = (overrides = {}) => ({ id: 'writer', agent: 'codex', model: 'test-model', prompt: 'Update the output and test it.', context: ['input.txt'], outputs: ['output.txt'], timeoutMs: 5000, ...overrides });
@@ -41,7 +41,7 @@ function fake(script, observe = () => {}) {
 }
 const success = `if(fs.readFileSync('input.txt','utf8')!=='committed context')process.exit(8);fs.writeFileSync('output.txt','proposed');fs.writeFileSync('other.txt','undeclared edit');fs.writeFileSync('extra.txt','undeclared new file');fs.writeFileSync(result,${JSON.stringify(envelope)});process.stderr.write('tokens used\\n1,234\\n');`;
 async function removed(root, state) {
-  const location = path.join(root, '.swarm/runs', state.id, 'worktrees/writer');
+  const location = resolveWorktree(state, state.jobs.find(job => job.id === 'writer'));
   await assert.rejects(fs.access(location));
   assert.equal((await git(root, ['worktree', 'list', '--porcelain'])).includes(location), false);
 }
@@ -211,7 +211,7 @@ test('HEAD worktree runs with null stdin, collects only declared outputs, integr
   let received;
   const state = await runManifest(root, manifest(), { platform: 'darwin', spawnImpl: fake(success, (command, args, options) => { received = { command, args, options }; }) });
   assert.equal(state.status, 'complete', state.error ?? state.jobs[0]?.error);
-  assert.equal(received.options.cwd, path.join(root, '.swarm/runs', state.id, 'worktrees/writer'));
+  assert.equal(received.options.cwd, resolveWorktree(state, state.jobs[0]));
   assert.equal(received.args[received.args.indexOf('-m') + 1], 'test-model');
   if (await fs.access('/etc/ssl/cert.pem').then(() => true, () => false)) assert.equal(received.options.env.SSL_CERT_FILE, '/etc/ssl/cert.pem');
   assert.equal(state.summary.usageByProvider.codex.total_tokens, 1234);
@@ -293,7 +293,7 @@ for (const scenario of ['failed', 'timeout', 'cancelled', 'malformed', 'missing-
   await assert.rejects(fs.access(state.jobs[0].scratchDir), { code: 'ENOENT' });
   assert.equal(state.jobs[0].status, ['timeout', 'cancelled'].includes(scenario) ? scenario : 'failed');
   if (['timeout', 'cancelled'].includes(scenario)) assert.ok(signals.some(call => call.pid < 0 && call.signal === 'SIGTERM'));
-  const worktree = path.join(root, '.swarm/runs', state.id, 'worktrees/writer');
+  const worktree = resolveWorktree(state, state.jobs[0]);
   if (scenario === 'malformed') {
     // A clean exit with an invalid final envelope is the only evidence of what codex did; keep it.
     await fs.access(worktree);
@@ -345,7 +345,7 @@ test('a reply with no parseable JSON but worktree changes to declared outputs fa
   const state = await runManifest(root, manifest(), { platform: 'darwin', spawnImpl: fake(script) });
   assert.equal(state.status, 'complete', state.error ?? state.jobs[0]?.error);
   assert.equal(state.jobs[0].envelopeFallback, 'worktree');
-  const worktree = path.join(root, '.swarm/runs', state.id, 'worktrees/writer');
+  const worktree = resolveWorktree(state, state.jobs[0]);
   await fs.access(worktree);
   assert.equal((await git(root, ['worktree', 'list', '--porcelain'])).includes(worktree), true);
   assert.equal(state.jobs[0].keptWorkspace, worktree);
@@ -388,7 +388,8 @@ test('cancellation marker removes running Codex worktree and never creates queue
   assert.equal(state.status, 'cancelled');
   assert.equal(launched, 1);
   await removed(root, state);
-  await assert.rejects(fs.access(path.join(root, '.swarm/runs/cancel-marker/worktrees/queued')));
+  await assert.rejects(fs.access(resolveWorktree(state, state.jobs[1])));
+  assert.equal(state.jobs[1].worktreePath, undefined);
 });
 
 
