@@ -154,8 +154,10 @@ describe('T80 core lessons', () => {
     await refuses(() => runLessonCore(root, add, { now }), { code: 'lesson-id-overflow', field: 'id' });
     assert.deepEqual(await fs.readFile(path.join(root, store)), before);
     await put(root, legacyFile, legacy9003.replace('2000-01-02', '2000-02-30'));
-    await refuses(() => runLessonCore(root, add, { now }), { code: 'lesson-import-invalid', line: 1 });
-    assert.deepEqual(await fs.readFile(path.join(root, store)), before);
+    const malformed = JSON.parse((await runLessonCore(root, add, { now })).stdout);
+    assert.equal(malformed.lesson.id, 9012);
+    assert.deepEqual(malformed.warnings, [{ code: 'legacy-table-unparsed', line: 1 }]);
+    assert.equal((await readLessons(root)).at(-1).id, 9012);
   });
 
   test('T80 list filters and run queue warning use one age rule', async t => {
