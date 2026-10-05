@@ -1,0 +1,54 @@
+[
+ {
+  "name": "recorded-path-ignored",
+  "file": "tools/swarm.mjs",
+  "find": "if (typeof job.worktreePath === 'string' && job.worktreePath) return job.worktreePath;",
+  "replace": "if (false) return job.worktreePath;",
+  "check": [
+   "node",
+   "--import",
+   "./tests/_isolate-config.mjs",
+   "--test",
+   "tests/t86-worktree-relocation.test.mjs"
+  ]
+ },
+ {
+  "name": "shim-wrong-dir",
+  "file": "tools/swarm.mjs",
+  "find": "return path.join(state.root, '.swarm', 'runs', state.id, 'worktrees', job.id);",
+  "replace": "return path.join(state.root, '.swarm', 'runs', state.id, job.id);",
+  "check": [
+   "node",
+   "--import",
+   "./tests/_isolate-config.mjs",
+   "--test",
+   "tests/t86-worktree-relocation.test.mjs"
+  ]
+ },
+ {
+  "name": "base-not-realpath",
+  "file": "tools/swarm.mjs",
+  "find": "const realBase = await fs.realpath(base);",
+  "replace": "const realBase = base;",
+  "check": [
+   "node",
+   "--import",
+   "./tests/_isolate-config.mjs",
+   "--test",
+   "tests/t86-worktree-relocation.test.mjs"
+  ]
+ },
+ {
+  "name": "flag-ignored",
+  "file": "tools/swarm.mjs",
+  "find": "if (worktreeConfig.worktreesOutsideRoot === true && manifest.jobs.some(usesWorktree))",
+  "replace": "if (false && manifest.jobs.some(usesWorktree))",
+  "check": [
+   "node",
+   "--import",
+   "./tests/_isolate-config.mjs",
+   "--test",
+   "tests/t86-worktree-relocation.test.mjs"
+  ]
+ }
+]
