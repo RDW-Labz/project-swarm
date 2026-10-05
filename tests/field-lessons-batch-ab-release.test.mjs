@@ -15,10 +15,10 @@ describe('release: 1.45.0', () => {
     );
     const pkg = JSON.parse(pkgText);
     const lock = JSON.parse(lockText);
-    assert.equal(pkg.version, '1.45.0');
-    assert.equal(lock.version, '1.45.0');
-    assert.equal(lock.packages[''].version, '1.45.0');
-    assert.match(changelog, /^# Changelog\n\n## 1\.45\.0\n/);
+    assert.equal(pkg.version, '1.46.0');
+    assert.equal(lock.version, '1.46.0');
+    assert.equal(lock.packages[''].version, '1.46.0');
+    assert.match(changelog, /^# Changelog\n\n## 1\.46\.0\n/);
   });
 
   test('the five release lessons name flags and warnings present in command source', async () => {

@@ -2220,3 +2220,12 @@ rule is enforced or documented.
     standard temp-directory variables pointing at it, and the directory is
     removed once the job finishes unless an explicit keep-temp override is
     set. Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.
+199. **Dispatch refusals must name the next action.** A coordinator linking a
+    fresh, empty project hit three refusals in a row, each costing a
+    source-code dive before the first run started: `bookkeeping-terse:
+    resultKeys missing status`; `fatal: ambiguous argument 'HEAD': unknown
+    revision`; and `Refusing: base is red (...); pass --accept-red-base with
+    --reason to run onto it anyway`, whose override then left no trace once
+    accepted. Rule: a refusal names where the thing came from and the one
+    command that resolves it, and an accepted override is recorded, not just
+    typed. Regression coverage is in `tests/dispatch-refusals.test.mjs`.

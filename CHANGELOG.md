@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.46.0
+
+- `resultKeys missing` refusals (at dispatch and at integrate) now name the skills source directory, why the skill attached (`manifest skills list` or the matching `paths:` glob), and how to run without the skill; `attachSkillsForJob` exposes this via a new `attachedBy` field. (lesson 199)
+- `run` refuses with `no-commits` when the project's HEAD is unborn (no commits yet) and the run needs one (base checks, or a codex / claude-shell worktree job), naming `git commit --allow-empty` instead of surfacing git's own raw error; a copied-workspace run without checks still runs as before. (lesson 199)
+- `run --accept-red-base --reason` now records `acceptRedBase`, `acceptRedBaseReason` and `baseCheckFailures` in the run's state; `inspect` (not `status`) reports them when present. (lesson 199)
+
 ## 1.45.0
 
 - Config `worktreesOutsideRoot: true` (default off) places codex and claude-shell job worktrees in a per-run scratch dir outside the repository root (`<scratch root>/worktrees/<repo>-<hash>/<run>/<job>`, override with config `worktreesDir`), so root-level lint, test and search tools never see swarm copies; `run` skips `swarm-dir-not-ignored` when it is on. (T86, lesson 330, decision #345)

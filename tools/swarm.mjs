@@ -70,7 +70,7 @@ const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/;
 const CHECK_NAME = /^[A-Za-z0-9 ._-]{1,60}$/;
 const CHECK_TAIL = 2000;
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
-const fail = message => { throw new Error(message); };
+const fail = (message, code) => { throw Object.assign(new Error(message), code ? { code } : {}); };
 // Field lesson #344: a contract worker's hand-written `editOutputs` surfaced a bare
 // "Unknown job field" with no pointer to the real field; suggest a close known name.
 function unknownJobFieldMessage(name, knownFields) {
@@ -417,12 +417,19 @@ export function parsePromptDeclaredResultKeys(prompt) {
   }
   return keys;
 }
-export function dispatchResultKeysRefusal(attachedSkills, job) {
+// Field lesson #283's own refusal named the skill and the key but neither where the skill came
+// from nor how to turn it off — a coordinator on a fresh project had to source-dive to learn
+// either. `skillsSourceDir` defaults to '(unknown)' so an existing caller that never threads it
+// through still gets a (less useful, never wrong) message instead of `undefined`.
+export function dispatchResultKeysRefusal(attachedSkills, job, { skillsSourceDir = '(unknown)' } = {}) {
   const declaredKeys = parsePromptDeclaredResultKeys(job.prompt);
   for (const skill of attachedSkills) {
     if (skill.attached === 'index-only' || !skill.checks?.resultKeys?.length) continue;
     for (const key of skill.checks.resultKeys) {
-      if (!declaredKeys || !declaredKeys.includes(key)) fail(`${skill.name}: resultKeys missing ${key}`);
+      if (!declaredKeys || !declaredKeys.includes(key)) {
+        const reason = skill.attachedBy ?? (skill.attached === 'named' ? 'manifest skills list' : 'paths match');
+        fail(`${skill.name}: resultKeys missing ${key} (skill from ${skillsSourceDir}, attached by ${reason}; to run without these skills set "skillsDir" in the manifest to an empty directory, or declare the key in the job's "Return JSON only" shape)`);
+      }
     }
   }
 }
@@ -1964,11 +1971,27 @@ export async function runBaseChecks(root, manifest, { spawnImpl = spawn, gitImpl
 export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks, checkBase = false, acceptRedBase = false, reason, baseChecks = {}, sync = false, acceptCoveredRedBase = true } = {}) {
   root = await fs.realpath(root);
   validateManifest(manifest);
+  // An unborn HEAD (no commits yet) breaks `git rev-parse HEAD`, which runBaseChecks below (and
+  // worktree creation, for a codex/claude-shell job) both assume succeeds; refused here, before
+  // either runs, naming the fix instead of surfacing git's own raw "ambiguous argument" error.
+  // Only the paths that actually resolve HEAD are gated: base checks (checkBase with checks) and
+  // the detached worktree a codex or claude-shell job starts from. A copied-workspace job on a
+  // commit-less repo ran fine before and still does (replay evidence, lesson 199).
+  const needsHead = (checkBase && (manifest.checks ?? []).length > 0) || manifest.jobs.some(job => job.agent === 'codex' || job.shell === true);
+  if (needsHead) {
+    let hasGitDir = true;
+    try { await git(root, ['rev-parse', '--git-dir']); } catch { hasGitDir = false; }
+    if (hasGitDir) {
+      try { await git(root, ['rev-parse', '--verify', 'HEAD']); }
+      catch { fail('Refusing: project has no commits yet and this run needs one (base checks or a worktree job); create one first (for example `git commit --allow-empty -m "init"`), then run again', 'no-commits'); }
+    }
+  }
   await privateNamesDispatchGuard(root, manifest, { env });
   // Every worktree of one repo shares a board key; refuse before touching anything if another
   // live run already claims one of this run's declared outputs.
   const declaredOutputs = manifest.jobs.flatMap(job => job.outputs);
   let redBaseAutoAccept = null;
+  let acceptedRedBaseInfo = null;
   // Field lesson #253: refuses to dispatch onto a red base unless the caller explicitly accepts
   // it (with a reason) — before any workspace is even created for a job.
   if (checkBase) {
@@ -1987,6 +2010,9 @@ export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl,
       if (!covered || !acceptCoveredRedBase) fail(`Refusing: base is red (${baseResult.failures.join(', ')}); pass --accept-red-base with --reason to run onto it anyway`);
       redBaseAutoAccept = `red-base-auto-accepted: every failing check location is covered by this run's own outputs: ${locations.join(', ')}`;
     }
+    // An explicit --accept-red-base override is otherwise only ever visible in the coordinator's
+    // own shell history; recorded here so inspect can show it.
+    if (acceptRedBase) acceptedRedBaseInfo = { reason, failures: baseResult.failures };
   }
   if (manifest.jobs.some(job => job.agent === 'codex')) requireCodexPlatform(platform);
   // Decision #154: a shell job never runs unsandboxed and never falls back to the person's own
@@ -2006,13 +2032,13 @@ export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl,
   }
   await registerLiveRun({ runId: id, root, outputs: declaredOutputs, dir: liveDirOpt });
   try {
-    return await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, workerKey, shellHooks, redBaseAutoAccept, sync });
+    return await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, workerKey, shellHooks, redBaseAutoAccept, acceptedRedBaseInfo, sync });
   } finally {
     await unregisterLiveRun(id, { dir: liveDirOpt });
   }
 }
 
-async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, workerKey, shellHooks, redBaseAutoAccept = null, sync = false }) {
+async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, workerKey, shellHooks, redBaseAutoAccept = null, acceptedRedBaseInfo = null, sync = false }) {
   const cleanup = new AbortController();
   signal = signal ? AbortSignal.any([signal, cleanup.signal]) : cleanup.signal;
   let workers = [];
@@ -2020,7 +2046,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   await safePath(root, `${directory}/state.json`, { internal: true, parents: true });
   const claim = await safePath(root, `${directory}/claim`, { internal: true });
   await fs.writeFile(claim, '', { flag: 'wx' });
-  const state = { version: 1, id, root, concurrency: manifest.concurrency??2, peakConcurrency: 0, status: 'running', startedAt: new Date().toISOString(), jobs: [], ...(redBaseAutoAccept ? { redBaseAutoAccept } : {}) };
+  const state = { version: 1, id, root, concurrency: manifest.concurrency??2, peakConcurrency: 0, status: 'running', startedAt: new Date().toISOString(), jobs: [], ...(redBaseAutoAccept ? { redBaseAutoAccept } : {}), ...(acceptedRedBaseInfo ? { acceptRedBase: true, acceptRedBaseReason: acceptedRedBaseInfo.reason, baseCheckFailures: acceptedRedBaseInfo.failures } : {}) };
   const worktreeConfig = loadLocalConfig({ env });
   if (worktreeConfig.worktreesOutsideRoot === true && manifest.jobs.some(usesWorktree)) state.worktreesBase = await worktreesBaseFor(root, worktreeConfig, { env });
   // Field lesson #202: two shell jobs each told to run the full suite, sharing one root, is a
@@ -3356,7 +3382,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
           const responseBytes = await bytesAt(root, `.swarm/runs/${id}/${declared.id}/response.txt`, true);
           resultData = responseBytes ? parseFinalJson(responseBytes.toString('utf8')) : null;
         }
-        const failures = skillCheckFailures({ attachedSkills, changedFiles: jobChangedFiles, resultData });
+        const failures = skillCheckFailures({ attachedSkills, changedFiles: jobChangedFiles, resultData, skillsSourceDir: skillsSourceDirAtIntegrate });
         if (failures.length) fail(`skill-check-failed: ${failures.join('; ')}`);
       }
     }
@@ -3974,7 +4000,7 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
     if (promptPathHits.length) fail(promptPathHits[0]);
     // Field lesson #283: an attached skill's own resultKeys is checked against the job's own
     // prompt-declared JSON shape before dispatch, not only once integrate reads the real result.
-    dispatchResultKeysRefusal(attachedSkills, job);
+    dispatchResultKeysRefusal(attachedSkills, job, { skillsSourceDir });
     let bytes=0, apiContextBytes=0;
     const files=[];
     const testOutputTexts = new Map();
@@ -4142,7 +4168,7 @@ export async function inspectRun(root,id,{spawnImpl=spawn,programOnPathImpl=prog
       }
     }
   }
-  return {id,status:state.status,integratedAt:state.integratedAt??null,tokens:tokensTotal(jobs.map(job=>job.tokens)),costNotReported:costNotReported(jobs),warnings:[...runWarnings(state),...inventedHashWarnings,...persistedFieldWarnings,...collectOnlyWarnings,...fixtureWarnings],jobs,files};
+  return {id,status:state.status,integratedAt:state.integratedAt??null,tokens:tokensTotal(jobs.map(job=>job.tokens)),costNotReported:costNotReported(jobs),warnings:[...runWarnings(state),...inventedHashWarnings,...persistedFieldWarnings,...collectOnlyWarnings,...fixtureWarnings],jobs,files,...(state.acceptRedBase?{acceptRedBase:true,acceptRedBaseReason:state.acceptRedBaseReason,baseCheckFailures:state.baseCheckFailures??[]}:{})};
 }
 
 // Lesson #48: a coordinator asking only "did it work, what did it say" should not have to
