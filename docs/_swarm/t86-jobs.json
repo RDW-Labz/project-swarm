@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "jobs": [
+    {
+      "id": "t86-core",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "Edits a 407 KB file in place across two executors, run wiring, inspect and the CLI; it must keep four #345 contracts and record-before-checkout ordering exact, and a slip silently loses failed-job evidence.",
+      "timeoutMs": 3000000,
+      "context": [
+        "docs/_swarm/t86-contract.md",
+        "docs/_swarm/t86-brief.md",
+        "tools/claude-shell.mjs",
+        "tools/codex-adapter.mjs",
+        "tools/local-config.mjs",
+        "tests/codex-adapter.test.mjs",
+        "tests/claude-shell.test.mjs",
+        "tests/field-lesson-t81-cli.test.mjs"
+      ],
+      "outputs": ["tools/swarm.mjs"],
+      "ignoreTests": ["tests/shell-scratch.test.mjs", "tests/board.test.mjs"],
+      "prompt": "Implement T86 in tools/swarm.mjs exactly as docs/_swarm/t86-contract.md specifies. Read sections 1, 2.1 and 3 in full before editing. tools/swarm.mjs is 407 KB: edit it in place with small Edit calls, never rewrite it, and touch only the functions section 2.1 lists. Section 3.4's helper text and the lines quoted in section 6 must appear verbatim, because the mutants match them. Order matters (section 3.6): onWorktreePath, then prepareWorktreeLocation, then git worktree add. Keep every keep/remove decision as it is (section 1 rule 8). If tools/local-config.mjs drops unknown config keys, or a change is needed outside your functions, return blocked naming the file or function (section 7 item 8). ignoreTests: tests/shell-scratch.test.mjs and tests/board.test.mjs import or mention swarm code but only cover sandbox profile strings and board keys, which T86 does not change. If validate names other swarm.mjs tests, the same reason applies. Do not edit any test file; t86-tests-new and t86-tests-existing own them.\nReturn JSON only: {\"status\":\"complete|blocked\",\"filesChanged\":[...],\"reproTest\":\"<test file>\",\"notes\":\"<=3 lines\"}"
+    },
+    {
+      "id": "t86-tests-new",
+      "agent": "claude",
+      "model": "sonnet",
+      "tier": "mid",
+      "timeoutMs": 1800000,
+      "after": ["t86-core"],
+      "context": [
+        "docs/_swarm/t86-contract.md",
+        "tools/swarm.mjs",
+        "tools/codex-adapter.mjs",
+        "tools/claude-shell.mjs",
+        "tests/codex-adapter.test.mjs"
+      ],
+      "outputs": ["tests/t86-worktree-relocation.test.mjs"],
+      "prompt": "Create tests/t86-worktree-relocation.test.mjs with the 12 tests in docs/_swarm/t86-contract.md section 4.1. Use those names exactly and follow the fixture rules there: a temp SWARM_CONFIG with worktreesOutsideRoot and worktreesDir, codex fake as in tests/codex-adapter.test.mjs, and every temp dir removed in t.after. Import resolveWorktree, worktreesBaseFor, listOrphanWorktrees, executeCodexJob, runManifest, inspectRun, integrateRun, cancelRun from ../tools/swarm.mjs, using the names in contract section 3. Never join a worktree path by hand except the one shim literal section 4.1 test 6 allows (section 1 rule 4). Each assertion must fail if the behaviour it names regresses: section 6 lists the mutants each test must catch. Use node:test and node:assert/strict only; no new dependencies. Run a single file with: node --import ./tests/_isolate-config.mjs --test tests/t86-worktree-relocation.test.mjs. Do not edit tools/swarm.mjs: if an export is missing or behaves differently from section 3, return blocked naming it.\nReturn JSON only: {\"status\":\"complete|blocked\",\"filesChanged\":[...],\"reproTest\":\"<test file>\",\"notes\":\"<=3 lines\"}"
+    },
+    {
+      "id": "t86-tests-existing",
+      "agent": "claude",
+      "model": "sonnet",
+      "tier": "mid",
+      "timeoutMs": 1800000,
+      "after": ["t86-core"],
+      "context": [
+        "docs/_swarm/t86-contract.md",
+        "tools/swarm.mjs"
+      ],
+      "outputs": [
+        "tests/codex-adapter.test.mjs",
+        "tests/claude-shell.test.mjs",
+        "tests/field-lesson-t81-cli.test.mjs"
+      ],
+      "prompt": "Apply exactly the per-line changes in docs/_swarm/t86-contract.md section 4.2 to tests/codex-adapter.test.mjs, tests/claude-shell.test.mjs and tests/field-lesson-t81-cli.test.mjs. Also add the one new T81 flag-on test named there. Asserted values do not change, because the flag is off in these files. Leave the T81 literal old-layout paths at lines 298 and 343 untouched: they prove the shim. Leave every sandbox profile string fixture untouched. Do not loosen, delete or skip any assertion. If a whole-record state assertion needs the optional worktreePath key, allow only that key and say so in notes. Do not edit tools/swarm.mjs: if resolveWorktree or the executor options from section 3.6 are missing, return blocked naming them. Run one file with: node --import ./tests/_isolate-config.mjs --test <file>.\nReturn JSON only: {\"status\":\"complete|blocked\",\"filesChanged\":[...],\"reproTest\":\"<test file>\",\"notes\":\"<=3 lines\"}"
+    },
+    {
+      "id": "t86-release",
+      "agent": "claude",
+      "model": "sonnet",
+      "tier": "cheap",
+      "tierReason": "Bookkeeping: copy fixed release text from the contract; claude sonnet is the manifest's standard worker for this run.",
+      "timeoutMs": 600000,
+      "context": [
+        "docs/_swarm/t86-contract.md"
+      ],
+      "outputs": ["CHANGELOG.md", "package.json"],
+      "prompt": "Bookkeeping job (skill bookkeeping-terse). Apply docs/_swarm/t86-contract.md section 5 exactly. In package.json change only \"version\": \"1.44.0\" to \"version\": \"1.45.0\". In CHANGELOG.md insert the 1.45.0 block verbatim directly above the line \"## 1.44.0\", with one blank line between the blocks. Change nothing else in either file.\nReturn JSON only: {\"status\":\"complete|blocked\",\"filesChanged\":[...],\"reproTest\":\"<test file>\",\"notes\":\"<=3 lines\"}"
+    }
+  ]
+}
