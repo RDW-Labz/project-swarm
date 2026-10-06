@@ -1,8 +1,27 @@
 # Changelog
 
-## 1.49.0
+## 1.50.0
 
 - Vendored five worker skills from `mattpocock/skills` under the MIT License, pinned to commits `6fd947921b935b7e1e69293a200400f0fdd5c15f` and `153fc1b93de6584562765cdce299324e1ff9e661`; `installProject` copies each skill only when absent and keeps an existing skill untouched.
+- UI changes now require or warn for preview-harness coverage of affected rendered views, and validation identifies uncovered UI roots. (lesson 362)
+- Base checks whose only named tests are absent declared outputs are reported as pending rather than red. (lesson 363)
+- Jobs that do not own changelog or version files receive explicit ownership guidance and do not block on those files. (lesson 364)
+- Session metrics report follow-up rework by skill and mark red rate as not applicable when integration checks are empty. (lesson 365)
+- Test suites isolate provider-limit caches and global paths under per-test temporary homes and guard against real-home access. (lesson 366)
+- Monitoring reports idle seats, runnable unblocked work, and the hand steps associated with idle gaps. (lesson 369)
+- Version-bump jobs discover tests asserting the old active version and require the full suite as their release check. (lesson 371)
+- Ship records each failing test block with its name, location, and assertion and reruns only failed local files when requested. (lesson 372)
+- Validation reuses live output-conflict checks and reports both conflicts and the subset of jobs that can start; run accepts that subset. (lesson 374)
+- Note resolves task and handoff files under the configured coordination directory, while invalid lesson areas list allowed values. (lesson 375)
+- Job-level contracts are normalized, null tier reasons are ignored, and sibling outputs in context are reported as pending. (lesson 377)
+- CI checks expand shell globs and branch shipping infers head and base from the selected branch and default branch. (lesson 378)
+- Validation warns when identifier-like mechanisms named in a brief or prompt are absent from the repository. (lesson 379)
+- Integrated-tree audits block undeclared edits and rerun each job's reported check against the integrated tree. (lesson 380)
+- Local checks ignore swarm scratch copies and warn when check output cites a scratch path. (lesson 381)
+- CI failures after a zero-failure test summary are classified as timeouts and the failed job is retried once. (lesson 382)
+- Existing safeguards already cover lesson 370.
+- Existing safeguards already cover lesson 373.
+- Existing safeguards already cover lesson 376.
 
 ## 1.48.0
 

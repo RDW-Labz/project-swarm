@@ -70,6 +70,64 @@ export function splitArgv(line) {
   return tokens;
 }
 
+function globToRegExp(glob) {
+  let source = '^';
+  for (let index = 0; index < glob.length; index++) {
+    const char = glob[index];
+    if (char === '*') {
+      if (glob[index + 1] === '*') { source += '.*'; index++; }
+      else source += '[^/]*';
+    } else if (char === '?') source += '[^/]';
+    else source += char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`${source}$`);
+}
+
+async function repoFiles(root) {
+  const files = [];
+  async function visit(relative) {
+    const directory = path.join(root, relative);
+    let entries;
+    try { entries = await fs.readdir(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (relative === '' && entry.name === '.git') continue;
+      const child = relative ? `${relative}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) await visit(child);
+      else if (entry.isFile()) files.push(child);
+    }
+  }
+  await visit('');
+  return files.sort();
+}
+
+// GitHub Actions invokes each run line through a shell. Expand the same relative file globs
+// before handing argv to a direct runner; otherwise pytest receives the literal `*` and exits
+// with a collection error. A no-match glob stays literal, matching the default shell behavior.
+export async function expandShellGlobs(argv, root) {
+  const files = await repoFiles(root);
+  const expanded = [];
+  for (const token of argv ?? []) {
+    if (!/[?*]/.test(token) || token.startsWith('-') || path.isAbsolute(token)) { expanded.push(token); continue; }
+    const matches = files.filter(file => globToRegExp(token).test(file));
+    expanded.push(...(matches.length ? matches : [token]));
+  }
+  return expanded;
+}
+
+function addSwarmIgnore(argv) {
+  const result = [...argv];
+  const runnerIndex = result.findIndex(token => ['pytest', 'vitest', 'eslint', 'ruff'].includes(path.basename(token)));
+  if (runnerIndex === -1) return result;
+  const runner = path.basename(result[runnerIndex]);
+  const alreadyIgnored = result.some(token => token === '.swarm' || token.includes('.swarm/**') || token.includes('.swarm/'));
+  if (alreadyIgnored) return result;
+  if (runner === 'pytest') result.push('--ignore=.swarm');
+  else if (runner === 'vitest') result.push('--exclude', '.swarm/**');
+  else if (runner === 'eslint') result.push('--ignore-pattern', '.swarm/**');
+  else if (runner === 'ruff') result.push('--exclude', '.swarm/**');
+  return result;
+}
+
 // Field lesson #247: a step CI itself refuses to run outside a real runner (gated on
 // `GITHUB_ACTIONS`/`runner.os`, a `pytest -m native`-style marker reserved for real hardware, or a
 // job whose `env:` wires in a repo secret) replaying it locally only ever wastes a round-trip on
@@ -173,7 +231,12 @@ export async function loadChecksFromCi(root, ciPath = DEFAULT_CI_PATH, { readFil
   let text;
   try { text = await readFile(path.join(root, ciPath), 'utf8'); }
   catch { return { checks: [], skipped: [], missing: true, path: ciPath }; }
-  return { ...ciChecksFromWorkflowText(text), missing: false, path: ciPath };
+  const parsed = ciChecksFromWorkflowText(text);
+  let hasSwarmDir = false;
+  try { hasSwarmDir = (await fs.stat(path.join(root, '.swarm'))).isDirectory(); } catch { /* no runtime scratch tree */ }
+  const checks = [];
+  for (const check of parsed.checks) checks.push({ ...check, argv: await expandShellGlobs(hasSwarmDir ? addSwarmIgnore(check.argv) : check.argv, root) });
+  return { checks, skipped: parsed.skipped, missing: false, path: ciPath };
 }
 
 // A hand check's "program + subcommand" (e.g. `uv run pytest ...` -> `uv run`) is the part CI

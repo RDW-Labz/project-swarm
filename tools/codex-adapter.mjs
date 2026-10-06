@@ -127,9 +127,15 @@ export function codexArgs(job, { profile, worktree, lastMessage, message }) {
 // waiver names the exact narrow case that is genuinely out of reach, so the rest of that sentence
 // stays true for everything else.
 export const CODEX_OUT_OF_REPO_DOCS_WAIVER_LINE = "Any doc your own AGENTS.md names that is not shown inline above, not in your context list, and not under .swarm/skills lives outside this worktree; you do not need to fetch it or ask for it — proceed using only what is provided here.\n";
+export const CODEX_OWNERSHIP_LINE = 'CHANGELOG and version files are owned by another job; do not edit or block on them.\n';
+export function codexNeedsOwnershipInstruction(job, versionFiles = []) {
+  const outputs = new Set((job.outputs ?? []).map(file => String(file).replace(/\\/g, '/')));
+  const activeVersionFiles = [...new Set(versionFiles.map(file => String(file).replace(/\\/g, '/')))].filter(Boolean);
+  return activeVersionFiles.length > 0 && (!outputs.has('CHANGELOG.md') || activeVersionFiles.some(file => !outputs.has(file)));
+}
 export const DESIGN_ONLY_LINE = 'Design-only job: do not run tests or installs; read and grep only. A test failure in your sandbox is never a reason to block.\n';
 export const isDesignOnlyCodexJob = job => job.agent === 'codex' && job.outputs.length > 0 && job.outputs.every(file => /\.md$/i.test(file) || (file.split('/')[0] === 'docs' && /\.json$/i.test(file)));
-export function codexMessage(job, { contract = null, gotchas = '', skills = '', agentsWorkspace = null, checks = [] } = {}) {
+export function codexMessage(job, { contract = null, gotchas = '', skills = '', agentsWorkspace = null, checks = [], versionFiles = [] } = {}) {
   let base = `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(job.context)}. You may edit only these declared outputs: ${JSON.stringify(job.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.\nRead only the files in your context; other reads may be denied.\nIf a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\n`;
   if (job.scope === 'open') base = `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(job.context)}. Your open scope directories are ${JSON.stringify(job.outputDirs)}. The frozen allowed files (tracked directory files plus explicit outputs) are ${JSON.stringify(job.outputs)}. You may read context and allowed files and edit only allowed files. New undeclared files are dropped writes. This is a proposal boundary, not per-file OS confinement. Do not delete files. Run relevant project tests. Root uncommitted changes are not included. Deliver what you can and list what remains. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed allowed paths and unfinished work.\n\n`;
   const contractSection = contract ? `Shared contract (${contract.path}). Read it first; it wins over any other file:\n${contract.text}\n\n` : '';
@@ -145,7 +151,8 @@ export function codexMessage(job, { contract = null, gotchas = '', skills = '', 
   // Field lesson #163: codex has a shell too, and the stash stack is shared by every worktree.
   // Field lesson #170: never hand-revert a mutant with checkout/restore; run `swarm mutants`.
   // Field lesson #167: known platform gotchas for this project, when a .swarm/gotchas.md exists.
-  return `${designOnly ? DESIGN_ONLY_LINE : ''}${base}${CODEX_OUT_OF_REPO_DOCS_WAIVER_LINE}${contractSection}${agentsWorkspaceSection}${testEnvironment}${checksLine}${NO_STASH_LINE}\n${MUTANTS_BY_HAND_LINE}\n${gotchas}${skills}TASK:\n${job.prompt}\n`;
+  const ownership = codexNeedsOwnershipInstruction(job, [...versionFiles, ...(job.versionFiles ?? [])]) ? CODEX_OWNERSHIP_LINE : '';
+  return `${designOnly ? DESIGN_ONLY_LINE : ''}${base}${ownership}${CODEX_OUT_OF_REPO_DOCS_WAIVER_LINE}${contractSection}${agentsWorkspaceSection}${testEnvironment}${checksLine}${NO_STASH_LINE}\n${MUTANTS_BY_HAND_LINE}\n${gotchas}${skills}TASK:\n${job.prompt}\n`;
 }
 const tryObject = text => { try { const value = JSON.parse(text); return value && typeof value === 'object' && !Array.isArray(value) ? value : null; } catch { return null; } };
 const CODEX_FENCE = /```[a-zA-Z]*[ \t]*\n([\s\S]*?)\n[ \t]*```/g;

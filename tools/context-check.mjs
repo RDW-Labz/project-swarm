@@ -253,6 +253,105 @@ export function contextDirectoryWarnings(root, job) {
   return warnings;
 }
 
+// Field lesson 362: source-level checks do not exercise rendered UI roots. Keep this small and
+// advisory so validate can identify the affected roots and require a configured preview harness
+// without knowing which browser runner the project uses.
+const RENDERED_UI_ROOT_RE = /^(?:src\/components\/|styles\/|src\/styles\/)/;
+const PREVIEW_HARNESS_RE = /(?:preview[-_ ]?harness|visual[-_ ]?regression|screenshot)/i;
+
+function checkText(check) {
+  return [check?.name, check?.kind, check?.type, ...(Array.isArray(check?.argv) ? check.argv : [])]
+    .filter(value => typeof value === 'string').join(' ');
+}
+
+function checkViews(check, expected) {
+  const declared = [
+    ...(Array.isArray(check?.views) ? check.views : []),
+    ...(Array.isArray(check?.previewViews) ? check.previewViews : []),
+  ].filter(value => typeof value === 'string');
+  if (declared.length) return declared;
+  const text = checkText(check);
+  return expected.filter(view => new RegExp(`(?:^|[^A-Za-z0-9_$-])${escapeRegExp(view)}(?:$|[^A-Za-z0-9_$-])`).test(text));
+}
+
+export function previewHarnessWarnings(_root, job, checks = []) {
+  const outputs = [...new Set((job.outputs ?? []).map(value => String(value).replace(/\\/g, '/')))]
+    .filter(file => RENDERED_UI_ROOT_RE.test(file)).sort();
+  if (!outputs.length) return [];
+  const views = [...new Set([...(job.previewViews ?? []), ...(job.views ?? [])]
+    .filter(value => typeof value === 'string' && value))].sort();
+  const harnesses = (Array.isArray(checks) ? checks : []).filter(check => PREVIEW_HARNESS_RE.test(checkText(check)));
+  if (!harnesses.length) {
+    return [{
+      code: 'preview-harness-missing',
+      jobId: job.id,
+      outputs,
+      views,
+      message: `job ${job.id} changes rendered UI roots (${outputs.join(', ')}); configure a preview-harness check${views.length ? ` covering views: ${views.join(', ')}` : ''}`,
+    }];
+  }
+  if (!views.length) return [];
+  const covered = new Set(harnesses.flatMap(check => checkViews(check, views)));
+  const missing = views.filter(view => !covered.has(view));
+  if (!missing.length) return [];
+  return [{
+    code: 'preview-harness-coverage',
+    jobId: job.id,
+    outputs,
+    views: missing,
+    message: `job ${job.id} preview-harness check does not cover views: ${missing.join(', ')}`,
+  }];
+}
+
+// Field lesson 379: a brief can name an assumed mechanism that is not present in the checkout.
+// Only explicit identifier-shaped references are considered; ordinary prose and private prompt
+// text are never copied into the warning, which keeps this check cheap and redaction-safe.
+const MECHANISM_WORD_RE = /^[A-Za-z_$][A-Za-z0-9_$]*(?:[-.][A-Za-z_$][A-Za-z0-9_$]*)*$/;
+const MECHANISM_CAMEL_RE = /[a-z][A-Z]|[_$]/;
+const MECHANISM_IGNORED = new Set(['true', 'false', 'null', 'undefined', 'return', 'function', 'class', 'const', 'let', 'var']);
+
+function mechanismTokens(text) {
+  const tokens = new Set();
+  const quoted = /`([^`\n]+)`/g;
+  for (const match of String(text ?? '').matchAll(quoted)) {
+    const token = match[1].trim();
+    if (MECHANISM_WORD_RE.test(token) && !MECHANISM_IGNORED.has(token) && !/^\$?(?:sk|pk|api|token)[-_]/i.test(token)) {
+      const simple = !token.includes('-') && !token.includes('.') && MECHANISM_CAMEL_RE.test(token);
+      if (simple || token.includes('-')) tokens.add(token);
+    }
+  }
+  for (const match of String(text ?? '').matchAll(/\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g)) {
+    const token = match[1];
+    if (MECHANISM_CAMEL_RE.test(token) && !MECHANISM_IGNORED.has(token)) tokens.add(token);
+  }
+  return [...tokens].sort();
+}
+
+function repositoryContains(root, files, token) {
+  const escaped = escapeRegExp(token);
+  const exact = new RegExp(`(?:^|[^A-Za-z0-9_$-])${escaped}(?:$|[^A-Za-z0-9_$-])`);
+  for (const file of files) {
+    if (exact.test(String(file).replace(/\\/g, '/'))) return true;
+    try {
+      const stat = fs.statSync(path.join(root, file));
+      if (!stat.isFile() || stat.size > CONTEXT_CHECK_LIMITS.maxTestBytes) continue;
+      if (exact.test(fs.readFileSync(path.join(root, file), 'utf8'))) return true;
+    } catch { /* a concurrently removed file is absent for this advisory check */ }
+  }
+  return false;
+}
+
+export function missingMechanismWarnings(root, job, files = listProjectFiles(root), { brief = '' } = {}) {
+  const text = `${brief}\n${job.brief ?? ''}\n${job.prompt ?? ''}`;
+  const missing = mechanismTokens(text).filter(token => !repositoryContains(root, files, token));
+  return missing.map(token => ({
+    code: 'missing-mechanism',
+    jobId: job.id,
+    token,
+    message: `job ${job.id} names mechanism ${token}, but no repository file or symbol contains it`,
+  }));
+}
+
 // Field lesson 155: a job that adds an entry to a registry (catalog dir, allowlist, pinned
 // scopes) also owns the test that pins that registry's membership, or the new file breaks a
 // hard-coded set the job's own context/outputs never named. "Near" is a same-text proximity

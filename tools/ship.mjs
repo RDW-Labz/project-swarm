@@ -858,6 +858,26 @@ export function parsePrPayload(text) {
   return { title: data.title, head: data.head, base: data.base, body: data.body };
 }
 
+// `--branch` is also a useful recovery path for a payload written before head/base were known.
+// Resolve the repository's configured default branch; never guess from a local branch name.
+export async function inferDefaultBranch(exec, root) {
+  try {
+    const symbolic = await exec('git', ['symbolic-ref', 'refs/remotes/origin/HEAD'], { cwd: root });
+    if (symbolic?.code === 0) {
+      const branch = /^refs\/remotes\/origin\/(.+)$/.exec(symbolic.stdout.trim())?.[1];
+      if (branch && HEAD_RE.test(branch)) return branch;
+    }
+  } catch { /* try the remote's human-readable fallback */ }
+  try {
+    const remote = await exec('git', ['remote', 'show', 'origin'], { cwd: root });
+    if (remote?.code === 0) {
+      const branch = /^\s*HEAD branch:\s*(\S+)/m.exec(remote.stdout)?.[1];
+      if (branch && HEAD_RE.test(branch)) return branch;
+    }
+  } catch { /* no usable default branch */ }
+  return null;
+}
+
 export function isHeld(body) {
   for (const line of String(body ?? '').split('\n')) {
     const trimmed = line.trim();
@@ -996,6 +1016,11 @@ export function extractFailingTestFiles(text) {
     re.lastIndex = 0;
     let match;
     while ((match = re.exec(source))) files.add(match[1]);
+  }
+  for (const failure of extractFailureBlocks(source)) {
+    const location = String(failure.location ?? '');
+    const file = location.replace(/:\d+(?::\d+)?$/, '');
+    if (file && TEST_FILE_RE.test(file)) files.add(file);
   }
   return [...files];
 }
@@ -1225,6 +1250,42 @@ export function extractFailingTestIds(text) {
   return [...ids];
 }
 
+// Keep the structured part of every test-runner failure in the check record.  The retained tail
+// is intentionally small, so using it as the only evidence loses TAP YAML diagnostics and the
+// location/assertion that make a failure actionable.
+export function extractFailureBlocks(text) {
+  const lines = String(text ?? '').replace(/\r\n/g, '\n').split('\n');
+  const starts = [];
+  for (let index = 0; index < lines.length; index++) {
+    if (/^\s*not ok \d+ - .+/.test(lines[index]) || /^\s*(?:✖|FAIL\s+).+/.test(lines[index])) starts.push(index);
+  }
+  return starts.map((start, position) => {
+    const end = starts[position + 1] ?? lines.length;
+    const blockLines = lines.slice(start, end).join('\n').trim();
+    const first = lines[start].trim();
+    const name = /^not ok \d+ - (.+)$/.exec(first)?.[1]?.trim() ??
+      /^(?:✖|FAIL\s+)(.+)$/.exec(first)?.[1]?.trim() ?? first;
+    const location = blockLines.match(/(?:^|\n)\s*(?:location:\s*|❯\s*|at\s+)([^\s()]+:\d+(?::\d+)?)/m)?.[1] ??
+      blockLines.match(/\b((?:[A-Za-z]:)?[^\s()]+:\d+:\d+)\b/)?.[1] ?? null;
+    const assertion = blockLines.match(/(?:^|\n)\s*(operator:\s*[^\n]+)/i)?.[1]?.trim() ??
+      blockLines.match(/(?:^|\n)\s*((?:AssertionError|assert(?:ion)?(?:Error)?|expected:|actual:|Expected|Received)\b[^\n]*)/i)?.[1]?.trim() ??
+      blockLines.split('\n').slice(1).map(line => line.trim()).find(line => line && line !== '---' && line !== '...') ?? null;
+    return { name, location, assertion, block: blockLines };
+  });
+}
+
+function withFailureBlocks(check) {
+  if (!check || check.status !== 'failed') return check;
+  if (Array.isArray(check.failureBlocks)) return check;
+  const source = [check.output, check.rawOutput, check.head, check.tail, check.stderr, check.stdout].filter(Boolean).join('\n');
+  const failureBlocks = extractFailureBlocks(source);
+  return failureBlocks.length ? { ...check, failureBlocks } : check;
+}
+
+function normalizeChecks(checks) {
+  return (Array.isArray(checks) ? checks : []).map(withFailureBlocks);
+}
+
 const escapeRegExp = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Field lesson #192: "fail" needs positive evidence (the same id fails on base); a test whose file
@@ -1270,6 +1331,35 @@ export function failedRunIds(rollup, failedNames) {
   return [...ids];
 }
 
+function localFailedFiles(checks) {
+  const files = new Set();
+  for (const check of checks ?? []) {
+    if (check.status !== 'failed') continue;
+    const source = [check.output, check.rawOutput, check.head, check.tail, check.stderr, check.stdout].filter(Boolean).join('\n');
+    for (const file of extractFailingTestFiles(source)) files.add(file);
+    for (const failure of check.failureBlocks ?? []) {
+      const file = String(failure.location ?? '').replace(/:\d+(?::\d+)?$/, '');
+      if (file && TEST_FILE_RE.test(file)) files.add(file);
+    }
+  }
+  return [...files];
+}
+
+function targetedLocalArgvs(checkArgvs, files) {
+  return (checkArgvs ?? []).map(argv => {
+    if (!Array.isArray(argv) || !argv.length) return argv;
+    const runner = targetedRunner(argv);
+    return runner && files.length ? [...argv, ...files] : argv;
+  });
+}
+
+export function classifyCiFailureLog(text) {
+  const source = String(text ?? '');
+  const zeroFailures = /(?:\b0\s+(?:failed|failures)\b|(?:tests?|suites?)\s*:\s*[^\n]*\b0\s+failed\b|\b(?:passed|pass)\b[^\n]*,\s*0\s+failed\b)/i.test(source);
+  const stepTimeout = /(?:action|step|job|runner)[^\n]*(?:timed out|timeout)|(?:timed out|timeout)[^\n]*(?:action|step|job|runner)/i.test(source);
+  return zeroFailures && stepTimeout ? 'timeout' : null;
+}
+
 // Field lesson #187: `ship --help`/`-h` prints this and exits 0 (the swarm.mjs dispatch calls
 // shipHelpRequested before parsing any other ship flag).
 export const SHIP_USAGE = [
@@ -1289,7 +1379,11 @@ export function shipHelpRequested(args) {
 }
 
 export function swarmCheckWarnings(checks) {
-  const count = checks.reduce((sum, check) => sum + (check.swarmLineCount ?? 0), 0);
+  const count = checks.reduce((sum, check) => {
+    const rawLines = [check.output, check.rawOutput, check.head, check.tail, check.stderr, check.stdout]
+      .filter(Boolean).join('\n').split('\n').filter(line => /(?:^|[\s:("'])[^\n]*\.swarm\//.test(line)).length;
+    return sum + Math.max(check.swarmLineCount ?? 0, rawLines);
+  }, 0);
   return count ? ['check-hit-swarm-dir: ignored ' + count + ' check output lines under .swarm/'] : [];
 }
 
@@ -1303,7 +1397,9 @@ export function renderChecks(results) {
     // PR's own Checks section — reachable now that the base re-run can be scoped to just them.
     if (result.status === 'pre-existing' && result.failingTests?.length) line += ` — pre-existing on base: ${result.failingTests.map(t => t.id).join(', ')}`;
     lines.push(line);
-    if (result.status === 'failed' && result.tail) lines.push(...String(result.tail).split('\n').slice(-20));
+    if (result.status === 'failed' && result.failureBlocks?.length) {
+      for (const failure of result.failureBlocks) lines.push(`failure: ${failure.name} @ ${failure.location ?? 'unknown'} — ${failure.assertion ?? 'assertion unavailable'}`);
+    } else if (result.status === 'failed' && result.tail) lines.push(...String(result.tail).split('\n').slice(-20));
   }
   return ['```', ...lines, '```'].join('\n');
 }
@@ -1413,7 +1509,20 @@ export async function ship(options) {
 
   let payload;
   try {
-    payload = parsePrPayload(await fs.readFile(payloadPath, 'utf8'));
+    const payloadText = await fs.readFile(payloadPath, 'utf8');
+    let payloadData;
+    try { payloadData = JSON.parse(payloadText); } catch { payloadData = null; }
+    if (branch && payloadData && typeof payloadData === 'object' && !Array.isArray(payloadData)) {
+      if (typeof payloadData.head !== 'string' || payloadData.head.trim() === '') payloadData.head = branch;
+      if (typeof payloadData.base !== 'string' || payloadData.base.trim() === '') {
+        const defaultBranch = await inferDefaultBranch(exec, root);
+        if (!defaultBranch) return { ...base, status: 'refused', reason: 'cannot infer default branch for --branch; set payload base explicitly' };
+        payloadData.base = defaultBranch;
+      }
+      payload = parsePrPayload(JSON.stringify(payloadData));
+    } else {
+      payload = parsePrPayload(payloadText);
+    }
   } catch (err) {
     return { ...base, status: 'refused', reason: err.message };
   }
@@ -1672,7 +1781,30 @@ export async function ship(options) {
   if (packagingRefusals.length) return { ...base, status: 'refused', reason: `${packagingRefusals.join('; ')}; add a check that builds the package (uv build --wheel, npm pack --dry-run)` };
 
   const checksStart = now();
-  const checks = await runChecks({ env: checkEnv });
+  let checks = normalizeChecks(await runChecks({ env: checkEnv, retainFailures: true }));
+  let localRerunAttempts = 0;
+  let localRerunFiles = [];
+  const localRerunLimit = Number.isFinite(rerunFlaky) ? Math.max(0, rerunFlaky) : 0;
+  while (checks.some(check => check.status === 'failed') && localRerunAttempts < localRerunLimit) {
+    const failedTestFiles = localFailedFiles(checks);
+    if (!failedTestFiles.length) break;
+    localRerunFiles = failedTestFiles;
+    localRerunAttempts++;
+    checks = normalizeChecks(await runChecks({
+      env: checkEnv,
+      retainFailures: true,
+      onlyFiles: failedTestFiles,
+      failedTestFiles,
+      checkArgvs: targetedLocalArgvs(checkArgvs, failedTestFiles),
+    }));
+  }
+  if (localRerunAttempts) {
+    base.flakyRerun = {
+      attempts: localRerunAttempts,
+      result: checks.some(check => check.status === 'failed') ? 'failed' : 'passed',
+      tests: localRerunFiles,
+    };
+  }
   base.checks = checks;
   base.warnings.push(...swarmCheckWarnings(checks));
   for (let index = 0; index < checks.length; index++) {
@@ -1905,11 +2037,41 @@ export async function ship(options) {
   // fetch to happen FIRST, once per loop iteration, so both defaults can read from that one fetch
   // instead of the log fetch only ever running after the platform-only default was already decided.
   let rerunAttempts = 0, rerunTests = null, defaultRerunWarned = false, verifiedFlakyResult = null;
+  let ciTimeoutRetryUsed = false;
   while (ci.failed.length > 0) {
     // Field lesson 151: named up front so the next job starts from "this OS only", not a guess.
     const platformOnly = platformOnlyFailures(ciRollup);
     for (const entry of platformOnly) base.warnings.push(`platform-only failure: ${entry.os}: ${entry.testIds.join(', ')}`);
     const runIds = failedRunIds(ciRollup, ci.failed);
+
+    // A runner can report a completely green test summary and then time out while the step is
+    // shutting down. Treat that as infrastructure timeout, retry the failed job once, and leave
+    // ordinary assertion failures on the real-red path below.
+    const failedLogs = [];
+    for (const id of runIds) {
+      const logRes = await exec('gh', ['run', 'view', id, '--repo', repo, '--log-failed'], { cwd: root });
+      if (logRes.code === 0) failedLogs.push({ id, text: logRes.stdout ?? '' });
+    }
+    const timeoutLogs = failedLogs.filter(log => classifyCiFailureLog(log.text) === 'timeout');
+    if (timeoutLogs.length) {
+      const timeoutNames = timeoutLogs.map(log => ciRollup.find(item => runIdFromDetailsUrl(item.detailsUrl ?? item.target_url) === log.id)?.name ?? log.id);
+      if (ciTimeoutRetryUsed) {
+        return { ...base, status: 'timeout', reason: `CI step timed out: ${timeoutNames.join(', ')}` };
+      }
+      ciTimeoutRetryUsed = true;
+      base.warnings.push(`ci-timeout: ${timeoutNames.join(', ')}; retrying failed job once`);
+      for (const id of [...new Set(timeoutLogs.map(log => log.id))]) await exec('gh', ['run', 'rerun', id, '--failed', '--repo', repo], { cwd: root });
+      await sleep(pollMs);
+      const settled = await waitForCi();
+      if (settled.terminal) return settled.terminal;
+      ({ ci, ciRollup } = settled);
+      base.ci = ci;
+      if (ci.failed.length === 0) {
+        base.ciTimeoutRetry = { attempts: 1, result: 'passed', checks: timeoutNames };
+        break;
+      }
+      continue;
+    }
 
     if (rerunFlakyCi === 1) {
       const verifiedFlake = await verifiedFlakyEvidence({ root, repo, payload, sha, ci, ciRollup, checkArgvs, exec, checkEnv });
@@ -1950,11 +2112,7 @@ export async function ship(options) {
       return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}` };
     }
 
-    const logs = [];
-    for (const id of runIds) {
-      const logRes = await exec('gh', ['run', 'view', id, '--repo', repo, '--log-failed'], { cwd: root });
-      if (logRes.code === 0) logs.push(logRes.stdout);
-    }
+    const logs = failedLogs.map(log => log.text);
     rerunTests = [...new Set(logs.flatMap(extractFailingTestFiles))];
     const inDiff = rerunTests.some(test => integratedFiles.some(file => file === test || file.endsWith(`/${test}`) || test.endsWith(`/${file}`)));
     let effectiveRerunFlaky = rerunFlaky;
