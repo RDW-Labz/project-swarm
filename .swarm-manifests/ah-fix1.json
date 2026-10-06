@@ -1,0 +1,31 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ah-fix1",
+   "agent": "codex",
+   "model": "gpt-6-luna",
+   "tier": "cheap",
+   "timeoutMs": 1500000,
+   "context": [
+    "docs/_swarm/ah-fails.txt",
+    "docs/_swarm/ah-contract.md",
+    "tools/swarm.mjs",
+    "templates/coordination/CONTRACT.md",
+    "tests/field-lesson-t80-cli.test.mjs",
+    "tests/field-lessons-batch-p.test.mjs",
+    "tests/field-lessons-batch-q.test.mjs",
+    "tests/field-lessons-batch-ah-release.test.mjs",
+    "tests/field-lessons-batch-ah-runtime.test.mjs",
+    "tests/swarm.test.mjs",
+    "tests/ask-125.test.mjs"
+   ],
+   "outputs": [
+    "tools/swarm.mjs",
+    "templates/coordination/CONTRACT.md"
+   ],
+   "prompt": "You are job ah-fix1. Read docs/_swarm/ah-fails.txt and contract docs/_swarm/ah-contract.md. Restate done-when in one line. Fix both with the smallest change: (1) in tools/swarm.mjs edit only the help/usage text for ask so the global --help contains 'ask --model' again, plus the new tier form; no behavior change; (2) templates/coordination/CONTRACT.md to <= 40 lines keeping all required content (check every assertion on that file in tests/field-lessons-batch-p.test.mjs, tests/field-lessons-batch-q.test.mjs and tests/field-lessons-batch-ah-release.test.mjs). Do not edit tests. CHANGELOG.md and version files are owned by another job; do not edit or block on them. You may run: node --test tests/field-lesson-t80-cli.test.mjs tests/field-lessons-batch-p.test.mjs tests/field-lessons-batch-q.test.mjs tests/field-lessons-batch-ah-release.test.mjs tests/field-lessons-batch-ah-runtime.test.mjs. Nested sandbox reds elsewhere are expected and never a reason to block. Return JSON only: {\"status\":\"complete|blocked\",\"filesChanged\":[...],\"reproTest\":\"tests/field-lesson-t80-cli.test.mjs\",\"notes\":\"<=2 lines\"}"
+  }
+ ]
+}
