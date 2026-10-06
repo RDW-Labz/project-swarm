@@ -1,0 +1,6 @@
+{
+  "title": "1.48.0: field lessons 357–361",
+  "head": "swarm-1.48.0-pr",
+  "base": "main",
+  "body": "## Summary\n- Read-only requests can select configured tiers and use a configured fallback for unsupported routes, with fallback reporting.\n- Workspace path validation recognizes carried directories and matching globs while retaining missing-workspace refusals.\n- Held summaries flag numeric values absent from added changes, and shared contract guidance records fixed values and tests.\n- Integration refuses work-folder references in changed source and test files, while validation warns about build scratch data in context.\n- Notes append real UTC timestamps to task or handoff files without executing note text.\n\n## Checks\n<!-- swarm:checks -->\n\n## Mutation check\nSix mutants from contract section 6, all killed (focused node --test per lesson test file):\n- ah357-remove-configured-fallback — killed\n- ah358-exact-files-only — killed\n- ah359-drop-decision-warnings — killed\n- ah360-disable-prewrite-reference-check — killed\n- ah360-drop-context-warning — killed\n- ah361-forge-note-clock — killed\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+}
