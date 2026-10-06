@@ -20,7 +20,9 @@
     "tests/field-lessons-batch-u.test.mjs",
     "tests/field-lessons-batch-x.test.mjs",
     "tests/field-lessons-batch-w.test.mjs",
-    "tests/install.test.mjs"
+    "tests/install.test.mjs",
+    "tests/scheduling.test.mjs",
+    "tests/swarm.test.mjs"
    ],
    "outputs": [
     "templates/coordination/CONTRACT.md"
