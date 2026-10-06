@@ -1,0 +1,6 @@
+{
+  "title": "1.49.0: vendored worker skills (MIT, pinned)",
+  "head": "t101-1.49.0-pr",
+  "base": "main",
+  "body": "## Summary\n- Vendor five MIT worker skills: tdd, diagnosing-bugs, code-review, resolving-merge-conflicts, and writing-for-agents.\n- Pin the upstream skills at 6fd947921b935b7e1e69293a200400f0fdd5c15f; resolving-merge-conflicts is pinned at 153fc1b93de6584562765cdce299324e1ff9e661.\n- Keep a LICENSE beside each skill and record the third-party skills in NOTICE.\n- The installer copies a skill only when the project has none, preserving an existing project skill.\n- Existing release tests advance active pins to 1.49.0.\n\n## Checks\n<!-- swarm:checks -->\n\n## Mutation check\nTwo mutants from t101-mutants.json, both killed:\n- install-overwrites-existing-skill — killed\n- install-skips-license-copy — killed\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+}
