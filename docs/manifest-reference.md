@@ -141,7 +141,8 @@ node tools/swarm.mjs doctor all
 node tools/swarm.mjs doctor openai
 node tools/swarm.mjs validate examples/smoke.json
 node tools/swarm.mjs run examples/smoke.json
-node tools/swarm.mjs ask --model sonnet --context src/a.js,src/b.js "question"
+node tools/swarm.mjs ask --tier cheap --context src/a.js,src/b.js "question"
+node tools/swarm.mjs note --file coordination/TASK.md "recorded progress"
 node tools/swarm.mjs scout --model sonnet --brief docs/scout-brief-example.md "goal"
 node tools/swarm.mjs sweep --model sonnet --brief docs/scout-brief-example.md --goals docs/sweep-goals-example.json
 node tools/swarm.mjs status <run-id>
@@ -198,9 +199,13 @@ Each job record also carries `actualModel` (the model behind most of its `assist
 
 ## Ask
 
-`ask --model M --context f1,f2,... [--agent claude] [--timeout S] "question"` builds one read-only job in memory — `id: ask-<timestamp>`, empty `outputs`, the given `context`, and the question plus a fixed suffix asking for one final JSON line — runs it like `run`, waits for it, and prints exactly one JSON line: `{"id","status","model","actualModel","modelMismatch","costUsd","contextFiles","warnings","result"}`, where `result` is the worker's parsed final JSON (or `null` plus `error`) and `contextFiles` is the exact context list the worker was given. It refuses with no `--model`, no `--context`, or an empty question. Exit code is `0` when the job completes, `1` otherwise. `--agent` defaults to `claude`; only `claude` and API agents are allowed, never `codex`. The run is saved under `.swarm/runs/` like any other run.
+`ask [--tier cheap|mid|expensive] [--model M [--agent A]] --context f1,f2,... [--timeout S] "question"` builds one read-only job in memory — `id: ask-<timestamp>`, empty `outputs`, the given `context`, and the question plus a fixed suffix asking for one final JSON line — runs it like `run`, waits for it, and prints exactly one JSON line: `{"id","status","model","actualModel","modelMismatch","costUsd","contextFiles","warnings","result"}`, where `result` is the worker's parsed final JSON (or `null` plus `error`) and `contextFiles` is the exact context list the worker was given. A tier selects `config.tiers.<tier>.agent` and `.model`; it is mutually exclusive with explicit `--model` or `--agent`, while legacy explicit routes remain unchanged. With a selected unsupported agent (`codex`, `hermes`, or `qwen`), the matching tier must provide `fallback: {agent,model}`; the fallback is validated before launch and is reported in every answer branch as `route: {tier,requestedAgent,requestedModel,agent,model}` plus warning `ask-agent-fallback: <fromAgent>/<fromModel> -> <agent>/<model> (tier <tier>); using configured read-only fallback`. Native Codex read-only remains unsupported. Refusal messages are `ask-route-invalid: choose either --tier cheap|mid|expensive or --model with an optional supported --agent; configured routes require agent and model` and `ask-agent-fallback-unconfigured: no unique supported fallback for <fromAgent>/<fromModel>; select --tier and configure tiers.<tier>.fallback with agent and model`. Exit code is `0` when the job completes, `1` otherwise. `--agent` defaults to `claude`; only `claude` and API agents are allowed for execution. The run is saved under `.swarm/runs/` like any other run.
 
 The prompt's fixed suffix (lesson #176) also tells the worker that any claim in its answer that something is missing, never called, omitted, or absent must carry `"basis":"context-only"` and name what it searched — a worker reading only a fixed context list cannot tell a genuine absence from a file it was never given. `warnings` gains `absence-claim-limited-context` whenever the worker's own answer text contains such a claim (a simple, case-insensitive, word-boundary scan for `missing`/`never`/`omits`/`not invoked`/`not called`/`lacks`/`drops`), independent of whether the worker actually added `"basis":"context-only"` — the warning is a flag for the reader, not a check on the worker's compliance.
+
+## Note
+
+`note [--file RELATIVE_PATH] "text"` appends exactly `- <timestamp> <text>\n`, using a tool-generated UTC ISO timestamp. The default target is `TASK.md`; `--file` may select a repository-relative `TASK.md` or `HANDOFF.md`, including a nested coordination path. Text must be nonblank, single-line literal data with no control characters. Refusals are `note-invalid-args: provide one non-empty single-line note; use note [--file TASK.md|HANDOFF.md] text`, `note-invalid-path: target must be a regular TASK.md or HANDOFF.md inside the project with existing non-symlink parents`, and `note-write-failed: could not append a clock-stamped note`.
 
 ```sh
 node tools/swarm.mjs ask --model haiku --context src/renderer.js "Any obvious performance bug here?"
@@ -518,6 +523,12 @@ Add the missing files to `context` directly, or declare `contextGlob` (see [Job 
 
 A directory can mix more filename prefixes than a job's `contextGlob` actually names — a review round declaring only one capture kind (say `shots/activity-*.png`) never learns that a second kind (`shots/scoreboard-*.png`) was also captured into the same directory. Multiple `contextGlob` entries against the same directory, each with its own prefix, already work; `validate`/`run` also warn `{"code": "context-glob-partial-dir", "jobId", "dir", "extension", "prefixes", "present", "total", "missing", "message"}` when that directory holds other files of the declared extension that match none of the job's declared prefixes, naming the covered prefixes and up to 5 uncovered files. Add one `contextGlob` entry per prefix actually present in the directory to close the gap.
 
+### Coordinator scratch references
+
+At the final pre-write gate, `integrate` scans proposed non-deletion bytes for changed `src/` and `tests/` files. A path-segment reference to `docs/_swarm` (including slash or backslash spellings, comments, and nested paths) refuses before any project write or deletion with `work-folder-reference: <file>:<line> references docs/_swarm; move runtime and test inputs to tracked tests/fixtures files`. Binary buffers containing NUL are skipped; deleted files and skipped jobs do not trigger this guard.
+
+`validate`/`preflight` add `work-folder-context` when a build job includes a non-documentation context path under `docs/_swarm` (for example JSON or Python data). Documentation-only jobs and `.md`, `.rst`, `.txt`, and `.adoc` paths are exempt. The warning is `work-folder-context: Job <id> includes <path> as non-documentation scratch input; copy required runtime or test data into tracked tests/fixtures files`.
+
 ## Ship
 
 `ship <run-id> --repo OWNER/NAME --pr payload.json` pushes an integrated run's branch, opens or updates its pull request, waits for CI, and merges once everything is green — refusing at any earlier step leaves nothing pushed or merged. It requires the run to already be integrated (`integrate <run-id>` must have run first) and reuses that run's saved manifest `checks`, re-running them against the committed tree before filling `<!-- swarm:checks -->` in the PR body. It also passes the run's own integrated files through to the pre-push lock check (field lesson 147); fixed in lesson #166 (`ship --branch`, below, already passed them — a plain `ship <run-id>` did not, so the lock check never ran on a real run).
@@ -545,6 +556,12 @@ node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json [--requir
   test execution evidence, dirty probes, stale heads, or a red fresh attempt remain
   `ci-failed`; an eligible failure that cannot be retried warns
   `rerun-flaky-ci-ineligible: <reason>`.
+
+When the PR body is held (its first nonblank line starts with `**needs `), `ship` and
+`preflight` inspect numeric claims in the Summary and Could break sections. Distinct signed
+decimal tokens are compared literally with numeric tokens on added content lines of the
+committed merge-base diff; URLs, list numbering, dotted versions, removed lines and hunk
+metadata are excluded. A missing token adds `decision-value-not-in-diff: held PR summary names <value>, absent from added diff lines; quote the source constant and name its value-pinning test`. If the committed diff cannot be read, the single advisory is `decision-value-diff-unavailable: cannot read the committed diff; verify decision values against source before handoff`. These warnings never release a hold, change the PR body, or claim unit conversion or semantic correctness; no diff is fetched for unheld or no-number bodies.
 
 `ship` prints one JSON line: `{status, repo, pr, url, sha, mergeSha, checks, ci, reason, portBase}`, where `status` is one of `merged | held | ready | refused | checks-failed | ci-failed | no-ci | timeout | merge-failed` and fields that do not apply are `null`. The re-run of `checks` gets its own `SWARM_PORT_BASE` (see [Ports](#ports) above), computed from the project root; a moved or exhausted block adds the same `port-block-moved`/`port-block-busy` warning `integrate` does. When the merged PR's diff changed `package.json`'s `version`, the result also gains `tag: {name: 'v<version>', status: 'found'|'missing'|'skipped', waitedSeconds}`; a `missing` tag also adds warning `release tag v<version> not on origin after <n>s`. A PR body whose first non-blank line starts with `**needs ` is never merged (`held`); a person merges it. Exit code is `0` for `merged`, `held`, or `ready`, and `1` for every other status.
 
@@ -587,7 +604,7 @@ node tools/swarm.mjs go <run-id> --commit-message "Add render review"
 
 ## Advisory preflight
 
-`node tools/swarm.mjs preflight <manifest>` validates without starting workers, then reports file byte breakdowns, repeated copied context, output/input snapshot hazards, task-size advisories, and each job's `agent`, `model`, `tier`, and `tierReason` (`null` when unset). It does not automatically split or dispatch tasks, and it does not choose or verify a tier; that stays the coordinator's judgment call against [the routing checklist](orchestration.md). See [active orchestration](orchestration.md) and [manager task contracts](managed-feature-plan.md).
+`node tools/swarm.mjs preflight <manifest>` validates without starting workers, then reports file byte breakdowns, repeated copied context, output/input snapshot hazards, task-size advisories, scratch-context warnings, and each job's `agent`, `model`, `tier`, and `tierReason` (`null` when unset). A held numeric summary also surfaces the bounded `decision-value-not-in-diff` or `decision-value-diff-unavailable` advisory described above. It does not automatically split or dispatch tasks, and it does not choose or verify a tier; that stays the coordinator's judgment call against [the routing checklist](orchestration.md). See [active orchestration](orchestration.md) and [manager task contracts](managed-feature-plan.md).
 
 `monitor` includes content-free CLI byte counts and output timestamps where observable. API requests without streaming report unavailable progress; neither output nor silence proves whether a worker is making useful progress.
 

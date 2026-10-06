@@ -420,18 +420,52 @@ export function sumCreditPreflight(entries) {
 // (already-expanded) context, nor manifest.resources — it will be silently absent from the copied
 // workspace. `covered` is checked first (cheap, no filesystem access); `access` is injectable so
 // tests never depend on the real filesystem's own layout.
-const PROMPT_PATH_RE = /(?:^|[\s"'`(])((?:\.\.?\/)?[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+)/g;
-export async function promptPathsNotInWorkspaceWarnings(root, job, context, { trackedFiles, resources = [], access = file => fs.access(file) } = {}) {
+const PROMPT_PATH_RE = /(?:^|[\s"'`(<])((?:\.\/)?[A-Za-z0-9_.*-]+(?:\/[A-Za-z0-9_.*-]+)*\/?)(?=$|[\s"'`)>,;])/g;
+function promptPathCovered(candidate, covered) {
+  if (candidate.includes('*')) return anyPathMatchesGlobs([candidate], [...covered]);
+  return covered.has(candidate) || [...covered].some(file => file.startsWith(candidate + '/'));
+}
+export async function promptPathsNotInWorkspaceWarnings(root, job, context, { trackedFiles = [], resources = [], access = file => fs.access(file) } = {}) {
   const covered = new Set([...trackedFiles, ...context, ...resources]);
-  const candidates = new Set([...String(job.prompt ?? '').matchAll(PROMPT_PATH_RE)].map(m => m[1]));
+  const candidates = new Set([...String(job.prompt ?? '').matchAll(PROMPT_PATH_RE)]
+    .map(m => m[1]).filter(value => (value.includes('/') || value.includes('*')) && !value.includes('***'))
+    .map(value => value.replace(/^\.\//, '').replace(/\/$/, '')));
   const hits = [];
   for (const candidate of candidates) {
-    if (covered.has(candidate)) continue;
-    let abs; try { abs = await safePath(root, candidate); } catch { continue; } // outside the repo entirely: not this check's concern
-    try { await access(abs); } catch { continue; } // never referenced anything real: not a path, just prose
-    hits.push(candidate);
+    // Validate spelling before coverage: normalization must never erase traversal.
+    try { relative(candidate); } catch { continue; }
+    if (promptPathCovered(candidate, covered)) continue;
+    const glob = candidate.includes('*');
+    const prefix = glob ? candidate.slice(0, candidate.indexOf('*')).replace(/[^/]*$/, '').replace(/\/$/, '') : candidate;
+    let abs; try { abs = prefix ? await safePath(root, prefix) : root; } catch { continue; }
+    try { await access(abs); if (glob && !(await fs.lstat(abs)).isDirectory()) continue; } catch { continue; }
+    hits.push(`prompt-path-not-in-workspace: Job ${job.id}'s prompt names ${candidate}, which ${glob ? 'matches no tracked, context, or resource file' : 'exists on disk but is neither tracked, in context, nor in manifest resources'}; it will be absent from the copied workspace`);
   }
-  return hits.map(file => `prompt-path-not-in-workspace: Job ${job.id}'s prompt names ${file}, which exists on disk but is neither tracked, in context, nor in manifest resources; it will be absent from the copied workspace`);
+  return hits;
+}
+
+export function workFolderReferenceHits(writes) {
+  const hits = [];
+  for (const { file, bytes } of writes) {
+    if (!/^(?:src|tests)\//.test(file) || bytes === null || bytes.includes(0)) continue;
+    const lines = bytes.toString('utf8').replace(/\\+/g, '/').split('\n');
+    for (const [index, line] of lines.entries()) {
+      if (/(?:^|[^A-Za-z0-9_.-])docs\/_swarm(?=$|[^A-Za-z0-9_.-])/.test(line)) {
+        hits.push({ code: 'work-folder-reference', file, line: index + 1, message: `work-folder-reference: ${file}:${index + 1} references docs/_swarm; move runtime and test inputs to tracked tests/fixtures files` });
+      }
+    }
+  }
+  return hits;
+}
+
+export function workFolderContextWarnings(job, context) {
+  const documentation = file => /\.(?:md|rst|txt|adoc)$/i.test(file);
+  const build = (job.outputs ?? []).some(file => !documentation(file) && !(/^docs\//.test(file) && /\.json$/i.test(file)));
+  if (!build) return [];
+  return [...new Set(context)].filter(file => file.startsWith('docs/_swarm/') && !documentation(file)).map(file => ({
+    code: 'work-folder-context', jobId: job.id, path: file,
+    message: `work-folder-context: Job ${job.id} includes ${file} as non-documentation scratch input; copy required runtime or test data into tracked tests/fixtures files`,
+  }));
 }
 
 // Field lesson #282: a configured `privateData.paths` glob list (local config) names paths whose
@@ -3645,6 +3679,8 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
     }
     // Field lesson #159: a change to packaging keys that no check builds is named up front.
     const packagingWarnings = packagingChangeWarnings(writes.filter(change => isPackagingFile(change.file)).map(change => ({ file: change.file, keys: packagingKeyChanges(change.file, change.previous?.toString('utf8') ?? '', change.bytes.toString('utf8')) })), [...(manifest.checks ?? []).map(check => check.argv), ...(manifest.preChecks ?? [])]);
+    const workFolderHits = workFolderReferenceHits(writes);
+    if (workFolderHits.length) fail(workFolderHits.map(hit => hit.message).join('\n'), 'work-folder-reference');
     // Every path, output, base hash, and mutants source has passed before the first project write.
     const applied = [];
     try {
@@ -4211,6 +4247,7 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
     // Field lesson 115: also echoes, per pattern, how many files it matched.
     const { extra: contextGlobExtra, counts: contextGlobCounts } = await expandContextGlobs(root, job);
     const context = [...new Set([...job.context, ...contextGlobExtra])];
+    warnings.push(...workFolderContextWarnings(job, context));
     // Field lesson #282: refused before this job (or any after it) ever dispatches — the same
     // spot maxCredits/resources are enforced, before any worker spends anything.
     const privateDataWarning = privateDataRequiredWarning(job, context, localConfig);
@@ -4522,13 +4559,72 @@ export async function inspectResults(root, id) {
   return { runId: id, status: state.status, tokens: tokensTotal(jobs.map(job => job.tokens)), costNotReported: costNotReported(jobs), warnings, jobs };
 }
 
-// Lesson #48: a single read-only question does not deserve a hand-written manifest; ask builds
-// the one-job manifest itself and returns just the worker's answer.
-export async function askRun(root, { model, context = [], agent = 'claude', timeoutMs, question } = {}, runOptions = {}) {
-  if (typeof model !== 'string' || !model.trim()) fail('ask requires --model');
+// Clock-stamped notes preserve existing bytes and never interpret their text as commands.
+const NOTE_INVALID_ARGS = 'note-invalid-args: provide one non-empty single-line note; use note [--file TASK.md|HANDOFF.md] text';
+const NOTE_INVALID_PATH = 'note-invalid-path: target must be a regular TASK.md or HANDOFF.md inside the project with existing non-symlink parents';
+export async function noteRun(root, { text, file = 'TASK.md' } = {}, { now = Date.now } = {}) {
+  if (typeof text !== 'string' || !text.trim() || /[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(text)) fail(NOTE_INVALID_ARGS, 'note-invalid-args');
+  let target;
+  try {
+    target = await safePath(root, file);
+    if (!['TASK.md', 'HANDOFF.md'].includes(path.basename(target))) throw Error();
+    if (!(await fs.lstat(path.dirname(target))).isDirectory()) throw Error();
+    try { if (!(await fs.lstat(target)).isFile()) throw Error(); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  } catch { fail(NOTE_INVALID_PATH, 'note-invalid-path'); }
+  try {
+    let prior;
+    try { prior = await fs.readFile(target); } catch (error) { if (error.code !== 'ENOENT') throw error; prior = Buffer.alloc(0); }
+    const timestamp = new Date(now()).toISOString();
+    await fs.appendFile(target, `${prior.length && prior.at(-1) !== 10 ? '\n' : ''}- ${timestamp} ${text}\n`);
+    return { status: 'complete', file, timestamp };
+  } catch { fail('note-write-failed: could not append a clock-stamped note', 'note-write-failed'); }
+}
+
+// The private symbol lets the CLI guard and runner share exactly one resolved route.
+const ASK_ROUTE = Symbol('resolved ask route');
+const ASK_ROUTE_INVALID = 'ask-route-invalid: choose either --tier cheap|mid|expensive or --model with an optional supported --agent; configured routes require agent and model';
+export function resolveAskRoute(options = {}, config = {}) {
+  let { agent, model, tier } = options;
+  const invalid = () => fail(ASK_ROUTE_INVALID, 'ask-route-invalid');
+  const validPair = pair => {
+    if (!pair || typeof pair !== 'object' || Array.isArray(pair) || typeof pair.agent !== 'string' || typeof pair.model !== 'string' || !pair.model.trim()) return false;
+    try { validateManifest({ version: 1, jobs: [{ id: 'ask-route', agent: pair.agent, model: pair.model, prompt: 'Answer the question.', context: [], outputs: [] }] }); return true; }
+    catch { return false; }
+  };
+  if (tier !== undefined) {
+    if (!TIERS.includes(tier) || agent !== undefined || model !== undefined) invalid();
+    const selected = config?.tiers?.[tier];
+    if (!validPair(selected)) invalid();
+    ({ agent, model } = selected);
+  } else {
+    if (typeof model !== 'string' || !model.trim()) fail('ask requires --model or --tier');
+    agent ??= 'claude';
+    if (!validPair({ agent, model })) invalid();
+  }
+  if (agent === 'claude' || API_AGENTS.includes(agent)) return { agent, model };
+  const unconfigured = () => fail(`ask-agent-fallback-unconfigured: no unique supported fallback for ${agent}/${model}; select --tier and configure tiers.<tier>.fallback with agent and model`, 'ask-agent-fallback-unconfigured');
+  if (tier === undefined) {
+    const matches = TIERS.filter(name => config?.tiers?.[name]?.agent === agent && config.tiers[name].model === model);
+    if (matches.length !== 1) unconfigured();
+    tier = matches[0];
+  }
+  const configured = config.tiers[tier];
+  const fallback = configured.fallback;
+  if (!validPair(fallback) || Object.keys(fallback).some(key => !['agent', 'model'].includes(key)) || (fallback.agent !== 'claude' && !API_AGENTS.includes(fallback.agent))) unconfigured();
+  const route = { tier, requestedAgent: agent, requestedModel: model, agent: fallback.agent, model: fallback.model };
+  const warning = `ask-agent-fallback: ${agent}/${model} -> ${fallback.agent}/${fallback.model} (tier ${tier}); using configured read-only fallback`;
+  return { agent: fallback.agent, model: fallback.model, route, warning };
+}
+
+// Lesson #48: build a single read-only job and return the worker's answer.
+export async function askRun(root, options = {}, runOptions = {}) {
+  const resolved = runOptions[ASK_ROUTE] ?? resolveAskRoute(options, loadLocalConfig({ env: runOptions.env ?? process.env }));
+  const { model, agent } = resolved;
+  const { context = [], timeoutMs, question } = options;
   if (!Array.isArray(context) || !context.length) fail('ask requires --context with at least one file');
   if (typeof question !== 'string' || !question.trim()) fail('ask requires a non-empty question');
-  if (agent !== 'claude' && !API_AGENTS.includes(agent)) fail('ask only supports claude or an API agent, not codex');
+  const answer = result => resolved.route ? { ...result, route: resolved.route, warnings: [...(result.warnings ?? []), ...modelMismatchWarnings(state), resolved.warning] } : result;
   // Field lesson 176: a worker reading only a fixed context list cannot tell a genuine absence
   // from a file it was never given; any claim of one must say so and name what it searched.
   const prompt = `${question.trim()}\n\nIf your answer claims that something is missing, never called, omitted, or absent, include "basis":"context-only" in your JSON and name what you searched (which of your context files) to reach that conclusion.\n\nFinish with exactly one JSON line containing your complete answer as a JSON object.`;
@@ -4548,7 +4644,7 @@ export async function askRun(root, { model, context = [], agent = 'claude', time
   // answer to a format mismatch is worse than returning it unparsed and saying so.
   if (API_AGENTS.includes(agent) && record.status === 'complete' && parsed === null) {
     const responseBytes = await bytesAt(root, `.swarm/runs/${id}/${id}/response.txt`, true);
-    return { id, status: 'ok', model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd, contextFiles: job.context, answer: responseBytes ? responseBytes.toString('utf8') : '', parsed: false };
+    return answer({ id, status: 'ok', model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd, contextFiles: job.context, answer: responseBytes ? responseBytes.toString('utf8') : '', parsed: false });
   }
   // Field lesson #200: a worker that answered is never reported as `complete` with a bare `null`
   // result; a lenient repair is tried first (flagged `repaired: true`), and only a genuinely
@@ -4559,15 +4655,15 @@ export async function askRun(root, { model, context = [], agent = 'claude', time
     const rawText = rawBytes ? rawBytes.toString('utf8') : '';
     const repaired = repairArrayKeyValueJson(rawText);
     if (repaired !== null) {
-      return { id, status: state.status, model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd, contextFiles: job.context, warnings: [], result: displayResult(repaired), repaired: true };
+      return answer({ id, status: state.status, model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd, contextFiles: job.context, warnings: [], result: displayResult(repaired), repaired: true });
     }
-    return { id, status: 'unparsed', model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd, contextFiles: job.context, rawPath, raw: rawText.slice(0, 2048), error: 'Worker returned no parsable final JSON' };
+    return answer({ id, status: 'unparsed', model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd, contextFiles: job.context, rawPath, raw: rawText.slice(0, 2048), error: 'Worker returned no parsable final JSON' });
   }
   // Field lesson 176: warn (never fail the job) when the worker's own answer text reads as an
   // absence claim, so a reader knows to check the claim against more than this job's own context
   // before spending tokens proving there was no bug.
   const warnings = hasAbsenceClaim(JSON.stringify(parsed)) ? ['absence-claim-limited-context'] : [];
-  return { id, status: state.status, model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd, contextFiles: job.context, warnings, result: displayResult(parsed) };
+  return answer({ id, status: state.status, model, actualModel: record.actualModel ?? null, modelMismatch: record.modelMismatch ?? false, costUsd, contextFiles: job.context, warnings, result: displayResult(parsed) });
 }
 
 // A read-only web job (GitHub first) that returns raw JSON; the runner, not the model, applies
@@ -5427,7 +5523,7 @@ async function main() {
     }
     root=args[rootIndex+1];args.splice(rootIndex,2);
   }
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list [--queued|--shipped] [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list [--queued|--shipped] [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
@@ -5565,14 +5661,30 @@ async function main() {
     process.exitCode=result.exitCode;
     return;
   }
-  // ask has its own flag/positional shape (no single RUN/MANIFEST argument), so it is parsed and
-  // dispatched entirely here rather than sharing the generic [command,argument,...rest] path below.
+  // Notes and asks have their own positional shapes, outside the generic RUN/MANIFEST parser.
+  if(args[0]==='note'){
+    let file;
+    const positionals=[];
+    for(let index=1;index<args.length;index++){
+      if(args[index]==='--file'){
+        if(file!==undefined || !args[index+1] || args[index+1].startsWith('--')) fail(NOTE_INVALID_ARGS, 'note-invalid-args');
+        file=args[++index];
+      } else if(args[index].startsWith('--')) fail(NOTE_INVALID_ARGS, 'note-invalid-args');
+      else positionals.push(args[index]);
+    }
+    if(positionals.length!==1) fail(NOTE_INVALID_ARGS, 'note-invalid-args');
+    const result=await noteRun(root,{text:positionals[0],file});
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
   if(args[0]==='ask'){
     const flags=args.slice(1);
-    let model,contextArg,agent='claude',timeoutSeconds,overCapArg=false,reasonArg,ignoreProviderLimitArg=false;
+    let model,contextArg,agent,tier,timeoutSeconds,overCapArg=false,reasonArg,ignoreProviderLimitArg=false;
     const positionals=[];
     for(let index=0;index<flags.length;index++){
       const flag=flags[index];
+      if(['--model','--agent','--tier'].includes(flag) && (!flags[index+1] || flags[index+1].startsWith('--'))) fail(ASK_ROUTE_INVALID, 'ask-route-invalid');
+      if(flag==='--tier'){tier=flags[++index];continue;}
       if(flag==='--model'){model=flags[++index];continue;}
       if(flag==='--context'){contextArg=flags[++index];continue;}
       if(flag==='--agent'){agent=flags[++index];continue;}
@@ -5592,18 +5704,19 @@ async function main() {
     if(positionals.length!==1)fail('ask requires exactly one question argument; use --help');
     if(overCapArg&&!reasonArg)fail('--over-cap requires --reason');
     root=await fs.realpath(root);
-    if(agent==='claude'&&!ignoreProviderLimitArg){
+    const resolved=resolveAskRoute({model,agent,tier},loadLocalConfig({env:process.env}));
+    if(resolved.agent==='claude'&&!ignoreProviderLimitArg){
       const marker=await claudeProviderLimitGuard(root);
       if(marker)fail(`claude-provider-limit: resets ${marker.resetsAt}; pass --ignore-provider-limit to proceed anyway`);
     }
     const askGuard=await spendGuard(root,{env:process.env});
     if(askGuard.status==='cap'){
       if(!overCapArg||!reasonArg)fail(askGuard.message);
-      process.stdout.write(`${JSON.stringify({warning:askGuard.message})}\n`);
-    }else if(askGuard.status==='warn')process.stdout.write(`${JSON.stringify({warning:askGuard.message})}\n`);
-    const result=await askRun(root,{model,context:contextArg?contextArg.split(','):[],agent,timeoutMs:timeoutSeconds!==undefined?timeoutSeconds*1000:undefined,question:positionals[0]});
+      process.stderr.write(`${JSON.stringify({warning:askGuard.message})}\n`);
+    }else if(askGuard.status==='warn')process.stderr.write(`${JSON.stringify({warning:askGuard.message})}\n`);
+    const result=await askRun(root,{model,tier,context:contextArg?contextArg.split(','):[],agent,timeoutMs:timeoutSeconds!==undefined?timeoutSeconds*1000:undefined,question:positionals[0]},{[ASK_ROUTE]:resolved});
     process.stdout.write(`${JSON.stringify(result)}\n`);
-    if(result.status!=='complete')process.exitCode=1;
+    if(!['complete','ok'].includes(result.status))process.exitCode=1;
     return;
   }
   // T52b (#262): `verify --orb` is the only verify subcommand so far; imported lazily (like

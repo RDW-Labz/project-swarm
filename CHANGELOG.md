@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.48.0
+
+- Read-only ask follows a selected configured tier and reports ask-agent-fallback when an unsupported route uses its configured fallback. (lesson 357)
+- Prompt path validation accepts carried directories and matching globs while retaining missing-workspace refusals. (lesson 358)
+- Held summaries warn decision-value-not-in-diff for values absent from added diff lines; the contract template records decision-fixed constants and pinning tests. (lesson 359)
+- Integration refuses work-folder-reference in changed source and test files; validation warns work-folder-context for build scratch data. (lesson 360)
+- The note command appends real UTC timestamps to task or handoff files without executing note text. (lesson 361)
+
 ## 1.47.0
 
 - `check-pins --core` reports `vendored-core-missing-runtime-wheels` when a vendored core requirement is neither vendored nor a direct dependency. (lesson 343)

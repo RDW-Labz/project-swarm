@@ -15,10 +15,10 @@ or another agent with file and command access. The worker adapter does not
 need to match the orchestrator. Paste this into your agent at project start:
 
 ```text
-Use Project Swarm 1.47.0 for this project. Read docs/kickoff.md in the toolkit
+Use Project Swarm 1.48.0 for this project. Read docs/kickoff.md in the toolkit
 and perform its kickoff workflow. Ask me up front which model providers may
 receive project code and what spend ceiling applies; wait before model calls.
-Install from tag v1.47.0 in ~/.project-swarm, run tools/install.mjs --user,
+Install from tag v1.48.0 in ~/.project-swarm, run tools/install.mjs --user,
 link this project, run doctor, validate and run the read-only and writing smoke
 jobs, inspect and integrate the reviewed writing output. Read the installed
 SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
@@ -223,6 +223,7 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 | `doctor [all] [--probe-local]` | Configuration, compatibility, optional local health, tool exclusions |
 | `validate` / `preflight` | Validate scope and review context before dispatch |
 | `run` / `ask` | Execute a manifest or one read-only question |
+| `note` | Append a clock-stamped note to `TASK.md` or `HANDOFF.md` |
 | `status` / `monitor` / `wait` | Inspect progress or wait for completion |
 | `inspect` / `integrate` | Review proposals, then import and check them |
 | `cancel` | Stop the runner's owned workers |
@@ -246,7 +247,8 @@ Integration reports the parsed keys, source and a bounded text excerpt for skill
 - `validate <manifest>` — check schema, paths, files, and size limits; no run or model call. Warnings include `command-handler-not-in-job` for a named command whose handler is absent from context and outputs, and `max-output-below-model-default` for an explicit API/OpenRouter token cap below its model default (16000 for reasoning models), naming both values. Single-request API outputs default to 61440 bytes total and 15360 per existing file; override job `outputCapBytes` or config `outputCap`, otherwise `output-cap-exceeded` directs oversized work to codex or smaller outputs; shell agents are exempt. A refusal for an uncovered test names exactly which tests to add via `suggestedIgnoreTests: {"<jobId>": ["tests/...", ...]}` in its JSON, ready to paste into `ignoreTests`.
 - `preflight <manifest>` — validate and flag oversized jobs, repeated context, and snapshot dependencies before dispatch. Warnings support coordinator judgment; they do not automatically split or launch jobs.
 - `run <manifest>` — start workers and save the exchange. Refuses to start if another live run in the same repository (any of its worktrees) is already writing one of this run's declared outputs, with no override; see `board` below. A job may declare `after: [ids]` so it starts only once those jobs complete; see [the manifest reference](docs/manifest-reference.md#after). When the manifest sets `contract`, a `codex` job's prompt also gets that file's current text injected directly, ahead of the task itself.
-- `ask --model M --context f1,f2,... [--agent claude] [--timeout S] "question"` — build and run one read-only job in memory, wait for it, and print `{"id","status","model","actualModel","modelMismatch","costUsd","result"}` (`result` is the worker's parsed final JSON, or `null` plus `error`). Refuses with no `--model`, no `--context`, or an empty question; `--agent` defaults to `claude` and never allows `codex`. See [the manifest reference](docs/manifest-reference.md#ask).
+- `ask [--tier cheap|mid|expensive] [--model M [--agent A]] --context f1,f2,... [--timeout S] "question"` — build and run one read-only job in memory, wait for it, and print `{"id","status","model","actualModel","modelMismatch","costUsd","contextFiles","warnings","result"}`. A tier selects `config.tiers.<tier>.agent` and `.model`; `--tier` is mutually exclusive with explicit `--model` or `--agent`, while legacy `--model` routing remains unchanged. A selected unsupported ask agent (`codex`, `hermes`, or `qwen`) uses only its configured `tiers.<tier>.fallback` object and adds `route: {tier, requestedAgent, requestedModel, agent, model}` plus `ask-agent-fallback: <fromAgent>/<fromModel> -> <agent>/<model> (tier <tier>); using configured read-only fallback` to every answer branch. Native Codex read-only remains unsupported. Refusals are `ask-route-invalid: choose either --tier cheap|mid|expensive or --model with an optional supported --agent; configured routes require agent and model` and `ask-agent-fallback-unconfigured: no unique supported fallback for <fromAgent>/<fromModel>; select --tier and configure tiers.<tier>.fallback with agent and model`. See [the manifest reference](docs/manifest-reference.md#ask).
+- `note [--file RELATIVE_PATH] "text"` — append `- <timestamp> <text>` to `TASK.md` by default, or to a repository-relative `TASK.md`/`HANDOFF.md` path. The timestamp is generated by the command; text is literal, single-line data and is never executed.
 - `status <run-id>` — read progress, errors, and model metadata.
 - `monitor <run-id>` — concise snapshot of queued/running/completed jobs, observed peak concurrency, timings, numeric usage, and content-free CLI output counters. Silence is not proof that a worker is stuck. Add `--view` for a human-readable table instead of JSON, and `--watch [seconds]` to keep it redrawing in place (read-only) until the run finishes:
 
