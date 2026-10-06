@@ -22,7 +22,8 @@ async function tempDir(t) {
 }
 
 test('vendored skills load, stay within the warning threshold, and carry attribution', async t => {
-  const license = await fs.readFile(path.join(repoRoot, 'docs/_swarm/t101-src/LICENSE'), 'utf8');
+  const license = await fs.readFile(path.join(repoRoot, 'templates/coordination/skills', names[0], 'LICENSE'));
+  assert.match(license.toString('utf8'), /^MIT License\n\nCopyright \(c\) 2026 Matt Pocock\n/);
   for (const name of names) {
     const file = path.join(repoRoot, 'templates/coordination/skills', name, 'SKILL.md');
     const skill = await loadSkillFile(file);
@@ -30,7 +31,7 @@ test('vendored skills load, stay within the warning threshold, and carry attribu
     assert.ok(tokenEstimate(skill.chars) <= 800, `${name} is over 800 tokens`);
     assert.deepEqual(skillSizeWarnings([skill]), []);
     assert.match(skill.body, /^Adapted from mattpocock\/skills \(MIT\), commit [0-9a-f]+; trimmed\./);
-    assert.equal(await fs.readFile(path.join(path.dirname(file), 'LICENSE'), 'utf8'), license);
+    assert.deepEqual(await fs.readFile(path.join(path.dirname(file), 'LICENSE')), license);
   }
   const notice = await fs.readFile(path.join(repoRoot, 'NOTICE'), 'utf8');
   for (const pin of Object.keys(pins)) assert.match(notice, new RegExp(pin));
