@@ -1,0 +1,90 @@
+✖ #204: pin-not-vendored fires without --core too (it is not one of the two core-specific rules) (6.174166ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+      'library-exact-core-pin',
+      'wheel-requirement-unsatisfied',
+  +   'vendored-core-missing-runtime-wheels'
+    ]
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'library-exact-core-pin', 'wheel-requirement-unsatisfied', 'vendored-core-missing-runtime-wheels' ],
+--
+✖ #229: templates/coordination/CONTRACT.md exists with an Event names table and a Time zones line (4.629375ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(text.split('\n').length <= 40)
+  
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '=='
+  }
+
+--
+✖ #241: templates/coordination/CONTRACT.md Tests section asks for one test per named failure class (3.893375ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(text.split('\n').length <= 40)
+  
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '=='
+  }
+
+--
+  ✖ integrate --jobs j2 refuses when j2 is not complete (80.354416ms)
+    AssertionError [ERR_ASSERTION]: The input did not match the regular expression /not complete/i. Input:
+    
+    'Error: Output collision (case-insensitive): input.txt'
+    
+      generatedMessage: true,
+      code: 'ERR_ASSERTION',
+      actual: Error: Output collision (case-insensitive): input.txt
+--
+✖ L298: integrate RUN --jobs <id,...> integrates only named complete jobs (318.081583ms)
+▶ L294: validate warns output-cap-too-small when outputs exceed maxOutputTokens
+  ✔ a manifest with many large outputs and small cap refuses validation (0.273083ms)
+  ✔ a manifest with large outputs but adequate cap passes validation (0.205958ms)
+✔ L294: validate warns output-cap-too-small when outputs exceed maxOutputTokens (0.548666ms)
+▶ L293: validate/integrate refuse private-name on shared/fixtures/tests outputs
+  ✔ integrate with private-names FILE refuses output under shared/ containing a term (86.05275ms)
+  ✔ integrate --private-names FILE passes output under shared/ without private terms (95.642ms)
+✔ L293: validate/integrate refuse private-name on shared/fixtures/tests outputs (181.916042ms)
+▶ #187: ship --help, and runId/branch reach ship() from shipRun/shipBranch
+  ✔ CLI: swarm ship --help / -h print usage and exit 0, in every position, before RUN/--branch is required (184.302209ms)
+  ✔ shipBranch: a --branch mismatch refusal (before ship() ever runs) still names --branch (4.10925ms)
+  ✔ shipBranch: a real (ready) result names --branch (187.34ms)
+  ✔ shipRun: an early refusal (before ship() ever runs) still names its run id (209.651792ms)
+  ✔ shipRun: a real (ready) result names its run id (210.540416ms)
+--
+  ✖ CLI check-pins without --core skips the core-specific rules and names them in skippedRules (38.126958ms)
+    AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        'library-exact-core-pin',
+        'wheel-requirement-unsatisfied',
+    +   'vendored-core-missing-runtime-wheels'
+      ]
+      generatedMessage: true,
+      code: 'ERR_ASSERTION',
+--
+✖ generic-pins: check-pins is generic (no built-in package names), driven entirely by --core/--app-prefix (110.951709ms)
+ℹ tests 73
+ℹ suites 9
+ℹ pass 68
+ℹ fail 5
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2870.517792
+
+✖ failing tests:
+
+test at tests/field-lessons-batch-m1.test.mjs:54:1
+✖ #204: pin-not-vendored fires without --core too (it is not one of the two core-specific rules) (6.174166ms)

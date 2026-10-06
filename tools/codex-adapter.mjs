@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Codex's outer macOS seatbelt, not its prompt or built-in sandbox, is the boundary.
 import fs from 'node:fs/promises';
-import { mkdirSync, realpathSync, openSync, writeSync, closeSync, constants } from 'node:fs';
+import { mkdirSync, realpathSync, lstatSync, openSync, writeSync, closeSync, constants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { NO_STASH_LINE, MUTANTS_BY_HAND_LINE } from './swarm-env.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { execViaFile } from './cli-adapters.mjs';
+import { loadLocalConfig } from './local-config.mjs';
 
 const execGit = promisify(execFile);
 export const CODEX_MODEL = /^[A-Za-z0-9._:-]{1,80}$/;
@@ -27,7 +28,7 @@ export function effectiveDeniedHomeDirs(config = {}) {
   return [...DENIED_HOME_DIRS, ...extra];
 }
 const deniedPaths = (home, config = {}) => effectiveDeniedHomeDirs(config).map(part => path.join(home, part));
-const within = (file, parent) => file === parent || file.startsWith(`${parent}/`);
+const within = (file, parent) => { const rel = path.relative(parent, file); return rel === '' || (!path.isAbsolute(rel) && rel.split(path.sep)[0] !== '..'); };
 // Field lesson #255: both the raw and realpath'd form of the current process's own os.tmpdir(),
 // alongside /tmp and /private/tmp, since macOS resolves /tmp and /var through symlinks into
 // /private and a profile rule written against one spelling may not match the other at the VFS
@@ -52,7 +53,7 @@ export async function resolveReadPaths(paths = [], home = os.homedir(), config =
   // Reject aliases into denied directories as well as their literal spellings.
   return validateReadPaths(await Promise.all(validated.map(file => fs.realpath(file))), home, config);
 }
-export function codexProfile({ home = os.homedir(), worktree, commonDir, metadataDir, scratchDir, readPaths = [], environmentReadPaths = [], config = {}, tmpRoots = defaultTmpRoots() }) {
+export function codexProfile({ home = os.homedir(), worktree, commonDir, metadataDir, scratchDir, readPaths = [], environmentReadPaths = [], cacheWritePaths = [], config = {}, tmpRoots = defaultTmpRoots() }) {
   home = sandboxPath(home);
   const reads = [worktree, commonDir, ...['.codex', '.nvm', '.cache', '.npm', '.local/share/uv', 'Library/Caches'].map(p => path.join(home, p)), ...validateReadPaths(readPaths, home, config)].map(sandboxPath);
   let scratchPaths = [];
@@ -61,8 +62,16 @@ export function codexProfile({ home = os.homedir(), worktree, commonDir, metadat
     mkdirSync(raw, { recursive: true });
     scratchPaths = [...new Set([raw, sandboxPath(realpathSync.native(raw))])];
   }
-  const environment = validateReadPaths(environmentReadPaths, home, config);
-  const writes = [worktree, metadataDir, ...scratchPaths, ...['.codex', '.cache', '.npm'].map(p => path.join(home, p)), '/private/tmp', '/private/var/folders'].map(sandboxPath);
+  const caches = validateReadPaths(cacheWritePaths, home, config);
+  if (caches.length && (caches.length !== 2 || new Set(caches.map(file => path.basename(file))).size !== 2)) throw viteCacheError(caches[0]);
+  for (const file of caches) {
+    const parent = path.dirname(file);
+    if (!VITE_CACHE_NAMES.includes(path.basename(file)) || ![path.join(worktree, 'node_modules'), ...environmentReadPaths].includes(parent) ||
+        lstatSync(file).isSymbolicLink() || !lstatSync(file).isDirectory() || realpathSync(file) !== file) throw viteCacheError(file);
+  }
+  if (caches.length && path.dirname(caches[0]) !== path.dirname(caches[1])) throw viteCacheError(caches[0]);
+  const environment = validateReadPaths([...new Set([...environmentReadPaths, ...caches.map(file => path.dirname(file))])], home, config);
+  const writes = [worktree, metadataDir, ...scratchPaths, ...caches, ...['.codex', '.cache', '.npm'].map(p => path.join(home, p)), '/private/tmp', '/private/var/folders'].map(sandboxPath);
   const filter = (kind, file) => `(${kind} "${sandboxPath(file)}")`;
   const ancestors = new Set([home]);
   for (const file of [...reads, metadataDir]) {
@@ -94,13 +103,17 @@ export function codexProfile({ home = os.homedir(), worktree, commonDir, metadat
   const environmentAllow = environment.map(file => `(allow file-read* ${filter('subpath', file)})\n(allow process-exec ${filter('subpath', file)})\n`).join('') +
     (environmentAncestors.size ? `(allow file-read-metadata ${[...environmentAncestors].map(file => filter('literal', file)).join(' ')})\n` : '');
   const environmentDeny = environment.map(file => `(deny file-write* ${filter('subpath', file)})\n`).join('');
+  const viteCacheAllow = caches.map(file => `(allow file-write* ${filter('subpath', file)})\n`).join('');
+  // A checkout under an OS temp root must not inherit that broad temporary-write grant.
+  // Keep only this job's worktree/metadata writable; the two cache exceptions follow below.
+  const checkoutDeny = caches.length ? `(deny file-write* (require-all ${filter('subpath', path.dirname(commonDir))} (require-not (require-any ${filter('subpath', worktree)} ${filter('subpath', metadataDir)}))))\n` : '';
   return `(version 1)\n(allow default)\n(deny file-read* file-write* ${filter('subpath', home)})\n` +
     `(deny file-read* process-exec ${tmpDeny})\n` +
     scratchAllow + scratchMetadataAllow + environmentAllow +
     `(allow file-read* ${[...ancestors].map(file => filter('literal', file)).join(' ')} ${reads.map(file => filter('subpath', file)).join(' ')} ${filter('literal', path.join(home, '.gitconfig'))})\n` +
     `(allow process-exec ${reads.map(file => filter('subpath', file)).join(' ')})\n` +
     `(allow file-write* ${writable})\n(deny file-write* (require-not (require-any ${writable})))\n` +
-    environmentDeny +
+    checkoutDeny + environmentDeny + viteCacheAllow +
     `(deny file-read* file-write* ${deniedPaths(home, config).map(file => filter('subpath', file)).join(' ')})\n` +
     '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd.xpc"))\n';
 }
@@ -114,20 +127,25 @@ export function codexArgs(job, { profile, worktree, lastMessage, message }) {
 // waiver names the exact narrow case that is genuinely out of reach, so the rest of that sentence
 // stays true for everything else.
 export const CODEX_OUT_OF_REPO_DOCS_WAIVER_LINE = "Any doc your own AGENTS.md names that is not shown inline above, not in your context list, and not under .swarm/skills lives outside this worktree; you do not need to fetch it or ask for it — proceed using only what is provided here.\n";
+export const DESIGN_ONLY_LINE = 'Design-only job: do not run tests or installs; read and grep only. A test failure in your sandbox is never a reason to block.\n';
+export const isDesignOnlyCodexJob = job => job.agent === 'codex' && job.outputs.length > 0 && job.outputs.every(file => /\.md$/i.test(file) || (file.split('/')[0] === 'docs' && /\.json$/i.test(file)));
 export function codexMessage(job, { contract = null, gotchas = '', skills = '', agentsWorkspace = null, checks = [] } = {}) {
-  const base = `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(job.context)}. You may edit only these declared outputs: ${JSON.stringify(job.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.\nRead only the files in your context; other reads may be denied.\nIf a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\n`;
+  let base = `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(job.context)}. You may edit only these declared outputs: ${JSON.stringify(job.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.\nRead only the files in your context; other reads may be denied.\nIf a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\n`;
+  if (job.scope === 'open') base = `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(job.context)}. Your open scope directories are ${JSON.stringify(job.outputDirs)}. The frozen allowed files (tracked directory files plus explicit outputs) are ${JSON.stringify(job.outputs)}. You may read context and allowed files and edit only allowed files. New undeclared files are dropped writes. This is a proposal boundary, not per-file OS confinement. Do not delete files. Run relevant project tests. Root uncommitted changes are not included. Deliver what you can and list what remains. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed allowed paths and unfinished work.\n\n`;
   const contractSection = contract ? `Shared contract (${contract.path}). Read it first; it wins over any other file:\n${contract.text}\n\n` : '';
   // Field lesson #288: a codex worktree already contains every tracked file at HEAD and already has
   // .swarm/skills copied in, so a doc this repo's own AGENTS.md names is usually already readable;
   // inlined directly (never relies on the worker thinking to go read it) when the run found one.
   const agentsWorkspaceSection = agentsWorkspace ? `Required reading named by this repo's own AGENTS.md (${agentsWorkspace.path}); it is already in your worktree and readable, read it now:\n${agentsWorkspace.text}\n\n` : '';
   const checkList = checks.length ? checks.map(check => `${check.name}: ${JSON.stringify(check.argv)}${check.integrateOnly || check.status === 'path-denied' || check.status === 'not run' || /skipped-integrate-only|integrate-only: path outside this worktree|path-denied/.test(check.name) || check.argv.some(arg => /^\{(?:integrated|new)(?::[^}]+)?\}$/.test(arg)) ? ' (not run: orchestrator-only or path-denied)' : ''}`).join('; ') : 'none declared; run relevant tests';
-  const checksLine = `Manifest checks: ${checkList}. Run these; fix red before you return; report checksRun.\nReport checksRun as [{"name":"NAME","status":"passed|failed|not run"}]. Checks marked not run must stay not run; do not evade path restrictions or run orchestrator-only checks.\n`;
+  let checksLine = `Manifest checks: ${checkList}. Run these; fix red before you return; report checksRun.\nReport checksRun as [{"name":"NAME","status":"passed|failed|not run"}]. Checks marked not run must stay not run; do not evade path restrictions or run orchestrator-only checks.\n`;
+  const designOnly = isDesignOnlyCodexJob(job);
+  if (designOnly) { base = base.replace('Run relevant project tests.', 'Read and grep only.'); checksLine = 'Manifest checks are not run for this design-only job; report checksRun with status "not run".\n'; }
   const testEnvironment = job.testEnv ? `Test environment (already set): ${Object.entries(job.testEnv).map(([key, value]) => `${key}=${value}`).join(', ')}\n` : '';
   // Field lesson #163: codex has a shell too, and the stash stack is shared by every worktree.
   // Field lesson #170: never hand-revert a mutant with checkout/restore; run `swarm mutants`.
   // Field lesson #167: known platform gotchas for this project, when a .swarm/gotchas.md exists.
-  return `${base}${CODEX_OUT_OF_REPO_DOCS_WAIVER_LINE}${contractSection}${agentsWorkspaceSection}${testEnvironment}${checksLine}${NO_STASH_LINE}\n${MUTANTS_BY_HAND_LINE}\n${gotchas}${skills}TASK:\n${job.prompt}\n`;
+  return `${designOnly ? DESIGN_ONLY_LINE : ''}${base}${CODEX_OUT_OF_REPO_DOCS_WAIVER_LINE}${contractSection}${agentsWorkspaceSection}${testEnvironment}${checksLine}${NO_STASH_LINE}\n${MUTANTS_BY_HAND_LINE}\n${gotchas}${skills}TASK:\n${job.prompt}\n`;
 }
 const tryObject = text => { try { const value = JSON.parse(text); return value && typeof value === 'object' && !Array.isArray(value) ? value : null; } catch { return null; } };
 const CODEX_FENCE = /```[a-zA-Z]*[ \t]*\n([\s\S]*?)\n[ \t]*```/g;
@@ -293,6 +311,60 @@ export async function prepareWorkspaceEnvironment(root, worktree, { sync = false
     }
   }
   return { environmentReadPaths: [...new Set(dependencies.map(item => item.real))], setupResult };
+}
+
+const VITE_CACHE_NAMES = ['.vite-temp', '.vite'];
+const viteCacheError = file => Object.assign(new Error(`vite-temp-not-writable: ${file}; prepare writable Vite caches or use an isolated dependency install`), { code: 'vite-temp-not-writable', path: file });
+async function viteCachePaths(worktree, { environmentReadPaths = [], home = os.homedir(), config = {}, fsImpl = fs, lstat = file => fsImpl.lstat(file), access = file => fsImpl.access(file, constants.W_OK), prepare = false, project = false } = {}) {
+  let checking = path.join(worktree, 'package.json');
+  const infoAt = async file => { try { return await lstat(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
+  try {
+    const packageInfo = await infoAt(checking);
+    if (!packageInfo) return [];
+    if (packageInfo.isSymbolicLink() || !packageInfo.isFile() || packageInfo.size > 1024 * 1024) throw Error('unsafe package');
+    const pkg = JSON.parse(await fsImpl.readFile(checking, 'utf8'));
+    if (!['dependencies', 'devDependencies', 'optionalDependencies'].some(key => pkg[key] && ['vite', 'vitest'].some(name => Object.hasOwn(pkg[key], name)))) return [];
+    checking = path.join(worktree, 'node_modules');
+    const dependencyInfo = await infoAt(checking);
+    if (!dependencyInfo) {
+      // Do not synthesize an empty install. Preflight still identifies the missing cache.
+      if (prepare) return [];
+      await access(worktree);
+      throw viteCacheError(path.join(checking, VITE_CACHE_NAMES[0]));
+    }
+    const dependency = (validateReadPaths([await fsImpl.realpath(checking)], home, config))[0];
+    if (!(await lstat(dependency)).isDirectory()) throw Error('not a directory');
+    const localDependency = path.join(await fsImpl.realpath(worktree), 'node_modules');
+    if (!project && dependency !== localDependency && !environmentReadPaths.includes(dependency)) throw Error('unvalidated dependency link');
+    const paths = [];
+    for (const name of VITE_CACHE_NAMES) {
+      checking = path.join(dependency, name);
+      const info = await infoAt(checking);
+      if (info?.isSymbolicLink() || (info && !info.isDirectory())) throw Error('unsafe cache');
+      if (!info) {
+        await access(dependency);
+        if (!prepare) throw Error('missing cache');
+        await fsImpl.mkdir(checking);
+      }
+      // Check after creation as well: an existing link or a changed parent never grants an alias.
+      const after = await lstat(checking);
+      if (after.isSymbolicLink() || !after.isDirectory() || await fsImpl.realpath(checking) !== checking) throw Error('cache escaped dependency');
+      validateReadPaths([checking], home, config);
+      await access(checking);
+      paths.push(checking);
+    }
+    return paths;
+  } catch (error) { throw error.code === 'vite-temp-not-writable' ? error : viteCacheError(checking); }
+}
+
+export async function prepareViteCaches(worktree, options = {}) {
+  return { cacheWritePaths: await viteCachePaths(worktree, { ...options, prepare: true }) };
+}
+
+export async function viteCacheWarnings(root, manifest, options = {}) {
+  if (!manifest.jobs.some(job => job.agent === 'codex')) return [];
+  try { await viteCachePaths(root, { config: options.config ?? loadLocalConfig(), ...options, project: true }); return []; }
+  catch (error) { return [{ code: 'vite-temp-not-writable', path: error.path, message: error.message }]; }
 }
 
 // Synchronous append makes evidence visible before a caller applies its in-memory log cap.

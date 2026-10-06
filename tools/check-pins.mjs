@@ -58,8 +58,14 @@ export function satisfiesRequirement(version, requirement) {
 // --- pyproject.toml: name + the [project] dependencies array only, no general TOML parsing -----
 
 export function parsePyprojectDependencies(text) {
-  const name = /^\s*name\s*=\s*"([^"]+)"/m.exec(text)?.[1] ?? null;
-  const block = /dependencies\s*=\s*\[([\s\S]*?)\]/.exec(text)?.[1] ?? '';
+  const projectHeader = /^\s*\[project\]\s*$/m.exec(String(text));
+  if (!projectHeader) return { name: null, dependencies: [] };
+  const projectStart = projectHeader.index + projectHeader[0].length;
+  const remainder = String(text).slice(projectStart);
+  const nextTable = /^\s*\[/m.exec(remainder);
+  const projectBlock = nextTable ? remainder.slice(0, nextTable.index) : remainder;
+  const name = /^\s*name\s*=\s*"([^"]+)"/m.exec(projectBlock)?.[1] ?? null;
+  const block = /dependencies\s*=\s*\[([\s\S]*?)\]/.exec(projectBlock)?.[1] ?? '';
   const dependencies = [];
   const re = /"([^"]+)"/g;
   let m;
@@ -218,7 +224,7 @@ function printHuman(result) {
 export async function runCheckPins({ root, json = false, core, appPrefix }) {
   const findings = [];
   const normalizedCore = core != null ? normalizeName(core) : null;
-  const skippedRules = normalizedCore ? [] : ['library-exact-core-pin', 'wheel-requirement-unsatisfied'];
+  const skippedRules = normalizedCore ? [] : ['library-exact-core-pin', 'wheel-requirement-unsatisfied', 'vendored-core-missing-runtime-wheels'];
 
   const vendorDir = path.join(root, 'vendor');
   const vendorFiles = await listVendorFiles(vendorDir);
@@ -246,11 +252,19 @@ export async function runCheckPins({ root, json = false, core, appPrefix }) {
       }
     }
 
-    if (normalizedCore && normalizeName(name ?? '') === normalizedCore && wheelFiles.length) {
-      const lockVersions = parseUvLockVersions(await readIfExists(path.join(root, 'uv.lock')) ?? '');
+    const directNames = new Set(dependencies.map(spec => parseRequirement(spec)?.name).filter(Boolean));
+    if (normalizedCore && wheelFiles.length) {
+      const lockVersions = normalizeName(name ?? '') === normalizedCore
+        ? parseUvLockVersions(await readIfExists(path.join(root, 'uv.lock')) ?? '')
+        : null;
       for (const file of wheelFiles) {
         const metadataText = await readWheelMetadata(path.join(vendorDir, file));
         for (const req of parseRequiresDist(metadataText)) {
+          const wheel = parseWheelFilename(file);
+          if (wheel?.name === normalizedCore && !vendoredWheelVersions.has(req.name) && !directNames.has(req.name)) {
+            findings.push({ rule: 'vendored-core-missing-runtime-wheels', file: `vendor/${file}`, package: req.name, message: `vendored core wheel ${file} requires ${req.name}, which is neither vendored nor a direct project dependency` });
+          }
+          if (!lockVersions) continue;
           const locked = lockVersions.get(req.name);
           if (locked == null || satisfiesRequirement(locked, req)) continue;
           findings.push({ rule: 'wheel-requirement-unsatisfied', file: `vendor/${file}`, package: req.name, message: `vendored wheel ${file} requires ${req.name}${req.raw} but uv.lock has ${req.name}==${locked}` });

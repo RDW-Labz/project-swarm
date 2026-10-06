@@ -1,0 +1,218 @@
+[
+  {
+    "name": "ag351-drop-open-expansion",
+    "file": "tools/swarm.mjs",
+    "find": "const effectiveOutputs = [...new Set([...job.outputs, ...trackedScopeFiles])].sort();",
+    "replace": "const effectiveOutputs = [...job.outputs];",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag351-drop-narrow-warning",
+    "file": "tools/swarm.mjs",
+    "find": "job.outputs.length < 3 && /touch only/i.test(job.prompt)",
+    "replace": "false",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag351-drop-ticket-extra-files",
+    "file": "tools/pipeline.mjs",
+    "find": "...validatedOpenScopeFiles",
+    "replace": "...[]",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag352-hide-missing-tool",
+    "file": "tools/swarm.mjs",
+    "find": "if (!resolvedTool.path) inventoryWarnings.push(",
+    "replace": "if (false) inventoryWarnings.push(",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag353-drop-cache-grants",
+    "file": "tools/codex-adapter.mjs",
+    "find": "environmentDeny + viteCacheAllow +",
+    "replace": "environmentDeny +",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag353-drop-preflight-warning",
+    "file": "tools/preflight.mjs",
+    "find": "...await viteCacheWarnings(root, manifest)",
+    "replace": "...[]",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag355-hide-other-writer",
+    "file": "tools/swarm.mjs",
+    "find": "if (otherCalls.length > 0) redundantWarnings.push(",
+    "replace": "if (false) redundantWarnings.push(",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag-default-off-again",
+    "file": "tools/swarm.mjs",
+    "find": "worktreeConfig.worktreesOutsideRoot !== false",
+    "replace": "worktreeConfig.worktreesOutsideRoot === true",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag356-drop-design-only-prepend",
+    "file": "tools/codex-adapter.mjs",
+    "find": "${designOnly ? DESIGN_ONLY_LINE : ''}",
+    "replace": "",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag351-allow-other-agent-open-scope",
+    "file": "tools/swarm.mjs",
+    "find": "job.scope !== 'open' || job.agent !== 'codex' || !Array.isArray(job.outputDirs)",
+    "replace": "job.scope !== 'open' || !Array.isArray(job.outputDirs)",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag351-ignore-duplicate-directories",
+    "file": "tools/swarm.mjs",
+    "find": "seen.has(dir.toLowerCase())",
+    "replace": "false",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag351-drop-expansion-size-refusal",
+    "file": "tools/swarm.mjs",
+    "find": "if (effectiveOutputs.length > 100)",
+    "replace": "if (false)",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag351-drop-open-dropped-write-report",
+    "file": "tools/swarm.mjs",
+    "find": "result.droppedWrites = dropped.sort();\n      result.droppedWritesNew = droppedNew.sort();",
+    "replace": "result.droppedWrites = [];\n      result.droppedWritesNew = droppedNew.sort();",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag353-accept-cache-preparation-errors",
+    "file": "tools/codex-adapter.mjs",
+    "find": "throw error.code === 'vite-temp-not-writable' ? error : viteCacheError(checking);",
+    "replace": "return [];",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag353-allow-other-cache-children",
+    "file": "tools/codex-adapter.mjs",
+    "find": "!VITE_CACHE_NAMES.includes(path.basename(file))",
+    "replace": "false",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag353-allow-duplicate-cache-grants",
+    "file": "tools/codex-adapter.mjs",
+    "find": "caches.length && (caches.length !== 2 || new Set(caches.map(file => path.basename(file))).size !== 2)",
+    "replace": "false",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag-cli-drop-retry-flag-conflict",
+    "file": "tools/swarm.mjs",
+    "find": "rerunFlaky !== undefined && rerunFlakyCi !== undefined",
+    "replace": "false",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  },
+  {
+    "name": "ag-cli-drop-retry-flag-value-check",
+    "file": "tools/swarm.mjs",
+    "find": "if (!/^[01]$/.test(value)) fail('--rerun-flaky-ci requires 0 or 1');",
+    "replace": "if (false) fail('--rerun-flaky-ci requires 0 or 1');",
+    "check": [
+      "npm",
+      "test",
+      "--",
+      "tests/field-lessons-batch-ag-runtime.test.mjs"
+    ]
+  }
+]

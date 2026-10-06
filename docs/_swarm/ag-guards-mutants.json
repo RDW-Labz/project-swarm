@@ -1,0 +1,5 @@
+[
+  {"name":"ag343-drop-runtime-coverage","file":"tools/check-pins.mjs","find":"!vendoredWheelVersions.has(req.name) && !directNames.has(req.name)","replace":"false","check":["npm","test","--","tests/field-lessons-batch-ag-pins.test.mjs"]},
+  {"name":"ag354-skip-verified-retry","file":"tools/ship.mjs","find":"rerunFlakyCi === 1 && verifiedFlake.eligible","replace":"false","check":["npm","test","--","tests/field-lessons-batch-ag-ship.test.mjs"]},
+  {"name":"ag354-accept-two-local-passes","file":"tools/ship.mjs","find":"localPasses === 3 && basePassed","replace":"localPasses >= 2 && basePassed","check":["npm","test","--","tests/field-lessons-batch-ag-ship.test.mjs"]}
+]

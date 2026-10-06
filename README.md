@@ -15,10 +15,10 @@ or another agent with file and command access. The worker adapter does not
 need to match the orchestrator. Paste this into your agent at project start:
 
 ```text
-Use Project Swarm 1.46.1 for this project. Read docs/kickoff.md in the toolkit
+Use Project Swarm 1.47.0 for this project. Read docs/kickoff.md in the toolkit
 and perform its kickoff workflow. Ask me up front which model providers may
 receive project code and what spend ceiling applies; wait before model calls.
-Install from tag v1.46.1 in ~/.project-swarm, run tools/install.mjs --user,
+Install from tag v1.47.0 in ~/.project-swarm, run tools/install.mjs --user,
 link this project, run doctor, validate and run the read-only and writing smoke
 jobs, inspect and integrate the reviewed writing output. Read the installed
 SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
@@ -124,6 +124,8 @@ node tools/swarm.mjs integrate <run-id>
 ```
 
 A successful smoke run produces `coordination/swarm-handshake.md` after integration. Each live worker uses your own provider access and can consume billable usage. A host environment may require network execution approval.
+
+Codex and Claude shell jobs use detached worktrees outside the project root by default, under the configured scratch directory, so repository tooling does not walk worker copies. Set `worktreesOutsideRoot: false` in the local config to retain the in-root layout. The saved `worktreePath` remains authoritative for inspection and integration, while runs without that field keep the historical in-root fallback.
 
 ## Drop it into another project
 
@@ -265,7 +267,7 @@ Integration reports the parsed keys, source and a bounded text excerpt for skill
 - `go <manifest.json|run-id> [--commit-message MSG] [--repo OWNER/NAME --pr payload.json] [--require-section NAME]... [--mutants] [--merge-method M] [--timeout S]` — one command from a manifest (or an already-started run) to a merged, reviewed change: run and wait (skipped for a run id), integrate with checks, commit exactly that run's integrated files (never `git add -A`) when `--commit-message` is given, then ship when `--repo`/`--pr` are given. Prints one JSON line and exits `0` for `merged`/`held`/`ready`/`integrated`/`committed`, `1` for `failed`. See [the manifest reference](docs/manifest-reference.md#go).
 - `scout --model M --brief FILE "goal"` — prior-art research for one large task; `--brief` may be any readable path, including outside the project root; validates license claims and writes a report for review.
 - `sweep --model M --brief FILE --goals FILE [--max-usd N]` — prior-art research across several areas with a dispatch spending threshold; review findings before adoption.
-- `check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX]` — reads what a project actually ships (its dependency manifest, lockfile, and vendored copies) and reports a stale internal pin: a library that exact-pins the shared core package named by `--core` instead of a range (a repo whose own name starts with `--app-prefix` is exempt), an exact pin that no longer matches a vendored copy, a pin older than a newer vendored copy, or (in the `--core` repo itself) a vendored copy's own requirement left unsatisfied by the lockfile. Without `--core`, the two core-specific rules are skipped and named in a `skippedRules` field. Prints one finding per line (or one JSON object with `--json`) and exits `1` when any finding is present, `0` otherwise.
+- `check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX]` — reads what a project actually ships (its dependency manifest, lockfile, and vendored copies) and reports a stale internal pin: a library that exact-pins the shared core package named by `--core` instead of a range (a repo whose own name starts with `--app-prefix` is exempt), an exact pin that no longer matches a vendored copy, a pin older than a newer vendored copy, or (in an application vendoring `--core`) a vendored core wheel's runtime requirement absent from both vendored wheels and direct project dependencies. Without `--core`, the three core-specific rules are skipped in `skippedRules` in their established order: `library-exact-core-pin`, `wheel-requirement-unsatisfied`, `vendored-core-missing-runtime-wheels`. Prints one finding per line (or one JSON object with `--json`) and exits `1` when any finding is present, `0` otherwise.
 - `version [--check]` — print `{version, installRoot, tag}`; with `--check`, also `latest`/`updateAvailable` from the `origin` remote's tags (or `checkError` if the remote can't be reached). No local files change.
 - `update [--projects [DIR...]] [--yes]` — move this shared install to the newest release tag and reinstall the skill; or, with `--projects`, find old per-project copies/stale pointers and replace them with a pointer only when `--yes` is given.
 - `onboard` — print a plain-language summary of what the swarm does, provider compatibility and configuration on this machine, and how to ask for work; generated from local `doctor` checks, no model call.

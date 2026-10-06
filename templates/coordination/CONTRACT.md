@@ -16,6 +16,15 @@ One row per file, one owner job each. No two jobs may write the same file.
 ## Exports / events / flags
 Every cross-job function name, event name, manifest flag or field this batch
 introduces. A job may not invent a name not listed here.
+
+For each value that another project or external consumer validates, record the accepting
+implementation or an existing house example before dispatch. Do not invent external
+vocabularies; if the accepting rule is unavailable, leave the value unresolved and report it.
+
+| value | consumer | validated-by (file:line or existing example) |
+|---|---|---|
+|  |  |  |
+
 ## Event names
 A row per log/event name a job's code writes or reads. A row with an empty
 producer cell names a reader with no producer anywhere in this batch —
