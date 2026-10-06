@@ -4643,13 +4643,16 @@ const NOTE_INVALID_ARGS = 'note-invalid-args: provide one non-empty single-line 
 const NOTE_INVALID_PATH = 'note-invalid-path: target must be a regular TASK.md or HANDOFF.md inside the project with existing non-symlink parents';
 export async function noteRun(root, { text, file = 'TASK.md' } = {}, { now = Date.now, env = process.env, home = os.homedir(), config } = {}) {
   if (typeof text !== 'string' || !text.trim() || /[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(text)) fail(NOTE_INVALID_ARGS, 'note-invalid-args');
-  let target, coordinationDir, legacyRootNote = false;
+  let target, coordinationDir, legacyRootNote = false, coordinationFile = false;
   try {
-    if (!['TASK.md', 'HANDOFF.md'].includes(file) || path.basename(file) !== file) throw Error();
     const localConfig = config ?? await loadLocalConfigInline({ env, home });
     const hasConfiguredCoordination = Boolean(localConfig.coordinationDir ?? localConfig.coordination?.dir ?? localConfig.paths?.coordination);
     coordinationDir = localConfig.coordinationDir ?? localConfig.coordination?.dir ?? localConfig.paths?.coordination ?? 'coordination';
     relative(coordinationDir);
+    const bareFile = ['TASK.md', 'HANDOFF.md'].includes(file) && path.basename(file) === file;
+    coordinationFile = typeof file === 'string' && file.startsWith(`${coordinationDir}/`) &&
+      ['TASK.md', 'HANDOFF.md'].includes(path.basename(file)) && path.dirname(file) === coordinationDir;
+    if (!bareFile && !coordinationFile) throw Error();
     const useConfiguredCoordination = config !== undefined;
     if (!useConfiguredCoordination) {
       // Preserve the pre-coordination API for callers that have not selected a configured
@@ -4657,13 +4660,18 @@ export async function noteRun(root, { text, file = 'TASK.md' } = {}, { now = Dat
       // root-level replacement.
       target = await safePath(root, file);
       if (!(await fs.lstat(path.dirname(target))).isDirectory()) throw Error();
-      try {
+      if (coordinationFile) {
         if (!(await fs.lstat(target)).isFile()) throw Error();
-      } catch (targetError) {
-        if (targetError.code !== 'ENOENT') throw targetError;
+      } else {
+        try {
+          if (!(await fs.lstat(target)).isFile()) throw Error();
+        } catch (targetError) {
+          if (targetError.code !== 'ENOENT') throw targetError;
+        }
+        legacyRootNote = true;
       }
-      legacyRootNote = true;
     } else {
+      if (!bareFile) throw Error();
       target = await safePath(root, `${coordinationDir}/${file}`);
       if (!(await fs.lstat(path.dirname(target))).isDirectory()) throw Error();
       if (!(await fs.lstat(target)).isFile()) throw Error();
@@ -4674,7 +4682,7 @@ export async function noteRun(root, { text, file = 'TASK.md' } = {}, { now = Dat
     try { prior = await fs.readFile(target); } catch (error) { if (error.code !== 'ENOENT') throw error; prior = Buffer.alloc(0); }
     const timestamp = new Date(now()).toISOString();
     await fs.appendFile(target, `${prior.length && prior.at(-1) !== 10 ? '\n' : ''}- ${timestamp} ${text}\n`);
-    return { status: 'complete', file: legacyRootNote ? file : `${coordinationDir}/${file}`, timestamp };
+    return { status: 'complete', file: legacyRootNote || coordinationFile ? file : `${coordinationDir}/${file}`, timestamp };
   } catch { fail('note-write-failed: could not append a clock-stamped note', 'note-write-failed'); }
 }
 

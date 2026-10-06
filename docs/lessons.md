@@ -2243,3 +2243,19 @@ rule is enforced or documented.
 359. **Decision values need source evidence.** Pin fixed constants with literal expected values in tests and quote the source values in review summaries. Warn when a held summary names a value absent from the added change.
 360. **Tests need durable inputs.** Keep runtime and test fixtures in tracked locations that survive a clean checkout. Refuse source and test references to temporary coordinator material and warn about scratch data in build context.
 361. **Progress timestamps must come from a clock.** Append progress notes with a tool-generated UTC timestamp. A generated timestamp describes when the note was recorded, not when an earlier event occurred.
+362. **Rendered UI changes need preview coverage.** Require or warn for preview-harness checks covering affected views when rendered UI roots change, and identify UI roots without configured harness coverage.
+363. **Absent output tests are pending, not red.** Treat a base check as pending when every named test path is an absent declared job output, and refuse only on real failures.
+364. **Ownership guidance prevents false blocks.** Tell jobs when changelog or active version files belong to another job, and do not let that ownership rule block unrelated work.
+365. **Rework metrics need follow-up evidence.** Report follow-up edits within 24 hours by skill as the primary rework measure, and mark red rate not applicable when integration checks are empty.
+366. **Test state needs per-run isolation.** Keep provider-limit caches and global paths under a per-test temporary home, with a guard against resolving the real home during concurrent runs.
+369. **Idle seats need actionable attribution.** Report idle seats after five minutes, list runnable unblocked work, and attribute idle gaps to recorded hand steps.
+371. **Version bumps include active assertions.** Discover tests that assert the previous active version, include them in outputs or explicit ignores, and require the full suite for release checks.
+372. **Failure records need the failing assertion.** Preserve each failed test's name, location, and assertion, and rerun only failed local files when a flaky rerun is requested.
+374. **Validation should expose live conflicts.** Reuse the run-time output-conflict scan, return conflict details with the startable subset, and allow that subset to be selected directly.
+375. **Coordination notes belong in coordination.** Resolve task and handoff files under the configured coordination directory, refuse root-level replacements, and list allowed lesson areas on invalid input.
+377. **Manifest contracts need normalization.** Hoist job-level contracts, treat a null tier reason as absent, and label not-yet-created sibling outputs as pending.
+378. **CI checks must match shell expansion.** Expand CI globs as the shell does and infer shipping head and base from the selected branch and default branch.
+379. **Brief premises need cheap existence checks.** Warn when an identifier-like mechanism named in a brief or prompt is absent from the repository before expensive work begins.
+380. **Integrated edits must stay declared.** Block edits outside declared outputs and rerun each job's reported check against the integrated tree.
+381. **Checks must ignore swarm scratch copies.** Exclude scratch workspaces from local checks and warn when check output cites a scratch path.
+382. **Test summaries can precede timeouts.** Classify a CI step timeout after a zero-failure test summary as a timeout and retry the failed job once.

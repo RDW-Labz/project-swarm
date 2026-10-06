@@ -308,6 +308,7 @@ test('L361 note appends the injected UTC clock and preserves existing content', 
     assert.deepEqual(await fs.readFile(path.join(root, 'TASK.md')), Buffer.concat([prior, Buffer.from(`${prior.length && prior.at(-1) !== 10 ? '\n' : ''}- ${stamp} first\n- ${stamp} second\n`)]));
   }
   await fs.mkdir(path.join(root, 'coordination'));
+  await put(root, 'coordination/HANDOFF.md', Buffer.alloc(0));
   await swarm.noteRun(root, { text: 'handoff', file: 'coordination/HANDOFF.md' }, { now });
   assert.equal(await fs.readFile(path.join(root, 'coordination/HANDOFF.md'), 'utf8'), `- ${stamp} handoff\n`);
   assert.equal(clocks, 9);
@@ -347,6 +348,7 @@ test('L361 note rejects forged lines and unsafe targets without writes', async t
 test('L361 CLI prints a real timestamp and leaves note text inert', async t => {
   const root = await fixture(t);
   await fs.mkdir(path.join(root, 'coordination'));
+  await put(root, 'coordination/HANDOFF.md', Buffer.alloc(0));
   const text = 'literal "quotes" $HOME $(echo forged) `echo forged`; exit 9';
   const before = Date.now();
   const result = await cliRun(root, ['note', '--file', 'coordination/HANDOFF.md', text]);

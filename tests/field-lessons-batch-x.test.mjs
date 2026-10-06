@@ -356,14 +356,14 @@ describe('#288: a codex job\'s own repo AGENTS.md names required reads the promp
 });
 
 // ---------------------------------------------------------------------------------------------
-describe('release: 1.49.0', () => {
-  test('package.json and package-lock.json are both at 1.49.0', async () => {
+describe('release: 1.50.0', () => {
+  test('package.json and package-lock.json are both at 1.50.0', async () => {
     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
     const lock = JSON.parse(await fs.readFile(path.join(root, 'package-lock.json'), 'utf8'));
-    assert.equal(pkg.version, '1.49.0');
-    assert.equal(lock.version, '1.49.0');
-    assert.equal(lock.packages[''].version, '1.49.0');
+    assert.equal(pkg.version, '1.50.0');
+    assert.equal(lock.version, '1.50.0');
+    assert.equal(lock.packages[''].version, '1.50.0');
   });
 
   test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
@@ -381,6 +381,6 @@ describe('release: 1.49.0', () => {
   test('docs/lessons.md carries one public entry per lesson, numbered after the existing tail', async () => {
     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
     const text = await fs.readFile(path.join(root, 'docs/lessons.md'), 'utf8');
-    for (const n of [184, 185, 186, 187, 188, 189, 190, 191]) assert.match(text, new RegExp(`^${n}\\. \\*\\*`, 'm'));
+    for (const n of [362, 363, 364, 365, 366, 369, 371, 372, 374, 375, 377, 378, 379, 380, 381, 382]) assert.match(text, new RegExp(`^${n}\\. \\*\\*`, 'm'));
   });
 });

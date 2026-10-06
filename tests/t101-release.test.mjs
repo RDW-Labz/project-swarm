@@ -19,9 +19,9 @@ test('T101 release records the vendored skills and their attribution', async () 
     fs.readFile(path.join(root, 'CHANGELOG.md'), 'utf8'),
     fs.readFile(path.join(root, 'NOTICE'), 'utf8'),
   ]);
-  assert.equal(JSON.parse(pkgText).version, '1.49.0');
-  assert.match(changelog, /^# Changelog\n\n## 1\.49\.0\n/);
-  const current = changelog.split('## 1.49.0\n')[1].split('\n## ')[0];
+  assert.equal(JSON.parse(pkgText).version, '1.50.0');
+  assert.match(changelog, /^# Changelog\n\n## 1\.50\.0\n/);
+  const current = changelog.split('## 1.50.0\n')[1].split('\n## ')[0];
   assert.match(current, /MIT License/);
   for (const pin of pins) {
     assert.ok(current.includes(pin), `missing changelog pin ${pin}`);
