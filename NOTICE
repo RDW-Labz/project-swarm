@@ -7,3 +7,13 @@ Created during the example website design and development workflow.
 The example website, its brand assets, and its private model transcripts are not
 included in this distribution. Claude Code is a separate Anthropic product;
 this project does not distribute or license that product.
+
+Third-party worker skills
+
+The following skills are trimmed and adapted from mattpocock/skills under the MIT License:
+
+- tdd — commit 6fd947921b935b7e1e69293a200400f0fdd5c15f
+- diagnosing-bugs — commit 6fd947921b935b7e1e69293a200400f0fdd5c15f
+- code-review — commit 6fd947921b935b7e1e69293a200400f0fdd5c15f
+- writing-for-agents — commit 6fd947921b935b7e1e69293a200400f0fdd5c15f
+- resolving-merge-conflicts — commit 153fc1b93de6584562765cdce299324e1ff9e661
