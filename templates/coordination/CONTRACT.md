@@ -18,6 +18,17 @@ Every cross-job function, event, manifest flag, or field introduced here. A job 
 |---|---|---|
 |  |  |  |
 
+## Decision-fixed constants
+List every constant whose exact value is part of the decision. Use `none` when there are no applicable values.
+
+| constant | source file:line | exact value and unit | decision reference | pinning test file and test name |
+|---|---|---|---|---|
+| none |  |  |  |  |
+
+Each applicable row requires a literal expected value independent of the production constant, plus a boundary assertion when relevant.
+
+Quote decision-fixed values from the source constant in the review summary; name the test that pins each value. Do not copy numbers from the ticket.
+
 ## Event names
 A row per log/event name a job writes or reads. An empty producer cell names a reader with no producer in this batch; `validate` warns `event-reader-no-producer`.
 
