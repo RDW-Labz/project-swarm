@@ -1,0 +1,40 @@
+✖ #242: templates/coordination/CONTRACT.md Tests section requires a mid-case cap-trip test for spend-cap contracts (1.260958ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /single case trips the cap mid-way/. Input:
+  
+  '## Tests\n' +
+    "Where each job's regression test lives and which existing tests it changes. A done-when naming a diagnostic field names one test per failure class it must distinguish. Spend caps name the checked unit and test one case tripping the cap mid-way. Async blocking changes name its execution context and test concurrent work continues. Platform-bound startup dependencies test backend failure with lazy construction. Evaluator/gate tests use real vendored data and assert a non-zero attacked/flagged count.\n" +
+    '## Mutants\n' +
+    "Every evaluator/gate changed here gets a standard mutant forcing every case clean; the Tests section's real-data test must kill it.\n"
+  
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+--
+  ✖ (g) the Tests section states the requirement (1.067041ms)
+    AssertionError [ERR_ASSERTION]: The input did not match the regular expression /For any new platform-bound dependency \(keychain, OS API\) on a startup path, one test forces the platform backend to fail and proves startup still succeeds; construct it lazily via a factory\./. Input:
+    
+    '# Contract — <batch name>\n' +
+      "One shared, coordinator-owned file every job's `context` includes and no job's `outputs` may write. Fill each section before dispatch.\n" +
+      '\n' +
+      '## Base\n' +
+      'Base commit/branch; target branch for the PR.\n' +
+      '\n' +
+      '## Outputs\n' +
+      'One row per file and owner; no two jobs may write the same file.\n' +
+      '\n' +
+      '| file | owner job |\n' +
+--
+✖ #257: templates/coordination/CONTRACT.md requires a platform-backend-failure test for a new platform-bound startup dependency (1.315875ms)
+▶ #263: a shell job's launch env has TMPDIR/TMP/TEMP under its own scratch directory; a non-shell job is unaffected
+  ✔ (o) a shell job's env has TMPDIR/TMP/TEMP under its own scratch dir (302.329666ms)
+  ✔ (p) a non-shell job's env is unchanged (142.627958ms)
+✔ #263: a shell job's launch env has TMPDIR/TMP/TEMP under its own scratch directory; a non-shell job is unaffected (445.077041ms)
+ℹ tests 24
+ℹ suites 9
+ℹ pass 22
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2071.038208
+--
+✖ failing tests:
