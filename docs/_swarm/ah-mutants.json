@@ -1,0 +1,68 @@
+[
+ {
+  "name": "ah357-remove-configured-fallback",
+  "file": "tools/swarm.mjs",
+  "find": "const fallback = configured.fallback;",
+  "replace": "const fallback = null;",
+  "check": [
+   "node",
+   "--test",
+   "tests/field-lessons-batch-ah-runtime.test.mjs"
+  ]
+ },
+ {
+  "name": "ah358-exact-files-only",
+  "file": "tools/swarm.mjs",
+  "find": "if (promptPathCovered(candidate, covered)) continue;",
+  "replace": "if (covered.has(candidate)) continue;",
+  "check": [
+   "node",
+   "--test",
+   "tests/field-lessons-batch-ah-runtime.test.mjs"
+  ]
+ },
+ {
+  "name": "ah359-drop-decision-warnings",
+  "file": "tools/ship.mjs",
+  "find": "const missing = claimed.filter(value => !added.has(value));",
+  "replace": "const missing = [];",
+  "check": [
+   "node",
+   "--test",
+   "tests/field-lessons-batch-ah-process.test.mjs"
+  ]
+ },
+ {
+  "name": "ah360-disable-prewrite-reference-check",
+  "file": "tools/swarm.mjs",
+  "find": "const workFolderHits = workFolderReferenceHits(writes);",
+  "replace": "const workFolderHits = [];",
+  "check": [
+   "node",
+   "--test",
+   "tests/field-lessons-batch-ah-runtime.test.mjs"
+  ]
+ },
+ {
+  "name": "ah360-drop-context-warning",
+  "file": "tools/swarm.mjs",
+  "find": "warnings.push(...workFolderContextWarnings(job, context));",
+  "replace": "warnings.push(...[]);",
+  "check": [
+   "node",
+   "--test",
+   "tests/field-lessons-batch-ah-runtime.test.mjs"
+  ]
+ },
+ {
+  "name": "ah361-forge-note-clock",
+  "file": "tools/swarm.mjs",
+  "find": "const timestamp = new Date(now()).toISOString();",
+  "replace": "const timestamp = new Date(0).toISOString();",
+  "check": [
+   "node",
+   "--test",
+   "tests/field-lessons-batch-ah-runtime.test.mjs"
+  ]
+ }
+]
