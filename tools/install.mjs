@@ -209,7 +209,40 @@ export async function installProject(targetDirectory,{source=packageRoot,agentFi
   try{
    await fs.writeFile(destination,await fs.readFile(path.join(installRoot,from)),{flag:'wx'});
    added.push(to);
-  }catch(error){if(error.code!=='EEXIST')throw error;kept.push(to);}
+   }catch(error){if(error.code!=='EEXIST')throw error;kept.push(to);}
+ }
+ const vendorRoot=path.join(installRoot,'templates/coordination/skills');
+ let vendorSkills=[];
+ try{vendorSkills=(await fs.readdir(vendorRoot,{withFileTypes:true})).filter(entry=>entry.isDirectory()).sort((a,b)=>a.name.localeCompare(b.name));}
+ catch(error){if(error.code!=='ENOENT')throw error;}
+ for(const entry of vendorSkills){
+  const name=entry.name,relativeDir=`coordination/skills/${name}`,sourceDir=path.join(vendorRoot,name),destinationDir=await safeTarget(root,relativeDir);
+  const files=await listFiles(sourceDir);
+  let exists=false;
+  try{
+   const stat=await fs.lstat(destinationDir);
+   if(stat.isSymbolicLink())throw Error(`Symlink refused: ${relativeDir}`);
+   if(!stat.isDirectory())throw Error(`Non-directory parent: ${relativeDir}`);
+   exists=true;
+  }catch(error){if(error.code!=='ENOENT')throw error;}
+  if(exists){
+   for(const file of files)kept.push(`${relativeDir}/${file}`);
+   continue;
+  }
+  await fs.mkdir(await safeTarget(root,'coordination/skills',{createParents:true}),{recursive:true});
+  try{await fs.mkdir(destinationDir);}catch(error){
+   if(error.code!=='EEXIST')throw error;
+   const stat=await fs.lstat(destinationDir);
+   if(stat.isSymbolicLink())throw Error(`Symlink refused: ${relativeDir}`);
+   if(!stat.isDirectory())throw Error(`Non-directory parent: ${relativeDir}`);
+   for(const file of files)kept.push(`${relativeDir}/${file}`);
+   continue;
+  }
+  for(const file of files){
+   const to=`${relativeDir}/${file}`,destination=await safeTarget(root,to,{createParents:true});
+   await fs.copyFile(path.join(sourceDir,file),destination);
+   added.push(to);
+  }
  }
  const agentPaths=[];
  if(agentFiles)for(const [template,to] of [['AGENTS.md','AGENTS.md'],['CLAUDE.md','CLAUDE.md'],['cursor-rule.mdc','.cursor/rules/project-swarm.mdc']]){
