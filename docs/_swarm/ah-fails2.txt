@@ -1,0 +1,6 @@
+After ah-fix1: npm test 1417 pass / 3 fail. ah-fix1 compressed templates/coordination/CONTRACT.md to 35 lines but dropped wording other tests require:
+- tests/field-lessons-batch-r.test.mjs:275 (#242) — the Tests section must state the spend-cap mid-case cap-trip test requirement (see the test's exact regex/strings).
+- tests/field-lessons-batch-u.test.mjs:331 (#257) — the Tests section must require a forced platform-backend-failure test for a new platform-bound startup dependency.
+- (#286 in tests/field-lessons-batch-*.test.mjs is an unrelated environment flake; ignore.)
+Every test that reads templates/coordination/CONTRACT.md: tests/field-lessons-batch-ag-release.test.mjs tests/field-lessons-batch-ah-release.test.mjs tests/field-lessons-batch-q.test.mjs tests/field-lessons-batch-p.test.mjs tests/field-lessons-batch-r.test.mjs tests/field-lessons-batch-u.test.mjs tests/field-lessons-batch-x.test.mjs tests/field-lessons-batch-w.test.mjs tests/install.test.mjs 
+Rule: the file stays <= 40 lines AND satisfies every assertion in every one of those files. Read each assertion before editing.

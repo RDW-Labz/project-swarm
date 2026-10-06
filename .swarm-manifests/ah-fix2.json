@@ -1,0 +1,31 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ah-fix2",
+   "agent": "codex",
+   "model": "gpt-reserve",
+   "tier": "mid",
+   "timeoutMs": 1500000,
+   "context": [
+    "docs/_swarm/ah-fails2.txt",
+    "docs/_swarm/ah-contract.md",
+    "templates/coordination/CONTRACT.md",
+    "tests/field-lessons-batch-ag-release.test.mjs",
+    "tests/field-lessons-batch-ah-release.test.mjs",
+    "tests/field-lessons-batch-q.test.mjs",
+    "tests/field-lessons-batch-p.test.mjs",
+    "tests/field-lessons-batch-r.test.mjs",
+    "tests/field-lessons-batch-u.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/field-lessons-batch-w.test.mjs",
+    "tests/install.test.mjs"
+   ],
+   "outputs": [
+    "templates/coordination/CONTRACT.md"
+   ],
+   "prompt": "You are job ah-fix2. Read docs/_swarm/ah-fails2.txt. Restate done-when in one line. Edit only templates/coordination/CONTRACT.md: keep it <= 40 lines and make it satisfy EVERY assertion in every test file in your context that reads it (list them, check each string/regex one by one before you finish; restore any required wording the last edit dropped, including the lesson 359 decision-values line). Do not edit tests. CHANGELOG.md and version files are owned by another job. You may run: node --test <those test files>; EPERM sandbox reds from ~/.project-swarm paths are expected and never a reason to block. Return JSON only: {\"status\":\"complete|blocked\",\"filesChanged\":[...],\"reproTest\":\"tests/field-lessons-batch-r.test.mjs\",\"notes\":\"<=2 lines: final line count and assertions checked\"}"
+  }
+ ]
+}
