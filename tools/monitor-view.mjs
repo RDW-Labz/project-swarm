@@ -132,6 +132,21 @@ function formatUsage(usageByProvider) {
   }).join('  ·  ');
 }
 
+export function renderIdleSeatEvents(events, width = 100) {
+  const lines = [];
+  for (const event of events ?? []) {
+    if (event?.type !== 'idle-seat') continue;
+    const minutes = event.idleMinutes ?? '-';
+    lines.push(truncate(`idle seat: no worker running for ${minutes}m`, width));
+    const tasks = event.runnableTasks ?? [];
+    lines.push(truncate(
+      tasks.length ? `runnable unblocked TASK items: ${tasks.join(', ')}` : 'runnable unblocked TASK items: none',
+      width,
+    ));
+  }
+  return lines;
+}
+
 // `view` mirrors summarizeRun's shape (id, status, concurrency, peakConcurrency, counts,
 // elapsedMs, usageByProvider, jobs[]) with each job entry additionally carrying agent,
 // model, tier, tierReason, and outputCount merged in by the caller from run/manifest state.
@@ -153,6 +168,7 @@ export function renderMonitorView(view, options = {}) {
   ));
   const usage = formatUsage(view.usageByProvider);
   if (usage) lines.push(truncate(`usage  ${usage}`, width));
+  lines.push(...renderIdleSeatEvents(view.idleSeatEvents ?? view.idleSeat ?? [], width));
   lines.push('');
   lines.push(...renderTable(jobs, width, color));
   return lines.join('\n');

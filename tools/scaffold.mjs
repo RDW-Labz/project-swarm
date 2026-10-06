@@ -128,6 +128,42 @@ async function writeScaffold(root, file, key, value) {
     return error.code === 'EEXIST' ? failure('scaffold-exists', { file }) : failure('scaffold-io', { file, message: error.message });
   }
 }
+
+const VERSION_RE = /\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\b/g;
+const TEST_FILE_RE = /(?:^|\/)(?:tests?|__tests__)(?:\/|$)|(?:^|\/)[^/]*\.(?:test|spec)\.[cm]?[jt]sx?$/i;
+
+function isVersionBumpJob(job, activeVersion) {
+  if (!job.outputs.includes('package.json') || !activeVersion) return false;
+  const prompt = job.prompt ?? '';
+  return /\b(?:version|release|bump)\b/i.test(prompt) &&
+    (prompt.includes(activeVersion) || new RegExp(VERSION_RE.source).test(prompt));
+}
+
+async function activeVersionTests(root, projectFiles, activeVersion) {
+  const hits = [];
+  for (const file of projectFiles) {
+    if (!TEST_FILE_RE.test(file)) continue;
+    let text;
+    try { text = await fs.readFile(await safeFile(root, file), 'utf8'); }
+    catch { continue; }
+    // Test assertions often escape dots in a regex literal (1\\.49\\.0); normalize only
+    // that harmless spelling so the active-version scan does not miss a pinned release test.
+    if (text.includes(activeVersion) || text.replaceAll('\\.', '.').includes(activeVersion)) hits.push(file);
+  }
+  return hits.sort();
+}
+
+async function releaseVersionGuard(root, job, projectFiles) {
+  let packageText;
+  try { packageText = await fs.readFile(await safeFile(root, 'package.json'), 'utf8'); }
+  catch { return { isRelease: false, tests: [] }; }
+  let packageData;
+  try { packageData = JSON.parse(packageText); } catch { return { isRelease: false, tests: [] }; }
+  const activeVersion = typeof packageData.version === 'string' ? packageData.version : null;
+  if (!isVersionBumpJob(job, activeVersion)) return { isRelease: false, tests: [] };
+  return { isRelease: true, tests: await activeVersionTests(root, projectFiles, activeVersion) };
+}
+
 export async function scaffoldJob(root, options, deps) {
   let manifest, inputFile = root;
   try {
@@ -153,9 +189,15 @@ export async function scaffoldJob(root, options, deps) {
     manifest = { version: 1, jobs: [job] };
     deps.validateManifest(manifest);
     const projectFiles = await deps.listProjectFiles(root);
+    const release = await releaseVersionGuard(root, job, projectFiles);
+    if (release.isRelease) {
+      job.ignoreTests = release.tests.filter(file => !job.outputs.includes(file));
+      for (const test of job.ignoreTests) job.prompt += '\nignoreTests: ' + test + ' — Active release version assertion; the release job does not own this test file, so the coordinator must update it and run the full suite.';
+      manifest.checks = [{ name: 'full-suite', argv: ['npm', 'test'] }];
+    }
     const uncovered = await deps.findUncoveredTests(root, job, projectFiles);
     const uncoveredTests = [...new Set(uncovered.map(item => item.test))].sort();
-    job.ignoreTests = uncoveredTests;
+    job.ignoreTests = [...new Set([...job.ignoreTests, ...uncoveredTests])].sort();
     for (const test of uncoveredTests) job.prompt += '\nignoreTests: ' + test + " — Existing test is outside this job's declared outputs; the coordinator runs it after integration.";
     job.prompt += '\nReturn JSON only: {"status":"complete|partial|blocked","filesChanged":[],"reproTest":"PATH or n/a"}';
     deps.validateManifest(manifest);
