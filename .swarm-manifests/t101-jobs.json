@@ -1,0 +1,78 @@
+{
+ "version": 1,
+ "concurrency": 2,
+ "jobs": [
+  {
+   "id": "t101-vendor",
+   "agent": "codex",
+   "model": "gpt-reserve",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "docs/_swarm/t101-src/LICENSE",
+    "docs/_swarm/t101-src/code-review.SKILL.md",
+    "docs/_swarm/t101-src/diagnosing-bugs.SKILL.md",
+    "docs/_swarm/t101-src/handoff.SKILL.md",
+    "docs/_swarm/t101-src/resolving-merge-conflicts.SKILL.md",
+    "docs/_swarm/t101-src/tdd.SKILL.md",
+    "docs/_swarm/t101-src/tdd.mocking.md",
+    "docs/_swarm/t101-src/tdd.tests.md",
+    "docs/_swarm/t101-src/to-spec.SKILL.md",
+    "docs/_swarm/t101-src/to-tickets.SKILL.md",
+    "docs/_swarm/t101-src/writing-for-agents.SKILL-MECHANICS.md",
+    "docs/_swarm/t101-src/writing-for-agents.SKILL.md",
+    "docs/_swarm/t101-ours/oasis-code-review.SKILL.md",
+    "docs/_swarm/t101-ours/oasis-debugging.SKILL.md",
+    "tools/skills.mjs",
+    "tools/install.mjs",
+    "tests/install.test.mjs",
+    "tests/link.test.mjs",
+    "tests/worker-skills.test.mjs",
+    "NOTICE",
+    "README.md"
+   ],
+   "outputs": [
+    "templates/coordination/skills/tdd/SKILL.md",
+    "templates/coordination/skills/tdd/LICENSE",
+    "templates/coordination/skills/diagnosing-bugs/SKILL.md",
+    "templates/coordination/skills/diagnosing-bugs/LICENSE",
+    "templates/coordination/skills/code-review/SKILL.md",
+    "templates/coordination/skills/code-review/LICENSE",
+    "templates/coordination/skills/resolving-merge-conflicts/SKILL.md",
+    "templates/coordination/skills/resolving-merge-conflicts/LICENSE",
+    "templates/coordination/skills/writing-for-agents/SKILL.md",
+    "templates/coordination/skills/writing-for-agents/LICENSE",
+    "templates/coordination/skills/tdd/tests.md",
+    "templates/coordination/skills/tdd/mocking.md",
+    "templates/coordination/skills/writing-for-agents/mechanics.md",
+    "NOTICE",
+    "tools/install.mjs",
+    "tests/t101-vendored-skills.test.mjs"
+   ],
+   "prompt": "You are job t101-vendor. Restate done-when in one line. Vendor five MIT worker skills from the upstream copies in your context (files named <skill>.SKILL.md plus reference files <skill>.<ref>.md, and LICENSE) into templates/coordination/skills/<name>/ for name in: tdd, diagnosing-bugs, code-review, resolving-merge-conflicts, writing-for-agents.\nPer skill write: SKILL.md = our frontmatter (name, description one line, paths: list, checks: with resultKeys list; copy the exact frontmatter style and parser limits of the two example skills named oasis-*.SKILL.md in context, and tools/skills.mjs) + the upstream body trimmed to the rules a bounded file-tools worker can act on (drop install steps, interactive/human-in-the-loop steps, shell-script references, slash-command and plugin talk, links to files we do not ship). Whole file <= 800 tokens (ceil(chars/4) <= 800, i.e. <= 3200 chars); keep the upstream's meaning and wording where kept. A trimmed-away part that matters may go in one reference file beside it (tdd: tests.md/mocking.md trimmed, writing-for-agents: mechanics) each <= 3200 chars. LICENSE = the upstream MIT LICENSE text verbatim in every skill folder. Add a first body line: 'Adapted from mattpocock/skills (MIT), commit <pin>; trimmed.' Pins: 6fd947921b935b7e1e69293a200400f0fdd5c15f for tdd, diagnosing-bugs, code-review, writing-for-agents; 153fc1b93de6584562765cdce299324e1ff9e661 for resolving-merge-conflicts (removed upstream later; last version). paths: choose generic globs (e.g. tests/** and src/** for tdd; no project names).\nAlso: append a 'Third-party worker skills' section to NOTICE (repo, license, both pins, list of skills, 'trimmed and adapted'). Make tools/install.mjs copy each templates/coordination/skills/<name>/ folder (every file in it) to coordination/skills/<name>/ only when that folder is absent (never overwrite or merge an existing project skill of the same name), reported in the existing added/kept lists. Tests in tests/t101-vendored-skills.test.mjs: each of the five loads with the tools/skills.mjs loader without error and estimates <= 800 tokens (no skill-over-800 warning); each folder has LICENSE identical to the upstream MIT text and a pin line; NOTICE names both pins; install copies the folders into a fresh fixture root and keeps an existing coordination/skills/code-review untouched (byte-identical). No new dependencies. Private names: no person, company, product or repo names other than the upstream attribution. CHANGELOG.md and version files are owned by another job; do not edit or block on them. Do not run the full suite (nested sandbox reds are expected); you may run node --test tests/t101-vendored-skills.test.mjs tests/install.test.mjs tests/worker-skills.test.mjs. Return JSON only: {\"status\":\"complete|blocked\",\"filesChanged\":[...],\"reproTest\":\"tests/t101-vendored-skills.test.mjs\",\"notes\":\"<=3 lines: final token estimate per skill\"}"
+  },
+  {
+   "id": "t101-compare",
+   "agent": "codex",
+   "model": "gpt-reserve",
+   "tier": "mid",
+   "timeoutMs": 1800000,
+   "context": [
+    "docs/_swarm/t101-src/handoff.SKILL.md",
+    "docs/_swarm/t101-src/to-spec.SKILL.md",
+    "docs/_swarm/t101-src/to-tickets.SKILL.md",
+    "docs/_swarm/t101-ours/oasis-code-review.SKILL.md",
+    "docs/_swarm/t101-ours/oasis-debugging.SKILL.md",
+    "docs/_swarm/t101-ours/oasis-handoff-rules.md",
+    "docs/_swarm/t101-ours/oasis-tickets-sample.md",
+    "templates/coordination/CONTRACT.md",
+    "templates/coordination/HANDOFF.md",
+    "templates/coordination/TASK.md"
+   ],
+   "outputs": [
+    "docs/_swarm/t101-compare.md"
+   ],
+   "prompt": "You are job t101-compare (writing only; do not run tests). Restate done-when in one line. Write docs/_swarm/t101-compare.md, one page (<= 70 lines): compare the upstream skills to-tickets, to-spec and handoff (files to-tickets.SKILL.md, to-spec.SKILL.md, handoff.SKILL.md in context) with ours: ticket format (oasis-tickets-sample.md), contract template (templates/coordination/CONTRACT.md), handoff rules (oasis-handoff-rules.md, templates/coordination/HANDOFF.md, templates/coordination/TASK.md). Ours stays; no replacement. For each of the three: 2-line summary of what upstream does that ours does not (and the reverse), then a table of proposed line-level edits to OUR files: | our file | current line (quote, <= 15 words) or 'new line after: <quote>' | proposed line | why (<= 12 words) |. Max 6 edits per area, ranked by expected rework saved. Quote upstream at most 12 words at a time with attribution (MIT). End with 'Not adopted' (one line each). Return JSON only: {\"status\":\"complete|blocked\",\"filesChanged\":[\"docs/_swarm/t101-compare.md\"],\"reproTest\":\"none\",\"notes\":\"<=3 lines\"}"
+  }
+ ]
+}
