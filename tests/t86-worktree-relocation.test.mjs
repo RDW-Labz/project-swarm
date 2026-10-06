@@ -130,8 +130,10 @@ test('no-json reply with changed outputs falls back to worktree result at record
 
 test('shim finds worktree in old location when worktreePath missing', async t => {
   const root = await fixture(t);
+  const { configFile } = await worktreeConfig(t);
+  await fs.writeFile(configFile, JSON.stringify({ worktreesOutsideRoot: false }));
   const script = `fs.writeFileSync('output.txt','proposed');process.exit(7);`;
-  const state = await runManifest(root, manifest(), { platform: 'darwin', spawnImpl: fake(script) });
+  const state = await runManifest(root, manifest(), { platform: 'darwin', env: { ...process.env, SWARM_CONFIG: configFile }, spawnImpl: fake(script) });
   assert.equal(state.jobs[0].status, 'failed');
   const stateFile = path.join(root, '.swarm', 'runs', state.id, 'state.json');
   const onDisk = JSON.parse(await fs.readFile(stateFile, 'utf8'));

@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { validateManifest, validateProject } from './swarm.mjs';
 import { resolveToolchainBin } from './ship.mjs';
+import { viteCacheWarnings } from './codex-adapter.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -128,7 +129,8 @@ export async function preflightProject(root, manifest, { exec, timeoutMs } = {})
   // Use the same guarded reads as execution. Do not follow validation with a
   // second, unguarded filesystem walk merely to gather size information.
   const validated = await validateProject(root, manifest);
-  const advisories = [...validated.warnings, ...await projectToolWarnings(root)];
+  const advisories = [...validated.warnings, ...await projectToolWarnings(root), ...await viteCacheWarnings(root, manifest)];
+  manifest = { ...manifest, jobs: manifest.jobs.map((job, index) => ({ ...job, outputs: validated.jobs[index].outputs })) };
   const copies = new Map();
   const jobs = validated.jobs.map((checked, index) => {
     const job = manifest.jobs[index];

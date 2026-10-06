@@ -265,7 +265,7 @@ test('runCheckPins: without core, library-exact-core-pin and wheel-requirement-u
   await writeWheel(path.join(root, 'vendor'), 'acme-core', '0.5.1');
 
   const result = await runCheckPins({ root });
-  assert.deepEqual(result.skippedRules, ['library-exact-core-pin', 'wheel-requirement-unsatisfied']);
+  assert.deepEqual(result.skippedRules, ['library-exact-core-pin', 'wheel-requirement-unsatisfied', 'vendored-core-missing-runtime-wheels']);
   assert.deepEqual(result.findings.map(f => f.rule).sort(), ['pin-not-vendored-version', 'pin-older-than-vendored']);
 });
 

@@ -242,7 +242,16 @@ async function runPipeline(root, options, deps) {
           failure = errorResult('commit', 'pipeline-dirty', { paths: changedAfterChecks.sort() });
           result = failure.detail;
         }
-        const files = [...new Set([...outputs, ...LOCKFILES.filter(file => after[file] !== journal.lockfileBaseline[file])])].sort();
+        const integrated = journal.stages.findLast(entry => entry.stage === 'integrate' && entry.status === 'ok')?.detail;
+        const openJobs = manifest.jobs.filter(job => job.agent === 'codex' && job.scope === 'open');
+        const validatedOpenScopeFiles = openJobs.length && stagePassed('integrate', integrated) ? (integrated.files ?? []).filter(file => {
+          if (!relativeFile(file) || file.includes(':') || file.split('/').some(part => ['.git', '.swarm'].includes(part.toLowerCase()))) throw new Error('unsafe integrated path');
+          return openJobs.some(job => job.outputs.includes(file) || (job.outputDirs ?? []).some(dir => {
+            const rel = path.relative(dir, file);
+            return rel && !path.isAbsolute(rel) && rel.split(path.sep)[0] !== '..';
+          }));
+        }) : [];
+        const files = [...new Set([...outputs, ...validatedOpenScopeFiles, ...LOCKFILES.filter(file => after[file] !== journal.lockfileBaseline[file])])].sort();
         for (const file of files) await safeFile(root, file);
         const dirty = await dirtyPaths(root, deps.exec);
         const unrelated = dirty.filter(file => !files.includes(file));

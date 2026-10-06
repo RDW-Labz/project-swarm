@@ -30,7 +30,7 @@ import { loadChecksFromCi, checkNotInCiWarnings, DEFAULT_CI_PATH } from './check
 import { go, commitOutputs, goExitCode } from './go.mjs';
 import { TICKET_USAGE, parseTicketArgs, ticketPipeline } from './pipeline.mjs';
 import { SCAFFOLD_USAGE, parseScaffoldArgs, scaffoldJob, scaffoldPr, commandHandlers, commandHandlerWarnings } from './scaffold.mjs';
-import { prepareWorkspaceEnvironment, createAdapterLogSink, runCodexWithRetry } from './codex-adapter.mjs';
+import { prepareWorkspaceEnvironment, prepareViteCaches, isDesignOnlyCodexJob, createAdapterLogSink, runCodexWithRetry } from './codex-adapter.mjs';
 import { classifyCheckEnvironment, swarmCheckWarnings } from './ship.mjs';
 import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary, listLiveRuns, repoKey, repoPaths } from './board.mjs';
 import { writeSessionMetric } from './session-metrics.mjs';
@@ -128,14 +128,74 @@ function toolchainsDir({ env = process.env, home = os.homedir() } = {}) {
   return env.SWARM_TOOLCHAINS || path.join(home, '.project-swarm/toolchains');
 }
 const TOOLCHAIN_TMP_ENV_VARS = ['RUSTUP_HOME', 'CARGO_HOME', 'UV_CACHE_DIR', 'UV_PYTHON_INSTALL_DIR', 'UV_TOOL_DIR', 'PLAYWRIGHT_BROWSERS_PATH', 'npm_config_cache'];
-export async function toolchainsReport({ env = process.env, home = os.homedir(), platform = process.platform, fsImpl = fs } = {}) {
-  const dir = toolchainsDir({ env, home });
+export async function toolchainsReport({ root, env = process.env, home = os.homedir(), platform = process.platform, fsImpl = fs, access } = {}) {
+  const dir = platform === 'win32' ? env.SWARM_TOOLCHAINS || path.win32.join(home, '.project-swarm', 'toolchains') : toolchainsDir({ env, home });
   let exists = false;
   try { exists = (await fsImpl.stat(dir)).isDirectory(); } catch { exists = false; }
   const tmpPaths = [];
-  for (const entry of String(env.PATH ?? '').split(':')) if (entry && TMP_PREFIX_RE.test(entry)) tmpPaths.push({ name: 'PATH', path: entry });
+  for (const entry of String(env.PATH ?? '').split(platform === 'win32' ? ';' : path.delimiter)) if (entry && TMP_PREFIX_RE.test(entry)) tmpPaths.push({ name: 'PATH', path: entry });
   for (const name of TOOLCHAIN_TMP_ENV_VARS) if (typeof env[name] === 'string' && TMP_PREFIX_RE.test(env[name])) tmpPaths.push({ name, path: env[name] });
-  return { dir, exists, tmpPaths };
+  const inventory = root === undefined ? null : await toolchainInventory(root, { env, home, platform, fsImpl, access });
+  return { dir, exists, tmpPaths, ...(inventory ? { inventory } : {}) };
+}
+
+export function parseToolchainInventory(text) {
+  const cells = line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(value => value.trim().replace(/^`([^`]*)`$/, '$1'));
+  const lines = text.split(/\r?\n/);
+  const headings = lines.flatMap((line, index) => cells(line).join('|') === 'binary|version|reinstall' ? [index] : []);
+  if (headings.length !== 1) return null;
+  const start = headings[0];
+  const separator = cells(lines[start + 1] ?? '');
+  if (separator.length !== 3 || separator.some(cell => !/^:?-{3,}:?$/.test(cell))) return null;
+  const rows = [], seen = new Set();
+  for (const line of lines.slice(start + 2)) {
+    if (!line.trim() || !line.includes('|')) break;
+    const [binary, version, reinstall, extra] = cells(line);
+    if (extra !== undefined || !binary || !version || !reinstall || ['.', '..'].includes(binary) || /[\\/:\x00-\x1f\x7f]/.test(binary) || seen.has(binary.toLowerCase())) return null;
+    seen.add(binary.toLowerCase());
+    rows.push({ binary, version, reinstall });
+  }
+  return rows.length ? rows : null;
+}
+
+async function toolchainInventory(root, { env, home, platform, fsImpl, access }) {
+  const relativeFile = 'coordination/toolchain-versions.md';
+  const invalid = () => ({ rows: [], warnings: [{ code: 'toolchain-inventory-invalid', message: `toolchain-inventory-invalid: ${relativeFile}: expected binary | version | reinstall table` }] });
+  const paths = platform === 'win32' ? path.win32 : path;
+  const file = paths.resolve(root, 'coordination', 'toolchain-versions.md');
+  let text;
+  try {
+    let current = paths.parse(file).root;
+    const parts = paths.relative(current, file).split(paths.sep);
+    for (const [index, part] of parts.entries()) {
+      current = paths.join(current, part);
+      const info = await fsImpl.lstat(current);
+      if (info.isSymbolicLink() || (index < parts.length - 1 ? !info.isDirectory() : !info.isFile() || info.size > 1024 * 1024)) return invalid();
+    }
+    text = await fsImpl.readFile(file, 'utf8');
+  } catch (error) { return error.code === 'ENOENT' ? null : invalid(); }
+  const rows = parseToolchainInventory(text);
+  if (!rows) return invalid();
+  const executable = access ?? (async file => {
+    if (!(await fsImpl.stat(file)).isFile()) throw Error('not a file');
+    await fsImpl.access(file, fs.constants.X_OK);
+  });
+  const inventoryWarnings = [];
+  for (const row of rows) {
+    let resolvedTool;
+    if (platform === 'win32') {
+      const dir = env.SWARM_TOOLCHAINS || paths.join(home, '.project-swarm', 'toolchains');
+      const dirs = [dir, paths.join(dir, 'bin'), ...String(env.PATH ?? '').split(';').filter(Boolean)];
+      const suffixes = /\.(exe|cmd)$/i.test(row.binary) ? [''] : ['', '.exe', '.cmd'];
+      resolvedTool = { path: null };
+      for (const candidate of dirs.flatMap(dir => suffixes.map(suffix => paths.join(dir, row.binary + suffix)))) {
+        try { await executable(candidate); resolvedTool.path = candidate; break; } catch { /* next candidate */ }
+      }
+    } else resolvedTool = await resolveToolchainBin(row.binary, { env, home, access: executable });
+    row.path = resolvedTool.path;
+    if (!resolvedTool.path) inventoryWarnings.push({ code: 'toolchain-missing', message: `toolchain-missing: ${row.binary} (${row.version}); reinstall: ${row.reinstall}` });
+  }
+  return { rows, warnings: inventoryWarnings };
 }
 
 // Codex and claude shell jobs run in a detached worktree; every other CLI job in a copied workspace.
@@ -913,6 +973,68 @@ export function mutantMissingForComparisonLineWarnings(writes, mutants) {
 // missing or duplicated find (a block copied with the wrong indentation) or a find equal to its
 // replace can only ever report a meaningless result. `readText(file)` returns the target's text
 // (the post-integration bytes for integrate) or null when it does not exist.
+export function redundantWriterWarnings(mutants, fileTexts) {
+  const texts = fileTexts instanceof Map ? fileTexts : new Map(Object.entries(fileTexts));
+  const redundantWarnings = [];
+  for (const mutant of mutants) {
+    // Deliberately narrow: a single, qualified call with simple arguments. Aliases, dynamic
+    // calls and multiline/complex syntax are unverified, never inferred as equivalent effects.
+    const removed = /^\s*(?:await\s+)?([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)\s*\([^()\n]*\)\s*;?\s*$/.exec(mutant.find);
+    if (!removed) continue;
+    const callee = removed[1];
+    const escaped = callee.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const call = new RegExp(`(?<![\\w$.])${escaped}\\s*\\(`, 'g');
+    if (new RegExp(`(?<![\\w$.])${escaped}\\s*\\(`).test(mutant.replace)) continue;
+    const otherCalls = [];
+    for (const [file, text] of texts) {
+      if (!reviewSourcePath(file)) continue;
+      const mutationStart = file === mutant.file ? text.indexOf(mutant.find) : -1;
+      let offset = 0;
+      for (const [index, line] of text.split('\n').entries()) {
+        if (!/^\s*(?:\/\/|#|\/\*|\*|\*\/)/.test(line) && !/^\s*(?:export\s+)?(?:async\s+)?(?:function|def)\b/.test(line)) {
+          for (const match of line.matchAll(call)) {
+            const position = offset + match.index;
+            if (mutationStart >= 0 && position >= mutationStart && position < mutationStart + mutant.find.length) continue;
+            const location = `${file}:${index + 1}`;
+            if (!otherCalls.includes(location)) otherCalls.push(location);
+          }
+        }
+        offset += line.length + 1;
+      }
+    }
+    if (otherCalls.length > 0) redundantWarnings.push(...otherCalls.sort().map(location => `redundant-writer: ${mutant.name} removes ${callee}; another call at ${location} may preserve the effect; target the shared store or reader`));
+  }
+  return redundantWarnings;
+}
+
+const reviewSourcePath = file => !isTestFile(file) && /\.(?:[cm]?js|jsx|tsx?|py|rs|go|java|c|cc|cpp|h|swift|rb)$/i.test(file) &&
+  !file.split('/').some(part => ['node_modules', 'vendor', 'dist', 'build', 'generated', 'coverage', '.git', '.swarm', '.venv', '__pycache__'].includes(part.toLowerCase()));
+async function mutantReviewTexts(root, overlay = new Map()) {
+  let entries = [];
+  try { entries = (await git(root, ['ls-tree', '-r', '-z', 'HEAD'])).split('\0').filter(entry => /^100(?:644|755) blob /.test(entry)).map(entry => entry.slice(entry.indexOf('\t') + 1)); }
+  catch { /* Non-git copied fixtures still validate mutants; no tracked-source evidence. */ }
+  const texts = new Map();
+  let total = 0;
+  for (const file of [...new Set([...entries, ...overlay.keys()])].sort()) {
+    if (!reviewSourcePath(file)) continue;
+    let bytes;
+    try {
+      const target = await safePath(root, file);
+      if (overlay.has(file)) bytes = overlay.get(file);
+      else {
+        const info = await fs.lstat(target);
+        if (!info.isFile() || info.size > 1024 * 1024) continue;
+        bytes = await fs.readFile(target);
+      }
+    } catch { continue; }
+    if (!bytes || bytes.length > 1024 * 1024 || bytes.includes(0)) continue;
+    if (total + bytes.length > MAX_CONTEXT) break;
+    total += bytes.length;
+    texts.set(file, bytes.toString('utf8'));
+  }
+  return texts;
+}
+
 export async function mutantProblems(mutants, readText) {
   const problems = [];
   for (const mutant of mutants) {
@@ -930,7 +1052,51 @@ async function refuseInvalidMutants(mutants, readText) {
   if (problems.length) throw Object.assign(new Error(`Refusing to run mutants: ${problems.length} invalid mutant(s), nothing mutated: ${problems.map(describeMutantProblem).join('; ')}`), { details: { mutantProblems: problems } });
 }
 
-export function validateManifest(manifest) {
+const pathContains = (parent, file) => {
+  const rel = path.relative(parent, file);
+  return rel === '' || (!path.isAbsolute(rel) && rel.split(path.sep)[0] !== '..');
+};
+
+export function narrowOutputScopeWarning(job) {
+  return job.outputs.length < 3 && /touch only/i.test(job.prompt)
+    ? { code: 'narrow-output-scope', jobId: job.id, message: `narrow-output-scope: Job ${job.id} says touch only with fewer than three outputs; include every plausible file or use scope open with outputDirs` }
+    : null;
+}
+
+// Expansion is a dispatch-time snapshot. Saved manifests are never passed here by inspect,
+// integrate or redcheck; their output/base-hash lists remain authoritative across HEAD changes.
+export async function expandOpenScopes(root, manifest) {
+  const expanded = structuredClone(manifest);
+  validateManifest(expanded);
+  if (!expanded.jobs.some(job => job.scope === 'open')) return expanded;
+  const entries = (await git(root, ['ls-tree', '-r', '-z', 'HEAD'])).split('\0').filter(Boolean).map(entry => {
+    const tab = entry.indexOf('\t');
+    return { mode: entry.slice(0, 6), file: entry.slice(tab + 1) };
+  });
+  for (const job of expanded.jobs) {
+    if (job.scope !== 'open') continue;
+    for (const dir of job.outputDirs) {
+      try {
+        const target = await safePath(root, dir);
+        if (!(await fs.lstat(target)).isDirectory() || !entries.some(entry => entry.file !== dir && pathContains(dir, entry.file))) throw Error('not tracked');
+      } catch { fail(`scope-open-path: Job ${job.id}: ${dir} is not a safe tracked directory`, 'scope-open-path'); }
+    }
+    const trackedScopeFiles = [];
+    for (const { mode, file } of entries) {
+      if (!['100644', '100755'].includes(mode) || !job.outputDirs.some(dir => file !== dir && pathContains(dir, file))) continue;
+      // Deleted files and symlink replacements are not grants. Reserved paths also fail closed.
+      try { if ((await fs.lstat(await safePath(root, file))).isFile()) trackedScopeFiles.push(file); }
+      catch (error) { if (error.code !== 'ENOENT' && !/Symlink refused|Reserved or secret/.test(error.message)) throw error; }
+    }
+    const effectiveOutputs = [...new Set([...job.outputs, ...trackedScopeFiles])].sort();
+    if (effectiveOutputs.length > 100) fail(`scope-open-too-large: Job ${job.id}: expanded outputs exceed 100 files; narrow outputDirs`, 'scope-open-too-large');
+    job.outputs = effectiveOutputs;
+  }
+  validateManifest(expanded);
+  return expanded;
+}
+
+export function validateManifest(manifest, { outputJobIds = null } = {}) {
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.jobs) || !manifest.jobs.length || manifest.jobs.length > 256) fail('Manifest requires version: 1 and 1–256 jobs');
   for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract', 'preChecks', 'skillsDir', 'allowEmptyContext', 'resources'].includes(key)) fail(`Unknown manifest field: ${key}`);
   // Field lesson #221: an empty context file (0 bytes, or whitespace only) is always a mistake —
@@ -990,6 +1156,7 @@ export function validateManifest(manifest) {
   }
   const ids = new Set();
   const writers = new Set();
+  const outputJobs = outputJobIds === null ? null : new Set(outputJobIds);
   for (const job of manifest.jobs) {
     if (!job || typeof job.id !== 'string' || !ID.test(job.id) || ids.has(job.id.toLowerCase())) fail(`Invalid or duplicate job id: ${job?.id}`);
     ids.add(job.id.toLowerCase());
@@ -1068,6 +1235,17 @@ export function validateManifest(manifest) {
     if (job.tier === 'expensive' && !job.tierReason?.trim()) fail(`expensive tier requires a non-empty tierReason: ${job.id}`);
     if (typeof job.prompt !== 'string' || !job.prompt.trim() || job.prompt.length > 100000) fail(`Invalid prompt: ${job.id}`);
     if (!Array.isArray(job.context) || !Array.isArray(job.outputs) || job.context.length > 100 || job.outputs.length > 100) fail('context and outputs must be explicit arrays of at most 100 files');
+    if (job.scope !== undefined || job.outputDirs !== undefined) {
+      if (job.scope !== 'open' || job.agent !== 'codex' || !Array.isArray(job.outputDirs) || !job.outputDirs.length || job.outputDirs.length > 20) fail(`scope-open-invalid: Job ${job.id}: scope open requires codex and non-empty outputDirs`, 'scope-open-invalid');
+      const seen = new Set();
+      for (const dir of job.outputDirs) {
+        try {
+          relative(dir);
+          if (/[*?\[\]{}]/.test(dir) || seen.has(dir.toLowerCase())) throw Error('unsafe directory');
+          seen.add(dir.toLowerCase());
+        } catch { fail(`scope-open-path: Job ${job.id}: ${dir} is not a safe tracked directory`, 'scope-open-path'); }
+      }
+    }
     if (new Set(job.context).size !== job.context.length || new Set(job.outputs).size !== job.outputs.length) fail('Duplicate file path');
     for (const file of [...job.context, ...job.outputs]) relative(file);
     // Decision #227: a deepseek/* model on OpenRouter writes bookkeeping files only.
@@ -1087,7 +1265,7 @@ export function validateManifest(manifest) {
       if (new Set(job.contextGlob).size !== job.contextGlob.length) fail(`Job ${job.id}: duplicate contextGlob entry`);
       for (const pattern of job.contextGlob) parseContextGlob(pattern);
     }
-    for (const file of job.outputs) {
+    for (const file of outputJobs && !outputJobs.has(job.id) ? [] : job.outputs) {
       if (writers.has(file.toLowerCase())) fail(`Output collision (case-insensitive): ${file}`);
       writers.add(file.toLowerCase());
     }
@@ -1134,14 +1312,14 @@ export function validateManifest(manifest) {
       if (job.outputs.length) fail('a web job must be read-only (no outputs)');
     }
     // Unknown command/provider fields cannot create an execution path.
-    const knownJobFields = ['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes'];
+    const knownJobFields = ['id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs'];
     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
   }
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
   for (const job of manifest.jobs) for (const afterId of job.after ?? []) if (!ids.has(afterId.toLowerCase())) fail(`Job ${job.id} after names unknown job ${afterId}`);
   const cycle = detectAfterCycle(manifest.jobs);
   if (cycle) fail(`after cycle: ${cycle.join(' -> ')}`);
-  for (const a of writers) for (const b of writers) if (a !== b && b.startsWith(`${a}/`)) fail(`Overlapping output paths: ${a}, ${b}`);
+  for (const a of writers) for (const b of writers) if (a !== b && pathContains(a, b)) fail(`Overlapping output paths: ${a}, ${b}`);
   // Field lesson #294: check output capacity for API agents with maxOutputTokens
   for (const job of manifest.jobs) {
     if (job.maxOutputTokens && API_AGENTS.includes(job.agent)) {
@@ -1611,6 +1789,7 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
     // Field lesson #197-followup: a project's own denied-home-dir additions (config
     // `deniedHomeDirs`) reach the real sandbox profile, not just the generic built-ins.
     const config = loadLocalConfig({ env: options.env });
+    const { cacheWritePaths } = await prepareViteCaches(worktree, { environmentReadPaths, home: options.env?.HOME ?? os.homedir(), config });
     const readPaths = await resolveReadPaths(job.readPaths, undefined, config);
     const venv = await resolveVenvInterpreterDirs(worktree);
     if (venv.unresolvable.length) { result = venvUnresolvableResult(venv.unresolvable); return result; }
@@ -1627,7 +1806,7 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
     const realScratchDir = await fs.realpath(scratchDir);
     await assertScratchOutsideRepo(realScratchDir, file => fs.access(file));
     await options.onScratchDir?.(scratchDir);
-    const profileText = codexProfile({ worktree, commonDir, metadataDir, scratchDir: realScratchDir, readPaths, environmentReadPaths, config });
+    const profileText = codexProfile({ home: options.env?.HOME ?? os.homedir(), worktree, commonDir, metadataDir, scratchDir: realScratchDir, readPaths, environmentReadPaths, cacheWritePaths, config });
     const profileRelative = `${directory}/${job.id}/sandbox.sb`;
     await write(root, profileRelative, profileText, true);
     const profile = await safePath(root, profileRelative, { internal: true });
@@ -1639,9 +1818,12 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
       launchBaseline.baseHashes[file] = bytes === null ? null : digest(bytes);
       launchBaseline.baseModes[file] = bytes === null ? 0o644 : (await fs.stat(await safePath(worktree, file))).mode & 0o777;
     }
+    const beforeStatus = job.scope === 'open' ? await worktreeStatusMap(worktree) : null;
+    const resultFiles = new Set();
     result = await runCodexWithRetry(async () => {
       // This is inside the run directory AND the allowed worktree, requiring no extra write grant.
       const resultRelative = `.swarm-codex-result-${crypto.randomBytes(12).toString('hex')}.json`;
+      resultFiles.add(resultRelative);
       const lastMessage = path.join(worktree, resultRelative);
       // Field lesson #141: this worktree's own port block, next to testEnv; a manifest testEnv can
       // never set SWARM_PORT_BASE itself (refused at validate time).
@@ -1666,6 +1848,19 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
       }
       return result;
     }, { hasWrittenOutputs: () => outputsChanged(worktree, launchBaseline), onRetry: options.onRetry ?? (async () => {}), cancelled: options.cancelled });
+    if (job.scope === 'open') {
+      result.filesChanged = [];
+      for (const file of job.outputs) if (await outputsChanged(worktree, { ...baseline, outputs: [file] })) result.filesChanged.push(file);
+      const dropped = [], droppedNew = [];
+      for (const [file, code] of await worktreeStatusMap(worktree)) {
+        if (job.outputs.includes(file) || resultFiles.has(file) || beforeStatus.get(file) === code) continue;
+        dropped.push(file);
+        if (code === '??') droppedNew.push(file);
+        await saveDroppedWrite(root, path.basename(directory), file, await droppedBytesAt(worktree, file), await droppedBytesAt(root, file), { useGit: true });
+      }
+      result.droppedWrites = dropped.sort();
+      result.droppedWritesNew = droppedNew.sort();
+    }
     if (venvInterpreterDenied.length) result.venvInterpreterDenied = venvInterpreterDenied;
     // Lesson #64: a completed job that only resolved through the result-file or worktree
     // fallback keeps its worktree too, since its envelope was reconstructed, not reported.
@@ -1682,7 +1877,7 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
     }
     return result;
   } catch (error) {
-    if (error.code === 'workspace-env-invalid') { result = { ...setupFailedResult(error.message), code: error.code, path: error.path }; return result; }
+    if (['workspace-env-invalid', 'vite-temp-not-writable'].includes(error.code)) { result = { ...setupFailedResult(error.message), code: error.code, path: error.path }; return result; }
     if (error.code === 'worktree-disk-low') { result = worktreeDiskLowResult(error.message); return result; }
     // Output validation can fail after a successful provider result. Keep any real
     // edited files even when another declared output is missing or unsafe.
@@ -1968,6 +2163,7 @@ export async function runBaseChecks(root, manifest, { spawnImpl = spawn, gitImpl
 export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks, checkBase = false, acceptRedBase = false, reason, baseChecks = {}, sync = false, acceptCoveredRedBase = true } = {}) {
   root = await fs.realpath(root);
   validateManifest(manifest);
+  const scopeWarnings = manifest.jobs.map(narrowOutputScopeWarning).filter(Boolean);
   // An unborn HEAD (no commits yet) breaks `git rev-parse HEAD`, which runBaseChecks below (and
   // worktree creation, for a codex/claude-shell job) both assume succeeds; refused here, before
   // either runs, naming the fix instead of surfacing git's own raw "ambiguous argument" error.
@@ -1983,6 +2179,7 @@ export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl,
       catch { fail('Refusing: project has no commits yet and this run needs one (base checks or a worktree job); create one first (for example `git commit --allow-empty -m "init"`), then run again', 'no-commits'); }
     }
   }
+  manifest = await expandOpenScopes(root, manifest);
   await privateNamesDispatchGuard(root, manifest, { env });
   // Every worktree of one repo shares a board key; refuse before touching anything if another
   // live run already claims one of this run's declared outputs.
@@ -2023,19 +2220,30 @@ export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl,
   if (typeof id !== 'string' || !ID.test(id)) fail('Invalid run id');
   if (!Number.isInteger(progressIntervalMs) || progressIntervalMs < 50 || progressIntervalMs > 60000) fail('progressIntervalMs must be 50–60000');
   const conflicts = await findWriterConflicts({ runId: id, root, outputs: declaredOutputs, dir: liveDirOpt });
+  // The legacy board matches exact names. Open jobs additionally reserve case-folded path
+  // segments, including file/parent collisions, without changing the saved board schema.
+  if (manifest.jobs.some(job => job.scope === 'open')) {
+    const repo = await repoKey(root);
+    const files = (await repoPaths(root, declaredOutputs)).map(file => file.toLowerCase());
+    for (const run of await listLiveRuns({ dir: liveDirOpt })) {
+      if (run.runId === id || run.repo !== repo || conflicts.some(conflict => conflict.runId === run.runId)) continue;
+      const shared = run.files.filter(file => files.some(own => pathContains(own, file.toLowerCase()) || pathContains(file.toLowerCase(), own)));
+      if (shared.length) conflicts.push({ runId: run.runId, root: run.root, files: shared });
+    }
+  }
   if (conflicts.length) {
     const [first] = conflicts;
     throw Object.assign(new Error(`Refusing to run: ${first.files[0]} is also written by live run ${first.runId} in ${first.root}`), { details: { conflicts } });
   }
   await registerLiveRun({ runId: id, root, outputs: declaredOutputs, dir: liveDirOpt });
   try {
-    return await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, workerKey, shellHooks, redBaseAutoAccept, acceptedRedBaseInfo, sync });
+    return await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, workerKey, shellHooks, redBaseAutoAccept, acceptedRedBaseInfo, sync, scopeWarnings });
   } finally {
     await unregisterLiveRun(id, { dir: liveDirOpt });
   }
 }
 
-async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, workerKey, shellHooks, redBaseAutoAccept = null, acceptedRedBaseInfo = null, sync = false }) {
+async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, workerKey, shellHooks, redBaseAutoAccept = null, acceptedRedBaseInfo = null, sync = false, scopeWarnings = [] }) {
   const cleanup = new AbortController();
   signal = signal ? AbortSignal.any([signal, cleanup.signal]) : cleanup.signal;
   let workers = [];
@@ -2045,14 +2253,14 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   await fs.writeFile(claim, '', { flag: 'wx' });
   const state = { version: 1, id, root, concurrency: manifest.concurrency??2, peakConcurrency: 0, status: 'running', startedAt: new Date().toISOString(), jobs: [], ...(redBaseAutoAccept ? { redBaseAutoAccept } : {}), ...(acceptedRedBaseInfo ? { acceptRedBase: true, acceptRedBaseReason: acceptedRedBaseInfo.reason, baseCheckFailures: acceptedRedBaseInfo.failures } : {}) };
   const worktreeConfig = loadLocalConfig({ env });
-  if (worktreeConfig.worktreesOutsideRoot === true && manifest.jobs.some(usesWorktree)) state.worktreesBase = await worktreesBaseFor(root, worktreeConfig, { env });
+  if (worktreeConfig.worktreesOutsideRoot !== false && manifest.jobs.some(usesWorktree)) state.worktreesBase = await worktreesBaseFor(root, worktreeConfig, { env });
   // Field lesson #202: two shell jobs each told to run the full suite, sharing one root, is a
   // manifest-shape problem known before any worker starts — surfaced on every state write.
   // Field lesson #265: a live rig-service checkout is named the same way, on the same warnings path.
   const liveWarning = await liveServiceCheckoutWarning(root, { env });
   const { lessonQueueWarnings } = await import('./lessons.mjs');
   const swarmDirWarning = state.worktreesBase ? null : await swarmDirNotIgnoredWarning(root);
-  const manifestWarnings = [...sharedRootFullSuiteWarnings(manifest), ...(liveWarning ? [liveWarning.message] : []), ...await lessonQueueWarnings(root), ...(swarmDirWarning ? [swarmDirWarning] : [])];
+  const manifestWarnings = [...scopeWarnings.map(warning => warning.message), ...sharedRootFullSuiteWarnings(manifest), ...(liveWarning ? [liveWarning.message] : []), ...await lessonQueueWarnings(root), ...(swarmDirWarning ? [swarmDirWarning] : [])];
   const save = async () => { state.warnings = runWarnings(state, manifestWarnings); state.summary = summarizeRun(state); await jsonWrite(root, `${directory}/state.json`, state); onState(state); };
   // Serialize status writes when several workers finish at once.
   let writes = Promise.resolve();
@@ -2063,7 +2271,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   const cancelled = async () => Boolean(signal?.aborted || await bytesAt(root, `${directory}/cancel`, true));
   try {
     await jsonWrite(root, `${directory}/manifest.json`, manifest);
-    await validateProject(root, manifest);
+    await validateProject(root, manifest, { scopesExpanded: true, scopeWarnings, env });
     state.baseCommit = await git(root, ['rev-parse', 'HEAD']).then(value => value.trim(), () => null);
     // Field lesson #160: loaded once per run; every setup, codex worker and shell worker gets it.
     const { env: swarmEnv } = await loadSwarmEnv(root);
@@ -2394,6 +2602,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           }
         }
         if (job.shell === true) Object.assign(record, { proxyRefused: result.proxyRefused ?? [], loopbackDenied: result.loopbackDenied ?? [], scratchDir: result.scratchDir ?? null, ...(result.venvInterpreterDenied?.length ? { venvInterpreterDenied: result.venvInterpreterDenied } : {}), ...(result.workerKeyExposed ? { workerKeyExposed: true } : {}), ...(result.loopbackScanHint ? { loopbackScanHint: result.loopbackScanHint } : {}), ...(result.droppedWrites?.length ? { droppedWrites: result.droppedWrites, ...(result.droppedWritesNew?.length ? { droppedWritesNew: result.droppedWritesNew } : {}) } : {}) });
+        if (job.scope === 'open') Object.assign(record, { filesChanged: result.filesChanged ?? [], droppedWrites: result.droppedWrites ?? [], droppedWritesNew: result.droppedWritesNew ?? [] });
         // Field lesson #201: a setup failure never spawns the worker; `setupFailed` rides along on
         // the job record so inspect can name the phase, instead of an empty error/result/cost that
         // reads identically to a worker that ran and produced nothing.
@@ -3124,6 +3333,7 @@ export async function runMutantsCurrentTree(root, { mutantsFile, mutantCheck, dr
   const checkSpec = mutantCheck ? parseMutantCheckFlag(mutantCheck) : null;
   // Field lesson #161: every find is counted in its target before the baseline or any mutant.
   await refuseInvalidMutants(mutants, async file => (await bytesAt(root, file))?.toString('utf8') ?? null);
+  warnings.push(...redundantWriterWarnings(mutants, await mutantReviewTexts(root)));
   if (dryRun) return { ...(warnings.length ? { warnings } : {}), status: 'dry-run', mutants: mutants.map(mutant => ({ name: mutant.name, file: mutant.file, status: 'valid', check: mutant.check ? 'mutant' : 'default', checkArgv: mutant.check ?? checkSpec.argv })), mutantsValid: true };
   const env = { ...process.env, ...(extraEnv ?? (await loadSwarmEnv(root)).env) };
   // Field lesson 136: a mutation "kill" only means something once the check is known to pass on
@@ -3212,6 +3422,13 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   // never skip that gate for it.
   if (salvage && noChecks) fail('--no-checks and --salvage cannot be combined');
   const state = await readState(root, id);
+  if (state.root !== root || state.id !== id) fail('Run belongs to another repository');
+  const manifest = validateManifest(JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true)), { outputJobIds: jobs ?? null });
+  const designWarnings = [];
+  for (const job of manifest.jobs) {
+    const warning = designOnlyBlockedOnTestWarning(job, await jobFinalJson(root, id, job.id));
+    if (warning) designWarnings.push(warning);
+  }
   // Field lesson 131: a job that stopped `blocked` (an out-of-scope break it could not fix itself)
   // is accepted by --accept-blocked; outputs it never wrote are skipped (lesson 328).
   // Field lesson #202: a job that only hit its own timeout while its declared outputs were already
@@ -3240,11 +3457,12 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   // Check if run can be integrated: either all jobs complete, or --jobs specified with complete named jobs
   const hasIncompleteJobs = state.jobs.some(j => !jobsAcceptable(j));
   if (hasIncompleteJobs && !jobs) {
+    if (designWarnings.length) throw Object.assign(new Error('Only a complete or accepted blocked run can be integrated'), { details: { warnings: designWarnings } });
     fail(`Only a complete${acceptBlocked ? ' or blocked' : ''}${salvage ? ' or timed-out (with salvageable output)' : ''} run from this repository can be integrated; pass --jobs <id,...> to integrate only specific complete jobs`);
   }
   if (!((acceptBlocked || salvage) ? (jobs ? state.jobs.filter(j => jobs.includes(j.id)).every(jobsAcceptable) : state.jobs.every(jobsAcceptable)) : (jobs ? state.jobs.filter(j => jobs.includes(j.id)).every(j => j.status === 'complete') : state.status === 'complete'))) fail(`Only a complete${acceptBlocked ? ' or blocked' : ''}${salvage ? ' or timed-out (with salvageable output)' : ''} run from this repository can be integrated`);
   await workerKeyGuard(root, id, state, { env, keyExec });
-  const manifest = validateManifest(JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true)));
+
   if (state.jobs.length !== manifest.jobs.length) fail('Job records do not match manifest');
   const lock = await safePath(root, '.swarm/integration.lock', { internal: true });
   await fs.mkdir(lock); // Other coordinators must finish before integrating.
@@ -3423,6 +3641,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       // integration writes (the proposed output, else the current file), before any write.
       const planned = new Map(writes.map(change => [change.file, change.bytes]));
       await refuseInvalidMutants(preValidatedMutants, async file => (planned.get(file) ?? await bytesAt(root, file))?.toString('utf8') ?? null);
+      mutantMissingWarnings.push(...redundantWriterWarnings(preValidatedMutants, await mutantReviewTexts(root, planned)));
     }
     // Field lesson #159: a change to packaging keys that no check builds is named up front.
     const packagingWarnings = packagingChangeWarnings(writes.filter(change => isPackagingFile(change.file)).map(change => ({ file: change.file, keys: packagingKeyChanges(change.file, change.previous?.toString('utf8') ?? '', change.bytes.toString('utf8')) })), [...(manifest.checks ?? []).map(check => check.argv), ...(manifest.preChecks ?? [])]);
@@ -3524,7 +3743,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       }
       Object.assign(state, mutantsResult);
     }
-    const warnings = [...swarmCheckWarnings(checksResult.checks), ...portWarnings, ...preChecksResult.warnings, ...(mutantsResult.mutantsSkippedRedBase ? ['mutants skipped: red base (checks failed)'] : []), ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`), ...mutantMissingWarnings];
+    const warnings = [...designWarnings, ...swarmCheckWarnings(checksResult.checks), ...portWarnings, ...preChecksResult.warnings, ...(mutantsResult.mutantsSkippedRedBase ? ['mutants skipped: red base (checks failed)'] : []), ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`), ...mutantMissingWarnings];
     if (resultShapeWarnings.length) state.resultShapeWarnings = resultShapeWarnings;
     // Field lesson 328: unwritten blocked outputs were skipped; retain the distinct integration status;
     // the run is tagged distinctly so a later `inspect`/`ship` never mistakes it for a clean pass,
@@ -3536,7 +3755,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
     // state), never merely swallowed by --accept-deviation.
     if (acceptedDeviations.length) state.acceptedDeviations = acceptedDeviations;
     await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
-    return { id, status: 'integrated', integrationStatus: state.integrationStatus, files: state.integratedFiles, portBase, ...(preChecksResult.preChecks.length ? { preChecks: preChecksResult.preChecks } : {}), ...(warnings.length ? { warnings } : {}), ...checksResult, ...mutantsResult, ...(blockedJobs.length ? { blockedEvidence: blockedJobs.map(job => ({ name: job.id, lines: [job.error ?? 'blocked'] })) } : {}), ...(salvagedJobs.length ? { salvaged: true, salvagedJobs: salvagedJobs.map(job => job.id) } : {}), ...(acceptedDeviations.length ? { acceptedDeviations } : {}), ...(jobs ? { integratedJobs, skippedJobs } : {}) };
+    return { id, status: 'integrated', integrationStatus: state.integrationStatus, files: state.integratedFiles, filesChanged: state.integratedFiles, portBase, ...(preChecksResult.preChecks.length ? { preChecks: preChecksResult.preChecks } : {}), ...(warnings.length ? { warnings } : {}), ...checksResult, ...mutantsResult, ...(blockedJobs.length ? { blockedEvidence: blockedJobs.map(job => ({ name: job.id, lines: [job.error ?? 'blocked'] })) } : {}), ...(salvagedJobs.length ? { salvaged: true, salvagedJobs: salvagedJobs.map(job => job.id) } : {}), ...(acceptedDeviations.length ? { acceptedDeviations } : {}), ...(jobs ? { integratedJobs, skippedJobs } : {}) };
   } finally { await fs.rmdir(lock); }
 }
 
@@ -3862,8 +4081,10 @@ export function modelRouteChangeNoSmokeTestWarning(manifest, job) {
   return { code: 'model-route-no-smoke-test', jobId: job.id, files: changed, message: `model-route-no-smoke-test: Job ${job.id} changes ${changed.join(', ')}; declare a check named model-route-smoke (or an argv containing model-route-smoke/streaming-smoke) that sends one real streaming message through the project's own client before this route change lands` };
 }
 
-export async function validateProject(root, manifest, { exec = execFileAsync, liveDir, isAlive, env = process.env, home = os.homedir() } = {}) {
+export async function validateProject(root, manifest, { exec = execFileAsync, liveDir, isAlive, env = process.env, home = os.homedir(), scopesExpanded = false, scopeWarnings } = {}) {
   root=await fs.realpath(root);validateManifest(manifest);
+  scopeWarnings ??= manifest.jobs.map(narrowOutputScopeWarning).filter(Boolean);
+  if (!scopesExpanded) manifest = await expandOpenScopes(root, manifest);
   // Lesson 325: existing outputs must fit a single-request API worker before dispatch.
   const capConfig = loadLocalConfig({ env, home });
   for (const job of manifest.jobs) {
@@ -3885,6 +4106,7 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   const liveWarning = await liveServiceCheckoutWarning(root, { env, home });
   const jobs=[], warnings=[...(liveWarning ? [liveWarning.message] : []), ...tmpToolPathWarnings(manifest), ...await sharedOutputAcrossOpenJobsWarnings(root, manifest, { liveDir, isAlive }), ...shellSandboxDeniedCheckWarnings(manifest, { env, home }), ...sharedRootFullSuiteWarnings(manifest), ...await cheapTierNotConfiguredModelWarnings(manifest, { env, home }), ...await checkPathMissingWarnings(manifest, { env })];
   const projectFiles = listProjectFiles(root);
+  warnings.push(...scopeWarnings);
   const trackedFiles = new Set(projectFiles);
   const uncovered = [];
   // Field lesson 126s: a skills source dir (manifest `skillsDir`, else local config `skills.dir`)
@@ -4126,11 +4348,18 @@ async function failedStderrTail(root, id, job, record) {
   } finally { await handle.close(); }
 }
 
+export function designOnlyBlockedOnTestWarning(job, result) {
+  return isDesignOnlyCodexJob(job) && result?.status === 'blocked' && /\btests?\b/i.test(JSON.stringify(result.notes ?? ''))
+    ? { code: 'design-only-blocked-on-test', jobId: job.id, message: `design-only-blocked-on-test: Job ${job.id} blocked on a test in a design-only job` }
+    : null;
+}
+
 export async function inspectRun(root,id,{spawnImpl=spawn,programOnPathImpl=programOnPath,exec=shipExec,env=process.env}={}){
   root=await fs.realpath(root);const state=await readState(root,id);
   if(state.root!==root||state.id!==id) fail('Run belongs to another repository');
   const manifest=validateManifest(JSON.parse(await bytesAt(root,`.swarm/runs/${id}/manifest.json`,true)));
   const files=[];
+  const filesChanged=[];
   const jobs=[];
   const inventedHashWarnings=[];
   const persistedFieldWarnings=[];
@@ -4139,10 +4368,14 @@ export async function inspectRun(root,id,{spawnImpl=spawn,programOnPathImpl=prog
   // proposed test-file output is worth a git-ignored-fixture scan — both surfaced as warnings only.
   const collectOnlyWarnings=[];
   const fixtureWarnings=[];
+  const designWarnings=[];
   for(const job of manifest.jobs){
     const record=state.jobs.find(j=>j.id===job.id);if(!record)fail('Missing job record');
     // tier/tierReason are validated metadata only; they never change which model ran.
     const parsedResult=await jobFinalJson(root,id,job.id);
+    if (JSON.stringify(record.outputs) !== JSON.stringify(job.outputs)) fail('Worker metadata does not match manifest');
+    const designWarning = designOnlyBlockedOnTestWarning(job, parsedResult);
+    if (designWarning) designWarnings.push(designWarning);
     // Field lesson #201: a setup failure never spawns the worker (empty error/result/cost, exactly
     // like a job that never ran) — inspect names the phase and the setup log's own tail here.
     const setupErrorTail=record.setupFailed?(await bytesAt(root,`.swarm/runs/${id}/${job.id}/setup.log`,true))?.toString('utf8').split('\n').slice(-20).join('\n')??null:null;
@@ -4154,6 +4387,8 @@ export async function inspectRun(root,id,{spawnImpl=spawn,programOnPathImpl=prog
     for(const file of job.outputs){
       const current=await bytesAt(root,file),proposed=await bytesAt(workspaceRoot,file);
       const currentHash=current===null?null:digest(current),proposedHash=proposed===null?null:digest(proposed);
+      const proposedMode=proposed===null?null:(await fs.stat(await safePath(workspaceRoot,file))).mode & 0o777;
+      if(proposed!==null&&(proposedHash!==record.baseHashes[file]||(record.baseModes?.[file]!==undefined&&proposedMode!==record.baseModes[file])))filesChanged.push(file);
       const currentMode=current===null?0o644:(await fs.stat(await safePath(root,file))).mode & 0o777;
       const conflict=currentHash!==record.baseHashes[file]||(current!==null&&record.baseModes?.[file]!==undefined&&currentMode!==record.baseModes[file]);
       files.push({job:job.id,jobStatus:record.status,path:file,baseHash:record.baseHashes[file],currentHash,proposedHash,bytes:proposed?.length??0,status:record.status!=='complete'?'blocked':proposed===null?'missing':state.integratedAt&&currentHash===proposedHash?'applied':conflict?'conflict':currentHash===proposedHash?'unchanged':'ready'});
@@ -4177,7 +4412,7 @@ export async function inspectRun(root,id,{spawnImpl=spawn,programOnPathImpl=prog
       }
     }
   }
-  return {id,status:state.status,integratedAt:state.integratedAt??null,tokens:tokensTotal(jobs.map(job=>job.tokens)),costNotReported:costNotReported(jobs),warnings:[...runWarnings(state),...inventedHashWarnings,...persistedFieldWarnings,...collectOnlyWarnings,...fixtureWarnings],jobs,files,...(state.acceptRedBase?{acceptRedBase:true,acceptRedBaseReason:state.acceptRedBaseReason,baseCheckFailures:state.baseCheckFailures??[]}:{})};
+  return {id,status:state.status,integratedAt:state.integratedAt??null,tokens:tokensTotal(jobs.map(job=>job.tokens)),costNotReported:costNotReported(jobs),warnings:[...runWarnings(state),...inventedHashWarnings,...persistedFieldWarnings,...collectOnlyWarnings,...fixtureWarnings,...designWarnings],jobs,files,filesChanged,...(state.acceptRedBase?{acceptRedBase:true,acceptRedBaseReason:state.acceptRedBaseReason,baseCheckFailures:state.baseCheckFailures??[]}:{})};
 }
 
 // Lesson #48: a coordinator asking only "did it work, what did it say" should not have to
@@ -4193,6 +4428,8 @@ export async function inspectResults(root, id) {
     const job = manifest.jobs.find(job => job.id === record.id);
     if (!job) fail('Missing manifest job');
     const message = await jobFinalJson(root, id, record.id);
+    const designWarning = designOnlyBlockedOnTestWarning(job, message);
+    if (designWarning) warnings.push(designWarning);
     let parsed = message, resultSource = 'message';
     const workspace = await safePath(root, `.swarm/workspaces/${id}/${job.id}`, { internal: true });
     if (job.resultFile) {
@@ -4479,11 +4716,11 @@ export async function sweepRun(root, { model, brief, goals, maxUsd = 15, concurr
   };
 }
 
-export async function doctor({exec=execViaFile, agent='claude', env=process.env, platform=process.platform, probeLocal=false, probeTimeoutMs=1500, fetchImpl=fetch, home=os.homedir(), fsImpl=fs}={}){
+export async function doctor({exec=execViaFile, agent='claude', env=process.env, platform=process.platform, probeLocal=false, probeTimeoutMs=1500, fetchImpl=fetch, home=os.homedir(), fsImpl=fs, root, access}={}){
   const [major,minor]=process.versions.node.split('.').map(Number);
   if(major<20||(major===20&&minor<3))fail('Node 20.3 or newer is required');
   // Field lesson 106: advisory only, added to every agent's result; it never changes status/configured.
-  const toolchains=await toolchainsReport({env,home,platform,fsImpl});
+  const toolchains=await toolchainsReport({root,env,home,platform,fsImpl,access});
   if(agent==='codex')return {...await codexDoctor({exec,platform}),toolchains};
   if(process.platform==='win32')fail('Use macOS, Linux, or WSL; native Windows process-group cleanup is not supported');
   if(EXTRA_CLI_AGENTS.includes(agent))return {...await extraCliDoctor(agent,exec),toolchains};
@@ -4802,12 +5039,12 @@ export function shipExitCode(status) {
   return ['merged', 'held', 'ready'].includes(status) ? 0 : 1;
 }
 
-const SHIP_FLAGS_WITH_VALUE = new Set(['--repo', '--pr', '--require-section', '--merge-method', '--timeout', '--poll', '--tag-timeout', '--branch', '--check', '--rerun-flaky', '--exempt', '--private-names', '--per-test-timeout']);
+const SHIP_FLAGS_WITH_VALUE = new Set(['--repo', '--pr', '--require-section', '--merge-method', '--timeout', '--poll', '--tag-timeout', '--branch', '--check', '--rerun-flaky', '--rerun-flaky-ci', '--exempt', '--private-names', '--per-test-timeout']);
 
 // Pure CLI-flag parsing, kept separate from ship() execution so it is directly testable.
 export function parseShipFlags(flags) {
   let repo, payloadPath, mergeMethod, timeoutMs, pollMs, tagTimeoutMs, noFlakeCheck, branch, merge = true, privateNamesFile;
-  let checksFromCi, checksFromCiPath, rerunFlaky, acceptPreExisting = false, perTestTimeoutSeconds, preflight = false, waitRequiredOnly = false;
+  let checksFromCi, checksFromCiPath, rerunFlaky, rerunFlakyCi, acceptPreExisting = false, perTestTimeoutSeconds, preflight = false, waitRequiredOnly = false;
   const requireSections = [], checks = [], exemptions = [];
   for (let index = 0; index < flags.length; index++) {
     const flag = flags[index];
@@ -4830,7 +5067,7 @@ export function parseShipFlags(flags) {
     }
     if (!SHIP_FLAGS_WITH_VALUE.has(flag)) fail(`Unknown flag: ${flag}`);
     const value = flags[++index];
-    if (value === undefined) fail(`${flag} requires a value`);
+    if (value === undefined) fail(flag === '--rerun-flaky-ci' ? '--rerun-flaky-ci requires 0 or 1' : `${flag} requires a value`);
     if (flag === '--repo') repo = value;
     else if (flag === '--pr') payloadPath = value;
     else if (flag === '--require-section') requireSections.push(value);
@@ -4851,6 +5088,7 @@ export function parseShipFlags(flags) {
     // when none of the tests they failed on are in this ship's own diff. Left undefined here when
     // the flag is absent so ship() can apply its own platform-only default instead of always 0;
     // an explicit value (including 0) always wins over that default.
+    else if (flag === '--rerun-flaky-ci') { if (!/^[01]$/.test(value)) fail('--rerun-flaky-ci requires 0 or 1'); rerunFlakyCi = Number(value); }
     else if (flag === '--rerun-flaky') { if (!/^\d+$/.test(value)) fail('--rerun-flaky requires a non-negative integer'); rerunFlaky = Number(value); }
     // Field lesson #273 (orchestrator answer #3): overrides local config's ci.perTestTimeoutSeconds.
     else if (flag === '--per-test-timeout') { if (!/^\d+(\.\d+)?$/.test(value) || Number(value) <= 0) fail('--per-test-timeout requires a positive number of seconds'); perTestTimeoutSeconds = Number(value); }
@@ -4864,6 +5102,7 @@ export function parseShipFlags(flags) {
     // coordination/private-names.txt.
     else if (flag === '--private-names') privateNamesFile = value;
   }
+  if (rerunFlaky !== undefined && rerunFlakyCi !== undefined) fail('rerun-flaky-ci-conflict: use only one CI retry flag', 'rerun-flaky-ci-conflict');
   if (!payloadPath) fail('ship requires --pr PAYLOAD.json');
   if (checks.length && !branch) fail('--check is only for ship --branch; a run ships with its manifest checks');
   return {
@@ -4873,6 +5112,7 @@ export function parseShipFlags(flags) {
     ...(branch ? { branch, checks } : {}),
     ...(checksFromCi ? { checksFromCi, ...(checksFromCiPath !== undefined ? { checksFromCiPath } : {}) } : {}),
     ...(rerunFlaky !== undefined ? { rerunFlaky } : {}),
+    ...(rerunFlakyCi !== undefined ? { rerunFlakyCi } : {}),
     ...(perTestTimeoutSeconds !== undefined ? { perTestTimeoutSeconds } : {}),
     ...(exemptions.length ? { exemptions } : {}),
     ...(privateNamesFile !== undefined ? { privateNamesFile } : {}),
@@ -4913,7 +5153,7 @@ export async function resolvePathCwdThenRoot(rawPath, root, { cwd = process.cwd(
 // given --check argvs run like manifest checks (env file and port block included), and every
 // other ship rule (needs-a-human hold, --require-section, lock check, test binary gate,
 // packaging build check) applies to the branch's own diff against its base.
-export async function shipBranch(root, flags, { spawnImpl = spawn, exec = shipExec, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now } = {}) {
+export async function shipBranch(root, flags, { spawnImpl = spawn, exec = shipExec, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now, shipImpl = ship } = {}) {
   root = await fs.realpath(root);
   // Field lesson #187: every refusal (even one this function returns itself, before ship() ever
   // runs) names --branch, so a ship --branch attempt is always recoverable from its own result.
@@ -4972,7 +5212,7 @@ export async function shipBranch(root, flags, { spawnImpl = spawn, exec = shipEx
       checks = merged.slice(0, 10);
     }
   }
-  return ship({
+  return shipImpl({
     root, repo: flags.repo, payloadPath, manifest: null, tagTimeoutMs: flags.tagTimeoutMs, now,
     // Field lesson #187: names --branch on the result so a `ship --branch` run is recoverable.
     branch: flags.branch,
@@ -4983,6 +5223,7 @@ export async function shipBranch(root, flags, { spawnImpl = spawn, exec = shipEx
     timeoutMs: flags.timeoutMs ?? SHIP_DEFAULTS.timeoutMs,
     noCiGraceMs: SHIP_DEFAULTS.noCiGraceMs,
     rerunFlaky: flags.rerunFlaky,
+    ...(flags.rerunFlakyCi !== undefined ? { rerunFlakyCi: flags.rerunFlakyCi } : {}),
     perTestTimeoutSeconds: flags.perTestTimeoutSeconds,
     exemptions: flags.exemptions ?? [],
     acceptPreExisting: flags.acceptPreExisting ?? false,
@@ -5002,7 +5243,7 @@ export async function shipBranch(root, flags, { spawnImpl = spawn, exec = shipEx
   });
 }
 
-export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipExec, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now, env, keyExec } = {}) {
+export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipExec, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now, env, keyExec, shipImpl = ship } = {}) {
   root = await fs.realpath(root);
   // Field lesson 118: a missing gh/git must refuse before any check runs, not surface partway
   // through ship() as a confusing push/PR failure. Same result shape as ship()'s own early refusal.
@@ -5042,7 +5283,7 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
       ciWarnings.push(...checkNotInCiWarnings(manifest.checks ?? [], ciResult.checks));
     }
   }
-  return ship({
+  return shipImpl({
     root, repo: flags.repo, payloadPath, manifest, tagTimeoutMs: flags.tagTimeoutMs, now,
     // Field lesson #187: names this run so a `ship RUN` result is recoverable without reading
     // source to find how it was started.
@@ -5057,6 +5298,7 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
     timeoutMs: flags.timeoutMs ?? SHIP_DEFAULTS.timeoutMs,
     noCiGraceMs: SHIP_DEFAULTS.noCiGraceMs,
     rerunFlaky: flags.rerunFlaky,
+    ...(flags.rerunFlakyCi !== undefined ? { rerunFlakyCi: flags.rerunFlakyCi } : {}),
     perTestTimeoutSeconds: flags.perTestTimeoutSeconds,
     exemptions: flags.exemptions ?? [],
     acceptPreExisting: flags.acceptPreExisting ?? false,
@@ -5185,7 +5427,7 @@ async function main() {
     }
     root=args[rootIndex+1];args.splice(rootIndex,2);
   }
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list [--queued|--shipped] [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | ask --model M --context f1,f2,... [--agent claude] [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects [DIR...]] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list [--queued|--shipped] [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
@@ -5513,7 +5755,7 @@ async function main() {
   // runs — checked ahead of both ship dispatch shapes below (`ship --branch ...` and `ship RUN
   // ...`) so it always wins regardless of where in the ship argv it appears.
   if(args[0]==='ship'&&shipHelpRequested(args.slice(1))){
-    process.stdout.write(SHIP_USAGE);
+    process.stdout.write(SHIP_USAGE.includes('--rerun-flaky-ci') ? SHIP_USAGE : SHIP_USAGE + '       [--rerun-flaky-ci 0|1] (exclusive with --rerun-flaky)\n');
     return;
   }
   // Field lesson #164: `ship --branch B` has no RUN argument; everything else about ship is shared.
@@ -5698,7 +5940,7 @@ async function main() {
     return;
   }
   if(command==='doctor'){
-    result=argument==='all'?await doctorAll({probeLocal}):await doctor({agent:argument??'claude',probeLocal});
+    result=argument==='all'?await doctorAll({root,probeLocal}):await doctor({root,agent:argument??'claude',probeLocal});
     result.warnings=await (await import('./preflight.mjs')).projectToolWarnings(root);
   }
   else if(command==='board')result={...await boardSummary(),spendUsd:await todaySpendUsd(root),providerLimit:await claudeProviderLimitGuard(root)};

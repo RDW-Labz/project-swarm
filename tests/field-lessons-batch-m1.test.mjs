@@ -56,7 +56,7 @@ test('#204: pin-not-vendored fires without --core too (it is not one of the two 
   await fs.writeFile(path.join(root, 'pyproject.toml'), `[project]\nname = "acme-service"\ndependencies = [\n  "connectors==0.0.1",\n]\n`);
 
   const result = await runCheckPins({ root });
-  assert.deepEqual(result.skippedRules, ['library-exact-core-pin', 'wheel-requirement-unsatisfied']);
+  assert.deepEqual(result.skippedRules, ['library-exact-core-pin', 'wheel-requirement-unsatisfied', 'vendored-core-missing-runtime-wheels']);
   assert.deepEqual(result.findings.map(f => f.rule), ['pin-not-vendored']);
 });
 
