@@ -1,6 +1,6 @@
 # Swarm lessons batch 362–381 — planning contract (coordinator s79)
 
-Input: docs/_swarm/lessons-362-381.json (21 queued rows; id 374 appears twice — treat as 374a (validate conflict scan) and 374b (ship CI timeout classification)).
+Input: docs/_swarm/lessons-362-381.json (21 queued rows; id 374 appears twice — treat as 374 (validate conflict scan) and 382 (ship CI timeout classification; was a duplicate 374)).
 Out of this repo: 367 (coordination/tools/build_app.sh) and 368 (coordination/tools/session_metrics.py) live in the OASIS repo, not here — list them under "outOfRepo" with a one-line spec each; do not plan code for them here.
 
 For every other lesson: find the real code location in tools/*.mjs, the existing tests that cover it (tests/*.test.mjs), and decide: build (with a test that fails without the fix) or drop/merge (already fixed on main — cite file:line proving it).

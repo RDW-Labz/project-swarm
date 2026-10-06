@@ -1,0 +1,169 @@
+{
+  "dropped": [
+    {
+      "id": 370,
+      "reason": "drop: directory prompt paths already count when any tracked or contextual descendant is present",
+      "evidence": "tools/swarm.mjs:428-442; tests/field-lessons-batch-ah-runtime.test.mjs:198-210"
+    },
+    {
+      "id": 373,
+      "reason": "drop: clean-branch and integrate already reject docs/_swarm work-folder references with file:line evidence",
+      "evidence": "tools/swarm.mjs:447-455,3682-3683; tests/field-lessons-batch-ah-runtime.test.mjs:237-271"
+    },
+    {
+      "id": 376,
+      "reason": "merge: the existing after dependency graph already validates, sequences, propagates outputs, and skips dependents on failure; avoid a duplicate dependsOn spelling",
+      "evidence": "tools/swarm.mjs:1333-1355,2375-2429; tests/scheduling.test.mjs:109-158"
+    }
+  ],
+  "outOfRepo": [
+    {
+      "id": 367,
+      "spec": "In OASIS, add coordination/tools/build_app.sh <sha> to set the pinned Rust toolchain, build OASIS.app, copy it to worktrees/builds/OASIS-<sha>.app, and have the toolchain doctor report missing cargo."
+    },
+    {
+      "id": 368,
+      "spec": "In OASIS, update coordination/tools/session_metrics.py to ignore and warn on stale end:null agent-tool rows older than --since minus 12 hours, with a stale-row regression test."
+    }
+  ],
+  "jobs": [
+    {
+      "id": "l362-context-prompts",
+      "lessons": [362, 364, 379],
+      "outputs": [
+        "tools/context-check.mjs",
+        "tools/codex-adapter.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs"
+      ],
+      "context": [
+        "tools/context-check.mjs",
+        "tools/codex-adapter.mjs",
+        "tests/field-lessons-batch-ah-runtime.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/scheduling.test.mjs"
+      ],
+      "prompt": "Add failing-first coverage for three guards. For lesson 362, when a job changes rendered UI roots under src/components or styles, require or warn for a configured preview-harness check covering every affected view; validate must warn when no harness check is configured. For lesson 364, codex/run prompts whose outputs omit CHANGELOG.md and active version files must receive the exact ownership instruction that another job owns them and the worker must not edit or block on them. For lesson 379, validate must cheaply detect identifier-like symbols named as existing mechanisms in a brief/prompt but absent from the repository and warn with the missing token; add the first tests before implementation, preserving private-data redaction and existing prompt behavior. Keep each warning actionable and deterministic."
+    },
+    {
+      "id": "l362-run-validation",
+      "lessons": [363, "374a", 375, 377],
+      "outputs": [
+        "tools/swarm.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs"
+      ],
+      "context": [
+        "tools/swarm.mjs",
+        "tools/board.mjs",
+        "tests/field-lessons-batch-t1.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/scheduling.test.mjs"
+      ],
+      "prompt": "Add failing-first tests, then implement the run/validate contract. Lesson 363: a base check is pending, not red, when every named test path is an absent job-output path; report pending checks and refuse only real reds. Lesson 374a: validate must reuse run's live output-conflict scan, return conflict details plus the startable subset, and run must accept --jobs <ids> for that subset without hand-editing manifests. Lesson 375: note resolves TASK.md/HANDOFF.md under the configured coordination directory and refuses to create a root-level replacement; invalid lesson areas list allowed values. Lesson 377: accept job-level contract by hoisting it, treat tierReason:null as absent, and label sibling-output context as pending (created by job X). Preserve legacy after scheduling and all existing refusal envelopes."
+    },
+    {
+      "id": "l362-metrics-isolation",
+      "lessons": [365, 366, 369],
+      "outputs": [
+        "tools/session-metrics.mjs",
+        "tools/monitor-view.mjs",
+        "templates/coordination/ORCHESTRATOR.md",
+        "tests/_isolate-config.mjs",
+        "tests/field-lessons-batch-ai-metrics.test.mjs"
+      ],
+      "context": [
+        "tools/session-metrics.mjs",
+        "tools/monitor-view.mjs",
+        "templates/coordination/ORCHESTRATOR.md",
+        "tests/worker-skills.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs"
+      ],
+      "prompt": "Write failing-first fixture tests. Lesson 365: make reworkShare (follow-up edits to the same outputs within 24 hours, grouped by skill) the primary metric and report red_rate as the literal n/a reason when integrate checks are empty; do not infer health from checksPassed. Lesson 366: isolate provider-limit caches and every global path under a per-test temporary home, and add a guard that fails if a test resolves the real home while two suites run concurrently. Lesson 369: expose idle-seat events after five minutes with no worker running, list runnable unblocked TASK items, and include hand-step attribution in idle-gap metrics and the coordinator guidance. Preserve legacy metric records and machine-readable monitor output."
+    },
+    {
+      "id": "l362-release-integration",
+      "lessons": [371, 380],
+      "outputs": [
+        "tools/scaffold.mjs",
+        "tools/integration-audit.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs"
+      ],
+      "context": [
+        "tools/scaffold.mjs",
+        "tools/swarm.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-v.test.mjs"
+      ],
+      "prompt": "Add failing-first tests before implementation. For lesson 371, when a scaffold/release job changes package.json's version, discover every test asserting the old active version, include those tests in the job outputs or ignoreTests with a reason, and require the full suite as the release check. For lesson 380, factor an integrated-tree audit that flags any workspace edit outside declared outputs as undeclared-edit and blocks it with the file list; re-run the job's reported check command against the integrated tree and refuse on mismatch. Keep salvage/acceptance explicit, never silently drop edits, and preserve existing dropped-write evidence and rollback behavior."
+    },
+    {
+      "id": "l362-ship-ci",
+      "lessons": [372, "374b", 378, 381],
+      "outputs": [
+        "tools/ship.mjs",
+        "tools/checks-from-ci.mjs",
+        "tests/field-lessons-batch-ai-ship.test.mjs"
+      ],
+      "context": [
+        "tools/ship.mjs",
+        "tools/checks-from-ci.mjs",
+        "tests/ship.test.mjs",
+        "tests/ship-125.test.mjs",
+        "tests/field-lessons-batch-j.test.mjs",
+        "tests/field-lessons-batch-ab-core.test.mjs"
+      ],
+      "prompt": "Add a fixture that fails once, then implement failing-first ship coverage. Lesson 372: retain every TAP/spec/vitest failure block with name, location, and assertion in check records; --rerun-flaky reruns only failed local test files before giving up. Lesson 374b: classify a CI failure with a zero-failure test summary followed by a step-timeout error as timeout and retry the failed job once. Lesson 378: expand CI shell globs as the CI shell would and infer ship --branch head from the branch and base from the default branch. Lesson 381: ensure checks ignore .swarm scratch copies (or pass an equivalent ignore pattern) and warn when output cites a .swarm path. Preserve real-red and non-timeout failure classification."
+    },
+    {
+      "id": "l362-docs-150",
+      "lessons": [],
+      "outputs": [
+        "CHANGELOG.md",
+        "README.md",
+        "package.json",
+        "package-lock.json",
+        "docs/lessons.md",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/t101-release.test.mjs"
+      ],
+      "context": [
+        "CHANGELOG.md",
+        "README.md",
+        "package.json",
+        "package-lock.json",
+        "docs/lessons.md",
+        "docs/_swarm/lessons-362-381.json",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/t101-release.test.mjs"
+      ],
+      "prompt": "Own the final release/docs slice. Bump package.json and package-lock.json from 1.49.0 to 1.50.0, update README and every active release assertion in the listed tests, and add the 1.50.0 CHANGELOG entry. Add public docs/lessons.md entries for the batch dispositions using generic wording only: no personal names, repository names, URLs, prompt text, or company data. Preserve historical release pins and the input evidence files. Add the full suite as this job's check and keep the version assertions synchronized."
+    }
+  ],
+  "versionFiles": [
+    "CHANGELOG.md",
+    "README.md",
+    "package.json",
+    "package-lock.json",
+    "tests/field-lesson-t80-cli.test.mjs",
+    "tests/field-lessons-batch-ab-release.test.mjs",
+    "tests/field-lessons-batch-ag-release.test.mjs",
+    "tests/field-lessons-batch-ah-release.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/t101-release.test.mjs"
+  ],
+  "notes": [
+    "npm test: 1414 passed, 5 failed, 9 skipped; failures were macOS nested-seatbelt Operation not permitted.",
+    "checksRun: not run (design-only job).",
+    "Build jobs: 5; final docs job included; no job shares an output path."
+  ]
+}
