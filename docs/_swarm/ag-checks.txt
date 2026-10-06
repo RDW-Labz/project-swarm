@@ -1,0 +1,8 @@
+Local checks (branch built from swarm-ag-lessons, 2026-10-06):
+- npm test → tests 1409, pass 1404, fail 0, skipped 5
+- npm run check → Package checks passed: 203 files, syntax, links, license, skill, examples
+Mutation check (swarm mutants):
+- docs/_swarm/ag-runtime-mutants.json → killed 18, survived 0, error 0
+- docs/_swarm/ag-guards-mutants.json → killed 2, survived 1 (ag354-accept-two-local-passes) → missing test added (two local passes then a red third probe with a passing base: no retry, no flake) → rerun: killed 1, survived 0
+Result: 21/21 killed.
+Dogfood: every job of this batch ran with job worktrees outside the repository root (the new default); no root-level tool saw a job copy.
