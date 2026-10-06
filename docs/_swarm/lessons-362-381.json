@@ -1,0 +1,230 @@
+[
+ {
+  "id": 362,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s75 T100: UI fix rounds closed with vitest/tsc/eslint green (1576/0) while the preview harness's layout guard failed every chat view (heading off the content column, a regression from the new header picker); found only when rendering screenshots for the owner",
+  "rule": "a UI change to a rendered component is not green until the preview harness renders the affected views",
+  "fix": "ship/integrate: when changed files include src/components or styles, require (or warn) a preview-harness check for views that mount them; validate warns when a UI root has no harness check configured",
+  "public": null,
+  "status": "queued",
+  "test": null,
+  "version": null
+ },
+ {
+  "id": 363,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s75 batch AH: run refused 'base is red' for all seven acceptance checks; every check named a new test file that is a job output and does not exist yet; needed --accept-red-base --reason",
+  "rule": "a check whose only test file is a not-yet-existing job output is pending, not red",
+  "fix": "run: classify a base check as pending (not red) when every test path it names is a job output absent at base; report pending checks, refuse only on real reds",
+  "public": null,
+  "status": "queued",
+  "test": null,
+  "version": null
+ },
+ {
+  "id": 364,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s75 T100b: a Codex build job (astra, 25k tokens) returned blocked with no changes because the repo AGENTS.md says every change updates CHANGELOG.md and CHANGELOG was not in its outputs (the PR job owns it by rule)",
+  "rule": "a build job that does not own CHANGELOG is told so; the AGENTS CHANGELOG rule is never a reason to block",
+  "fix": "run/codex brief: when CHANGELOG.md (or a version file) is not in a job's outputs, prepend 'CHANGELOG and version files are owned by another job; do not edit or block on them'; warn when a job blocks citing CHANGELOG",
+  "public": null,
+  "status": "queued",
+  "test": null,
+  "version": null
+ },
+ {
+  "id": 365,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s75: session_metrics --rework-only over 7 days and 243 roots returned integrated 0 / red_rate null; per root it reads checksPassed=true because integrate runs with no checks (the coordinator runs checks by hand after), so red_rate measures nothing",
+  "rule": "rework is measured by follow-up edits to the same outputs (reworkBySkill), not by integrate check status",
+  "fix": "session-metrics: report reworkShare (follow-up within 24h, per skill) as the primary rework number; mark red_rate 'n/a: no integrate checks' when checks were empty",
+  "public": null,
+  "status": "queued",
+  "test": null,
+  "version": null
+ },
+ {
+  "id": 366,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s75: npm test run concurrently in two project-swarm worktrees; '#286 run refuses claude-provider-limit\u2026' failed in both, passed 25/0 alone; the test reads/writes shared global state under the user's swarm home",
+  "rule": "a test never touches the real swarm home; suites in two worktrees can run at once",
+  "fix": "tests: point the provider-limit cache (and every global path) at a per-test temp home via env; add a guard test that fails if any test resolves the real home",
+  "public": null,
+  "status": "queued",
+  "test": null,
+  "version": null
+ },
+ {
+  "id": 367,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s76: OASIS.app build `npm run tauri build` failed 'cargo metadata: No such file or directory' (cargo off PATH; toolchain under ~/.project-swarm/toolchains/rust); second known repeat (s71 memory note)",
+  "rule": "an app build never relies on the shell PATH for cargo; one script sets the toolchain and builds",
+  "fix": "add coordination/tools/build_app.sh <sha>: sets RUSTUP_HOME/CARGO_HOME/PATH from ~/.project-swarm/toolchains/rust, builds, ditto to worktrees/builds/OASIS-<sha>.app; swarm toolchain doctor reports cargo missing from PATH",
+  "public": null,
+  "status": "queued",
+  "test": null,
+  "version": null
+ },
+ {
+  "id": 368,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s76 session_metrics.py: 7 agent-tool-jobs.jsonl rows with end:null from old sessions counted as running \u2192 idle 0, parallel 6.01 while real swarm jobs = 1 and ~52 min had none",
+  "rule": "an open agent-tool row older than its session never counts as running",
+  "fix": "session_metrics.py ignores (and warns on) agent-tool rows with end:null whose start is before --since minus 12 h; test with a stale row",
+  "public": null,
+  "status": "queued",
+  "test": null,
+  "version": null
+ },
+ {
+  "id": 369,
+  "date": "2026-10-06",
+  "area": "process",
+  "evidence": "s76: ~52 min with zero worker jobs while T97, T101 and swarm 1.48.0 (AH) were unblocked; seat spent the time merging #107/#77, building OASIS-c9d0cbc.app and T102 intake, then handed off with only the T102 contract running (Braden flagged at s77 boot)",
+  "rule": "merging, app builds and intake never pause worker jobs; before any hand step, every unblocked ticket whose output files do not overlap (#325) has a job running",
+  "fix": "swarm monitor/run prints 'idle seat' when no job is running for 5 min and lists unblocked TASK.md items; session_metrics.py flags each idle gap >=5 min with the hand steps logged in it; ORCHESTRATOR.md #149 gains this line",
+  "public": null,
+  "status": "queued",
+  "test": null,
+  "version": null
+ },
+ {
+  "id": 370,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s77: validate refused t101-release with prompt-path-not-in-workspace for templates/coordination/skills although all 13 files under it were tracked and then also listed in context; only rewording the prompt passed",
+  "rule": "a prompt path that is a directory counts as present when any tracked file or context file lies under it",
+  "fix": "prompt-path-not-in-workspace checks git ls-files <dir> and context prefixes before refusing; test with a tracked directory named in a prompt",
+  "public": null,
+  "status": "queued",
+  "test": null,
+  "version": null
+ },
+ {
+  "id": 371,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s77: t101-release (1.48.0 -> 1.49.0) left 6 old release tests red because they pin the ACTIVE release; the job only ran its own test; same pattern each batch release (AH had to advance AG pins); fix1 job needed",
+  "rule": "a version-bump job gets every test that asserts the old version as output and the full suite as its check",
+  "fix": "validate: when a job's outputs include package.json and the version changes, grep tests for the old version string and refuse unless each hit is in outputs or ignoreTests; scaffold release job adds them",
+  "public": null,
+  "status": "queued",
+  "test": null,
+  "version": null
+ },
+ {
+  "id": 372,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s77: AH ship check-1 failed 1419/1 while 5 worker jobs ran; the saved tail held only passing subtests (no 'not ok' line), and --rerun-flaky 1 recorded runs:1 rerunCount:0; the same suite passed alone 1420/0 twice; mutants baseline hit the same flake earlier",
+  "rule": "a failed check always names its failing tests, and a requested flaky rerun always happens before ship gives up",
+  "fix": "ship/mutants keep every 'not ok' block (name + location + assertion) in the check record instead of the raw tail; --rerun-flaky applies to local checks, re-running only the failed test files; test with a fixture suite that fails once",
+  "public": null,
+  "status": "queued",
+  "test": null,
+  "version": null
+ },
+ {
+  "id": 373,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s77: T101 vendor job (integrated under 1.47.0) wrote tests/t101-vendored-skills.test.mjs reading docs/_swarm/t101-src/LICENSE; passed on the WIP branch, failed ENOENT on the clean PR branch at ship; lesson 360's integrate refusal shipped in 1.48.0 the same hour",
+  "rule": "work already integrated before a guard shipped gets the guard run once before its clean branch",
+  "fix": "clean-branch (and ship --branch) runs the work-folder-reference check over changed src/tests and refuses with file:line; test with a test file that reads docs/_swarm",
+  "public": null,
+  "status": "queued",
+  "test": null,
+  "version": null
+ },
+ {
+  "id": 374,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s78: T97 manifests (agent-core + desktop) and T102 subset all reported valid by validate, then run refused each on output overlap (CHANGELOG.md, serviceClient.ts, src/anorak/browser/trail.py) with live T103 runs in sibling worktrees; 3 wasted launches",
+  "rule": "validate reports the same live-run output conflicts that run enforces, plus which job ids can start now",
+  "fix": "validate reuses run's live-run conflict scan; returns conflicts and a startable-subset list; run gains --jobs <ids> so a subset starts without hand-made manifests; test: two roots, live run owning a file, validate returns error with conflicts",
+  "status": "queued"
+ },
+ {
+  "id": 375,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s78: `swarm --root <repo> note --file TASK.md` wrote a new TASK.md at the repo root instead of coordination/TASK.md; `lesson add --area validate` refused lesson-area-invalid though 'validate' matches the AREA regex",
+  "rule": "note resolves TASK.md/HANDOFF.md to the configured coordination dir; lesson add error lists allowed areas",
+  "fix": "note looks up coordination/<file> (config key) and refuses to create a new file; lesson-area-invalid includes the allowed list; tests for both",
+  "status": "queued"
+ },
+ {
+  "id": 376,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s78: T102 desktop contract listed extension-shell and extension-driver as parallel jobs; driver imports shell's protocol.ts/transport.ts, so it ended blocked (4 tests failing on missing import) and needed a second astra run",
+  "rule": "a job whose code imports another job's new output must run after it (dependsOn) or receive the interface as a contract stub",
+  "fix": "validate scans each job prompt/contract for import targets that are another job's outputs and not yet on disk; refuses unless dependsOn is set; run honours dependsOn by sequencing; test with two jobs where B imports A's new file",
+  "status": "queued"
+ },
+ {
+  "id": 377,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s78: T104 contract (astra) wrote job manifests with job-level `contract`, `tierReason: null`, and context listing not-yet-created sibling outputs; validate refused three times before a run",
+  "rule": "contract jobs that emit manifests get them validated in-job, or the swarm normalises the known shapes",
+  "fix": "validate accepts job-level contract by hoisting it, treats tierReason null as absent, and reports sibling-output context as 'pending (created by job X)' instead of Missing; test fixtures for each",
+  "status": "queued"
+ },
+ {
+  "id": 374,
+  "date": "2026-10-06",
+  "area": "process",
+  "evidence": "s77: agent-core#108 windows-latest 'Tests' step: 2580 passed in 720.54s, then '##[error]The action Tests has timed out after 12 minutes'; ship reported ci-failed with no cause",
+  "rule": "a CI step timeout that fires after the test summary is a timeout, not a red suite; ship names it and re-runs once",
+  "fix": "ship classifies a failed CI job whose log has a pytest/node summary with 0 failed plus a step-timeout error as 'timeout' and re-runs the failed job once; agent-core ci.yml windows Tests timeout raised (needs its own ticket/PR)",
+  "public": null,
+  "status": "queued",
+  "test": null,
+  "version": null
+ },
+ {
+  "id": 378,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s78: ship --checks-from-ci on agent-core held a CI-timeout PR on 'ci-8-uv' (pytest tests/test_browser_*.py, glob passed literally without a shell \u2192 exit 4 on base and head); also ship --branch refused a payload missing head/base that it could infer from --branch",
+  "rule": "checks-from-ci expands shell globs the way the CI shell would; ship --branch fills head from the branch and base from the default branch",
+  "fix": "checks-from-ci runs glob expansion (or wraps in the CI shell) per step; ship --branch defaults payload head/base; tests for both",
+  "status": "queued"
+ },
+ {
+  "id": 379,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s78: t93d-guard (astra) blocked after a full run with 0 edits: brief assumed an existing network-level 'submit-intent ask' path that did not exist; one astra run lost",
+  "rule": "a brief that names an existing mechanism gets a cheap existence check (grep the named symbol/behaviour) before an expensive job runs",
+  "fix": "validate warns when a brief/prompt names a code symbol (identifier-like token) absent from the repo; job prompt boilerplate: 'if a premise in the brief is false, stop in the first 2 minutes with the evidence'",
+  "status": "queued"
+ },
+ {
+  "id": 380,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s78: t93d-run (gpt-reserve) reported '2347 passed' but its integrated code read BillArguments.due_date, a field in utility_bill_compute.py outside its outputs; 3 tests failed at the orchestrator's run. The worker's workspace test run passed only because it edited an undeclared file that integrate dropped",
+  "rule": "a job that edits a file outside its outputs fails, not silently drops the edit; claimed check results are re-run against the integrated tree",
+  "fix": "run/inspect flags any workspace file changed outside outputs (undeclared-edit) and marks the job blocked with the file list; integrate re-runs the job's own reported test command on the integrated tree and refuses on mismatch",
+  "status": "queued"
+ },
+ {
+  "id": 381,
+  "date": "2026-10-06",
+  "area": "tool",
+  "evidence": "s79 desktop-app-t102: eslint . reported 7 errors from .swarm/runs/*/base and .swarm/workspaces copies, hiding the 1 real error",
+  "rule": "Local lint/test checks must ignore .swarm/ scratch copies",
+  "fix": "swarm adds .swarm/ to the project's lint ignore (or --ignore-pattern) for checks it runs, and warns when check output cites a .swarm/ path",
+  "status": "queued"
+ }
+]
