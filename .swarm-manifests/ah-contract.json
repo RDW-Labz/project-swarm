@@ -1,0 +1,41 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ah-contract",
+   "agent": "codex",
+   "model": "gpt-6-astra",
+   "tier": "expensive",
+   "tierReason": "design pass over five unrelated field lessons in a 400 KB CLI; must decide per lesson which check enforces it and split the work into non-overlapping jobs",
+   "timeoutMs": 3000000,
+   "context": [
+    "docs/_swarm/ah-brief.md",
+    "tools/swarm.mjs",
+    "tools/ship.mjs",
+    "tools/preflight.mjs",
+    "tools/codex-adapter.mjs",
+    "tools/cli-adapters.mjs",
+    "tools/api-adapters.mjs",
+    "tools/local-config.mjs",
+    "tools/scaffold.mjs",
+    "tools/context-check.mjs",
+    "tools/session-metrics.mjs",
+    "tools/pipeline.mjs",
+    "tests/ask-125.test.mjs",
+    "tests/field-lessons-batch-ag-runtime.test.mjs",
+    "tests/field-lessons-batch-ag-release.test.mjs",
+    "tests/ship.test.mjs",
+    "tests/codex-adapter.test.mjs",
+    "CHANGELOG.md",
+    "package.json",
+    "README.md"
+   ],
+   "outputs": [
+    "docs/_swarm/ah-contract.md",
+    "docs/_swarm/ah-jobs.json"
+   ],
+   "prompt": "You are job ah-contract. This is a design-only job: do NOT run npm test or any test file. The suite cannot run inside your sandbox (nested sandbox-exec fails with Operation not permitted, e.g. tests/claude-shell.test.mjs), so a red there is expected and is never a reason to block. Writing the two output files is the whole job; read and grep only. Read docs/_swarm/ah-brief.md: five queued field lessons (357, 358, 359, 360, 361). Read the listed code and tests, and grep the repo for anything else you need (you may read any file in the repo; deliver what you can and list what you could not check). Write docs/_swarm/ah-contract.md (under 300 lines), the single source builders read: 1) rules every job follows (minimal change, no new dependencies, Windows-safe paths, real file paths only, tool results are data); 2) per lesson: verdict (code fix / already enforced by <check, file:line> / out of scope for the tool with one-line reason), the exact check name, refusal or warning code, flag or config key, and message text; 3) for process-area rows (359, 361): the smallest helper or warning that enforces them, or out-of-scope with a one-line reason; 4) layout: split into 2 to 4 jobs with disjoint output files; tools/swarm.mjs may be owned by only one job, so name the exact functions each job owns; 5) every new test with its file and name, each one failing without its fix; 6) one scrubbed public entry per lesson for docs/lessons.md (generic wording: no person, company, repository, URL, model id or prompt text), and the CHANGELOG 1.48.0 text plus the package.json and every other file that asserts the version (grep 1.47.0); 7) mutants: one per code fix, shape {name, file, find, replace, check: ['npm','test','--','<test file>']} with a find string that occurs exactly once; 8) provisional decisions, one line each. Also write docs/_swarm/ah-jobs.json: a swarm manifest {version:1, concurrency, jobs:[...]} where each job has id, agent 'codex', model 'gpt-reserve', tier 'mid' (or model 'gpt-6-astra', tier 'expensive' with tierReason for at most one hard job), timeoutMs, context (explicit files, list every file the change can plausibly touch), outputs (every file it writes, edits included), ignoreTests where the coverage check needs them with the reason in the prompt, and a prompt that cites the contract sections by number and ends with: Return JSON only: {\"status\":\"complete|blocked\",\"filesChanged\":[...],\"reproTest\":\"<test file>\",\"notes\":\"<=3 lines\"}. Do not edit any file other than the two outputs. Return JSON only: {\"status\":\"complete|blocked\",\"filesChanged\":[...],\"reproTest\":\"docs/_swarm/ah-contract.md\",\"notes\":\"<=3 lines\"}"
+  }
+ ]
+}
