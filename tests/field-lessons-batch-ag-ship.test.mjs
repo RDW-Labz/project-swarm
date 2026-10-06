@@ -75,9 +75,10 @@ test('L354 incomplete evidence and a second red never become a flake', async t =
   await t.test('two local passes are ineligible', async subtest => {
     const { root, payloadPath } = await fixture(subtest);
     let probes = 0;
-    const { calls, options } = fakeShip({ root, payloadPath, rerunFlakyCi: 1, views: [rollup('head-sha', 110)], probe: () => (++probes < 3 ? ok('1 passed tests/flake.py\n') : fail('FAILED tests/flake.py::test_flake')) });
+    const { calls, options } = fakeShip({ root, payloadPath, rerunFlakyCi: 1, views: [rollup('head-sha', 110)], probe: () => (++probes < 3 ? ok('1 passed tests/flake.py\n') : fail('FAILED tests/flake.py::test_flake')), baseProbe: () => ok('1 passed tests/flake.py\n') });
     const result = await ship(options);
     assert.equal(result.status, 'ci-failed');
+    assert.equal(probes, 3);
     assert.ok(result.warnings.some(warning => warning.startsWith('rerun-flaky-ci-ineligible:')));
     assert.equal(calls.filter(call => call.file === 'gh' && call.args[1] === 'rerun').length, 0);
     await assert.rejects(fs.access(path.join(root, '.swarm', 'flake-log.json')));
