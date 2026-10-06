@@ -1,0 +1,16 @@
+  error: |-
+  error: '1 subtest failed'
+  error: |-
+  expected: '1.48.0'
+  actual: '1.49.0'
+  error: |-
+  expected: '1.48.0'
+  actual: '1.49.0'
+  error: |-
+  error: '1 subtest failed'
+not ok 185 - T80 release docs describe the bounded loop and pin kickoff to 1.48.0
+not ok 223 - release: 1.48.0
+not ok 226 - AG historical dispositions remain under 1.47.0 while active release pins advance
+not ok 244 - AH release pins 1.48.0 and publishes five scrubbed lesson dispositions
+not ok 245 - AH retains historical AG dispositions while advancing active release pins
+not ok 497 - release: 1.48.0
