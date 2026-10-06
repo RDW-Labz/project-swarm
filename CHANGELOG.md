@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.49.0
+
+- Vendored five worker skills from `mattpocock/skills` under the MIT License, pinned to commits `6fd947921b935b7e1e69293a200400f0fdd5c15f` and `153fc1b93de6584562765cdce299324e1ff9e661`; `installProject` copies each skill only when absent and keeps an existing skill untouched.
+
 ## 1.48.0
 
 - Read-only ask follows a selected configured tier and reports ask-agent-fallback when an unsupported route uses its configured fallback. (lesson 357)

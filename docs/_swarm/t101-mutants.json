@@ -1,0 +1,16 @@
+[
+  {
+    "name": "install-overwrites-existing-skill",
+    "file": "tools/install.mjs",
+    "find": "if(exists){\n   for(const file of files)kept.push(`${relativeDir}/${file}`);\n   continue;\n  }",
+    "replace": "if(exists){\n   for(const file of files){const destination=await safeTarget(root,`${relativeDir}/${file}`);await fs.copyFile(path.join(sourceDir,file),destination);}\n   continue;\n  }",
+    "check": ["node", "--test", "tests/t101-vendored-skills.test.mjs"]
+  },
+  {
+    "name": "install-skips-license-copy",
+    "file": "tools/install.mjs",
+    "find": "for(const file of files){\n   const to=`${relativeDir}/${file}`,destination=await safeTarget(root,to,{createParents:true});",
+    "replace": "for(const file of files.filter(file=>file!=='LICENSE')){\n   const to=`${relativeDir}/${file}`,destination=await safeTarget(root,to,{createParents:true});",
+    "check": ["node", "--test", "tests/t101-vendored-skills.test.mjs"]
+  }
+]
