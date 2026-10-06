@@ -2238,3 +2238,8 @@ rule is enforced or documented.
 354. **A retry needs evidence and a fresh result.** Confirm three passes on the same local commit and a base pass before one requested CI retry. Record a confirmed flake only after a fresh attempt succeeds.
 355. **A mutant must defeat every effective writer.** A second call may preserve behavior after one writer is removed. Review duplicate-call warnings and target the shared store or reader; a text match is advisory evidence.
 356. **Design-only jobs should not be blocked by sandbox tests.** Documentation-only Codex jobs read and grep without tests or installs; a sandbox test failure is not a reason to block the job.
+357. **Read-only questions need explicit routing.** Follow the selected tier and report any configured fallback before presenting its answer. An unsupported route must never silently choose another provider.
+358. **Directory references can describe real context.** Accept directory and glob references when they match carried files. Keep refusing real inputs that the worker will not receive.
+359. **Decision values need source evidence.** Pin fixed constants with literal expected values in tests and quote the source values in review summaries. Warn when a held summary names a value absent from the added change.
+360. **Tests need durable inputs.** Keep runtime and test fixtures in tracked locations that survive a clean checkout. Refuse source and test references to temporary coordinator material and warn about scratch data in build context.
+361. **Progress timestamps must come from a clock.** Append progress notes with a tool-generated UTC timestamp. A generated timestamp describes when the note was recorded, not when an earlier event occurred.

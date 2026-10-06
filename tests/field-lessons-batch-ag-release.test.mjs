@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
-test('AG release pins 1.47.0 and documents all eight dispositions', async () => {
+test('AG historical dispositions remain under 1.47.0 while active release pins advance', async () => {
   const files = await Promise.all([
     'package.json',
     'package-lock.json',
@@ -25,11 +25,11 @@ test('AG release pins 1.47.0 and documents all eight dispositions', async () => 
   const text = Object.fromEntries(files);
   const pkg = JSON.parse(text['package.json']);
   const lock = JSON.parse(text['package-lock.json']);
-  assert.equal(pkg.version, '1.47.0');
-  assert.equal(lock.version, '1.47.0');
-  assert.equal(lock.packages[''].version, '1.47.0');
+  assert.equal(pkg.version, '1.48.0');
+  assert.equal(lock.version, '1.48.0');
+  assert.equal(lock.packages[''].version, '1.48.0');
 
-  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.47\.0\n/);
+  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.48\.0\n/);
   const current = text['CHANGELOG.md'].split('## 1.47.0\n')[1].split('\n## 1.46.1\n')[0];
   const currentBullets = current.split('\n').filter(line => line.startsWith('- '));
   assert.equal(currentBullets.length, 9);
@@ -65,7 +65,7 @@ test('AG release pins 1.47.0 and documents all eight dispositions', async () => 
   assert.match(text['README.md'], /outside the project root by default/);
   assert.match(text['README.md'], /worktreesOutsideRoot: false/);
   assert.match(text['README.md'], /vendored-core-missing-runtime-wheels/);
-  assert.match(text['skills/project-swarm/SKILL.md'], /v1\.47\.0/);
+  assert.match(text['skills/project-swarm/SKILL.md'], /v1\.48\.0/);
   assert.match(text['templates/coordination/CONTRACT.md'], /\| value \| consumer \| validated-by \(file:line or existing example\) \|/);
   assert.match(text['docs/setup.md'], /worktreesOutsideRoot/);
   assert.match(text['docs/manifest-reference.md'], /`scope`.*"open"/);

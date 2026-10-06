@@ -507,7 +507,8 @@ export async function preflightReport({
     failures.push({ code: 'test-reads-git-ignored-path', reason: `test-reads-git-ignored-path: ${gitIgnored.map(w => `${w.file} -> ${w.path}`).join(', ')}; move the fixture into a tracked path, or pass --exempt git-ignored-fixture:<file>=<reason>` });
   }
 
-  return { ok: failures.length === 0, failures };
+  const decisionWarnings = await collectDecisionValueWarnings(root, payloadBase, body, exec);
+  return { ok: failures.length === 0, failures, ...(decisionWarnings.length ? { warnings: decisionWarnings } : {}) };
 }
 
 // Unified diff (-U0) added lines, each with the new-file line number it lands on.
@@ -521,6 +522,67 @@ function parseAddedLines(diffText) {
     if (newLine !== null && line.startsWith('+')) { added.push({ line: newLine, text: line.slice(1) }); newLine++; }
   }
   return added;
+}
+
+const DECISION_NUMBER_RE = /[+-]?(?:\d+(?:\.\d+)?|\.\d+)/g;
+const URL_DESTINATION_RE = /\b(?:https?|ftp):\/\/[^\s<>()\[\]]+/gi;
+
+function decisionNumberTokens(text, { listNumbering = false } = {}) {
+  const source = String(text ?? '').split('\n').map(line => {
+    const withoutUrl = line.replace(URL_DESTINATION_RE, '');
+    return listNumbering ? withoutUrl.replace(/^\s*(?:[-+*]\s+)?\d+[.)]\s+/, '') : withoutUrl;
+  }).join('\n');
+  const tokens = [];
+  for (const match of source.matchAll(DECISION_NUMBER_RE)) {
+    const at = match.index ?? 0;
+    const value = match[0];
+    const before = source[at - 1] ?? '';
+    const after = source[at + value.length] ?? '';
+    if (/[A-Za-z0-9_]/.test(before) || /[A-Za-z0-9_]/.test(after)) continue;
+    if (before === '.' && /\d/.test(source[at - 2] ?? '')) continue;
+    if (after === '.' && /\d/.test(source[at + value.length + 1] ?? '')) continue;
+    tokens.push(value);
+  }
+  return tokens;
+}
+
+function decisionValueClaims(body) {
+  if (!isHeld(body)) return [];
+  const sections = [sectionContent(body, 'Summary'), sectionContent(body, 'Could break')].filter(Boolean);
+  return [...new Set(sections.flatMap(section => decisionNumberTokens(section, { listNumbering: true })))]
+    .sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+}
+
+export function decisionValueWarnings(body, diffText) {
+  const claimed = decisionValueClaims(body);
+  if (!claimed.length) return [];
+  const added = new Set(parseAddedLines(diffText).flatMap(entry => decisionNumberTokens(entry.text)));
+  const missing = claimed.filter(value => !added.has(value));
+  return missing.map(value => `decision-value-not-in-diff: held PR summary names ${value}, absent from added diff lines; quote the source constant and name its value-pinning test`);
+}
+
+export async function collectDecisionValueWarnings(root, payloadBase, body, exec) {
+  const claims = decisionValueClaims(body);
+  if (!claims.length) return [];
+  let baseSha;
+  try {
+    const baseRes = await exec('git', ['merge-base', `origin/${payloadBase}`, 'HEAD'], { cwd: root });
+    if (!baseRes || baseRes.code !== 0 || typeof baseRes.stdout !== 'string' || !baseRes.stdout.trim()) {
+      return ['decision-value-diff-unavailable: cannot read the committed diff; verify decision values against source before handoff'];
+    }
+    baseSha = baseRes.stdout.trim();
+  } catch {
+    return ['decision-value-diff-unavailable: cannot read the committed diff; verify decision values against source before handoff'];
+  }
+  try {
+    const diffRes = await exec('git', ['diff', `${baseSha}...HEAD`, '-U0', '--'], { cwd: root });
+    if (!diffRes || diffRes.code !== 0 || typeof diffRes.stdout !== 'string') {
+      return ['decision-value-diff-unavailable: cannot read the committed diff; verify decision values against source before handoff'];
+    }
+    return decisionValueWarnings(body, diffRes.stdout);
+  } catch {
+    return ['decision-value-diff-unavailable: cannot read the committed diff; verify decision values against source before handoff'];
+  }
 }
 
 // Same no-usable-base fallback as readAddedTestFileLines/addedScratchFiles: without a real base to
@@ -1399,10 +1461,13 @@ export async function ship(options) {
   });
   if (preflight) {
     const report = await collectPreflight();
-    process.stdout.write(`${JSON.stringify({ status: 'preflight', ok: report.ok, failures: report.failures, ...(waitRequiredOnly ? { requiredContexts: base.requiredContexts, pendingAtMerge: [], waitedForRequiredOnly: base.waitedForRequiredOnly } : {}) })}\n`);
+    const decisionWarnings = report.warnings ?? [];
+    process.stdout.write(`${JSON.stringify({ status: 'preflight', ok: report.ok, failures: report.failures, warnings: decisionWarnings, ...(waitRequiredOnly ? { requiredContexts: base.requiredContexts, pendingAtMerge: [], waitedForRequiredOnly: base.waitedForRequiredOnly } : {}) })}\n`);
     process.exitCode = report.ok ? 0 : 1;
-    return { ...base, status: 'preflight', ok: report.ok, failures: report.failures };
+    return { ...base, status: 'preflight', ok: report.ok, failures: report.failures, warnings: [...base.warnings, ...decisionWarnings] };
   }
+
+  base.warnings.push(...await collectDecisionValueWarnings(root, payload.base, payload.body, exec));
 
   // Field lesson #197: a private-names list (`<root>/coordination/private-names.txt`, or
   // --private-names FILE) is scanned against only the lines this diff ADDS, and only for a repo

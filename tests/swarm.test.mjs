@@ -682,9 +682,9 @@ test('ask refuses without --model, --context, or a non-empty question', async t 
   await assert.rejects(askRun(root, { model: 'sonnet', context: ['input.txt'], question: '   ' }), /non-empty question/);
 });
 
-test('ask refuses codex as its agent', async t => {
+test('ask refuses an unsupported agent without a configured fallback', async t => {
   const root = await fixture(t);
-  await assert.rejects(askRun(root, { model: 'test-model', context: ['input.txt'], agent: 'codex', question: 'What next?' }), /not codex/);
+  await assert.rejects(askRun(root, { model: 'test-model', context: ['input.txt'], agent: 'codex', question: 'What next?' }), { code: 'ask-agent-fallback-unconfigured' });
 });
 
 test('ask builds a read-only job, runs it like run, and returns the contract-shaped result with a fake claude CLI', async t => {
