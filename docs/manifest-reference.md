@@ -43,6 +43,8 @@ Unknown top-level fields are rejected.
 - `prompt`: required nonblank string of at most 100,000 characters. Include the task, expected output, and relevant acceptance criteria.
 - `context`: required array of explicit existing relative file paths, at most 100 entries. These files are copied for other workers; Codex receives them as a read-first list in its HEAD worktree.
 - `outputs`: required array of explicit relative file paths, at most 100 entries. Existing files are copied automatically; new files may be created. An empty array creates a job with no proposed files; Codex still has shell access inside its sandbox.
+- `scope`: optional Codex-only value. Omit it for today's explicit-output mode; `"open"` permits the bounded tracked-file scope named by `outputDirs` in addition to explicitly declared outputs. Unknown values and non-Codex open jobs refuse with `scope-open-invalid`.
+- `outputDirs`: required with `scope: "open"`; one to 20 unique safe relative directories. They cannot be absolute, drive-qualified, dotted/root, backslash-containing, traversing, globbed, symlinked, or contain reserved `.git`/`.swarm` segments. Invalid combinations refuse with `scope-open-invalid: Job <id>: scope open requires codex and non-empty outputDirs`; an unsafe directory refuses with `scope-open-path: Job <id>: <path> is not a safe tracked directory`; the expanded tracked regular-file list is capped at 100 files and refuses with `scope-open-too-large: Job <id>: expanded outputs exceed 100 files; narrow outputDirs`.
 - `readPaths`: optional for `codex` and claude `shell: true` jobs only, an array of at most 100 absolute read-only paths for extra toolchains. Quotes, backslashes, and control characters are refused. Paths under `~/Library/Keychains`, `~/.ssh`, `~/.aws`, `~/.config`, or any directory a project's own local config adds to `deniedHomeDirs`, are refused, including resolved aliases. Final sandbox denies override grants.
 - `maxOutputTokens`: optional for API jobs only, integer 256–32768, default 8192. This is an output limit, not a dollar budget; reasoning may consume the allowance.
 - `timeoutMs`: optional integer from 50 to 3,600,000 milliseconds. Default is 300,000 milliseconds, or five minutes.
@@ -63,6 +65,27 @@ Unknown top-level fields are rejected.
 **Precedence:** an explicit per-job `model` always wins. `tier` is descriptive, coordinator-facing routing guidance for choosing which provider/model to put in `model` (or which worker pool to dispatch to); the runner itself does not map `tier` to a model. A job may set both: `model` decides what actually runs, `tier`/`tierReason` document why that choice was made. A manifest with no `tier` field behaves exactly as before.
 
 Unknown job fields are rejected. Manifests cannot specify executable paths, arbitrary provider commands, environment variables, shell scripts, MCP servers, or additional tools.
+
+### Open output scope
+
+An open Codex job is still bounded: before context coverage, skill attachment, dirty-file
+checks, writer reservation, and snapshots, the runner freezes the sorted union of its
+explicit outputs and regular files tracked at `HEAD` under each `outputDirs` entry. Untracked,
+ignored, deleted, symlink and submodule paths are not added, and directory matching is
+segment-aware and case-insensitive. Explicit outputs may remain outside those directories;
+new undeclared files are never authorized. The frozen list is reused by inspect, integrate,
+redcheck and later review, so a newer `HEAD` cannot widen it. Additional changed files are
+reported in `filesChanged`; a proposed file outside the frozen list remains a dropped write.
+
+The default is explicit-output mode. A restrictive prompt containing `touch only` with fewer
+than three explicit outputs receives the advisory `narrow-output-scope` warning:
+`narrow-output-scope: Job <id> says touch only with fewer than three outputs; include every
+plausible file or use scope open with outputDirs`. The warning does not widen permissions.
+
+When every output of a Codex job is a Markdown file (or a JSON file under `docs/`), its brief
+also carries: `Design-only job: do not run tests or installs; read and grep only. A test failure
+in your sandbox is never a reason to block.` This is prompt guidance for documentation-only
+work; it does not change the job's file scope or claim that runtime checks passed.
 
 ## Shell jobs
 
@@ -246,6 +269,14 @@ Each run uses these project-local locations:
     shortlist.json
     shortlist.md
 ```
+
+Codex and Claude shell jobs created by a public run use an outside-root worktree by default:
+`<worktreesBase>/<repo>-<hash>/<run>/<job>`, where the base comes from local `worktreesDir`
+or the durable default. Set `worktreesOutsideRoot: false` in the local config to retain the
+historical `.swarm/runs/<run-id>/worktrees/<job-id>` layout. The saved `worktreePath` is
+recorded before checkout and is authoritative for later inspection and integration; legacy
+state without it uses the historical resolver fallback. Direct low-level adapter calls without
+an explicit worktree path retain their legacy fallback.
 
 The exact prompt, model response, and provider events are local evidence, not material to publish automatically. Provider metadata may contain usage and actual model identifiers when the provider emits them. API records contain a normalized event, numeric usage, and model identifier rather than raw HTTP responses or headers. API cost is unavailable, not inferred. Missing metadata must be reported as unavailable, not inferred from a requested alias.
 
@@ -504,6 +535,16 @@ node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json [--requir
 - `--timeout SECONDS` / `--poll SECONDS`: how long to wait for CI and how often to poll; defaults are 45 minutes and 20 seconds respectively (the grace period before an empty rollup counts as `no-ci` is five minutes and is not configurable from the CLI).
 - `--tag-timeout SECONDS`: how long to poll origin for a release tag after merging a PR whose diff changed `package.json`'s `version` (`git ls-remote --tags origin v<version>` every 10 seconds); default 180, `0` disables the wait.
 - `--no-flake-check`: disable the base-commit flake rerun described in [Flake on base](#flake-on-base) above.
+- `--rerun-flaky-ci 0|1`: opt into the bounded CI-flake evidence path for `ship` RUN and
+  `ship --branch`. `1` requires a safe file-targeted check to pass three times on the captured
+  head and once on the immutable base, then requests each failed run ID once and waits for a
+  fresh green attempt before recording a flake. `0` disables this path; omitting the option
+  preserves the legacy `--rerun-flaky` behavior byte-for-byte. The two explicit retry flags
+  cannot be combined (`rerun-flaky-ci-conflict`), and other values refuse with
+  `--rerun-flaky-ci requires 0 or 1`. Unknown logs, lint/build failures, missing IDs, missing
+  test execution evidence, dirty probes, stale heads, or a red fresh attempt remain
+  `ci-failed`; an eligible failure that cannot be retried warns
+  `rerun-flaky-ci-ineligible: <reason>`.
 
 `ship` prints one JSON line: `{status, repo, pr, url, sha, mergeSha, checks, ci, reason, portBase}`, where `status` is one of `merged | held | ready | refused | checks-failed | ci-failed | no-ci | timeout | merge-failed` and fields that do not apply are `null`. The re-run of `checks` gets its own `SWARM_PORT_BASE` (see [Ports](#ports) above), computed from the project root; a moved or exhausted block adds the same `port-block-moved`/`port-block-busy` warning `integrate` does. When the merged PR's diff changed `package.json`'s `version`, the result also gains `tag: {name: 'v<version>', status: 'found'|'missing'|'skipped', waitedSeconds}`; a `missing` tag also adds warning `release tag v<version> not on origin after <n>s`. A PR body whose first non-blank line starts with `**needs ` is never merged (`held`); a person merges it. Exit code is `0` for `merged`, `held`, or `ready`, and `1` for every other status.
 
@@ -583,3 +624,15 @@ Every `doctor` result (every agent) adds `toolchains: {dir, exists, tmpPaths}`
 only — it never changes `status`/`configured`. Onboarding prints one line:
 ok when the dir exists and nothing was found under `/tmp`, else `toolchains:
 move to <dir>` plus the offending paths.
+
+An optional project inventory at `coordination/toolchain-versions.md` is recognized only as
+one Markdown table headed `binary | version | reinstall`; a single surrounding backtick pair
+around a cell is allowed. `binary` is a basename, while `version` and `reinstall` are display
+text. A malformed or symlinked inventory warns
+`toolchain-inventory-invalid: coordination/toolchain-versions.md: expected binary | version |
+reinstall table`. `doctor` resolves each binary through the durable toolchains directory and
+then `PATH` (with platform-appropriate path separators and executable suffixes). A missing
+entry adds `toolchain-missing: <binary> (<version>); reinstall: <reinstall>` and returns its
+row with `found: null`. The text is never executed, and a found executable is not proof of
+version compatibility. Projects without the inventory retain the historical `toolchains`
+report shape.

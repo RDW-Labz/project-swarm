@@ -2229,3 +2229,12 @@ rule is enforced or documented.
     accepted. Rule: a refusal names where the thing came from and the one
     command that resolves it, and an accepted override is recorded, not just
     typed. Regression coverage is in `tests/dispatch-refusals.test.mjs`.
+343. **Vendored runtime dependencies need coverage.** Inspect a vendored package's runtime metadata and report requirements absent from both direct dependencies and vendored artifacts. A source override alone does not establish dependency coverage.
+345. **Externally validated values need an accepting rule.** Cite the consumer's validation rule or an existing example before choosing a contract value. Resource validation belongs to the consuming scheduler; the shared contract template records the evidence.
+348. **A human-review hold survives green checks.** A held change stops before automatic merge and includes what changed, what could break and verification evidence. A later merge needs explicit human authorization.
+351. **Exploratory work needs an honest file scope.** Declare plausible edits up front or allow tracked files within named directories. Keep collision and integration checks, report additional changes, and list unfinished work.
+352. **Build tools need durable storage and availability checks.** Keep toolchains outside temporary storage and report missing inventory executables before relying on them. Reinstall guidance is displayed for review, never executed from documentation.
+353. **Test caches need narrow write access.** Prepare the test bundler's cache directories and grant those locations explicitly when dependencies are shared read-only. Verify both permitted cache writes and denied dependency writes.
+354. **A retry needs evidence and a fresh result.** Confirm three passes on the same local commit and a base pass before one requested CI retry. Record a confirmed flake only after a fresh attempt succeeds.
+355. **A mutant must defeat every effective writer.** A second call may preserve behavior after one writer is removed. Review duplicate-call warnings and target the shared store or reader; a text match is advisory evidence.
+356. **Design-only jobs should not be blocked by sandbox tests.** Documentation-only Codex jobs read and grep without tests or installs; a sandbox test failure is not a reason to block the job.

@@ -938,6 +938,174 @@ export function extractFailingTestFiles(text) {
   return [...files];
 }
 
+function safeTestFile(root, file) {
+  const value = String(file ?? '');
+  if (!value || value.includes('\\') || path.isAbsolute(value) || !TEST_FILE_RE.test(value)) return false;
+  const rootPath = path.resolve(root);
+  const candidate = path.resolve(rootPath, value);
+  const relative = path.relative(rootPath, candidate);
+  if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
+  return fs.stat(candidate).then(async info => {
+    if (!info.isFile()) return false;
+    const realRoot = await fs.realpath(rootPath);
+    const realCandidate = await fs.realpath(candidate);
+    const realRelative = path.relative(realRoot, realCandidate);
+    return Boolean(realRelative) && !realRelative.startsWith(`..${path.sep}`) && !path.isAbsolute(realRelative);
+  }).catch(() => false);
+}
+
+function targetedRunner(argv) {
+  for (const token of argv ?? []) {
+    const name = path.basename(String(token));
+    if (name === 'pytest' || name.startsWith('pytest.')) return 'pytest';
+    if (name === 'vitest' || name.startsWith('vitest.')) return 'vitest';
+  }
+  return null;
+}
+
+function positiveTargetedPass(output, file, runner) {
+  const text = String(output ?? '');
+  if (!text.includes(file)) return false;
+  if (/\b0\s+passed\b/i.test(text)) return false;
+  if (runner === 'pytest') {
+    return /\b(?:[1-9]\d*\s+passed|PASSED\s+[^\n]*|[^\n]*\s+PASSED)\b/i.test(text);
+  }
+  if (runner === 'vitest') {
+    return /(?:✓|✔|\bPASS\b|\bpassed\b)[^\n]*|(?:Test Files|Tests)\s+\d+\s+passed/i.test(text);
+  }
+  return false;
+}
+
+async function cleanHeadAt(exec, root, expectedSha) {
+  try {
+    const status = await exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root });
+    if (!status || status.code !== 0 || String(status.stdout ?? '').trim() !== '') return false;
+    const head = await exec('git', ['rev-parse', 'HEAD'], { cwd: root });
+    return Boolean(head && head.code === 0 && head.stdout.trim() === expectedSha);
+  } catch {
+    return false;
+  }
+}
+
+function ciRollupIdentity(item) {
+  const values = [item?.id, item?.databaseId, item?.checkRunId, item?.detailsUrl, item?.target_url, item?.externalId];
+  return values.some(value => value != null) ? JSON.stringify(values) : null;
+}
+
+function ciRollupAttempt(item) {
+  for (const key of ['runAttempt', 'run_attempt', 'attempt']) {
+    if (Number.isFinite(Number(item?.[key]))) return Number(item[key]);
+  }
+  return null;
+}
+
+function freshCiAttemptObserved(beforeRollup, afterRollup, failedNames) {
+  const before = new Map((beforeRollup ?? []).map(item => [item.name ?? item.context ?? 'unknown', item]));
+  const names = new Set(failedNames ?? []);
+  for (const item of afterRollup ?? []) {
+    const name = item.name ?? item.context ?? 'unknown';
+    if (!names.has(name)) continue;
+    const previous = before.get(name);
+    if (!previous) return true;
+    const previousAttempt = ciRollupAttempt(previous);
+    const nextAttempt = ciRollupAttempt(item);
+    if (previousAttempt != null && nextAttempt != null && nextAttempt > previousAttempt) return true;
+    const previousIdentity = ciRollupIdentity(previous);
+    const nextIdentity = ciRollupIdentity(item);
+    if (previousIdentity != null && nextIdentity != null && previousIdentity !== nextIdentity) return true;
+  }
+  return false;
+}
+
+async function verifiedFlakyEvidence({ root, repo, payload, sha, ci, ciRollup, checkArgvs, exec, checkEnv }) {
+  const failedNames = [...(ci?.failed ?? [])];
+  if (!failedNames.length) return { eligible: false, reason: 'no failed checks' };
+  if (failedNames.some(name => /(?:format|lint|build)/i.test(name))) return { eligible: false, reason: 'format, lint, or build failure' };
+
+  const failedItems = (ciRollup ?? []).filter(item => failedNames.includes(item.name ?? item.context ?? 'unknown'));
+  if (failedItems.length !== failedNames.length) return { eligible: false, reason: 'failed check is missing from the CI rollup' };
+  const itemRunIds = failedItems.map(item => runIdFromDetailsUrl(item.detailsUrl ?? item.target_url));
+  if (itemRunIds.some(id => !id)) return { eligible: false, reason: 'failed CI run is missing a run id' };
+  const runIds = [...new Set(itemRunIds)];
+
+  const logs = [];
+  for (const id of runIds) {
+    let logRes;
+    try { logRes = await exec('gh', ['run', 'view', id, '--repo', repo, '--log-failed'], { cwd: root }); } catch { return { eligible: false, reason: `failed log fetch for ${id}` }; }
+    if (!logRes || logRes.code !== 0) return { eligible: false, reason: `failed log fetch for ${id}` };
+    logs.push(logRes.stdout ?? '');
+  }
+  const files = [...new Set(logs.flatMap(extractFailingTestFiles))];
+  if (!files.length) return { eligible: false, reason: 'failed logs did not name a test file' };
+  for (const file of files) if (!await safeTestFile(root, file)) return { eligible: false, reason: `unsafe or missing test file ${file}` };
+
+  const targets = new Map();
+  for (const file of files) {
+    const argv = (checkArgvs ?? []).find(candidate => Array.isArray(candidate) && candidate.includes(file) && targetedRunner(candidate));
+    if (!argv) return { eligible: false, reason: `no explicitly file-targeted pytest or Vitest check for ${file}` };
+    targets.set(file, { argv: [...argv], runner: targetedRunner(argv) });
+  }
+
+  if (!await cleanHeadAt(exec, root, sha)) return { eligible: false, reason: 'head or tracked tree changed before probes' };
+  const localPassCounts = new Map();
+  for (const [file, target] of targets) {
+    let localPasses = 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let result;
+      try {
+        const argv = expandArgvForRoot(target.argv, [file], root);
+        if (!argv) return { eligible: false, reason: `cannot expand check for ${file}` };
+        result = await exec(argv[0], argv.slice(1), { cwd: root, env: checkEnv });
+      } catch { continue; }
+      const output = `${result?.stdout ?? ''}\n${result?.stderr ?? ''}`;
+      if (result && result.code === 0 && !classifyCheckEnvironment({ exitCode: result.code, head: output }) && positiveTargetedPass(output, file, target.runner)) localPasses += 1;
+    }
+    localPassCounts.set(file, localPasses);
+  }
+  if (!await cleanHeadAt(exec, root, sha)) return { eligible: false, reason: 'head or tracked tree changed after local probes' };
+
+  let baseSha;
+  try {
+    const baseRes = await exec('git', ['rev-parse', `origin/${payload.base}`], { cwd: root });
+    baseSha = baseRes?.code === 0 ? baseRes.stdout.trim() : null;
+  } catch { baseSha = null; }
+  if (!baseSha) return { eligible: false, reason: 'could not resolve immutable base SHA' };
+
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-flaky-base-'));
+  const checkout = path.join(temporary, 'base');
+  let added = false;
+  try {
+    const addRes = await exec('git', ['worktree', 'add', '--detach', checkout, baseSha], { cwd: root });
+    if (!addRes || addRes.code !== 0) return { eligible: false, reason: 'could not create base worktree' };
+    added = true;
+    for (const [file, target] of targets) {
+      const localPasses = localPassCounts.get(file) ?? 0;
+      let basePassed = false;
+      const filePath = path.resolve(checkout, file);
+      const relative = path.relative(path.resolve(checkout), filePath);
+      if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return { eligible: false, reason: `unsafe base test file ${file}` };
+      let info;
+      try { info = await fs.stat(filePath); } catch { return { eligible: false, reason: `base test file is absent: ${file}` }; }
+      if (!info.isFile()) return { eligible: false, reason: `base test file is absent: ${file}` };
+      let result;
+      try {
+        const argv = expandArgvForRoot(target.argv, [file], checkout);
+        if (!argv) return { eligible: false, reason: `cannot expand base check for ${file}` };
+        result = await exec(argv[0], argv.slice(1), { cwd: checkout, env: checkEnv });
+      } catch { return { eligible: false, reason: `base probe failed for ${file}` }; }
+      const output = `${result?.stdout ?? ''}\n${result?.stderr ?? ''}`;
+      basePassed = Boolean(result && result.code === 0 && !classifyCheckEnvironment({ exitCode: result.code, head: output }) && positiveTargetedPass(output, file, target.runner));
+      if (localPasses === 3 && basePassed) continue;
+      return { eligible: false, reason: `local or base probe lacked positive passing evidence for ${file}` };
+    }
+  } finally {
+    if (added) { try { await exec('git', ['worktree', 'remove', '--force', checkout], { cwd: root }); } catch { /* best effort */ } }
+    await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
+  }
+  if (!await cleanHeadAt(exec, root, sha)) return { eligible: false, reason: 'head or tracked tree changed after base probe' };
+  return { eligible: true, files, runIds, headSha: sha, baseSha, beforeRollup: ciRollup, failedNames };
+}
+
 // Field lesson #273: a test near the CI per-test timeout is a flake waiting to happen. Once CI is
 // green, ship reads every check run's own FULL log (never --log-failed — a passing run's own
 // pytest `--durations` line only ever appears in the full log) and warns when a test this PR
@@ -1047,7 +1215,7 @@ export const SHIP_USAGE = [
   '       swarm ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [flags]',
   'Flags: [--repo OWNER/NAME] [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase]',
   '       [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--wait-required-only]',
-  '       [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--accept-pre-existing] [--preflight] [--exempt GUARD:FILE=REASON]... [--private-names FILE]',
+  '       [--checks-from-ci [PATH]] [--rerun-flaky N] [--rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--accept-pre-existing] [--preflight] [--exempt GUARD:FILE=REASON]... [--private-names FILE]',
   `Exempt guards: ${EXEMPTION_GUARD_IDS.join(', ')}`,
   'git-ignored-fixture: only existing ignored paths; --exempt git-ignored-fixture:<file>=<reason>.',
   'check-hit-swarm-dir: ignores check lines whose path starts with .swarm/ and reports their count.',
@@ -1147,6 +1315,7 @@ export async function ship(options) {
     integratedFiles = [],
     packagingChanges = [], checkArgvs = [], extraWarnings = [],
     rerunFlaky,
+    rerunFlakyCi,
     // Field lesson #273: an explicit --per-test-timeout always wins over the local config default.
     perTestTimeoutSeconds,
     exemptions = [],
@@ -1670,12 +1839,52 @@ export async function ship(options) {
   // never touches (a flaky failure anywhere else in the repo) — which needs the failing-test log
   // fetch to happen FIRST, once per loop iteration, so both defaults can read from that one fetch
   // instead of the log fetch only ever running after the platform-only default was already decided.
-  let rerunAttempts = 0, rerunTests = null, defaultRerunWarned = false;
+  let rerunAttempts = 0, rerunTests = null, defaultRerunWarned = false, verifiedFlakyResult = null;
   while (ci.failed.length > 0) {
     // Field lesson 151: named up front so the next job starts from "this OS only", not a guess.
     const platformOnly = platformOnlyFailures(ciRollup);
     for (const entry of platformOnly) base.warnings.push(`platform-only failure: ${entry.os}: ${entry.testIds.join(', ')}`);
     const runIds = failedRunIds(ciRollup, ci.failed);
+
+    if (rerunFlakyCi === 1) {
+      const verifiedFlake = await verifiedFlakyEvidence({ root, repo, payload, sha, ci, ciRollup, checkArgvs, exec, checkEnv });
+      if (rerunFlakyCi === 1 && verifiedFlake.eligible) {
+        const verified = verifiedFlake;
+        rerunTests = verified.files;
+        base.warnings.push('rerun-flaky-ci: verified three local passes and a base pass; rerunning failed jobs once');
+        for (const id of verified.runIds) {
+        let rerun;
+        try { rerun = await exec('gh', ['run', 'rerun', id, '--failed', '--repo', repo], { cwd: root }); } catch { rerun = null; }
+        if (!rerun || rerun.code !== 0) return { ...base, status: 'ci-failed', reason: `rerun-flaky-ci-failed: could not request rerun for ${id}` };
+        }
+        rerunAttempts = 1;
+        base.timing.rerunCount = 1;
+        await sleep(pollMs);
+        let settled = await waitForCi();
+        if (settled.terminal) return settled.terminal;
+        let fresh = settled;
+        if (fresh.ci.failed.length === 0 && !freshCiAttemptObserved(ciRollup, fresh.ciRollup, ci.failed)) {
+          await sleep(pollMs);
+          settled = await waitForCi();
+          if (settled.terminal) return settled.terminal;
+          fresh = settled;
+        }
+        ({ ci, ciRollup } = fresh);
+        base.ci = ci;
+        if (ci.failed.length > 0) return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}` };
+        if (!freshCiAttemptObserved((verified.beforeRollup ?? ciRollup), ciRollup, verified.failedNames)) {
+          base.warnings.push('rerun-flaky-ci-ineligible: fresh CI attempt was not observed');
+          return { ...base, status: 'ci-failed', reason: 'failed checks were not confirmed by a fresh CI attempt' };
+        }
+        const repeatOffenders = await recordFlakeHits(root, verified.files, () => new Date(now()).toISOString());
+        base.warnings.push(...repeatOffenders.map(o => `flake-repeat-offender: ${o.file} (${o.hits} hits); dispatch a fix job`));
+        verifiedFlakyResult = { headSha: verified.headSha, baseSha: verified.baseSha, runIds: verified.runIds };
+        break;
+      }
+      base.warnings.push(`rerun-flaky-ci-ineligible: ${verifiedFlake.reason}`);
+      return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}` };
+    }
+
     const logs = [];
     for (const id of runIds) {
       const logRes = await exec('gh', ['run', 'view', id, '--repo', repo, '--log-failed'], { cwd: root });
@@ -1713,7 +1922,11 @@ export async function ship(options) {
     ({ ci, ciRollup } = settled);
     base.ci = ci;
   }
-  if (rerunAttempts > 0) base.flakyRerun = { attempts: rerunAttempts, result: 'passed', tests: rerunTests ?? [] };
+  if (verifiedFlakyResult) {
+    base.flakyRerun = { attempts: 1, result: 'passed', tests: rerunTests ?? [], evidence: verifiedFlakyResult };
+  } else if (rerunAttempts > 0) {
+    base.flakyRerun = { attempts: rerunAttempts, result: 'passed', tests: rerunTests ?? [] };
+  }
 
   // Field lesson #273: now that CI is fully green, read every check run's own FULL log (never
   // --log-failed — a passing run's own pytest --durations line only ever shows up there) and warn

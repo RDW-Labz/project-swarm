@@ -37,6 +37,16 @@ config file, never as a source literal: `$XDG_CONFIG_HOME/project-swarm/config.j
 `SWARM_CONFIG` overrides either. This file must sit outside any git work tree, including the
 shared install's own checkout — the runner refuses to read a config file found inside one.
 
+Live Codex and Claude shell runs put their detached worktrees outside the project root by
+default. Set `{"worktreesOutsideRoot": false}` in this local config to opt back into the
+historical in-root layout; `worktreesDir` may select a different outside-root base. The
+low-level adapter fallback and saved legacy `worktreePath` records remain readable.
+
+An optional `coordination/toolchain-versions.md` inventory can document executable
+availability with a Markdown table headed `binary | version | reinstall`. `doctor` reports
+missing binaries and displays the reinstall text for review; it never executes that text or
+claims version compatibility from a found executable.
+
 ## One shared install per machine
 
 Project Swarm uses a single shared install per machine instead of a copy inside every project. Clone (or update) it once at `~/.project-swarm` (or choose another directory and invoke its runner explicitly), then register the skill for every agent home on the machine:

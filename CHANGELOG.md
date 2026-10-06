@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.47.0
+
+- `check-pins --core` reports `vendored-core-missing-runtime-wheels` when a vendored core requirement is neither vendored nor a direct dependency. (lesson 343)
+- The shared contract template records the accepting rule for externally validated values; scheduler-specific resource validation remains with its consumer. (lesson 345)
+- Document the existing human-review hold and three-field handoff; green checks do not authorize a held merge. (lesson 348)
+- Codex jobs can use `scope: "open"` with `outputDirs` for bounded tracked-file edits; `narrow-output-scope` warns about underspecified restrictive prompts. (lesson 351)
+- `doctor` reports missing executables from an optional toolchain inventory and displays reinstall guidance without executing it. (lesson 352)
+- Codex prepares narrow Vite cache write grants; preflight reports `vite-temp-not-writable` before dispatch. (lesson 353)
+- `ship --rerun-flaky-ci 1` permits one retry after three verified local passes and a base pass, recording a flake only after fresh CI succeeds. (lesson 354)
+- Mutant review warns `redundant-writer` about another call that may preserve the mutated effect. (lesson 355)
+- Worktree jobs now default outside the repository root; `worktreesOutsideRoot: false` preserves the in-root layout, and recorded legacy paths remain readable.
+
+Design-only Codex jobs are told to read and grep without tests or installs; sandbox test failures do not block them. (lesson 356)
+
 ## 1.46.1
 
 - Claude `provider-limit` classification uses provider error events or standalone diagnostics on a failed exit; limit strings quoted from context files remain worker data. (lesson 347)

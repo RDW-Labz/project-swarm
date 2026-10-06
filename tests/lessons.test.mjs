@@ -7,7 +7,7 @@ import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { runManifest, integrateRun, cancelRun, readState, validateManifest, validateProject, waitRun, inspectRun, inspectResults, redcheckRun } from '../tools/swarm.mjs';
+import { runManifest, integrateRun, cancelRun, readState, resolveWorktree, validateManifest, validateProject, waitRun, inspectRun, inspectResults, redcheckRun } from '../tools/swarm.mjs';
 import { git } from '../tools/codex-adapter.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -505,7 +505,8 @@ test('failed Codex jobs keep a changed declared output in their actual worktree'
   });
   assert.equal(state.status, 'failed');
   const kept = state.jobs[0].keptWorkspace;
-  assert.equal(kept, path.join(root, '.swarm/runs', state.id, 'worktrees/writer'));
+  assert.equal(kept, resolveWorktree(state, state.jobs[0]));
+  assert.equal(path.relative(root, kept).split(path.sep)[0], '..');
   assert.equal(await fs.readFile(path.join(kept, 'tracked.txt'), 'utf8'), 'partial work');
   assert.equal((await git(root, ['worktree', 'list', '--porcelain'])).includes(kept), true);
   await assert.rejects(integrateRun(root, state.id), /Only a complete run/);
