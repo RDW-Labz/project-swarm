@@ -28,7 +28,7 @@ One row per log/event name read or written. An empty producer identifies a reade
 ## Time zones
 Date-window code needs a non-UTC test with an event after local 19:00, alongside UTC-clock tests.
 ## Tests
-Name each job's regression test and existing tests changed. A done-when naming a diagnostic field needs one test per failure class. Spend caps name the checked unit (each request, not each case/task) and test one case that trips mid-way. Async blocking changes name their execution context and test concurrent work continues. New platform-bound startup dependencies (keychain, OS API) need a forced backend failure test proving startup succeeds; construct lazily via a factory. Evaluator/gate tests use real vendored data and assert a non-zero attacked/flagged count.
+Name each job's regression test and existing tests changed. A done-when naming a diagnostic field needs one test per failure class. Spend caps name the checked unit (each request, not each case/task); a single case trips the cap mid-way. Async blocking changes name their execution context and test concurrent work continues. For any new platform-bound dependency (keychain, OS API) on a startup path, one test forces the platform backend to fail and proves startup still succeeds; construct it lazily via a factory. Evaluator/gate tests use real vendored data and assert a non-zero attacked/flagged count.
 ## Mutants
 Every changed evaluator/gate gets a standard mutant forcing every case clean; the Tests section's real-data test must kill it.
 ## Release
