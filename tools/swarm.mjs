@@ -1096,7 +1096,7 @@ export async function expandOpenScopes(root, manifest) {
   return expanded;
 }
 
-export function validateManifest(manifest) {
+export function validateManifest(manifest, { outputJobIds = null } = {}) {
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.jobs) || !manifest.jobs.length || manifest.jobs.length > 256) fail('Manifest requires version: 1 and 1–256 jobs');
   for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract', 'preChecks', 'skillsDir', 'allowEmptyContext', 'resources'].includes(key)) fail(`Unknown manifest field: ${key}`);
   // Field lesson #221: an empty context file (0 bytes, or whitespace only) is always a mistake —
@@ -1156,6 +1156,7 @@ export function validateManifest(manifest) {
   }
   const ids = new Set();
   const writers = new Set();
+  const outputJobs = outputJobIds === null ? null : new Set(outputJobIds);
   for (const job of manifest.jobs) {
     if (!job || typeof job.id !== 'string' || !ID.test(job.id) || ids.has(job.id.toLowerCase())) fail(`Invalid or duplicate job id: ${job?.id}`);
     ids.add(job.id.toLowerCase());
@@ -1264,7 +1265,7 @@ export function validateManifest(manifest) {
       if (new Set(job.contextGlob).size !== job.contextGlob.length) fail(`Job ${job.id}: duplicate contextGlob entry`);
       for (const pattern of job.contextGlob) parseContextGlob(pattern);
     }
-    for (const file of job.outputs) {
+    for (const file of outputJobs && !outputJobs.has(job.id) ? [] : job.outputs) {
       if (writers.has(file.toLowerCase())) fail(`Output collision (case-insensitive): ${file}`);
       writers.add(file.toLowerCase());
     }
@@ -3422,7 +3423,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   if (salvage && noChecks) fail('--no-checks and --salvage cannot be combined');
   const state = await readState(root, id);
   if (state.root !== root || state.id !== id) fail('Run belongs to another repository');
-  const manifest = validateManifest(JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true)));
+  const manifest = validateManifest(JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true)), { outputJobIds: jobs ?? null });
   const designWarnings = [];
   for (const job of manifest.jobs) {
     const warning = designOnlyBlockedOnTestWarning(job, await jobFinalJson(root, id, job.id));
