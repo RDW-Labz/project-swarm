@@ -2,6 +2,8 @@
 
 The coordinator turns the mission into reviewed changes. A list of imaginary workers is not a swarm run. Start only workers with concrete useful deliverables, record the run ID, and follow their work through verification.
 
+For overflow work run manually with `cursor-agent`, use a separate git worktree and the [Cursor lane guard](cursor-lane.md) to claim files, check changes before merging, and check swarm manifests against those claims. The coordinator must run these advisory checks; the lane is not managed by the swarm runner.
+
 ## A practical operating loop
 
 1. Inspect the actual project and its instructions. Identify the desired behavior, current implementation, shared interfaces, and relevant checks.
