@@ -8,6 +8,31 @@ It is designed for a human or coding agent acting as the coordinator. The coordi
 
 Codex CLI workers (`codex`) run in per-job git worktrees under a macOS seatbelt sandbox with an explicit model; see [provider setup](docs/providers.md). **The Codex sandbox is macOS-only** (it uses `sandbox-exec`): on Linux, WSL or Windows, `doctor codex` reports unsupported and `run` refuses codex jobs.
 
+Cursor CLI workers (`cursor`) are worktree writers like codex: `cursor-agent` runs in a per-job git worktree under the same seatbelt profile (plus its install directory and `~/.cursor`), macOS only. The Keychain stays blocked, so a cursor job authenticates only with `CURSOR_API_KEY` in the swarm's environment; see [the cursor section of provider setup](docs/providers.md#cursor-cli-cursor-macos-only).
+
+| Worker type | Agents | Where it runs | Writes files by | Shell / tests |
+|---|---|---|---|---|
+| Worktree writer | `codex`, `cursor` | detached HEAD worktree, macOS seatbelt | editing declared outputs in place | yes, inside the sandbox |
+| Claude shell | `claude` with `shell: true` | detached HEAD worktree, macOS seatbelt | editing declared outputs in place | yes, inside the sandbox |
+| Copied workspace | `claude` | copy of declared context/outputs | its own file tools | no |
+| Tool-free CLI | `hermes`, `qwen` | copied workspace, JSON exchange | strict JSON file envelope | no |
+| Tool-free API | `openai`, `gemini`, `ollama`, `lambda`, `openrouter` | one HTTP request | strict JSON file envelope | no |
+
+The local machine config (see [setup](docs/setup.md#local-machine-config)) carries per-agent settings and tier routes. A typical entry for the cursor worker and the tiers:
+
+```json
+{
+  "cursor": { "model": "composer-2.5", "timeoutMs": 300000, "maxAttempts": 2, "allowedPaths": [] },
+  "tiers": {
+    "cheap": { "agent": "claude", "model": "haiku" },
+    "mid": { "agent": "cursor", "model": "composer-2.5", "fallback": { "agent": "claude", "model": "sonnet" } },
+    "expensive": { "agent": "codex", "model": "<your codex model>", "fallback": { "agent": "claude", "model": "opus" } }
+  }
+}
+```
+
+Tiers are routing metadata for the coordinator; a job's explicit `model` always wins, and nothing escalates a failed job to a higher tier automatically. `ask` is read-only, so `ask --tier mid` or `--tier expensive` uses each tier's `fallback`, exactly as for any worktree writer.
+
 ## Agent kickoff
 
 The orchestrator can be **any agent**: Claude Code, Codex CLI, Cursor, Gemini CLI,
@@ -15,10 +40,10 @@ or another agent with file and command access. The worker adapter does not
 need to match the orchestrator. Paste this into your agent at project start:
 
 ```text
-Use Project Swarm 1.51.0 for this project. Read docs/kickoff.md in the toolkit
+Use Project Swarm 1.52.0 for this project. Read docs/kickoff.md in the toolkit
 and perform its kickoff workflow. Ask me up front which model providers may
 receive project code and what spend ceiling applies; wait before model calls.
-Install from tag v1.51.0 in ~/.project-swarm, run tools/install.mjs --user,
+Install from tag v1.52.0 in ~/.project-swarm, run tools/install.mjs --user,
 link this project, run doctor, validate and run the read-only and writing smoke
 jobs, inspect and integrate the reviewed writing output. Read the installed
 SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
@@ -243,7 +268,7 @@ Replace paths with files that exist in your project. An empty `outputs` array ma
 
 Integration reports the parsed keys, source and a bounded text excerpt for skill result-shape failures. When every declared output exists, the shape failure becomes a warning; `integrate RUN --accept-result-shape` explicitly accepts other result-key mismatches. File-change requirements and integration conflicts still apply. The debugging skill attaches automatically only when the prompt requests a fix; `skills: ["debugging"]` explicitly opts in from the manifest.
 
-- `doctor [claude|codex|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local]` — check compatibility/configuration and root tool exclusions; no network by default. `--probe-local` checks only loopback HTTP health with a short timeout and no credentials; cloud keys remain configuration-only. Omitted provider means Claude.
+- `doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local]` — check compatibility/configuration and root tool exclusions; no network by default. `--probe-local` checks only loopback HTTP health with a short timeout and no credentials; cloud keys remain configuration-only. Omitted provider means Claude.
 - `validate <manifest>` — check schema, paths, files, and size limits; no run or model call. Warnings include `command-handler-not-in-job` for a named command whose handler is absent from context and outputs, and `max-output-below-model-default` for an explicit API/OpenRouter token cap below its model default (16000 for reasoning models), naming both values. Single-request API outputs default to 61440 bytes total and 15360 per existing file; override job `outputCapBytes` or config `outputCap`, otherwise `output-cap-exceeded` directs oversized work to codex or smaller outputs; shell agents are exempt. A refusal for an uncovered test names exactly which tests to add via `suggestedIgnoreTests: {"<jobId>": ["tests/...", ...]}` in its JSON, ready to paste into `ignoreTests`.
 - `preflight <manifest>` — validate and flag oversized jobs, repeated context, and snapshot dependencies before dispatch. Warnings support coordinator judgment; they do not automatically split or launch jobs.
 - `run <manifest>` — start workers and save the exchange. Refuses to start if another live run in the same repository (any of its worktrees) is already writing one of this run's declared outputs, with no override; see `board` below. A job may declare `after: [ids]` so it starts only once those jobs complete; see [the manifest reference](docs/manifest-reference.md#after). When the manifest sets `contract`, a `codex` job's prompt also gets that file's current text injected directly, ahead of the task itself.
@@ -291,7 +316,7 @@ Integration reports the parsed keys, source and a bounded text excerpt for skill
 - [Security and limitations](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 
-Nine adapters are implemented: `codex` (macOS-sandboxed Codex CLI), `claude`, `hermes` (Nous Research CLI), `qwen` (Qwen Code CLI), `openai` (Responses API), `gemini` (generateContent), `ollama` (chat API), `lambda` (OpenAI-compatible chat completions against hosted Lambda Inference or an operator-owned origin), and `openrouter` (OpenRouter chat completions; every request denies provider data collection, `anthropic/*` models are pinned to Anthropic, `deepseek/*` models may write bookkeeping files only, and spend is capped at $5 per job and $25 per UTC day). API workers are single-request text/file generators, not interactive coding CLIs. Their contract is tested with mock HTTP responses; this release does not claim live API account/model verification. Claude has a recorded live project-scoped history. See [provider setup](docs/providers.md) for honest capability limits and smoke verification.
+Ten adapters are implemented: `codex` (macOS-sandboxed Codex CLI), `cursor` (macOS-sandboxed Cursor CLI, live smoke pending), `claude`, `hermes` (Nous Research CLI), `qwen` (Qwen Code CLI), `openai` (Responses API), `gemini` (generateContent), `ollama` (chat API), `lambda` (OpenAI-compatible chat completions against hosted Lambda Inference or an operator-owned origin), and `openrouter` (OpenRouter chat completions; every request denies provider data collection, `anthropic/*` models are pinned to Anthropic, `deepseek/*` models may write bookkeeping files only, and spend is capped at $5 per job and $25 per UTC day). API workers are single-request text/file generators, not interactive coding CLIs. Their contract is tested with mock HTTP responses; this release does not claim live API account/model verification. Claude has a recorded live project-scoped history. See [provider setup](docs/providers.md) for honest capability limits and smoke verification.
 
 Use the included recipes for code review, UI source review, documentation, test planning, four-worker Claude reviews, and mixed-provider reviews. API workers do not see rendered screenshots or run tests. The coordinator performs those checks. Hermes and Qwen use serialized copied context and strict JSON file envelopes; they do not get file-editing tools through this adapter. Their compatibility and authentication must be checked independently. Raising concurrency is opt-in and increases simultaneous resource use; it is not a spending cap.
 

@@ -100,7 +100,7 @@ export async function boardSummary({ dir = liveDir(), isAlive } = {}) {
     try {
       const state = JSON.parse(await fs.readFile(path.join(run.root, '.swarm/runs', run.runId, 'state.json'), 'utf8'));
       status = state.status;
-      jobs = state.jobs.map(job => ({ id: job.id, status: job.status, outputs: job.outputs }));
+      jobs = state.jobs.map(job => ({ id: job.id, status: job.status, outputs: job.outputs, ...(job.agent ? { agent: job.agent } : {}) }));
     } catch {}
     summarized.push({ runId: run.runId, root: run.root, repo: run.repo, pid: run.pid, startedAt: run.startedAt, status, jobs });
   }

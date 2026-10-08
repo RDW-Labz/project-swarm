@@ -31,7 +31,7 @@ Read [the security boundaries](../SECURITY.md) before copying sensitive files in
 ## Local machine config
 
 Anything project-specific (a keychain service name, a rig port file, a cheap-tier model
-override, extra denied home directories, a private-names list) lives in a small local, machine-specific
+override, extra denied home directories, a private-names list, `cursor` worker settings) lives in a small local, machine-specific
 config file, never as a source literal: `$XDG_CONFIG_HOME/project-swarm/config.json` when
 `XDG_CONFIG_HOME` is set to an absolute path, else `~/.config/project-swarm/config.json`.
 `SWARM_CONFIG` overrides either. This file must sit outside any git work tree, including the
@@ -135,7 +135,7 @@ git clone https://github.com/RDW-Labz/project-swarm.git
 
 The owner name in the URL is the source repository location. You do not sign into that account. You can also download the source archive from the release page. Model execution still uses your own provider setup.
 
-`doctor all` lists all nine adapters without making network requests by default. `doctor all --probe-local` opts into a short HTTP health probe only for loopback Ollama and self-hosted Lambda endpoints. It sends no credentials, follows no redirects and makes no model request. Remote endpoints and cloud keys are never probed. Reports distinguish `configured`, `reachable` (HTTP health only), and `unreachable`; `reachable: null` means not checked. `configured` means a required environment key is present, or a local Ollama endpoint is selected; it does not prove service health or model access. Each run checks only its selected providers. Default concurrency is 2; set `concurrency` to an integer from 1 to 32 when you deliberately want more simultaneous workers.
+`doctor all` lists all ten adapters without making network requests by default. `doctor all --probe-local` opts into a short HTTP health probe only for loopback Ollama and self-hosted Lambda endpoints. It sends no credentials, follows no redirects and makes no model request. Remote endpoints and cloud keys are never probed. Reports distinguish `configured`, `reachable` (HTTP health only), and `unreachable`; `reachable: null` means not checked. `configured` means a required environment key is present, or a local Ollama endpoint is selected; it does not prove service health or model access. Each run checks only its selected providers. Default concurrency is 2; set `concurrency` to an integer from 1 to 32 when you deliberately want more simultaneous workers.
 
 ## Preflight before larger assignments
 

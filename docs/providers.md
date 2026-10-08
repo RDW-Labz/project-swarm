@@ -1,6 +1,6 @@
 # Providers and setup
 
-Project Swarm supports nine adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
+Project Swarm supports ten adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
 
 ## Choose the execution style
 
@@ -126,6 +126,34 @@ as cleanup.
 The final rules re-deny reads/writes of `~/Library/Keychains`, `~/.ssh`, `~/.aws`, `~/.config`, and any directory a project's own local config adds to `deniedHomeDirs`, plus mach lookups of `com.apple.SecurityServer` and `com.apple.securityd.xpc`. Optional per-job `readPaths` grants extra absolute read-only toolchain paths. Paths under denied directories (including resolved aliases) are refused. Paths embedded in profiles cannot contain quotes, backslashes, or control characters. Do not place secrets in the committed project or granted toolchain paths.
 
 The runner reads the final message from the `-o` file inside the job worktree (also inside the run directory), saves it as `response.txt`, and parses it as JSON: the reply's last fenced (```json or bare ```) block wins when it has one, otherwise its last top-level JSON object wins; any keys are accepted (there is no fixed `files_changed`/`notes` schema), since only declared outputs, never anything the JSON names, are ever collected. When that JSON is missing or does not parse, the runner falls back first to the `-o` file's own content if it alone parses as an object, then to the worktree's actual changes to declared outputs versus the job's base commit; either fallback still completes the job, keeps its worktree, and surfaces a `codex envelope fallback: result-file` or `codex envelope fallback: worktree` warning from `inspect`/`wait`. A worktree with no output changes and no parseable result file still fails the job and keeps the worktree for inspection. Parseable `tokens used` output is recorded as `total_tokens`, grouped under provider `codex`; missing usage and dollar cost remain unavailable. Unit tests inject fake workers and do not claim a live Codex or seatbelt smoke run.
+
+## Cursor CLI (`cursor`, macOS only)
+
+A `cursor` job is a worktree writer exactly like a codex job: the same detached HEAD worktree, scratch directory, port block, setup, `readPaths`, `testEnv`, output collection, conflict checks and retention rules, and the same prompt (`codexMessage`: ownership line, design-only line, contract, checks). `after` is refused for cursor jobs as for codex. Every job names its `model` (plain names such as `composer-2.5`, or cursor's bracket form such as `claude-opus-4-8[effort=high]`); the runner never uses a cursor default.
+
+The runner invokes:
+
+```text
+sandbox-exec -f <profile> <real cursor-agent path> -p --output-format json --model <model> --trust --workspace <worktree> --sandbox disabled --force <prompt>
+```
+
+The outer seatbelt is the boundary, as with codex's `--dangerously-bypass-approvals-and-sandbox`. `--sandbox disabled` is required because cursor's own sandbox is itself seatbelt, and a nested sandbox inside the profile fails every shell command; `--force` is required because print mode otherwise denies non-allowlisted commands, so the worker could not run tests. The runner never passes `--api-key` (it would put the key in argv), `--worktree`, or `--approve-mcps`. Stdin is `/dev/null`. `cursor-agent` is resolved on `PATH` to its real file (`~/.local/bin/cursor-agent` links into `~/.local/share/cursor-agent/versions/<ver>/`).
+
+The profile is the codex profile with exactly two additions: read and exec of that version directory, and read and write of `~/.cursor`. Worktree-only writes, the denied home directories and the Keychain mach-lookup denial are unchanged. Because the Keychain is blocked, `agent login` credentials cannot be used; the worker authenticates only with `CURSOR_API_KEY` from the swarm's own environment. The worker environment is an allowlist (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TERM`, `TZ`, `TMPDIR`, `NO_COLOR`, `CI`, `SSL_CERT_FILE`, the swarm/test variables codex also gets, and `CURSOR_API_KEY`); no other provider key, and not `CURSOR_API_ENDPOINT`, is forwarded. The key is refused in the prompt and in argv, redacted from the adapter logs, `provider.jsonl`, `stderr.log` and `response.txt`, and a job whose output contains it fails without keeping its worktree. A run where the key appeared anywhere is refused by `integrate` and `ship`.
+
+`run` fails fast before any worktree exists: `cursor is unsupported on this platform` off macOS, `cursor-not-installed: ...` when `cursor-agent` is not on `PATH`, and `cursor-not-authenticated: set CURSOR_API_KEY in the swarm environment (Keychain login is blocked by the sandbox)` when the key is missing. `doctor cursor` checks macOS, `sandbox-exec`, the binary, `--version` and every required flag in `--help`, and reports `auth: CURSOR_API_KEY set` or status `not-authenticated`; it never prints the key and makes no model call.
+
+The result is cursor's `--output-format json` object; its `result` text is saved as `response.txt` and parsed with the codex envelope rule (last fenced block, else last top-level object), falling back to the worktree's changes to declared outputs (`codex envelope fallback: worktree`). A nonzero exit or `is_error` result fails the job with the exit code and stderr recorded as for codex.
+
+Local config `cursor` settings, all optional:
+
+```json
+{ "cursor": { "model": "composer-2.5", "timeoutMs": 300000, "maxAttempts": 2, "allowedPaths": [] } }
+```
+
+`timeoutMs` applies when a job sets none. `maxAttempts` (1-5, default 2 like codex) caps launches, and only a transient transport error (`ECONNRESET`, `socket hang up`, a 502/503/504) with no output written earns another; the job records `retries` and `retryReason: cursor-blip: ...`. `allowedPaths` are extra absolute read-only paths for every cursor job, validated like `readPaths`. `model` documents the recommended model for tier routes (`tiers.mid`); a job still names its own. Tests use a fake `cursor-agent`; a live cursor smoke is pending an operator's `CURSOR_API_KEY`.
+
+Manually run Cursor workers outside the swarm keep using the [Cursor lane guard](cursor-lane.md); a swarm-run cursor job is an ordinary swarm job on `swarm board` and needs no claim.
 
 ## Local health diagnostics
 
