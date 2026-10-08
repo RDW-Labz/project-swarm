@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.51.0
+
+- Added the Cursor lane guard with advisory file claims in `coordination/cursor-claims.json`: `claim` before work, `check` before merge, `release` after merge, `check-manifest` before a swarm run, and `list` to inspect claims. See [docs/cursor-lane.md](docs/cursor-lane.md).
+- The guard falls back to the sibling `swarm.mjs` when a project has no `.project-swarm.json`; a present pin whose install is missing still fails.
+
 ## 1.50.0
 
 - Vendored five worker skills from `mattpocock/skills` under the MIT License, pinned to commits `6fd947921b935b7e1e69293a200400f0fdd5c15f` and `153fc1b93de6584562765cdce299324e1ff9e661`; `installProject` copies each skill only when absent and keeps an existing skill untouched.

@@ -25,11 +25,11 @@ test('AG historical dispositions remain under 1.47.0 while active release pins a
   const text = Object.fromEntries(files);
   const pkg = JSON.parse(text['package.json']);
   const lock = JSON.parse(text['package-lock.json']);
-  assert.equal(pkg.version, '1.50.0');
-  assert.equal(lock.version, '1.50.0');
-  assert.equal(lock.packages[''].version, '1.50.0');
+  assert.equal(pkg.version, '1.51.0');
+  assert.equal(lock.version, '1.51.0');
+  assert.equal(lock.packages[''].version, '1.51.0');
 
-  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.50\.0\n/);
+  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.51\.0\n/);
   const current = text['CHANGELOG.md'].split('## 1.47.0\n')[1].split('\n## 1.46.1\n')[0];
   const currentBullets = current.split('\n').filter(line => line.startsWith('- '));
   assert.equal(currentBullets.length, 9);
