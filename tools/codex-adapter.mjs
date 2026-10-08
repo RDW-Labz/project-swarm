@@ -53,9 +53,12 @@ export async function resolveReadPaths(paths = [], home = os.homedir(), config =
   // Reject aliases into denied directories as well as their literal spellings.
   return validateReadPaths(await Promise.all(validated.map(file => fs.realpath(file))), home, config);
 }
-export function codexProfile({ home = os.homedir(), worktree, commonDir, metadataDir, scratchDir, readPaths = [], environmentReadPaths = [], cacheWritePaths = [], config = {}, tmpRoots = defaultTmpRoots() }) {
+// extraWrites: absolute read+write grants an adapter adds on top of the codex baseline (the cursor
+// worker's ~/.cursor); validated like readPaths, so a denied home directory can never be granted.
+export function codexProfile({ home = os.homedir(), worktree, commonDir, metadataDir, scratchDir, readPaths = [], environmentReadPaths = [], cacheWritePaths = [], extraWrites = [], config = {}, tmpRoots = defaultTmpRoots() }) {
   home = sandboxPath(home);
-  const reads = [worktree, commonDir, ...['.codex', '.nvm', '.cache', '.npm', '.local/share/uv', 'Library/Caches'].map(p => path.join(home, p)), ...validateReadPaths(readPaths, home, config)].map(sandboxPath);
+  const extraWritePaths = validateReadPaths(extraWrites, home, config);
+  const reads = [worktree, commonDir, ...['.codex', '.nvm', '.cache', '.npm', '.local/share/uv', 'Library/Caches'].map(p => path.join(home, p)), ...validateReadPaths(readPaths, home, config), ...extraWritePaths].map(sandboxPath);
   let scratchPaths = [];
   if (scratchDir !== undefined) {
     const raw = sandboxPath(scratchDir);
@@ -71,7 +74,7 @@ export function codexProfile({ home = os.homedir(), worktree, commonDir, metadat
   }
   if (caches.length && path.dirname(caches[0]) !== path.dirname(caches[1])) throw viteCacheError(caches[0]);
   const environment = validateReadPaths([...new Set([...environmentReadPaths, ...caches.map(file => path.dirname(file))])], home, config);
-  const writes = [worktree, metadataDir, ...scratchPaths, ...caches, ...['.codex', '.cache', '.npm'].map(p => path.join(home, p)), '/private/tmp', '/private/var/folders'].map(sandboxPath);
+  const writes = [worktree, metadataDir, ...scratchPaths, ...caches, ...['.codex', '.cache', '.npm'].map(p => path.join(home, p)), ...extraWritePaths, '/private/tmp', '/private/var/folders'].map(sandboxPath);
   const filter = (kind, file) => `(${kind} "${sandboxPath(file)}")`;
   const ancestors = new Set([home]);
   for (const file of [...reads, metadataDir]) {
@@ -134,7 +137,8 @@ export function codexNeedsOwnershipInstruction(job, versionFiles = []) {
   return activeVersionFiles.length > 0 && (!outputs.has('CHANGELOG.md') || activeVersionFiles.some(file => !outputs.has(file)));
 }
 export const DESIGN_ONLY_LINE = 'Design-only job: do not run tests or installs; read and grep only. A test failure in your sandbox is never a reason to block.\n';
-export const isDesignOnlyCodexJob = job => job.agent === 'codex' && job.outputs.length > 0 && job.outputs.every(file => /\.md$/i.test(file) || (file.split('/')[0] === 'docs' && /\.json$/i.test(file)));
+// A worktree writer (codex or cursor) whose outputs are all docs.
+export const isDesignOnlyCodexJob = job => ['codex', 'cursor'].includes(job.agent) && job.outputs.length > 0 && job.outputs.every(file => /\.md$/i.test(file) || (file.split('/')[0] === 'docs' && /\.json$/i.test(file)));
 export function codexMessage(job, { contract = null, gotchas = '', skills = '', agentsWorkspace = null, checks = [], versionFiles = [] } = {}) {
   let base = `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(job.context)}. You may edit only these declared outputs: ${JSON.stringify(job.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.\nRead only the files in your context; other reads may be denied.\nIf a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\n`;
   if (job.scope === 'open') base = `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(job.context)}. Your open scope directories are ${JSON.stringify(job.outputDirs)}. The frozen allowed files (tracked directory files plus explicit outputs) are ${JSON.stringify(job.outputs)}. You may read context and allowed files and edit only allowed files. New undeclared files are dropped writes. This is a proposal boundary, not per-file OS confinement. Do not delete files. Run relevant project tests. Root uncommitted changes are not included. Deliver what you can and list what remains. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed allowed paths and unfinished work.\n\n`;
@@ -369,7 +373,7 @@ export async function prepareViteCaches(worktree, options = {}) {
 }
 
 export async function viteCacheWarnings(root, manifest, options = {}) {
-  if (!manifest.jobs.some(job => job.agent === 'codex')) return [];
+  if (!manifest.jobs.some(job => ['codex', 'cursor'].includes(job.agent))) return [];
   try { await viteCachePaths(root, { config: options.config ?? loadLocalConfig(), ...options, project: true }); return []; }
   catch (error) { return [{ code: 'vite-temp-not-writable', path: error.path, message: error.message }]; }
 }
@@ -446,15 +450,22 @@ export const CODEX_BLIP_RE = /workspace routing discovery failed|Reconnecting\.\
 // attempt owns fresh result filenames and returns validation failures with their stderr intact.
 // hasWrittenOutputs compares bytes AND modes against the immediate pre-launch snapshot,
 // including creation/deletion. onRetry persists retries/retryReason before the second launch.
-export async function runCodexWithRetry(attempt, { hasWrittenOutputs, onRetry, cancelled = () => false }) {
-  const result = await attempt(0);
-  if (result.status !== 'failed' || result.cleanupError || result.refusedBeforeStart ||
-      result.terminationReason || result.cancelled || result.timedOut || result.code === 'adapter-log-failed' || await cancelled()) return result;
-  const match = CODEX_BLIP_RE.exec(result.stderr ?? '');
-  if (!match) return result;
-  if (await hasWrittenOutputs()) return result;
-  if (await cancelled()) return result;
-  await onRetry(`codex-blip: ${match[0]}`);
-  if (await cancelled()) return result;
-  return attempt(1);
+// maxAttempts (default 2: one retry) caps launches; only a transient blip matching blipRe, with no
+// output written, ever earns another. The cursor worker reuses this with its own label and regex.
+export const DEFAULT_MAX_ATTEMPTS = 2;
+export async function runCodexWithRetry(attempt, { hasWrittenOutputs, onRetry, cancelled = () => false, maxAttempts = DEFAULT_MAX_ATTEMPTS, blipRe = CODEX_BLIP_RE, label = 'codex-blip' }) {
+  const limit = Number.isSafeInteger(maxAttempts) && maxAttempts >= 1 ? maxAttempts : DEFAULT_MAX_ATTEMPTS;
+  let result = await attempt(0);
+  for (let index = 1; index < limit; index++) {
+    if (result.status !== 'failed' || result.cleanupError || result.refusedBeforeStart ||
+        result.terminationReason || result.cancelled || result.timedOut || result.code === 'adapter-log-failed' || await cancelled()) return result;
+    const match = blipRe.exec(`${result.stderr ?? ''}\n${result.blipText ?? ''}`);
+    if (!match) return result;
+    if (await hasWrittenOutputs()) return result;
+    if (await cancelled()) return result;
+    await onRetry(`${label}: ${match[0]}`, index);
+    if (await cancelled()) return result;
+    result = await attempt(index);
+  }
+  return result;
 }
