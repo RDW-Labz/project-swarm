@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { validateManifest } from './swarm.mjs';
+import { listDesignLoopSkillFiles } from './design-loop.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const required=['README.md','LICENSE','NOTICE','SECURITY.md','CONTRIBUTING.md','CHANGELOG.md','skills/project-swarm/SKILL.md','docs/kickoff.md','docs/field-report.md','templates/coordination/ORCHESTRATOR.md','templates/coordination/HANDOFF.md','templates/coordination/TASK.md','templates/coordination/swarm-lessons.md','templates/coordination/CONTRACT.md','templates/agent-pointers/AGENTS.md','templates/agent-pointers/CLAUDE.md','templates/agent-pointers/cursor-rule.mdc','.github/workflows/ci.yml'];
 for(const file of required)assert.ok((await fs.stat(path.join(root,file))).size>0,file);
@@ -32,4 +33,8 @@ for(const file of await fs.readdir(path.join(root,'examples')))validateManifest(
 const pkg=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));
 assert.equal(pkg.license,'Apache-2.0');assert.match(pkg.version,/^\d+\.\d+\.\d+$/);assert.equal(pkg.private,true);
 assert.match(await fs.readFile(path.join(root,'skills/project-swarm/SKILL.md'),'utf8'),/^---\r?\nname: project-swarm\r?\ndescription: /);
+assert.match(await fs.readFile(path.join(root,'skills/design-loop/SKILL.md'),'utf8'),/^---\r?\nname: design-loop\r?\ndescription: /);
+for(const file of await listDesignLoopSkillFiles(path.join(root,'skills/design-loop'))){
+ assert.ok((await fs.stat(path.join(root,'skills/design-loop',file))).size>0,`skills/design-loop/${file}`);
+}
 console.log(`Package checks passed: ${files.length} files, syntax, links, license, skill, examples.`);

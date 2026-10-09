@@ -1,5 +1,7 @@
 # Worker skills
 
+For the experimental UI design loop skill (installed with `install.mjs --user`), see `skills/design-loop/SKILL.md` and `swarm design-loop`.
+
 A skill is a small reusable chunk of instructions, kept as its own file instead of copied into
 every manifest prompt by hand. This feature is off by default: with no `skillsDir` and no local
 config `skills.dir`, every prompt is byte-identical to a release before it existed.
