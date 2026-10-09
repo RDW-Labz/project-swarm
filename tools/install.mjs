@@ -47,6 +47,13 @@ async function skillFilePairs(source){
  return pairs;
 }
 
+async function designLoopSkillPairs(source){
+ const skillDir=path.join(source,'skills/design-loop');
+ let files=[];
+ try{files=await listFiles(skillDir);}catch(error){if(error.code!=='ENOENT')throw error;}
+ return files.map(file=>[`skills/design-loop/${file}`,file]);
+}
+
 async function listFiles(dir,base=dir,out=[]){
  for(const entry of await fs.readdir(dir,{withFileTypes:true})){
   const full=path.join(dir,entry.name);
@@ -142,6 +149,13 @@ export async function installUser({source=packageRoot,home=os.homedir(),dev=fals
    await safeTarget(agentHome,relTarget,{createParents:true});
    const destination=await safeTarget(agentHome,relTarget);
    await fs.writeFile(destination,text,'utf8');
+   written.push(destination);
+  }
+  for(const [from,to] of await designLoopSkillPairs(source)){
+   const relTarget=`skills/design-loop/${to}`;
+   await safeTarget(agentHome,relTarget,{createParents:true});
+   const destination=await safeTarget(agentHome,relTarget);
+   await fs.copyFile(path.join(source,from),destination);
    written.push(destination);
   }
  }

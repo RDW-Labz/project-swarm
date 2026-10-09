@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.53.0
+
+- Added the experimental `design-loop` skill and `swarm design-loop <config> [--dry-run] [--resume]` orchestrator: bounded design → Playwright capture → fresh reviewer rounds with human checkpoints, stop rules, and `install.mjs --user` copies `skills/design-loop/` into agent homes alongside `project-swarm`.
+
 ## 1.52.0
 
 - Added the `cursor` worker: `cursor-agent` runs as a worktree writer like codex, under `sandbox-exec` with the codex profile plus its install directory and `~/.cursor`, invoked as `-p --output-format json --model <model> --trust --workspace <worktree> --sandbox disabled --force <prompt>`. See [docs/providers.md](docs/providers.md#cursor-cli-cursor-macos-only).

@@ -1,0 +1,24 @@
+{
+  "target": "./mockup.html",
+  "screens": [
+    { "name": "dashboard", "url_or_selector": "#g-d1440", "widths": [1440, 1024] },
+    { "name": "lot", "url_or_selector": "#g-l1440", "widths": [1440, 1024] },
+    { "name": "pickups", "url_or_selector": "#g-p1440", "widths": [1440, 1024] }
+  ],
+  "baseline": "none",
+  "designer": "codex:gpt-6-astra",
+  "reviewer": {
+    "primary": "claude:opus",
+    "cheap": "codex:gpt-6-sol"
+  },
+  "rubric": "RUBRIC.md",
+  "done": "DONE.md",
+  "rounds": {
+    "max": 6,
+    "checkpoints": [1, 3, 6],
+    "primary_reviewer_at": [1, 3, 6]
+  },
+  "motion": { "screen": "dashboard" },
+  "locks": { "fonts": 3 },
+  "out": "docs/design/mockup-g/rounds"
+}
