@@ -6,7 +6,7 @@ status: experimental
 
 # Design loop
 
-Experimental until run end to end once. First run: BinGo Auctions mockup G (in progress).
+Experimental until (1) designer and reviewer workers run through the normal sandboxed job path, and (2) one full end-to-end run via `swarm design-loop`. First run candidate: BinGo Auctions mockup G (in progress).
 
 ## Running it
 
