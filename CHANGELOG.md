@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.51.1
+
+- `ask` runs a named CLI agent (e.g. `--tier cheap` or `--agent codex --model gpt-6-luna`) directly as a read-only job with no outputs when no read-only fallback is configured (no matching tier, or a tier without `fallback`), with an `ask-agent-direct` warning and `route.direct: true`, instead of refusing with `ask-agent-fallback-unconfigured`. A configured but malformed fallback still refuses. (lesson 417)
+
 ## 1.51.0
 
 - Added the Cursor lane guard with advisory file claims in `coordination/cursor-claims.json`: `claim` before work, `check` before merge, `release` after merge, `check-manifest` before a swarm run, and `list` to inspect claims. See [docs/cursor-lane.md](docs/cursor-lane.md).

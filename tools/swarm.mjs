@@ -4709,13 +4709,23 @@ export function resolveAskRoute(options = {}, config = {}) {
   }
   if (agent === 'claude' || API_AGENTS.includes(agent)) return { agent, model };
   const unconfigured = () => fail(`ask-agent-fallback-unconfigured: no unique supported fallback for ${agent}/${model}; select --tier and configure tiers.<tier>.fallback with agent and model`, 'ask-agent-fallback-unconfigured');
+  // Field lesson #417: a read-only ask starts when the named model is available, fallback or
+  // not. With no read-only fallback configured (no matching tier, or a tier without `fallback`),
+  // the named agent itself runs the one read-only job (no outputs, nothing integrated) and the
+  // result says so. A fallback that is present but malformed still refuses: that is a config bug.
+  const direct = matchedTier => {
+    const route = { tier: matchedTier ?? null, requestedAgent: agent, requestedModel: model, agent, model, direct: true };
+    const warning = `ask-agent-direct: no read-only fallback configured for ${agent}/${model}${matchedTier ? ` (tier ${matchedTier})` : ''}; running it directly as a read-only job with no outputs`;
+    return { agent, model, route, warning };
+  };
   if (tier === undefined) {
     const matches = TIERS.filter(name => config?.tiers?.[name]?.agent === agent && config.tiers[name].model === model);
-    if (matches.length !== 1) unconfigured();
+    if (matches.length !== 1) return direct(null);
     tier = matches[0];
   }
   const configured = config.tiers[tier];
   const fallback = configured.fallback;
+  if (fallback === undefined) return direct(tier);
   if (!validPair(fallback) || Object.keys(fallback).some(key => !['agent', 'model'].includes(key)) || (fallback.agent !== 'claude' && !API_AGENTS.includes(fallback.agent))) unconfigured();
   const route = { tier, requestedAgent: agent, requestedModel: model, agent: fallback.agent, model: fallback.model };
   const warning = `ask-agent-fallback: ${agent}/${model} -> ${fallback.agent}/${fallback.model} (tier ${tier}); using configured read-only fallback`;
