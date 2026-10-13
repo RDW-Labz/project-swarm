@@ -682,9 +682,25 @@ test('ask refuses without --model, --context, or a non-empty question', async t 
   await assert.rejects(askRun(root, { model: 'sonnet', context: ['input.txt'], question: '   ' }), /non-empty question/);
 });
 
-test('ask refuses an unsupported agent without a configured fallback', async t => {
-  const root = await fixture(t);
-  await assert.rejects(askRun(root, { model: 'test-model', context: ['input.txt'], agent: 'codex', question: 'What next?' }), { code: 'ask-agent-fallback-unconfigured' });
+import { resolveAskRoute as resolveAskRouteFor417 } from '../tools/swarm.mjs';
+
+test('lesson #417: ask runs a named CLI agent directly when no read-only fallback is configured', () => {
+  const direct = resolveAskRouteFor417({ agent: 'codex', model: 'test-model' }, {});
+  assert.equal(direct.agent, 'codex');
+  assert.equal(direct.model, 'test-model');
+  assert.equal(direct.route.direct, true);
+  assert.equal(direct.route.tier, null);
+  assert.match(direct.warning, /^ask-agent-direct: no read-only fallback configured for codex\/test-model; running it directly/);
+  const tiers = { cheap: { agent: 'codex', model: 'gpt-6-luna' }, mid: { agent: 'codex', model: 'gpt-reserve' } };
+  for (const [options, model, tier] of [[{ tier: 'cheap' }, 'gpt-6-luna', 'cheap'], [{ agent: 'codex', model: 'gpt-reserve' }, 'gpt-reserve', 'mid'], [{ agent: 'codex', model: 'unlisted' }, 'unlisted', null]]) {
+    const route = resolveAskRouteFor417(options, { tiers, fallback: { cheap: { agent: 'openrouter', model: 'deepseek/deepseek-v4.1-flash' } } });
+    assert.deepEqual([route.agent, route.model, route.route.tier, route.route.direct], ['codex', model, tier, true]);
+  }
+  const ambiguous = resolveAskRouteFor417({ agent: 'codex', model: 'gpt-6-luna' }, { tiers: { cheap: tiers.cheap, mid: tiers.cheap } });
+  assert.deepEqual([ambiguous.agent, ambiguous.route.direct, ambiguous.route.tier], ['codex', true, null]);
+  const swapped = resolveAskRouteFor417({ tier: 'cheap' }, { tiers: { cheap: { ...tiers.cheap, fallback: { agent: 'claude', model: 'haiku' } } } });
+  assert.deepEqual([swapped.agent, swapped.model, swapped.route.direct], ['claude', 'haiku', undefined]);
+  assert.throws(() => resolveAskRouteFor417({ tier: 'cheap' }, { tiers: { cheap: { ...tiers.cheap, fallback: { agent: 'unknown', model: 'x' } } } }), { code: 'ask-agent-fallback-unconfigured' });
 });
 
 test('ask builds a read-only job, runs it like run, and returns the contract-shaped result with a fake claude CLI', async t => {

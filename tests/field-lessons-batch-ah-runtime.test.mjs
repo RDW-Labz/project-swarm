@@ -131,8 +131,6 @@ test('L357 refuses ambiguous or missing fallbacks before dispatch', async t => {
     [{ agent: 'unknown', model: 'model' }, base, 'ask-route-invalid'],
     [{ tier: 'cheap' }, { tiers: { cheap: { agent: 'unknown', model: 'model' } } }, 'ask-route-invalid'],
     [{ tier: 'cheap' }, { tiers: { cheap: { agent: 'codex' } } }, 'ask-route-invalid'],
-    [{ agent: 'codex', model: 'test-model' }, {}, 'ask-agent-fallback-unconfigured'],
-    [{ agent: 'codex', model: 'test-model' }, { tiers: { cheap: base.tiers.cheap, mid: base.tiers.cheap } }, 'ask-agent-fallback-unconfigured'],
     ...[null, [], {}, { agent: 'codex', model: 'test-model' }, { agent: 'unknown', model: 'test-model' }, { agent: 'claude', model: ' ' }, { agent: 'claude', model: 'bad model' }].map(fallback => [{ tier: 'cheap' }, tierConfig(fallback), 'ask-agent-fallback-unconfigured']),
   ];
   let calls = 0;
