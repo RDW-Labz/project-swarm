@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "type-merge",
+      "type": "merge",
+      "agent": "auto",
+      "prompt": "Reconcile conflicting router changes while preserving sensitive-job filtering and fallback behavior. Add regression coverage for both intents.",
+      "context": [
+        "tools/router.mjs",
+        "tests/router.test.mjs"
+      ],
+      "outputs": [
+        "tools/router.mjs",
+        "tests/router.test.mjs"
+      ]
+    }
+  ]
+}

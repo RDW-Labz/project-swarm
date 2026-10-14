@@ -101,7 +101,7 @@ For a writing job, list its allowed output filenames. New nested output files ar
 
 ### Choosing a tier, not gut feel
 
-Set each job's optional `tier` (`cheap` | `mid` | `expensive`) before dispatch; mark `expensive` with a short, non-empty `tierReason`. This is validated metadata shown back in `preflight`/`inspect`, not a model lookup: explicit agents keep their model; `agent: "auto"` uses lane models and starts at Claude for `tier: "expensive"`. Keep the wording short and plain.
+Set each job's optional `tier` (`cheap` | `mid` | `expensive`) before dispatch; mark `expensive` with a short, non-empty `tierReason`. This is validated metadata shown back in `preflight`/`inspect`, not a model lookup: explicit agents keep their model; `agent: "auto"` uses lane models and starts at Claude for `tier: "expensive"`. Keep the wording short and plain. Optional job `type` presets set prompt guidance, default timeouts, skills, automatic routing order, and allowed outputs; see [job types](references/job-types.md).
 
 Route by difficulty, not topic. Auth, async and similar topics are not triggers by themselves.
 

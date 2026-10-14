@@ -40,10 +40,10 @@ or another agent with file and command access. The worker adapter does not
 need to match the orchestrator. Paste this into your agent at project start:
 
 ```text
-Use Project Swarm 1.53.0 for this project. Read docs/kickoff.md in the toolkit
+Use Project Swarm 1.54.0 for this project. Read docs/kickoff.md in the toolkit
 and perform its kickoff workflow. Ask me up front which model providers may
 receive project code and what spend ceiling applies; wait before model calls.
-Install from tag v1.53.0 in ~/.project-swarm, run tools/install.mjs --user,
+Install from tag v1.54.0 in ~/.project-swarm, run tools/install.mjs --user,
 link this project, run doctor, validate and run the read-only and writing smoke
 jobs, inspect and integrate the reviewed writing output. Read the installed
 SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
@@ -219,7 +219,9 @@ flowchart LR
 - Prompts, responses, provider logs, resolved model identifiers, usage, and reported cost remain in the local run directory.
 - The coordinator handles follow-up rounds by explicitly passing earlier responses into a new assignment. Workers do not maintain a shared conversation or coordinate themselves.
 
-Manifests accept 1–5000 jobs. Each agent has its own lane cap, rate limit, backoff, and quota pause. Optional `agent: "auto"` selects a configured lane model and falls back to higher lanes after failures; `sensitive: true` excludes OpenRouter. See [lanes and routing](docs/lanes.md) for defaults and overrides.
+Manifests accept 1–5000 jobs. Each agent has its own lane cap, rate limit, backoff, and quota pause. Optional `agent: "auto"` selects a configured lane model and falls back to higher lanes after failures; jobs are sensitive by default; `sensitive: false` allows OpenRouter. See [lanes and routing](docs/lanes.md) for defaults and overrides.
+
+Optional [job types](docs/job-types.md) set prompt guidance, default timeouts, skills, and automatic routing preferences. Choose `build`, `fix`, `test`, `review`, `research`, `docs`, `merge`, or `lead`; each type also limits declared outputs.
 
 Copied workspaces and guarded integration are **not an operating-system security sandbox**. Read [the scope and threat model](SECURITY.md) before using sensitive source. Keep secrets out of worker context.
 

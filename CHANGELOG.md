@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.54.0
+
+- Added eight optional job types with prompt guidance and default timeouts.
+- Enforced type output rules, including read-only review and research jobs. Docs require documentation extensions or README.txt/CHANGELOG.txt basenames; docs/state/ is blocked.
+- Added type-specific cheap routing, with Codex for merge and lead. Remaining cheap lanes follow Hermes → Cursor → Codex → OpenRouter; paused cheap lanes wait. Claude requires two real cheap failures and no cheap candidate, unless the tier is expensive.
+- **Breaking:** jobs are sensitive by default. Explicit OpenRouter jobs must set `sensitive: false`; automatic routing also requires it for OpenRouter.
+- Attached preset skills when available and reported missing skills as warnings.
+- Added [job type guidance](docs/job-types.md) and one example per type.
+
 ## 1.53.0
 
 - Raised manifest limits to 5000 jobs and global concurrency to 512; the default remains 2.

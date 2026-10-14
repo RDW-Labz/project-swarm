@@ -17,9 +17,12 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-14 | 1 | runner-lanes (attempt 1): runner integration | codex | gpt-6.1-sol | blocked: test file not in outputs (coordinator miss) | 102,212 | subscription |
 | 2026-10-14 | 1 | runner-lanes-2 (attempt 2): runner integration + 500-job test | codex | gpt-6.1-sol | pass, 1 regression found in review | 230,411 | subscription |
 | 2026-10-14 | 1 | shell-snapshot-fix: drop on-disk snapshot copies | codex | gpt-6.1-sol | pass | 54,215 | subscription |
+| 2026-10-14 | 2 | types-code: job-types module, validation, router, examples, tests | codex | gpt-6.1-sol | pass | 103,395 | subscription |
+| 2026-10-14 | 2 | types-docs: 1.54.0 release + job-types docs | codex | gpt-6.1-sol | pass (blocked only on sibling-owned examples) | 54,080 | subscription |
+| 2026-10-14 | 2 | phase2-fixes: cheap-first router, sensitive default, docs rule | codex | gpt-6.1-sol | pass | 104,726 | subscription |
 
 ## Daily summary
 
 | date | tier | calls | pass | fail/blocked | tokens | rough cost |
 |---|---|---|---|---|---|---|
-| 2026-10-14 | codex | 13 | 11 | 2 | 767,350 | subscription |
+| 2026-10-14 | codex | 16 | 14 | 2 | 1,029,551 | subscription |

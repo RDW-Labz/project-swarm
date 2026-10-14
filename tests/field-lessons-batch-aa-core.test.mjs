@@ -19,7 +19,7 @@ const isolate = fileURLToPath(new URL('./_isolate-config.mjs', import.meta.url))
 const stamp = '2000-01-01T00:00:00.000Z';
 const json = value => JSON.stringify(value) + '\n';
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
-const job = (extra = {}) => ({ id: '9001', agent: 'openrouter', model: 'model9001', prompt: '9001', context: [], outputs: ['9001.txt'], ...extra });
+const job = (extra = {}) => ({ id: '9001', agent: 'openrouter', sensitive: false, model: 'model9001', prompt: '9001', context: [], outputs: ['9001.txt'], ...extra });
 const manifest = extra => ({ version: 1, jobs: [job(extra)] });
 const envelope = { summary: '9001', files: [{ path: '9001.txt', content: '9002' }], edits: [] };
 const chat = (reason, content = JSON.stringify(envelope)) => ({ model: 'model9001', choices: [{ finish_reason: reason, message: { content } }] });
@@ -274,9 +274,9 @@ describe('L325 finishReason', () => {
     const f = await fixture(t);
     const env = { OPENROUTER_API_KEY: '900190019001', LAMBDA_API_KEY: '900190019001', SWARM_LOGS_DIR: path.join(f.root, 'logs9001') };
     for (const scenario of [
-      { agent: 'openrouter', bodies: [chat('length', '9001')], expected: 'length', status: 'failed' },
-      { agent: 'openrouter', bodies: [chat('length', ''), chat('stop')], expected: 'stop', status: 'complete', retry: true },
-      { agent: 'openrouter', bodies: [chat('length', ''), {}], expected: null, status: 'failed' },
+      { agent: 'openrouter', sensitive: false, bodies: [chat('length', '9001')], expected: 'length', status: 'failed' },
+      { agent: 'openrouter', sensitive: false, bodies: [chat('length', ''), chat('stop')], expected: 'stop', status: 'complete', retry: true },
+      { agent: 'openrouter', sensitive: false, bodies: [chat('length', ''), {}], expected: null, status: 'failed' },
       { agent: 'lambda', bodies: [{ stop_reason: 'max_tokens' }], expected: 'max_tokens', status: 'failed' },
       { agent: 'lambda', bodies: [chat('stop')], expected: 'stop', status: 'complete' },
       { agent: 'lambda', bodies: [{}], expected: null, status: 'failed' },

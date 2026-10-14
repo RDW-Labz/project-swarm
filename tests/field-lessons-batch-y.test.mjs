@@ -227,7 +227,7 @@ describe('L294: validate warns output-cap-too-small when outputs exceed maxOutpu
   test('a manifest with many large outputs and small cap refuses validation', () => {
     const m = manifest(
       {
-        agent: 'openrouter',
+        agent: 'openrouter', sensitive: false,
         model: 'anthropic/claude-sonnet-5.5',
         outputs: [
           'output1.txt',
@@ -247,7 +247,7 @@ describe('L294: validate warns output-cap-too-small when outputs exceed maxOutpu
   test('a manifest with large outputs but adequate cap passes validation', () => {
     const m = manifest(
       {
-        agent: 'openrouter',
+        agent: 'openrouter', sensitive: false,
         model: 'anthropic/claude-sonnet-5.5',
         outputs: [
           'output1.txt',

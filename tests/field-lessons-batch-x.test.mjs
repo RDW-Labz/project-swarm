@@ -229,7 +229,7 @@ describe('#285: a tool-free API job with outputs: [] that asks for real content 
       throw new Error(`unexpected url ${url}`);
     };
     const longPrompt = 'x'.repeat(3400);
-    const theJob = { id: 'j3', agent: 'openrouter', model: 'anthropic/claude-sonnet-5', context: [], outputs: ['notes.md'], prompt: longPrompt, timeoutMs: 2000 };
+    const theJob = { id: 'j3', agent: 'openrouter', sensitive: false, model: 'anthropic/claude-sonnet-5', context: [], outputs: ['notes.md'], prompt: longPrompt, timeoutMs: 2000 };
     const result = await executeApi(theJob, [], { env, fetchImpl });
     assert.equal(result.status, 'failed');
     assert.match(result.error, /truncated: finish_reason length \(prompt 3400 chars\)$/);
@@ -356,14 +356,14 @@ describe('#288: a codex job\'s own repo AGENTS.md names required reads the promp
 });
 
 // ---------------------------------------------------------------------------------------------
-describe('release: 1.53.0', () => {
-  test('package.json and package-lock.json are both at 1.53.0', async () => {
+describe('release: 1.54.0', () => {
+  test('package.json and package-lock.json are both at 1.54.0', async () => {
     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
     const lock = JSON.parse(await fs.readFile(path.join(root, 'package-lock.json'), 'utf8'));
-    assert.equal(pkg.version, '1.53.0');
-    assert.equal(lock.version, '1.53.0');
-    assert.equal(lock.packages[''].version, '1.53.0');
+    assert.equal(pkg.version, '1.54.0');
+    assert.equal(lock.version, '1.54.0');
+    assert.equal(lock.packages[''].version, '1.54.0');
   });
 
   test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
