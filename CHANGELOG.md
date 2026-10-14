@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.57.0
+
+- Added spend caps: per-run `budget.maxUsd` / `budget.maxTokens` (or `run --max-usd` / `--max-tokens`) and per-lane daily caps (`spend.lanes` in config; OpenRouter defaults to $5 per UTC day). At a cap the runner stops launching, lets in-flight jobs finish, and holds the rest; the run ends `paused` (exit code 75).
+- Added `swarm resume RUN`: it dispatches exactly the held jobs and their dependents under the same run id and leaves completed records unchanged. Going past a cap needs `--raise KEY=VALUE --reason TEXT`; the runner never raises a cap itself.
+- Quota exhaustion now holds jobs until the lane resets. `resume --wait` and `run --wait-quota` run the zero-model idle menu (configured local commands on `idle/<run>/<name>` branches, scrubbed env), wait for the reset, then resume.
+- Runs now write the usage ledger automatically (`docs/state/usage-ledger.md` when present, else `.swarm/usage-ledger.md`), one row per attempt without duplicates, and recompute the daily summary. Added `swarm ledger RUN` and `swarm idle RUN`. See [spend guard](docs/spend.md).
+
 ## 1.56.0
 
 - Make integration batches crash-safe with atomic journals, automatic rollback on recovery, and SIGINT/SIGTERM rollback of queue writes, including bytes, new files, deletions, and modes.

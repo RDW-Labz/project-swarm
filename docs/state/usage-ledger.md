@@ -29,9 +29,13 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-14 | 3 | queue-code: queue pass, bisect, requeue, merge jobs, CLI, monitor/rollup | codex | gpt-6.1-sol | pass | 136,303 | subscription |
 | 2026-10-14 | 3 | queue-docs: merge-queue docs + changelog | codex | gpt-6.1-sol | pass | 94,637 | subscription |
 | 2026-10-14 | 3 | queue-safety: batch journal, signal rollback, per-repo integrate lock | codex | gpt-6.1-sol | pass | 122,405 | subscription |
+| 2026-10-14 | 6 | spend-core: tools/spend.mjs budgets, caps, ledger, idle menu + tests | codex | gpt-6.1-sol | pass | 61,198 | subscription |
+| 2026-10-14 | 6 | spend-run: gates, pause/resume, ledger and idle wiring, CLI + tests | codex | gpt-6.1-sol | pass | 333,862 | subscription |
+| 2026-10-14 | 6 | spend-docs (first try) | codex | gpt-6.1-sol | blocked: README/SKILL.md not in read context | 18,554 | subscription |
+| 2026-10-14 | 6 | spend-docs (retry): docs/spend.md, README link, SKILL.md | codex | gpt-6.1-sol | pass | 60,219 | subscription |
 
 ## Daily summary
 
 | date | tier | calls | pass | fail/blocked | tokens | rough cost |
 |---|---|---|---|---|---|---|
-| 2026-10-14 | codex | 25 | 22 | 3 | 1,994,804 | subscription |
+| 2026-10-14 | codex | 29 | 25 | 4 | 2,468,637 | subscription |
