@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.55.0
+
+- **Breaking:** explicit OpenAI, Gemini, and Lambda jobs now require `sensitive: false`, like OpenRouter; refusals use `sensitive-provider` while OpenRouter keeps `sensitive-openrouter`.
+- Added `swarm ask --not-sensitive`; sensitive questions routed to OpenRouter, OpenAI, Gemini, or Lambda refuse before any network call with `ask-sensitive-provider`.
+
 ## 1.54.0
 
 - Added eight optional job types with prompt guidance and default timeouts.

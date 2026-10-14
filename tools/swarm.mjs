@@ -73,6 +73,7 @@ const CLI_AGENTS = ['claude', 'codex', 'cursor', ...EXTRA_CLI_AGENTS];
 const WORKTREE_WRITERS = ['codex', 'cursor'];
 const isWorktreeWriter = job => WORKTREE_WRITERS.includes(job?.agent);
 export const AGENTS = Object.freeze([...CLI_AGENTS, ...API_AGENTS]);
+export const NON_SENSITIVE_ONLY_AGENTS = Object.freeze(['openrouter', 'openai', 'gemini', 'lambda']);
 export const TIERS = ['cheap', 'mid', 'expensive'];
 const API_PROGRESS_NOTE = 'Single-request API jobs return only when the request settles; incremental worker activity is not observable.';
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/;
@@ -1246,6 +1247,7 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     // (for Claude, that default is the user's own, often the most expensive, model).
     if (job.sensitive !== undefined && typeof job.sensitive !== 'boolean') fail(`Job ${job.id}: sensitive must be true or false`);
     if (job.agent === 'openrouter' && job.sensitive !== false) fail(`Job ${job.id}: OpenRouter only gets jobs that set sensitive: false`, 'sensitive-openrouter');
+    if (NON_SENSITIVE_ONLY_AGENTS.includes(job.agent) && job.sensitive !== false) fail(`Job ${job.id}: ${job.agent} only gets jobs that set sensitive: false`, 'sensitive-provider');
     if (job.agent === 'auto') {
       if (Object.hasOwn(job, 'model')) fail(`Job ${job.id}: agent auto picks its own model; omit model`, 'auto-model-forbidden');
     } else {
@@ -4965,7 +4967,10 @@ export function resolveAskRoute(options = {}, config = {}) {
   const validPair = pair => {
     if (!pair || typeof pair !== 'object' || Array.isArray(pair) || typeof pair.agent !== 'string' || typeof pair.model !== 'string' || !pair.model.trim()) return false;
     try { validateManifest({ version: 1, jobs: [{ id: 'ask-route', agent: pair.agent, model: pair.model, ...(options.sensitive !== undefined ? { sensitive: options.sensitive } : {}), prompt: 'Answer the question.', context: [], outputs: [] }] }); return true; }
-    catch { return false; }
+    catch (error) {
+      if (['sensitive-openrouter', 'sensitive-provider'].includes(error.code)) fail(`ask-sensitive-provider: ${pair.agent} needs --not-sensitive; the question and context would leave for a third-party API`, 'ask-sensitive-provider');
+      return false;
+    }
   };
   if (tier !== undefined) {
     if (!TIERS.includes(tier) || agent !== undefined || model !== undefined) invalid();
@@ -5910,7 +5915,7 @@ async function main() {
     }
     root=args[rootIndex+1];args.splice(rootIndex,2);
   }
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
@@ -6072,12 +6077,13 @@ async function main() {
   }
   if(args[0]==='ask'){
     const flags=args.slice(1);
-    let model,contextArg,agent,tier,timeoutSeconds,overCapArg=false,reasonArg,ignoreProviderLimitArg=false;
+    let model,contextArg,agent,tier,timeoutSeconds,overCapArg=false,reasonArg,ignoreProviderLimitArg=false,notSensitive=false;
     const positionals=[];
     for(let index=0;index<flags.length;index++){
       const flag=flags[index];
       if(['--model','--agent','--tier'].includes(flag) && (!flags[index+1] || flags[index+1].startsWith('--'))) fail(ASK_ROUTE_INVALID, 'ask-route-invalid');
       if(flag==='--tier'){tier=flags[++index];continue;}
+      if(flag==='--not-sensitive'){notSensitive=true;continue;}
       if(flag==='--model'){model=flags[++index];continue;}
       if(flag==='--context'){contextArg=flags[++index];continue;}
       if(flag==='--agent'){agent=flags[++index];continue;}
@@ -6097,7 +6103,7 @@ async function main() {
     if(positionals.length!==1)fail('ask requires exactly one question argument; use --help');
     if(overCapArg&&!reasonArg)fail('--over-cap requires --reason');
     root=await fs.realpath(root);
-    const resolved=resolveAskRoute({model,agent,tier},loadLocalConfig({env:process.env}));
+    const resolved=resolveAskRoute({model,agent,tier,...(notSensitive?{sensitive:false}:{})},loadLocalConfig({env:process.env}));
     if(resolved.agent==='claude'&&!ignoreProviderLimitArg){
       const marker=await claudeProviderLimitGuard(root);
       if(marker)fail(`claude-provider-limit: resets ${marker.resetsAt}; pass --ignore-provider-limit to proceed anyway`);
@@ -6107,7 +6113,7 @@ async function main() {
       if(!overCapArg||!reasonArg)fail(askGuard.message);
       process.stderr.write(`${JSON.stringify({warning:askGuard.message})}\n`);
     }else if(askGuard.status==='warn')process.stderr.write(`${JSON.stringify({warning:askGuard.message})}\n`);
-    const result=await askRun(root,{model,tier,context:contextArg?contextArg.split(','):[],agent,timeoutMs:timeoutSeconds!==undefined?timeoutSeconds*1000:undefined,question:positionals[0]},{[ASK_ROUTE]:resolved});
+    const result=await askRun(root,{model,tier,...(notSensitive?{sensitive:false}:{}),context:contextArg?contextArg.split(','):[],agent,timeoutMs:timeoutSeconds!==undefined?timeoutSeconds*1000:undefined,question:positionals[0]},{[ASK_ROUTE]:resolved});
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if(!['complete','ok'].includes(result.status))process.exitCode=1;
     return;

@@ -158,7 +158,7 @@ test('onboard lists ready and needs-setup agents from an injected doctor and sta
 
 test('validate in a project linked to a different swarm version prints one warning to stderr and still succeeds',async t=>{
  const project=await tempDir(t);
- const manifest={version:1,jobs:[{id:'job',agent:'openai',model:'gpt-4o-mini',prompt:'do work',context:[],outputs:[]}]};
+ const manifest={version:1,jobs:[{id:'job',agent:'openai',sensitive:false,model:'gpt-4o-mini',prompt:'do work',context:[],outputs:[]}]};
  await fs.mkdir(path.join(project,'coordination'));
  await fs.writeFile(path.join(project,'coordination/manifest.json'),JSON.stringify(manifest));
  const installedVersion=JSON.parse(await fs.readFile(path.join(packageRoot,'package.json'),'utf8')).version;

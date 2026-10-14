@@ -15,7 +15,7 @@ import { OPENROUTER_MODELS_URL, OPENROUTER_ENDPOINT } from '../tools/openrouter.
 const exec = promisify(execFile);
 const env = { OPENAI_API_KEY: 'fake-openai-lane-key', GEMINI_API_KEY: 'fake-gemini-lane-key', SWARM_CONFIG: process.env.SWARM_CONFIG };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-const job = (n, agent = 'ollama', overrides = {}) => ({ id: `job-${n}`, agent, model: 'test-model', prompt: `Write out/${n}.txt`, context: ['input.txt'], outputs: [`out/${n}.txt`], timeoutMs: 5000, ...overrides });
+const job = (n, agent = 'ollama', overrides = {}) => ({ id: `job-${n}`, agent, ...(['openai', 'gemini', 'lambda'].includes(agent) ? { sensitive: false } : {}), model: 'test-model', prompt: `Write out/${n}.txt`, context: ['input.txt'], outputs: [`out/${n}.txt`], timeoutMs: 5000, ...overrides });
 const manifest = (jobs, overrides = {}) => ({ version: 1, concurrency: 512, jobs, ...overrides });
 const reply = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
 function completion(agent, n) {

@@ -13,7 +13,7 @@ import { EXTRA_CLI_AGENTS } from '../tools/cli-adapters.mjs';
 import { preflightProject } from '../tools/preflight.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
 async function temp(t){const dir=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-kickoff-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));return dir;}
-const manifest={version:1,jobs:[{id:'a',agent:'openai',model:'fixture',context:[],outputs:[],prompt:'Review'}]};
+const manifest={version:1,jobs:[{id:'a',agent:'openai',sensitive:false,model:'fixture',context:[],outputs:[],prompt:'Review'}]};
 test('adapter counts in every guide agree with the executable adapter list',async()=>{
  const count=swarm.AGENTS.length;
  assert.equal(count,3+EXTRA_CLI_AGENTS.length+API_AGENTS.length);
