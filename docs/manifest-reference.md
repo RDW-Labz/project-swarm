@@ -1,6 +1,6 @@
 # Manifest reference
 
-A manifest is a JSON object with `version`, `jobs`, and optional `concurrency`. It contains task data, not shell commands or provider configuration.
+A manifest is a JSON object with `version`, `jobs`, and optional `concurrency` and `lanes`. It contains task data and lane overrides, not shell commands or credentials.
 
 ```json
 {
@@ -25,8 +25,9 @@ Replace the example paths with files in your target project.
 ## Top-level fields
 
 - `version`: required, exactly `1`.
-- `jobs`: required array of 1–256 jobs.
-- `concurrency`: optional integer from 1 to 32; default is 2. The effective parallelism is never greater than the number of jobs.
+- `jobs`: required array of 1–5000 jobs.
+- `concurrency`: optional integer from 1 to 512; default is 2. This global capacity is also bounded by each agent's lane cap.
+- `lanes`: optional per-agent overrides for concurrency, requests per minute, backoff, quota pause, and routing model. Machine config applies first, then manifest overrides merge per field. See [lanes and routing](lanes.md).
 - `checks`: optional array of at most 10 post-integration checks, run by `integrate` after it writes files. See the Checks section below.
 - `mutants`: optional array of at most 32 mutation entries, checked by `integrate --mutants`. See the Mutation checks section below.
 - `mutantCheck`: optional, the single check run against each mutant in `mutants`. See the Mutation checks section below.
@@ -38,8 +39,9 @@ Unknown top-level fields are rejected.
 ## Job fields
 
 - `id`: required unique string, 1–80 characters. The first character is an ASCII letter or digit; remaining characters may also include `_` and `-`.
-- `agent`: required: `"claude"`, `"codex"`, `"hermes"`, `"qwen"`, `"openai"`, `"gemini"`, `"ollama"`, or `"lambda"`.
-- `model`: required non-empty model identifier or alias, for every job on every agent. The runner never falls back to a CLI default — for Claude, that default is the user's own, often most expensive, configured model — so an omitted `model` is refused before any worker starts. The first character is an ASCII letter or digit; remaining characters may also include `.`, `_`, `:`, `/`, and `-`. Maximum length is 120 characters. Codex instead requires `/^[A-Za-z0-9._:-]{1,80}$/` and always passes `-m <job.model>`. Syntax validation does not prove provider availability.
+- `agent`: required: `"hermes"`, `"cursor"`, `"codex"`, `"claude"`, `"qwen"`, `"openai"`, `"gemini"`, `"ollama"`, `"lambda"`, `"openrouter"`, or `"auto"`. `"auto"` selects an eligible lane model at dispatch; validation reports the route it would pick now.
+- `model`: required non-empty model identifier or alias for every explicit agent. Omit it for `agent: "auto"`; supplying it refuses with `auto-model-forbidden`. The runner never falls back to a CLI default. The first character is an ASCII letter or digit; remaining characters may also include `.`, `_`, `:`, `/`, and `-`. Maximum length is 120 characters. Codex instead requires `/^[A-Za-z0-9._:-]{1,80}$/` and always passes `-m <job.model>`. Syntax validation does not prove provider availability.
+- `sensitive`: optional boolean. `true` excludes OpenRouter from automatic routing; explicit `agent: "openrouter"` refuses with `sensitive-openrouter`.
 - `prompt`: required nonblank string of at most 100,000 characters. Include the task, expected output, and relevant acceptance criteria.
 - `context`: required array of explicit existing relative file paths, at most 100 entries. These files are copied for other workers; Codex receives them as a read-first list in its HEAD worktree.
 - `outputs`: required array of explicit relative file paths, at most 100 entries. Existing files are copied automatically; new files may be created. An empty array creates a job with no proposed files; Codex still has shell access inside its sandbox.
@@ -48,7 +50,7 @@ Unknown top-level fields are rejected.
 - `readPaths`: optional for `codex` and claude `shell: true` jobs only, an array of at most 100 absolute read-only paths for extra toolchains. Quotes, backslashes, and control characters are refused. Paths under `~/Library/Keychains`, `~/.ssh`, `~/.aws`, `~/.config`, or any directory a project's own local config adds to `deniedHomeDirs`, are refused, including resolved aliases. Final sandbox denies override grants.
 - `maxOutputTokens`: optional for API jobs only, integer 256–32768, default 8192. This is an output limit, not a dollar budget; reasoning may consume the allowance.
 - `timeoutMs`: optional integer from 50 to 3,600,000 milliseconds. Default is 300,000 milliseconds, or five minutes.
-- `tier`: optional, one of `"cheap"`, `"mid"`, or `"expensive"`. A named routing decision for the coordinator, not a model catalog lookup: setting `tier` never chooses, overrides, or resolves a model. It is validated metadata, shown in `preflight` and `inspect` output for review. See [the routing checklist](orchestration.md) for when to use each value.
+- `tier`: optional, one of `"cheap"`, `"mid"`, or `"expensive"`. Explicit agents keep their named model. With `agent: "auto"`, `tier: "expensive"` starts at Claude; other tiers use the normal lane order. It is validated metadata, shown in `preflight` and `inspect` output for review. See [the routing checklist](orchestration.md) for when to use each value.
 - `tierReason`: optional string, at most 2,000 characters. Required, and must be non-empty after trimming, whenever `tier` is `"expensive"`; the reason is what makes the choice inspectable instead of gut feel. Optional for `"cheap"`/`"mid"`.
 - `ignoreTests`: optional array of at most 100 explicit existing relative file paths, same path rules as `context`. Lists test files the job knowingly leaves uncovered by `context` — see "Context check" below. Give a reason in the `prompt` when you use it.
 - `after`: optional non-empty array of other job ids in the same manifest that must all reach `complete` before this job starts. See [After](#after) below.

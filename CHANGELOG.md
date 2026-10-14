@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.53.0
+
+- Raised manifest limits to 5000 jobs and global concurrency to 512; the default remains 2.
+- Added per-agent lanes with concurrency caps, optional requests-per-minute limits, backoff, and quota pauses.
+- Added `agent: "auto"` routing through configured lane models, with fallback after two failed or timed-out attempts on a lane.
+- Added `sensitive` routing protection that excludes OpenRouter and refuses explicit sensitive OpenRouter jobs.
+- Prepared workspaces and context lazily at dispatch and coalesced state writes for large runs. Saved state includes lane health, routes, attempts, and rate-limit retries.
+- Added [lane configuration and routing guidance](docs/lanes.md), including defaults and override examples.
+- Preserved run-start snapshots with lazy preparation; changed copied files fail the affected job with `snapshot-changed` before spawning.
+
 ## 1.52.0
 
 - Added the `cursor` worker: `cursor-agent` runs as a worktree writer like codex, under `sandbox-exec` with the codex profile plus its install directory and `~/.cursor`, invoked as `-p --output-format json --model <model> --trust --workspace <worktree> --sandbox disabled --force <prompt>`. See [docs/providers.md](docs/providers.md#cursor-cli-cursor-macos-only).

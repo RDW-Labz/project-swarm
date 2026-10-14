@@ -1,3 +1,4 @@
+import './_isolate-config.mjs';
 // SPDX-License-Identifier: Apache-2.0
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -79,7 +80,7 @@ test('monitor reports real queue states, elapsed durations and numeric provider 
  const state={id:'x',status:'running',startedAt:new Date(1000).toISOString(),concurrency:4,peakConcurrency:2,jobs:[{id:'a',agent:'qwen',status:'complete',startedAt:new Date(1000).toISOString(),finishedAt:new Date(1200).toISOString(),durationMs:200,usage:{input_tokens:10,ignore:'private'}},{id:'b',agent:'hermes',status:'running',startedAt:new Date(1500).toISOString()},{id:'c',agent:'claude',status:'queued'}]};
  const report=summarizeRun(state,2000);assert.deepEqual(report.counts,{queued:1,running:1,complete:1,failed:0,timeout:0,cancelled:0,skipped:0});assert.equal(report.peakConcurrency,2);assert.equal(report.jobs[1].durationMs,500);assert.equal(report.jobs[2].durationMs,null);assert.deepEqual(report.usageByProvider.qwen,{input_tokens:10});
 });
-test('larger scheduler limits remain explicit and reject excessive workers/jobs',()=>{const jobs=Array.from({length:256},(_,i)=>({...job('qwen'),id:`job-${i}`,outputs:[]}));assert.equal(validateManifest({version:1,concurrency:32,jobs}).jobs.length,256);assert.throws(()=>validateManifest({version:1,concurrency:33,jobs}));assert.throws(()=>validateManifest({version:1,concurrency:2,jobs:[...jobs,{...job('qwen'),id:'last'}]}));});
+test('larger scheduler limits remain explicit and reject excessive workers/jobs',()=>{const jobs=Array.from({length:5000},(_,i)=>({...job('qwen'),id:`job-${i}`,outputs:[]}));assert.equal(validateManifest({version:1,concurrency:512,jobs}).jobs.length,5000);assert.throws(()=>validateManifest({version:1,concurrency:513,jobs}));assert.throws(()=>validateManifest({version:1,concurrency:2,jobs:[...jobs,{...job('qwen'),id:'last'}]}));});
 
 test('both new CLI adapters time out owned children and never expose partial files',async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-cli-timeout-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));await fs.writeFile(path.join(root,'input.md'),'source');

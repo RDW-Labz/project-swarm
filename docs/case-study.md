@@ -40,7 +40,7 @@ Adapt `examples/parallel-review.json` or the other [workflow recipes](workflows.
 
 ## Evidence and limits
 
-The runner accepts up to 32 concurrent jobs and 256 jobs per manifest; concurrency defaults to two. This case study demonstrates six simultaneous authenticated Claude workers, not 32. An eight-worker deterministic scheduling test uses fake workers and must not be presented as live provider evidence.
+At the time, the runner accepted up to 32 concurrent jobs and 256 jobs per manifest. The limits have since been raised to 512 and 5000, with per-agent lane caps; concurrency still defaults to two. This case study demonstrates six simultaneous authenticated Claude workers, not 32. An eight-worker deterministic scheduling test uses fake workers and must not be presented as live provider evidence.
 
 The package supports Claude, Hermes, Qwen, OpenAI, Gemini, Ollama, and Lambda adapters. The Claude evidence above does not verify the other providers. Follow the [provider guide](providers.md), check compatibility, and run a bounded exchange with your own account and selected model before assigning substantial work.
 

@@ -176,7 +176,28 @@ function numericUsage(value) {
 function modelName(value) { return typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,119}$/.test(value) ? value : null; }
 
 async function readJson(response) {
-  if (!response.ok) { await response.body?.cancel().catch(() => {}); fail(`Provider HTTP ${response.status}; response body omitted to protect credentials and source`); }
+  if (!response.ok) {
+    let prefix = Buffer.alloc(0);
+    if (response.body) {
+      const reader = response.body.getReader();
+      try {
+        while (prefix.length < 4096) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          prefix = Buffer.concat([prefix, Buffer.from(value.subarray(0, 4096 - prefix.length))]);
+        }
+      } catch { /* Preserve the HTTP status even when its error body is unreadable. */ }
+      finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+    }
+    const header = response.headers?.get('retry-after');
+    const seconds = header != null && /^\d+(?:\.\d+)?$/.test(header.trim()) ? Number(header) : NaN;
+    const date = header ? Date.parse(header) : NaN;
+    const retryAfterMs = Number.isFinite(seconds) ? seconds * 1000 : Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+    throw Object.assign(new AdapterError(`Provider HTTP ${response.status}; response body omitted to protect credentials and source`), {
+      httpStatus: response.status, retryAfterMs,
+      quotaExhausted: response.status === 402 || /insufficient_quota|quota[_ ]?exceeded|billing_hard_limit|credit/i.test(prefix.toString('utf8')),
+    });
+  }
   if (!response.body) fail('Provider returned no response body');
   const reader = response.body.getReader(); const chunks = []; let size = 0;
   try {
@@ -352,6 +373,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     // size rides along so a too-small maxOutputTokens is provable without guessing.
     const message = reason || (error instanceof AdapterError || error instanceof OpenRouterError ? error.message : 'Provider processing failed; details omitted to protect credentials');
     const result = { finishReason, status: reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : 'failed', error: TRUNCATION_RE.test(message) ? `${message} (prompt ${job.prompt.length} chars)` : message, files: [], edits: [], contextInlined, stdout: '', stderr: '', response: '', actualModel: null, usage: null, modelUsage: null, costUsd: null, exitCode: null };
+    if (error.httpStatus !== undefined) Object.assign(result, { httpStatus: error.httpStatus, retryAfterMs: error.retryAfterMs, quotaExhausted: error.quotaExhausted });
     // Lesson 296: Include invalidResponseText for validation errors so swarm can write response-invalid.txt
     if (error instanceof AdapterError && error.invalidResponseText) {
       result.invalidResponseText = error.invalidResponseText;
