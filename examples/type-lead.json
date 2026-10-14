@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "type-lead",
+      "type": "lead",
+      "agent": "auto",
+      "prompt": "Plan two small test-only child jobs for router sensitivity and fallback coverage. Assign separate new test files under tests/ as their outputs.",
+      "context": [
+        "tools/router.mjs",
+        "tests/router.test.mjs"
+      ],
+      "outputs": [
+        "coordination/router-child-manifest.json"
+      ]
+    }
+  ]
+}

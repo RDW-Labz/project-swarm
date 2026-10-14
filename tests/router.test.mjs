@@ -101,3 +101,22 @@ test('exhaustion reports code, job id, and reason', () => {
     code: 'route-exhausted', message: 'route-exhausted: no lane left for job route-job (fallback after 2 failures on claude)',
   });
 });
+
+test('typeRoute orders candidates and appends claude as fallback', () => {
+  const typed = { ...job, typeRoute: ['codex', 'cursor'] };
+  assert.equal(routeJob(typed, { lanes }).agent, 'codex');
+  assert.equal(routeJob(typed, { lanes, failures: { codex: 2 } }).agent, 'cursor');
+  assert.equal(routeJob(typed, { lanes, failures: { cursor: 2 } }).agent, 'claude');
+  assert.equal(routeJob(typed, { lanes: { claude: lanes.claude } }).agent, 'claude');
+  assert.equal(routeJob({ ...job, typeRoute: [] }, { lanes }).agent, 'hermes');
+  assert.equal(routeJob({ ...job, typeRoute: ['claude', 'codex'] }, { lanes }).agent, 'claude');
+  assert.throws(() => routeJob({ ...job, typeRoute: ['codex', 'claude'] }, { lanes, failures: { claude: 2 } }), { code: 'route-exhausted' });
+});
+
+test('typeRoute retains sensitivity, expensive tier, health, and accepts filters', () => {
+  const typed = { ...job, typeRoute: ['openrouter', 'codex'] };
+  assert.equal(routeJob({ ...typed, sensitive: true }, { lanes }).agent, 'codex');
+  assert.equal(routeJob({ ...typed, tier: 'expensive' }, { lanes }).agent, 'claude');
+  assert.equal(routeJob(typed, { lanes, health: agent => ({ state: agent === 'openrouter' ? 'paused' : 'ok' }) }).agent, 'codex');
+  assert.equal(routeJob(typed, { lanes, accepts: resolved => resolved.agent === 'claude' }).agent, 'claude');
+});

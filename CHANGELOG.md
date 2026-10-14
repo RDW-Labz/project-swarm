@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.54.0
+
+- Added eight optional job types with prompt guidance and default timeouts.
+- Enforced type output rules, including read-only review and research jobs.
+- Added type-specific automatic routing with Claude as the final fallback.
+- Attached preset skills when available and reported missing skills as warnings.
+- Added [job type guidance](docs/job-types.md) and one example per type.
+
 ## 1.53.0
 
 - Raised manifest limits to 5000 jobs and global concurrency to 512; the default remains 2.

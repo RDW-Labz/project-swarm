@@ -21,6 +21,7 @@ import { portBlockFor, resolvePortBlock } from './ports.mjs';
 import { loadLocalConfig } from './local-config.mjs';
 import { resolveLanes, LaneScheduler, classifyProviderOutcome } from './lanes.mjs';
 import { routeJob } from './router.mjs';
+import { JOB_TYPES, applyJobType, jobTypeOutputViolations } from './job-types.mjs';
 import { loadSwarmEnv, envPrintText, checkNeedsEnvWarnings, npmScriptsResolveToPlainNode, NO_STASH_LINE, MUTANTS_BY_HAND_LINE, MUTANTS_SHAPE, gitGuardScript, findRealGit, materializeGitGuard } from './swarm-env.mjs';
 import { loadGotchas, gotchasPromptBlock, windowsCiGotchasWarnings } from './gotchas.mjs';
 import { packagingWithoutBuildCheckWarning, packagingKeyChanges, packagingChangeWarnings, isPackagingFile } from './packaging-check.mjs';
@@ -1221,6 +1222,8 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
   for (const job of manifest.jobs) {
     if (!job || typeof job.id !== 'string' || !ID.test(job.id) || ids.has(job.id.toLowerCase())) fail(`Invalid or duplicate job id: ${job?.id}`);
     ids.add(job.id.toLowerCase());
+    if (job.type !== undefined && (typeof job.type !== 'string' || !Object.hasOwn(JOB_TYPES, job.type))) fail(`Job ${job.id}: unknown type ${job.type}`, 'job-type-invalid');
+    if (job.typeRoute !== undefined && (!job.type || !isDeepStrictEqual(job.typeRoute, JOB_TYPES[job.type].route))) fail(`Job ${job.id}: typeRoute must equal the preset route for its type`, 'job-type-invalid');
     if (![...CLI_AGENTS, ...API_AGENTS, 'auto'].includes(job.agent)) fail(`Unsupported agent: ${job.agent}`);
     // Decision #154: `sonnet-shell`/`opus-shell` expand to {model, shell: true, tier} here, so
     // every later check (and the saved manifest, state and inspect) sees the real model.
@@ -1315,6 +1318,8 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     }
     if (new Set(job.context).size !== job.context.length || new Set(job.outputs).size !== job.outputs.length) fail('Duplicate file path');
     for (const file of [...job.context, ...job.outputs]) relative(file);
+    const typeViolations = jobTypeOutputViolations(job);
+    if (typeViolations.length) fail(`Job ${job.id} (type ${job.type}) may not write: ${typeViolations.join(', ')}`, 'job-type-output');
     // Decision #227: a deepseek/* model on OpenRouter writes bookkeeping files only.
     if (job.agent === 'openrouter') { const bad = nonBookkeepingOutputs(job.model, job.outputs); if (bad.length) fail(`Job ${job.id}: ${job.model} is for bookkeeping jobs only (PR payloads, changelogs, mutants files, metrics, .swarm-manifests/*.md); a contract or other .md with design content goes to a cheap Claude tier instead; refused outputs: ${bad.join(', ')}`); }
     if (job.resultFile !== undefined) {
@@ -1379,7 +1384,7 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
       if (job.outputs.length) fail('a web job must be read-only (no outputs)');
     }
     // Unknown command/provider fields cannot create an execution path.
-    const knownJobFields = ['sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs'];
+    const knownJobFields = ['type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs'];
     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
   }
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
@@ -2351,9 +2356,26 @@ function selectRunManifest(manifest, jobs) {
   return { ...manifest, jobs: selected };
 }
 
+async function applyManifestJobTypes(root, manifest, { env, home = os.homedir() }) {
+  if (manifest.jobs.every(job => job.type === undefined)) {
+    return { manifest: { ...manifest, jobs: manifest.jobs.map(job => applyJobType(job).job) }, warnings: [] };
+  }
+  const skillsSourceDir = resolveSkillsDir(manifest, loadLocalConfig({ env, home }), root);
+  if (skillsSourceDir) await assertNoSkillSymlinks(skillsSourceDir);
+  const skills = skillsSourceDir ? await listSkills(skillsSourceDir) : [];
+  const skillNames = skillsSourceDir ? skills.filter(skill => !skill.broken).map(skill => skill.name) : null;
+  const applied = manifest.jobs.map(job => applyJobType(job, { skillNames }));
+  return {
+    manifest: { ...manifest, jobs: applied.map(result => result.job) },
+    warnings: applied.flatMap(result => result.warnings), skillsSourceDir, skills,
+  };
+}
+
 export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks, checkBase = false, acceptRedBase = false, reason, baseChecks = {}, sync = false, acceptCoveredRedBase = true, jobs = null } = {}) {
   root = await fs.realpath(root);
   validateManifest(manifest);
+  const appliedTypes = await applyManifestJobTypes(root, manifest, { env });
+  manifest = appliedTypes.manifest;
   manifest = selectRunManifest(manifest, jobs);
   const runLanes = resolveLanes({ config: loadLocalConfig({ env }), manifest });
   const dispatchJobs = manifest.jobs.map(job => {
@@ -2438,13 +2460,13 @@ export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl,
   }
   await registerLiveRun({ runId: id, root, outputs: declaredOutputs, dir: liveDirOpt });
   try {
-    return await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept, acceptedRedBaseInfo, pendingBaseChecks, sync, scopeWarnings, liveDir: liveDirOpt });
+    return await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept, acceptedRedBaseInfo, pendingBaseChecks, sync, scopeWarnings, jobTypeWarnings: appliedTypes.warnings.filter(warning => manifest.jobs.some(job => job.id === warning.jobId)), liveDir: liveDirOpt });
   } finally {
     await unregisterLiveRun(id, { dir: liveDirOpt });
   }
 }
 
-async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept = null, acceptedRedBaseInfo = null, pendingBaseChecks = null, sync = false, scopeWarnings = [], liveDir }) {
+async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept = null, acceptedRedBaseInfo = null, pendingBaseChecks = null, sync = false, scopeWarnings = [], jobTypeWarnings = [], liveDir }) {
   const cleanup = new AbortController();
   signal = signal ? AbortSignal.any([signal, cleanup.signal]) : cleanup.signal;
   let workers = [];
@@ -2463,7 +2485,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   const liveWarning = await liveServiceCheckoutWarning(root, { env });
   const { lessonQueueWarnings } = await import('./lessons.mjs');
   const swarmDirWarning = state.worktreesBase ? null : await swarmDirNotIgnoredWarning(root);
-  const manifestWarnings = [...scopeWarnings.map(warning => warning.message), ...sharedRootFullSuiteWarnings(manifest), ...(liveWarning ? [liveWarning.message] : []), ...await lessonQueueWarnings(root), ...(swarmDirWarning ? [swarmDirWarning] : [])];
+  const manifestWarnings = [...jobTypeWarnings.map(warning => warning.message), ...scopeWarnings.map(warning => warning.message), ...sharedRootFullSuiteWarnings(manifest), ...(liveWarning ? [liveWarning.message] : []), ...await lessonQueueWarnings(root), ...(swarmDirWarning ? [swarmDirWarning] : [])];
   const save = async () => { state.lanes = scheduler.snapshot(); state.peakConcurrency = state.lanes.peakGlobal; state.warnings = runWarnings(state, manifestWarnings); state.summary = summarizeRun(state); await jsonWrite(root, `${directory}/state.json`, state); onState(state); };
   // Coalesce bursts into one writer and one pending publication of the latest state.
   let writes = null, pendingWrite = false;
@@ -4410,6 +4432,8 @@ async function snapshotHash(root, file) {
 
 export async function validateProject(root, manifest, { exec = execFileAsync, liveDir, isAlive, env = process.env, home = os.homedir(), scopesExpanded = false, scopeWarnings } = {}) {
   root=await fs.realpath(root);validateManifest(manifest);
+  const appliedTypes = await applyManifestJobTypes(root, manifest, { env, home });
+  manifest = appliedTypes.manifest;
   const resolvedLanes = resolveLanes({ config: loadLocalConfig({ env, home }), manifest });
   const routes = manifest.jobs.filter(job => job.agent === 'auto').map(job => ({ jobId: job.id, ...pickJobRoute(job, resolvedLanes) }));
   if (routes.length) {
@@ -4440,15 +4464,16 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   const liveWarning = await liveServiceCheckoutWarning(root, { env, home });
   const jobs=[], warnings=[...(liveWarning ? [liveWarning.message] : []), ...tmpToolPathWarnings(manifest), ...await sharedOutputAcrossOpenJobsWarnings(root, manifest, { liveDir, isAlive }), ...shellSandboxDeniedCheckWarnings(manifest, { env, home }), ...sharedRootFullSuiteWarnings(manifest), ...await cheapTierNotConfiguredModelWarnings(manifest, { env, home }), ...await checkPathMissingWarnings(manifest, { env })];
   const projectFiles = listProjectFiles(root);
+  warnings.push(...appliedTypes.warnings);
   warnings.push(...scopeWarnings);
   const trackedFiles = new Set(projectFiles);
   const outputOwners = new Map(manifest.jobs.flatMap(job => (job.outputs ?? []).map(file => [file, job.id])));
   const uncovered = [];
   // Field lesson 126s: a skills source dir (manifest `skillsDir`, else local config `skills.dir`)
   // is read once here — absent, `skills` stays `[]` and every check below is a no-op.
-  const skillsSourceDir = resolveSkillsDir(manifest, loadLocalConfig({ env, home }), root);
+  const skillsSourceDir = appliedTypes.skillsSourceDir ?? resolveSkillsDir(manifest, loadLocalConfig({ env, home }), root);
   if (skillsSourceDir) await assertNoSkillSymlinks(skillsSourceDir);
-  const skills = skillsSourceDir ? await listSkills(skillsSourceDir) : [];
+  const skills = appliedTypes.skills ?? (skillsSourceDir ? await listSkills(skillsSourceDir) : []);
   warnings.push(...skillSizeWarnings(skills));
   refuseOversizeSkills(skills);
   // Field lesson #229: a shared contract's own Event names table is read once, here, so a reader
@@ -4636,7 +4661,7 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
     // Catches a worker changing an output's behavior without ever seeing the test that
     // asserts it: advisory static text matching, resolved via context or ignoreTests.
     for (const pair of findUncoveredTests(root, { ...job, context }, projectFiles)) uncovered.push({ job: job.id, ...pair });
-    jobs.push({id:job.id,agent:job.agent,model:job.model??null,...(job.shell===true?{shell:true}:{}),tier:job.tier??null,tierReason:job.tierReason??null,contextBytes:bytes,outputs:job.outputs,files,contextGlobCounts});
+    jobs.push({id:job.id,agent:job.agent,model:job.model??null,...(job.type!==undefined?{type:job.type,prompt:job.prompt,timeoutMs:job.timeoutMs,typeRoute:job.typeRoute,...(job.skills!==undefined?{skills:job.skills}:{})}:{}),...(job.shell===true?{shell:true}:{}),tier:job.tier??null,tierReason:job.tierReason??null,contextBytes:bytes,outputs:job.outputs,files,contextGlobCounts});
   }
   // Field lesson #224: reaching here means the per-job loop above never found a broken skill
   // actually attached (that would already have refused); every broken skill left is unused.

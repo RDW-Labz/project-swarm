@@ -9,7 +9,9 @@ export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), fa
     throw error;
   }
 
-  let candidates = ROUTE_ORDER.filter(agent => typeof lanes[agent]?.model === 'string');
+  const order = Array.isArray(job.typeRoute) && job.typeRoute.length ? job.typeRoute : ROUTE_ORDER;
+  const withFallback = order.includes('claude') ? order : [...order, 'claude'];
+  let candidates = withFallback.filter(agent => typeof lanes[agent]?.model === 'string');
   if (job.sensitive === true) candidates = candidates.filter(agent => agent !== 'openrouter');
   if (job.tier === 'expensive') candidates = candidates.filter(agent => agent === 'claude');
 

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "type-research",
+      "type": "research",
+      "agent": "auto",
+      "prompt": "Explain the existing router fallback policy and identify tradeoffs for lane availability. Cite the supplied source paths.",
+      "context": [
+        "tools/router.mjs",
+        "tests/router.test.mjs"
+      ],
+      "outputs": []
+    }
+  ]
+}

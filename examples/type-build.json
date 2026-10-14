@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "type-build",
+      "type": "build",
+      "agent": "auto",
+      "prompt": "Add a focused router test for a configured lane whose model is missing.",
+      "context": [
+        "tools/router.mjs",
+        "tests/router.test.mjs"
+      ],
+      "outputs": [
+        "tests/router.test.mjs"
+      ]
+    }
+  ]
+}
