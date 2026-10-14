@@ -67,9 +67,36 @@ Explicit raises apply last, in order. Valid keys are `maxUsd`, `maxTokens`, `lan
 
 Caps must be `null` or finite positive numbers; token caps must be positive integers. Invalid cap values, unknown budget keys, and unknown lane agents refuse with `budget-invalid: <path> <reason>`.
 
-Run totals sum reported `costUsd` and `usage.total_tokens` across job records, including unfinished records with usage. Lane daily totals use jobs finished at or after today's UTC midnight across this root's saved runs, plus the current run in memory. Missing dollar costs do not contribute dollars; reported tokens still count. A dollar cap cannot account for unreported cost.
+## Machine-wide daily spend
 
-The gate checks recorded usage after acquiring a scheduler slot and before preparing a workspace. It holds a job when either run total or its selected lane total is at least the corresponding cap. Run caps are checked first. This is a launch gate: with concurrency 1, five jobs costing $0.40 each and `maxUsd: 1` complete three jobs, then hold two at $1.20. Concurrent in-flight work can also finish above the cap.
+Lane daily totals are machine-wide. Every project on the machine shares one store, `~/.project-swarm/spend/daily.json`, or `$SWARM_SPEND_DIR/daily.json` if that is set. Each read and write takes the `daily.lock` directory lock, and writes are atomic. Deleting a project's `.swarm/` does not reset the day. Entries are keyed by project, run, job and attempt, and are pruned after 31 days. A malformed store refuses with `spend-store-invalid` and is never overwritten. A lock held past 10 s refuses with `spend-store-locked`. A stale lock from a dead process on this host is cleared.
+
+## Reservations
+
+Before launch, each job reserves an estimate under that lock. The job is admitted only if run and lane totals, counting every in-flight reservation, are still below their caps. The reservation counts toward both caps until the attempt finishes; then it is replaced by the actual cost. So concurrent launches can overshoot a cap by at most one job's reservation, plus any amount by which an actual cost exceeds its estimate.
+
+Paid lanes are `openrouter`, `openai`, `gemini` and `lambda`. Their USD reservation is the first of these that applies:
+
+- `maxCredits` times the model's `creditUsd`;
+- input characters times the input rate, plus `maxOutputTokens` (or the lane default) times the output rate;
+- the lane's `reserveUsd`.
+
+Rates come from config `spend.rates.<model>` (`inUsdPerToken`, `outUsdPerToken`, optional `creditUsd`). For OpenRouter without a configured rate, they come from its public pricing. `reserveUsd` defaults to $0.50 and can be overridden in config `spend.lanes.<agent>.reserveUsd`. Every lane also reserves a token estimate (output limit plus input characters / 4) for token caps.
+
+When an attempt finishes:
+
+- **Reported cost:** the provider's reported cost is used.
+- **No reported cost, but tokens:** a paid job is estimated as tokens × rate, with `costSource: "estimated-from-tokens"`.
+- **No cost and no tokens:** the job keeps its reservation as its cost, with `costSource: "reservation"`.
+
+A paid job is never counted as $0 unless the provider reported $0. Estimated costs are flagged:
+
+- in the rollup: `spend.estimatedCount`, and "estimated cost for N jobs" in the text view;
+- in the ledger: `$x.xx est` or `$x.xx reserved` cells, and `(incl. estimates)` in the daily summary.
+
+A job that never reached its provider releases its reservation. A reservation left behind by a crashed process becomes `reserved-as-cost`.
+
+The gate holds a job when the run total or its lane total is at least the cap. Run caps are checked first. With concurrency 1, five jobs costing $0.40 each with `maxUsd: 1` complete three and hold two.
 
 For automatic routing, a lane at its daily cap is treated as paused so routing can choose another eligible lane. A direct job is held for its chosen capped lane. Existing `spendGuard` daily-cap behavior, `--over-cap`, and the Claude provider-limit marker keep their existing rules.
 

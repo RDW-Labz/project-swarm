@@ -33,9 +33,11 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-14 | 6 | spend-run: gates, pause/resume, ledger and idle wiring, CLI + tests | codex | gpt-6.1-sol | pass | 333,862 | subscription |
 | 2026-10-14 | 6 | spend-docs (first try) | codex | gpt-6.1-sol | blocked: README/SKILL.md not in read context | 18,554 | subscription |
 | 2026-10-14 | 6 | spend-docs (retry): docs/spend.md, README link, SKILL.md | codex | gpt-6.1-sol | pass | 60,219 | subscription |
+| 2026-10-14 | 6 | spend-fixes-core: machine-wide spend store, reservations, cost estimates + tests | codex | gpt-6.1-sol | pass | 72,987 | subscription |
+| 2026-10-14 | 6 | spend-fixes-run: reservation wiring, two-root and 64-job tests | codex | gpt-6.1-sol | pass | 100,515 | subscription |
 
 ## Daily summary
 
 | date | tier | calls | pass | fail/blocked | tokens | rough cost |
 |---|---|---|---|---|---|---|
-| 2026-10-14 | codex | 29 | 25 | 4 | 2,468,637 | subscription |
+| 2026-10-14 | codex | 31 | 27 | 4 | 2,642,139 | subscription |

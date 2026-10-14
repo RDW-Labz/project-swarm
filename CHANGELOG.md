@@ -3,6 +3,9 @@
 ## 1.57.0
 
 - Added spend caps: per-run `budget.maxUsd` / `budget.maxTokens` (or `run --max-usd` / `--max-tokens`) and per-lane daily caps (`spend.lanes` in config; OpenRouter defaults to $5 per UTC day). At a cap the runner stops launching, lets in-flight jobs finish, and holds the rest; the run ends `paused` (exit code 75).
+- Daily lane caps are machine-wide. One locked spend store next to the shared install (`~/.project-swarm/spend/daily.json`, or `SWARM_SPEND_DIR`) is shared by every project, and deleting a project's `.swarm/` does not reset it.
+- Each job reserves an estimated cost before launch (from `maxCredits` or `maxOutputTokens` times the model rate, or the lane's `reserveUsd`, default $0.50). The reservation counts toward run and lane caps until the actual cost replaces it, so concurrent launches overshoot by at most one reservation.
+- A paid job with no reported cost is estimated from tokens × rate, or keeps its reservation as its cost. It is never counted as $0, and the estimate is flagged in the rollup and the ledger.
 - Added `swarm resume RUN`: it dispatches exactly the held jobs and their dependents under the same run id and leaves completed records unchanged. Going past a cap needs `--raise KEY=VALUE --reason TEXT`; the runner never raises a cap itself.
 - Quota exhaustion now holds jobs until the lane resets. `resume --wait` and `run --wait-quota` run the zero-model idle menu (configured local commands on `idle/<run>/<name>` branches, scrubbed env), wait for the reset, then resume.
 - Runs now write the usage ledger automatically (`docs/state/usage-ledger.md` when present, else `.swarm/usage-ledger.md`), one row per attempt without duplicates, and recompute the daily summary. Added `swarm ledger RUN` and `swarm idle RUN`. See [spend guard](docs/spend.md).
