@@ -88,7 +88,7 @@ than three explicit outputs receives the advisory `narrow-output-scope` warning:
 plausible file or use scope open with outputDirs`. The warning does not widen permissions.
 
 When every output of a Codex job is a Markdown file (or a JSON file under `docs/`), its brief
-also carries: `Design-only job: do not run tests or installs; read and grep only. A test failure
+also carries: `Docs-only job: edit your declared outputs; do not run tests or installs. A test failure
 in your sandbox is never a reason to block.` This is prompt guidance for documentation-only
 work; it does not change the job's file scope or claim that runtime checks passed.
 

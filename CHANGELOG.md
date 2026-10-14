@@ -7,6 +7,10 @@
 - Conflicting jobs preserve newer checkout content, requeue twice by default, then get one merge job. Unresolved merge jobs are flagged.
 - Added merge queue summary counts to `monitor --view` and rollup JSON. See [merge queue guidance](docs/merge-queue.md).
 
+## 1.55.1
+
+- Docs-only Codex and Cursor jobs are now told to edit their declared outputs (the old "read and grep only" wording made a worker refuse to edit).
+
 ## 1.55.0
 
 - Sanitized and labeled untrusted worker text in rollups and sanitized monitor cells.

@@ -25,6 +25,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-14 | 4 | reports-docs: docs + changelog | codex | gpt-6.1-sol | blocked (runner design-only wording read as no-edit) | 10,973 | subscription |
 | 2026-10-14 | 4 | reports-docs-2: retry with clarified prompt | codex | gpt-6.1-sol | pass | 97,869 | subscription |
 | 2026-10-14 | 4 | phase4-review-fixes: untrusted worker text, report-only re-ask | codex | gpt-6.1-sol | pass | 123,100 | subscription |
+| 2026-10-14 | fix | docs-only-wording: 1.55.1 prompt wording | codex | gpt-6.1-sol | pass (1 cursor test pin fixed by coordinator) | 49,501 | subscription |
 | 2026-10-14 | 3 | queue-code: queue pass, bisect, requeue, merge jobs, CLI, monitor/rollup | codex | gpt-6.1-sol | pass | 136,303 | subscription |
 | 2026-10-14 | 3 | queue-docs: merge-queue docs + changelog | codex | gpt-6.1-sol | pass | 94,637 | subscription |
 
@@ -32,4 +33,4 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 
 | date | tier | calls | pass | fail/blocked | tokens | rough cost |
 |---|---|---|---|---|---|---|
-| 2026-10-14 | codex | 21 | 18 | 3 | 1,591,958 | subscription |
+| 2026-10-14 | codex | 24 | 21 | 3 | 1,872,399 | subscription |
