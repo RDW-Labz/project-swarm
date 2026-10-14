@@ -28,9 +28,10 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-14 | fix | docs-only-wording: 1.55.1 prompt wording | codex | gpt-6.1-sol | pass (1 cursor test pin fixed by coordinator) | 49,501 | subscription |
 | 2026-10-14 | 3 | queue-code: queue pass, bisect, requeue, merge jobs, CLI, monitor/rollup | codex | gpt-6.1-sol | pass | 136,303 | subscription |
 | 2026-10-14 | 3 | queue-docs: merge-queue docs + changelog | codex | gpt-6.1-sol | pass | 94,637 | subscription |
+| 2026-10-14 | 3 | queue-safety: batch journal, signal rollback, per-repo integrate lock | codex | gpt-6.1-sol | pass | 122,405 | subscription |
 
 ## Daily summary
 
 | date | tier | calls | pass | fail/blocked | tokens | rough cost |
 |---|---|---|---|---|---|---|
-| 2026-10-14 | codex | 24 | 21 | 3 | 1,872,399 | subscription |
+| 2026-10-14 | codex | 25 | 22 | 3 | 1,994,804 | subscription |

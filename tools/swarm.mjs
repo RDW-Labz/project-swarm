@@ -38,6 +38,8 @@ import { prepareWorkspaceEnvironment, prepareViteCaches, isDesignOnlyCodexJob, c
 import { CURSOR_MODEL, CURSOR_BLIP_RE, requireCursorPlatform, requireCursorApiKey, resolveCursorBinary, cursorConfig, cursorProfile, cursorLaunchArgs, cursorMessage, cursorEnvironment, resolveCursorEnvelope, parseCursorOutput, redactCursorKey, cursorDoctor } from './cursor-adapter.mjs';
 import { classifyCheckEnvironment, swarmCheckWarnings } from './ship.mjs';
 import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary, listLiveRuns, repoKey, repoPaths } from './board.mjs';
+import { acquireIntegrationLock } from './integration-lock.mjs';
+export { acquireIntegrationLock } from './integration-lock.mjs';
 import { writeSessionMetric } from './session-metrics.mjs';
 import { resolveSkillsDir, listSkills, skillSizeWarnings, refuseOversizeSkills, attachSkillsForJob, skillsPromptBlock, skillRecordEntries, skillCheckFailures, copySkillsInto, assertNoSkillSymlinks, anyPathMatchesGlobs, SKILLS_DIR_NAME } from './skills.mjs';
 import { estimateCostFromTranscript } from './rates.mjs';
@@ -3847,7 +3849,7 @@ function validateQueueOptions({ batchSize = 10, maxRequeues = 2, jobs, salvage, 
   if (!Number.isInteger(maxRequeues) || maxRequeues < 0 || maxRequeues > 5) fail('queue-requeues-invalid: maxRequeues must be an integer 0-5', 'queue-requeues-invalid');
 }
 
-async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, conflicts, skipped, noChecks, noFlakeCheck, spawnImpl, warnings }) {
+async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, conflicts, skipped, noChecks, noFlakeCheck, spawnImpl, warnings, releaseIntegrationLock }) {
   const queue = state.mergeQueue = { state: 'running', batchSize, batches: [], integrated: [], conflicts, checkFailed: [], skipped };
   state.integratedFiles = [];
   state.integratedNewFiles = [];
@@ -3865,12 +3867,6 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, co
     if (broken) { await persist(); fail(`checks-not-runnable: preCheck ${broken.name} ${broken.status}`); }
     if (!manifest.preChecks?.length && plans.some(plan => plan.writes.some(change => ENV_RESYNC_TRIGGER_NAMES.has(path.basename(change.file))))) warnings.push('lockfile changed, env not synced');
   }
-  const rollback = async changes => {
-    for (const change of [...changes].reverse()) {
-      if (change.previous === null) await fs.unlink(await safePath(root, change.file)).catch(error => { if (error.code !== 'ENOENT') throw error; });
-      else await write(root, change.file, change.previous, false, change.mode);
-    }
-  };
   const applyBatch = async batch => {
     const ready = [];
     for (const plan of batch) {
@@ -3888,7 +3884,12 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, co
     }
     batch = ready;
     if (!batch.length) { await persist(); return; }
-    const changes = batch.flatMap(plan => plan.writes), applied = [];
+    const alreadyApplied = batch.filter(plan => plan.alreadyApplied);
+    queue.integrated.push(...alreadyApplied.map(plan => plan.job));
+    batch = batch.filter(plan => !plan.alreadyApplied);
+    if (!batch.length) { await persist(); return; }
+    const changes = batch.flatMap(plan => plan.writes);
+    const journal = await startIntegrationJournal(root, id, 'queue-batch', batch.map(plan => plan.job), changes, releaseIntegrationLock);
     let result;
     try {
       for (const change of changes) {
@@ -3897,25 +3898,27 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, co
         const mode = current === null ? 0o644 : (await fs.stat(await safePath(root, change.file))).mode & 0o777;
         if (current === null ? change.previous !== null : change.previous === null || !current.equals(change.previous)) fail(`Integration conflict: ${change.file} changed since worker snapshot`);
         if (mode !== change.mode) fail(`Integration conflict: ${change.file} permissions changed since worker snapshot`);
-        if (change.bytes === null) await fs.unlink(await safePath(root, change.file)).catch(error => { if (error.code !== 'ENOENT') throw error; });
-        else await write(root, change.file, change.bytes, false, change.mode);
-        applied.push(change);
+        await journal.perform(async () => {
+          if (change.bytes === null) await fs.unlink(await safePath(root, change.file)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+          else await write(root, change.file, change.bytes, false, change.mode);
+        });
       }
       result = noChecks ? { checks: [], checksPassed: true } : await runChecks(root, manifest.checks ?? [], changes.map(change => change.file), changes.filter(change => change.previous === null).map(change => change.file), spawnImpl, { baseCommit: state.baseCommit, noFlakeCheck, portBase, extraEnv: swarmEnv });
-    } catch (error) { await rollback(applied); throw error; }
+    } catch (error) { await journal.rollback(); throw error; }
     const failed = result.checksPassed === false;
     queue.batches.push({ jobs: batch.map(plan => plan.job), checks: noChecks ? 'skipped' : failed ? 'failed' : 'passed', bisected: failed && batch.length > 1 });
     warnings.push(...swarmCheckWarnings(result.checks));
     // Queue mode deliberately rolls failed batches back before bisecting. Plain integrate
     // retains its existing behavior: check failures never roll back its writes.
     if (failed) {
-      await rollback(changes);
+      await journal.rollback();
       if (batch.length === 1) queue.checkFailed.push({ job: batch[0].job, checks: result.checks.filter(check => !['passed', 'skipped'].includes(check.status)).map(check => check.name) });
     } else {
       queue.integrated.push(...batch.map(plan => plan.job));
       state.integratedFiles.push(...changes.map(change => change.file));
       state.integratedNewFiles.push(...changes.filter(change => change.previous === null).map(change => change.file));
     }
+    if (!failed) await journal.finish();
     await persist();
     if (failed && batch.length > 1) {
       const middle = Math.ceil(batch.length / 2);
@@ -3946,6 +3949,8 @@ export async function integrateQueue(root, id, { batchSize = 10, maxRequeues = 2
   const pass = async (run, attempt, kind, mergeOriginal = null) => {
     summary.runs.push({ id: run, attempt, kind });
     const result = await integrateRun(root, run, { ...options, queue: true, batchSize, ...(kind === 'merge' ? { acceptBlocked: false } : {}) });
+    summary.warnings = [...(summary.warnings ?? []), ...result.warnings];
+    if (result.recoveredJournal) summary.recoveredJournal = result.recoveredJournal;
     const q = result.mergeQueue;
     for (const job of q.integrated) summary.integrated.push({ job, run, attempt });
     for (const failure of q.checkFailed) summary.checkFailed.push({ job: failure.job, run, checks: failure.checks });
@@ -4009,7 +4014,89 @@ function deviationText(deviation) {
   return typeof deviation === 'string' ? deviation : deviation?.contract ?? JSON.stringify(deviation);
 }
 
-export async function integrateRun(root, id, { noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, salvage = false, acceptDeviation = false, acceptResultShape = false, acceptDropped = false, salvageDropped = false, jobs = undefined, privateNamesFile = undefined, queue = false, batchSize = 10 } = {}) {
+async function recoverIntegrationJournal(root) {
+  const target = await safePath(root, '.swarm/integration-journal.json', { internal: true });
+  let journal;
+  try { journal = JSON.parse(await fs.readFile(target, 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  if (journal.version !== 1 || !Array.isArray(journal.entries)) fail('Invalid integration journal');
+  for (const entry of journal.entries) {
+    if (entry.previous === null) await fs.unlink(await safePath(root, entry.file)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    else await write(root, entry.file, Buffer.from(entry.previous, 'base64'), false, entry.mode);
+  }
+  await fs.unlink(target);
+  return { runId: journal.runId, kind: journal.kind, jobs: journal.jobs, files: journal.entries.length };
+}
+function journalWarning(recovered) {
+  return `integrate-journal-rolled-back: run ${recovered.runId} ${recovered.kind} jobs ${recovered.jobs.join(',')} restored ${recovered.files} files`;
+}
+async function startIntegrationJournal(root, runId, kind, jobs, changes, release) {
+  const target = await safePath(root, '.swarm/integration-journal.json', { internal: true });
+  const entries = [];
+  for (const { file } of changes) {
+    const previous = await bytesAt(root, file);
+    const mode = previous === null ? 0o644 : (await fs.stat(await safePath(root, file))).mode & 0o777;
+    entries.push({ file, previous: previous === null ? null : previous.toString('base64'), mode });
+  }
+  const journal = { version: 1, runId, pid: process.pid, startedAt: new Date().toISOString(), kind, jobs, entries };
+  const temporary = `${target}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  let stopping = false;
+  let pending = Promise.resolve();
+  const stopped = () => new Promise(() => {}); // The signal handler will exit after restoration.
+  const interrupt = signal => {
+    if (stopping) return;
+    stopping = true;
+    const code = signal === 'SIGINT' ? 130 : 143;
+    void (async () => {
+      try {
+        try { await pending.catch(() => {}); await recoverIntegrationJournal(root); }
+        finally { await release(); }
+      }
+      finally { process.exit(code); }
+    })();
+  };
+  const onInt = () => interrupt('SIGINT'), onTerm = () => interrupt('SIGTERM');
+  process.on('SIGINT', onInt); process.on('SIGTERM', onTerm);
+  const detach = () => { process.off('SIGINT', onInt); process.off('SIGTERM', onTerm); };
+  try {
+    pending = (async () => {
+      const handle = await fs.open(temporary, 'wx');
+      try { await handle.writeFile(JSON.stringify(journal)); await handle.sync(); } finally { await handle.close(); }
+      await fs.rename(temporary, target);
+    })();
+    await pending;
+  } catch (error) { detach(); await fs.rm(temporary, { force: true }); throw error; }
+  return {
+    async perform(action) {
+      if (stopping) return stopped();
+      pending = action();
+      return await pending;
+    },
+    async finish() {
+      if (stopping) return stopped();
+      try { pending = fs.unlink(target); await pending; } finally { detach(); }
+    },
+    async rollback() {
+      if (stopping) return stopped();
+      try { pending = recoverIntegrationJournal(root); await pending; } finally { detach(); }
+    },
+  };
+}
+
+export async function integrateRun(root, id, options = {}) {
+  if (options.queue) validateQueueOptions({ ...options, batchSize: options.batchSize ?? 10 });
+  root = await fs.realpath(root);
+  const lock = await acquireIntegrationLock(root, { runId: id, liveDir: options.liveDir, isAlive: options.isAlive });
+  try {
+    const recoveredJournal = await recoverIntegrationJournal(root);
+    const result = await integrateRunLocked(root, id, { ...options, releaseIntegrationLock: lock.release });
+    if (lock.warnings.length || recoveredJournal) result.warnings = [...lock.warnings, ...(recoveredJournal ? [journalWarning(recoveredJournal)] : []), ...(result.warnings ?? [])];
+    if (recoveredJournal) result.recoveredJournal = recoveredJournal;
+    return result;
+  } finally { await lock.release(); }
+}
+
+async function integrateRunLocked(root, id, { releaseIntegrationLock, noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, salvage = false, acceptDeviation = false, acceptResultShape = false, acceptDropped = false, salvageDropped = false, jobs = undefined, privateNamesFile = undefined, queue = false, batchSize = 10 } = {}) {
   if (queue) validateQueueOptions({ batchSize, jobs, salvage, mutants: mutants || mutantsFile !== undefined || mutantCheck !== undefined });
   root = await fs.realpath(root);
   // Field lesson #202: a job's own timed-out worker declares nothing missing — it simply never got
@@ -4040,7 +4127,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   // after its files were already written (preChecks/checks/mutants) may be retried; only a fully
   // completed integration refuses outright. Checked before the completeness gate below so a run
   // already integrated (blocked or otherwise) always reports that, not a generic status mismatch.
-  if (state.integratedAt && state.integrationStatus !== 'partial') fail('Run already integrated');
+  if (state.integratedAt && state.integrationStatus !== 'partial' && !(queue && state.mergeQueue?.state === 'running')) fail('Run already integrated');
   // Lesson 298: --jobs flag to integrate only named jobs
   if (jobs) {
     for (const jobId of jobs) {
@@ -4059,8 +4146,6 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   await workerKeyGuard(root, id, state, { env, keyExec });
 
   if (state.jobs.length !== manifest.jobs.length) fail('Job records do not match manifest');
-  const lock = await safePath(root, '.swarm/integration.lock', { internal: true });
-  await fs.mkdir(lock); // Other coordinators must finish before integrating.
   const writes = [];
   const newFiles = [];
   const jobMutantsBytes = new Map();
@@ -4144,8 +4229,11 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
         const output = await bytesAt(readRoot, file);
         if (queue) {
           snapshots.push({ file, bytes: current, mode: currentMode });
-          if (current !== null && job.baseModes?.[file] !== undefined && currentMode !== job.baseModes[file]) conflict(file, 'permissions changed since worker snapshot');
-          if (currentHash !== job.baseHashes[file]) conflict(file, 'changed since worker snapshot');
+          const alreadyApplied = state.mergeQueue?.state === 'running' && (output === null ? current === null : currentHash === digest(output));
+          if (!alreadyApplied) {
+            if (current !== null && job.baseModes?.[file] !== undefined && currentMode !== job.baseModes[file]) conflict(file, 'permissions changed since worker snapshot');
+            if (currentHash !== job.baseHashes[file]) conflict(file, 'changed since worker snapshot');
+          }
         }
         // Field lesson 328: a blocked job's unwritten output is skipped, never a missing-output,
         // undeclared-delete or declared-delete; what it did write still integrates (lesson 131).
@@ -4185,7 +4273,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
         // Field lesson 120: a retry of a `partial` integration must not refuse just because this
         // file already equals what this same run wrote last time; only a file that genuinely
         // differs from both base and the proposed output is a real conflict.
-        const alreadyApplied = state.integrationStatus === 'partial' && currentHash === outputHash;
+        const alreadyApplied = (state.integrationStatus === 'partial' || (queue && state.mergeQueue?.state === 'running')) && currentHash === outputHash;
         if (!alreadyApplied) {
           if(current!==null && job.baseModes?.[file]!==undefined && currentMode!==job.baseModes[file]) conflict(file, 'permissions changed since worker snapshot');
           if (currentHash !== job.baseHashes[file]) conflict(file, 'changed since worker snapshot');
@@ -4225,7 +4313,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
         const hits = workFolderReferenceHits(plannedWrites);
         if (hits.length) fail(hits.map(hit => hit.message).join('\n'), 'work-folder-reference');
         if (conflictingFiles.length) queueConflicts.push({ job: job.id, files: conflictingFiles, reason: conflictReason });
-        else queuePlans.push({ job: job.id, writes: plannedWrites, snapshots });
+        else queuePlans.push({ job: job.id, writes: plannedWrites, snapshots, alreadyApplied: state.mergeQueue?.state === 'running' && !plannedWrites.length });
       }
     }
     if (queue) writes.push(...queuePlans.flatMap(plan => plan.writes));
@@ -4267,17 +4355,18 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
     if (queue) {
       if (acceptedDeviations.length) state.acceptedDeviations = acceptedDeviations;
       if (resultShapeWarnings.length) state.resultShapeWarnings = resultShapeWarnings;
-      return await applyQueuePlans(root, id, state, manifest, queuePlans, { batchSize, conflicts: queueConflicts, skipped: queueSkipped, noChecks, noFlakeCheck, spawnImpl, warnings: [...designWarnings, ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)] });
+      return await applyQueuePlans(root, id, state, manifest, queuePlans, { batchSize, conflicts: queueConflicts, skipped: queueSkipped, noChecks, noFlakeCheck, spawnImpl, releaseIntegrationLock, warnings: [...designWarnings, ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)] });
     }
     // Every path, output, base hash, and mutants source has passed before the first project write.
-    const applied = [];
+    const journal = await startIntegrationJournal(root, id, 'integrate', integratedJobs, writes, releaseIntegrationLock);
     try {
       // Field lesson #196: a declared delete (change.bytes === null) removes the file instead of
       // writing it; everything else writes as before.
       for (const change of writes) {
-        if (change.bytes === null) await fs.unlink(await safePath(root, change.file)).catch(error => { if (error.code !== 'ENOENT') throw error; });
-        else await write(root, change.file, change.bytes, false, change.mode);
-        applied.push(change);
+        await journal.perform(async () => {
+          if (change.bytes === null) await fs.unlink(await safePath(root, change.file)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+          else await write(root, change.file, change.bytes, false, change.mode);
+        });
       }
       state.integratedAt = new Date().toISOString(); state.integratedFiles = writes.map(change => change.file); state.integratedNewFiles = newFiles;
       // Field lesson 120: persisted immediately, so a later failure (preChecks/checks/mutants)
@@ -4285,12 +4374,9 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       // still refuses "already integrated" or a retry treats its own files as a conflict.
       state.integrationStatus = 'partial';
       await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
+      await journal.finish();
     } catch (error) {
-      for (const change of applied.reverse()) {
-        if (change.bytes === null) { if (change.previous !== null) await write(root, change.file, change.previous, false, change.mode); }
-        else if (change.previous === null) await fs.unlink(await safePath(root, change.file));
-        else await write(root, change.file, change.previous, false, change.mode);
-      }
+      await journal.rollback();
       throw error;
     }
     // Field lesson #141: one port block for the whole integration (preChecks, checks, flake
@@ -4380,7 +4466,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
     if (acceptedDeviations.length) state.acceptedDeviations = acceptedDeviations;
     await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
     return { id, status: 'integrated', integrationStatus: state.integrationStatus, files: state.integratedFiles, filesChanged: state.integratedFiles, portBase, ...(preChecksResult.preChecks.length ? { preChecks: preChecksResult.preChecks } : {}), ...(warnings.length ? { warnings } : {}), ...checksResult, ...mutantsResult, ...(blockedJobs.length ? { blockedEvidence: blockedJobs.map(job => ({ name: job.id, lines: [job.error ?? 'blocked'] })) } : {}), ...(salvagedJobs.length ? { salvaged: true, salvagedJobs: salvagedJobs.map(job => job.id) } : {}), ...(acceptedDeviations.length ? { acceptedDeviations } : {}), ...(jobs ? { integratedJobs, skippedJobs } : {}) };
-  } finally { await fs.rmdir(lock); }
+  } finally { /* The caller owns both integration locks. */ }
 }
 
 // Field lesson #210: a hand step (integrate, mutants, ship) run while no job is actually running
@@ -4516,10 +4602,23 @@ async function redcheckCommitRun(root, id, argv, { spawnImpl, timeoutMs, commit 
   return result;
 }
 
-export async function redcheckRun(root, id, argv, { spawnImpl = spawn, timeoutMs = 300000, base: baseRef, commit } = {}) {
+export async function redcheckRun(root, id, argv, options = {}) {
+  let lock;
+  try {
+    root = await fs.realpath(root);
+    lock = await acquireIntegrationLock(root, { runId: id, liveDir: options.liveDir, isAlive: options.isAlive });
+    const recoveredJournal = await recoverIntegrationJournal(root);
+    const result = await redcheckRunLocked(root, id, argv, options);
+    if (lock.warnings.length || recoveredJournal) result.warnings = [...lock.warnings, ...(recoveredJournal ? [journalWarning(recoveredJournal)] : []), ...(result.warnings ?? [])];
+    if (recoveredJournal) result.recoveredJournal = recoveredJournal;
+    return result;
+  } catch (error) { return { status: 'error', exitCode: null, restored: [], tail: error.message, base: options.base ?? 'run-base' }; }
+  finally { if (lock) await lock.release(); }
+}
+
+async function redcheckRunLocked(root, id, argv, { spawnImpl = spawn, timeoutMs = 300000, base: baseRef, commit } = {}) {
   if (commit !== undefined) return await redcheckCommitRun(root, id, argv, { spawnImpl, timeoutMs, commit });
   const restored = [];
-  let lock, locked = false;
   const result = { status: 'error', exitCode: null, restored, tail: '', base: baseRef ?? 'run-base' };
   try {
     if (!Array.isArray(argv) || !argv.length || argv.some(item => typeof item !== 'string' || item.includes('\0')) || !argv[0]) fail('redcheck requires --test <argv...>');
@@ -4529,9 +4628,6 @@ export async function redcheckRun(root, id, argv, { spawnImpl = spawn, timeoutMs
     if (state.root !== root || state.id !== id || !['complete', 'integrated'].includes(state.status)) fail('Only a complete or integrated run from this repository can be redchecked');
     const manifest = validateManifest(JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true)));
     if (state.jobs.length !== manifest.jobs.length) fail('Job records do not match manifest');
-    lock = await safePath(root, '.swarm/integration.lock', { internal: true });
-    await fs.mkdir(lock);
-    locked = true;
     let revision;
     if (baseRef !== undefined) {
       if (typeof baseRef !== 'string' || !baseRef || baseRef.startsWith('-')) fail('Invalid base revision');
@@ -4607,11 +4703,6 @@ export async function redcheckRun(root, id, argv, { spawnImpl = spawn, timeoutMs
   } catch (error) {
     result.status = 'error';
     result.tail = `${result.tail}\n${error.message}`.trim().slice(-2000);
-  } finally {
-    if (locked) {
-      try { await fs.rmdir(lock); }
-      catch (error) { result.status = 'error'; result.tail = `${result.tail}\n${error.message}`.trim().slice(-2000); }
-    }
   }
   return result;
 }

@@ -2,6 +2,8 @@
 
 ## 1.56.0
 
+- Make integration batches crash-safe with atomic journals, automatic rollback on recovery, and SIGINT/SIGTERM rollback of queue writes, including bytes, new files, deletions, and modes.
+- Serialize integration and redcheck across every worktree of a repository with owner-recorded locks; clear dead local owners with a warning and refuse live owners with `integrate-locked`.
 - Added `integrate --queue` for large runs, with ordered batches and checks per batch.
 - Failed queue batches roll back and bisect to keep passing jobs and isolate check failures. Plain integration keeps its existing behavior.
 - Conflicting jobs preserve newer checkout content, requeue twice by default, then get one merge job. Unresolved merge jobs are flagged.

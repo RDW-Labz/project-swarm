@@ -44,6 +44,18 @@ Passing sub-batches stay applied. A single job whose checks fail is rolled back 
 
 Rollback after failed checks is intentional in queue mode. Plain integration never rolls back because a check failed. Queue rollback restores the batch's declared writes; it is not a general rollback of arbitrary check side effects.
 
+## Crash safety
+
+Before writing a batch, including each bisected sub-batch, integration atomically saves `.swarm/integration-journal.json` with the previous bytes and modes of every file it will write or delete. The journal remains through queue checks and is removed after success or rollback. Plain integration removes its journal after successful writes and keeps its existing behavior of retaining writes when checks fail.
+
+SIGINT and SIGTERM restore the journal, remove it, release the locks, and exit 130 or 143 without waiting for child checks. After SIGKILL or a crash, the next plain integration, queue pass, or redcheck restores the journal before planning. Its result includes `recoveredJournal: {runId, kind, jobs, files}` and the warning `integrate-journal-rolled-back: run <runId> <kind> jobs <ids> restored <n> files`. Re-running an interrupted queue pass replans unfinished jobs and skips files already applied by that run. Recovery covers declared batch writes, including new files and modes; arbitrary check side effects are outside the journal.
+
+## Locking
+
+Plain integration, each queue pass, and redcheck acquire a per-repository lock in the live registry before `.swarm/integration.lock`. All worktrees sharing a Git common directory share the repository lock. Both locks record the process, host, run, root, and start time and are released when the command finishes.
+
+A dead owner on this host is cleared automatically with an `integrate-lock-stale-cleared` warning. An ownerless or unreadable lock is cleared only after 60 seconds. A live owner, a remote owner, or a fresh ownerless lock refuses with `integrate-locked`. Queue locks are released between passes while conflict workers run.
+
 ## Requeues and merge jobs
 
 The driver starts with attempt 0. After each pass, conflicting jobs get a child run if their attempt is below `maxRequeues`. The default allows two requeues. Each child snapshots the current checkout, so workers see the newer content.
