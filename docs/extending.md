@@ -20,7 +20,7 @@ Changing models does not change the job's tools, file ownership, or integration 
 
 ## Change concurrency or timeouts
 
-The shipped runner accepts concurrency 1–32, with a default of 2. Increasing a timeout can help a genuinely larger task, but smaller tasks are easier to review and recover. The maximum per-job timeout is one hour.
+The shipped runner accepts concurrency 1–512 and 1–5000 jobs per manifest, with a default concurrency of 2 and separate [lane caps](lanes.md). Increasing a timeout can help a genuinely larger task, but smaller tasks are easier to review and recover. The maximum per-job timeout is one hour.
 
 If changing these limits in code, update validation, tests, the skill, and this documentation together. Preserve conservative defaults and explain any new account-usage implications.
 

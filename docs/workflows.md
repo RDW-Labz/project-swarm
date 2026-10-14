@@ -16,7 +16,7 @@ Start from the outcome and split the work by independent questions or file owner
 
 Use the smallest context that is sufficient, not the entire repository. Ask for exact source evidence and require workers to distinguish demonstrated defects from hypotheses. Source-only UI reviewers cannot judge rendered pixels; reserve browser checks and visual judgment for the coordinator.
 
-The default concurrency is two. Version 1.2 permits up to 32 simultaneous jobs and 256 total jobs per manifest, but a larger number does not create more independent work or guarantee faster results. The website case demonstrated six real Claude workers at once. Start with two to four meaningful tasks, then increase only when your workload, machine, account limits, and review capacity justify it.
+The default concurrency is two. The runner permits up to 512 simultaneous jobs and 5000 total jobs per manifest, with per-agent lane caps, but a larger number does not create more independent work or guarantee faster results. The website case demonstrated six real Claude workers at once. Start with two to four meaningful tasks, then increase only when your workload, machine, account limits, and review capacity justify it.
 
 ## Parallel independent reviews
 
@@ -40,7 +40,7 @@ Do not assign the same output path to two jobs. Avoid jobs whose output paths ov
 
 The coordinator must also avoid editing a worker's owned outputs during the run. Separate manifests do not create a universal scheduling lock; coordinate ownership across all active runs yourself. Integration's base-hash check catches changed outputs but cannot decide how two conflicting implementations should be combined.
 
-All workers receive snapshots taken before execution begins. Job B cannot consume Job A's new changes merely because the manifest lists B later or uses `concurrency: 1`. Integrate A, then create a fresh run for dependent work.
+Workspaces are prepared lazily at dispatch; path and size validation still happens before execution. Job B cannot consume Job A's new changes merely because the manifest lists B later or uses `concurrency: 1`. Integrate A, then create a fresh run for dependent work.
 
 ## Shared contract for parallel jobs
 
@@ -98,4 +98,4 @@ For example, the website project's six-worker run produced a browser-test file a
 
 The examples directory includes `code-review.json`, `ui-review.json`, `documentation.json`, `test-plan.json`, `four-reviewers.json`, and `mixed-provider-review.json`. They use this toolkit README as safe example context. Adapt the file lists, prompts, declared reports, and model names before using them on your application. After installation they are named `coordination/swarm-<example-name>.json`.
 
-Code review asks for defects with source evidence; UI review evaluates supplied source and cannot see rendered pixels; documentation writes a complete declared Markdown output; test planning proposes checks without pretending to execute them. Four-reviewer and mixed-provider recipes explicitly opt into concurrency 4. Jobs are peers with snapshots, not a dependency graph. Use separate runs after integration for dependent stages. See [provider setup](providers.md) to configure only the providers you choose.
+Code review asks for defects with source evidence; UI review evaluates supplied source and cannot see rendered pixels; documentation writes a complete declared Markdown output; test planning proposes checks without pretending to execute them. Four-reviewer and mixed-provider recipes explicitly opt into concurrency 4. Jobs have separate workspaces; after dependencies can pass completed outputs where supported. Use separate runs after integration for dependent stages. See [provider setup](providers.md) to configure only the providers you choose.
