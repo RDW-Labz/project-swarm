@@ -2295,6 +2295,36 @@ async function liveOutputConflicts(root, jobs, { runId, liveDir, isAlive } = {})
   return conflicts;
 }
 
+export async function cursorClaimConflicts(root, jobs) {
+  const file = 'coordination/cursor-claims.json';
+  const invalid = reason => fail(`cursor-claims-invalid: ${file} ${reason}`, 'cursor-claims-invalid');
+  let text;
+  try { text = await fs.readFile(path.join(root, file), 'utf8'); }
+  catch (error) {
+    if (error.code === 'ENOENT') return [];
+    invalid(`cannot read (${error.code ?? 'unknown error'})`);
+  }
+  let claims;
+  try { claims = JSON.parse(text); } catch { invalid('contains malformed JSON'); }
+  const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  if (!object(claims)) invalid('must be an object');
+  const conflicts = [];
+  for (const claim of Object.keys(claims).sort()) {
+    const entry = claims[claim];
+    if (!object(entry) || !Array.isArray(entry.files) || entry.files.some(file => typeof file !== 'string') || typeof entry.base !== 'string') invalid(`has an invalid entry for ${claim}`);
+    const files = new Set(), jobIds = new Set();
+    for (const job of jobs) {
+      for (const file of entry.files) {
+        if (!(job.outputs ?? []).some(output => output === file || (job.scope === 'open' && (pathContains(output, file) || pathContains(file, output))))) continue;
+        files.add(file);
+        jobIds.add(job.id);
+      }
+    }
+    if (files.size) conflicts.push({ claim, files: [...files].sort(), jobIds: [...jobIds].sort() });
+  }
+  return conflicts;
+}
+
 function selectRunManifest(manifest, jobs) {
   if (jobs === null || jobs === undefined) return manifest;
   if (!Array.isArray(jobs) || !jobs.length || jobs.some(id => typeof id !== 'string' || !ID.test(id)) || new Set(jobs).size !== jobs.length) fail('--jobs requires a non-empty list of unique job ids');
@@ -2380,6 +2410,11 @@ export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl,
   if (conflicts.length) {
     const [first] = conflicts;
     throw Object.assign(new Error(`Refusing to run: ${first.files[0]} is also written by live run ${first.runId} in ${first.root}`), { details: { conflicts } });
+  }
+  const cursorClaims = await cursorClaimConflicts(root, manifest.jobs);
+  if (cursorClaims.length) {
+    const [first] = cursorClaims;
+    throw Object.assign(new Error(`Refusing to run: ${first.files[0]} is claimed by Cursor lane job ${first.claim} (coordination/cursor-claims.json); release it with \`python3 tools/cursor_lane_guard.py release ${first.claim}\` or drop it from outputs`), { code: 'cursor-claim-conflict', details: { cursorClaims } });
   }
   await registerLiveRun({ runId: id, root, outputs: declaredOutputs, dir: liveDirOpt });
   try {
@@ -4491,6 +4526,12 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   const conflicts = [...jobConflicts.values()].map(conflict => ({ ...conflict, jobIds: [...new Set(conflict.jobIds)] }));
   if (conflicts.length) {
     warnings.push(...conflicts.map(conflict => ({ code: 'live-output-conflict', runId: conflict.runId, files: conflict.files, jobIds: conflict.jobIds, message: `live-output-conflict: ${conflict.files.join(', ')} is owned by live run ${conflict.runId}; startable jobs: ${manifest.jobs.filter(job => !conflict.jobIds.includes(job.id)).map(job => job.id).join(', ') || '(none)'}` })));
+  }
+  try {
+    const cursorClaims = await cursorClaimConflicts(root, manifest.jobs);
+    warnings.push(...cursorClaims.map(conflict => ({ code: 'cursor-claim-conflict', ...conflict, message: `cursor-claim-conflict: ${conflict.files.join(', ')} is claimed by Cursor lane job ${conflict.claim}; startable jobs: ${manifest.jobs.filter(job => !conflict.jobIds.includes(job.id)).map(job => job.id).join(', ') || '(none)'}` })));
+  } catch (error) {
+    warnings.push({ code: 'cursor-claims-invalid', message: error.message });
   }
   const blockedJobIds = new Set(conflicts.flatMap(conflict => conflict.jobIds));
   const startableJobs = manifest.jobs.filter(job => !blockedJobIds.has(job.id)).map(job => job.id);

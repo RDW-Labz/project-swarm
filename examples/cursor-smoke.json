@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "cursor-smoke",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Return one sentence acknowledging this bounded communication test, and write the same sentence into the declared output.",
+      "context": [],
+      "outputs": [
+        "coordination/cursor-handshake.md"
+      ],
+      "timeoutMs": 120000
+    }
+  ]
+}
