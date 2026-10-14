@@ -168,6 +168,7 @@ export function renderMonitorView(view, options = {}) {
     `elapsed ${formatDuration(view.elapsedMs ?? null)}  ·  peak concurrency ${view.peakConcurrency ?? 0}`,
     width,
   ));
+  if (view.pause) lines.push(truncate(`paused: ${view.pause.reasons.join(', ')} until ${view.pause.until ?? 'n/a'}; held ${view.pause.jobs.length} (${view.pause.jobs.slice(0, 5).join(', ')})`, width));
   const usage = formatUsage(view.usageByProvider);
   if (usage) lines.push(truncate(`usage  ${usage}`, width));
   const lanes = Object.entries(view.lanes?.lanes ?? {});
