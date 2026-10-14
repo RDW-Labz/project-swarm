@@ -4,6 +4,8 @@
 // process access beyond the explicit options callers pass in, so every code path here is
 // deterministic and directly testable against a fixture run view.
 
+import { sanitizeWorkerText } from './worker-text.mjs';
+
 const ANSI_RE = /\u001b\[[0-9;]*m/g;
 const RESET = '\u001b[0m';
 
@@ -79,7 +81,7 @@ function buildColumns(jobs, width) {
     { key: 'out', label: 'OUT', align: 'right', flex: false, drop: true, get: job => String(job.outputCount ?? 0) },
   ];
   for (const column of columns) {
-    column.cells = jobs.map(column.get);
+    column.cells = jobs.map(job => sanitizeWorkerText(column.get(job)));
     const natural = Math.max(column.label.length, 0, ...column.cells.map(cell => visibleLength(cell)));
     column.width = column.flex ? Math.max(natural, 0) : natural;
     column.natural = natural;
@@ -110,10 +112,10 @@ function renderTable(jobs, width, color) {
   if (!columns.length) return [];
   const headerLine = columns.map(c => pad(truncate(c.label, c.width), c.width, c.align)).join('  ');
   const rows = jobs.map(job => columns.map(c => {
-    const raw = c.get(job);
+    const raw = sanitizeWorkerText(c.get(job));
     if (c.key === 'status') {
       const cell = statusCell(job.status);
-      const truncated = truncate(cell.plain, c.width);
+      const truncated = truncate(sanitizeWorkerText(cell.plain), c.width);
       return pad(colorize(truncated, cell.code, color), c.width, c.align);
     }
     return pad(truncate(raw, c.width), c.width, c.align);
@@ -137,10 +139,10 @@ export function renderIdleSeatEvents(events, width = 100) {
   for (const event of events ?? []) {
     if (event?.type !== 'idle-seat') continue;
     const minutes = event.idleMinutes ?? '-';
-    lines.push(truncate(`idle seat: no worker running for ${minutes}m`, width));
+    lines.push(truncate(sanitizeWorkerText(`idle seat: no worker running for ${minutes}m`), width));
     const tasks = event.runnableTasks ?? [];
     lines.push(truncate(
-      tasks.length ? `runnable unblocked TASK items: ${tasks.join(', ')}` : 'runnable unblocked TASK items: none',
+      sanitizeWorkerText(tasks.length ? `runnable unblocked TASK items: ${tasks.join(', ')}` : 'runnable unblocked TASK items: none'),
       width,
     ));
   }

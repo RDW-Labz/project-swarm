@@ -13,6 +13,14 @@ import { runManifest, summarizeRun } from '../tools/swarm.mjs';
 const runner = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
 const ANSI_RE = /\u001b\[[0-9;]*m/;
 
+test('monitor sanitizes every cell and idle-seat text before measuring widths', () => {
+  const dirty = '\u001b[31mclean\u001b[0m\u001b]title\u0007\u001b[2J\u001b[4;1H\u0000\u0007\u007f\u0085\u202e\u2066\nname';
+  const text = renderMonitorView(fixtureView({ jobs: [{ id: dirty, agent: dirty, model: dirty, tier: dirty, status: dirty, outputCount: dirty }], idleSeatEvents: [{ type: 'idle-seat', idleMinutes: dirty, runnableTasks: [dirty] }] }), { width: 200 });
+  assert.ok(text.includes('clean name'));
+  assert.doesNotMatch(text, /[\u0000-\u0009\u001b\u007f-\u009f\u202e\u2066]/);
+  assert.ok(text.split('\n').every(line => line.length <= 200));
+});
+
 test('monitor renders lane health, waiting queue, merge state and spend after usage', () => {
   const view = fixtureView({ lanes: { lanes: {
     codex: { state: 'ok', inFlight: 3, concurrency: 6, queued: 2 },

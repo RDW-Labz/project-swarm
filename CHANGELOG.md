@@ -2,6 +2,8 @@
 
 ## 1.55.0
 
+- Sanitized and labeled untrusted worker text in rollups and sanitized monitor cells.
+- Added one report-only re-ask for otherwise complete strict jobs before `report-invalid`.
 - Added opt-in strict `report: "short"` at manifest and job level, with five-field worker reports and validation.
 - Saved valid short reports or derived legacy reports for worker attempts that ended complete, blocked, or failed. Jobs that never ran have no report.
 - Added `swarm rollup` for compact JSON or text summaries of status, lanes, spend, changed files, risks, and follow-ups.

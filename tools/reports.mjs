@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { formatDuration } from './monitor-view.mjs';
+import { sanitizeWorkerText, UNTRUSTED_LABEL } from './worker-text.mjs';
+export { sanitizeWorkerText, UNTRUSTED_LABEL } from './worker-text.mjs';
 
 export const REPORT_KEYS = Object.freeze(['status', 'summary', 'files', 'risks', 'followups']);
 export const REPORT_STATUSES = Object.freeze(['complete', 'blocked', 'failed']);
@@ -57,9 +59,15 @@ export function rollupRun(state, { top = 10 } = {}) {
     if (job.report) reports[job.report.legacy ? 'legacy' : 'short']++;
     else reports.missing++;
     if (job.reportErrors?.length) reports.invalid++;
-    if (job.status !== 'complete' || job.reportErrors?.length) attention.push({ id: job.id, status: job.status, agent: job.agent, summary: cut([job.report?.summary, job.error, job.status].find(nonblank) ?? '', 160) });
+    if (job.status !== 'complete' || job.reportErrors?.length) {
+      const summary = sanitizeWorkerText([job.report?.summary, job.error, job.status].find(nonblank) ?? '', 160);
+      if (summary) attention.push({ id: job.id, status: job.status, agent: job.agent, summary });
+    }
     for (const [key, map] of [['risks', risks], ['followups', followups]]) {
-      for (const item of job.report?.[key] ?? []) if (nonblank(item)) { const text = item.trim(); map.set(text, (map.get(text) ?? 0) + 1); }
+      for (const item of job.report?.[key] ?? []) {
+        const text = sanitizeWorkerText(item, 200);
+        if (text) map.set(text, (map.get(text) ?? 0) + 1);
+      }
     }
   }
   spend.costUsd = Math.round(spend.costUsd * 100) / 100;
@@ -73,6 +81,7 @@ export function rollupRun(state, { top = 10 } = {}) {
   const shown = attention.slice(0, Math.max(0, Math.min(50, Number.isInteger(top) ? top : 10)));
   const rollup = { id: state.id, status: state.status, total: jobs.length, counts, lanes, spend, files: { changed: files.size, jobs: fileJobs }, reports, attention: shown, attentionMore: attention.length - shown.length, risks: entries(risks), followups: entries(followups), elapsedMs: start !== null && Number.isFinite(end) ? Math.max(0, end - start) : null };
   // Bound the compact view by showing fewer attention entries when summaries fill the budget.
+  rollup.untrusted = ['attention.summary', 'risks', 'followups'];
   while (Buffer.byteLength(JSON.stringify(rollup)) >= 4096 && shown.length) { shown.pop(); rollup.attentionMore++; }
   while (Buffer.byteLength(JSON.stringify(rollup)) >= 4096 && (rollup.risks.length || rollup.followups.length)) (rollup.followups.length >= rollup.risks.length ? rollup.followups : rollup.risks).pop();
   return rollup;
@@ -80,16 +89,17 @@ export function rollupRun(state, { top = 10 } = {}) {
 
 export function renderRollupText(rollup) {
   const r = rollup;
-  const lines = [`Run ${r.id} - ${r.status} - ${r.total} jobs - elapsed ${formatDuration(r.elapsedMs)}`, Object.entries(r.counts).map(([key, count]) => `${key} ${count}`).join(' - '), `lanes  ${Object.entries(r.lanes).map(([agent, count]) => `${agent} ${count}`).join(' - ')}`, `spend  $${r.spend.costUsd.toFixed(2)} (${r.spend.costReportedJobs} jobs reported cost) - tokens ${r.spend.tokens}`, `files  ${r.files.changed} changed across ${r.files.jobs} jobs`, `reports  ${r.reports.short} short - ${r.reports.legacy} legacy - ${r.reports.invalid} invalid - ${r.reports.missing} missing`];
+  const lines = [`Run ${sanitizeWorkerText(r.id)} - ${sanitizeWorkerText(r.status)} - ${r.total} jobs - elapsed ${formatDuration(r.elapsedMs)}`, Object.entries(r.counts).map(([key, count]) => `${sanitizeWorkerText(key)} ${count}`).join(' - '), `lanes  ${Object.entries(r.lanes).map(([agent, count]) => `${sanitizeWorkerText(agent)} ${count}`).join(' - ')}`, `spend  $${r.spend.costUsd.toFixed(2)} (${r.spend.costReportedJobs} jobs reported cost) - tokens ${r.spend.tokens}`, `files  ${r.files.changed} changed across ${r.files.jobs} jobs`, `reports  ${r.reports.short} short - ${r.reports.legacy} legacy - ${r.reports.invalid} invalid - ${r.reports.missing} missing`];
   const attention = r.attention.slice(0, 15), more = r.attentionMore + r.attention.length - attention.length;
+  if (attention.length || more || r.risks.length || r.followups.length) lines.push(UNTRUSTED_LABEL);
   if (attention.length || more) {
     lines.push(`attention (${attention.length} of ${r.attention.length + r.attentionMore}):`);
-    for (const job of attention) lines.push(`  ${job.status} ${job.id} (${job.agent}): ${job.summary.replace(/[\r\n]/g, ' ')}`);
-    if (more) lines.push(`  +${more} more: swarm inspect ${r.id}`);
+    for (const job of attention) lines.push(`  ${sanitizeWorkerText(job.status)} ${sanitizeWorkerText(job.id)} (${sanitizeWorkerText(job.agent)}): ${sanitizeWorkerText(job.summary, 160)}`);
+    if (more) lines.push(`  +${more} more: swarm inspect ${sanitizeWorkerText(r.id)}`);
   }
   for (const key of ['risks', 'followups']) if (r[key].length) {
     lines.push(`${key}:`);
-    for (const item of r[key]) lines.push(`  ${item.count}x ${item.text.replace(/[\r\n]/g, ' ')}`);
+    for (const item of r[key]) lines.push(`  ${sanitizeWorkerText(item.count)}x ${sanitizeWorkerText(item.text, 200)}`);
   }
   return lines.join('\n');
 }

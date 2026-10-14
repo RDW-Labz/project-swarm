@@ -1862,6 +1862,58 @@ async function prepareWorktreeLocation(worktree, { statfsImpl = fs.statfs } = {}
 
 // Also runs cursor jobs: the same detached worktree, seatbelt, scratch dir, retry and output
 // collection, with cursor's own profile additions, argv, allowlisted env and key redaction.
+const reportObject = (job, result) => result.finalObject ?? (isWorktreeWriter(job) ? parseCodexReply(result.response) : parseFinalJson(result.response));
+const checkWorkerReport = (job, result) => {
+  const value = reportObject(job, result);
+  return value == null ? { report: null, errors: ['no final report'] } : validateReport(value, { outputs: job.outputs });
+};
+
+async function reaskWorkerReport(job, result, workspace, options, launch) {
+  if (job.report !== 'short' || job.shell === true || result.status !== 'complete' || result.error || result.envelopeInvalid || result.cleanupError || result.terminationReason || result.reportReasked) return result;
+  const checked = checkWorkerReport(job, result);
+  if (checked.report) return result;
+  if (options.signal?.aborted || await options.cancelled?.()) return result;
+  const message = `Your files are saved. Reply with only your final report JSON line and nothing else.\nProblems with your last report: ${checked.errors.join('; ')}\nDeclared outputs you may list in files: ${JSON.stringify(job.outputs)}\n${REPORT_PROMPT_LINE}`;
+  const sessionId = job.agent === 'claude' ? extractSessionId(result.stdout) : null;
+  const writers = isWorktreeWriter(job) || (job.agent === 'claude' && !sessionId);
+  const saved = new Map();
+  if (writers) for (const file of job.outputs) {
+    const bytes = await bytesAt(workspace, file);
+    saved.set(file, { bytes, mode: bytes === null ? null : (await fs.stat(await safePath(workspace, file))).mode & 0o777 });
+  }
+  result.reportReasked = true;
+  let reask;
+  try {
+    if (launch) reask = await launch(message);
+    else if (job.agent === 'claude') reask = await execute(job, workspace, message, { ...options, onOutput: () => {}, resumeSessionId: sessionId ?? undefined });
+    else {
+      const request = { ...job, outputs: [], context: [], prompt: `${job.prompt.slice(0, 4000)}\n\n${message}` };
+      reask = API_AGENTS.includes(job.agent)
+        ? await executeApi(request, [], options)
+        : await execute(request, workspace, extraCliMessage(request, []), { ...options, onOutput: () => {} });
+    }
+    if (typeof result.usage?.total_tokens === 'number' && typeof reask.usage?.total_tokens === 'number') result.usage = { ...result.usage, total_tokens: result.usage.total_tokens + reask.usage.total_tokens };
+    if (reask.status !== 'complete' || reask.error || reask.envelopeInvalid) result.reportReaskErrors = [`re-ask failed: ${reask.error ?? reask.status}`];
+    else {
+      result.finalObject = reportObject(job, reask);
+      result.response = reask.response;
+      result.reportReaskErrors = checkWorkerReport(job, reask).errors;
+    }
+  } catch (error) { result.reportReaskErrors = [`re-ask failed: ${error.message}`]; }
+  finally {
+    const restored = [];
+    for (const [file, { bytes: before, mode }] of saved) {
+      const after = await bytesAt(workspace, file);
+      if (before === null ? after === null : after !== null && before.equals(after)) continue;
+      if (before === null) await fs.rm(await safePath(workspace, file), { force: true });
+      else await write(workspace, file, before, false, mode);
+      restored.push(file);
+    }
+    if (restored.length) result.reportReaskRestored = restored;
+  }
+  return result;
+}
+
 export async function executeCodexJob(root, directory, job, proposalRoot, options) {
   const gitImpl = options.gitImpl ?? git;
   const isCursor = job.agent === 'cursor';
@@ -1965,7 +2017,20 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
               : typeof reply.file === 'string' && reply.file.trim() ? `needs ${reply.file.trim()}` : 'no summary given';
             result = { ...result, status: 'blocked', error: `blocked: ${summary}`.slice(0, 300) };
           } else result = { ...result, status: 'failed', error: `Missing output (deletions are never propagated): ${missing.join(', ')}` };
-        } else for (const output of outputs) await write(proposalRoot, output.file, output.bytes, false, output.mode);
+        } else {
+          result = await reaskWorkerReport(job, result, worktree, options, async reaskMessage => {
+            const reaskRelative = `.swarm-codex-result-${crypto.randomBytes(12).toString('hex')}.json`;
+            resultFiles.add(reaskRelative);
+            const launchOptions = { ...options, logDirectory: path.join(root, directory, job.id), onOutput: () => {} };
+            if (isCursor) {
+              const reask = await execute(job, worktree, reaskMessage, { ...launchOptions, workerKey: cursorKey, cursor: { profile, bin: cursorBinary.bin, worktree, apiKey: cursorKey, env: { ...await cursorEnvironment(options.env), ...workerEnv, CURSOR_API_KEY: cursorKey } } });
+              for (const key of ['stdout', 'stderr', 'response', 'error']) if (typeof reask[key] === 'string') reask[key] = redactCursorKey(reask[key], cursorKey);
+              return reask;
+            }
+            return execute(job, worktree, reaskMessage, { ...launchOptions, codex: { worktree, profile, lastMessage: path.join(worktree, reaskRelative), resultRelative: reaskRelative, env: { ...await codexEnvironment(options.env), ...workerEnv } } });
+          });
+          for (const output of outputs) await write(proposalRoot, output.file, output.bytes, false, output.mode);
+        }
       }
       return result;
     }, { hasWrittenOutputs: () => outputsChanged(worktree, launchBaseline), onRetry: options.onRetry ?? (async () => {}), cancelled: options.cancelled, ...(isCursor ? { maxAttempts: cursorSettings.maxAttempts, blipRe: CURSOR_BLIP_RE, label: 'cursor-blip' } : {}) });
@@ -2844,6 +2909,9 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         // generic "missing output" instead of being silently replaced by it. Codex already
         // resolves its own blocked envelope (result.status is already 'blocked' by here); every
         // other agent's final message is checked fresh.
+        if (!isWorktreeWriter(job)) result = await reaskWorkerReport(job, result, workspaceRoot, { spawnImpl, signal, cancelled, killImpl, fetchImpl, env });
+        if (result.reportReasked) record.reportReasked = true;
+        if (result.reportReaskRestored) record.reportReaskRestored = result.reportReaskRestored;
         let finalMessage = !isWorktreeWriter(job) && ['complete', 'blocked', 'failed'].includes(result.status) ? parseFinalJson(result.response) : null;
         // Field lesson 116: a prompt that demands a JSON-only reply sometimes gets prose instead.
         // One cheap re-ask on the same session (claude only, when a session id was observed)
@@ -2918,7 +2986,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           delete record.report;
           delete record.reportErrors;
           const reportMessage = result.finalObject ?? (isWorktreeWriter(job) ? parseCodexReply(result.response) : finalMessage);
-          const checked = reportMessage === null ? { report: null, errors: ['no final report'] } : validateReport(reportMessage, { outputs: job.outputs });
+          const checked = result.reportReaskErrors?.length ? { report: null, errors: result.reportReaskErrors } : reportMessage === null ? { report: null, errors: ['no final report'] } : validateReport(reportMessage, { outputs: job.outputs });
           if (checked.report) {
             record.report = checked.report;
             if (checked.report.status === 'blocked') {
@@ -3181,7 +3249,7 @@ const costRateUnknownWarnings = state => state.jobs.filter(job => job.costWarnin
 // Field lesson #268: a red base this run auto-accepted (every failing location already covered by
 // its own declared outputs) is never silent — surfaced the same way any other run-level warning is.
 const redBaseAutoAcceptWarnings = state => state.redBaseAutoAccept ? [state.redBaseAutoAccept] : [];
-const runWarnings = (state, extra = []) => [...modelMismatchWarnings(state), ...codexEnvelopeFallbackWarnings(state), ...permissionDenialWarnings(state), ...invalidJsonOutputWarnings(state), ...droppedWriteWarnings(state), ...venvInterpreterWarnings(state), ...costRateUnknownWarnings(state), ...redBaseAutoAcceptWarnings(state), ...extra];
+const runWarnings = (state, extra = []) => [...modelMismatchWarnings(state), ...codexEnvelopeFallbackWarnings(state), ...permissionDenialWarnings(state), ...invalidJsonOutputWarnings(state), ...droppedWriteWarnings(state), ...venvInterpreterWarnings(state), ...costRateUnknownWarnings(state), ...redBaseAutoAcceptWarnings(state), ...state.jobs.filter(job => job.reportReaskRestored?.length).map(job => `report-reask-restored: ${job.id}: ${job.reportReaskRestored.join(', ')}`), ...extra];
 // A provider that never reports usage.total_tokens (or never ran) reports null, not 0: absence
 // of evidence, not evidence of zero cost.
 const jobTokens = record => typeof record?.usage?.total_tokens === 'number' ? record.usage.total_tokens : null;

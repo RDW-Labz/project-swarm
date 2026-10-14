@@ -3,9 +3,35 @@ import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { REPORT_KEYS, REPORT_STATUSES, REPORT_PROMPT_LINE, SUMMARY_MAX, ITEM_MAX, LIST_MAX, validateReport, legacyReport, rollupRun, renderRollupText } from '../tools/reports.mjs';
+import { sanitizeWorkerText, UNTRUSTED_LABEL } from '../tools/reports.mjs';
 
 const report = overrides => ({ status: 'complete', summary: 'Done.', files: ['out.txt'], risks: [], followups: [], ...overrides });
 const validate = value => validateReport(value, { outputs: ['out.txt'] });
+
+test('worker text strips terminal escapes and controls without changing saved reports', () => {
+  const dirty = '\u001b[31mred\u001b[0m\u001b]title\u0007\u001b]other\u001b\\\u001b[2J\u001b[4;1H\u001bM\u0000\u0007\u007f\u0085\u202e\u2066\u200e\u200f\tnew\nline\r end';
+  assert.equal(sanitizeWorkerText(dirty), 'red new line end');
+  assert.equal(sanitizeWorkerText(42), '42');
+  assert.equal(sanitizeWorkerText('abcdefgh', 6), 'abc...');
+  assert.equal(validate(report({ summary: dirty })).report.summary, dirty.trim());
+  const r = rollupRun({ jobs: [{ id: 'a', status: 'failed', report: report({ summary: dirty, risks: ['risk', 'ri\u0000sk', '\u0007'], followups: ['\u202e', dirty] }) }, { id: 'b', status: 'failed', report: report({ summary: '\u0007' }) }] });
+  assert.deepEqual(r.untrusted, ['attention.summary', 'risks', 'followups']);
+  assert.deepEqual(r.risks, [{ text: 'risk', count: 2 }]);
+  assert.equal(r.attention.length, 1);
+  assert.equal(r.attention[0].summary, 'red new line end');
+  r.attention[0].summary = dirty;
+  r.risks[0].text = dirty;
+  const text = renderRollupText(r);
+  assert.equal(text.split('\n').filter(line => line === UNTRUSTED_LABEL).length, 1);
+  assert.ok(text.includes('red new line end'));
+  assert.doesNotMatch(text, /[\u0000-\u0009\u001b\u007f-\u009f\u202e]/);
+  for (const key of ['attention', 'risks', 'followups']) {
+    const only = rollupRun({ jobs: [] });
+    only[key] = r[key];
+    assert.equal(renderRollupText(only).split('\n').filter(line => line === UNTRUSTED_LABEL).length, 1);
+  }
+  assert.ok(!renderRollupText(rollupRun({ jobs: [] })).includes(UNTRUSTED_LABEL));
+});
 
 test('report constants, copied frozen reports, exact keys and trimmed summaries', () => {
   assert.deepEqual(REPORT_KEYS, ['status', 'summary', 'files', 'risks', 'followups']);

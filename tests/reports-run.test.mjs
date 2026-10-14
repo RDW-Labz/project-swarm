@@ -31,6 +31,96 @@ async function fixture(t, gitRepo = false) {
 }
 const fake = value => (_command, _args, options) => spawn(process.execPath, ['-e', `console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${JSON.stringify(typeof value === 'string' ? value : JSON.stringify(value))}}))`], options);
 
+for (const valid of [true, false]) test(`strict API report-only re-ask ${valid ? 'recovers' : 'fails once'}`, async t => {
+  const root = await fixture(t);
+  let calls = 0;
+  const value = report({ files: ['out.txt'] });
+  const state = await runManifest(root, manifest({ jobs: [job({ agent: 'ollama', model: 'test-model', outputs: ['out.txt'] })] }), { fetchImpl: async (_url, options) => {
+    const body = JSON.parse(options.body);
+    const input = JSON.parse(body.messages[1].content);
+    calls++;
+    if (calls === 2) {
+      assert.deepEqual(input.declaredOutputs, []);
+      assert.deepEqual(input.files, []);
+      assert.match(input.task, /Your files are saved\. Reply with only your final report JSON line and nothing else\.\nProblems with your last report:/);
+      assert.match(input.task, /Declared outputs you may list in files: \["out.txt"\]/);
+    }
+    return new Response(JSON.stringify({ done: true, done_reason: 'stop', prompt_eval_count: 10, eval_count: 5, message: { content: JSON.stringify({ summary: 'done', files: calls === 1 ? [{ path: 'out.txt', content: 'first' }] : [], result: calls === 2 && valid ? value : { files_changed: ['out.txt'] } }) } }));
+  } });
+  assert.equal(calls, 2);
+  assert.equal(state.jobs[0].reportReasked, true);
+  assert.equal(state.jobs[0].usage.input_tokens, 10);
+  assert.equal(state.jobs[0].status, valid ? 'complete' : 'failed', state.jobs[0].error);
+  if (valid) assert.deepEqual(state.jobs[0].report, value);
+  else assert.match(state.jobs[0].error, /^report-invalid:/);
+  assert.equal(await fs.readFile(path.join(root, state.jobs[0].workspace, 'out.txt'), 'utf8'), 'first');
+});
+
+test('codex report-only re-ask restores output bytes in the same worktree', async t => {
+  const root = await fixture(t, true);
+  let calls = 0, workspace;
+  const value = report({ files: ['output.txt'] });
+  const state = await runManifest(root, manifest({ jobs: [job({ agent: 'codex', model: 'test-model', outputs: ['output.txt'] })] }), { platform: 'darwin', spawnImpl: (_command, args, options) => {
+    calls++;
+    if (calls === 1) workspace = options.cwd;
+    else {
+      assert.equal(options.cwd, workspace);
+      assert.ok(args.at(-1).startsWith('Your files are saved. Reply with only your final report JSON line and nothing else.\n'));
+    }
+    const resultFile = args[args.indexOf('-o') + 1];
+    return spawn(process.execPath, ['-e', `const fs=require('node:fs');fs.writeFileSync('output.txt',${JSON.stringify(calls === 1 ? 'first' : 'changed')});fs.writeFileSync(${JSON.stringify(resultFile)},${JSON.stringify(JSON.stringify(calls === 1 ? { files_changed: ['output.txt'] } : value))});`], options);
+  } });
+  assert.equal(calls, 2);
+  assert.equal(state.jobs[0].status, 'complete', state.jobs[0].error);
+  assert.equal(state.jobs[0].reportReasked, true);
+  assert.deepEqual(state.jobs[0].report, value);
+  assert.equal(await fs.readFile(path.join(root, state.jobs[0].workspace, 'output.txt'), 'utf8'), 'first');
+  assert.ok(state.warnings.includes('report-reask-restored: worker: output.txt'));
+});
+
+test('timeout and non-strict attempts never re-ask reports', async t => {
+  const root = await fixture(t);
+  let calls = 0;
+  const plain = await runManifest(root, manifest({ report: undefined }), { spawnImpl: (...args) => { calls++; return fake('legacy')(...args); } });
+  assert.equal(calls, 1);
+  assert.equal(plain.jobs[0].reportReasked, undefined);
+  calls = 0;
+  const timed = await runManifest(root, manifest({ jobs: [job({ timeoutMs: 50 })] }), { spawnImpl: (_command, _args, options) => { calls++; return spawn(process.execPath, ['-e', 'setTimeout(()=>{},10000)'], options); } });
+  assert.equal(calls, 1);
+  assert.equal(timed.jobs[0].status, 'timeout');
+  assert.equal(timed.jobs[0].reportReasked, undefined);
+});
+
+for (const status of ['complete', 'blocked', 'failed']) test(`Claude same-session report re-ask saves ${status} and sums reported tokens`, async t => {
+  const root = await fixture(t);
+  let calls = 0;
+  const value = report({ status });
+  const state = await runManifest(root, manifest(), { spawnImpl: (_command, args, options) => {
+    calls++;
+    if (calls === 2) assert.equal(args[args.indexOf('--resume') + 1], 'fixture-session');
+    const reply = calls === 1 ? 'legacy' : JSON.stringify(value);
+    return spawn(process.execPath, ['-e', `console.log(JSON.stringify({type:'system',subtype:'init',session_id:'fixture-session'}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${JSON.stringify(reply)},usage:{total_tokens:7}}));`], options);
+  } });
+  assert.equal(calls, 2);
+  assert.equal(state.jobs[0].reportReasked, true);
+  assert.equal(state.jobs[0].usage.total_tokens, 14);
+  assert.equal(state.jobs[0].status, status, state.jobs[0].error);
+  assert.deepEqual(state.jobs[0].report, value);
+});
+
+test('shell attempts never re-ask reports', async t => {
+  const root = await fixture(t, true);
+  let calls = 0;
+  const state = await runManifest(root, manifest({ jobs: [job({ shell: true })] }), {
+    platform: 'darwin', env: { ...process.env, SWARM_CLAUDE_WORKER_API_KEY: 'fixture-worker-key' },
+    shellHooks: { access: async () => {}, resolveClaude: async () => process.execPath, scanListeningPorts: async () => [] },
+    spawnImpl: (...args) => { calls++; return fake('legacy')(...args); },
+  });
+  assert.equal(calls, 1, state.jobs[0].error);
+  assert.equal(state.jobs[0].reportReasked, undefined);
+  assert.match(state.jobs[0].error, /^report-invalid:/);
+});
+
 test('strict API jobs retry provider limits, validate the result and clear attempt errors', async t => {
   const root = await fixture(t);
   let calls = 0;
@@ -79,11 +169,12 @@ for (const status of ['complete', 'blocked', 'failed']) test(`strict ${status} r
   assert.deepEqual((await inspectRun(root, state.id)).jobs[0].report, value);
 });
 
-for (const value of ['prose reply', { files_changed: [], notes: ['legacy'] }]) test(`strict invalid ${typeof value} reports fail without retry`, async t => {
+for (const value of ['prose reply', { files_changed: [], notes: ['legacy'] }]) test(`strict invalid ${typeof value} reports fail after one report re-ask`, async t => {
   const root = await fixture(t);
   let calls = 0;
   const state = await runManifest(root, manifest(), { spawnImpl: (...args) => { calls++; return fake(value)(...args); } });
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
+  assert.equal(state.jobs[0].reportReasked, true);
   assert.equal(state.jobs[0].status, 'failed');
   assert.match(state.jobs[0].error, /^report-invalid:/);
   assert.ok(state.jobs[0].reportErrors.length);
