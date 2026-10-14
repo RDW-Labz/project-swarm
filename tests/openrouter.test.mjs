@@ -19,7 +19,7 @@ const models = { data: [
   { id: 'deepseek/deepseek-v4.1-flash', pricing: { prompt: '0.000000014', completion: '0.0000004' } },
   { id: 'pricey/model', pricing: { prompt: '0.01', completion: '0.01' } },
 ] };
-const job = overrides => ({ id: 'or-job', agent: 'openrouter', model: 'anthropic/claude-sonnet-5', context: ['input.txt'], outputs: ['coordination/x-pr-create.json'], prompt: 'Write the payload.', timeoutMs: 2000, ...overrides });
+const job = overrides => ({ id: 'or-job', agent: 'openrouter', sensitive: false, model: 'anthropic/claude-sonnet-5', context: ['input.txt'], outputs: ['coordination/x-pr-create.json'], prompt: 'Write the payload.', timeoutMs: 2000, ...overrides });
 
 async function logsDir(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-openrouter-'));

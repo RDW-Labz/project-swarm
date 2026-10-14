@@ -229,7 +229,7 @@ describe('#285: a tool-free API job with outputs: [] that asks for real content 
       throw new Error(`unexpected url ${url}`);
     };
     const longPrompt = 'x'.repeat(3400);
-    const theJob = { id: 'j3', agent: 'openrouter', model: 'anthropic/claude-sonnet-5', context: [], outputs: ['notes.md'], prompt: longPrompt, timeoutMs: 2000 };
+    const theJob = { id: 'j3', agent: 'openrouter', sensitive: false, model: 'anthropic/claude-sonnet-5', context: [], outputs: ['notes.md'], prompt: longPrompt, timeoutMs: 2000 };
     const result = await executeApi(theJob, [], { env, fetchImpl });
     assert.equal(result.status, 'failed');
     assert.match(result.error, /truncated: finish_reason length \(prompt 3400 chars\)$/);

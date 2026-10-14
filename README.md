@@ -219,7 +219,7 @@ flowchart LR
 - Prompts, responses, provider logs, resolved model identifiers, usage, and reported cost remain in the local run directory.
 - The coordinator handles follow-up rounds by explicitly passing earlier responses into a new assignment. Workers do not maintain a shared conversation or coordinate themselves.
 
-Manifests accept 1–5000 jobs. Each agent has its own lane cap, rate limit, backoff, and quota pause. Optional `agent: "auto"` selects a configured lane model and falls back to higher lanes after failures; `sensitive: true` excludes OpenRouter. See [lanes and routing](docs/lanes.md) for defaults and overrides.
+Manifests accept 1–5000 jobs. Each agent has its own lane cap, rate limit, backoff, and quota pause. Optional `agent: "auto"` selects a configured lane model and falls back to higher lanes after failures; jobs are sensitive by default; `sensitive: false` allows OpenRouter. See [lanes and routing](docs/lanes.md) for defaults and overrides.
 
 Optional [job types](docs/job-types.md) set prompt guidance, default timeouts, skills, and automatic routing preferences. Choose `build`, `fix`, `test`, `review`, `research`, `docs`, `merge`, or `lead`; each type also limits declared outputs.
 

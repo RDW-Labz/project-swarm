@@ -14,8 +14,8 @@ Routes list agents in candidate order. Timeouts are in milliseconds.
 | `review` | none | hermes, codex | 900000 | `code-review` |
 | `research` | none | hermes, openrouter | 900000 | none |
 | `docs` | docs | hermes | 900000 | none |
-| `merge` | any | codex, claude | 1800000 | `resolving-merge-conflicts` |
-| `lead` | manifest | claude, codex | 900000 | none |
+| `merge` | any | codex | 1800000 | `resolving-merge-conflicts` |
+| `lead` | manifest | codex | 900000 | none |
 
 Explicit `timeoutMs` and `skills` win over preset defaults. A type never changes `agent`, `model`, `context`, or `outputs`.
 
@@ -23,7 +23,7 @@ Explicit `timeoutMs` and `skills` win over preset defaults. A type never changes
 
 - `any`: any declared output is allowed, subject to the usual path and ownership rules.
 - `tests`: every output must pass the runner's `isTestFile` check.
-- `docs`: every output must have a `.md`, `.mdx`, `.rst`, `.txt`, or `.adoc` extension, or be under `docs/`.
+- `docs`: outputs need a `.md`, `.mdx`, `.rst`, or `.adoc` extension, or the basename `README.txt` or `CHANGELOG.txt`, anywhere and case-insensitive. Other `.txt` files are refused. Files under `docs/` still need an allowed extension or basename; `docs/state/` is always blocked, case-insensitive. Backslashes are normalized to slashes.
 - `none`: `outputs` must be `[]`. Review and research jobs do not edit files.
 - `manifest`: exactly one output is required, ending in `.json`. Lead jobs write only that child manifest. Child jobs must stay inside the assigned area.
 
@@ -51,9 +51,9 @@ For GitHub prior art, the coordinator uses `swarm scout` or `sweep`.
 
 ## Routing
 
-Type routes apply only to `agent: "auto"`. Omit `model` and configure lane models first. The router uses the preset candidate order and appends Claude if it is absent. Lanes without models, paused lanes, and lanes that cannot accept the job's fields are skipped. If all eligible lanes are paused, the router returns the first eligible lane with a pause reason.
+Type routes apply only to `agent: "auto"`. Omit `model` and configure lane models first. The router tries the preset route without Claude, then any remaining cheap lanes in order: Hermes → Cursor → Codex → OpenRouter. Lanes without models or unable to accept the job are skipped. It selects the first healthy cheap lane; if all eligible cheap lanes are paused, it waits on the first one.
 
-`sensitive: true` removes OpenRouter. `tier: "expensive"` goes straight to Claude and still requires `tierReason`. Two failed or timed-out attempts move the job up the candidate order. Rate-limit retries do not count toward fallback. Explicit agents keep their named route. See [lanes and routing](lanes.md).
+Jobs are sensitive by default; only `sensitive: false` allows OpenRouter. `tier: "expensive"` goes straight to Claude and still requires `tierReason`. Two failed or timed-out attempts drop that lane. Claude is eligible only when no cheap candidate remains and cheap lanes have collected at least two real failures. Pauses and rate-limit retries never justify a Claude fallback. Explicit agents keep their named route. See [lanes and routing](lanes.md).
 
 The applied job, including its prompt and defaults, is saved in the run's `manifest.json`.
 

@@ -29,8 +29,8 @@ test('presets are frozen and match the contract defaults', () => {
     review: ['none', ['hermes', 'codex'], 900000, 'code-review'],
     research: ['none', ['hermes', 'openrouter'], 900000, null],
     docs: ['docs', ['hermes'], 900000, null],
-    merge: ['any', ['codex', 'claude'], 1800000, 'resolving-merge-conflicts'],
-    lead: ['manifest', ['claude', 'codex'], 900000, null],
+    merge: ['any', ['codex'], 1800000, 'resolving-merge-conflicts'],
+    lead: ['manifest', ['codex'], 900000, null],
   };
   assert.equal(Object.isFrozen(JOB_TYPES), true);
   assert.deepEqual(Object.keys(JOB_TYPES), Object.keys(expected));
@@ -75,8 +75,8 @@ test('preset skills attach only when available and otherwise warn', () => {
 });
 
 test('documentation paths and every write rule including manifest edge cases', () => {
-  for (const file of ['README.md', 'guide.mdx', 'guide.rst', 'guide.txt', 'guide.adoc', 'docs/data.json', 'docs/nested/example.mjs']) assert.equal(isDocsFile(file), true, file);
-  for (const file of ['src/main.mjs', 'mydocs/data.json', 'guide.md.js']) assert.equal(isDocsFile(file), false, file);
+  for (const file of ['README.md', 'guide.mdx', 'guide.rst', 'guide.adoc', 'README.txt', 'notes/CHANGELOG.txt', 'docs/guide.md', 'DOCS\\guide.MD', 'notes/readme.TXT']) assert.equal(isDocsFile(file), true, file);
+  for (const file of ['src/main.mjs', 'mydocs/data.json', 'guide.md.js', 'requirements.txt', 'docs/x.js', 'docs/data.json', 'docs/state/usage-ledger.md', 'DOCS\\STATE\\ledger.MD', 'guide.txt']) assert.equal(isDocsFile(file), false, file);
   assert.deepEqual(jobTypeOutputViolations(job({ outputs: ['src/main.mjs'] })), []);
   for (const type of ['build', 'fix', 'merge']) assert.deepEqual(jobTypeOutputViolations(job({ type, outputs: ['src/main.mjs'] })), []);
   for (const type of ['review', 'research']) {
@@ -84,7 +84,7 @@ test('documentation paths and every write rule including manifest edge cases', (
     assert.deepEqual(jobTypeOutputViolations(job({ type, outputs: ['README.md', 'tests/x.mjs'] })), ['README.md', 'tests/x.mjs']);
   }
   assert.deepEqual(jobTypeOutputViolations(job({ type: 'test', outputs: ['tests/x.mjs', 'src/x.test.mjs', 'test_x.py', 'x_test.go', 'src/x.mjs'] })), ['src/x.mjs']);
-  assert.deepEqual(jobTypeOutputViolations(job({ type: 'docs', outputs: ['README.md', 'docs/data.json', 'src/x.mjs'] })), ['src/x.mjs']);
+  assert.deepEqual(jobTypeOutputViolations(job({ type: 'docs', outputs: ['README.md', 'docs/data.json', 'src/x.mjs'] })), ['docs/data.json', 'src/x.mjs']);
   assert.deepEqual(jobTypeOutputViolations(job({ type: 'lead', outputs: ['coordination/child.json'] })), []);
   for (const outputs of [[], ['child.md'], ['a.json', 'b.json'], ['a.json', 'b.md']]) {
     const violations = outputs.length ? outputs : ['(none)'];

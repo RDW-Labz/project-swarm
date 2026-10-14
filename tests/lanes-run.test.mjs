@@ -90,7 +90,7 @@ test('auto retries OpenRouter twice then falls back to Claude with three recorde
   const root = await fixture(t);
   const logs = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-lane-ledger-'));
   t.after(() => fs.rm(logs, { recursive: true, force: true }));
-  const auto = job(0, 'auto'); delete auto.model;
+  const auto = job(0, 'auto', { sensitive: false }); delete auto.model;
   const lanes = { openrouter: { model: 'anthropic/claude-sonnet-5' }, claude: { model: 'sonnet' } };
   const validation = await validateProject(root, manifest([auto], { lanes }), { env });
   assert.equal(validation.routes[0].agent, 'openrouter');
@@ -121,29 +121,39 @@ test('manifest accepts 5000 jobs and concurrency 512 and refuses invalid lanes a
   assert.equal(validateManifest(manifest(jobs)).jobs.length, 5000);
   assert.throws(() => validateManifest(manifest([...jobs, job(5000)])), /1–5000/);
   assert.throws(() => validateManifest(manifest(jobs, { concurrency: 513 })), /1–512/);
-  assert.throws(() => validateManifest(manifest([job(0, 'openrouter', { sensitive: true })])), { code: 'sensitive-openrouter' });
+  for (const sensitive of [undefined, true]) {
+    assert.throws(() => validateManifest(manifest([job(0, 'openrouter', { sensitive })])), {
+      code: 'sensitive-openrouter', message: 'Job job-0: OpenRouter only gets jobs that set sensitive: false',
+    });
+  }
+  validateManifest(manifest([job(0, 'openrouter', { sensitive: false })]));
+  assert.throws(() => validateManifest(manifest([job(0, 'openrouter', { sensitive: 'false' })])), /sensitive must be true or false/);
   assert.throws(() => validateManifest(manifest([job(0, 'auto')])), { code: 'auto-model-forbidden' });
   assert.throws(() => validateManifest(manifest([job(0)], { lanes: { ollama: { concurrency: 0 } } })), { code: 'lanes-invalid' });
-  const root = await fixture(t), auto = job(0, 'auto'); delete auto.model;
+  const root = await fixture(t), auto = job(0, 'auto', { sensitive: false }); delete auto.model;
   await assert.rejects(validateProject(root, manifest([auto]), { env }), { code: 'route-exhausted' });
+  await assert.rejects(validateProject(root, manifest([auto], { lanes: { claude: { model: 'sonnet' } } }), { env }), { code: 'route-exhausted' });
+  auto.tier = 'expensive'; auto.tierReason = 'Explicit expensive route test';
   const result = await validateProject(root, manifest([auto], { lanes: { claude: { model: 'sonnet' } } }), { env });
-  assert.deepEqual(result.routes, [{ jobId: auto.id, agent: 'claude', model: 'sonnet', reason: 'cheapest healthy lane' }]);
+  assert.deepEqual(result.routes, [{ jobId: auto.id, agent: 'claude', model: 'sonnet', reason: 'tier expensive' }]);
 });
 
-test('auto quota exhaustion routes around the paused lane and counts one failed attempt', async t => {
-  const root = await fixture(t), auto = job(0, 'auto'); delete auto.model;
-  const lanes = { openrouter: { model: 'anthropic/claude-sonnet-5', pauseMs: 300 }, claude: { model: 'sonnet' } };
+test('auto quota exhaustion waits for the cheap lane instead of jumping to Claude', async t => {
+  const root = await fixture(t), auto = job(0, 'auto', { sensitive: false }); delete auto.model;
+  const lanes = { openrouter: { model: 'anthropic/claude-sonnet-5', pauseMs: 30 }, claude: { model: 'sonnet' } };
+  let calls = 0;
   const state = await runManifest(root, manifest([auto], { lanes }), {
     env: { ...env, OPENROUTER_API_KEY: 'sk-or-fake-quota-key', SWARM_LOGS_DIR: root },
     fetchImpl: async url => {
       if (url === OPENROUTER_MODELS_URL) return reply({ data: [{ id: lanes.openrouter.model, pricing: { prompt: '0.000002', completion: '0.00001' } }] });
       assert.equal(url, OPENROUTER_ENDPOINT);
-      return new Response('credit exhausted', { status: 402 });
+      if (++calls === 1) return new Response('credit exhausted', { status: 402 });
+      return reply({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ summary: 'done', files: [{ path: 'out/0.txt', content: 'done' }] }) } }] });
     },
     spawnImpl: (_command, _args, options) => spawn(process.execPath, ['--input-type=module', '-e', "import fs from 'node:fs'; fs.mkdirSync('out',{recursive:true}); fs.writeFileSync('out/0.txt','done'); console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'complete'}));"], options),
   });
   assert.equal(state.status, 'complete', state.error);
-  assert.deepEqual(state.jobs[0].attempts.map(attempt => attempt.agent), ['openrouter', 'claude']);
+  assert.deepEqual(state.jobs[0].attempts.map(attempt => attempt.agent), ['openrouter', 'openrouter']);
   assert.equal(state.jobs[0].routeFailures.openrouter, 1);
 });
 
@@ -205,16 +215,24 @@ test('exhausted rate-limit retries fail with a stable prefix', async t => {
 });
 
 test('auto dependency jobs skip worktree-only lanes and receive completed dependency outputs', async t => {
-  const root = await fixture(t), auto = job(1, 'auto', { after: ['job-0'] }); delete auto.model;
-  const spec = manifest([job(0), auto], { lanes: { codex: { model: 'gpt-5.4' }, claude: { model: 'sonnet' } } });
+  const root = await fixture(t), auto = job(1, 'auto', { after: ['job-0'], sensitive: false }); delete auto.model;
+  const lanes = { codex: { model: 'gpt-5.4' }, openrouter: { model: 'anthropic/claude-sonnet-5' }, claude: { model: 'sonnet' } };
+  const spec = manifest([job(0), auto], { lanes });
   const validation = await validateProject(root, spec, { env });
-  assert.equal(validation.routes[0].agent, 'claude');
+  assert.equal(validation.routes[0].agent, 'openrouter');
   const state = await runManifest(root, spec, {
-    env, fetchImpl: async () => reply(completion('ollama', 0)),
-    spawnImpl: (_command, _args, options) => spawn(process.execPath, ['--input-type=module', '-e', "import fs from 'node:fs'; if(fs.readFileSync('out/0.txt','utf8') !== 'output 0\\n') process.exit(9); fs.writeFileSync('out/1.txt','dependency copied'); console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'complete'}));"], options),
+    env: { ...env, OPENROUTER_API_KEY: 'sk-or-fake-dependency-key', SWARM_LOGS_DIR: root },
+    fetchImpl: async (url, options) => {
+      if (url === OPENROUTER_MODELS_URL) return reply({ data: [{ id: lanes.openrouter.model, pricing: { prompt: '0.000002', completion: '0.00001' } }] });
+      if (url !== OPENROUTER_ENDPOINT) return reply(completion('ollama', 0));
+      assert.match(options.body, /output 0/);
+      return reply({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ summary: 'done', files: [{ path: 'out/1.txt', content: 'dependency copied' }] }) } }] });
+    },
   });
   assert.equal(state.status, 'complete', state.error);
-  assert.equal(state.jobs[1].lane, 'claude');
+  assert.equal(state.jobs[1].lane, 'openrouter');
+  const workspace = path.join(root, '.swarm/workspaces', state.id, auto.id);
+  assert.equal(await fs.readFile(path.join(workspace, 'out/1.txt'), 'utf8'), 'dependency copied');
 });
 
 test('HTTP outcome metadata is bounded and never retains an error body', async () => {

@@ -158,7 +158,7 @@ test('#222: executeApi refuses api-key-missing naming the config path, before an
 });
 
 test('#222: executeApi names the openrouter keychain item and config path in api-key-missing', async t => {
-  const result = await executeApi(job({ agent: 'openrouter', model: 'anthropic/claude', outputs: ['report.md'] }), [], {
+  const result = await executeApi(job({ agent: 'openrouter', sensitive: false, model: 'anthropic/claude', outputs: ['report.md'] }), [], {
     env: { SWARM_CONFIG: '/tmp/does-not-exist-swarm-config.json' }, readKey: () => null,
     fetchImpl: async () => { throw new Error('must not be called'); },
   });
@@ -175,7 +175,7 @@ test('#222 follow-up: api-key-missing config path resolves from the passed env, 
   // A decoy the real machine's home never has: if the code fell back to the live os.homedir()
   // instead of the isolated env it was handed, this service name would never show up.
   await fs.writeFile(decoyConfigFile, JSON.stringify({ keychain: { service: 'decoy-service' } }));
-  const result = await executeApi(job({ agent: 'openrouter', model: 'anthropic/claude', outputs: ['report.md'] }), [], {
+  const result = await executeApi(job({ agent: 'openrouter', sensitive: false, model: 'anthropic/claude', outputs: ['report.md'] }), [], {
     env: { HOME: fakeHome }, readKey: () => null,
     fetchImpl: async () => { throw new Error('must not be called'); },
   });
@@ -351,7 +351,7 @@ test('#226: executeApi retries once at double the limit on an empty length-trunc
     if (call === 1) return new Response(JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: '' } }], model: 'deepseek/deepseek-r1' }), { headers: { 'content-type': 'application/json' } });
     return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ summary: 'ok', files: [], edits: [] }) } }], model: 'deepseek/deepseek-r1', usage: { cost: 0.01 } }), { headers: { 'content-type': 'application/json' } });
   };
-  const result = await executeApi(job({ agent: 'openrouter', model: 'deepseek/deepseek-r1', outputs: [] }), [], {
+  const result = await executeApi(job({ agent: 'openrouter', sensitive: false, model: 'deepseek/deepseek-r1', outputs: [] }), [], {
     env: { OPENROUTER_API_KEY: 'sk-fake-secret-token-abcdef' }, fetchImpl,
   });
   assert.equal(result.status, 'complete', result.error);

@@ -1245,7 +1245,7 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     // Every job, CLI or API, must name its model: the runner never falls back to a CLI default
     // (for Claude, that default is the user's own, often the most expensive, model).
     if (job.sensitive !== undefined && typeof job.sensitive !== 'boolean') fail(`Job ${job.id}: sensitive must be true or false`);
-    if (job.sensitive === true && job.agent === 'openrouter') fail(`Job ${job.id}: sensitive jobs never go to openrouter`, 'sensitive-openrouter');
+    if (job.agent === 'openrouter' && job.sensitive !== false) fail(`Job ${job.id}: OpenRouter only gets jobs that set sensitive: false`, 'sensitive-openrouter');
     if (job.agent === 'auto') {
       if (Object.hasOwn(job, 'model')) fail(`Job ${job.id}: agent auto picks its own model; omit model`, 'auto-model-forbidden');
     } else {
@@ -4964,7 +4964,7 @@ export function resolveAskRoute(options = {}, config = {}) {
   const invalid = () => fail(ASK_ROUTE_INVALID, 'ask-route-invalid');
   const validPair = pair => {
     if (!pair || typeof pair !== 'object' || Array.isArray(pair) || typeof pair.agent !== 'string' || typeof pair.model !== 'string' || !pair.model.trim()) return false;
-    try { validateManifest({ version: 1, jobs: [{ id: 'ask-route', agent: pair.agent, model: pair.model, prompt: 'Answer the question.', context: [], outputs: [] }] }); return true; }
+    try { validateManifest({ version: 1, jobs: [{ id: 'ask-route', agent: pair.agent, model: pair.model, ...(options.sensitive !== undefined ? { sensitive: options.sensitive } : {}), prompt: 'Answer the question.', context: [], outputs: [] }] }); return true; }
     catch { return false; }
   };
   if (tier !== undefined) {
@@ -5014,7 +5014,7 @@ export async function askRun(root, options = {}, runOptions = {}) {
   // from a file it was never given; any claim of one must say so and name what it searched.
   const prompt = `${question.trim()}\n\nIf your answer claims that something is missing, never called, omitted, or absent, include "basis":"context-only" in your JSON and name what you searched (which of your context files) to reach that conclusion.\n\nFinish with exactly one JSON line containing your complete answer as a JSON object.`;
   const { id, job, state } = await runWithIdRetry('ask', runOptions, async id => {
-    const job = { id, agent, model, prompt, context, outputs: [], ...(timeoutMs !== undefined ? { timeoutMs } : {}) };
+    const job = { id, agent, model, prompt, context, outputs: [], ...(options.sensitive !== undefined ? { sensitive: options.sensitive } : {}), ...(timeoutMs !== undefined ? { timeoutMs } : {}) };
     const state = await runManifest(root, { version: 1, jobs: [job] }, { ...runOptions, id });
     return { job, state };
   });

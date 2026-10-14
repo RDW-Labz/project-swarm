@@ -22,7 +22,7 @@ const isolate = fileURLToPath(new URL('./_isolate-config.mjs', import.meta.url))
 const stamp = '2000-01-01T00:00:00.000Z';
 const json = value => JSON.stringify(value) + '\n';
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
-const job = (extra = {}) => ({ id: '9001', agent: 'openrouter', model: 'model9001', prompt: '9001', context: [], outputs: ['9001.txt'], ...extra });
+const job = (extra = {}) => ({ id: '9001', agent: 'openrouter', sensitive: false, model: 'model9001', prompt: '9001', context: [], outputs: ['9001.txt'], ...extra });
 const manifest = extra => ({ version: 1, jobs: [job(extra)] });
 
 async function fixture(t) {

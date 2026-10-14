@@ -12,8 +12,8 @@ export const JOB_TYPES = Object.freeze({
   review: preset('none', ['hermes', 'codex'], 900000, 'code-review', 'Do not edit files. Finish with one JSON line: {"status":"complete","summary":"...","findings":[{"file":"...","line":0,"severity":"high|medium|low","issue":"...","fix":"..."}]}.'),
   research: preset('none', ['hermes', 'openrouter'], 900000, null, 'Do not edit files. Finish with one JSON line: {"status":"complete","summary":"...","sources":["..."],"findings":["..."]}. For GitHub prior art, the coordinator uses swarm scout or sweep instead.'),
   docs: preset('docs', ['hermes'], 900000, null, 'Edit documentation only. Plain, short sentences.'),
-  merge: preset('any', ['codex', 'claude'], 1800000, 'resolving-merge-conflicts', "Resolve the conflict so both sides' intent survives; never drop a side silently. Keep tests passing."),
-  lead: preset('manifest', ['claude', 'codex'], 900000, null, 'Write exactly one child manifest JSON file as your only output. Do not edit any other file. Child jobs must stay inside your assigned area.'),
+  merge: preset('any', ['codex'], 1800000, 'resolving-merge-conflicts', "Resolve the conflict so both sides' intent survives; never drop a side silently. Keep tests passing."),
+  lead: preset('manifest', ['codex'], 900000, null, 'Write exactly one child manifest JSON file as your only output. Do not edit any other file. Child jobs must stay inside your assigned area.'),
 });
 
 function jobPreset(job) {
@@ -43,7 +43,8 @@ export function applyJobType(job, { skillNames = null } = {}) {
 
 export function isDocsFile(relPath) {
   const file = String(relPath).replace(/\\/g, '/');
-  return file.startsWith('docs/') || /\.(?:md|mdx|rst|txt|adoc)$/i.test(file);
+  if (/^docs\/state\//i.test(file)) return false;
+  return /\.(?:md|mdx|rst|adoc)$/i.test(file) || /(?:^|\/)(?:README|CHANGELOG)\.txt$/i.test(file);
 }
 
 export function jobTypeOutputViolations(job) {

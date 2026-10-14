@@ -68,7 +68,7 @@ test('#184: an API agent whose summary is plain prose returns {status:"ok", answ
   const env = { OPENROUTER_API_KEY: KEY, SWARM_LOGS_DIR: await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-openrouter-logs-')) };
   t.after(() => fs.rm(env.SWARM_LOGS_DIR, { recursive: true, force: true }));
   const fetchImpl = transport(body => reply(completion('The answer is plainly yes, based on the source file.')));
-  const result = await askRun(root, { model: 'anthropic/claude-sonnet-5', context: ['input.txt'], agent: 'openrouter', question: 'Is it yes?' }, { env, fetchImpl });
+  const result = await askRun(root, { model: 'anthropic/claude-sonnet-5', context: ['input.txt'], agent: 'openrouter', sensitive: false, question: 'Is it yes?' }, { env, fetchImpl });
   assert.deepEqual(Object.keys(result).sort(), ['actualModel', 'answer', 'contextFiles', 'costUsd', 'id', 'model', 'modelMismatch', 'parsed', 'status'].sort());
   assert.equal(result.status, 'ok');
   assert.equal(result.parsed, false);
@@ -82,7 +82,7 @@ test('#184: an API agent whose summary already ends in a parsable JSON line is r
   const env = { OPENROUTER_API_KEY: KEY, SWARM_LOGS_DIR: await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-openrouter-logs-')) };
   t.after(() => fs.rm(env.SWARM_LOGS_DIR, { recursive: true, force: true }));
   const fetchImpl = transport(() => reply(completion(`Reasoning first.\n${JSON.stringify({ answer: 'yes' })}`)));
-  const result = await askRun(root, { model: 'anthropic/claude-sonnet-5', context: ['input.txt'], agent: 'openrouter', question: 'Is it yes?' }, { env, fetchImpl });
+  const result = await askRun(root, { model: 'anthropic/claude-sonnet-5', context: ['input.txt'], agent: 'openrouter', sensitive: false, question: 'Is it yes?' }, { env, fetchImpl });
   assert.equal(result.status, 'complete');
   assert.deepEqual(result.result, { answer: 'yes' });
   assert.equal('parsed' in result, false);
