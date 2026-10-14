@@ -5,6 +5,13 @@ worktree. It can take overflow work alongside swarm jobs. Swarm cannot see
 these manual workers, so the guard records which files they own and refuses
 overlapping claims.
 
+A swarm-run cursor job (`"agent": "cursor"` in a manifest; see
+[provider setup](providers.md#cursor-cli-cursor-macos-only)) is not part of this
+lane. It is an ordinary swarm job: swarm owns its outputs, it appears on
+`swarm board` (tagged `swarm-run cursor job` in guard refusals), a manual claim
+on one of its outputs is refused, and it never needs a claim of its own. Use the
+guard only for `cursor-agent` sessions you start yourself.
+
 Use Python 3; no Python packages are needed. Run the guard from the repository
 you intend to merge into, or set `REPO` to that repository. Claims live in
 `coordination/cursor-claims.json` under `REPO`. Keep that file out of worker

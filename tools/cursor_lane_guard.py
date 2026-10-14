@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """File-ownership guard for manually run Cursor workers.
 Track Cursor claims alongside visible swarm runs to refuse overlapping file ownership
-and check a worker's changes before merging.
+and check a worker's changes before merging. A swarm-run cursor job (manifest
+`agent: "cursor"`) is an ordinary swarm job: it shows on `swarm board`, so its outputs
+refuse a manual claim here, and it never needs (or takes) a claim of its own.
 
   claim   <job> <file>...       refuse if a live swarm run writes the file or another claim holds it
   check   <job> <worktree>      before merge: worktree changed only claimed files; main did not move under them
@@ -62,7 +64,8 @@ def live_swarm_outputs():
             continue
         for job in run.get("jobs", []):
             for f in job.get("outputs", []):
-                owned[f] = "%s/%s" % (run.get("runId"), job.get("id"))
+                kind = " (swarm-run cursor job)" if job.get("agent") == "cursor" else ""
+                owned[f] = "%s/%s%s" % (run.get("runId"), job.get("id"), kind)
     return owned
 
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.52.0
+
+- Added the `cursor` worker: `cursor-agent` runs as a worktree writer like codex, under `sandbox-exec` with the codex profile plus its install directory and `~/.cursor`, invoked as `-p --output-format json --model <model> --trust --workspace <worktree> --sandbox disabled --force <prompt>`. See [docs/providers.md](docs/providers.md#cursor-cli-cursor-macos-only).
+- The Keychain stays blocked; a cursor job authenticates only with `CURSOR_API_KEY` in an allowlisted worker environment. The key is refused in prompts and argv, redacted from logs and saved output, and a run that exposed it is refused by integrate and ship.
+- Cursor jobs fail fast with `cursor-not-installed` or `cursor-not-authenticated`, and `doctor cursor` checks the version and required flags without printing the key.
+- Local config `cursor` sets `model`, `timeoutMs`, `maxAttempts` and `allowedPaths`; the codex retry helper now takes `maxAttempts`, and cursor retries only transient transport errors. Documented tiers route `mid` to cursor and `expensive` to codex; automatic tier escalation is not built.
+- Worktree-writer gates (worktree use, `testEnv`, `readPaths`, `setup`, `after`, HEAD-only context, uncommitted-file warnings, shell-capable warnings) now cover cursor jobs, and `swarm board` jobs carry their agent so the Cursor lane guard names swarm-run cursor jobs.
+
 ## 1.51.1
 
 - `ask` runs a named CLI agent (e.g. `--tier cheap` or `--agent codex --model gpt-6-luna`) directly as a read-only job with no outputs when no read-only fallback is configured (no matching tier, or a tier without `fallback`), with an `ask-agent-direct` warning and `route.direct: true`, instead of refusing with `ask-agent-fallback-unconfigured`. A configured but malformed fallback still refuses. (lesson 417)
