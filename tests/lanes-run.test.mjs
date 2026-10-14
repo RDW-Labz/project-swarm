@@ -182,7 +182,7 @@ test('200 short API jobs coalesce state.json writes', async t => {
   };
   t.after(() => { fs.rename = rename; });
   const state = await runManifest(root, manifest(Array.from({ length: 200 }, (_, n) => job(n))), {
-    env, fetchImpl: async (url, options) => { const { agent, n } = requestJob(url, options); return reply(completion(agent, n)); },
+    env: { ...env, SWARM_LANES_DIR: path.join(root, 'lanes') }, fetchImpl: async (url, options) => { const { agent, n } = requestJob(url, options); return reply(completion(agent, n)); },
   });
   assert.equal(state.status, 'complete', state.error);
   assert.ok(writes < 80, `${writes} state writes for 200 jobs`);

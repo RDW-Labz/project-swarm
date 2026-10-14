@@ -143,7 +143,7 @@ export async function withLaneStore(fn, { dir = lanesDir(), now = Date.now, isAl
         }
       } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
       if (Date.now() - started >= timeoutMs) throw storeError('lanes-store-locked', 'timed out waiting for lanes.lock');
-      await new Promise(resolve => setTimeout(resolve, 25));
+      await new Promise(resolve => setTimeout(resolve, 1));
     }
   }
   let temp;
@@ -456,7 +456,12 @@ export class LaneScheduler {
       lane.state = 'paused';
       lane.until = Number.isFinite(reset) && reset > this.now() ? reset : this.now() + limits.pauseMs;
     } else if (outcome.kind === 'ok') lane.consecutiveRateLimits = 0;
-    if (this.shared) return this.persistPause(agent).then(() => this.scheduleShared());
+    // A clean success has nothing to publish. Rate limits and quota pauses still go to the shared file.
+    if (this.shared) {
+      if (outcome.kind !== 'ok' || lane.until !== null) return this.persistPause(agent).then(() => this.scheduleShared());
+      this.scheduleShared();
+      return;
+    }
     this.pump();
   }
 

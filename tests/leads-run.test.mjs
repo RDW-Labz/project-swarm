@@ -131,7 +131,7 @@ test('parent AbortSignal cancels running children', async t => {
   assert.match(state.jobs[0].error, /lead-child-cancelled/);
 });
 
-test('five leads share one cursor cap of 8, and a 429 pauses cursor for the other children and another repo', async t => {
+test('five leads share one cursor cap of 8, and a 429 pauses cursor for the other children and another repo', { skip: process.platform === 'darwin' ? false : 'cursor requires macOS' }, async t => {
   const options = await fixture(t);
   const other = await fixture(t);
   const lanesPath = path.join(path.dirname(options.env.SWARM_CONFIG), 'lanes');
