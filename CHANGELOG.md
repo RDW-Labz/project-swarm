@@ -8,6 +8,7 @@
 - Added `sensitive` routing protection that excludes OpenRouter and refuses explicit sensitive OpenRouter jobs.
 - Prepared workspaces and context lazily at dispatch and coalesced state writes for large runs. Saved state includes lane health, routes, attempts, and rate-limit retries.
 - Added [lane configuration and routing guidance](docs/lanes.md), including defaults and override examples.
+- Preserved run-start snapshots with lazy preparation; changed copied files fail the affected job with `snapshot-changed` before spawning.
 
 ## 1.52.0
 

@@ -40,7 +40,7 @@ Do not assign the same output path to two jobs. Avoid jobs whose output paths ov
 
 The coordinator must also avoid editing a worker's owned outputs during the run. Separate manifests do not create a universal scheduling lock; coordinate ownership across all active runs yourself. Integration's base-hash check catches changed outputs but cannot decide how two conflicting implementations should be combined.
 
-Workspaces are prepared lazily at dispatch; path and size validation still happens before execution. Job B cannot consume Job A's new changes merely because the manifest lists B later or uses `concurrency: 1`. Integrate A, then create a fresh run for dependent work.
+Workspaces are prepared lazily at dispatch; path and size validation still happens before execution. Every worker still sees the project as it was when the run started. A copied file edited mid-run fails the affected job before spawning with `snapshot-changed: <file>`. Job B cannot consume Job A's new changes merely because the manifest lists B later or uses `concurrency: 1`. Integrate A, then create a fresh run for dependent work.
 
 ## Shared contract for parallel jobs
 

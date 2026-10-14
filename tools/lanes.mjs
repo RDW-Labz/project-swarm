@@ -85,6 +85,7 @@ export class LaneScheduler {
     this.random = random;
     this.globalInFlight = 0;
     this.peakGlobal = 0;
+    this.nextArrival = 0;
     this.closed = false;
     this.timer = null;
     this.states = Object.fromEntries(LANE_AGENTS.map(agent => [agent, {
@@ -110,7 +111,7 @@ export class LaneScheduler {
     if (this.closed || signal?.aborted) return Promise.reject(abortError());
     lane.used = true;
     return new Promise((resolve, reject) => {
-      const waiter = { resolve, reject, signal, abort: null };
+      const waiter = { resolve, reject, signal, abort: null, arrival: this.nextArrival++ };
       waiter.abort = () => {
         const index = lane.queue.indexOf(waiter);
         if (index < 0) return;
@@ -133,28 +134,41 @@ export class LaneScheduler {
     let wakeAt = Infinity;
     for (const agent of LANE_AGENTS) {
       const lane = this.states[agent];
-      const limits = this.lanes[agent];
       this.refresh(lane, time);
       if (lane.until !== null) wakeAt = Math.min(wakeAt, lane.until);
-      if (lane.state !== 'ok') continue;
-      while (lane.queue.length && lane.inFlight < limits.concurrency && this.globalInFlight < this.globalConcurrency) {
-        if (limits.requestsPerMinute !== null && lane.acquisitions.length >= limits.requestsPerMinute) break;
-        const waiter = lane.queue.shift();
-        waiter.signal?.removeEventListener('abort', waiter.abort);
-        lane.inFlight += 1;
-        this.globalInFlight += 1;
-        lane.peak = Math.max(lane.peak, lane.inFlight);
-        this.peakGlobal = Math.max(this.peakGlobal, this.globalInFlight);
-        if (limits.requestsPerMinute !== null) lane.acquisitions.push(time);
-        let released = false;
-        waiter.resolve(() => {
-          if (released) return;
-          released = true;
-          lane.inFlight -= 1;
-          this.globalInFlight -= 1;
-          this.pump();
-        });
+    }
+    while (this.globalInFlight < this.globalConcurrency) {
+      let selected = null;
+      for (const agent of LANE_AGENTS) {
+        const lane = this.states[agent];
+        const limits = this.lanes[agent];
+        if (!lane.queue.length || lane.state !== 'ok' || lane.inFlight >= limits.concurrency) continue;
+        if (limits.requestsPerMinute !== null && lane.acquisitions.length >= limits.requestsPerMinute) continue;
+        if (selected === null || lane.queue[0].arrival < this.states[selected].queue[0].arrival) selected = agent;
       }
+      if (selected === null) break;
+      const lane = this.states[selected];
+      const limits = this.lanes[selected];
+      const waiter = lane.queue.shift();
+      waiter.signal?.removeEventListener('abort', waiter.abort);
+      lane.inFlight += 1;
+      this.globalInFlight += 1;
+      lane.peak = Math.max(lane.peak, lane.inFlight);
+      this.peakGlobal = Math.max(this.peakGlobal, this.globalInFlight);
+      if (limits.requestsPerMinute !== null) lane.acquisitions.push(time);
+      let released = false;
+      waiter.resolve(() => {
+        if (released) return;
+        released = true;
+        lane.inFlight -= 1;
+        this.globalInFlight -= 1;
+        this.pump();
+      });
+    }
+    for (const agent of LANE_AGENTS) {
+      const lane = this.states[agent];
+      const limits = this.lanes[agent];
+      if (lane.state !== 'ok') continue;
       if (lane.queue.length && limits.requestsPerMinute !== null && lane.acquisitions.length >= limits.requestsPerMinute) {
         wakeAt = Math.min(wakeAt, lane.acquisitions[0] + 60000);
       }
@@ -170,8 +184,11 @@ export class LaneScheduler {
     if (outcome.kind === 'rate-limited') {
       lane.consecutiveRateLimits += 1;
       const delay = outcome.retryAfterMs ?? Math.min(limits.backoff.maxMs, limits.backoff.baseMs * 2 ** (lane.consecutiveRateLimits - 1)) * (0.5 + this.random() / 2);
-      lane.state = 'backoff';
-      lane.until = this.now() + delay;
+      const until = this.now() + delay;
+      if (lane.state !== 'paused' || lane.until < until) {
+        lane.state = 'backoff';
+        lane.until = until;
+      }
     } else if (outcome.kind === 'quota-exhausted') {
       const reset = typeof outcome.resetsAt === 'string' ? Date.parse(outcome.resetsAt) : NaN;
       lane.state = 'paused';

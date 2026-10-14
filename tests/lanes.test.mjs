@@ -185,6 +185,67 @@ test('RPM counts acquisitions in a trailing window, including released slots', a
   assert.equal(f.timers.size, 0);
 });
 
+test('global cap serves eligible waiters in arrival order across lanes', async () => {
+  const { scheduler: s } = fixture({}, 1);
+  const occupied = await s.acquire('hermes');
+  const order = [];
+  const pending = ['codex', 'openai', 'codex'].map(agent => s.acquire(agent).then(release => {
+    order.push(agent);
+    return release;
+  }));
+  assert.deepEqual(order, []);
+  occupied();
+  for (const [index, acquisition] of pending.entries()) {
+    const release = await acquisition;
+    assert.deepEqual(order, ['codex', 'openai', 'codex'].slice(0, index + 1));
+    release();
+  }
+  s.close();
+});
+
+test('a capped lane is skipped when global capacity becomes available', async () => {
+  const { scheduler: s } = fixture({ codex: { concurrency: 1 } }, 2);
+  const codex = await s.acquire('codex');
+  const occupied = await s.acquire('hermes');
+  const order = [];
+  const waitingCodex = s.acquire('codex').then(release => { order.push('codex'); return release; });
+  const waitingOpenai = s.acquire('openai').then(release => { order.push('openai'); return release; });
+  occupied();
+  const openai = await waitingOpenai;
+  assert.deepEqual(order, ['openai']);
+  assert.equal(s.health('codex').queued, 1);
+  codex();
+  const nextCodex = await waitingCodex;
+  assert.deepEqual(order, ['openai', 'codex']);
+  openai(); nextCodex();
+  s.close();
+});
+
+test('rate limits preserve a later quota pause and its queued wake time', async () => {
+  const f = fixture({ codex: { pauseMs: 500, backoff: { baseMs: 100, maxMs: 100 } } });
+  const s = f.scheduler;
+  s.report('codex', outcome('quota-exhausted'));
+  const until = s.health('codex').until;
+  const pending = s.acquire('codex');
+  await f.tick(50);
+  s.report('codex', { kind: 'rate-limited' });
+  assert.equal(s.health('codex').state, 'paused');
+  assert.equal(s.health('codex').until, until);
+  assert.equal(s.health('codex').consecutiveRateLimits, 1);
+  assert.equal(s.pausedFor('codex'), 450);
+  await f.tick(100);
+  assert.equal(s.health('codex').queued, 1);
+  s.report('codex', outcome('rate-limited', { retryAfterMs: 0 }));
+  assert.equal(s.health('codex').until, until);
+  await f.tick(349);
+  assert.equal(s.health('codex').queued, 1);
+  await f.tick(1);
+  (await pending)();
+  assert.equal(s.health('codex').state, 'ok');
+  s.close();
+  assert.equal(f.timers.size, 0);
+});
+
 test('backoff grows exponentially, caps before jitter, and respects retryAfter override', async () => {
   for (const random of [0, 0.5, 1]) {
     const f = fixture({ codex: { backoff: { baseMs: 100, maxMs: 250 } } }, 4, () => random);

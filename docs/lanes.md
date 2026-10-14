@@ -61,15 +61,19 @@ Unknown agents and fields refuse with `lanes-invalid`. Concurrency must be an in
 
 ## Rate limits and quota pauses
 
-Jobs wait for both global and lane capacity. Each lane serves its waiters in order; a blocked lane does not block another lane. A configured request rate counts acquisitions in the trailing 60000 ms. Workspace creation and context reads happen at dispatch; path and size validation stays up front.
+Jobs wait for both global and lane capacity. When the global cap limits capacity, eligible waiters are served in arrival order across lanes. Each lane still serves its waiters in order; a blocked lane does not block another lane. A configured request rate counts acquisitions in the trailing 60000 ms. Workspace creation and context reads happen at dispatch; path and size validation stays up front.
 
 HTTP 429 or a rate-limit error backs off the lane. A supplied `retryAfterMs` sets the delay; otherwise exponential backoff starts at `baseMs`, doubles for consecutive rate limits, and caps at `maxMs`, with a jitter factor from 0.5 to 1. API responses supply retry timing from `Retry-After` seconds or an HTTP date when valid. A successful attempt resets the consecutive rate-limit count.
 
 A rate-limited job retries in a fresh workspace up to `backoff.maxRetries`. Those retries do not count as failures for routing. Exhausting the budget ends the job as `failed` with a `rate-limited:` error.
 
-Quota exhaustion pauses only that lane until a valid future `resetsAt`, or for `pauseMs` if no usable reset is supplied. HTTP 402 and quota or credit errors are quota signals. The attempt that hit quota retains its final status for explicit jobs; automatic jobs reroute. Queued jobs wait while the remaining pause is at most `maxPauseMs`; a longer pause ends them as `provider-limit` without spawning. Other lanes continue. A lane returns to `ok` when its backoff or pause ends.
+Quota exhaustion pauses only that lane until a valid future `resetsAt`, or for `pauseMs` if no usable reset is supplied. A rate limit never shortens a quota pause. HTTP 402 and quota or credit errors are quota signals. The attempt that hit quota retains its final status for explicit jobs; automatic jobs reroute. Queued jobs wait while the remaining pause is at most `maxPauseMs`; a longer pause ends them as `provider-limit` without spawning. Other lanes continue. A lane returns to `ok` when its backoff or pause ends.
 
 Provider HTTP errors retain status and retry metadata, but their response body is never saved or echoed. Lane health and peaks are recorded in `state.lanes`; each job records its actual `lane`, `attempts`, and `rateLimitRetries`. Automatic jobs also record their selected `route`. State writes are coalesced for large runs.
+
+## Snapshots
+
+Every worker sees the project as it was when the run started. At run start, the runner hashes each distinct context, output, and resource file once, streaming the contents without keeping the bytes. At dispatch, copied files must match those hashes. A mismatch fails the affected job before spawning with `snapshot-changed: <file>`. Worktree jobs start from `state.baseCommit`.
 
 ## Automatic routing and fallback
 
