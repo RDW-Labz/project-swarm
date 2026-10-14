@@ -22,6 +22,7 @@ import { loadLocalConfig } from './local-config.mjs';
 import { resolveLanes, LaneScheduler, classifyProviderOutcome } from './lanes.mjs';
 import { routeJob } from './router.mjs';
 import { JOB_TYPES, applyJobType, jobTypeOutputViolations } from './job-types.mjs';
+import { REPORT_PROMPT_LINE, validateReport, legacyReport, rollupRun, renderRollupText } from './reports.mjs';
 import { loadSwarmEnv, envPrintText, checkNeedsEnvWarnings, npmScriptsResolveToPlainNode, NO_STASH_LINE, MUTANTS_BY_HAND_LINE, MUTANTS_SHAPE, gitGuardScript, findRealGit, materializeGitGuard } from './swarm-env.mjs';
 import { loadGotchas, gotchasPromptBlock, windowsCiGotchasWarnings } from './gotchas.mjs';
 import { packagingWithoutBuildCheckWarning, packagingKeyChanges, packagingChangeWarnings, isPackagingFile } from './packaging-check.mjs';
@@ -73,6 +74,7 @@ const CLI_AGENTS = ['claude', 'codex', 'cursor', ...EXTRA_CLI_AGENTS];
 const WORKTREE_WRITERS = ['codex', 'cursor'];
 const isWorktreeWriter = job => WORKTREE_WRITERS.includes(job?.agent);
 export const AGENTS = Object.freeze([...CLI_AGENTS, ...API_AGENTS]);
+export const NON_SENSITIVE_ONLY_AGENTS = Object.freeze(['openrouter', 'openai', 'gemini', 'lambda']);
 export const TIERS = ['cheap', 'mid', 'expensive'];
 const API_PROGRESS_NOTE = 'Single-request API jobs return only when the request settles; incremental worker activity is not observable.';
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/;
@@ -1159,7 +1161,8 @@ function normalizeManifestMetadata(manifest) {
 export function validateManifest(manifest, { outputJobIds = null } = {}) {
   normalizeManifestMetadata(manifest);
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.jobs) || !manifest.jobs.length || manifest.jobs.length > 5000) fail('Manifest requires version: 1 and 1–5000 jobs');
-  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract', 'preChecks', 'skillsDir', 'allowEmptyContext', 'resources', 'lanes'].includes(key)) fail(`Unknown manifest field: ${key}`);
+  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract', 'preChecks', 'skillsDir', 'allowEmptyContext', 'resources', 'lanes', 'report'].includes(key)) fail(`Unknown manifest field: ${key}`);
+  for (const value of [manifest, ...manifest.jobs]) if (value?.report !== undefined && value.report !== 'short') fail('report must be "short"', 'report-invalid-mode');
   // Field lesson #221: an empty context file (0 bytes, or whitespace only) is always a mistake —
   // ask/validate/run refuse it by path — unless the manifest names it here as a deliberate
   // exception (e.g. a placeholder a job is meant to fill in).
@@ -1246,6 +1249,7 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     // (for Claude, that default is the user's own, often the most expensive, model).
     if (job.sensitive !== undefined && typeof job.sensitive !== 'boolean') fail(`Job ${job.id}: sensitive must be true or false`);
     if (job.agent === 'openrouter' && job.sensitive !== false) fail(`Job ${job.id}: OpenRouter only gets jobs that set sensitive: false`, 'sensitive-openrouter');
+    if (NON_SENSITIVE_ONLY_AGENTS.includes(job.agent) && job.sensitive !== false) fail(`Job ${job.id}: ${job.agent} only gets jobs that set sensitive: false`, 'sensitive-provider');
     if (job.agent === 'auto') {
       if (Object.hasOwn(job, 'model')) fail(`Job ${job.id}: agent auto picks its own model; omit model`, 'auto-model-forbidden');
     } else {
@@ -1384,7 +1388,7 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
       if (job.outputs.length) fail('a web job must be read-only (no outputs)');
     }
     // Unknown command/provider fields cannot create an execution path.
-    const knownJobFields = ['type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs'];
+    const knownJobFields = ['type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report'];
     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
   }
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
@@ -1608,32 +1612,32 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
         // stdout is cursor's `--output-format json` result; the envelope is read from its final
         // text exactly as codex's, then from the outputs-only worktree diff.
         const parsed = parseCursorOutput(stdout);
-        let response = parsed?.response ?? '', envelopeInvalid = false, envelopeFallback = null;
+        let response = parsed?.response ?? '', envelopeInvalid = false, envelopeFallback = null, finalObject = null;
         let failed = cleanupError || reason || error?.message || (code !== 0 ? `Cursor exited ${code}` : null) || (parsed?.isError ? `Cursor result: ${parsed.subtype || 'error'}` : null);
         if (!failed) {
           const resolved = await resolveCursorEnvelope(stdout, cwd, job);
-          if (resolved) { envelopeFallback = resolved.fallback; response = resolved.response; }
+          if (resolved) { envelopeFallback = resolved.fallback; response = resolved.response; finalObject = resolved.result; }
           else { failed = 'Invalid Cursor result envelope'; envelopeInvalid = true; }
         }
         const usage = parsed?.usage && Number.isSafeInteger(parsed.usage.total_tokens ?? parsed.usage.totalTokens) ? { total_tokens: parsed.usage.total_tokens ?? parsed.usage.totalTokens } : null;
-        resolve({ cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed, envelopeInvalid, envelopeFallback, stdout, stderr, response, blipText: parsed?.isError ? parsed.response : '', exitCode: code, actualModel: null, modelsSeen: [], modelMismatch: false, usage, modelUsage: null, costUsd: null });
+        resolve({ finalObject, cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed, envelopeInvalid, envelopeFallback, stdout, stderr, response, blipText: parsed?.isError ? parsed.response : '', exitCode: code, actualModel: null, modelsSeen: [], modelMismatch: false, usage, modelUsage: null, costUsd: null });
         return;
       }
       if(job.agent === 'codex') {
-        let response = '', envelopeInvalid = false, envelopeFallback = null, failed = cleanupError || reason || error?.message || (code !== 0 ? `Codex exited ${code}` : null);
+        let response = '', envelopeInvalid = false, envelopeFallback = null, finalObject = null, failed = cleanupError || reason || error?.message || (code !== 0 ? `Codex exited ${code}` : null);
         if (!failed) {
           response = (await bytesAt(cwd, codex.resultRelative, true))?.toString('utf8') ?? '';
           const resolved = await resolveCodexEnvelope(response, cwd, codex.resultRelative, job);
-          if (resolved) envelopeFallback = resolved.fallback;
+          if (resolved) { envelopeFallback = resolved.fallback; finalObject = resolved.result; }
           else { failed = 'Invalid Codex result envelope'; envelopeInvalid = true; }
         }
-        resolve({ cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed, envelopeInvalid, envelopeFallback, stdout, stderr, response, exitCode: code, actualModel: null, modelsSeen: [], modelMismatch: false, usage: codexUsage(stdout + '\n' + stderr), modelUsage: null, costUsd: null });
+        resolve({ finalObject, cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed, envelopeInvalid, envelopeFallback, stdout, stderr, response, exitCode: code, actualModel: null, modelsSeen: [], modelMismatch: false, usage: codexUsage(stdout + '\n' + stderr), modelUsage: null, costUsd: null });
         return;
       }
       if(EXTRA_CLI_AGENTS.includes(job.agent)){
         let parsed, failed=cleanupError||reason||(error?'CLI launch failed':null),files=[],response='';
-        if(!failed)try{parsed=parseExtraCli(job.agent,stdout,code,job.model);const value=validateEnvelope(parsed.value,job.outputs);files=value.files;response=value.summary;}catch(problem){failed=problem.message;}
-        resolve({cleanupError,terminationReason:reason??null,status:cleanupError?'failed':reason==='timeout'?'timeout':reason==='cancelled'?'cancelled':failed?'failed':'complete',error:failed??null,files,response,stdout:failed?'':JSON.stringify({type:'result',provider:job.agent,status:'complete',actualModel:parsed.actualModel,usage:parsed.usage})+'\n',stderr:'',exitCode:code,actualModel:parsed?.actualModel??null,modelsSeen:parsed?.modelsSeen??[],modelMismatch:parsed?.modelMismatch??false,usage:parsed?.usage??null,modelUsage:null,costUsd:null});return;
+        if(!failed)try{parsed=parseExtraCli(job.agent,stdout,code,job.model);const value=validateEnvelope(parsed.value,job.outputs);files=value.files;response=job.report === 'short' && value.result ? `${value.summary}\n${JSON.stringify(value.result)}\n` : value.summary;}catch(problem){failed=problem.message;}
+        resolve({finalObject:parsed?.value?.result ?? parsed?.value ?? null,cleanupError,terminationReason:reason??null,status:cleanupError?'failed':reason==='timeout'?'timeout':reason==='cancelled'?'cancelled':failed?'failed':'complete',error:failed??null,files,response,stdout:failed?'':JSON.stringify({type:'result',provider:job.agent,status:'complete',actualModel:parsed.actualModel,usage:parsed.usage})+'\n',stderr:'',exitCode:code,actualModel:parsed?.actualModel??null,modelsSeen:parsed?.modelsSeen??[],modelMismatch:parsed?.modelMismatch??false,usage:parsed?.usage??null,modelUsage:null,costUsd:null});return;
       }
       let result, parseError; const events=[];
       for (const line of stdout.split('\n').filter(Boolean)) {
@@ -1858,6 +1862,58 @@ async function prepareWorktreeLocation(worktree, { statfsImpl = fs.statfs } = {}
 
 // Also runs cursor jobs: the same detached worktree, seatbelt, scratch dir, retry and output
 // collection, with cursor's own profile additions, argv, allowlisted env and key redaction.
+const reportObject = (job, result) => result.finalObject ?? (isWorktreeWriter(job) ? parseCodexReply(result.response) : parseFinalJson(result.response));
+const checkWorkerReport = (job, result) => {
+  const value = reportObject(job, result);
+  return value == null ? { report: null, errors: ['no final report'] } : validateReport(value, { outputs: job.outputs });
+};
+
+async function reaskWorkerReport(job, result, workspace, options, launch) {
+  if (job.report !== 'short' || job.shell === true || result.status !== 'complete' || result.error || result.envelopeInvalid || result.cleanupError || result.terminationReason || result.reportReasked) return result;
+  const checked = checkWorkerReport(job, result);
+  if (checked.report) return result;
+  if (options.signal?.aborted || await options.cancelled?.()) return result;
+  const message = `Your files are saved. Reply with only your final report JSON line and nothing else.\nProblems with your last report: ${checked.errors.join('; ')}\nDeclared outputs you may list in files: ${JSON.stringify(job.outputs)}\n${REPORT_PROMPT_LINE}`;
+  const sessionId = job.agent === 'claude' ? extractSessionId(result.stdout) : null;
+  const writers = isWorktreeWriter(job) || (job.agent === 'claude' && !sessionId);
+  const saved = new Map();
+  if (writers) for (const file of job.outputs) {
+    const bytes = await bytesAt(workspace, file);
+    saved.set(file, { bytes, mode: bytes === null ? null : (await fs.stat(await safePath(workspace, file))).mode & 0o777 });
+  }
+  result.reportReasked = true;
+  let reask;
+  try {
+    if (launch) reask = await launch(message);
+    else if (job.agent === 'claude') reask = await execute(job, workspace, message, { ...options, onOutput: () => {}, resumeSessionId: sessionId ?? undefined });
+    else {
+      const request = { ...job, outputs: [], context: [], prompt: `${job.prompt.slice(0, 4000)}\n\n${message}` };
+      reask = API_AGENTS.includes(job.agent)
+        ? await executeApi(request, [], options)
+        : await execute(request, workspace, extraCliMessage(request, []), { ...options, onOutput: () => {} });
+    }
+    if (typeof result.usage?.total_tokens === 'number' && typeof reask.usage?.total_tokens === 'number') result.usage = { ...result.usage, total_tokens: result.usage.total_tokens + reask.usage.total_tokens };
+    if (reask.status !== 'complete' || reask.error || reask.envelopeInvalid) result.reportReaskErrors = [`re-ask failed: ${reask.error ?? reask.status}`];
+    else {
+      result.finalObject = reportObject(job, reask);
+      result.response = reask.response;
+      result.reportReaskErrors = checkWorkerReport(job, reask).errors;
+    }
+  } catch (error) { result.reportReaskErrors = [`re-ask failed: ${error.message}`]; }
+  finally {
+    const restored = [];
+    for (const [file, { bytes: before, mode }] of saved) {
+      const after = await bytesAt(workspace, file);
+      if (before === null ? after === null : after !== null && before.equals(after)) continue;
+      if (before === null) await fs.rm(await safePath(workspace, file), { force: true });
+      else await write(workspace, file, before, false, mode);
+      restored.push(file);
+    }
+    if (restored.length) result.reportReaskRestored = restored;
+  }
+  return result;
+}
+
 export async function executeCodexJob(root, directory, job, proposalRoot, options) {
   const gitImpl = options.gitImpl ?? git;
   const isCursor = job.agent === 'cursor';
@@ -1956,12 +2012,25 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
           // Field lesson 19: a worker's own "blocked" envelope is the real reason, reported as
           // job status blocked with its summary — never masked by a generic missing-output error.
           const reply = parseCodexReply(result.response);
-          if (reply?.status === 'blocked') {
+          if (reply?.status === 'blocked' && (job.report !== 'short' || validateReport(reply, { outputs: job.outputs }).report)) {
             const summary = typeof reply.summary === 'string' && reply.summary.trim() ? reply.summary.trim()
               : typeof reply.file === 'string' && reply.file.trim() ? `needs ${reply.file.trim()}` : 'no summary given';
             result = { ...result, status: 'blocked', error: `blocked: ${summary}`.slice(0, 300) };
           } else result = { ...result, status: 'failed', error: `Missing output (deletions are never propagated): ${missing.join(', ')}` };
-        } else for (const output of outputs) await write(proposalRoot, output.file, output.bytes, false, output.mode);
+        } else {
+          result = await reaskWorkerReport(job, result, worktree, options, async reaskMessage => {
+            const reaskRelative = `.swarm-codex-result-${crypto.randomBytes(12).toString('hex')}.json`;
+            resultFiles.add(reaskRelative);
+            const launchOptions = { ...options, logDirectory: path.join(root, directory, job.id), onOutput: () => {} };
+            if (isCursor) {
+              const reask = await execute(job, worktree, reaskMessage, { ...launchOptions, workerKey: cursorKey, cursor: { profile, bin: cursorBinary.bin, worktree, apiKey: cursorKey, env: { ...await cursorEnvironment(options.env), ...workerEnv, CURSOR_API_KEY: cursorKey } } });
+              for (const key of ['stdout', 'stderr', 'response', 'error']) if (typeof reask[key] === 'string') reask[key] = redactCursorKey(reask[key], cursorKey);
+              return reask;
+            }
+            return execute(job, worktree, reaskMessage, { ...launchOptions, codex: { worktree, profile, lastMessage: path.join(worktree, reaskRelative), resultRelative: reaskRelative, env: { ...await codexEnvironment(options.env), ...workerEnv } } });
+          });
+          for (const output of outputs) await write(proposalRoot, output.file, output.bytes, false, output.mode);
+        }
       }
       return result;
     }, { hasWrittenOutputs: () => outputsChanged(worktree, launchBaseline), onRetry: options.onRetry ?? (async () => {}), cancelled: options.cancelled, ...(isCursor ? { maxAttempts: cursorSettings.maxAttempts, blipRe: CURSOR_BLIP_RE, label: 'cursor-blip' } : {}) });
@@ -2357,16 +2426,21 @@ function selectRunManifest(manifest, jobs) {
 }
 
 async function applyManifestJobTypes(root, manifest, { env, home = os.homedir() }) {
+  const withReport = job => {
+    if (manifest.report !== 'short' && job.report !== 'short') return job;
+    return { ...job, report: 'short', prompt: job.prompt.includes(REPORT_PROMPT_LINE) ? job.prompt : `${job.prompt}\n\n${REPORT_PROMPT_LINE}` };
+  };
+  const typedJob = (job, options) => applyJobType((manifest.report === 'short' || job.report === 'short') && job.prompt.endsWith(`\n\n${REPORT_PROMPT_LINE}`) ? { ...job, prompt: job.prompt.slice(0, -REPORT_PROMPT_LINE.length - 2) } : job, options);
   if (manifest.jobs.every(job => job.type === undefined)) {
-    return { manifest: { ...manifest, jobs: manifest.jobs.map(job => applyJobType(job).job) }, warnings: [] };
+    return { manifest: { ...manifest, jobs: manifest.jobs.map(job => withReport(typedJob(job).job)) }, warnings: [] };
   }
   const skillsSourceDir = resolveSkillsDir(manifest, loadLocalConfig({ env, home }), root);
   if (skillsSourceDir) await assertNoSkillSymlinks(skillsSourceDir);
   const skills = skillsSourceDir ? await listSkills(skillsSourceDir) : [];
   const skillNames = skillsSourceDir ? skills.filter(skill => !skill.broken).map(skill => skill.name) : null;
-  const applied = manifest.jobs.map(job => applyJobType(job, { skillNames }));
+  const applied = manifest.jobs.map(job => typedJob(job, { skillNames }));
   return {
-    manifest: { ...manifest, jobs: applied.map(result => result.job) },
+    manifest: { ...manifest, jobs: applied.map(result => withReport(result.job)) },
     warnings: applied.flatMap(result => result.warnings), skillsSourceDir, skills,
   };
 }
@@ -2835,11 +2909,14 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         // generic "missing output" instead of being silently replaced by it. Codex already
         // resolves its own blocked envelope (result.status is already 'blocked' by here); every
         // other agent's final message is checked fresh.
-        let finalMessage = !isWorktreeWriter(job) && ['complete', 'failed'].includes(result.status) ? parseFinalJson(result.response) : null;
+        if (!isWorktreeWriter(job)) result = await reaskWorkerReport(job, result, workspaceRoot, { spawnImpl, signal, cancelled, killImpl, fetchImpl, env });
+        if (result.reportReasked) record.reportReasked = true;
+        if (result.reportReaskRestored) record.reportReaskRestored = result.reportReaskRestored;
+        let finalMessage = !isWorktreeWriter(job) && ['complete', 'blocked', 'failed'].includes(result.status) ? parseFinalJson(result.response) : null;
         // Field lesson 116: a prompt that demands a JSON-only reply sometimes gets prose instead.
         // One cheap re-ask on the same session (claude only, when a session id was observed)
         // recovers it; only a genuinely unparsable final reply is left as `resultMissing`.
-        if (!isWorktreeWriter(job) && result.status === 'complete' && !finalMessage && quotesJsonDemand(job.prompt)) {
+        if (job.report !== 'short' && !isWorktreeWriter(job) && result.status === 'complete' && !finalMessage && quotesJsonDemand(job.prompt)) {
           record.resultMissing = true;
           // A shell job is never re-asked: that re-ask would be an unsandboxed claude call.
           if (job.agent === 'claude' && job.shell !== true) {
@@ -2859,12 +2936,12 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           await write(root, `${directory}/${job.id}/response-invalid.txt`, result.invalidResponseText, true);
           if (!result.error) result.error = `Invalid structured output envelope; raw response saved to ${directory}/${job.id}/response-invalid.txt`;
         }
-        if (finalMessage?.status === 'blocked') {
+        if (finalMessage?.status === 'blocked' && (job.report !== 'short' || validateReport(finalMessage, { outputs: job.outputs }).report)) {
           result.status = 'blocked';
           const summary = typeof finalMessage.summary === 'string' && finalMessage.summary.trim() ? finalMessage.summary.trim()
             : typeof finalMessage.file === 'string' && finalMessage.file.trim() ? `needs ${finalMessage.file.trim()}` : 'no summary given';
           result.error = `blocked: ${summary}`.slice(0, 300);
-        } else if (CLI_AGENTS.includes(job.agent) && !finalMessage && typeof result.response === 'string' && /status:\s*blocked/i.test(result.response)) {
+        } else if (job.report !== 'short' && CLI_AGENTS.includes(job.agent) && !finalMessage && typeof result.response === 'string' && /status:\s*blocked/i.test(result.response)) {
           // Field lesson #223: a worker's prose "Status: BLOCKED" (no JSON envelope at all) is
           // resolved the same way a JSON blocked envelope would be, naming the file it parses out
           // of a "Required file: ..." line.
@@ -2872,7 +2949,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           result.status = 'blocked';
           record.needFile = requiredFile ? requiredFile[1] : null;
           result.error = `blocked: ${requiredFile ? `needs ${requiredFile[1]}` : 'no summary given'}`.slice(0, 300);
-        } else if (CLI_AGENTS.includes(job.agent) && !isWorktreeWriter(job) && job.shell !== true && result.status === 'complete' && !finalMessage && quotesJsonDemand(job.prompt) && job.outputs.length && !(await anyOutputExists(workspaceRoot, job.outputs))) {
+        } else if (job.report !== 'short' && CLI_AGENTS.includes(job.agent) && !isWorktreeWriter(job) && job.shell !== true && result.status === 'complete' && !finalMessage && quotesJsonDemand(job.prompt) && job.outputs.length && !(await anyOutputExists(workspaceRoot, job.outputs))) {
           // Field lesson #223: a job whose own prompt demands a JSON-only final reply, got none
           // (not even after the re-ask above), and left none of its declared outputs written at
           // all is never `complete` — it is `failed`, reason `no-output`. Gated on the prompt's own
@@ -2905,7 +2982,30 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         // the job record so inspect can name the phase, instead of an empty error/result/cost that
         // reads identically to a worker that ran and produced nothing.
         Object.assign(record, { ...(result.code ? { code: result.code, ...(result.path ? { path: result.path } : {}), ...(result.stream ? { stream: result.stream } : {}) } : {}), ...(API_AGENTS.includes(job.agent) ? { finishReason: result.finishReason ?? null } : {}), permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, ...(result.costSource ? { costSource: result.costSource } : {}), ...(result.costWarning ? { costWarning: result.costWarning } : {}), finishedAt: new Date().toISOString(), durationMs:Date.now()-Date.parse(record.startedAt), ...(result.setupFailed ? { setupFailed: true } : {}), ...(result.status === 'timeout' ? { lastActivity: result.lastActivity ?? null } : {}), ...(result.contextInlined ? { contextInlined: result.contextInlined } : {}), ...(result.retriedForLength ? { retriedForLength: true } : {}) });
-        const outcome = classifyProviderOutcome(result);
+        if (!result.refusedBeforeStart && !result.setupFailed && ['complete', 'blocked', 'failed'].includes(result.status)) {
+          delete record.report;
+          delete record.reportErrors;
+          const reportMessage = result.finalObject ?? (isWorktreeWriter(job) ? parseCodexReply(result.response) : finalMessage);
+          const checked = result.reportReaskErrors?.length ? { report: null, errors: result.reportReaskErrors } : reportMessage === null ? { report: null, errors: ['no final report'] } : validateReport(reportMessage, { outputs: job.outputs });
+          if (checked.report) {
+            record.report = checked.report;
+            if (checked.report.status === 'blocked') {
+              result.status = record.status = 'blocked';
+              result.error = record.error = `blocked: ${checked.report.summary}`.slice(0, 300);
+            } else if (checked.report.status === 'failed' && result.status === 'complete') {
+              result.status = record.status = 'failed';
+              result.error = record.error = `worker-reported-failed: ${checked.report.summary}`.slice(0, 300);
+            }
+          } else if (job.report === 'short') {
+            record.reportErrors = checked.errors;
+            if (result.status === 'complete' || result.envelopeInvalid) {
+              result.status = record.status = 'failed';
+              result.error = record.error = `report-invalid: ${checked.errors.join('; ')}`.slice(0, 300);
+            }
+            result.reportInvalid = result.error?.startsWith('report-invalid:') || reportMessage !== null || Boolean(result.invalidResponseText);
+          } else record.report = legacyReport({ status: record.status, error: record.error, result: reportMessage, outputs: job.outputs });
+        }
+        const outcome = result.reportInvalid ? { kind: 'other' } : classifyProviderOutcome(result);
         scheduler.report(job.agent, outcome);
         abortLongPauses();
         record.attempts.push({ agent: job.agent, model: job.model, status: result.status, error: result.error ?? null, startedAt: record.startedAt, finishedAt: record.finishedAt });
@@ -2913,7 +3013,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           if (record.rateLimitRetries < lanes[job.agent].backoff.maxRetries) {
             record.rateLimitRetries += 1; retry = true;
           } else { record.status = 'failed'; record.error = `rate-limited: ${result.error ?? job.agent}`; }
-        } else if (original.agent === 'auto' && !['blocked', 'cancelled'].includes(result.status) && (outcome.kind === 'quota-exhausted' || ['failed', 'timeout'].includes(result.status))) {
+        } else if (!result.reportInvalid && original.agent === 'auto' && !['blocked', 'cancelled'].includes(result.status) && (outcome.kind === 'quota-exhausted' || ['failed', 'timeout'].includes(result.status))) {
           if (['failed', 'timeout'].includes(result.status)) failures[job.agent] = (failures[job.agent] ?? 0) + 1;
           try { pickJobRoute(original, lanes, { health: agent => scheduler.health(agent), failures }); retry = true; }
           catch (error) { record.status = 'failed'; record.error = error.message; }
@@ -3149,7 +3249,7 @@ const costRateUnknownWarnings = state => state.jobs.filter(job => job.costWarnin
 // Field lesson #268: a red base this run auto-accepted (every failing location already covered by
 // its own declared outputs) is never silent — surfaced the same way any other run-level warning is.
 const redBaseAutoAcceptWarnings = state => state.redBaseAutoAccept ? [state.redBaseAutoAccept] : [];
-const runWarnings = (state, extra = []) => [...modelMismatchWarnings(state), ...codexEnvelopeFallbackWarnings(state), ...permissionDenialWarnings(state), ...invalidJsonOutputWarnings(state), ...droppedWriteWarnings(state), ...venvInterpreterWarnings(state), ...costRateUnknownWarnings(state), ...redBaseAutoAcceptWarnings(state), ...extra];
+const runWarnings = (state, extra = []) => [...modelMismatchWarnings(state), ...codexEnvelopeFallbackWarnings(state), ...permissionDenialWarnings(state), ...invalidJsonOutputWarnings(state), ...droppedWriteWarnings(state), ...venvInterpreterWarnings(state), ...costRateUnknownWarnings(state), ...redBaseAutoAcceptWarnings(state), ...state.jobs.filter(job => job.reportReaskRestored?.length).map(job => `report-reask-restored: ${job.id}: ${job.reportReaskRestored.join(', ')}`), ...extra];
 // A provider that never reports usage.total_tokens (or never ran) reports null, not 0: absence
 // of evidence, not evidence of zero cost.
 const jobTokens = record => typeof record?.usage?.total_tokens === 'number' ? record.usage.total_tokens : null;
@@ -4661,7 +4761,7 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
     // Catches a worker changing an output's behavior without ever seeing the test that
     // asserts it: advisory static text matching, resolved via context or ignoreTests.
     for (const pair of findUncoveredTests(root, { ...job, context }, projectFiles)) uncovered.push({ job: job.id, ...pair });
-    jobs.push({id:job.id,agent:job.agent,model:job.model??null,...(job.type!==undefined?{type:job.type,prompt:job.prompt,timeoutMs:job.timeoutMs,typeRoute:job.typeRoute,...(job.skills!==undefined?{skills:job.skills}:{})}:{}),...(job.shell===true?{shell:true}:{}),tier:job.tier??null,tierReason:job.tierReason??null,contextBytes:bytes,outputs:job.outputs,files,contextGlobCounts});
+    jobs.push({id:job.id,agent:job.agent,model:job.model??null,...(job.report==='short'?{report:'short',prompt:job.prompt}:{}),...(job.type!==undefined?{type:job.type,prompt:job.prompt,timeoutMs:job.timeoutMs,typeRoute:job.typeRoute,...(job.skills!==undefined?{skills:job.skills}:{})}:{}),...(job.shell===true?{shell:true}:{}),tier:job.tier??null,tierReason:job.tierReason??null,contextBytes:bytes,outputs:job.outputs,files,contextGlobCounts});
   }
   // Field lesson #224: reaching here means the per-job loop above never found a broken skill
   // actually attached (that would already have refused); every broken skill left is unused.
@@ -4765,7 +4865,7 @@ export async function inspectRun(root,id,{spawnImpl=spawn,programOnPathImpl=prog
     // Field lesson #201: a setup failure never spawns the worker (empty error/result/cost, exactly
     // like a job that never ran) — inspect names the phase and the setup log's own tail here.
     const setupErrorTail=record.setupFailed?(await bytesAt(root,`.swarm/runs/${id}/${job.id}/setup.log`,true))?.toString('utf8').split('\n').slice(-20).join('\n')??null:null;
-    jobs.push({...await failedStderrTail(root,id,job,record),id:job.id,agent:record.agent,model:record.model??job.model??null,...(isWorktreeWriter(record)&&record.scratchDir?{scratchDir:record.scratchDir}:{}),...(job.shell===true?{shell:true,checksRun:Array.isArray(parsedResult?.checksRun)?parsedResult.checksRun:null,proxyRefused:record.proxyRefused??[],loopbackDenied:record.loopbackDenied??[]}:{}),tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,...(record.status!=='complete'?{finishReason:record.finishReason??null}:{}),...(record.agentError?{agentError:record.agentError}:{}),...(record.resultMissing?{resultMissing:true}:{}),...(record.setupFailed?{phase:'setup',setupError:setupErrorTail}:{}),result:displayResult(parsedResult),transcript:job.privateData===true?'withheld':'saved',costUsd:typeof record.costUsd==='number'?record.costUsd:null,...(record.costSource==='estimated-from-transcript'?{costSource:record.costSource}:{}),costPer1kOutputTokens:costPer1kOutputTokens(record),tokens:jobTokens(record),modelsSeen:record.modelsSeen??[],modelMismatch:record.modelMismatch??false,...(usesWorktree(job)&&record.keptWorkspace?{worktree:resolveWorktree(state,record)}:{})});
+    jobs.push({...await failedStderrTail(root,id,job,record),...(record.report ? {report:record.report} : {}),...(record.reportErrors ? {reportErrors:record.reportErrors} : {}),id:job.id,agent:record.agent,model:record.model??job.model??null,...(isWorktreeWriter(record)&&record.scratchDir?{scratchDir:record.scratchDir}:{}),...(job.shell===true?{shell:true,checksRun:Array.isArray(parsedResult?.checksRun)?parsedResult.checksRun:null,proxyRefused:record.proxyRefused??[],loopbackDenied:record.loopbackDenied??[]}:{}),tier:job.tier??null,tierReason:job.tierReason??null,status:record.status,...(record.status!=='complete'?{finishReason:record.finishReason??null}:{}),...(record.agentError?{agentError:record.agentError}:{}),...(record.resultMissing?{resultMissing:true}:{}),...(record.setupFailed?{phase:'setup',setupError:setupErrorTail}:{}),result:displayResult(parsedResult),transcript:job.privateData===true?'withheld':'saved',costUsd:typeof record.costUsd==='number'?record.costUsd:null,...(record.costSource==='estimated-from-transcript'?{costSource:record.costSource}:{}),costPer1kOutputTokens:costPer1kOutputTokens(record),tokens:jobTokens(record),modelsSeen:record.modelsSeen??[],modelMismatch:record.modelMismatch??false,...(usesWorktree(job)&&record.keptWorkspace?{worktree:resolveWorktree(state,record)}:{})});
     const workspaceRoot=await safePath(root,expectedWorkspaceFor(id, job.id, record),{internal:true});
     // Field lesson 128: the same invented-hash scan integrate runs, surfaced here before any file
     // is actually written, so a made-up sha is visible at inspect time too.
@@ -4965,7 +5065,10 @@ export function resolveAskRoute(options = {}, config = {}) {
   const validPair = pair => {
     if (!pair || typeof pair !== 'object' || Array.isArray(pair) || typeof pair.agent !== 'string' || typeof pair.model !== 'string' || !pair.model.trim()) return false;
     try { validateManifest({ version: 1, jobs: [{ id: 'ask-route', agent: pair.agent, model: pair.model, ...(options.sensitive !== undefined ? { sensitive: options.sensitive } : {}), prompt: 'Answer the question.', context: [], outputs: [] }] }); return true; }
-    catch { return false; }
+    catch (error) {
+      if (['sensitive-openrouter', 'sensitive-provider'].includes(error.code)) fail(`ask-sensitive-provider: ${pair.agent} needs --not-sensitive; the question and context would leave for a third-party API`, 'ask-sensitive-provider');
+      return false;
+    }
   };
   if (tier !== undefined) {
     if (!TIERS.includes(tier) || agent !== undefined || model !== undefined) invalid();
@@ -5481,7 +5584,7 @@ async function monitorView(root, id) {
     const { tier, tierReason } = tierById.get(job.id) ?? { tier: null, tierReason: null };
     return { ...job, agent: record.agent, model: record.model ?? null, tier, tierReason, outputCount: record.outputs?.length ?? 0 };
   });
-  return { status: summary.status, text: renderMonitorView({ ...summary, jobs }, { width: process.stdout.columns || 100, color: supportsColor() }) };
+  return { status: summary.status, text: renderMonitorView({ ...summary, jobs, lanes: state.lanes, queued: summary.counts.queued, mergeQueue: state.mergeQueue ?? null, integratedAt: state.integratedAt ?? null, spend: rollupRun(state).spend }, { width: process.stdout.columns || 100, color: supportsColor() }) };
 }
 
 // The install running this file, independent of --root: used to compare a linked project's
@@ -5910,7 +6013,7 @@ async function main() {
     }
     root=args[rootIndex+1];args.splice(rootIndex,2);
   }
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | integrate RUN [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
@@ -6072,12 +6175,13 @@ async function main() {
   }
   if(args[0]==='ask'){
     const flags=args.slice(1);
-    let model,contextArg,agent,tier,timeoutSeconds,overCapArg=false,reasonArg,ignoreProviderLimitArg=false;
+    let model,contextArg,agent,tier,timeoutSeconds,overCapArg=false,reasonArg,ignoreProviderLimitArg=false,notSensitive=false;
     const positionals=[];
     for(let index=0;index<flags.length;index++){
       const flag=flags[index];
       if(['--model','--agent','--tier'].includes(flag) && (!flags[index+1] || flags[index+1].startsWith('--'))) fail(ASK_ROUTE_INVALID, 'ask-route-invalid');
       if(flag==='--tier'){tier=flags[++index];continue;}
+      if(flag==='--not-sensitive'){notSensitive=true;continue;}
       if(flag==='--model'){model=flags[++index];continue;}
       if(flag==='--context'){contextArg=flags[++index];continue;}
       if(flag==='--agent'){agent=flags[++index];continue;}
@@ -6097,7 +6201,7 @@ async function main() {
     if(positionals.length!==1)fail('ask requires exactly one question argument; use --help');
     if(overCapArg&&!reasonArg)fail('--over-cap requires --reason');
     root=await fs.realpath(root);
-    const resolved=resolveAskRoute({model,agent,tier},loadLocalConfig({env:process.env}));
+    const resolved=resolveAskRoute({model,agent,tier,...(notSensitive?{sensitive:false}:{})},loadLocalConfig({env:process.env}));
     if(resolved.agent==='claude'&&!ignoreProviderLimitArg){
       const marker=await claudeProviderLimitGuard(root);
       if(marker)fail(`claude-provider-limit: resets ${marker.resetsAt}; pass --ignore-provider-limit to proceed anyway`);
@@ -6107,7 +6211,7 @@ async function main() {
       if(!overCapArg||!reasonArg)fail(askGuard.message);
       process.stderr.write(`${JSON.stringify({warning:askGuard.message})}\n`);
     }else if(askGuard.status==='warn')process.stderr.write(`${JSON.stringify({warning:askGuard.message})}\n`);
-    const result=await askRun(root,{model,tier,context:contextArg?contextArg.split(','):[],agent,timeoutMs:timeoutSeconds!==undefined?timeoutSeconds*1000:undefined,question:positionals[0]},{[ASK_ROUTE]:resolved});
+    const result=await askRun(root,{model,tier,...(notSensitive?{sensitive:false}:{}),context:contextArg?contextArg.split(','):[],agent,timeoutMs:timeoutSeconds!==undefined?timeoutSeconds*1000:undefined,question:positionals[0]},{[ASK_ROUTE]:resolved});
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if(!['complete','ok'].includes(result.status))process.exitCode=1;
     return;
@@ -6276,6 +6380,21 @@ async function main() {
   const probeLocal=args[0]==='doctor'&&args.includes('--probe-local');
   if(probeLocal)args.splice(args.indexOf('--probe-local'),1);
   let [command,argument,...rest]=args;
+  if(command==='rollup'){
+    let text=false,top=10;
+    for(let index=0;index<rest.length;index++){
+      if(rest[index]==='--text'){text=true;continue;}
+      if(rest[index]==='--top' && /^\d+$/.test(rest[index+1] ?? '')){
+        top=Number(rest[++index]);
+        if(top>=1 && top<=50)continue;
+      }
+      fail('Invalid rollup arguments; use --help');
+    }
+    if(!argument)fail('Invalid arguments; use --help');
+    const rollup=rollupRun(await readState(await fs.realpath(root),argument),{top});
+    process.stdout.write((text?renderRollupText(rollup):JSON.stringify(rollup))+'\n');
+    return;
+  }
   // monitor keeps its JSON snapshot as the default; --view/--watch are read-only human rendering
   // extras consumed here so the generic argument-count check below still fails on anything else.
   let view=false,watchSeconds=null;

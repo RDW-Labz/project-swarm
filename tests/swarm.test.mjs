@@ -144,7 +144,7 @@ test('every job, CLI or API, must name an explicit model; there is no CLI defaul
   assert.throws(() => validateManifest(manifest([job({ model: undefined })])), /writer requires an explicit model; the runner never uses a CLI default/);
   assert.throws(() => validateManifest(manifest([job({ model: '' })])), /writer requires an explicit model; the runner never uses a CLI default/);
   assert.doesNotThrow(() => validateManifest(manifest([job({ model: 'sonnet' })])));
-  assert.throws(() => validateManifest(manifest([job({ id: 'openai-job', agent: 'openai', model: undefined })])), /openai-job requires an explicit model; the runner never uses a CLI default/);
+  assert.throws(() => validateManifest(manifest([job({ id: 'openai-job', agent: 'openai', sensitive: false, model: undefined })])), /openai-job requires an explicit model; the runner never uses a CLI default/);
 });
 
 test('bounds simultaneous fresh processes to manifest concurrency', async t => {

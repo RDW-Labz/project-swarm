@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.55.0
+
+- Sanitized and labeled untrusted worker text in rollups and sanitized monitor cells.
+- Added one report-only re-ask for otherwise complete strict jobs before `report-invalid`.
+- Added opt-in strict `report: "short"` at manifest and job level, with five-field worker reports and validation.
+- Saved valid short reports or derived legacy reports for worker attempts that ended complete, blocked, or failed. Jobs that never ran have no report.
+- Added `swarm rollup` for compact JSON or text summaries of status, lanes, spend, changed files, risks, and follow-ups.
+- Added lane, queue, merge, and spend lines to `monitor --view`; runs over 40 jobs show a bounded table and a rollup hint.
+- **Breaking:** explicit OpenAI, Gemini, and Lambda jobs now require `sensitive: false`, like OpenRouter; refusals use `sensitive-provider` while OpenRouter keeps `sensitive-openrouter`.
+- Added `swarm ask --not-sensitive`; sensitive questions routed to OpenRouter, OpenAI, Gemini, or Lambda refuse before any network call with `ask-sensitive-provider`.
+
 ## 1.54.0
 
 - Added eight optional job types with prompt guidance and default timeouts.

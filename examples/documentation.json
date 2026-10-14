@@ -5,6 +5,7 @@
     {
       "id": "documentation",
       "agent": "openai",
+      "sensitive": false,
       "model": "gpt-4.1-mini",
       "prompt": "Write a concise first-run checklist grounded only in the supplied README. Include setup, validation, review and integration; do not invent features.",
       "context": [

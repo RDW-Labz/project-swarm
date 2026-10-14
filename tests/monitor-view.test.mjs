@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -11,6 +12,43 @@ import { runManifest, summarizeRun } from '../tools/swarm.mjs';
 
 const runner = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
 const ANSI_RE = /\u001b\[[0-9;]*m/;
+
+test('monitor sanitizes every cell and idle-seat text before measuring widths', () => {
+  const dirty = '\u001b[31mclean\u001b[0m\u001b]title\u0007\u001b[2J\u001b[4;1H\u0000\u0007\u007f\u0085\u202e\u2066\nname';
+  const text = renderMonitorView(fixtureView({ jobs: [{ id: dirty, agent: dirty, model: dirty, tier: dirty, status: dirty, outputCount: dirty }], idleSeatEvents: [{ type: 'idle-seat', idleMinutes: dirty, runnableTasks: [dirty] }] }), { width: 200 });
+  assert.ok(text.includes('clean name'));
+  assert.doesNotMatch(text, /[\u0000-\u0009\u001b\u007f-\u009f\u202e\u2066]/);
+  assert.ok(text.split('\n').every(line => line.length <= 200));
+});
+
+test('monitor renders lane health, waiting queue, merge state and spend after usage', () => {
+  const view = fixtureView({ lanes: { lanes: {
+    codex: { state: 'ok', inFlight: 3, concurrency: 6, queued: 2 },
+    cursor: { state: 'paused', until: new Date(81000).toISOString() },
+    hermes: { state: 'backoff' },
+  } }, queued: 7, mergeQueue: { state: 'waiting' }, spend: { costUsd: 1.234, tokens: 42 } });
+  const text = renderMonitorView(view, { width: 200, now: 1000 });
+  assert.match(text, /lanes  codex 3\/6 run, 2 queued - cursor paused 1m20s - hermes backoff/);
+  assert.match(text, /queue  7 waiting\nmerge  waiting\nspend  \$1.23 - tokens 42/);
+  assert.match(renderMonitorView(fixtureView({ lanes: { lanes: { cursor: { state: 'paused', until: 81000 } } } }), { width: 200, now: 1000 }), /cursor paused 1m20s/);
+  assert.ok(text.indexOf('usage') < text.indexOf('lanes'));
+  assert.ok(text.indexOf('spend') < text.indexOf('JOB'));
+  assert.match(renderMonitorView(fixtureView({ integratedAt: '2026-01-01T00:00:00Z' })), /merge  integrated 2026-01-01T00:00:00Z/);
+  assert.match(renderMonitorView(fixtureView({ mergeQueue: null, integratedAt: null })), /merge  not integrated/);
+  assert.doesNotMatch(renderMonitorView(fixtureView({ lanes: { lanes: {} }, spend: { costUsd: 0, tokens: 0 } })), /lanes  |spend  |queue  |merge  /);
+});
+
+test('large monitor views hide completed jobs and cap unfinished rows at forty', () => {
+  const jobs = Array.from({ length: 100 }, (_, i) => ({ id: `job-${i}`, status: i < 50 ? 'complete' : 'queued' }));
+  const text = renderMonitorView(fixtureView({ jobs }), { width: 200 });
+  assert.doesNotMatch(text, /job-0\s/);
+  assert.match(text, /job-50\s/);
+  assert.doesNotMatch(text, /job-90\s/);
+  assert.match(text, /\.\.\. 50 complete jobs hidden; swarm rollup demo-run --text for the summary/);
+  const small = renderMonitorView(fixtureView({ jobs: jobs.slice(0, 40) }), { width: 200 });
+  assert.equal(small.split('\n').filter(line => /job-\d/.test(line)).length, 40);
+  assert.doesNotMatch(small, /jobs hidden/);
+});
 
 function fixtureView(overrides = {}) {
   return {

@@ -5,6 +5,7 @@
     {
       "id": "ui-review",
       "agent": "gemini",
+      "sensitive": false,
       "model": "gemini-2.5-flash",
       "prompt": "Review the onboarding user flow described in the supplied README. Identify friction and accessible wording improvements. You have no screenshot or rendered UI; do not claim visual inspection.",
       "context": [

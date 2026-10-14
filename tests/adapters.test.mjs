@@ -10,7 +10,7 @@ import path from 'node:path';
 import { executeApi, validateEnvelope, apiConfiguration, apiDoctor } from '../tools/api-adapters.mjs';
 import { runManifest, integrateRun, validateManifest, validateProject, cancelRun } from '../tools/swarm.mjs';
 const env={OPENAI_API_KEY:'secret-openai-credential',GEMINI_API_KEY:'secret-google-credential',LAMBDA_API_KEY:'secret-lambda-credential'};
-const job=(agent='openai',overrides={})=>({id:agent,agent,model:'test-model',context:['input.txt'],outputs:['report.md'],prompt:'Review copied source.',timeoutMs:1000,...overrides});
+const job=(agent='openai',overrides={})=>({id:agent,agent,...(['openai','gemini','lambda'].includes(agent)?{sensitive:false}:{}),model:'test-model',context:['input.txt'],outputs:['report.md'],prompt:'Review copied source.',timeoutMs:1000,...overrides});
 const manifest=jobs=>({version:1,concurrency:4,jobs});
 const envelope={summary:'Reviewed source; tests not run.',files:[{path:'report.md',content:'# Review\nA concrete finding.\n'}]};
 function body(agent,value=envelope){const text=JSON.stringify(value);if(agent==='openai')return{status:'completed',model:'resolved-openai',usage:{input_tokens:23,output_tokens:19,private:'never log'},output:[{type:'message',content:[{type:'output_text',text}]}]};if(agent==='gemini')return{modelVersion:'resolved-gemini',usageMetadata:{promptTokenCount:23,candidatesTokenCount:19},candidates:[{finishReason:'STOP',content:{parts:[{text}]}}]};if(agent==='lambda')return{id:'cmpl-1',model:'resolved-lambda',usage:{prompt_tokens:23,completion_tokens:19,private:'never log'},choices:[{finish_reason:'stop',message:{role:'assistant',content:text}}]};return{done:true,done_reason:'stop',model:'resolved-ollama',prompt_eval_count:23,eval_count:19,message:{content:text}};}

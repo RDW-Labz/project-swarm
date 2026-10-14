@@ -5,6 +5,7 @@
     {
       "id": "code-review",
       "agent": "openai",
+      "sensitive": false,
       "model": "gpt-4.1-mini",
       "prompt": "Review the supplied README for inconsistent commands or behavior claims. Cite exact text and distinguish concrete defects from suggestions.",
       "context": [

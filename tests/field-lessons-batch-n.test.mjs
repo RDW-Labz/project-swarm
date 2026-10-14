@@ -31,7 +31,7 @@ async function fixture(t) {
 const env = { OPENAI_API_KEY: 'secret-openai-credential' };
 const reply = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
 const openaiBody = envelopeValue => ({ status: 'completed', model: 'resolved-model', usage: { input_tokens: 1, output_tokens: 1 }, output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(envelopeValue) }] }] });
-const job = (overrides = {}) => ({ id: 'api-job', agent: 'openai', model: 'test-model', context: [], outputs: ['report.md'], prompt: 'Edit the report.', timeoutMs: 2000, ...overrides });
+const job = (overrides = {}) => ({ id: 'api-job', agent: 'openai', sensitive: false, model: 'test-model', context: [], outputs: ['report.md'], prompt: 'Edit the report.', timeoutMs: 2000, ...overrides });
 const manifest = jobs => ({ version: 1, concurrency: 1, jobs });
 
 // --- #185: API envelope `edits` form -----------------------------------------------------------

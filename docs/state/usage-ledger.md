@@ -20,9 +20,14 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-14 | 2 | types-code: job-types module, validation, router, examples, tests | codex | gpt-6.1-sol | pass | 103,395 | subscription |
 | 2026-10-14 | 2 | types-docs: 1.54.0 release + job-types docs | codex | gpt-6.1-sol | pass (blocked only on sibling-owned examples) | 54,080 | subscription |
 | 2026-10-14 | 2 | phase2-fixes: cheap-first router, sensitive default, docs rule | codex | gpt-6.1-sol | pass | 104,726 | subscription |
+| 2026-10-14 | 4-pre | phase4-pre: ask --not-sensitive, openai/gemini/lambda need sensitive: false | codex | gpt-6.1-sol | pass (2 release pins left to coordinator) | 88,515 | subscription |
+| 2026-10-14 | 4 | reports-code: reports module, strict/legacy reports, rollup, monitor view | codex | gpt-6.1-sol | pass (blocked on 1 out-of-scope test assertion) | 241,950 | subscription |
+| 2026-10-14 | 4 | reports-docs: docs + changelog | codex | gpt-6.1-sol | blocked (runner design-only wording read as no-edit) | 10,973 | subscription |
+| 2026-10-14 | 4 | reports-docs-2: retry with clarified prompt | codex | gpt-6.1-sol | pass | 97,869 | subscription |
+| 2026-10-14 | 4 | phase4-review-fixes: untrusted worker text, report-only re-ask | codex | gpt-6.1-sol | pass | 123,100 | subscription |
 
 ## Daily summary
 
 | date | tier | calls | pass | fail/blocked | tokens | rough cost |
 |---|---|---|---|---|---|---|
-| 2026-10-14 | codex | 16 | 14 | 2 | 1,029,551 | subscription |
+| 2026-10-14 | codex | 21 | 18 | 3 | 1,591,958 | subscription |
