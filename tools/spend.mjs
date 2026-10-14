@@ -126,8 +126,7 @@ export async function withSpendStore(fn, { dir = spendDir(), now = Date.now, isA
   }
   let temp;
   try {
-    await fs.writeFile(path.join(lock, 'owner.tmp'), JSON.stringify({ pid: process.pid, host, at: new Date(now()).toISOString() }));
-    await fs.rename(path.join(lock, 'owner.tmp'), path.join(lock, 'owner.json'));
+    await fs.writeFile(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, host, at: new Date(now()).toISOString() }));
     let store;
     try { store = JSON.parse(await fs.readFile(file, 'utf8')); }
     catch (error) {
@@ -141,10 +140,11 @@ export async function withSpendStore(fn, { dir = spendDir(), now = Date.now, isA
       throw storeError('spend-store-invalid', 'daily.json has an invalid shape');
     }
     const before = JSON.stringify(store);
-    const oldest = Date.parse(utcDay(now)) - 31 * 86400000;
+    const oldest = Date.parse(utcDay(now)) - 31 * 86400000, alive = new Map();
+    const ownerAlive = pid => { if (!alive.has(pid)) alive.set(pid, isAlive(pid)); return alive.get(pid); };
     for (const [key, entry] of Object.entries(store.entries)) {
       if (Date.parse(entry.day) < oldest) delete store.entries[key];
-      else if (entry.kind === 'reservation' && entry.host === host && !isAlive(entry.pid)) {
+      else if (entry.kind === 'reservation' && entry.host === host && !ownerAlive(entry.pid)) {
         entry.kind = 'reserved-as-cost'; entry.flagged = true;
       }
     }
@@ -152,7 +152,7 @@ export async function withSpendStore(fn, { dir = spendDir(), now = Date.now, isA
     if (JSON.stringify(store) !== before) {
       temp = path.join(dir, `.daily-${process.pid}-${crypto.randomUUID()}.tmp`);
       const handle = await fs.open(temp, 'wx', 0o600);
-      try { await handle.writeFile(`${JSON.stringify(store, null, 2)}\n`); await handle.sync(); }
+      try { await handle.writeFile(`${JSON.stringify(store)}\n`); }
       finally { await handle.close(); }
       await fs.rename(temp, file);
       temp = null;

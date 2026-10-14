@@ -2805,7 +2805,9 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           if (!waitingJobs.size) { clearInterval(waitPoll); waitPoll = null; }
         }
         if (await cancelled()) fail('cancelled');
-        const admit = admissions.then(async () => {
+        // An unpaid lane with no token cap has nothing to reserve in the machine-wide store.
+        const unreserved = !PAID_LANES.includes(job.agent) && state.budget.maxTokens === null && state.budget.lanes[job.agent]?.dailyTokens == null;
+        const admit = unreserved ? Promise.resolve(capDecision({ budget: state.budget, run: reservedRunTotals(), laneToday: {}, agent: job.agent })) : admissions.then(async () => {
           const rates = await ratesFor(job);
           let inputChars = job.prompt.length;
           for (const file of new Set([...job.context, ...job.outputs])) inputChars += (await bytesAt(root, file))?.length ?? 0;
@@ -2819,7 +2821,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           }
           return decision;
         });
-        admissions = admit.catch(() => {});
+        if (!unreserved) admissions = admit.catch(() => {});
         const decision = await admit;
         if (decision) {
           release(); release = null;
