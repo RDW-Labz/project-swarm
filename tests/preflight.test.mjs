@@ -1,3 +1,4 @@
+import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -86,7 +87,8 @@ test('fails closed for missing inputs, traversal, reserved paths, and invalid ma
     await assert.rejects(preflightProject(root, manifest(job('unsafe', { outputs: [file] }))), /path/i);
   }
   await assert.rejects(preflightProject(root, manifest(job('a', { outputs: ['same.txt'] }), job('b', { outputs: ['same.txt'] }))), /collision/);
-  await assert.rejects(preflightProject(root, { ...manifest(job('a')), concurrency: 33 }), /Concurrency/);
+  await assert.rejects(preflightProject(root, { ...manifest(job('a')), concurrency: 513 }), /Concurrency/);
+  assert.equal((await preflightProject(root, { ...manifest(job('accepted')), concurrency: 512 })).validated, true);
   assert.deepEqual(await fs.readdir(root), []);
 });
 

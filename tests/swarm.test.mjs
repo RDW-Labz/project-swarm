@@ -1,3 +1,4 @@
+import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -47,7 +48,8 @@ test('rejects traversal, absolute paths, secrets, collisions, and executable ada
   assert.throws(() => validateManifest(manifest([job(), job({ id: 'second' })])), /collision/);
   assert.throws(() => validateManifest(manifest([job({ command: '/tmp/evil' })])), /Unknown/);
   assert.throws(() => validateManifest(manifest([job({ agent: 'unknown-agent' })])), /Unsupported/);
-  assert.throws(() => validateManifest({ ...manifest(), concurrency: 33 }), /Concurrency/);
+  assert.throws(() => validateManifest({ ...manifest(), concurrency: 513 }), /Concurrency/);
+  assert.doesNotThrow(() => validateManifest({ ...manifest(), concurrency: 512 }));
 });
 
 test('refuses symlink context and launches no workers', async t => {
