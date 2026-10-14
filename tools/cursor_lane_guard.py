@@ -8,7 +8,7 @@ refuse a manual claim here, and it never needs (or takes) a claim of its own.
   claim   <job> <file>...       refuse if a live swarm run writes the file or another claim holds it
   check   <job> <worktree>      before merge: worktree changed only claimed files; main did not move under them
   release <job>                 after merge
-  check-manifest <manifest>     before any swarm run: refuse if a job output is claimed by Cursor
+  check-manifest <manifest>     optional: refuse claimed job outputs; swarm run does this automatically
   list
 
 Env: SWARM (default: node <pinned swarm.mjs, or this install's sibling swarm.mjs>),

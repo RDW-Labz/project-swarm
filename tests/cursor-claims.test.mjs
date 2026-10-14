@@ -122,6 +122,17 @@ test('validateProject warns with claim, files and jobIds without throwing', asyn
   }]);
 });
 
+test('validateProject excludes claimed cursor jobs from the startable subset', async t => {
+  const root = await fixture(t), fake = await fakeCursor(t, success);
+  await writeClaims(root, { owner: { files: ['output.txt'], base: 'abc' } });
+  const result = await validateProject(root, {
+    version: 1,
+    jobs: [job(), job({ id: 'other', outputs: ['other.txt'] })],
+  }, { env: runEnv(fake) });
+  assert.deepEqual(result.startableJobs, ['other']);
+  assert.deepEqual(result.startableSubset, ['other']);
+});
+
 test('claim conflicts sort and deduplicate; open scope checks both containment directions', async t => {
   const root = await fixture(t);
   await fakeCursor(t, success);

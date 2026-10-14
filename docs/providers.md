@@ -155,6 +155,8 @@ Local config `cursor` settings, all optional:
 
 Manually run Cursor workers outside the swarm keep using the [Cursor lane guard](cursor-lane.md); a swarm-run cursor job is an ordinary swarm job on `swarm board` and needs no claim.
 
+The [Cursor claims check](cursor-lane.md) makes `run` refuse claimed outputs and `validate` warn automatically.
+
 ## Local health diagnostics
 
 `doctor all` makes no network requests by default. Add `--probe-local` to

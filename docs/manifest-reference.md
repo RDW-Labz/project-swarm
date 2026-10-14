@@ -134,6 +134,8 @@ Before starting any job, `run` (and therefore `go`) checks this same registry fo
 
 `validate` catches the milder, earlier case of the same problem: the manifest being validated declares an output file that an *already-open* run elsewhere in this same repository (another worktree or branch) also lists. Two open jobs each working from their own copy of one shared file collide on the next rebase or integrate — a hand union-merge of the two independent results can break the file's own syntax. This is only a warning, never a refusal (unlike the exact-collision case above): a genuinely shared file (a registry, an index) is sometimes integrated one job at a time on purpose. `{"code": "shared-output-across-open-jobs", "path", "runIds"}`, naming the other open run(s) and suggesting a per-job fragment file, combined in a later step, instead. (Two jobs of the *same* manifest sharing one output file is refused outright by `validate`/`run`'s existing case-insensitive writer-collision check, so that case never reaches this warning.) (lesson #165)
 
+`run` also checks `coordination/cursor-claims.json` under the project root before registering the run or starting workers. Claimed outputs refuse with `cursor-claim-conflict`; `validate` warns with the same code. Exact matches conflict, and jobs with `scope: "open"` also conflict when either path contains the other. A missing claims file means no claims. Read, parse or shape errors make `run` refuse and `validate` warn with `cursor-claims-invalid`. Release the claim with `python3 tools/cursor_lane_guard.py release <claim>` or drop the file from outputs. The [Cursor lane guard](cursor-lane.md) `check-manifest` command remains optional.
+
 ## Commands
 
 ```sh

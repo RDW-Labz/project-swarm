@@ -7,6 +7,7 @@
 - Cursor jobs fail fast with `cursor-not-installed` or `cursor-not-authenticated`, and `doctor cursor` checks the version and required flags without printing the key.
 - Local config `cursor` sets `model`, `timeoutMs`, `maxAttempts` and `allowedPaths`; the codex retry helper now takes `maxAttempts`, and cursor retries only transient transport errors. Documented tiers route `mid` to cursor and `expensive` to codex; automatic tier escalation is not built.
 - Worktree-writer gates (worktree use, `testEnv`, `readPaths`, `setup`, `after`, HEAD-only context, uncommitted-file warnings, shell-capable warnings) now cover cursor jobs, and `swarm board` jobs carry their agent so the Cursor lane guard names swarm-run cursor jobs.
+- `run` now checks Cursor lane claims before starting workers and refuses conflicts with `cursor-claim-conflict`; `validate` warns. Invalid claims use `cursor-claims-invalid`, and the manual `check-manifest` check is optional.
 
 ## 1.51.1
 

@@ -4533,7 +4533,7 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   } catch (error) {
     warnings.push({ code: 'cursor-claims-invalid', message: error.message });
   }
-  const blockedJobIds = new Set(conflicts.flatMap(conflict => conflict.jobIds));
+  const blockedJobIds = new Set(warnings.filter(warning => ['live-output-conflict', 'cursor-claim-conflict'].includes(warning.code)).flatMap(warning => warning.jobIds));
   const startableJobs = manifest.jobs.filter(job => !blockedJobIds.has(job.id)).map(job => job.id);
   return {status:'valid',root,jobs,warnings,conflicts,startableJobs,startableSubset:startableJobs};
 }

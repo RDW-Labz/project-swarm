@@ -30,9 +30,15 @@ changes and use the same `REPO` for all guard calls.
 4. Merge the reviewed work, then run
    `python3 tools/cursor_lane_guard.py release cursor-task`.
 
-Before starting any swarm run, also run
-`python3 tools/cursor_lane_guard.py check-manifest manifest.json` to refuse
-job outputs claimed by Cursor. Use `list` to inspect current claims. Exit
+`swarm run` now checks `coordination/cursor-claims.json` automatically. It
+refuses any job whose output is claimed by Cursor with `cursor-claim-conflict`,
+before registering the run or starting workers. `swarm validate` warns about
+these conflicts. A missing claims file means no claims; an unreadable or invalid
+file makes `run` refuse and `validate` warn with `cursor-claims-invalid`.
+Release the claim with `python3 tools/cursor_lane_guard.py release <claim>` or
+drop the file from outputs. The manual
+`python3 tools/cursor_lane_guard.py check-manifest manifest.json` check is
+optional and still works. Use `list` to inspect current claims. Exit
 codes are `0` for success, `1` for refusal, and `2` for usage errors.
 
 `SWARM` can override the runner command. Otherwise the guard uses the install
@@ -40,8 +46,8 @@ pinned in `.project-swarm.json`; when that file is absent, it runs `node` with
 the `swarm.mjs` beside the guard. A present pin whose install is missing still
 fails rather than silently selecting another install.
 
-Claims are advisory: they do not lock files or automatically intercept either
-runner. Coordinate claim and dispatch operations; simultaneous calls are not
+Claims are advisory: they do not lock files. Coordinate claim and dispatch
+operations; simultaneous calls are not
 an atomic reservation. The guard only knows about swarm runs visible on
 `swarm board`. Unregistered workers and edits made after a check still need
 coordinator oversight.
