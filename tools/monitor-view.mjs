@@ -168,8 +168,18 @@ export function renderMonitorView(view, options = {}) {
   ));
   const usage = formatUsage(view.usageByProvider);
   if (usage) lines.push(truncate(`usage  ${usage}`, width));
+  const lanes = Object.entries(view.lanes?.lanes ?? {});
+  if (lanes.length) lines.push(truncate('lanes  ' + lanes.map(([agent, lane]) => {
+    if (lane.state === 'paused') return `${agent} paused ${formatDuration(Math.max(0, (typeof lane.until === 'number' ? lane.until : Date.parse(lane.until)) - (options.now ?? Date.now())))}`;
+    if (lane.state === 'backoff') return `${agent} backoff`;
+    return `${agent} ${lane.inFlight}/${lane.concurrency} run${lane.queued > 0 ? `, ${lane.queued} queued` : ''}`;
+  }).join(' - '), width));
+  if (view.queued !== undefined) lines.push(truncate(`queue  ${view.queued} waiting`, width));
+  if (view.mergeQueue !== undefined || view.integratedAt !== undefined) lines.push(truncate(`merge  ${view.mergeQueue?.state ?? (view.integratedAt ? `integrated ${view.integratedAt}` : 'not integrated')}`, width));
+  if (view.spend?.costUsd || view.spend?.tokens) lines.push(truncate(`spend  $${(view.spend.costUsd ?? 0).toFixed(2)} - tokens ${view.spend.tokens ?? 0}`, width));
   lines.push(...renderIdleSeatEvents(view.idleSeatEvents ?? view.idleSeat ?? [], width));
   lines.push('');
-  lines.push(...renderTable(jobs, width, color));
+  lines.push(...renderTable(jobs.length > 40 ? jobs.filter(job => job.status !== 'complete').slice(0, 40) : jobs, width, color));
+  if (jobs.length > 40) lines.push(`... ${jobs.filter(job => job.status === 'complete').length} complete jobs hidden; swarm rollup ${view.id} --text for the summary`);
   return lines.join('\n');
 }

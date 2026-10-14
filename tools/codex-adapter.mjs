@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Codex's outer macOS seatbelt, not its prompt or built-in sandbox, is the boundary.
 import fs from 'node:fs/promises';
+import { REPORT_PROMPT_LINE } from './reports.mjs';
 import { mkdirSync, realpathSync, lstatSync, openSync, writeSync, closeSync, constants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -142,6 +143,7 @@ export const isDesignOnlyCodexJob = job => ['codex', 'cursor'].includes(job.agen
 export function codexMessage(job, { contract = null, gotchas = '', skills = '', agentsWorkspace = null, checks = [], versionFiles = [] } = {}) {
   let base = `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(job.context)}. You may edit only these declared outputs: ${JSON.stringify(job.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.\nRead only the files in your context; other reads may be denied.\nIf a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\n`;
   if (job.scope === 'open') base = `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(job.context)}. Your open scope directories are ${JSON.stringify(job.outputDirs)}. The frozen allowed files (tracked directory files plus explicit outputs) are ${JSON.stringify(job.outputs)}. You may read context and allowed files and edit only allowed files. New undeclared files are dropped writes. This is a proposal boundary, not per-file OS confinement. Do not delete files. Run relevant project tests. Root uncommitted changes are not included. Deliver what you can and list what remains. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed allowed paths and unfinished work.\n\n`;
+  if (job.report === 'short') base = base.replace(/Finish with exactly one JSON line [^\n]+/, 'Return the short report requested in the task.');
   const contractSection = contract ? `Shared contract (${contract.path}). Read it first; it wins over any other file:\n${contract.text}\n\n` : '';
   // Field lesson #288: a codex worktree already contains every tracked file at HEAD and already has
   // .swarm/skills copied in, so a doc this repo's own AGENTS.md names is usually already readable;
@@ -149,14 +151,16 @@ export function codexMessage(job, { contract = null, gotchas = '', skills = '', 
   const agentsWorkspaceSection = agentsWorkspace ? `Required reading named by this repo's own AGENTS.md (${agentsWorkspace.path}); it is already in your worktree and readable, read it now:\n${agentsWorkspace.text}\n\n` : '';
   const checkList = checks.length ? checks.map(check => `${check.name}: ${JSON.stringify(check.argv)}${check.integrateOnly || check.status === 'path-denied' || check.status === 'not run' || /skipped-integrate-only|integrate-only: path outside this worktree|path-denied/.test(check.name) || check.argv.some(arg => /^\{(?:integrated|new)(?::[^}]+)?\}$/.test(arg)) ? ' (not run: orchestrator-only or path-denied)' : ''}`).join('; ') : 'none declared; run relevant tests';
   let checksLine = `Manifest checks: ${checkList}. Run these; fix red before you return; report checksRun.\nReport checksRun as [{"name":"NAME","status":"passed|failed|not run"}]. Checks marked not run must stay not run; do not evade path restrictions or run orchestrator-only checks.\n`;
+  if (job.report === 'short') checksLine = `Manifest checks: ${checkList}. Run these; fix red before you return. Checks marked not run must stay not run; do not evade path restrictions or run orchestrator-only checks. Summarize check results in your report.\n`;
   const designOnly = isDesignOnlyCodexJob(job);
-  if (designOnly) { base = base.replace('Run relevant project tests.', 'Read and grep only.'); checksLine = 'Manifest checks are not run for this design-only job; report checksRun with status "not run".\n'; }
+  if (designOnly) { base = base.replace('Run relevant project tests.', 'Read and grep only.'); checksLine = job.report === 'short' ? 'Manifest checks are not run for this design-only job.\n' : 'Manifest checks are not run for this design-only job; report checksRun with status "not run".\n'; }
   const testEnvironment = job.testEnv ? `Test environment (already set): ${Object.entries(job.testEnv).map(([key, value]) => `${key}=${value}`).join(', ')}\n` : '';
   // Field lesson #163: codex has a shell too, and the stash stack is shared by every worktree.
   // Field lesson #170: never hand-revert a mutant with checkout/restore; run `swarm mutants`.
   // Field lesson #167: known platform gotchas for this project, when a .swarm/gotchas.md exists.
+  const taskPrompt = job.report === 'short' && !job.prompt.includes(REPORT_PROMPT_LINE) ? `${job.prompt}\n\n${REPORT_PROMPT_LINE}` : job.prompt;
   const ownership = codexNeedsOwnershipInstruction(job, [...versionFiles, ...(job.versionFiles ?? [])]) ? CODEX_OWNERSHIP_LINE : '';
-  return `${designOnly ? DESIGN_ONLY_LINE : ''}${base}${ownership}${CODEX_OUT_OF_REPO_DOCS_WAIVER_LINE}${contractSection}${agentsWorkspaceSection}${testEnvironment}${checksLine}${NO_STASH_LINE}\n${MUTANTS_BY_HAND_LINE}\n${gotchas}${skills}TASK:\n${job.prompt}\n`;
+  return `${designOnly ? DESIGN_ONLY_LINE : ''}${base}${ownership}${CODEX_OUT_OF_REPO_DOCS_WAIVER_LINE}${contractSection}${agentsWorkspaceSection}${testEnvironment}${checksLine}${NO_STASH_LINE}\n${MUTANTS_BY_HAND_LINE}\n${gotchas}${skills}TASK:\n${taskPrompt}\n`;
 }
 const tryObject = text => { try { const value = JSON.parse(text); return value && typeof value === 'object' && !Array.isArray(value) ? value : null; } catch { return null; } };
 const CODEX_FENCE = /```[a-zA-Z]*[ \t]*\n([\s\S]*?)\n[ \t]*```/g;
