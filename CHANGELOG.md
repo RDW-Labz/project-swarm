@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.55.1
+
+- Docs-only Codex and Cursor jobs are now told to edit their declared outputs (the old "read and grep only" wording made a worker refuse to edit).
+
 ## 1.55.0
 
 - Sanitized and labeled untrusted worker text in rollups and sanitized monitor cells.

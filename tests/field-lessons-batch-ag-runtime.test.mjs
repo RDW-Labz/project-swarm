@@ -385,6 +385,8 @@ test('L355 mutant review warns about a second writer before mutation', async t =
 test('L356 design-only briefs and blocked-test results are explicit', async t => {
   const docs = job({ outputs: ['docs/design.md', 'docs/map.json'] });
   assert(codexMessage(docs).startsWith(DESIGN_ONLY_LINE));
+  assert.match(codexMessage(docs), /edit your declared outputs/i);
+  assert.doesNotMatch(codexMessage(docs), /grep only/i);
   assert(!codexMessage(docs).includes('Run relevant project tests.'));
   assert(!codexMessage(job({ outputs: [...docs.outputs, 'src/code.js'] })).includes(DESIGN_ONLY_LINE));
   assert(!codexMessage(job({ outputs: ['outside.json'] })).includes(DESIGN_ONLY_LINE));
