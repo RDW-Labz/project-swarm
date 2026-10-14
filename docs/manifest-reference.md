@@ -318,7 +318,7 @@ A worker's own `blocked` envelope (its final JSON message with `{"status":"block
 
 ## Integration contract
 
-Integration requires a complete run from the same project, a matching saved manifest and worker record, and all declared output files. It validates every candidate and original target hash before writing any project output. If any target changed after the snapshot, integration stops with a conflict. It does not merge textual conflicts, propagate deletions, or import undeclared files.
+Plain `integrate` requires a complete run from the same project, a matching saved manifest and worker record, and all declared output files. It validates every candidate and original target hash before writing any project output. If any target changed after the snapshot, plain integration stops with a conflict. It does not merge textual conflicts, propagate deletions, or import undeclared files.
 
 An integration lock serializes integrations through this runner. Individual file replacements are atomic, with best-effort rollback on a caught write failure. This is not a transactional filesystem or protection against an unrelated process editing files concurrently. Keep a single coordinator for project writes and use normal version control.
 
@@ -327,6 +327,24 @@ API jobs additionally require a complete, non-refused response and valid JSON wi
 The `monitor` command is a single read-only snapshot, suitable for periodic coordinator polling. New runs record `queuedAt`, `startedAt`, `finishedAt`, `durationMs`, configured concurrency, and observed peak active jobs. Counts reflect recorded queue state, not proof that stale processes survived a coordinator crash. Numeric usage is grouped by provider without combining incompatible token fields or estimating missing costs. Older run records remain readable; unavailable historical timings remain null.
 
 `monitor <run-id>` still prints the JSON snapshot above by default; nothing about that output changed. Add `--view` for a human table instead: one row per job (`id`, `agent`, `model`, `tier`, `status`, elapsed/duration, declared output count), a summary line (running/done/failed/queued counts, total elapsed, peak concurrency), and, where recorded, usage per provider. Every status shows a symbol and a word together, never color alone, and color is used only on a TTY with `NO_COLOR` unset. Add `--watch [seconds]` (default 2) to keep `--view` re-rendering in place until the run reaches a terminal status or you press Ctrl+C; it only reads saved state and never starts, cancels, or integrates anything.
+
+### Integrate with a queue
+
+```sh
+swarm integrate <run-id> --queue --batch-size 10 --max-requeues 2
+```
+
+- `--queue`: integrate acceptable jobs in manifest order without requiring the whole run to be complete. Complete jobs are accepted; other statuses are skipped unless `--accept-blocked` accepts blocked jobs.
+- `--batch-size N`: jobs per batch, default 10. Requires an integer from 1 to 100; otherwise refuses with `queue-batch-invalid`.
+- `--max-requeues N`: conflict requeues before one merge job, default 2. Requires an integer from 0 to 5; otherwise refuses with `queue-requeues-invalid`. Zero goes straight to a merge job.
+- `--no-checks`: skip batch checks.
+- `--accept-blocked`: include blocked jobs under the existing blocked-output rules.
+
+`--jobs`, `--salvage`, and `--mutants` cannot be combined with `--queue`. Each refuses with code `queue-flag-unsupported` and message `queue-flag-unsupported: <flag> cannot be combined with --queue`.
+
+Conflicts never overwrite newer bytes or modes. Other validation gates still apply to the whole pass. Checks run once per batch. A failed batch is rolled back and bisected to isolate failing jobs; passing sub-batches stay applied. Conflicting jobs run again from the current checkout, then get one merge job if the requeue limit is exhausted.
+
+The command prints one JSON line with `status`, `runs`, `integrated`, `requeued`, `merged`, `checkFailed`, `flagged`, and `skipped`. It exits 0 for `integrated`, or 1 for `partial` when checks failed or merge jobs were flagged. The original run saves the driver result at `mergeQueue.summary`. See [merge queue guidance](merge-queue.md) for result shapes, saved progress, and monitor and rollup counts. Plain `integrate` without `--queue` keeps its existing behavior.
 
 ## Checks
 
@@ -351,7 +369,7 @@ Up to 10 checks per manifest. Inside `argv`, a whole item of exactly `{integrate
 
 The text `{root}` may also appear anywhere inside a `checks` or `mutantCheck` argv item — not only as a whole item — and is replaced with the run's absolute project root, for example `"CARGO_TARGET_DIR={root}/src-tauri/target"`. This keeps a project-relative build directory unique per run so two parallel runs never share (and corrupt) the same build folder. `{integrated}`/`{integrated:.ext}` still only expand a whole item, unchanged.
 
-Checks run with `cwd` at the project root, the coordinator's inherited environment plus `SWARM_PORT_BASE` (see [Ports](#ports) below), and each check's own timeout; a later check still runs even if an earlier one fails, so a formatter can run before the tests that depend on its output. **Formatters may rewrite the files integration just wrote, and a failing check never rolls back the integration** — checks are reported, not a transactional gate. `integrate`'s own process exit code stays 0 when files integrate successfully regardless of check outcome; pass `--require-checks` to exit 1 when any check fails, times out, or errors. Pass `--no-checks` to skip them entirely (the result shows `checks: []`, `checksSkipped: true`, and `failures: []`).
+Checks run with `cwd` at the project root, the coordinator's inherited environment plus `SWARM_PORT_BASE` (see [Ports](#ports) below), and each check's own timeout; a later check still runs even if an earlier one fails, so a formatter can run before the tests that depend on its output. **Formatters may rewrite the files integration just wrote, and a failing check never rolls back plain integration** — checks are reported, not a transactional gate. Plain `integrate`'s own process exit code stays 0 when files integrate successfully regardless of check outcome; pass `--require-checks` to exit 1 when any check fails, times out, or errors. Pass `--no-checks` to skip them entirely (the result shows `checks: []`, `checksSkipped: true`, and `failures: []`). Queue mode instead rolls back failed batches and bisects them; see [Integrate with a queue](#integrate-with-a-queue).
 
 The result also gains `failures`: one compact entry per check whose status is `failed`, `timeout`, or `error` — `{"name", "lines": [...]}`, the last few lines of that check's own `tail` that look like a failure (matching `fail`/`error`/`assert`/`expected`/`✗`/`✕`, capped at 5) — so a coordinator does not need to open the full tail to see what broke. `failures` is `[]` when every check passed or was skipped. This same shape is what `--evidence` (above) expects a local JSON file to contain.
 
@@ -522,7 +540,7 @@ A mutant's `find` string sometimes only exists in code a build job generates, so
 
 Either way, each mutant's `find` is checked against the file's bytes exactly like a manifest-declared mutant, but the **parse and shape validation** happens before any file is written: a job's own `mutantsFile` output is read from the exact bytes about to be written (not re-read from the tree afterward), and `--mutants-file` is read and parsed the same way, up front. When the manifest declares no `mutantCheck`, pass `--mutant-check "<argv json>"` (a JSON array of argv strings, e.g. `--mutant-check '["npm","test"]'`) — `integrate --mutants` refuses with a clear message, and writes nothing, if neither a usable mutants source nor a `mutantCheck` is available. Restore-and-byte-check behavior for every mutant, from any source, is unchanged.
 
-**Integration is all-or-nothing.** Every mutants source, and every other precondition, is validated before the first project file is written; a bad shape (including a `mutantsFile` output whose worker appended trailing text after its own final JSON line — see [agent failure evidence](verification.md#agent-failure-evidence)) refuses cleanly with nothing written. Once files are written, the run's saved state gains `integrationStatus: "partial"`, persisted immediately, before `preChecks`/`checks`/mutants run; a later failure in any of those (rare, since every precondition above is already checked) leaves that marker in place rather than an ambiguous state. A subsequent `integrate <run-id>` on a `partial` run is accepted as a retry rather than refused `"Run already integrated"`, and a file that already carries the exact bytes this same run wrote is treated as already applied instead of a conflict. `integrationStatus` becomes `"complete"` only once the whole command, including any mutants, finishes.
+**Plain integration validates all candidates before writing.** Every mutants source, and every other precondition, is validated before the first project file is written; a bad shape (including a `mutantsFile` output whose worker appended trailing text after its own final JSON line — see [agent failure evidence](verification.md#agent-failure-evidence)) refuses cleanly with nothing written. Once files are written, the run's saved state gains `integrationStatus: "partial"`, persisted immediately, before `preChecks`/`checks`/mutants run; a later failure in any of those (rare, since every precondition above is already checked) leaves that marker in place rather than an ambiguous state. A subsequent `integrate <run-id>` on a `partial` run is accepted as a retry rather than refused `"Run already integrated"`, and a file that already carries the exact bytes this same run wrote is treated as already applied instead of a conflict. `integrationStatus` becomes `"complete"` only once the whole command, including any mutants, finishes.
 
 ## Context check
 

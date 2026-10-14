@@ -128,3 +128,15 @@ test('300 long reports stay below JSON and text size budgets', () => {
     assert.ok(r.risks.length <= 5 && r.followups.length <= 5);
   }
 });
+
+test('rollup counts merge queue progress and driver summary within its budget', () => {
+  assert.equal(rollupRun({ jobs: [] }).mergeQueue, null);
+  const mergeQueue = { state: 'done', integrated: ['a'], checkFailed: [], summary: { integrated: Array(200), requeued: Array(10), flagged: Array(2), checkFailed: Array(3) } };
+  const jobs = Array.from({ length: 300 }, (_, n) => ({ id: `job-${n}`, status: 'failed', report: report({ summary: 's'.repeat(500) }) }));
+  const r = rollupRun({ jobs, mergeQueue });
+  assert.deepEqual(r.mergeQueue, { state: 'done', integrated: 200, requeued: 10, flagged: 2, checkFailed: 3 });
+  assert.ok(Buffer.byteLength(JSON.stringify(r)) < 4096);
+  assert.match(renderRollupText(r), /merge  done - 200 integrated - 10 requeued - 2 flagged - 3 checks failed/);
+  delete mergeQueue.summary;
+  assert.deepEqual(rollupRun({ jobs: [], mergeQueue }).mergeQueue, { state: 'done', integrated: 1, requeued: 0, flagged: 0, checkFailed: 0 });
+});

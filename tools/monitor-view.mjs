@@ -177,7 +177,10 @@ export function renderMonitorView(view, options = {}) {
     return `${agent} ${lane.inFlight}/${lane.concurrency} run${lane.queued > 0 ? `, ${lane.queued} queued` : ''}`;
   }).join(' - '), width));
   if (view.queued !== undefined) lines.push(truncate(`queue  ${view.queued} waiting`, width));
-  if (view.mergeQueue !== undefined || view.integratedAt !== undefined) lines.push(truncate(`merge  ${view.mergeQueue?.state ?? (view.integratedAt ? `integrated ${view.integratedAt}` : 'not integrated')}`, width));
+  if (view.mergeQueue !== undefined || view.integratedAt !== undefined) {
+    const summary = view.mergeQueue?.summary;
+    lines.push(truncate(`merge  ${view.mergeQueue?.state ?? (view.integratedAt ? `integrated ${view.integratedAt}` : 'not integrated')}${summary ? ` - ${summary.integrated.length} integrated - ${summary.requeued.length} requeued - ${summary.flagged.length} flagged` : ''}`, width));
+  }
   if (view.spend?.costUsd || view.spend?.tokens) lines.push(truncate(`spend  $${(view.spend.costUsd ?? 0).toFixed(2)} - tokens ${view.spend.tokens ?? 0}`, width));
   lines.push(...renderIdleSeatEvents(view.idleSeatEvents ?? view.idleSeat ?? [], width));
   lines.push('');

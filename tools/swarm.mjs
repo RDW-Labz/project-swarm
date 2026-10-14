@@ -38,6 +38,8 @@ import { prepareWorkspaceEnvironment, prepareViteCaches, isDesignOnlyCodexJob, c
 import { CURSOR_MODEL, CURSOR_BLIP_RE, requireCursorPlatform, requireCursorApiKey, resolveCursorBinary, cursorConfig, cursorProfile, cursorLaunchArgs, cursorMessage, cursorEnvironment, resolveCursorEnvelope, parseCursorOutput, redactCursorKey, cursorDoctor } from './cursor-adapter.mjs';
 import { classifyCheckEnvironment, swarmCheckWarnings } from './ship.mjs';
 import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary, listLiveRuns, repoKey, repoPaths } from './board.mjs';
+import { acquireIntegrationLock } from './integration-lock.mjs';
+export { acquireIntegrationLock } from './integration-lock.mjs';
 import { writeSessionMetric } from './session-metrics.mjs';
 import { resolveSkillsDir, listSkills, skillSizeWarnings, refuseOversizeSkills, attachSkillsForJob, skillsPromptBlock, skillRecordEntries, skillCheckFailures, copySkillsInto, assertNoSkillSymlinks, anyPathMatchesGlobs, SKILLS_DIR_NAME } from './skills.mjs';
 import { estimateCostFromTranscript } from './rates.mjs';
@@ -3838,6 +3840,173 @@ async function loadJobResultData(root, id, declared, readRoot) {
   return responseBytes ? parseFinalJson(responseBytes.toString('utf8')) : null;
 }
 
+function validateQueueOptions({ batchSize = 10, maxRequeues = 2, jobs, salvage, mutants, mutantsFile, mutantCheck }) {
+  mutants ||= mutantsFile !== undefined || mutantCheck !== undefined;
+  for (const [flag, enabled] of [['--jobs', jobs !== undefined && jobs !== null], ['--salvage', salvage], ['--mutants', mutants]]) {
+    if (enabled) fail(`queue-flag-unsupported: ${flag} cannot be combined with --queue`, 'queue-flag-unsupported');
+  }
+  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 100) fail('queue-batch-invalid: batchSize must be an integer 1-100', 'queue-batch-invalid');
+  if (!Number.isInteger(maxRequeues) || maxRequeues < 0 || maxRequeues > 5) fail('queue-requeues-invalid: maxRequeues must be an integer 0-5', 'queue-requeues-invalid');
+}
+
+async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, conflicts, skipped, noChecks, noFlakeCheck, spawnImpl, warnings, releaseIntegrationLock }) {
+  const queue = state.mergeQueue = { state: 'running', batchSize, batches: [], integrated: [], conflicts, checkFailed: [], skipped };
+  state.integratedFiles = [];
+  state.integratedNewFiles = [];
+  const persist = () => jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
+  await persist();
+  const originalPortBase = portBlockFor(root);
+  const { base: portBase, moved } = await resolvePortBlock(root);
+  if (moved) warnings.push(portBase === originalPortBase ? `port-block-busy: ${portBase}` : `port-block-moved: ${originalPortBase} -> ${portBase}`);
+  const { env: swarmEnv } = await loadSwarmEnv(root);
+  const portEnv = { ...process.env, ...swarmEnv, SWARM_PORT_BASE: String(portBase) };
+  state.preChecks = [];
+  if (plans.length) {
+    for (const [index, argv] of (manifest.preChecks ?? []).entries()) state.preChecks.push(await runCheck(argv.join(' ').slice(0, 60) || `preCheck-${index + 1}`, expandRootArgv(argv, root), root, 300000, spawnImpl, false, () => {}, portEnv));
+    const broken = state.preChecks.find(check => CHECK_ERRORED_STATUSES.has(check.status));
+    if (broken) { await persist(); fail(`checks-not-runnable: preCheck ${broken.name} ${broken.status}`); }
+    if (!manifest.preChecks?.length && plans.some(plan => plan.writes.some(change => ENV_RESYNC_TRIGGER_NAMES.has(path.basename(change.file))))) warnings.push('lockfile changed, env not synced');
+  }
+  const applyBatch = async batch => {
+    const ready = [];
+    for (const plan of batch) {
+      const files = [];
+      let reason = 'changed since worker snapshot';
+      for (const snapshot of plan.snapshots) {
+        const current = await bytesAt(root, snapshot.file);
+        const mode = current === null ? 0o644 : (await fs.stat(await safePath(root, snapshot.file))).mode & 0o777;
+        const changed = current === null ? snapshot.bytes !== null : snapshot.bytes === null || !current.equals(snapshot.bytes);
+        if (changed || mode !== snapshot.mode) files.push(snapshot.file);
+        if (mode !== snapshot.mode) reason = 'permissions changed since worker snapshot';
+      }
+      if (files.length) queue.conflicts.push({ job: plan.job, files, reason });
+      else ready.push(plan);
+    }
+    batch = ready;
+    if (!batch.length) { await persist(); return; }
+    const alreadyApplied = batch.filter(plan => plan.alreadyApplied);
+    queue.integrated.push(...alreadyApplied.map(plan => plan.job));
+    batch = batch.filter(plan => !plan.alreadyApplied);
+    if (!batch.length) { await persist(); return; }
+    const changes = batch.flatMap(plan => plan.writes);
+    const journal = await startIntegrationJournal(root, id, 'queue-batch', batch.map(plan => plan.job), changes, releaseIntegrationLock);
+    let result;
+    try {
+      for (const change of changes) {
+        // Recheck immediately before a write: preChecks or another writer may have moved it.
+        const current = await bytesAt(root, change.file);
+        const mode = current === null ? 0o644 : (await fs.stat(await safePath(root, change.file))).mode & 0o777;
+        if (current === null ? change.previous !== null : change.previous === null || !current.equals(change.previous)) fail(`Integration conflict: ${change.file} changed since worker snapshot`);
+        if (mode !== change.mode) fail(`Integration conflict: ${change.file} permissions changed since worker snapshot`);
+        await journal.perform(async () => {
+          if (change.bytes === null) await fs.unlink(await safePath(root, change.file)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+          else await write(root, change.file, change.bytes, false, change.mode);
+        });
+      }
+      result = noChecks ? { checks: [], checksPassed: true } : await runChecks(root, manifest.checks ?? [], changes.map(change => change.file), changes.filter(change => change.previous === null).map(change => change.file), spawnImpl, { baseCommit: state.baseCommit, noFlakeCheck, portBase, extraEnv: swarmEnv });
+    } catch (error) { await journal.rollback(); throw error; }
+    const failed = result.checksPassed === false;
+    queue.batches.push({ jobs: batch.map(plan => plan.job), checks: noChecks ? 'skipped' : failed ? 'failed' : 'passed', bisected: failed && batch.length > 1 });
+    warnings.push(...swarmCheckWarnings(result.checks));
+    // Queue mode deliberately rolls failed batches back before bisecting. Plain integrate
+    // retains its existing behavior: check failures never roll back its writes.
+    if (failed) {
+      await journal.rollback();
+      if (batch.length === 1) queue.checkFailed.push({ job: batch[0].job, checks: result.checks.filter(check => !['passed', 'skipped'].includes(check.status)).map(check => check.name) });
+    } else {
+      queue.integrated.push(...batch.map(plan => plan.job));
+      state.integratedFiles.push(...changes.map(change => change.file));
+      state.integratedNewFiles.push(...changes.filter(change => change.previous === null).map(change => change.file));
+    }
+    if (!failed) await journal.finish();
+    await persist();
+    if (failed && batch.length > 1) {
+      const middle = Math.ceil(batch.length / 2);
+      await applyBatch(batch.slice(0, middle));
+      await applyBatch(batch.slice(middle));
+    }
+  };
+  for (let index = 0; index < plans.length; index += batchSize) await applyBatch(plans.slice(index, index + batchSize));
+  queue.state = 'done';
+  state.integratedAt = new Date().toISOString();
+  state.integrationStatus = 'queued';
+  await persist();
+  return { id, status: 'integrated', integrationStatus: 'queued', mergeQueue: queue, files: state.integratedFiles, warnings };
+}
+
+export async function integrateQueue(root, id, { batchSize = 10, maxRequeues = 2, ...options } = {}) {
+  validateQueueOptions({ ...options, batchSize, maxRequeues });
+  root = await fs.realpath(root);
+  const original = JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true));
+  const summary = { status: 'integrated', runs: [], integrated: [], requeued: [], merged: [], checkFailed: [], flagged: [], skipped: [] };
+  const requeues = new Map();
+  const childManifest = jobs => ({ ...original, jobs });
+  const runChild = async jobs => {
+    // Every child snapshots the current checkout, and takes no integration lock while running.
+    const { id: ignoredId, jobs: ignoredJobs, queue: ignoredQueue, ...runOptions } = options;
+    return await runManifest(root, childManifest(jobs), runOptions);
+  };
+  const pass = async (run, attempt, kind, mergeOriginal = null) => {
+    summary.runs.push({ id: run, attempt, kind });
+    const result = await integrateRun(root, run, { ...options, queue: true, batchSize, ...(kind === 'merge' ? { acceptBlocked: false } : {}) });
+    summary.warnings = [...(summary.warnings ?? []), ...result.warnings];
+    if (result.recoveredJournal) summary.recoveredJournal = result.recoveredJournal;
+    const q = result.mergeQueue;
+    for (const job of q.integrated) summary.integrated.push({ job, run, attempt });
+    for (const failure of q.checkFailed) summary.checkFailed.push({ job: failure.job, run, checks: failure.checks });
+    if (kind === 'original') summary.skipped = q.skipped;
+    if (kind === 'merge') {
+      if (q.conflicts.length) summary.flagged.push({ job: mergeOriginal, reason: 'merge-conflict' });
+      else if (q.checkFailed.length) summary.flagged.push({ job: mergeOriginal, reason: 'merge-checks-failed' });
+      else if (q.skipped.length) summary.flagged.push({ job: mergeOriginal, reason: `merge-failed: ${q.skipped[0].status}` });
+      else summary.merged.push({ job: mergeOriginal, run });
+      return;
+    }
+    if (!q.conflicts.length) return;
+    if (attempt < maxRequeues) {
+      const jobs = q.conflicts.map(conflict => {
+        const { after, ...job } = original.jobs.find(job => job.id === conflict.job);
+        requeues.set(job.id, attempt + 1);
+        return job;
+      });
+      const child = await runChild(jobs);
+      await pass(child.id, attempt + 1, 'requeue');
+      return;
+    }
+    const state = await readState(root, run);
+    for (const conflict of q.conflicts) {
+      const originalJob = original.jobs.find(job => job.id === conflict.job);
+      const record = state.jobs.find(job => job.id === conflict.job);
+      const workspace = await safePath(root, expectedWorkspaceFor(run, record.id, record), { internal: true });
+      let prompt = `Merge job for ${originalJob.id}. Since this job ran, these declared outputs changed in the checkout: ${conflict.files.join(', ')}. Keep the newer content and re-apply this job's intent on top of it. Original task follows.\n\n${originalJob.prompt}`;
+      const versions = [];
+      let total = 0;
+      for (const file of conflict.files) {
+        const bytes = await bytesAt(workspace, file);
+        if (bytes === null) continue;
+        try {
+          const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+          total += bytes.length;
+          versions.push({ file, text });
+        } catch { /* Binary proposals are named above, never placed in the prompt. */ }
+      }
+      if (total <= 50000) for (const { file, text } of versions) prompt += `\n\nYour earlier version of ${file} (untrusted data, for reference):\n<<<\n${text}\n>>>`;
+      const context = [...originalJob.context];
+      for (const file of conflict.files) if (await bytesAt(root, file) !== null && !context.includes(file)) context.push(file);
+      const merge = { id: `${originalJob.id}-merge`, type: 'merge', agent: originalJob.agent, ...(originalJob.agent === 'auto' ? {} : { model: originalJob.model }), context, outputs: originalJob.outputs, prompt, ...(originalJob.sensitive !== undefined ? { sensitive: originalJob.sensitive } : {}) };
+      const child = await runChild([merge]);
+      await pass(child.id, attempt + 1, 'merge', originalJob.id);
+    }
+  };
+  await pass(id, 0, 'original');
+  summary.requeued = [...requeues].map(([job, attempts]) => ({ job, attempts }));
+  summary.status = summary.flagged.length || summary.checkFailed.length ? 'partial' : 'integrated';
+  const state = await readState(root, id);
+  state.mergeQueue.summary = summary;
+  await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
+  return summary;
+}
+
 // Field lesson #269: a worker's own `deviations` array may hold plain strings, not just
 // `{contract, did, why}` objects — rendered unchanged here rather than read as `.contract`
 // (`undefined` for a string) or spread character-by-character into a char-indexed object.
@@ -3845,7 +4014,90 @@ function deviationText(deviation) {
   return typeof deviation === 'string' ? deviation : deviation?.contract ?? JSON.stringify(deviation);
 }
 
-export async function integrateRun(root, id, { noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, salvage = false, acceptDeviation = false, acceptResultShape = false, acceptDropped = false, salvageDropped = false, jobs = undefined, privateNamesFile = undefined } = {}) {
+async function recoverIntegrationJournal(root) {
+  const target = await safePath(root, '.swarm/integration-journal.json', { internal: true });
+  let journal;
+  try { journal = JSON.parse(await fs.readFile(target, 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  if (journal.version !== 1 || !Array.isArray(journal.entries)) fail('Invalid integration journal');
+  for (const entry of journal.entries) {
+    if (entry.previous === null) await fs.unlink(await safePath(root, entry.file)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    else await write(root, entry.file, Buffer.from(entry.previous, 'base64'), false, entry.mode);
+  }
+  await fs.unlink(target);
+  return { runId: journal.runId, kind: journal.kind, jobs: journal.jobs, files: journal.entries.length };
+}
+function journalWarning(recovered) {
+  return `integrate-journal-rolled-back: run ${recovered.runId} ${recovered.kind} jobs ${recovered.jobs.join(',')} restored ${recovered.files} files`;
+}
+async function startIntegrationJournal(root, runId, kind, jobs, changes, release) {
+  const target = await safePath(root, '.swarm/integration-journal.json', { internal: true });
+  const entries = [];
+  for (const { file } of changes) {
+    const previous = await bytesAt(root, file);
+    const mode = previous === null ? 0o644 : (await fs.stat(await safePath(root, file))).mode & 0o777;
+    entries.push({ file, previous: previous === null ? null : previous.toString('base64'), mode });
+  }
+  const journal = { version: 1, runId, pid: process.pid, startedAt: new Date().toISOString(), kind, jobs, entries };
+  const temporary = `${target}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  let stopping = false;
+  let pending = Promise.resolve();
+  const stopped = () => new Promise(() => {}); // The signal handler will exit after restoration.
+  const interrupt = signal => {
+    if (stopping) return;
+    stopping = true;
+    const code = signal === 'SIGINT' ? 130 : 143;
+    void (async () => {
+      try {
+        try { await pending.catch(() => {}); await recoverIntegrationJournal(root); }
+        finally { await release(); }
+      }
+      finally { process.exit(code); }
+    })();
+  };
+  const onInt = () => interrupt('SIGINT'), onTerm = () => interrupt('SIGTERM');
+  process.on('SIGINT', onInt); process.on('SIGTERM', onTerm);
+  const detach = () => { process.off('SIGINT', onInt); process.off('SIGTERM', onTerm); };
+  try {
+    pending = (async () => {
+      const handle = await fs.open(temporary, 'wx');
+      try { await handle.writeFile(JSON.stringify(journal)); await handle.sync(); } finally { await handle.close(); }
+      await fs.rename(temporary, target);
+    })();
+    await pending;
+  } catch (error) { detach(); await fs.rm(temporary, { force: true }); throw error; }
+  return {
+    async perform(action) {
+      if (stopping) return stopped();
+      pending = action();
+      return await pending;
+    },
+    async finish() {
+      if (stopping) return stopped();
+      try { pending = fs.unlink(target); await pending; } finally { detach(); }
+    },
+    async rollback() {
+      if (stopping) return stopped();
+      try { pending = recoverIntegrationJournal(root); await pending; } finally { detach(); }
+    },
+  };
+}
+
+export async function integrateRun(root, id, options = {}) {
+  if (options.queue) validateQueueOptions({ ...options, batchSize: options.batchSize ?? 10 });
+  root = await fs.realpath(root);
+  const lock = await acquireIntegrationLock(root, { runId: id, liveDir: options.liveDir, isAlive: options.isAlive });
+  try {
+    const recoveredJournal = await recoverIntegrationJournal(root);
+    const result = await integrateRunLocked(root, id, { ...options, releaseIntegrationLock: lock.release });
+    if (lock.warnings.length || recoveredJournal) result.warnings = [...lock.warnings, ...(recoveredJournal ? [journalWarning(recoveredJournal)] : []), ...(result.warnings ?? [])];
+    if (recoveredJournal) result.recoveredJournal = recoveredJournal;
+    return result;
+  } finally { await lock.release(); }
+}
+
+async function integrateRunLocked(root, id, { releaseIntegrationLock, noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, salvage = false, acceptDeviation = false, acceptResultShape = false, acceptDropped = false, salvageDropped = false, jobs = undefined, privateNamesFile = undefined, queue = false, batchSize = 10 } = {}) {
+  if (queue) validateQueueOptions({ batchSize, jobs, salvage, mutants: mutants || mutantsFile !== undefined || mutantCheck !== undefined });
   root = await fs.realpath(root);
   // Field lesson #202: a job's own timed-out worker declares nothing missing — it simply never got
   // to say so — so a salvage always re-checks against the real checkout, same as any other job;
@@ -3875,7 +4127,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   // after its files were already written (preChecks/checks/mutants) may be retried; only a fully
   // completed integration refuses outright. Checked before the completeness gate below so a run
   // already integrated (blocked or otherwise) always reports that, not a generic status mismatch.
-  if (state.integratedAt && state.integrationStatus !== 'partial') fail('Run already integrated');
+  if (state.integratedAt && state.integrationStatus !== 'partial' && !(queue && state.mergeQueue?.state === 'running')) fail('Run already integrated');
   // Lesson 298: --jobs flag to integrate only named jobs
   if (jobs) {
     for (const jobId of jobs) {
@@ -3886,16 +4138,14 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   }
   // Check if run can be integrated: either all jobs complete, or --jobs specified with complete named jobs
   const hasIncompleteJobs = state.jobs.some(j => !jobsAcceptable(j));
-  if (hasIncompleteJobs && !jobs) {
+  if (hasIncompleteJobs && !jobs && !queue) {
     if (designWarnings.length) throw Object.assign(new Error('Only a complete or accepted blocked run can be integrated'), { details: { warnings: designWarnings } });
     fail(`Only a complete${acceptBlocked ? ' or blocked' : ''}${salvage ? ' or timed-out (with salvageable output)' : ''} run from this repository can be integrated; pass --jobs <id,...> to integrate only specific complete jobs`);
   }
-  if (!((acceptBlocked || salvage) ? (jobs ? state.jobs.filter(j => jobs.includes(j.id)).every(jobsAcceptable) : state.jobs.every(jobsAcceptable)) : (jobs ? state.jobs.filter(j => jobs.includes(j.id)).every(j => j.status === 'complete') : state.status === 'complete'))) fail(`Only a complete${acceptBlocked ? ' or blocked' : ''}${salvage ? ' or timed-out (with salvageable output)' : ''} run from this repository can be integrated`);
+  if (!queue && !((acceptBlocked || salvage) ? (jobs ? state.jobs.filter(j => jobs.includes(j.id)).every(jobsAcceptable) : state.jobs.every(jobsAcceptable)) : (jobs ? state.jobs.filter(j => jobs.includes(j.id)).every(j => j.status === 'complete') : state.status === 'complete'))) fail(`Only a complete${acceptBlocked ? ' or blocked' : ''}${salvage ? ' or timed-out (with salvageable output)' : ''} run from this repository can be integrated`);
   await workerKeyGuard(root, id, state, { env, keyExec });
 
   if (state.jobs.length !== manifest.jobs.length) fail('Job records do not match manifest');
-  const lock = await safePath(root, '.swarm/integration.lock', { internal: true });
-  await fs.mkdir(lock); // Other coordinators must finish before integrating.
   const writes = [];
   const newFiles = [];
   const jobMutantsBytes = new Map();
@@ -3915,7 +4165,8 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
   // Field lesson #293: load private names once for all output files
   const privateNamesList = privateNamesFile ? await loadPrivateNames(root, privateNamesFile, { env }) : { terms: [] };
   try {
-    const jobsToIntegrate = state.jobs.filter(j => !jobs || jobs.includes(j.id));
+    const queuePlans = [], queueConflicts = [], queueSkipped = [];
+    const jobsToIntegrate = state.jobs.filter(j => queue ? jobsAcceptable(j) : !jobs || jobs.includes(j.id));
     const integratedJobs = [];
     const skippedJobs = [];
     for (const [index, job] of state.jobs.entries()) {
@@ -3923,8 +4174,16 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       const shouldIntegrate = jobsToIntegrate.includes(job);
       if (!shouldIntegrate) {
         skippedJobs.push(job.id);
+        if (queue) queueSkipped.push({ job: job.id, status: job.status });
         continue;
       }
+      const writeStart = writes.length, conflictingFiles = [], snapshots = [];
+      let conflictReason = 'changed since worker snapshot';
+      const conflict = (file, reason) => {
+        if (!queue) fail(`Integration conflict: ${file} ${reason}`);
+        if (!conflictingFiles.includes(file)) conflictingFiles.push(file);
+        if (reason === 'permissions changed since worker snapshot') conflictReason = reason;
+      };
       const jobChangedFiles = [];
       integratedJobs.push(job.id);
       const expectedWorkspace = expectedWorkspaceFor(id, declared.id, job);
@@ -3968,6 +4227,14 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
         const currentHash = current === null ? null : digest(current);
         const currentMode=current===null?0o644:(await fs.stat(await safePath(root,file))).mode & 0o777;
         const output = await bytesAt(readRoot, file);
+        if (queue) {
+          snapshots.push({ file, bytes: current, mode: currentMode });
+          const alreadyApplied = state.mergeQueue?.state === 'running' && (output === null ? current === null : currentHash === digest(output));
+          if (!alreadyApplied) {
+            if (current !== null && job.baseModes?.[file] !== undefined && currentMode !== job.baseModes[file]) conflict(file, 'permissions changed since worker snapshot');
+            if (currentHash !== job.baseHashes[file]) conflict(file, 'changed since worker snapshot');
+          }
+        }
         // Field lesson 328: a blocked job's unwritten output is skipped, never a missing-output,
         // undeclared-delete or declared-delete; what it did write still integrates (lesson 131).
         if (output === null && acceptBlocked && job.status === 'blocked') continue;
@@ -3985,8 +4252,8 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
           if (!(declared.deletes ?? []).includes(file)) fail(`Missing output (deletions are never propagated): ${file} (undeclared-delete: not listed in this job's manifest deletes)`);
           const alreadyApplied = state.integrationStatus === 'partial' && currentHash === null;
           if (!alreadyApplied) {
-            if (job.baseModes?.[file] !== undefined && currentMode !== job.baseModes[file]) fail(`Integration conflict: ${file} permissions changed since worker snapshot`);
-            if (currentHash !== job.baseHashes[file]) fail(`Integration conflict: ${file} changed since worker snapshot`);
+            if (job.baseModes?.[file] !== undefined && currentMode !== job.baseModes[file]) conflict(file, 'permissions changed since worker snapshot');
+            if (currentHash !== job.baseHashes[file]) conflict(file, 'changed since worker snapshot');
           }
           writes.push({ file, bytes: null, previous: current, mode: currentMode });
           jobChangedFiles.push(file);
@@ -4006,10 +4273,10 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
         // Field lesson 120: a retry of a `partial` integration must not refuse just because this
         // file already equals what this same run wrote last time; only a file that genuinely
         // differs from both base and the proposed output is a real conflict.
-        const alreadyApplied = state.integrationStatus === 'partial' && currentHash === outputHash;
+        const alreadyApplied = (state.integrationStatus === 'partial' || (queue && state.mergeQueue?.state === 'running')) && currentHash === outputHash;
         if (!alreadyApplied) {
-          if(current!==null && job.baseModes?.[file]!==undefined && currentMode!==job.baseModes[file]) fail(`Integration conflict: ${file} permissions changed since worker snapshot`);
-          if (currentHash !== job.baseHashes[file]) fail(`Integration conflict: ${file} changed since worker snapshot`);
+          if(current!==null && job.baseModes?.[file]!==undefined && currentMode!==job.baseModes[file]) conflict(file, 'permissions changed since worker snapshot');
+          if (currentHash !== job.baseHashes[file]) conflict(file, 'changed since worker snapshot');
         }
         if (declared.mutantsFile === file) jobMutantsBytes.set(file, output);
         for (const hash of inventedHashesIn(output.toString('utf8'), current?.toString('utf8') ?? '', contextText)) inventedHashWarnings.push(`invented-hash: ${declared.id}: ${file}: ${hash}`);
@@ -4041,7 +4308,15 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
           resultShapeWarnings.push(`${acceptResultShape ? 'accepted-result-shape' : 'result-shape-warning'}: ${declared.id}: ${failures.join('; ')}; ${diagnostic}`);
         }
       }
+      if (queue) {
+        const plannedWrites = writes.splice(writeStart);
+        const hits = workFolderReferenceHits(plannedWrites);
+        if (hits.length) fail(hits.map(hit => hit.message).join('\n'), 'work-folder-reference');
+        if (conflictingFiles.length) queueConflicts.push({ job: job.id, files: conflictingFiles, reason: conflictReason });
+        else queuePlans.push({ job: job.id, writes: plannedWrites, snapshots, alreadyApplied: state.mergeQueue?.state === 'running' && !plannedWrites.length });
+      }
     }
+    if (queue) writes.push(...queuePlans.flatMap(plan => plan.writes));
     // Field lesson 120/122: every mutants source — a job's own `mutantsFile` output (read here
     // from the exact pre-write workspace bytes, not re-read from the tree afterward) and any
     // coordinator-supplied `--mutants-file` — is parsed and validated before the first project
@@ -4077,15 +4352,21 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
     const packagingWarnings = packagingChangeWarnings(writes.filter(change => isPackagingFile(change.file)).map(change => ({ file: change.file, keys: packagingKeyChanges(change.file, change.previous?.toString('utf8') ?? '', change.bytes.toString('utf8')) })), [...(manifest.checks ?? []).map(check => check.argv), ...(manifest.preChecks ?? [])]);
     const workFolderHits = workFolderReferenceHits(writes);
     if (workFolderHits.length) fail(workFolderHits.map(hit => hit.message).join('\n'), 'work-folder-reference');
+    if (queue) {
+      if (acceptedDeviations.length) state.acceptedDeviations = acceptedDeviations;
+      if (resultShapeWarnings.length) state.resultShapeWarnings = resultShapeWarnings;
+      return await applyQueuePlans(root, id, state, manifest, queuePlans, { batchSize, conflicts: queueConflicts, skipped: queueSkipped, noChecks, noFlakeCheck, spawnImpl, releaseIntegrationLock, warnings: [...designWarnings, ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)] });
+    }
     // Every path, output, base hash, and mutants source has passed before the first project write.
-    const applied = [];
+    const journal = await startIntegrationJournal(root, id, 'integrate', integratedJobs, writes, releaseIntegrationLock);
     try {
       // Field lesson #196: a declared delete (change.bytes === null) removes the file instead of
       // writing it; everything else writes as before.
       for (const change of writes) {
-        if (change.bytes === null) await fs.unlink(await safePath(root, change.file)).catch(error => { if (error.code !== 'ENOENT') throw error; });
-        else await write(root, change.file, change.bytes, false, change.mode);
-        applied.push(change);
+        await journal.perform(async () => {
+          if (change.bytes === null) await fs.unlink(await safePath(root, change.file)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+          else await write(root, change.file, change.bytes, false, change.mode);
+        });
       }
       state.integratedAt = new Date().toISOString(); state.integratedFiles = writes.map(change => change.file); state.integratedNewFiles = newFiles;
       // Field lesson 120: persisted immediately, so a later failure (preChecks/checks/mutants)
@@ -4093,12 +4374,9 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
       // still refuses "already integrated" or a retry treats its own files as a conflict.
       state.integrationStatus = 'partial';
       await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
+      await journal.finish();
     } catch (error) {
-      for (const change of applied.reverse()) {
-        if (change.bytes === null) { if (change.previous !== null) await write(root, change.file, change.previous, false, change.mode); }
-        else if (change.previous === null) await fs.unlink(await safePath(root, change.file));
-        else await write(root, change.file, change.previous, false, change.mode);
-      }
+      await journal.rollback();
       throw error;
     }
     // Field lesson #141: one port block for the whole integration (preChecks, checks, flake
@@ -4188,7 +4466,7 @@ export async function integrateRun(root, id, { noChecks = false, spawnImpl = spa
     if (acceptedDeviations.length) state.acceptedDeviations = acceptedDeviations;
     await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
     return { id, status: 'integrated', integrationStatus: state.integrationStatus, files: state.integratedFiles, filesChanged: state.integratedFiles, portBase, ...(preChecksResult.preChecks.length ? { preChecks: preChecksResult.preChecks } : {}), ...(warnings.length ? { warnings } : {}), ...checksResult, ...mutantsResult, ...(blockedJobs.length ? { blockedEvidence: blockedJobs.map(job => ({ name: job.id, lines: [job.error ?? 'blocked'] })) } : {}), ...(salvagedJobs.length ? { salvaged: true, salvagedJobs: salvagedJobs.map(job => job.id) } : {}), ...(acceptedDeviations.length ? { acceptedDeviations } : {}), ...(jobs ? { integratedJobs, skippedJobs } : {}) };
-  } finally { await fs.rmdir(lock); }
+  } finally { /* The caller owns both integration locks. */ }
 }
 
 // Field lesson #210: a hand step (integrate, mutants, ship) run while no job is actually running
@@ -4324,10 +4602,23 @@ async function redcheckCommitRun(root, id, argv, { spawnImpl, timeoutMs, commit 
   return result;
 }
 
-export async function redcheckRun(root, id, argv, { spawnImpl = spawn, timeoutMs = 300000, base: baseRef, commit } = {}) {
+export async function redcheckRun(root, id, argv, options = {}) {
+  let lock;
+  try {
+    root = await fs.realpath(root);
+    lock = await acquireIntegrationLock(root, { runId: id, liveDir: options.liveDir, isAlive: options.isAlive });
+    const recoveredJournal = await recoverIntegrationJournal(root);
+    const result = await redcheckRunLocked(root, id, argv, options);
+    if (lock.warnings.length || recoveredJournal) result.warnings = [...lock.warnings, ...(recoveredJournal ? [journalWarning(recoveredJournal)] : []), ...(result.warnings ?? [])];
+    if (recoveredJournal) result.recoveredJournal = recoveredJournal;
+    return result;
+  } catch (error) { return { status: 'error', exitCode: null, restored: [], tail: error.message, base: options.base ?? 'run-base' }; }
+  finally { if (lock) await lock.release(); }
+}
+
+async function redcheckRunLocked(root, id, argv, { spawnImpl = spawn, timeoutMs = 300000, base: baseRef, commit } = {}) {
   if (commit !== undefined) return await redcheckCommitRun(root, id, argv, { spawnImpl, timeoutMs, commit });
   const restored = [];
-  let lock, locked = false;
   const result = { status: 'error', exitCode: null, restored, tail: '', base: baseRef ?? 'run-base' };
   try {
     if (!Array.isArray(argv) || !argv.length || argv.some(item => typeof item !== 'string' || item.includes('\0')) || !argv[0]) fail('redcheck requires --test <argv...>');
@@ -4337,9 +4628,6 @@ export async function redcheckRun(root, id, argv, { spawnImpl = spawn, timeoutMs
     if (state.root !== root || state.id !== id || !['complete', 'integrated'].includes(state.status)) fail('Only a complete or integrated run from this repository can be redchecked');
     const manifest = validateManifest(JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true)));
     if (state.jobs.length !== manifest.jobs.length) fail('Job records do not match manifest');
-    lock = await safePath(root, '.swarm/integration.lock', { internal: true });
-    await fs.mkdir(lock);
-    locked = true;
     let revision;
     if (baseRef !== undefined) {
       if (typeof baseRef !== 'string' || !baseRef || baseRef.startsWith('-')) fail('Invalid base revision');
@@ -4415,11 +4703,6 @@ export async function redcheckRun(root, id, argv, { spawnImpl = spawn, timeoutMs
   } catch (error) {
     result.status = 'error';
     result.tail = `${result.tail}\n${error.message}`.trim().slice(-2000);
-  } finally {
-    if (locked) {
-      try { await fs.rmdir(lock); }
-      catch (error) { result.status = 'error'; result.tail = `${result.tail}\n${error.message}`.trim().slice(-2000); }
-    }
   }
   return result;
 }
@@ -6013,7 +6296,7 @@ async function main() {
     }
     root=args[rootIndex+1];args.splice(rootIndex,2);
   }
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | go MANIFEST|RUN [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
@@ -6414,12 +6697,15 @@ async function main() {
   }
   // integrate's checks/mutants flags are read-only selection of whether/how checks run; strip
   // them here so the generic argument-count check below still fails on anything else.
-  let noChecks=false,requireChecks=false,acceptFailedChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag,acceptBlocked=false,salvage=false,acceptDeviation=false,acceptResultShape=false,acceptDropped=false,salvageDropped=false,integrateJobs;
+  let noChecks=false,requireChecks=false,acceptFailedChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag,acceptBlocked=false,salvage=false,acceptDeviation=false,acceptResultShape=false,acceptDropped=false,salvageDropped=false,integrateJobs,queue=false,batchSize=10,maxRequeues=2;
   if(command==='integrate'){
     const flags=[...(argument === undefined ? [] : [argument]),...rest.splice(0,rest.length)];
     argument=undefined;
     for(let index=0;index<flags.length;index++){
       const flag=flags[index];
+      if(flag==='--queue'){queue=true;continue;}
+      if(flag==='--batch-size'){batchSize=Number(flags[++index]);continue;}
+      if(flag==='--max-requeues'){maxRequeues=Number(flags[++index]);continue;}
       if(flag==='--jobs'||flag.startsWith('--jobs=')){
         const value=flag==='--jobs'?flags[++index]:flag.slice('--jobs='.length);
         if(integrateJobs!==undefined||typeof value!=='string'||!value.split(',').every(id=>ID.test(id)))fail('--jobs requires a comma-separated list of job ids, once');
@@ -6448,6 +6734,8 @@ async function main() {
       rest.push(flag);
     }
     argument=rest.shift();
+    if(!queue&&flags.some(flag=>['--batch-size','--max-requeues'].includes(flag)))fail('Invalid arguments; use --help');
+    if(queue)validateQueueOptions({batchSize,maxRequeues,jobs:integrateJobs,salvage,mutants:useMutants||mutantsFileFlag!==undefined||mutantCheckFlag!==undefined});
     if(acceptDropped&&salvageDropped)fail('--accept-dropped and --salvage-dropped cannot be combined');
     if(noChecks&&requireChecks)fail('--no-checks and --require-checks cannot be combined');
     if(noChecks&&salvage)fail('--no-checks and --salvage cannot be combined');
@@ -6638,7 +6926,7 @@ async function main() {
       ship: (goRoot,id,goShipFlags)=>shipRun(goRoot,id,goShipFlags),
     });
   }
-  else result=await integrateRun(root,argument,{noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
+  else result=await (queue?integrateQueue:integrateRun)(root,argument,{batchSize,maxRequeues,noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
   // Field lesson #203: a failed check at integrate used to be a quiet field (`status: "integrated"`,
   // exit 0) unless the coordinator remembered --require-checks; refusing (or, with the escape
   // hatch, at least saying so loudly) is now the default. --require-checks stays an accepted no-op
@@ -6659,7 +6947,7 @@ async function main() {
   if(command==='wait'){if(result.status==='running')process.exitCode=2;else if(['failed','cancelled'].includes(result.status))process.exitCode=1;return;}
   if(command==='ship'){if(shipExitCode(result.status)!==0)process.exitCode=1;return;}
   if(command==='go'){if(goExitCode(result.status)!==0)process.exitCode=1;return;}
-  if(['failed','cancelled'].includes(result.status))process.exitCode=1;
+  if(['failed','cancelled'].includes(result.status)||(command==='integrate'&&result.status==='partial'))process.exitCode=1;
   // Field lesson 138 (tool half): a check that never started is invalid evidence, not a red
   // check; either way the CLI exits non-zero so it is never mistaken for a clean pass.
   if(command==='integrate'&&result.checksErrored)process.exitCode=1;
