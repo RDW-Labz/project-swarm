@@ -19,7 +19,7 @@ import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths,
 import { expandShellPreset, validateNetworkAllow, validateLoopbackAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterDirs, resolveRootGitInfo, scanListeningPorts, resolveRigServicePort, createShellScratchDir, shellMessage, containsKey, redactKey, effectiveShellDeniedHomeDirs, workerKeyItem, TOOLCHAIN_DIRS, scratchRootDir, assertScratchOutsideRepo, resolveSharedUvCacheDir } from './claude-shell.mjs';
 import { portBlockFor, resolvePortBlock } from './ports.mjs';
 import { loadLocalConfig } from './local-config.mjs';
-import { resolveLanes, LaneScheduler, classifyProviderOutcome } from './lanes.mjs';
+import { resolveLanes, LaneScheduler, classifyProviderOutcome, lanesDir } from './lanes.mjs';
 import { routeJob } from './router.mjs';
 import { resolveBudget, runTotals, jobSpend, spendDir, withSpendStore, laneDayTotals, estimateReservation, reserveSpend, settleSpend, releaseSpend, finalCost, PAID_LANES, capDecision, ledgerRows, mergeLedger, validateIdleItems, runIdleMenu } from './spend.mjs';
 import { JOB_TYPES, applyJobType, jobTypeOutputViolations } from './job-types.mjs';
@@ -2583,7 +2583,8 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
     validateRunIdle(state.idle);
   }
   const lanes = resolveLanes({ config: worktreeConfig, manifest });
-  const scheduler = new LaneScheduler({ lanes, globalConcurrency: state.concurrency, now });
+  const laneDirectory = lanesDir(env);
+  const scheduler = new LaneScheduler({ lanes, globalConcurrency: state.concurrency, now, shared: { dir: laneDirectory, runId: id } });
   const spendDirectory = spendDir(env);
   const today = () => withSpendStore(store => laneDayTotals(store, { day: new Date(now()).toISOString().slice(0, 10) }), { dir: spendDirectory, now });
   const pricing = new Map(), inFlight = new Map();
@@ -2831,7 +2832,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         if (!unreserved) admissions = admit.catch(() => {});
         const decision = await admit;
         if (decision) {
-          release(); release = null;
+          await release(); release = null;
           record.status = 'held'; record.heldReason = decision.reason; record.error = decision.message;
           await queueSave(); await settle(index); return;
         }
@@ -2842,7 +2843,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         record.error = record.status === 'provider-limit' ? `provider-limit: lane ${job.agent} paused until ${refusedPauseUntil}` : error.message;
         if (record.status === 'provider-limit') { record.heldReason = 'quota'; record.heldUntil = refusedPauseUntil; }
         record.finishedAt = new Date(now()).toISOString(); record.durationMs = 0;
-        await finishSpend(); release?.(); await queueSave(); await settle(index); return;
+        await finishSpend(); await release?.(); await queueSave(); await settle(index); return;
       }
       record.status = 'running'; record.startedAt = new Date(now()).toISOString();
       // Only a spawned CLI streams observable output; API jobs say so instead of guessing.
@@ -3117,7 +3118,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         }
         await finishSpend();
         const outcome = result.reportInvalid ? { kind: 'other' } : classifyProviderOutcome(result);
-        scheduler.report(job.agent, outcome);
+        await scheduler.report(job.agent, outcome);
         abortLongPauses();
         record.attempts.push({ agent: job.agent, model: job.model, status: result.status, error: result.error ?? null, startedAt: record.startedAt, finishedAt: record.finishedAt });
         if (outcome.kind === 'rate-limited' && !['blocked', 'cancelled'].includes(result.status)) {
@@ -3154,7 +3155,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
             delete record.finishedAt;
             await queueSave();
             // Child workers acquire their own provider seats and spend reservations.
-            release?.(); release = null;
+            await release?.(); release = null;
             // A parent cap may only lower a child's area budget, never replace it.
             const childCaps = Object.fromEntries(['maxUsd', 'maxTokens'].map(key => {
               const caps = [child.budget?.[key], { maxUsd, maxTokens }[key] ?? manifest.budget?.[key]].filter(value => value !== undefined && value !== null);
@@ -3172,7 +3173,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         throw error;
       } finally {
         await finishSpend();
-        release?.();
+        await release?.();
         if (retry) {
           record.status = 'queued'; record.startedAt = null; record.finishedAt = null; record.durationMs = null; record.progress = null;
           ready.push(index); notify();
@@ -3211,7 +3212,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   }
   if (state.worktreesBase) for (const dir of new Set(state.jobs.filter(record => record.worktreePath).map(record => path.dirname(record.worktreePath)))) await fs.rmdir(dir).catch(() => {});
   clearInterval(waitPoll);
-  scheduler.close();
+  await scheduler.close();
   state.finishedAt = new Date(now()).toISOString();
   updateRunPause(state, now);
   await appendRunLedger(root, state, manifest, { persist: false });

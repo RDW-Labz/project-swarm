@@ -2,6 +2,8 @@
 import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -127,4 +129,121 @@ test('parent AbortSignal cancels running children', async t => {
   const child = await readState(options.root, state.jobs[0].childRun);
   assert.equal(child.status, 'cancelled', JSON.stringify(child));
   assert.match(state.jobs[0].error, /lead-child-cancelled/);
+});
+
+test('five leads share one cursor cap of 8, and a 429 pauses cursor for the other children and another repo', async t => {
+  const options = await fixture(t);
+  const other = await fixture(t);
+  const lanesPath = path.join(path.dirname(options.env.SWARM_CONFIG), 'lanes');
+  const binDir = path.join(path.dirname(options.env.SWARM_CONFIG), 'bin');
+  const versionDir = path.join(path.dirname(options.env.SWARM_CONFIG), 'cursor');
+  await fs.mkdir(versionDir, { recursive: true });
+  await fs.mkdir(binDir);
+  const binary = path.join(versionDir, 'cursor-agent');
+  await fs.writeFile(binary, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  await fs.symlink(binary, path.join(binDir, 'cursor-agent'));
+  const laneConfig = JSON.stringify({ lanes: { cursor: { concurrency: 8, backoff: { baseMs: 60000, maxMs: 60000 } } } });
+  await fs.writeFile(options.env.SWARM_CONFIG, laneConfig);
+  await fs.writeFile(other.env.SWARM_CONFIG, laneConfig);
+  const env = { ...options.env, PATH: `${binDir}:/usr/bin:/bin`, CURSOR_API_KEY: 'crsr_FAKE_TEST_KEY_0123456789', SWARM_LANES_DIR: lanesPath };
+  const otherEnv = { ...other.env, PATH: env.PATH, CURSOR_API_KEY: env.CURSOR_API_KEY, SWARM_LANES_DIR: lanesPath };
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  let nextPid = 1_000_000;
+  const byPid = new Map();
+  const counts = { started: 0, active: 0, peak: 0, other: 0 };
+  let slotPeak = 0;
+  const watch = setInterval(() => {
+    try {
+      const store = JSON.parse(readFileSync(path.join(lanesPath, 'lanes.json'), 'utf8'));
+      slotPeak = Math.max(slotPeak, store.slots?.cursor?.length ?? 0);
+    } catch { /* the store appears with the first claim */ }
+  }, 10);
+  t.after(() => clearInterval(watch));
+  const settle = child => {
+    if (child.settled) return;
+    child.settled = true;
+    if (!child.other) counts.active--;
+  };
+  const killImpl = (pid, signal) => {
+    const child = byPid.get(Math.abs(pid));
+    if (!child || (child.settled && signal === 0)) throw Object.assign(new Error('no process'), { code: 'ESRCH' });
+    if (signal === 0) return;
+    if (child.settled) return;
+    settle(child);
+    setImmediate(() => child.emit('close', null));
+  };
+  const spawnImpl = (command, args) => {
+    assert.equal(command, 'sandbox-exec');
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdout.setEncoding = () => child.stdout;
+    child.stderr.setEncoding = () => child.stderr;
+    child.pid = nextPid++;
+    child.unref = () => {};
+    child.exitCode = null;
+    child.signalCode = null;
+    child.other = String(args[1] ?? '').startsWith(other.root);
+    byPid.set(child.pid, child);
+    if (child.other) counts.other++;
+    else {
+      counts.active++;
+      counts.started++;
+      counts.peak = Math.max(counts.peak, counts.active);
+    }
+    return child;
+  };
+  const cursorJob = (letter, n) => ({ id: `c-${n}`, agent: 'cursor', model: 'composer-2.5', prompt: `Write app/${letter}/${n}.txt`, context: ['input.txt'], outputs: [`app/${letter}/${n}.txt`] });
+  const fetchImpl = async (_url, request) => {
+    const letter = /Plan area ([a-e])/.exec(JSON.stringify(JSON.parse(request.body)))?.[1];
+    assert.ok(letter);
+    return reply(`plans/${letter}.json`, JSON.stringify({ version: 1, jobs: [0, 1, 2, 3].map(n => cursorJob(letter, n)) }));
+  };
+  const waitFor = async (ready, ms, label) => {
+    const start = Date.now();
+    while (!ready()) {
+      if (Date.now() - start > ms) throw new Error(`${label}: ${JSON.stringify({ ...counts, slotPeak })}`);
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  };
+  let parentError;
+  const parent = runManifest(options.root, manifest('abcde'.split('').map(letter => lead(letter, { agents: ['cursor'], concurrency: 8 }))), {
+    ...options, env, signal: controller.signal, fetchImpl, spawnImpl, killImpl,
+  }).catch(error => { parentError = error; });
+  await waitFor(() => parentError || counts.active >= 8, 30000, 'cursor never reached 8 in flight');
+  if (parentError) throw parentError;
+  assert.equal(counts.peak, 8);
+  assert.ok(slotPeak <= 8, `cursor slots peaked at ${slotPeak}`);
+  const victim = [...byPid.values()].find(child => !child.other && !child.settled);
+  victim.exitCode = 0;
+  victim.stdout.emit('data', `${JSON.stringify({ type: 'result', subtype: '429', is_error: true, result: 'rate limited' })}\n`);
+  settle(victim);
+  victim.emit('close', 0);
+  const pause = () => {
+    try { return JSON.parse(readFileSync(path.join(lanesPath, 'lanes.json'), 'utf8')).pauses?.cursor; }
+    catch { return null; }
+  };
+  await waitFor(() => parentError || pause()?.state === 'backoff', 5000, '429 did not pause cursor');
+  if (parentError) throw parentError;
+  const slotsAtPause = () => {
+    try { return JSON.parse(readFileSync(path.join(lanesPath, 'lanes.json'), 'utf8')).slots?.cursor ?? []; }
+    catch { return []; }
+  };
+  const heldIds = new Set(slotsAtPause().map(slot => slot.id));
+  await new Promise(resolve => setTimeout(resolve, 400));
+  assert.equal(counts.started, 8, JSON.stringify(counts));
+  assert.ok(slotPeak <= 8, `cursor slots peaked at ${slotPeak}`);
+  assert.ok(pause().until > Date.now());
+  let outsider;
+  const outside = runManifest(other.root, { version: 1, concurrency: 1, jobs: [cursorJob('z', 0)] }, {
+    ...other, env: otherEnv, signal: controller.signal, spawnImpl, killImpl, onState: state => { outsider = state; },
+  }).catch(error => { parentError ??= error; });
+  await waitFor(() => parentError || outsider?.jobs?.length === 1, 10000, 'second repo did not start');
+  await new Promise(resolve => setTimeout(resolve, 400));
+  assert.equal(counts.other, 0, JSON.stringify(counts));
+  assert.equal(outsider.jobs[0].status, 'queued');
+  assert.ok(slotsAtPause().every(slot => heldIds.has(slot.id)), 'a cursor slot was claimed after the pause');
+  controller.abort();
+  await Promise.allSettled([parent, outside]);
 });

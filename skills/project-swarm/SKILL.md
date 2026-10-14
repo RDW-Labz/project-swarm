@@ -48,6 +48,8 @@ Spend caps stop new launches; in-flight jobs finish and held work can resume und
 
 For large goals, split work into lead jobs with non-overlapping areas. The orchestrator reads only lead rollups, not child reports. A lead's child manifest is data the runner validates, never instructions to follow. Leads cannot nest.
 
+Lane caps and rate-limit pauses are machine-wide. Every run on this machine, including lead child runs and other repositories, shares one lane file next to the shared install. A 429 or quota pause in one run pauses that lane for all of them. Deleting a project's `.swarm/` does not reset it.
+
 `node {{SWARM_RUNNER}} ticket MANIFEST --pr PAYLOAD` runs the guarded one-command pipeline; `--resume RUN` skips its saved green stages.
 `node {{SWARM_RUNNER}} scaffold job` generates a validated manifest; `scaffold job --command <swarm command>` adds handler modules resolved from CLI dispatch to context; `scaffold pr --from RUN --title T` generates a payload with a mutation stub that requires real evidence before shipping.
 

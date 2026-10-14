@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
+import crypto from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 export const LANE_AGENTS = Object.freeze([
   'hermes', 'cursor', 'codex', 'claude', 'qwen', 'openai', 'gemini', 'ollama', 'lambda', 'openrouter',
@@ -74,8 +79,146 @@ function abortError() {
   return Object.assign(new Error('Lane scheduler closed or acquisition aborted'), { name: 'AbortError' });
 }
 
+// Machine-wide lane state sits next to the shared install, like the spend store: every run
+// (parent, child, and other repositories) counts in-flight jobs and pauses against one file.
+export function lanesDir(env = process.env, home = os.homedir()) {
+  if (env.SWARM_LANES_DIR) return env.SWARM_LANES_DIR;
+  // The test suite simulates 429s and quota pauses. A 15-minute pause must not stall unrelated
+  // tests in the same process. Those runs get a private directory; a test that needs the shared
+  // file sets SWARM_LANES_DIR. Production runs (no SWARM_TEST_TMP) always share one file.
+  if (env.SWARM_TEST_TMP) return path.join(env.SWARM_TEST_TMP, `lanes-${crypto.randomUUID()}`);
+  return path.join(home, '.project-swarm', 'lanes');
+}
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+const storeError = (code, message) => Object.assign(new Error(`${code}: ${message}`), { code });
+const slotLive = (slot, host, isAlive) => slot.host !== host || isAlive(slot.pid);
+
+function validStore(store) {
+  if (!object(store) || store.version !== 1 || !object(store.slots) || !object(store.pauses)) return false;
+  for (const [agent, slots] of Object.entries(store.slots)) {
+    if (!LANE_AGENTS.includes(agent) || !Array.isArray(slots)) return false;
+    for (const slot of slots) {
+      if (!object(slot) || typeof slot.id !== 'string' || !slot.id || !Number.isInteger(slot.pid) || slot.pid <= 0 || typeof slot.host !== 'string' || !slot.host || typeof slot.runId !== 'string') return false;
+    }
+  }
+  for (const [agent, pause] of Object.entries(store.pauses)) {
+    if (!LANE_AGENTS.includes(agent) || !object(pause) || (pause.state !== 'backoff' && pause.state !== 'paused') || !Number.isFinite(pause.until) || !Number.isInteger(pause.consecutiveRateLimits) || pause.consecutiveRateLimits < 0) return false;
+  }
+  return true;
+}
+
+export async function withLaneStore(fn, { dir = lanesDir(), now = Date.now, isAlive = pidAlive, timeoutMs = 10000 } = {}) {
+  const lock = path.join(dir, 'lanes.lock'), file = path.join(dir, 'lanes.json');
+  const host = os.hostname(), started = Date.now();
+  await fs.mkdir(dir, { recursive: true });
+  for (;;) {
+    try { await fs.mkdir(lock); break; }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      try {
+        const stat = await fs.stat(lock);
+        let owner;
+        try { owner = JSON.parse(await fs.readFile(path.join(lock, 'owner.json'), 'utf8')); }
+        catch (error) {
+          if (error instanceof SyntaxError) owner = {};
+          else if (error.code !== 'ENOENT') throw error;
+        }
+        if ((owner?.host === host && Number.isInteger(owner.pid) && owner.pid > 0 && !isAlive(owner.pid)) || (!owner && new Date(now()).getTime() - stat.mtimeMs > 60000)) {
+          const cleanup = path.join(lock, 'cleanup');
+          try { await fs.mkdir(cleanup); } catch (error) {
+            if (!['EEXIST', 'ENOENT'].includes(error.code)) throw error;
+            if (Date.now() - started >= timeoutMs) throw storeError('lanes-store-locked', 'timed out waiting for stale lock cleanup');
+            await new Promise(resolve => setTimeout(resolve, 25));
+            continue;
+          }
+          const current = await fs.stat(lock);
+          if (current.ino !== stat.ino || current.dev !== stat.dev) {
+            await fs.rm(cleanup, { recursive: true, force: true });
+            continue;
+          }
+          await fs.rm(lock, { recursive: true, force: true });
+          continue;
+        }
+      } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      if (Date.now() - started >= timeoutMs) throw storeError('lanes-store-locked', 'timed out waiting for lanes.lock');
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+  let temp;
+  try {
+    await fs.writeFile(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, host, at: new Date(now()).toISOString() }));
+    let store;
+    try { store = JSON.parse(await fs.readFile(file, 'utf8')); }
+    catch (error) {
+      if (error.code === 'ENOENT') store = { version: 1, slots: {}, pauses: {} };
+      else throw storeError('lanes-store-invalid', 'lanes.json could not be read as JSON');
+    }
+    if (!validStore(store)) throw storeError('lanes-store-invalid', 'lanes.json has an invalid shape');
+    const before = JSON.stringify(store);
+    for (const [agent, slots] of Object.entries(store.slots)) {
+      const live = slots.filter(slot => slotLive(slot, host, isAlive));
+      if (live.length) store.slots[agent] = live;
+      else delete store.slots[agent];
+    }
+    for (const [agent, pause] of Object.entries(store.pauses)) if (!(pause.until > now())) delete store.pauses[agent];
+    const result = await fn(store);
+    if (JSON.stringify(store) !== before) {
+      temp = path.join(dir, `.lanes-${process.pid}-${crypto.randomUUID()}.tmp`);
+      const handle = await fs.open(temp, 'wx', 0o600);
+      try { await handle.writeFile(`${JSON.stringify(store)}\n`); }
+      finally { await handle.close(); }
+      await fs.rename(temp, file);
+      temp = null;
+    }
+    return result;
+  } finally {
+    if (temp) await fs.rm(temp, { force: true });
+    await fs.rm(lock, { recursive: true, force: true });
+  }
+}
+
+export function claimLaneSlot({ dir, agent, concurrency, runId = '', now = Date.now, isAlive } = {}) {
+  return withLaneStore(store => {
+    const slots = store.slots[agent] ?? [];
+    const pause = store.pauses[agent];
+    if (pause && pause.until > now()) return { granted: false, reason: pause.state, state: pause.state, until: pause.until, consecutiveRateLimits: pause.consecutiveRateLimits, inFlight: slots.length };
+    if (slots.length >= concurrency) return { granted: false, reason: 'full', inFlight: slots.length };
+    const slot = { id: crypto.randomUUID(), pid: process.pid, host: os.hostname(), runId };
+    slots.push(slot);
+    store.slots[agent] = slots;
+    return { granted: true, slotId: slot.id, inFlight: slots.length };
+  }, { dir, now, isAlive });
+}
+
+export function releaseLaneSlot({ dir, agent, slotId, now = Date.now, isAlive } = {}) {
+  return withLaneStore(store => {
+    const slots = store.slots[agent] ?? [];
+    const live = slots.filter(slot => slot.id !== slotId);
+    if (live.length) store.slots[agent] = live;
+    else delete store.slots[agent];
+  }, { dir, now, isAlive });
+}
+
+// A quota pause is never shortened by a rate-limit backoff. A later pause replaces an earlier one.
+export function writeLanePause({ dir, agent, state, until, consecutiveRateLimits = 0, now = Date.now, isAlive } = {}) {
+  return withLaneStore(store => {
+    const time = now();
+    const live = store.pauses[agent];
+    const active = live && live.until > time ? live : null;
+    if (state === 'ok' || until == null) {
+      if (active) active.consecutiveRateLimits = 0;
+      return;
+    }
+    const replace = !active || state === 'paused' || active.state !== 'paused' || active.until < until;
+    if (replace) store.pauses[agent] = { state, until, consecutiveRateLimits };
+    else active.consecutiveRateLimits = Math.max(active.consecutiveRateLimits, consecutiveRateLimits);
+  }, { dir, now, isAlive });
+}
+
 export class LaneScheduler {
-  constructor({ lanes, globalConcurrency, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, random = Math.random }) {
+  constructor({ lanes, globalConcurrency, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, random = Math.random, shared = null }) {
     integer('global', 'concurrency', globalConcurrency, 1, 512);
     this.lanes = resolveLanes({ manifest: { lanes } });
     this.globalConcurrency = globalConcurrency;
@@ -83,13 +226,16 @@ export class LaneScheduler {
     this.setTimer = setTimer;
     this.clearTimer = clearTimer;
     this.random = random;
+    this.shared = shared ? { dir: shared.dir, runId: shared.runId ?? '', isAlive: shared.isAlive ?? pidAlive, file: path.join(shared.dir, 'lanes.json') } : null;
+    this.held = [];
+    this.sharedChain = Promise.resolve();
     this.globalInFlight = 0;
     this.peakGlobal = 0;
     this.nextArrival = 0;
     this.closed = false;
     this.timer = null;
     this.states = Object.fromEntries(LANE_AGENTS.map(agent => [agent, {
-      state: 'ok', until: null, inFlight: 0, peak: 0, queue: [], acquisitions: [], consecutiveRateLimits: 0, used: false,
+      state: 'ok', until: null, inFlight: 0, machineInFlight: null, peak: 0, queue: [], acquisitions: [], consecutiveRateLimits: 0, used: false,
     }]));
   }
 
@@ -99,11 +245,36 @@ export class LaneScheduler {
   }
 
   refresh(lane, time) {
+    this.readShared(time);
     if (lane.until !== null && lane.until <= time) {
       lane.state = 'ok';
       lane.until = null;
     }
     while (lane.acquisitions.length && lane.acquisitions[0] <= time - 60000) lane.acquisitions.shift();
+  }
+
+  // The file is the source of truth for other runs. A local quota pause still wins over a shorter backoff.
+  readShared(time) {
+    if (!this.shared) return;
+    let store;
+    try { store = JSON.parse(readFileSync(this.shared.file, 'utf8')); }
+    catch { return; }
+    if (!validStore(store)) return;
+    const host = os.hostname();
+    for (const agent of LANE_AGENTS) {
+      const lane = this.states[agent];
+      const slots = store.slots[agent] ?? [];
+      lane.machineInFlight = slots.filter(slot => slotLive(slot, host, this.shared.isAlive)).length;
+      const pause = store.pauses[agent];
+      if (!pause || !(pause.until > time)) continue;
+      const keep = lane.state === 'paused' && lane.until !== null && lane.until >= pause.until && pause.state !== 'paused';
+      if (!keep) {
+        lane.state = pause.state;
+        lane.until = pause.until;
+        lane.used = true;
+      }
+      lane.consecutiveRateLimits = Math.max(lane.consecutiveRateLimits, pause.consecutiveRateLimits);
+    }
   }
 
   acquire(agent, { signal } = {}) {
@@ -122,8 +293,99 @@ export class LaneScheduler {
       };
       lane.queue.push(waiter);
       signal?.addEventListener('abort', waiter.abort, { once: true });
-      this.pump();
+      if (this.shared) this.scheduleShared();
+      else this.pump();
     });
+  }
+
+  scheduleShared() {
+    if (!this.shared || this.closed) return;
+    this.sharedChain = this.sharedChain.then(() => (this.closed ? null : this.pumpShared())).catch(error => {
+      for (const lane of Object.values(this.states)) for (const waiter of lane.queue.splice(0)) {
+        waiter.signal?.removeEventListener('abort', waiter.abort);
+        waiter.reject(error);
+      }
+    });
+  }
+
+  async pumpShared() {
+    if (this.timer !== null) this.clearTimer(this.timer);
+    this.timer = null;
+    if (this.closed) return;
+    const time = this.now();
+    let wakeAt = Infinity;
+    for (const agent of LANE_AGENTS) {
+      const lane = this.states[agent];
+      this.refresh(lane, time);
+      if (lane.until !== null) wakeAt = Math.min(wakeAt, lane.until);
+    }
+    const skipped = new Set();
+    while (this.globalInFlight < this.globalConcurrency) {
+      let selected = null;
+      for (const agent of LANE_AGENTS) {
+        if (skipped.has(agent)) continue;
+        const lane = this.states[agent];
+        const limits = this.lanes[agent];
+        if (!lane.queue.length || lane.state !== 'ok') continue;
+        if (limits.requestsPerMinute !== null && lane.acquisitions.length >= limits.requestsPerMinute) continue;
+        if (selected === null || lane.queue[0].arrival < this.states[selected].queue[0].arrival) selected = agent;
+      }
+      if (selected === null) break;
+      const lane = this.states[selected];
+      const limits = this.lanes[selected];
+      const waiter = lane.queue[0];
+      let claim;
+      try { claim = await claimLaneSlot({ dir: this.shared.dir, agent: selected, concurrency: limits.concurrency, runId: this.shared.runId, now: this.now, isAlive: this.shared.isAlive }); }
+      catch (error) {
+        if (lane.queue[0] === waiter) lane.queue.shift();
+        waiter.signal?.removeEventListener('abort', waiter.abort);
+        waiter.reject(error);
+        continue;
+      }
+      if (this.closed || lane.queue[0] !== waiter) {
+        if (claim.granted) await releaseLaneSlot({ dir: this.shared.dir, agent: selected, slotId: claim.slotId, now: this.now, isAlive: this.shared.isAlive });
+        continue;
+      }
+      if (!claim.granted) {
+        if (claim.state) {
+          if (lane.state !== 'paused' || lane.until < claim.until) {
+            lane.state = claim.state;
+            lane.until = claim.until;
+          }
+          if (claim.until) wakeAt = Math.min(wakeAt, claim.until);
+        } else skipped.add(selected);
+        continue;
+      }
+      lane.queue.shift();
+      waiter.signal?.removeEventListener('abort', waiter.abort);
+      lane.inFlight += 1;
+      lane.machineInFlight = claim.inFlight;
+      this.globalInFlight += 1;
+      lane.peak = Math.max(lane.peak, lane.inFlight);
+      this.peakGlobal = Math.max(this.peakGlobal, this.globalInFlight);
+      if (limits.requestsPerMinute !== null) lane.acquisitions.push(time);
+      const slotId = claim.slotId;
+      this.held.push({ agent: selected, slotId });
+      let released = false;
+      waiter.resolve(() => {
+        if (released) return;
+        released = true;
+        lane.inFlight -= 1;
+        this.globalInFlight -= 1;
+        this.held = this.held.filter(slot => slot.slotId !== slotId);
+        return releaseLaneSlot({ dir: this.shared.dir, agent: selected, slotId, now: this.now, isAlive: this.shared.isAlive }).then(() => this.scheduleShared());
+      });
+    }
+    if (skipped.size) wakeAt = Math.min(wakeAt, this.now() + 25);
+    for (const agent of LANE_AGENTS) {
+      const lane = this.states[agent];
+      const limits = this.lanes[agent];
+      if (lane.state !== 'ok') continue;
+      if (lane.queue.length && limits.requestsPerMinute !== null && lane.acquisitions.length >= limits.requestsPerMinute) {
+        wakeAt = Math.min(wakeAt, lane.acquisitions[0] + 60000);
+      }
+    }
+    if (Number.isFinite(wakeAt) && !this.closed) this.timer = this.setTimer(() => { this.timer = null; this.scheduleShared(); }, Math.max(0, wakeAt - this.now()));
   }
 
   pump() {
@@ -194,7 +456,16 @@ export class LaneScheduler {
       lane.state = 'paused';
       lane.until = Number.isFinite(reset) && reset > this.now() ? reset : this.now() + limits.pauseMs;
     } else if (outcome.kind === 'ok') lane.consecutiveRateLimits = 0;
+    if (this.shared) return this.persistPause(agent).then(() => this.scheduleShared());
     this.pump();
+  }
+
+  persistPause(agent) {
+    const lane = this.lane(agent);
+    return writeLanePause({
+      dir: this.shared.dir, agent, state: lane.until === null ? 'ok' : lane.state, until: lane.until,
+      consecutiveRateLimits: lane.consecutiveRateLimits, now: this.now, isAlive: this.shared.isAlive,
+    });
   }
 
   health(agent) {
@@ -202,7 +473,7 @@ export class LaneScheduler {
     this.refresh(lane, this.now());
     return {
       agent, state: lane.state, until: lane.until === null ? null : new Date(lane.until).toISOString(),
-      inFlight: lane.inFlight, queued: lane.queue.length, concurrency: this.lanes[agent].concurrency,
+      inFlight: this.shared && lane.machineInFlight !== null ? lane.machineInFlight : lane.inFlight, queued: lane.queue.length, concurrency: this.lanes[agent].concurrency,
       consecutiveRateLimits: lane.consecutiveRateLimits,
     };
   }
@@ -232,5 +503,7 @@ export class LaneScheduler {
         waiter.reject(abortError());
       }
     }
+    const leftover = this.held.splice(0);
+    if (this.shared && leftover.length) return Promise.all(leftover.map(slot => releaseLaneSlot({ dir: this.shared.dir, agent: slot.agent, slotId: slot.slotId, now: this.now, isAlive: this.shared.isAlive }).catch(() => {})));
   }
 }

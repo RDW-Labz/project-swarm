@@ -7,6 +7,7 @@
 - Each child runs as `<parentId>-<leadId>` under the same caps, reservations, ledger, and cancel signal. A parent `--max-usd` or `--max-tokens` can lower a child's area budget but never lift it. A paused child holds its lead (`child-paused`); `resume` on the parent resumes the child without repeating the lead's model call.
 - Integrating a parent integrates each child run in order under the one lock, then the parent's own jobs; lead manifest files are never written to the project. Reruns skip already-integrated children.
 - Rollups add a bounded `leads` list (one line per lead in text) and `monitor --view` adds a leads line, so the orchestrator reads lead rollups instead of child reports. See [lead agents](docs/leads.md).
+- Lane caps and pauses are machine-wide. Every run on this machine — parent runs, lead child runs, and runs in other repositories — shares one lane file next to the shared install (`~/.project-swarm/lanes/lanes.json`, or `SWARM_LANES_DIR`). It tracks each lane's in-flight count and its rate-limit or quota pause, under a lock, and drops slots whose process has died. A 429 or quota pause in one run pauses that lane for all of them. Deleting a project's `.swarm/` does not reset it.
 
 ## 1.57.0
 
