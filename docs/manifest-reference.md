@@ -1,6 +1,6 @@
 # Manifest reference
 
-A manifest is a JSON object with `version`, `jobs`, and optional `concurrency` and `lanes`. It contains task data and lane overrides, not shell commands or credentials.
+A manifest is a JSON object with `version`, `jobs`, and optional fields such as `concurrency`, `lanes`, and `report`. It contains task data and lane overrides, not shell commands or credentials.
 
 ```json
 {
@@ -28,6 +28,7 @@ Replace the example paths with files in your target project.
 - `jobs`: required array of 1–5000 jobs.
 - `concurrency`: optional integer from 1 to 512; default is 2. This global capacity is also bounded by each agent's lane cap.
 - `lanes`: optional per-agent overrides for concurrency, requests per minute, backoff, quota pause, and routing model. Machine config applies first, then manifest overrides merge per field. See [lanes and routing](lanes.md).
+- `report`: optional, only `"short"` is allowed. Requires a valid short report from every worker job. Other values refuse with `report-invalid-mode`: `report must be "short"`. See [reports and rollups](reports.md).
 - `checks`: optional array of at most 10 post-integration checks, run by `integrate` after it writes files. See the Checks section below.
 - `mutants`: optional array of at most 32 mutation entries, checked by `integrate --mutants`. See the Mutation checks section below.
 - `mutantCheck`: optional, the single check run against each mutant in `mutants`. See the Mutation checks section below.
@@ -42,6 +43,7 @@ Unknown top-level fields are rejected.
 - `agent`: required: `"hermes"`, `"cursor"`, `"codex"`, `"claude"`, `"qwen"`, `"openai"`, `"gemini"`, `"ollama"`, `"lambda"`, `"openrouter"`, or `"auto"`. `"auto"` selects an eligible lane model at dispatch; validation reports the route it would pick now.
 - `model`: required non-empty model identifier or alias for every explicit agent. Omit it for `agent: "auto"`; supplying it refuses with `auto-model-forbidden`. The runner never falls back to a CLI default. The first character is an ASCII letter or digit; remaining characters may also include `.`, `_`, `:`, `/`, and `-`. Maximum length is 120 characters. Codex instead requires `/^[A-Za-z0-9._:-]{1,80}$/` and always passes `-m <job.model>`. Syntax validation does not prove provider availability.
 - `type`: optional string: `build`, `fix`, `test`, `review`, `research`, `docs`, `merge`, or `lead`. Sets prompt guidance, default timeout, skill, and automatic routing order; enforces declared output rules. See [job types](job-types.md).
+- `report`: optional, only `"short"` is allowed. Makes this job strict even when the manifest omits `report`. A job cannot opt out of manifest-level strict reporting. Missing or invalid reports fail an otherwise complete strict job with `report-invalid`; report status `blocked` blocks the job, and `failed` fails an otherwise complete job. See [reports and rollups](reports.md).
 - `sensitive`: optional boolean, sensitive by default. Only `sensitive: false` allows OpenRouter, OpenAI, Gemini, or Lambda. Explicit OpenAI, Gemini, and Lambda jobs without it refuse with `sensitive-provider`: `Job <id>: <agent> only gets jobs that set sensitive: false`. Explicit `agent: "openrouter"` without it refuses with `sensitive-openrouter`: `Job <id>: OpenRouter only gets jobs that set sensitive: false`.
 - `prompt`: required nonblank string of at most 100,000 characters. Include the task, expected output, and relevant acceptance criteria.
 - `context`: required array of explicit existing relative file paths, at most 100 entries. These files are copied for other workers; Codex receives them as a read-first list in its HEAD worktree.
@@ -158,6 +160,8 @@ node tools/swarm.mjs wait <run-id>
 node tools/swarm.mjs wait <run-id> --timeout 300
 node tools/swarm.mjs inspect <run-id>
 node tools/swarm.mjs inspect <run-id> --results
+node tools/swarm.mjs rollup <run-id>
+node tools/swarm.mjs rollup <run-id> --text --top 10
 node tools/swarm.mjs integrate <run-id>
 node tools/swarm.mjs integrate <run-id> --no-checks
 node tools/swarm.mjs integrate <run-id> --require-checks
@@ -201,6 +205,14 @@ For a job that declares `resultFile`, `inspect --results` sets `result` to the p
 Each job record also carries `actualModel` (the model behind most of its `assistant` events, falling back to the init-reported model, then `null`), `modelsSeen` (every distinct valid model id observed across init and assistant events, in first-seen order), and `modelMismatch` (`true` when an assistant-event model does not match the requested `model`, using alias matching: a requested `haiku`/`sonnet`/`opus`/`fable` matches any id containing that word, otherwise the id must equal or start with the request). Both plain `inspect` and `wait` add a top-level `warnings` array with one string per mismatched job, `model mismatch: <job id> asked <requested>, ran <actualModel>`; the job itself is not failed for it. Add `--results` to `inspect <run-id>` to print only `{"runId","status","warnings":[...],"jobs":[{"id","status","model","actualModel","modelMismatch","costUsd","result"}]}` and nothing else.
 
 `wait <run-id> [--timeout SECONDS]` blocks, polling saved run status at most once a second, until the run reaches a terminal status (`complete`, `failed`, or `cancelled`); with no `--timeout` it waits indefinitely. It prints one compact JSON line, `{runId, status, durationMs, costUsd, tokens, costNotReported, warnings, jobs: [{id, status, costUsd, tokens, notes}]}`, where `costUsd` is the sum of the jobs' recorded provider costs when any are available, else `null`, `tokens` is the sum of the jobs' non-null `tokens` (else `null`), `costNotReported` lists the ids of jobs with no reported cost, `warnings` lists any model-mismatch strings (see above), and each job's `notes` come from the same final-JSON-line parsing as `inspect` (capped the same way). Exit code is `0` for `complete`, `1` for `failed`/`cancelled` (or an unknown run id), and `2` if `--timeout` expires first — in that case `status` in the printed line is still `running`.
+
+## Rollup
+
+`swarm rollup <run-id> [--text] [--top N]` reads saved run state without changing files. It prints compact JSON by default. `--text` prints a summary with attention items, risks, and follow-ups. An unknown run refuses as it does for `inspect`.
+
+`--top` accepts an integer from 1 to 50, default 10. The size budget may reduce the number of attention items shown. Text shows at most 15 attention items. `attentionMore` counts omitted attention items. See [reports and rollups](reports.md) for all JSON fields and a text example.
+
+`inspect` includes each job's saved `report` and `reportErrors` when present. Use rollup first for a large run, then inspect the jobs needing attention.
 
 ## Ask
 

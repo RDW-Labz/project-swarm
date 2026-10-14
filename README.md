@@ -223,6 +223,8 @@ Manifests accept 1–5000 jobs. Each agent has its own lane cap, rate limit, bac
 
 Optional [job types](docs/job-types.md) set prompt guidance, default timeouts, skills, and automatic routing preferences. Choose `build`, `fix`, `test`, `review`, `research`, `docs`, `merge`, or `lead`; each type also limits declared outputs.
 
+Optional `report: "short"` requires a compact worker report. Use `swarm rollup <run> --text` to review a large run. See [reports and rollups](docs/reports.md) for strict reports, legacy reports, and monitor view lines.
+
 Copied workspaces and guarded integration are **not an operating-system security sandbox**. Read [the scope and threat model](SECURITY.md) before using sensitive source. Keep secrets out of worker context.
 
 ## A real assignment
