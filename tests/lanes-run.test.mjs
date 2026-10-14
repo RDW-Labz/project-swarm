@@ -174,10 +174,10 @@ test('a context change after run start fails a queued job before another request
 });
 
 test('200 short API jobs coalesce state.json writes', async t => {
-  const root = await fixture(t); let writes = 0;
+  const root = await fixture(t); const realRoot = await fs.realpath(root); let writes = 0;
   const rename = fs.rename;
   fs.rename = async (...args) => {
-    if (args[1].startsWith(root + path.sep) && args[1].endsWith('/state.json')) writes++;
+    if (String(args[1]).startsWith(realRoot + path.sep) && String(args[1]).endsWith(`${path.sep}state.json`)) writes++;
     return rename(...args);
   };
   t.after(() => { fs.rename = rename; });
