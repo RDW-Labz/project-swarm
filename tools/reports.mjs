@@ -45,7 +45,7 @@ export function legacyReport({ status, error, result, outputs = [] }) {
 export function rollupRun(state, { top = 10 } = {}) {
   const jobs = state.jobs ?? [];
   const counts = Object.fromEntries(['complete', 'failed', 'blocked', 'timeout', 'cancelled', 'skipped', 'queued', 'running'].map(key => [key, 0]));
-  const lanes = {}, spend = { costUsd: 0, costReportedJobs: 0, tokens: 0 }, files = new Set();
+  const lanes = {}, spend = { costUsd: 0, costReportedJobs: 0, tokens: 0, estimatedJobs: [] }, files = new Set();
   const reports = { short: 0, legacy: 0, invalid: 0, missing: 0 };
   let fileJobs = 0;
   const attention = [], risks = new Map(), followups = new Map();
@@ -54,6 +54,7 @@ export function rollupRun(state, { top = 10 } = {}) {
     if (Object.hasOwn(counts, job.status)) counts[job.status]++;
     if (job.agent) lanes[job.agent] = (lanes[job.agent] ?? 0) + 1;
     if (typeof job.costUsd === 'number' && Number.isFinite(job.costUsd)) { spend.costUsd += job.costUsd; spend.costReportedJobs++; }
+    if (['estimated-from-tokens', 'reservation'].includes(job.costSource)) spend.estimatedJobs.push(job.id);
     spend.tokens += number(job.usage?.total_tokens ?? (number(job.usage?.input_tokens) + number(job.usage?.output_tokens)));
     if (job.report?.files?.length) { fileJobs++; for (const file of job.report.files) files.add(file); }
     if (job.report) reports[job.report.legacy ? 'legacy' : 'short']++;
@@ -71,6 +72,8 @@ export function rollupRun(state, { top = 10 } = {}) {
     }
   }
   spend.costUsd = Math.round(spend.costUsd * 100) / 100;
+  spend.estimatedCount = spend.estimatedJobs.length;
+  spend.estimatedJobs = spend.estimatedJobs.slice(0, 10);
   const priority = status => ['failed', 'timeout'].includes(status) ? 0 : status === 'blocked' ? 1 : 2;
   attention.sort((a, b) => priority(a.status) - priority(b.status));
   const entries = map => [...map].map(([text, count]) => ({ text, count })).sort((a, b) => b.count - a.count).slice(0, 5);
@@ -91,7 +94,7 @@ export function rollupRun(state, { top = 10 } = {}) {
 
 export function renderRollupText(rollup) {
   const r = rollup;
-  const lines = [`Run ${sanitizeWorkerText(r.id)} - ${sanitizeWorkerText(r.status)} - ${r.total} jobs - elapsed ${formatDuration(r.elapsedMs)}`, Object.entries(r.counts).map(([key, count]) => `${sanitizeWorkerText(key)} ${count}`).join(' - '), `lanes  ${Object.entries(r.lanes).map(([agent, count]) => `${sanitizeWorkerText(agent)} ${count}`).join(' - ')}`, `spend  $${r.spend.costUsd.toFixed(2)} (${r.spend.costReportedJobs} jobs reported cost) - tokens ${r.spend.tokens}`, `files  ${r.files.changed} changed across ${r.files.jobs} jobs`, `reports  ${r.reports.short} short - ${r.reports.legacy} legacy - ${r.reports.invalid} invalid - ${r.reports.missing} missing`];
+  const lines = [`Run ${sanitizeWorkerText(r.id)} - ${sanitizeWorkerText(r.status)} - ${r.total} jobs - elapsed ${formatDuration(r.elapsedMs)}`, Object.entries(r.counts).map(([key, count]) => `${sanitizeWorkerText(key)} ${count}`).join(' - '), `lanes  ${Object.entries(r.lanes).map(([agent, count]) => `${sanitizeWorkerText(agent)} ${count}`).join(' - ')}`, `spend  $${r.spend.costUsd.toFixed(2)} (${r.spend.costReportedJobs} jobs reported cost) - tokens ${r.spend.tokens}${r.spend.estimatedCount ? ` - estimated cost for ${r.spend.estimatedCount} jobs` : ''}`, `files  ${r.files.changed} changed across ${r.files.jobs} jobs`, `reports  ${r.reports.short} short - ${r.reports.legacy} legacy - ${r.reports.invalid} invalid - ${r.reports.missing} missing`];
   const attention = r.attention.slice(0, 15), more = r.attentionMore + r.attention.length - attention.length;
   if (r.mergeQueue) lines.push(`merge  ${sanitizeWorkerText(r.mergeQueue.state)} - ${r.mergeQueue.integrated} integrated - ${r.mergeQueue.requeued} requeued - ${r.mergeQueue.flagged} flagged - ${r.mergeQueue.checkFailed} checks failed`);
   if (attention.length || more || r.risks.length || r.followups.length) lines.push(UNTRUSTED_LABEL);

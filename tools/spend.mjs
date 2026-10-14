@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
+import crypto from 'node:crypto';
+import { defaultMaxOutputTokens } from './openrouter.mjs';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LANE_AGENTS } from './lanes.mjs';
 
 export const LANE_DAILY_DEFAULTS = Object.freeze({ openrouter: Object.freeze({ dailyUsd: 5 }) });
+export const PAID_LANES = Object.freeze(['openrouter', 'openai', 'gemini', 'lambda']);
+export const LANE_RESERVE_DEFAULTS = Object.freeze({ openrouter: 0.5, openai: 0.5, gemini: 0.5, lambda: 0.5 });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 function invalid(key, reason, code = 'budget-invalid') {
   return Object.assign(new Error(`${code}: ${key} ${reason}`), { code });
@@ -21,8 +26,9 @@ function fields(value, allowed, prefix) {
   for (const key of Object.keys(value)) if (!allowed.includes(key)) throw invalid(`${prefix}.${key}`, 'is unknown');
 }
 export function resolveBudget({ config = {}, manifest = {}, cli = {}, raises = [] } = {}) {
-  const budget = { maxUsd: null, maxTokens: null, lanes: Object.fromEntries(LANE_AGENTS.map(agent => [agent, { dailyUsd: null, dailyTokens: null, ...LANE_DAILY_DEFAULTS[agent] }])) };
-  if (config.spend !== undefined) fields(config.spend, ['lanes'], 'spend');
+  const budget = { maxUsd: null, maxTokens: null, lanes: Object.fromEntries(LANE_AGENTS.map(agent => [agent, { dailyUsd: null, dailyTokens: null, ...LANE_DAILY_DEFAULTS[agent], ...(PAID_LANES.includes(agent) ? { reserveUsd: LANE_RESERVE_DEFAULTS[agent] } : {}) }])) };
+  if (config.spend !== undefined) fields(config.spend, ['lanes', 'rates'], 'spend');
+  validateRates(config.spend?.rates);
   if (manifest.budget !== undefined) fields(manifest.budget, ['maxUsd', 'maxTokens', 'lanes'], 'budget');
   for (const key of ['maxUsd', 'maxTokens']) {
     for (const source of [manifest.budget, cli]) if (source?.[key] !== undefined) budget[key] = cap(source[key], key, key === 'maxTokens');
@@ -31,8 +37,9 @@ export function resolveBudget({ config = {}, manifest = {}, cli = {}, raises = [
     if (source === undefined) continue;
     fields(source, LANE_AGENTS, 'lanes');
     for (const [agent, lane] of Object.entries(source)) {
-      fields(lane, ['dailyUsd', 'dailyTokens'], `lane.${agent}`);
+      fields(lane, lower ? ['dailyUsd', 'dailyTokens'] : ['dailyUsd', 'dailyTokens', 'reserveUsd'], `lane.${agent}`);
       for (const [key, value] of Object.entries(lane)) {
+        if (key === 'reserveUsd' && value === null) throw invalid(`lane.${agent}.${key}`, 'must be a positive finite number');
         cap(value, `lane.${agent}.${key}`, key === 'dailyTokens');
         const prior = budget.lanes[agent][key];
         budget.lanes[agent][key] = lower && prior !== null ? (value === null ? prior : Math.min(prior, value)) : value;
@@ -54,6 +61,159 @@ export function resolveBudget({ config = {}, manifest = {}, cli = {}, raises = [
     target[field] = value;
   }
   return budget;
+}
+
+// Rates may be zero (public pricing sometimes includes free input), unlike caps.
+export function validateRates(rates) {
+  if (rates === undefined) return;
+  if (!object(rates)) throw invalid('spend.rates', 'must be an object');
+  for (const [model, rate] of Object.entries(rates)) {
+    const prefix = `spend.rates.${model}`;
+    fields(rate, ['inUsdPerToken', 'outUsdPerToken', 'creditUsd'], prefix);
+    for (const key of ['inUsdPerToken', 'outUsdPerToken', ...(Object.hasOwn(rate, 'creditUsd') ? ['creditUsd'] : [])]) {
+      if (typeof rate[key] !== 'number' || !Number.isFinite(rate[key]) || rate[key] < 0) throw invalid(`${prefix}.${key}`, 'must be a nonnegative finite number');
+    }
+  }
+}
+
+export function spendDir(env = process.env, home = os.homedir()) {
+  return env.SWARM_SPEND_DIR || path.join(home, '.project-swarm', 'spend');
+}
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+const utcDay = now => new Date(now()).toISOString().slice(0, 10);
+const storeError = (code, message) => Object.assign(new Error(`${code}: ${message}`), { code });
+
+export async function withSpendStore(fn, { dir = spendDir(), now = Date.now, isAlive = pidAlive, timeoutMs = 10000 } = {}) {
+  const lock = path.join(dir, 'daily.lock'), file = path.join(dir, 'daily.json');
+  const host = os.hostname(), started = Date.now();
+  await fs.mkdir(dir, { recursive: true });
+  for (;;) {
+    try { await fs.mkdir(lock); break; }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      try {
+        const stat = await fs.stat(lock);
+        let owner;
+        try { owner = JSON.parse(await fs.readFile(path.join(lock, 'owner.json'), 'utf8')); }
+        catch (error) {
+          if (error instanceof SyntaxError) owner = {}; // An invalid owner is held until timeout.
+          else if (error.code !== 'ENOENT') throw error;
+        }
+        if ((owner?.host === host && Number.isInteger(owner.pid) && owner.pid > 0 && !isAlive(owner.pid)) || (!owner && new Date(now()).getTime() - stat.mtimeMs > 60000)) {
+          // Claim stale cleanup before removing it, so concurrent cleaners cannot
+          // remove the replacement lock acquired by another caller.
+          const cleanup = path.join(lock, 'cleanup');
+          try { await fs.mkdir(cleanup); } catch (error) {
+            if (!['EEXIST', 'ENOENT'].includes(error.code)) throw error;
+            if (Date.now() - started >= timeoutMs) throw storeError('spend-store-locked', 'timed out waiting for stale lock cleanup');
+            await new Promise(resolve => setTimeout(resolve, 25));
+            continue;
+          }
+          const current = await fs.stat(lock);
+          if (current.ino !== stat.ino || current.dev !== stat.dev) {
+            await fs.rm(cleanup, { recursive: true, force: true });
+            continue;
+          }
+          await fs.rm(lock, { recursive: true, force: true });
+          continue;
+        }
+      } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      if (Date.now() - started >= timeoutMs) throw storeError('spend-store-locked', 'timed out waiting for daily.lock');
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+  let temp;
+  try {
+    await fs.writeFile(path.join(lock, 'owner.tmp'), JSON.stringify({ pid: process.pid, host, at: new Date(now()).toISOString() }));
+    await fs.rename(path.join(lock, 'owner.tmp'), path.join(lock, 'owner.json'));
+    let store;
+    try { store = JSON.parse(await fs.readFile(file, 'utf8')); }
+    catch (error) {
+      if (error.code === 'ENOENT') store = { version: 1, entries: {} };
+      else throw storeError('spend-store-invalid', 'daily.json could not be read as JSON');
+    }
+    if (!object(store) || store.version !== 1 || !object(store.entries) || Object.values(store.entries).some(entry => !object(entry)
+      || !/^\d{4}-\d{2}-\d{2}$/.test(entry.day) || !Number.isFinite(Date.parse(entry.day))
+      || !LANE_AGENTS.includes(entry.lane) || !['reservation', 'actual', 'estimated', 'reserved-as-cost'].includes(entry.kind)
+      || spendNumber(entry.usd) === null || spendNumber(entry.tokens) === null)) {
+      throw storeError('spend-store-invalid', 'daily.json has an invalid shape');
+    }
+    const before = JSON.stringify(store);
+    const oldest = Date.parse(utcDay(now)) - 31 * 86400000;
+    for (const [key, entry] of Object.entries(store.entries)) {
+      if (Date.parse(entry.day) < oldest) delete store.entries[key];
+      else if (entry.kind === 'reservation' && entry.host === host && !isAlive(entry.pid)) {
+        entry.kind = 'reserved-as-cost'; entry.flagged = true;
+      }
+    }
+    const result = await fn(store);
+    if (JSON.stringify(store) !== before) {
+      temp = path.join(dir, `.daily-${process.pid}-${crypto.randomUUID()}.tmp`);
+      const handle = await fs.open(temp, 'wx', 0o600);
+      try { await handle.writeFile(`${JSON.stringify(store, null, 2)}\n`); await handle.sync(); }
+      finally { await handle.close(); }
+      await fs.rename(temp, file);
+      temp = null;
+    }
+    return result;
+  } finally {
+    if (temp) await fs.rm(temp, { force: true });
+    await fs.rm(lock, { recursive: true, force: true });
+  }
+}
+
+export function laneDayTotals(store, { day = utcDay(Date.now) } = {}) {
+  const totals = {};
+  for (const entry of Object.values(store.entries)) {
+    if (entry.day !== day) continue;
+    const lane = totals[entry.lane] ??= { usd: 0, tokens: 0 };
+    lane.usd += entry.usd; lane.tokens += entry.tokens;
+  }
+  return totals;
+}
+
+export function estimateReservation({ job, lane, model, inputChars, rates, laneDefaults = LANE_RESERVE_DEFAULTS }) {
+  const maxOut = job.maxOutputTokens ?? (lane === 'openrouter' ? defaultMaxOutputTokens(model) : 8192);
+  const tokens = maxOut + Math.ceil(inputChars / 4);
+  if (!PAID_LANES.includes(lane)) return { usd: 0, tokens, source: 'unpaid' };
+  let usd, source;
+  if (job.maxCredits != null && rates?.creditUsd != null) { usd = job.maxCredits * rates.creditUsd; source = 'max-credits'; }
+  else if (rates?.inUsdPerToken != null && rates?.outUsdPerToken != null) { usd = inputChars * rates.inUsdPerToken + maxOut * rates.outUsdPerToken; source = 'rate'; }
+  else { usd = laneDefaults[lane]?.reserveUsd ?? laneDefaults[lane] ?? LANE_RESERVE_DEFAULTS[lane]; source = 'lane-default'; }
+  // Free/empty pricing cannot make an unreported paid attempt disappear.
+  if (!(usd > 0)) { usd = laneDefaults[lane]?.reserveUsd ?? laneDefaults[lane] ?? LANE_RESERVE_DEFAULTS[lane]; source = 'lane-default'; }
+  return { usd, tokens, source };
+}
+
+export async function reserveSpend({ dir, key, lane, runId, root, jobId, usd, tokens, budget, runTotals, now = Date.now, isAlive }) {
+  return withSpendStore(store => {
+    const day = utcDay(now);
+    const decision = capDecision({ budget, run: runTotals, laneToday: laneDayTotals(store, { day }), agent: lane });
+    if (decision) return { decision };
+    store.entries[key] = { day, lane, runId, root, jobId, usd, tokens, kind: 'reservation', pid: process.pid, host: os.hostname(), at: new Date(now()).toISOString(), flagged: false };
+    return { decision: null };
+  }, { dir, now, isAlive });
+}
+export async function settleSpend({ dir, key, usd, tokens, kind, flagged, now = Date.now }) {
+  return withSpendStore(store => {
+    if (store.entries[key]) Object.assign(store.entries[key], { usd, tokens, kind, flagged });
+  }, { dir, now });
+}
+export async function releaseSpend({ dir, key }) {
+  return withSpendStore(store => { delete store.entries[key]; }, { dir });
+}
+export function finalCost({ lane, record, reservation, rates }) {
+  if (typeof record.costUsd === 'number') return { usd: record.costUsd, kind: 'actual', flagged: false, costSource: record.costSource ?? 'reported' };
+  if (!PAID_LANES.includes(lane)) return { usd: 0, kind: 'actual', flagged: false, costSource: null };
+  const input = record.usage?.input_tokens ?? record.usage?.prompt_tokens;
+  const output = record.usage?.output_tokens ?? record.usage?.completion_tokens;
+  if ((typeof input === 'number' || typeof output === 'number') && rates?.inUsdPerToken != null && rates?.outUsdPerToken != null) {
+    const usd = (input ?? 0) * rates.inUsdPerToken + (output ?? 0) * rates.outUsdPerToken;
+    if (usd > 0) return { usd, kind: 'estimated', flagged: true, costSource: 'estimated-from-tokens' };
+  }
+  return { usd: reservation.usd, kind: 'reserved-as-cost', flagged: true, costSource: 'reservation' };
 }
 
 const spendNumber = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
@@ -122,7 +282,7 @@ export function ledgerRows(state, { phase = '-' } = {}) {
         worker: clean(record.agent), model: clean(attempt.model ?? record.model ?? '-'),
         result: status === 'complete' ? 'pass' : `${clean(status)}: ${clean(error).slice(0, 60)}`,
         tokens: tokens === null ? '-' : Math.trunc(tokens).toLocaleString('en-US'),
-        cost: cost !== null ? `$${cost.toFixed(2)}` : subscription.has(record.agent) ? 'subscription' : 'unknown',
+        cost: cost !== null ? `$${cost.toFixed(2)}${record.costSource === 'estimated-from-tokens' ? ' est' : record.costSource === 'reservation' ? ' reserved' : ''}` : subscription.has(record.agent) ? 'subscription' : 'unknown',
       });
     });
   }
@@ -148,15 +308,16 @@ export function mergeLedger(text, rows) {
     if (cells.length !== 8) continue;
     const [date, , , worker, , result, tokens, cost] = cells;
     const key = `${date}\0${worker}`;
-    const group = groups.get(key) ?? { date, worker, calls: 0, pass: 0, tokens: 0, usd: 0, paid: false, subscription: false };
+    const group = groups.get(key) ?? { date, worker, calls: 0, pass: 0, tokens: 0, usd: 0, paid: false, subscription: false, estimated: false };
     group.calls++;
     if (result.startsWith('pass')) group.pass++;
     if (/^[\d,]+$/.test(tokens)) group.tokens += Number(tokens.replaceAll(',', ''));
-    if (/^\$\d+(\.\d+)?$/.test(cost)) { group.paid = true; group.usd += Number(cost.slice(1)); }
+    const paid = /^\$(\d+(?:\.\d+)?)(?: (est|reserved))?$/.exec(cost);
+    if (paid) { group.paid = true; group.usd += Number(paid[1]); group.estimated ||= Boolean(paid[2]); }
     if (cost === 'subscription') group.subscription = true;
     groups.set(key, group);
   }
-  const summary = ['## Daily summary', '', '| date | tier | calls | pass | fail/blocked | tokens | rough cost |', '| --- | --- | --- | --- | --- | --- | --- |', ...[...groups.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, g]) => `| ${g.date} | ${g.worker} | ${g.calls} | ${g.pass} | ${g.calls - g.pass} | ${g.tokens.toLocaleString('en-US')} | ${g.paid ? `$${g.usd.toFixed(2)}` : g.subscription ? 'subscription' : 'unknown'} |`)];
+  const summary = ['## Daily summary', '', '| date | tier | calls | pass | fail/blocked | tokens | rough cost |', '| --- | --- | --- | --- | --- | --- | --- |', ...[...groups.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, g]) => `| ${g.date} | ${g.worker} | ${g.calls} | ${g.pass} | ${g.calls - g.pass} | ${g.tokens.toLocaleString('en-US')} | ${g.paid ? `$${g.usd.toFixed(2)}${g.estimated ? ' (incl. estimates)' : ''}` : g.subscription ? 'subscription' : 'unknown'} |`)];
   const summaryStart = lines.findIndex(line => line.trim() === '## Daily summary');
   if (summaryStart < 0) lines.push('', ...summary, '');
   else {

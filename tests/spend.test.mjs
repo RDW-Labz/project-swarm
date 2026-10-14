@@ -9,6 +9,8 @@ import { promisify } from 'node:util';
 import {
   LANE_DAILY_DEFAULTS, resolveBudget, jobSpend, runTotals, laneDailyTotals,
   capDecision, ledgerRows, mergeLedger, validateIdleItems, runIdleMenu,
+  PAID_LANES, LANE_RESERVE_DEFAULTS, spendDir, withSpendStore, laneDayTotals,
+  estimateReservation, reserveSpend, settleSpend, releaseSpend, finalCost,
 } from '../tools/spend.mjs';
 
 test('budget precedence, lane lowering, null caps and ordered explicit raises', () => {
@@ -141,6 +143,122 @@ test('idle item validation rejects malformed names, commands and timeouts', () =
 });
 
 const exec = promisify(execFile);
+const tempSpend = () => fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP || os.tmpdir(), 'spend-store-'));
+const fixedNow = () => Date.parse('2026-10-14T12:00:00Z');
+const entry = overrides => ({ day: '2026-10-14', lane: 'openrouter', runId: 'r', root: '/fixture', jobId: 'j', usd: 0.5, tokens: 10, kind: 'reservation', pid: process.pid, host: os.hostname(), at: '2026-10-14T12:00:00Z', flagged: false, ...overrides });
+
+test('reservation defaults, rate validation and every estimation source', () => {
+  assert.deepEqual(PAID_LANES, ['openrouter', 'openai', 'gemini', 'lambda']);
+  assert.ok(Object.isFrozen(PAID_LANES) && Object.isFrozen(LANE_RESERVE_DEFAULTS));
+  assert.equal(spendDir({ SWARM_SPEND_DIR: '/fixture/spend' }, '/home'), '/fixture/spend');
+  assert.equal(spendDir({}, '/home'), '/home/.project-swarm/spend');
+  assert.equal(resolveBudget().lanes.openai.reserveUsd, 0.5);
+  assert.equal(resolveBudget({ config: { spend: { lanes: { openrouter: { reserveUsd: 2 } }, rates: { m: { inUsdPerToken: 0, outUsdPerToken: 0.001 } } } } }).lanes.openrouter.reserveUsd, 2);
+  for (const reserveUsd of [null, 0, -1, Infinity, '1']) assert.throws(() => resolveBudget({ config: { spend: { lanes: { openai: { reserveUsd } } } } }), { code: 'budget-invalid' });
+  for (const rates of [null, [], { m: {} }, { m: { inUsdPerToken: -1, outUsdPerToken: 1 } }, { m: { inUsdPerToken: 1, outUsdPerToken: Infinity } }, { m: { inUsdPerToken: 1, outUsdPerToken: 1, creditUsd: '1' } }, { m: { inUsdPerToken: 1, outUsdPerToken: 1, unknown: 1 } }]) assert.throws(() => resolveBudget({ config: { spend: { rates } } }), { code: 'budget-invalid' });
+  const input = { job: { maxOutputTokens: 100, maxCredits: 4 }, lane: 'openrouter', model: 'm', inputChars: 9, rates: { creditUsd: 0.2, inUsdPerToken: 0.01, outUsdPerToken: 0.02 } };
+  assert.deepEqual(estimateReservation(input), { usd: 0.8, tokens: 103, source: 'max-credits' });
+  assert.deepEqual(estimateReservation({ ...input, job: { maxOutputTokens: 100 } }), { usd: 2.09, tokens: 103, source: 'rate' });
+  assert.deepEqual(estimateReservation({ ...input, rates: null, laneDefaults: { openrouter: { reserveUsd: 0.7 } } }), { usd: 0.7, tokens: 103, source: 'lane-default' });
+  assert.deepEqual(estimateReservation({ ...input, lane: 'ollama' }), { usd: 0, tokens: 103, source: 'unpaid' });
+  assert.equal(estimateReservation({ ...input, job: {}, model: 'deepseek/test' }).tokens, 16003);
+  assert.equal(estimateReservation({ ...input, job: {}, lane: 'openai', rates: null }).tokens, 8195);
+  assert.equal(estimateReservation({ ...input, rates: { creditUsd: 0 } }).usd, 0.5);
+});
+
+test('final costs preserve reported zero, estimate token aliases and retain unpaid zero', () => {
+  const input = { lane: 'openrouter', record: {}, reservation: { usd: 0.5 }, rates: { inUsdPerToken: 0.01, outUsdPerToken: 0.02 } };
+  assert.deepEqual(finalCost({ ...input, record: { costUsd: 0 } }), { usd: 0, kind: 'actual', flagged: false, costSource: 'reported' });
+  assert.equal(finalCost({ ...input, record: { costUsd: 2, costSource: 'provider' } }).costSource, 'provider');
+  assert.deepEqual(finalCost({ ...input, lane: 'ollama' }), { usd: 0, kind: 'actual', flagged: false, costSource: null });
+  for (const usage of [{ input_tokens: 10, output_tokens: 20 }, { prompt_tokens: 10, completion_tokens: 20 }]) assert.deepEqual(finalCost({ ...input, record: { usage } }), { usd: 0.5, kind: 'estimated', flagged: true, costSource: 'estimated-from-tokens' });
+  assert.equal(finalCost({ ...input, record: { usage: { output_tokens: 10 } } }).usd, 0.2);
+  for (const record of [{}, { usage: { total_tokens: 100 } }, { usage: { input_tokens: 0 } }]) assert.deepEqual(finalCost({ ...input, record }), { usd: 0.5, kind: 'reserved-as-cost', flagged: true, costSource: 'reservation' });
+});
+
+test('store serializes callers, writes changes only, prunes and preserves crashed reservations', async () => {
+  const dir = await tempSpend(), file = path.join(dir, 'daily.json');
+  const store = { version: 1, entries: { old: entry({ day: '2026-09-12' }), boundary: entry({ day: '2026-09-13' }), crashed: entry({ pid: 99999999 }), foreign: entry({ pid: 99999999, host: 'other-host' }) } };
+  await fs.writeFile(file, JSON.stringify(store));
+  await withSpendStore(async current => {
+    assert.equal(current.entries.old, undefined);
+    assert.equal(current.entries.boundary.kind, 'reservation');
+    assert.equal(current.entries.crashed.kind, 'reserved-as-cost');
+    assert.equal(current.entries.crashed.flagged, true);
+    assert.equal(current.entries.foreign.kind, 'reservation');
+    await assert.rejects(withSpendStore(() => {}, { dir, timeoutMs: 30 }), { code: 'spend-store-locked' });
+  }, { dir, now: fixedNow, isAlive: pid => pid === process.pid });
+  const before = await fs.stat(file);
+  assert.equal(await withSpendStore(() => 42, { dir, now: fixedNow }), 42);
+  assert.equal((await fs.stat(file)).mtimeMs, before.mtimeMs);
+  const saved = JSON.parse(await fs.readFile(file, 'utf8'));
+  assert.deepEqual(laneDayTotals(saved, { day: '2026-10-14' }), { openrouter: { usd: 1, tokens: 20 } });
+  await assert.rejects(fs.access(path.join(dir, 'daily.lock')), { code: 'ENOENT' });
+  await assert.rejects(withSpendStore(() => { throw new Error('callback'); }, { dir }), /callback/);
+  await assert.rejects(fs.access(path.join(dir, 'daily.lock')), { code: 'ENOENT' });
+});
+
+test('store clears stale locks, times out on live/foreign locks and refuses malformed files', async () => {
+  for (const owner of [null, { pid: 99999999, host: os.hostname() }]) {
+    const dir = await tempSpend(), lock = path.join(dir, 'daily.lock');
+    await fs.mkdir(lock);
+    if (owner) await fs.writeFile(path.join(lock, 'owner.json'), JSON.stringify(owner));
+    else await fs.utimes(lock, new Date(Date.now() - 61000), new Date(Date.now() - 61000));
+    await withSpendStore(store => { store.entries.ok = entry(); }, { dir });
+    assert.equal(JSON.parse(await fs.readFile(path.join(dir, 'daily.json'), 'utf8')).entries.ok.usd, 0.5);
+  }
+  for (const owner of [{ pid: process.pid, host: os.hostname() }, { pid: 99999999, host: 'other-host' }]) {
+    const dir = await tempSpend();
+    await fs.mkdir(path.join(dir, 'daily.lock'));
+    await fs.writeFile(path.join(dir, 'daily.lock', 'owner.json'), JSON.stringify(owner));
+    await assert.rejects(withSpendStore(() => {}, { dir, timeoutMs: 30 }), { code: 'spend-store-locked' });
+  }
+  for (const text of ['{broken', '{}', '{"version":1,"entries":{"x":{}}}']) {
+    const dir = await tempSpend(), file = path.join(dir, 'daily.json');
+    await fs.writeFile(file, text);
+    await assert.rejects(withSpendStore(() => { assert.fail('must not call callback'); }, { dir }), { code: 'spend-store-invalid' });
+    assert.equal(await fs.readFile(file, 'utf8'), text);
+    await assert.rejects(fs.access(path.join(dir, 'daily.lock')), { code: 'ENOENT' });
+  }
+});
+
+test('reservation admission, settlement and release preserve original UTC day', async () => {
+  const dir = await tempSpend(), budget = resolveBudget({ cli: { maxTokens: 10 } });
+  const input = { dir, key: '0123456789ab/r/j#1', lane: 'openrouter', runId: 'r', root: '/fixture', jobId: 'j', usd: 0.5, tokens: 10, budget, runTotals: { usd: 0, tokens: 0 }, now: fixedNow };
+  assert.deepEqual(await reserveSpend(input), { decision: null });
+  assert.equal((await reserveSpend({ ...input, key: 'blocked', runTotals: { tokens: 10 } })).decision.reason, 'run-cap');
+  await settleSpend({ dir, key: input.key, usd: 0.6, tokens: 20, kind: 'estimated', flagged: true, now: () => fixedNow() + 86400000 });
+  await withSpendStore(store => {
+    assert.equal(store.entries[input.key].day, '2026-10-14');
+    assert.equal(store.entries[input.key].kind, 'estimated');
+    assert.equal(store.entries[input.key].usd, 0.6);
+    assert.equal(store.entries.blocked, undefined);
+  }, { dir, now: fixedNow });
+  await releaseSpend({ dir, key: input.key });
+  await releaseSpend({ dir, key: 'missing' });
+  await settleSpend({ dir, key: 'missing', usd: 1, tokens: 1, kind: 'actual', flagged: false });
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(dir, 'daily.json'), 'utf8')).entries, {});
+});
+
+test('eight child processes admit exactly ten half-dollar reservations at a five-dollar cap', async () => {
+  const dir = await tempSpend();
+  const moduleUrl = new URL('../tools/spend.mjs', import.meta.url).href;
+  const code = `import { reserveSpend, resolveBudget } from ${JSON.stringify(moduleUrl)}; for (let n = 0; n < 8; n++) await reserveSpend({dir: process.env.SWARM_SPEND_DIR, key: '0123456789ab/r/' + process.pid + '#' + n, lane: 'openrouter', runId: 'r', root: '/fixture', jobId: String(process.pid), usd: 0.5, tokens: 10, budget: resolveBudget(), runTotals: { usd: 0, tokens: 0 }});`;
+  const results = await Promise.all(Array.from({ length: 8 }, () => exec(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, SWARM_SPEND_DIR: dir } })));
+  assert.equal(results.length, 8);
+  const store = JSON.parse(await fs.readFile(path.join(dir, 'daily.json'), 'utf8'));
+  assert.equal(Object.keys(store.entries).length, 10);
+  assert.deepEqual(laneDayTotals(store), { openrouter: { usd: 5, tokens: 100 } });
+});
+
+test('ledger flags estimates and reservations and sums them in the daily summary', () => {
+  const rows = ledgerRows({ id: 'r', jobs: ['reported', 'estimated-from-tokens', 'reservation'].map((costSource, i) => ({ id: `j${i}`, agent: 'openrouter', costUsd: 0.5, costSource, status: 'complete', attempts: [attempt()] })) });
+  assert.deepEqual(rows.map(row => row.cost), ['$0.50', '$0.50 est', '$0.50 reserved']);
+  const ledger = mergeLedger('', rows);
+  assert.match(ledger, /\| 2026-10-14 \| openrouter \| 3 \| 3 \| 0 \| 0 \| \$1.50 \(incl\. estimates\) \|/);
+  assert.equal(mergeLedger(ledger, []), ledger);
+});
+
 async function git(root, args) {
   return (await exec('git', args, { cwd: root, encoding: 'utf8' })).stdout.trim();
 }
