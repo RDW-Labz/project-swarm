@@ -43,6 +43,9 @@ Requires Node 20.3+, macOS/Linux or WSL (native Windows is unsupported). Run `no
 Each worker receives only explicitly named files copied into `.swarm/workspaces/<run-id>/<job-id>`. Existing output files are also copied so workers can edit them. For Claude the tool set is Read/Glob/Grep plus Write/Edit for writing jobs; shell, agent, and MCP tools are unavailable. The prompt prohibits reads outside that copy. This is scoped orchestration and guarded integration, **not an operating-system security sandbox**: Claude authentication/configuration is still handled by its CLI, and its filesystem tools are not proven to block every absolute read. Do not put secrets in worker context. Use an approved container/OS sandbox if adversarial filesystem isolation is required.
 
 ## Workflow
+
+Spend caps stop new launches; in-flight jobs finish and held work can resume under the same run ID. Never raise a cap without the user's explicit OK. `resume --raise KEY=VALUE` needs `--reason TEXT`. The idle menu only runs configured local commands on `idle/` branches and must never invoke a model.
+
 `node {{SWARM_RUNNER}} ticket MANIFEST --pr PAYLOAD` runs the guarded one-command pipeline; `--resume RUN` skips its saved green stages.
 `node {{SWARM_RUNNER}} scaffold job` generates a validated manifest; `scaffold job --command <swarm command>` adds handler modules resolved from CLI dispatch to context; `scaffold pr --from RUN --title T` generates a payload with a mutation stub that requires real evidence before shipping.
 

@@ -33,6 +33,7 @@ function requestJob(url, options) {
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-lanes-run-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
+  env.SWARM_SPEND_DIR = path.join(root, '.swarm/spend');
   await fs.writeFile(path.join(root, 'input.txt'), 'original input\n');
   await exec('git', ['init', '-q', root]);
   await exec('git', ['-C', root, 'add', 'input.txt']);

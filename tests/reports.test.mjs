@@ -95,7 +95,7 @@ test('rollup aggregates statuses, assigned lanes, costs, tokens, files and repor
   assert.equal(r.id, 'demo'); assert.equal(r.total, 8); assert.equal(r.status, 'failed');
   assert.deepEqual(r.counts, Object.fromEntries(statuses.map(key => [key, 1])));
   assert.deepEqual(r.lanes, { codex: 4, cursor: 4 });
-  assert.deepEqual(r.spend, { costUsd: 0.03, costReportedJobs: 2, tokens: 14 });
+  assert.deepEqual(r.spend, { costUsd: 0.03, costReportedJobs: 2, tokens: 14, estimatedJobs: [], estimatedCount: 0 });
   assert.deepEqual(r.files, { changed: 1, jobs: 2 });
   assert.deepEqual(r.reports, { short: 1, legacy: 1, invalid: 1, missing: 6 });
   assert.deepEqual(r.attention.map(job => job.id), ['j1', 'j3', 'j2']);
@@ -139,4 +139,15 @@ test('rollup counts merge queue progress and driver summary within its budget', 
   assert.match(renderRollupText(r), /merge  done - 200 integrated - 10 requeued - 2 flagged - 3 checks failed/);
   delete mergeQueue.summary;
   assert.deepEqual(rollupRun({ jobs: [], mergeQueue }).mergeQueue, { state: 'done', integrated: 1, requeued: 0, flagged: 0, checkFailed: 0 });
+});
+
+test('rollup exposes estimated and reserved job ids and labels their cost', () => {
+  const jobs = ['reported', 'estimated-from-tokens', 'reservation'].map((costSource, i) => ({ id: `j${i}`, status: 'complete', agent: 'openrouter', costUsd: 0.5, costSource }));
+  const r = rollupRun({ jobs });
+  assert.deepEqual(r.spend.estimatedJobs, ['j1', 'j2']);
+  assert.match(renderRollupText(r), / - estimated cost for 2 jobs/);
+  const large = rollupRun({ jobs: Array.from({ length: 300 }, (_, i) => ({ ...jobs[1], id: `j${i}`, status: 'failed', report: report({ summary: 's'.repeat(500), risks: ['r'.repeat(200)] }) })) }, { top: 50 });
+  assert.equal(large.spend.estimatedCount, 300);
+  assert.equal(large.spend.estimatedJobs.length, 10);
+  assert.ok(Buffer.byteLength(JSON.stringify(large)) < 4096);
 });
