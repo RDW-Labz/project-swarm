@@ -37,9 +37,10 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-14 | 6 | spend-fixes-run: reservation wiring, two-root and 64-job tests | codex | gpt-6.1-sol | pass | 100,515 | subscription |
 | 2026-10-14 | 5 | leads-core: Implemented section A; 90 tests passed.; Deviation: oversized prompt goal, scope and out | codex | gpt-6.1-sol | pass | 42,962 | subscription |
 | 2026-10-14 | 5 | leads-run: status: blocked. Existing type-lead fixtures lack required area; need access to tests/job | codex | gpt-6.1-sol | blocked: blocked: no summary given | 158,156 | subscription |
+| 2026-10-14 | 5 | leads-docs: Documented lead areas, child validation, errors, lifecycle, integration, and rollups wit | codex | gpt-6.1-sol | pass | 44,416 | subscription |
 
 ## Daily summary
 
 | date | tier | calls | pass | fail/blocked | tokens | rough cost |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2026-10-14 | codex | 33 | 28 | 5 | 2,843,257 | subscription |
+| 2026-10-14 | codex | 34 | 29 | 5 | 2,887,673 | subscription |

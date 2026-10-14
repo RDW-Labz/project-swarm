@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.58.0
+
+- Added lead agents. A `type: "lead"` job owns an `area` (goal, file scope, job and concurrency caps, allowed agents, budget) and writes only a child manifest. Lead scopes must not overlap each other or any parent worker's outputs.
+- The runner validates each child manifest before launching it: every output and delete is inside the lead's scope, job count and concurrency stay within the area, agents are allowed, and the budget stays within the area. Children cannot set checks, shell, network, or another contract, cannot weaken `sensitive`, and cannot contain leads (depth limit 2). Refusals fail the lead with `lead-child-invalid` and launch nothing; sibling leads continue.
+- Each child runs as `<parentId>-<leadId>` under the same caps, reservations, ledger, and cancel signal. A parent `--max-usd` or `--max-tokens` can lower a child's area budget but never lift it. A paused child holds its lead (`child-paused`); `resume` on the parent resumes the child without repeating the lead's model call.
+- Integrating a parent integrates each child run in order under the one lock, then the parent's own jobs; lead manifest files are never written to the project. Reruns skip already-integrated children.
+- Rollups add a bounded `leads` list (one line per lead in text) and `monitor --view` adds a leads line, so the orchestrator reads lead rollups instead of child reports. See [lead agents](docs/leads.md).
+
 ## 1.57.0
 
 - Added spend caps: per-run `budget.maxUsd` / `budget.maxTokens` (or `run --max-usd` / `--max-tokens`) and per-lane daily caps (`spend.lanes` in config; OpenRouter defaults to $5 per UTC day). At a cap the runner stops launching, lets in-flight jobs finish, and holds the rest; the run ends `paused` (exit code 75).
