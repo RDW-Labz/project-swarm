@@ -23,6 +23,7 @@ import { resolveLanes, LaneScheduler, classifyProviderOutcome } from './lanes.mj
 import { routeJob } from './router.mjs';
 import { resolveBudget, runTotals, jobSpend, spendDir, withSpendStore, laneDayTotals, estimateReservation, reserveSpend, settleSpend, releaseSpend, finalCost, PAID_LANES, capDecision, ledgerRows, mergeLedger, validateIdleItems, runIdleMenu } from './spend.mjs';
 import { JOB_TYPES, applyJobType, jobTypeOutputViolations } from './job-types.mjs';
+import { validateLeadArea, validateParentLeads, validateChildManifest, leadPromptBlock, leadRollup } from './leads.mjs';
 import { REPORT_PROMPT_LINE, validateReport, legacyReport, rollupRun, renderRollupText } from './reports.mjs';
 import { loadSwarmEnv, envPrintText, checkNeedsEnvWarnings, npmScriptsResolveToPlainNode, NO_STASH_LINE, MUTANTS_BY_HAND_LINE, MUTANTS_SHAPE, gitGuardScript, findRealGit, materializeGitGuard } from './swarm-env.mjs';
 import { loadGotchas, gotchasPromptBlock, windowsCiGotchasWarnings } from './gotchas.mjs';
@@ -1400,9 +1401,12 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
       if (job.outputs.length) fail('a web job must be read-only (no outputs)');
     }
     // Unknown command/provider fields cannot create an execution path.
-    const knownJobFields = ['type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report'];
+    if (job.type === 'lead') validateLeadArea(job);
+    else if (job.area !== undefined) fail(`lead-area-invalid: Job ${job.id}: area requires type lead`, 'lead-area-invalid');
+    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report'];
     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
   }
+  validateParentLeads(manifest);
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
   for (const job of manifest.jobs) for (const afterId of job.after ?? []) if (!ids.has(afterId.toLowerCase())) fail(`Job ${job.id} after names unknown job ${afterId}`);
   const cycle = detectAfterCycle(manifest.jobs);
@@ -2457,7 +2461,8 @@ async function applyManifestJobTypes(root, manifest, { env, home = os.homedir() 
   };
 }
 
-export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks, checkBase = false, acceptRedBase = false, reason, baseChecks = {}, sync = false, acceptCoveredRedBase = true, jobs = null, maxUsd, maxTokens, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), resumeState = null } = {}) {
+export async function runManifest(root, manifest, options = {}) {
+  const { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks, checkBase = false, acceptRedBase = false, reason, baseChecks = {}, sync = false, acceptCoveredRedBase = true, jobs = null, maxUsd, maxTokens, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), resumeState = null, parentRun, leadJob } = options;
   root = await fs.realpath(root);
   validateManifest(manifest);
   const appliedTypes = await applyManifestJobTypes(root, manifest, { env });
@@ -2546,13 +2551,13 @@ export async function runManifest(root, manifest, { spawnImpl = spawn, killImpl,
   }
   await registerLiveRun({ runId: id, root, outputs: declaredOutputs, dir: liveDirOpt });
   try {
-    return await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept, acceptedRedBaseInfo, pendingBaseChecks, sync, scopeWarnings, jobTypeWarnings: appliedTypes.warnings.filter(warning => manifest.jobs.some(job => job.id === warning.jobId)), liveDir: liveDirOpt, maxUsd, maxTokens, now, sleep, resumeState });
+    return await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept, acceptedRedBaseInfo, pendingBaseChecks, sync, scopeWarnings, jobTypeWarnings: appliedTypes.warnings.filter(warning => manifest.jobs.some(job => job.id === warning.jobId)), liveDir: liveDirOpt, maxUsd, maxTokens, now, sleep, resumeState, parentRun, leadJob, childOptions: options });
   } finally {
     await unregisterLiveRun(id, { dir: liveDirOpt });
   }
 }
 
-async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept = null, acceptedRedBaseInfo = null, pendingBaseChecks = null, sync = false, scopeWarnings = [], jobTypeWarnings = [], liveDir, maxUsd, maxTokens, now = Date.now, sleep, resumeState = null }) {
+async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept = null, acceptedRedBaseInfo = null, pendingBaseChecks = null, sync = false, scopeWarnings = [], jobTypeWarnings = [], liveDir, maxUsd, maxTokens, now = Date.now, sleep, resumeState = null, parentRun, leadJob, childOptions }) {
   const cleanup = new AbortController();
   signal = signal ? AbortSignal.any([signal, cleanup.signal]) : cleanup.signal;
   let workers = [];
@@ -2561,6 +2566,8 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   const claim = await safePath(root, `${directory}/claim`, { internal: true });
   if (!resumeState) await fs.writeFile(claim, '', { flag: 'wx' });
   const state = resumeState ?? { version: 1, id, root, concurrency: manifest.concurrency??2, peakConcurrency: 0, status: 'running', startedAt: new Date(now()).toISOString(), jobs: [], ...(redBaseAutoAccept ? { redBaseAutoAccept } : {}), ...(acceptedRedBaseInfo ? { acceptRedBase: true, acceptRedBaseReason: acceptedRedBaseInfo.reason, baseCheckFailures: acceptedRedBaseInfo.failures } : {}), ...(pendingBaseChecks ? { pendingBaseChecks } : {}) };
+  if (parentRun !== undefined) { state.parentRun = parentRun; state.leadJob = leadJob; }
+  const childClaims = new Map();
   const worktreeConfig = loadLocalConfig({ env });
   state.status = 'running';
   delete state.pause;
@@ -2756,7 +2763,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
 
     const runOne = async index => {
       const original = manifest.jobs[index], record = state.jobs[index];
-      let job = original, release = null, retry = false, resourcePayload, snapshotFiles, refusedPauseUntil = null;
+      let job = original.type === 'lead' ? { ...original, prompt: original.prompt + leadPromptBlock({ job: original, area: validateLeadArea(original), outputPath: original.outputs[0] }) } : original, release = null, retry = false, resourcePayload, snapshotFiles, refusedPauseUntil = null;
       for (const key of ['heldReason', 'heldUntil', 'error']) delete record[key];
       let spendEntry = null, adapterStarted = false, attemptResult = null;
       const finishSpend = async () => {
@@ -2778,7 +2785,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
       try {
         if (original.agent === 'auto') {
           record.route = pickJobRoute(original, lanes, { health: routeHealth(await today()), failures });
-          job = { ...original, agent: record.route.agent, model: record.route.model };
+          job = { ...job, agent: record.route.agent, model: record.route.model };
           if (job.agent === 'codex') requireCodexPlatform(platform);
           if (job.agent === 'cursor') {
             requireCursorPlatform(platform);
@@ -3126,6 +3133,39 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         // Field lesson #286: persisted once, at the root (survives across runs, unlike
         // .swarm/runs/<id>/), so the next dispatch refuses instead of spending on the same outage.
         if (result.status === 'provider-limit') await jsonWrite(root, '.swarm/claude-provider-limit.json', { resetsAt: result.resetsAt, detectedAt: new Date(now()).toISOString() });
+        if (original.type === 'lead' && record.status === 'complete') {
+          try {
+            let child;
+            try { child = JSON.parse(await fs.readFile(path.join(workspaceRoot, original.outputs[0]), 'utf8')); }
+            catch { fail(`lead-child-invalid: ${original.id}: manifest unreadable`, 'lead-child-invalid'); }
+            child = validateChildManifest(child, { lead: original, area: validateLeadArea(original), parentManifest: manifest });
+            validateManifest(child);
+            await validateProject(root, child, { env, liveDir });
+            const childId = `${id}-${original.id}`;
+            if (!ID.test(childId)) fail(`lead-child-invalid: ${original.id}: child run id too long`, 'lead-child-invalid');
+            const outputs = child.jobs.flatMap(job => job.outputs);
+            for (const file of outputs) for (const [claimed, owner] of childClaims) {
+              if (owner !== original.id && (file === claimed || pathContains(file, claimed) || pathContains(claimed, file))) fail(`lead-scope-overlap: ${original.id} and ${owner}: ${file}`, 'lead-scope-overlap');
+            }
+            for (const file of outputs) childClaims.set(file, original.id);
+            record.childRun = childId;
+            (state.children ??= []).push({ job: original.id, run: childId });
+            record.status = 'running';
+            delete record.finishedAt;
+            await queueSave();
+            // Child workers acquire their own provider seats and spend reservations.
+            release?.(); release = null;
+            // A parent cap may only lower a child's area budget, never replace it.
+            const childCaps = Object.fromEntries(['maxUsd', 'maxTokens'].map(key => {
+              const caps = [child.budget?.[key], { maxUsd, maxTokens }[key] ?? manifest.budget?.[key]].filter(value => value !== undefined && value !== null);
+              return [key, caps.length ? Math.min(...caps) : undefined];
+            }));
+            const childState = await runManifest(root, child, { ...childOptions, ...childCaps, signal, jobs: null, resumeState: null, id: childId, parentRun: id, leadJob: original.id });
+            applyLeadChildState(record, childState);
+          } catch (error) { record.status = 'failed'; record.error = error.message; }
+          record.finishedAt = new Date(now()).toISOString();
+          record.durationMs = now() - Date.parse(record.startedAt);
+        }
         await queueSave();
       } catch (error) {
         if (error.keptWorkspace) record.keptWorkspace = error.keptWorkspace;
@@ -3240,6 +3280,15 @@ export async function idleRun(root, id, { now = Date.now } = {}) {
   return runIdleMenu(root, { runId: id, items, baseCommit: state.baseCommit, now });
 }
 
+function applyLeadChildState(record, childState) {
+  record.lead = leadRollup(childState, rollupRun(childState));
+  delete record.heldReason;
+  delete record.error;
+  if (childState.status === 'complete') record.status = 'complete';
+  else if (childState.status === 'paused') { record.status = 'held'; record.heldReason = 'child-paused'; }
+  else { record.status = 'failed'; record.error = `lead-child-${childState.status}: ${childState.id}`; }
+}
+
 export async function resumeRun(root, id, { raises = [], reason, wait = false, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), ...runOptions } = {}) {
   root = await fs.realpath(root);
   const state = await readState(root, id);
@@ -3269,6 +3318,17 @@ export async function resumeRun(root, id, { raises = [], reason, wait = false, n
     if (items.length) await runIdleMenu(root, { runId: id, items, baseCommit: state.baseCommit, until, now });
     else (state.spendWarnings ??= []).push('idle-menu-empty');
     await sleep(Math.max(0, until - now()));
+  }
+  for (const record of state.jobs.filter(record => record.heldReason === 'child-paused')) {
+    const child = await readState(root, record.childRun);
+    const resumed = child.status === 'paused' ? await resumeRun(root, child.id, { ...runOptions, raises, reason, wait, now, sleep }) : child;
+    applyLeadChildState(record, resumed);
+    await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
+  }
+  if (state.jobs.some(record => record.heldReason === 'child-paused')) {
+    updateRunPause(state, now);
+    await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
+    return state;
   }
   state.budgetRaises = budgetRaises;
   state.budget = budget;
@@ -4299,7 +4359,8 @@ export async function integrateRun(root, id, options = {}) {
   } finally { await lock.release(); }
 }
 
-async function integrateRunLocked(root, id, { releaseIntegrationLock, noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, salvage = false, acceptDeviation = false, acceptResultShape = false, acceptDropped = false, salvageDropped = false, jobs = undefined, privateNamesFile = undefined, queue = false, batchSize = 10 } = {}) {
+async function integrateRunLocked(root, id, options = {}) {
+  const { releaseIntegrationLock, noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, salvage = false, acceptDeviation = false, acceptResultShape = false, acceptDropped = false, salvageDropped = false, jobs = undefined, privateNamesFile = undefined, queue = false, batchSize = 10 } = options;
   if (queue) validateQueueOptions({ batchSize, jobs, salvage, mutants: mutants || mutantsFile !== undefined || mutantCheck !== undefined });
   root = await fs.realpath(root);
   // Field lesson #202: a job's own timed-out worker declares nothing missing — it simply never got
@@ -4346,6 +4407,17 @@ async function integrateRunLocked(root, id, { releaseIntegrationLock, noChecks =
     fail(`Only a complete${acceptBlocked ? ' or blocked' : ''}${salvage ? ' or timed-out (with salvageable output)' : ''} run from this repository can be integrated; pass --jobs <id,...> to integrate only specific complete jobs`);
   }
   if (!queue && !((acceptBlocked || salvage) ? (jobs ? state.jobs.filter(j => jobs.includes(j.id)).every(jobsAcceptable) : state.jobs.every(jobsAcceptable)) : (jobs ? state.jobs.filter(j => jobs.includes(j.id)).every(j => j.status === 'complete') : state.status === 'complete'))) fail(`Only a complete${acceptBlocked ? ' or blocked' : ''}${salvage ? ' or timed-out (with salvageable output)' : ''} run from this repository can be integrated`);
+  const children = [];
+  for (const lead of manifest.jobs.filter(job => job.type === 'lead' && (!jobs || jobs.includes(job.id)))) {
+    const record = state.jobs.find(job => job.id === lead.id);
+    if (!record.childRun) fail(`lead-child-invalid: ${lead.id}: missing child run`, 'lead-child-invalid');
+    const childState = await readState(root, record.childRun);
+    const result = childState.integratedAt && childState.integrationStatus !== 'partial'
+      ? { status: 'integrated', files: childState.integratedFiles ?? [] }
+      : await integrateRunLocked(root, record.childRun, { ...options, jobs: undefined });
+    children.push({ job: lead.id, run: record.childRun, status: result.status, files: result.files });
+    if (result.checksPassed === false) fail(`lead-child-integration-failed: ${record.childRun}`, 'lead-child-integration-failed');
+  }
   await workerKeyGuard(root, id, state, { env, keyExec });
 
   if (state.jobs.length !== manifest.jobs.length) fail('Job records do not match manifest');
@@ -4374,6 +4446,7 @@ async function integrateRunLocked(root, id, { releaseIntegrationLock, noChecks =
     const skippedJobs = [];
     for (const [index, job] of state.jobs.entries()) {
       const declared = manifest.jobs[index];
+      if (declared.type === 'lead') continue;
       const shouldIntegrate = jobsToIntegrate.includes(job);
       if (!shouldIntegrate) {
         skippedJobs.push(job.id);
@@ -4558,7 +4631,8 @@ async function integrateRunLocked(root, id, { releaseIntegrationLock, noChecks =
     if (queue) {
       if (acceptedDeviations.length) state.acceptedDeviations = acceptedDeviations;
       if (resultShapeWarnings.length) state.resultShapeWarnings = resultShapeWarnings;
-      return await applyQueuePlans(root, id, state, manifest, queuePlans, { batchSize, conflicts: queueConflicts, skipped: queueSkipped, noChecks, noFlakeCheck, spawnImpl, releaseIntegrationLock, warnings: [...designWarnings, ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)] });
+      const result = await applyQueuePlans(root, id, state, manifest, queuePlans, { batchSize, conflicts: queueConflicts, skipped: queueSkipped, noChecks, noFlakeCheck, spawnImpl, releaseIntegrationLock, warnings: [...designWarnings, ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)] });
+      return { ...result, ...(children.length ? { children } : {}) };
     }
     // Every path, output, base hash, and mutants source has passed before the first project write.
     const journal = await startIntegrationJournal(root, id, 'integrate', integratedJobs, writes, releaseIntegrationLock);
@@ -4668,7 +4742,7 @@ async function integrateRunLocked(root, id, { releaseIntegrationLock, noChecks =
     // state), never merely swallowed by --accept-deviation.
     if (acceptedDeviations.length) state.acceptedDeviations = acceptedDeviations;
     await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
-    return { id, status: 'integrated', integrationStatus: state.integrationStatus, files: state.integratedFiles, filesChanged: state.integratedFiles, portBase, ...(preChecksResult.preChecks.length ? { preChecks: preChecksResult.preChecks } : {}), ...(warnings.length ? { warnings } : {}), ...checksResult, ...mutantsResult, ...(blockedJobs.length ? { blockedEvidence: blockedJobs.map(job => ({ name: job.id, lines: [job.error ?? 'blocked'] })) } : {}), ...(salvagedJobs.length ? { salvaged: true, salvagedJobs: salvagedJobs.map(job => job.id) } : {}), ...(acceptedDeviations.length ? { acceptedDeviations } : {}), ...(jobs ? { integratedJobs, skippedJobs } : {}) };
+    return { id, status: 'integrated', ...(children.length ? { children } : {}), integrationStatus: state.integrationStatus, files: state.integratedFiles, filesChanged: state.integratedFiles, portBase, ...(preChecksResult.preChecks.length ? { preChecks: preChecksResult.preChecks } : {}), ...(warnings.length ? { warnings } : {}), ...checksResult, ...mutantsResult, ...(blockedJobs.length ? { blockedEvidence: blockedJobs.map(job => ({ name: job.id, lines: [job.error ?? 'blocked'] })) } : {}), ...(salvagedJobs.length ? { salvaged: true, salvagedJobs: salvagedJobs.map(job => job.id) } : {}), ...(acceptedDeviations.length ? { acceptedDeviations } : {}), ...(jobs ? { integratedJobs, skippedJobs } : {}) };
   } finally { /* The caller owns both integration locks. */ }
 }
 
@@ -6068,7 +6142,7 @@ async function monitorView(root, id) {
   const jobs = summary.jobs.map((job, index) => {
     const record = state.jobs[index];
     const { tier, tierReason } = tierById.get(job.id) ?? { tier: null, tierReason: null };
-    return { ...job, agent: record.agent, model: record.model ?? null, tier, tierReason, outputCount: record.outputs?.length ?? 0 };
+    return { ...job, agent: record.agent, model: record.model ?? null, tier, tierReason, type: manifestJobs[index]?.type, outputCount: record.outputs?.length ?? 0 };
   });
   return { status: summary.status, text: renderMonitorView({ ...summary, jobs, pause: state.pause, lanes: state.lanes, queued: summary.counts.queued, mergeQueue: state.mergeQueue ?? null, integratedAt: state.integratedAt ?? null, spend: rollupRun(state).spend }, { width: process.stdout.columns || 100, color: supportsColor() }) };
 }
