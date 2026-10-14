@@ -137,7 +137,7 @@ export function codexNeedsOwnershipInstruction(job, versionFiles = []) {
   const activeVersionFiles = [...new Set(versionFiles.map(file => String(file).replace(/\\/g, '/')))].filter(Boolean);
   return activeVersionFiles.length > 0 && (!outputs.has('CHANGELOG.md') || activeVersionFiles.some(file => !outputs.has(file)));
 }
-export const DESIGN_ONLY_LINE = 'Design-only job: do not run tests or installs; read and grep only. A test failure in your sandbox is never a reason to block.\n';
+export const DESIGN_ONLY_LINE = 'Docs-only job: edit your declared outputs; do not run tests or installs. A test failure in your sandbox is never a reason to block.\n';
 // A worktree writer (codex or cursor) whose outputs are all docs.
 export const isDesignOnlyCodexJob = job => ['codex', 'cursor'].includes(job.agent) && job.outputs.length > 0 && job.outputs.every(file => /\.md$/i.test(file) || (file.split('/')[0] === 'docs' && /\.json$/i.test(file)));
 export function codexMessage(job, { contract = null, gotchas = '', skills = '', agentsWorkspace = null, checks = [], versionFiles = [] } = {}) {
@@ -153,7 +153,7 @@ export function codexMessage(job, { contract = null, gotchas = '', skills = '', 
   let checksLine = `Manifest checks: ${checkList}. Run these; fix red before you return; report checksRun.\nReport checksRun as [{"name":"NAME","status":"passed|failed|not run"}]. Checks marked not run must stay not run; do not evade path restrictions or run orchestrator-only checks.\n`;
   if (job.report === 'short') checksLine = `Manifest checks: ${checkList}. Run these; fix red before you return. Checks marked not run must stay not run; do not evade path restrictions or run orchestrator-only checks. Summarize check results in your report.\n`;
   const designOnly = isDesignOnlyCodexJob(job);
-  if (designOnly) { base = base.replace('Run relevant project tests.', 'Read and grep only.'); checksLine = job.report === 'short' ? 'Manifest checks are not run for this design-only job.\n' : 'Manifest checks are not run for this design-only job; report checksRun with status "not run".\n'; }
+  if (designOnly) { base = base.replace('Run relevant project tests.', 'Edit your declared outputs; do not run tests.'); checksLine = job.report === 'short' ? 'Manifest checks are not run for this docs-only job.\n' : 'Manifest checks are not run for this docs-only job; report checksRun with status "not run".\n'; }
   const testEnvironment = job.testEnv ? `Test environment (already set): ${Object.entries(job.testEnv).map(([key, value]) => `${key}=${value}`).join(', ')}\n` : '';
   // Field lesson #163: codex has a shell too, and the stash stack is shared by every worktree.
   // Field lesson #170: never hand-revert a mutant with checkout/restore; run `swarm mutants`.

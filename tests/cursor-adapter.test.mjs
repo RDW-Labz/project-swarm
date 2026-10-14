@@ -127,7 +127,7 @@ test('cursorMessage is the codex prompt and refuses a prompt carrying the key', 
   const message = cursorMessage(job(), { apiKey: KEY });
   assert.match(message, /You are a fresh worker in a detached git worktree/);
   assert.match(message, /Finish with exactly one JSON line/);
-  assert.match(cursorMessage(job({ outputs: ['docs/plan.md'] }), {}), /^Design-only job/);
+  assert.match(cursorMessage(job({ outputs: ['docs/plan.md'] }), {}), /^Docs-only job/);
   assert.throws(() => cursorMessage(job({ prompt: `use ${KEY}` }), { apiKey: KEY }), /cursor-key-in-prompt/);
 });
 
