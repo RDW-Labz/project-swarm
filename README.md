@@ -40,10 +40,10 @@ or another agent with file and command access. The worker adapter does not
 need to match the orchestrator. Paste this into your agent at project start:
 
 ```text
-Use Project Swarm 1.55.0 for this project. Read docs/kickoff.md in the toolkit
+Use Project Swarm 1.56.0 for this project. Read docs/kickoff.md in the toolkit
 and perform its kickoff workflow. Ask me up front which model providers may
 receive project code and what spend ceiling applies; wait before model calls.
-Install from tag v1.55.0 in ~/.project-swarm, run tools/install.mjs --user,
+Install from tag v1.56.0 in ~/.project-swarm, run tools/install.mjs --user,
 link this project, run doctor, validate and run the read-only and writing smoke
 jobs, inspect and integrate the reviewed writing output. Read the installed
 SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
@@ -224,6 +224,8 @@ Manifests accept 1–5000 jobs. Each agent has its own lane cap, rate limit, bac
 Optional [job types](docs/job-types.md) set prompt guidance, default timeouts, skills, and automatic routing preferences. Choose `build`, `fix`, `test`, `review`, `research`, `docs`, `merge`, or `lead`; each type also limits declared outputs.
 
 Optional `report: "short"` requires a compact worker report. Use `swarm rollup <run> --text` to review a large run. See [reports and rollups](docs/reports.md) for strict reports, legacy reports, and monitor view lines.
+
+Use `swarm integrate <run> --queue` for large runs. It checks batches, rolls back and bisects failed batches, and requeues conflicts against newer checkout content. See [merge queue guidance](docs/merge-queue.md) for flags, merge jobs, and result fields.
 
 Copied workspaces and guarded integration are **not an operating-system security sandbox**. Read [the scope and threat model](SECURITY.md) before using sensitive source. Keep secrets out of worker context.
 

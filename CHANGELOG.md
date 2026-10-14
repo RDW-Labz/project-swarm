@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.56.0
+
+- Added `integrate --queue` for large runs, with ordered batches and checks per batch.
+- Failed queue batches roll back and bisect to keep passing jobs and isolate check failures. Plain integration keeps its existing behavior.
+- Conflicting jobs preserve newer checkout content, requeue twice by default, then get one merge job. Unresolved merge jobs are flagged.
+- Added merge queue summary counts to `monitor --view` and rollup JSON. See [merge queue guidance](docs/merge-queue.md).
+
 ## 1.55.0
 
 - Sanitized and labeled untrusted worker text in rollups and sanitized monitor cells.

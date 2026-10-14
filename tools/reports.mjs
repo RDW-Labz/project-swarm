@@ -81,6 +81,8 @@ export function rollupRun(state, { top = 10 } = {}) {
   const shown = attention.slice(0, Math.max(0, Math.min(50, Number.isInteger(top) ? top : 10)));
   const rollup = { id: state.id, status: state.status, total: jobs.length, counts, lanes, spend, files: { changed: files.size, jobs: fileJobs }, reports, attention: shown, attentionMore: attention.length - shown.length, risks: entries(risks), followups: entries(followups), elapsedMs: start !== null && Number.isFinite(end) ? Math.max(0, end - start) : null };
   // Bound the compact view by showing fewer attention entries when summaries fill the budget.
+  const queue = state.mergeQueue, summary = queue?.summary ?? queue;
+  rollup.mergeQueue = queue ? { state: queue.state, integrated: summary.integrated?.length ?? 0, requeued: summary.requeued?.length ?? 0, flagged: summary.flagged?.length ?? 0, checkFailed: summary.checkFailed?.length ?? 0 } : null;
   rollup.untrusted = ['attention.summary', 'risks', 'followups'];
   while (Buffer.byteLength(JSON.stringify(rollup)) >= 4096 && shown.length) { shown.pop(); rollup.attentionMore++; }
   while (Buffer.byteLength(JSON.stringify(rollup)) >= 4096 && (rollup.risks.length || rollup.followups.length)) (rollup.followups.length >= rollup.risks.length ? rollup.followups : rollup.risks).pop();
@@ -91,6 +93,7 @@ export function renderRollupText(rollup) {
   const r = rollup;
   const lines = [`Run ${sanitizeWorkerText(r.id)} - ${sanitizeWorkerText(r.status)} - ${r.total} jobs - elapsed ${formatDuration(r.elapsedMs)}`, Object.entries(r.counts).map(([key, count]) => `${sanitizeWorkerText(key)} ${count}`).join(' - '), `lanes  ${Object.entries(r.lanes).map(([agent, count]) => `${sanitizeWorkerText(agent)} ${count}`).join(' - ')}`, `spend  $${r.spend.costUsd.toFixed(2)} (${r.spend.costReportedJobs} jobs reported cost) - tokens ${r.spend.tokens}`, `files  ${r.files.changed} changed across ${r.files.jobs} jobs`, `reports  ${r.reports.short} short - ${r.reports.legacy} legacy - ${r.reports.invalid} invalid - ${r.reports.missing} missing`];
   const attention = r.attention.slice(0, 15), more = r.attentionMore + r.attention.length - attention.length;
+  if (r.mergeQueue) lines.push(`merge  ${sanitizeWorkerText(r.mergeQueue.state)} - ${r.mergeQueue.integrated} integrated - ${r.mergeQueue.requeued} requeued - ${r.mergeQueue.flagged} flagged - ${r.mergeQueue.checkFailed} checks failed`);
   if (attention.length || more || r.risks.length || r.followups.length) lines.push(UNTRUSTED_LABEL);
   if (attention.length || more) {
     lines.push(`attention (${attention.length} of ${r.attention.length + r.attentionMore}):`);

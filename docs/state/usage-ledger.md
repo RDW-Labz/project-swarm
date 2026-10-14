@@ -25,6 +25,8 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-14 | 4 | reports-docs: docs + changelog | codex | gpt-6.1-sol | blocked (runner design-only wording read as no-edit) | 10,973 | subscription |
 | 2026-10-14 | 4 | reports-docs-2: retry with clarified prompt | codex | gpt-6.1-sol | pass | 97,869 | subscription |
 | 2026-10-14 | 4 | phase4-review-fixes: untrusted worker text, report-only re-ask | codex | gpt-6.1-sol | pass | 123,100 | subscription |
+| 2026-10-14 | 3 | queue-code: queue pass, bisect, requeue, merge jobs, CLI, monitor/rollup | codex | gpt-6.1-sol | pass | 136,303 | subscription |
+| 2026-10-14 | 3 | queue-docs: merge-queue docs + changelog | codex | gpt-6.1-sol | pass | 94,637 | subscription |
 
 ## Daily summary
 

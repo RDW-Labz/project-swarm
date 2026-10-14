@@ -50,6 +50,13 @@ test('large monitor views hide completed jobs and cap unfinished rows at forty',
   assert.doesNotMatch(small, /jobs hidden/);
 });
 
+test('monitor merge summary includes integrated, requeued and flagged counts', () => {
+  const mergeQueue = { state: 'done', summary: { integrated: Array(200), requeued: Array(10), flagged: Array(2) } };
+  const text = renderMonitorView(fixtureView({ mergeQueue }), { width: 200 });
+  assert.match(text, /merge  done - 200 integrated - 10 requeued - 2 flagged/);
+  assert.ok(renderMonitorView(fixtureView({ mergeQueue }), { width: 40 }).split('\n').every(line => visibleLength(line) <= 40));
+});
+
 function fixtureView(overrides = {}) {
   return {
     id: 'demo-run',
