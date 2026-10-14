@@ -14,6 +14,7 @@ import { runCodexWithRetry, git } from '../tools/codex-adapter.mjs';
 import { validateManifest, runManifest, inspectRun, integrateRun, resolveWorktree, doctor } from '../tools/swarm.mjs';
 
 const KEY = 'crsr_FAKE_TEST_KEY_0123456789';
+const sandboxWorks = process.platform === 'darwin' && spawnSync('/usr/bin/sandbox-exec', ['-p', '(version 1)(allow default)', '/usr/bin/true']).status === 0;
 const job = (overrides = {}) => ({ id: 'writer', agent: 'cursor', model: 'composer-2.5', prompt: 'Update the output and test it.', context: ['input.txt'], outputs: ['output.txt'], timeoutMs: 10000, ...overrides });
 const manifest = overrides => ({ version: 1, jobs: [job(overrides)] });
 const envelope = { files_changed: ['output.txt'], notes: ['Fake cursor worker completed.'] };
@@ -166,7 +167,7 @@ test('cursor jobs pass the worktree-writer gates (testEnv, readPaths, setup) and
   assert.throws(() => validateManifest({ version: 1, jobs: [job({ id: 'a' }), job({ id: 'b' })] }), /Output collision/);
 });
 
-test('doctor cursor reports version and flags from a fake binary and never prints the key', async t => {
+test('doctor cursor reports version and flags from a fake binary and never prints the key', { skip: sandboxWorks ? false : 'sandbox-exec unavailable here' }, async t => {
   const fake = await fakeCursor(t, `case "$1" in --version) echo 2026.10.01-fake;; --help) echo "${CURSOR_FLAGS.map(flag => `  ${flag} <x>`).join('\\n')}";; esac`);
   const env = { PATH: `${fake.binDir}:/usr/bin:/bin`, CURSOR_API_KEY: KEY };
   const result = await doctor({ agent: 'cursor', platform: 'darwin', env });
@@ -180,6 +181,9 @@ test('doctor cursor reports version and flags from a fake binary and never print
   const noForce = await fakeCursor(t, `case "$1" in --version) echo v;; --help) echo "  -p --output-format --model --trust --workspace --sandbox";; esac`);
   await assert.rejects(cursorDoctor({ platform: 'darwin', env: { PATH: `${noForce.binDir}:/usr/bin:/bin`, CURSOR_API_KEY: KEY } }), /Cursor lacks required flags: --force/);
   await assert.rejects(cursorDoctor({ platform: 'darwin', env: { PATH: '/nonexistent' } }), /cursor-not-installed/);
+});
+
+test('doctor cursor reports unsupported on Linux', async () => {
   assert.equal((await cursorDoctor({ platform: 'linux' })).status, 'unsupported');
 });
 
@@ -191,7 +195,7 @@ test('run refuses a cursor job before any spawn: wrong platform, no binary, no k
   await assert.rejects(runManifest(root, manifest(), { platform: 'darwin', env: runEnv(fake, { PATH: '/usr/bin:/bin' }), spawnImpl: never }), /cursor-not-installed/);
   const { CURSOR_API_KEY, ...noKey } = runEnv(fake);
   assert.equal(CURSOR_API_KEY, KEY);
-  await assert.rejects(runManifest(root, manifest(), { platform: 'darwin', env: noKey, spawnImpl: never }), new RegExp(CURSOR_NOT_AUTHENTICATED.replace(/[()]/g, '\\$&')));
+  await assert.rejects(runManifest(root, manifest(), { platform: 'darwin', env: noKey, spawnImpl: never }), error => error.message.includes(CURSOR_NOT_AUTHENTICATED));
 });
 
 test('integration: a cursor job runs end to end through swarm.mjs with a fake cursor-agent and integrates', async t => {
@@ -275,7 +279,6 @@ test('integration: a key the worker prints is redacted from every log and refuse
 // binary: it execs from its install dir, writes the worktree and ~/.cursor, and cannot read the
 // rest of home or a denied dir. (Writes outside the worktree are not probed here: this fixture's
 // home sits under the OS temp dir, which the codex baseline leaves writable for test scratch.)
-const sandboxWorks = process.platform === 'darwin' && spawnSync('/usr/bin/sandbox-exec', ['-p', '(version 1)(allow default)', '/usr/bin/true']).status === 0;
 test('integration (real seatbelt): the fake cursor-agent can exec from its install dir, write the worktree and ~/.cursor, and nothing else', { skip: sandboxWorks ? false : 'sandbox-exec unavailable here' }, async t => {
   const root = await fixture(t);
   const base = await tempDir(t, 'swarm-cursor-seatbelt-');

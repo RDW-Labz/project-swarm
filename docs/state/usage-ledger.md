@@ -8,9 +8,10 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-14 | 0 | claims-docs (first try): docs for the claims check | codex | gpt-6.1-sol | blocked: contract file not in HEAD worktree | 9,546 | subscription |
 | 2026-10-14 | 0 | startable-fix: exclude claimed jobs from validate's startable list | codex | gpt-6.1-sol | pass | 51,496 | subscription |
 | 2026-10-14 | 0 | claims-docs (retry, contract inlined) | codex | gpt-6.1-sol | pass | 28,917 | subscription |
+| 2026-10-14 | 0 | ci-fix: Linux skip for doctor test, CodeQL regex-escaping alert | codex | gpt-6.1-sol | pass | 49,461 | subscription |
 
 ## Daily summary
 
 | date | tier | calls | pass | fail/blocked | tokens | rough cost |
 |---|---|---|---|---|---|---|
-| 2026-10-14 | codex | 4 | 3 | 1 | 130,800 | subscription |
+| 2026-10-14 | codex | 5 | 4 | 1 | 180,261 | subscription |
