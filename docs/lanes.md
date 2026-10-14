@@ -61,6 +61,8 @@ Unknown agents and fields refuse with `lanes-invalid`. Concurrency must be an in
 
 ## Rate limits and quota pauses
 
+Lane limits are machine-wide. Every run on this machine shares one lane file next to the shared install: `~/.project-swarm/lanes/lanes.json`, or `SWARM_LANES_DIR` when that is set. The file holds each lane's in-flight count and any rate-limit or quota pause. A lock keeps the counts exact, and a slot whose process has died is cleared on the next claim. A 429 or a quota pause in one run pauses that lane for every other run, including a lead's child runs and runs in other repositories. Deleting a project's `.swarm/` does not reset it. A run's own `concurrency` is still only that run's global cap.
+
 Jobs wait for both global and lane capacity. When the global cap limits capacity, eligible waiters are served in arrival order across lanes. Each lane still serves its waiters in order; a blocked lane does not block another lane. A configured request rate counts acquisitions in the trailing 60000 ms. Workspace creation and context reads happen at dispatch; path and size validation stays up front.
 
 HTTP 429 or a rate-limit error backs off the lane. A supplied `retryAfterMs` sets the delay; otherwise exponential backoff starts at `baseMs`, doubles for consecutive rate limits, and caps at `maxMs`, with a jitter factor from 0.5 to 1. API responses supply retry timing from `Retry-After` seconds or an HTTP date when valid. A successful attempt resets the consecutive rate-limit count.

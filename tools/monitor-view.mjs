@@ -169,6 +169,8 @@ export function renderMonitorView(view, options = {}) {
     width,
   ));
   if (view.pause) lines.push(truncate(`paused: ${view.pause.reasons.join(', ')} until ${view.pause.until ?? 'n/a'}; held ${view.pause.jobs.length} (${view.pause.jobs.slice(0, 5).join(', ')})`, width));
+  const leads = view.leads ?? jobs.filter(job => job.type === 'lead' || job.childRun || job.lead);
+  if (leads.length) lines.push(truncate(`leads  ${leads.length} (${leads.filter(lead => lead.status === 'complete').length} complete, ${leads.filter(lead => lead.status === 'running').length} running)`, width));
   const usage = formatUsage(view.usageByProvider);
   if (usage) lines.push(truncate(`usage  ${usage}`, width));
   const lanes = Object.entries(view.lanes?.lanes ?? {});

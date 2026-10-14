@@ -2,6 +2,9 @@
 import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { LANE_AGENTS, LANE_DEFAULTS, resolveLanes, classifyProviderOutcome, LaneScheduler } from '../tools/lanes.mjs';
 
 function fixture(overrides = {}, globalConcurrency = 4, random = () => 1) {
@@ -383,4 +386,43 @@ test('health, snapshot, pausedFor, unknown agents and global limits', async () =
   release();
   assert.equal(s.snapshot().lanes.hermes.peak, 1);
   s.close();
+});
+
+test('a shared lane file caps in-flight across schedulers, shares a 429 pause, and drops dead slots', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-lanes-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const lanes = resolveLanes({ manifest: { lanes: { cursor: { concurrency: 2, backoff: { baseMs: 60000, maxMs: 60000 } } } } });
+  const shared = { dir, runId: 'run-a' };
+  const first = new LaneScheduler({ lanes, globalConcurrency: 8, shared });
+  const second = new LaneScheduler({ lanes, globalConcurrency: 8, shared: { ...shared, runId: 'run-b' } });
+  t.after(() => { first.close(); second.close(); });
+  const held = [await first.acquire('cursor'), await second.acquire('cursor')];
+  let granted = false;
+  const waiting = first.acquire('cursor').then(release => { granted = true; return release; });
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(granted, false);
+  assert.equal(second.health('cursor').inFlight, 2);
+  await first.report('cursor', outcome('rate-limited', { retryAfterMs: 60000 }));
+  await held[0]();
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(granted, false);
+  assert.equal(second.health('cursor').state, 'backoff');
+  assert.ok(second.health('cursor').until > new Date().toISOString());
+  first.close(); second.close();
+  await assert.rejects(waiting, { name: 'AbortError' });
+
+  const deadDir = path.join(dir, 'dead');
+  const deadLanes = resolveLanes({ manifest: { lanes: { cursor: { concurrency: 1 } } } });
+  const dead = { dir: deadDir, isAlive: () => false, runId: 'dead' };
+  const stale = new LaneScheduler({ lanes: deadLanes, globalConcurrency: 4, shared: dead });
+  const next = new LaneScheduler({ lanes: deadLanes, globalConcurrency: 4, shared: dead });
+  const staleRelease = await stale.acquire('cursor');
+  const replaced = await Promise.race([
+    next.acquire('cursor'),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('dead slot was not cleared')), 500)),
+  ]);
+  const store = JSON.parse(await fs.readFile(path.join(deadDir, 'lanes.json'), 'utf8'));
+  assert.equal(store.slots.cursor.length, 1);
+  await staleRelease(); await replaced();
+  await stale.close(); await next.close();
 });

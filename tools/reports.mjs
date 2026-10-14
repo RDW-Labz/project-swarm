@@ -87,8 +87,15 @@ export function rollupRun(state, { top = 10 } = {}) {
   const queue = state.mergeQueue, summary = queue?.summary ?? queue;
   rollup.mergeQueue = queue ? { state: queue.state, integrated: summary.integrated?.length ?? 0, requeued: summary.requeued?.length ?? 0, flagged: summary.flagged?.length ?? 0, checkFailed: summary.checkFailed?.length ?? 0 } : null;
   rollup.untrusted = ['attention.summary', 'risks', 'followups'];
+  const leads = jobs.filter(job => job.lead).map(job => job.lead);
+  if (leads.length) {
+    rollup.leads = leads.slice(0, 20);
+    rollup.leadsMore = leads.length - rollup.leads.length;
+    rollup.untrusted.push('leads.attention');
+  }
   while (Buffer.byteLength(JSON.stringify(rollup)) >= 4096 && shown.length) { shown.pop(); rollup.attentionMore++; }
   while (Buffer.byteLength(JSON.stringify(rollup)) >= 4096 && (rollup.risks.length || rollup.followups.length)) (rollup.followups.length >= rollup.risks.length ? rollup.followups : rollup.risks).pop();
+  while (Buffer.byteLength(JSON.stringify(rollup)) >= 4096 && rollup.leads?.length) { rollup.leads.pop(); rollup.leadsMore++; }
   return rollup;
 }
 
@@ -97,7 +104,9 @@ export function renderRollupText(rollup) {
   const lines = [`Run ${sanitizeWorkerText(r.id)} - ${sanitizeWorkerText(r.status)} - ${r.total} jobs - elapsed ${formatDuration(r.elapsedMs)}`, Object.entries(r.counts).map(([key, count]) => `${sanitizeWorkerText(key)} ${count}`).join(' - '), `lanes  ${Object.entries(r.lanes).map(([agent, count]) => `${sanitizeWorkerText(agent)} ${count}`).join(' - ')}`, `spend  $${r.spend.costUsd.toFixed(2)} (${r.spend.costReportedJobs} jobs reported cost) - tokens ${r.spend.tokens}${r.spend.estimatedCount ? ` - estimated cost for ${r.spend.estimatedCount} jobs` : ''}`, `files  ${r.files.changed} changed across ${r.files.jobs} jobs`, `reports  ${r.reports.short} short - ${r.reports.legacy} legacy - ${r.reports.invalid} invalid - ${r.reports.missing} missing`];
   const attention = r.attention.slice(0, 15), more = r.attentionMore + r.attention.length - attention.length;
   if (r.mergeQueue) lines.push(`merge  ${sanitizeWorkerText(r.mergeQueue.state)} - ${r.mergeQueue.integrated} integrated - ${r.mergeQueue.requeued} requeued - ${r.mergeQueue.flagged} flagged - ${r.mergeQueue.checkFailed} checks failed`);
-  if (attention.length || more || r.risks.length || r.followups.length) lines.push(UNTRUSTED_LABEL);
+  for (const lead of r.leads ?? []) lines.push(`lead ${sanitizeWorkerText(lead.job)} -> ${sanitizeWorkerText(lead.run)} ${sanitizeWorkerText(lead.status)} ${lead.counts.complete ?? 0}/${lead.total} $${lead.spend.costUsd.toFixed(2)}`);
+  if (attention.length || more || r.risks.length || r.followups.length || r.leads?.some(lead => lead.attention?.length)) lines.push(UNTRUSTED_LABEL);
+  for (const lead of r.leads ?? []) for (const item of lead.attention ?? []) lines.push(`  ${sanitizeWorkerText(item.job)}: ${sanitizeWorkerText(item.error, 160)}`);
   if (attention.length || more) {
     lines.push(`attention (${attention.length} of ${r.attention.length + r.attentionMore}):`);
     for (const job of attention) lines.push(`  ${sanitizeWorkerText(job.status)} ${sanitizeWorkerText(job.id)} (${sanitizeWorkerText(job.agent)}): ${sanitizeWorkerText(job.summary, 160)}`);

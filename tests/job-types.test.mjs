@@ -13,6 +13,7 @@ import { validateManifest, validateProject, runManifest } from '../tools/swarm.m
 const exec = promisify(execFile);
 const job = (overrides = {}) => ({ id: 'typed', agent: 'auto', prompt: 'Perform the assigned work.', context: [], outputs: [], ...overrides });
 const manifest = value => ({ version: 1, jobs: [value] });
+const leadArea = { goal: 'Plan child jobs.', scope: ['app/'] };
 
 test('untyped jobs remain unchanged and are copied', () => {
   const job = { id: 'plain', prompt: 'Implement it.', outputs: ['src/main.mjs'] };
@@ -85,11 +86,11 @@ test('documentation paths and every write rule including manifest edge cases', (
   }
   assert.deepEqual(jobTypeOutputViolations(job({ type: 'test', outputs: ['tests/x.mjs', 'src/x.test.mjs', 'test_x.py', 'x_test.go', 'src/x.mjs'] })), ['src/x.mjs']);
   assert.deepEqual(jobTypeOutputViolations(job({ type: 'docs', outputs: ['README.md', 'docs/data.json', 'src/x.mjs'] })), ['docs/data.json', 'src/x.mjs']);
-  assert.deepEqual(jobTypeOutputViolations(job({ type: 'lead', outputs: ['coordination/child.json'] })), []);
+  assert.deepEqual(jobTypeOutputViolations(job({ type: 'lead', area: leadArea, outputs: ['coordination/child.json'] })), []);
   for (const outputs of [[], ['child.md'], ['a.json', 'b.json'], ['a.json', 'b.md']]) {
     const violations = outputs.length ? outputs : ['(none)'];
-    assert.deepEqual(jobTypeOutputViolations(job({ type: 'lead', outputs })), violations);
-    assert.throws(() => validateManifest(manifest(job({ type: 'lead', outputs }))), { code: 'job-type-output', message: 'Job typed (type lead) may not write: ' + violations.join(', ') });
+    assert.deepEqual(jobTypeOutputViolations(job({ type: 'lead', area: leadArea, outputs })), violations);
+    assert.throws(() => validateManifest(manifest(job({ type: 'lead', area: leadArea, outputs }))), { code: 'job-type-output', message: 'Job typed (type lead) may not write: ' + violations.join(', ') });
   }
   assert.throws(() => validateManifest(manifest(job({ type: 'test', outputs: ['tools/router.mjs'] }))), { code: 'job-type-output' });
   assert.throws(() => validateManifest(manifest(job({ type: 'docs', outputs: ['tools/router.mjs'] }))), { code: 'job-type-output' });

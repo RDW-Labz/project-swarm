@@ -13,7 +13,15 @@
       ],
       "outputs": [
         "coordination/router-child-manifest.json"
-      ]
+      ],
+      "area": {
+        "goal": "Router sensitivity and fallback test coverage",
+        "scope": [
+          "tests/router-sensitivity.test.mjs",
+          "tests/router-fallback.test.mjs"
+        ],
+        "maxJobs": 2
+      }
     }
   ]
 }
