@@ -47,6 +47,10 @@ If a worker needs another owner's file, stop that dependent edit and report the 
 
 Managers should identify ready independent work while dependencies settle. Idle workers do not improve throughput. Count all active providers and native agents when reporting concurrency, and distinguish running, completed, queued, and reviewing work.
 
+## Backlog
+
+- Tier escalation after two failures: not built. Config `tiers` (for example `mid` → `cursor`/`composer-2.5`, `expensive` → `codex`) is routing metadata for the coordinator only; no runner logic re-dispatches a failed job to a higher tier.
+
 ## Acceptance and measurement
 
 Before calling the feature complete, verify that every requested behavior maps to an owner and a passed check, all full runs integrated safely, unresolved findings are explicit, and required project tests/build/user flows have actually passed. Check schema or migration requirements when the source shows they apply. Deployment remains a separate authorized action.
