@@ -90,6 +90,20 @@ export function nonBookkeepingOutputs(model, outputs) {
   if (!isBookkeepingOnlyModel(model)) return [];
   return (outputs ?? []).filter(file => !BOOKKEEPING_OUTPUTS.some(pattern => pattern.test(String(file).replaceAll('\\', '/'))));
 }
+// Every output is a bookkeeping file (and there is at least one): the only jobs the router sends to OpenRouter.
+// Strings only, relative, with no `..` or absolute path, so a bookkeeping-looking name cannot point outside
+// the project or hide a code file.
+export function isBookkeepingJob(outputs) {
+  if (!Array.isArray(outputs) || outputs.length === 0) return false;
+  for (let index = 0; index < outputs.length; index += 1) {
+    const file = outputs[index];
+    if (typeof file !== 'string' || !file) return false;
+    const normalized = file.replaceAll('\\', '/');
+    if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized) || normalized.split('/').includes('..')) return false;
+    if (!BOOKKEEPING_OUTPUTS.some(pattern => pattern.test(normalized))) return false;
+  }
+  return true;
+}
 export function assertBookkeepingOnly(job) {
   const bad = nonBookkeepingOutputs(job.model, job.outputs);
   if (bad.length) fail(`Job ${job.id}: ${job.model} is for bookkeeping jobs only (PR payloads, changelogs, mutants files, metrics, .swarm-manifests/*.md); a contract or other .md with design content goes to a cheap Claude tier instead; refused outputs: ${bad.join(', ')}`);

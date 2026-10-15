@@ -100,3 +100,11 @@ test('#67: eight active jobs drain a larger queue with consistent observed count
  const state=await runManifest(root,{version:1,concurrency:8,jobs},{onState:state=>snapshots.push(structuredClone(state.summary)),spawnImpl:(_command,_args,options)=>{active++;peak=Math.max(peak,active);const child=spawn(process.execPath,['-e',script],options);child.on('close',()=>active--);return child;}});
  assert.equal(state.status,'complete');assert.equal(peak,8);assert.equal(state.peakConcurrency,8);assert.equal(active,0);assert.equal(state.summary.counts.complete,24);assert.ok(snapshots.some(s=>s.counts.running===8&&s.counts.queued>0));for(const snapshot of snapshots)assert.equal(Object.values(snapshot.counts).reduce((a,b)=>a+b,0),24);
 });
+
+test('parseExtraCli accepts the unknown-toolsets warning real Hermes prints on stdout, and nothing else that is not JSON',()=>{
+ const body=lines(events('hermes'));
+ const parsed=parseExtraCli('hermes',`Warning: Unknown toolsets: none\n${body}`,0,'test-model');
+ assert.equal(parsed.value.summary,value.summary);
+ assert.throws(()=>parseExtraCli('hermes',`Warning: something else\n${body}`,0,'test-model'),/Malformed CLI JSONL/);
+ assert.throws(()=>parseExtraCli('qwen',`Warning: Unknown toolsets: none\n${lines(events('qwen'))}`,0,'test-model'),/Malformed CLI JSONL/);
+});

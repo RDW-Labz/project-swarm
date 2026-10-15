@@ -91,7 +91,7 @@ test('auto retries OpenRouter twice then falls back to Claude with three recorde
   const root = await fixture(t);
   const logs = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-lane-ledger-'));
   t.after(() => fs.rm(logs, { recursive: true, force: true }));
-  const auto = job(0, 'auto', { sensitive: false }); delete auto.model;
+  const auto = job(0, 'auto', { sensitive: false, outputs: ['out/0-metrics.md'] }); delete auto.model;
   const lanes = { openrouter: { model: 'anthropic/claude-sonnet-5' }, claude: { model: 'sonnet' } };
   const validation = await validateProject(root, manifest([auto], { lanes }), { env });
   assert.equal(validation.routes[0].agent, 'openrouter');
@@ -103,7 +103,7 @@ test('auto retries OpenRouter twice then falls back to Claude with three recorde
       assert.equal(url, OPENROUTER_ENDPOINT); calls++;
       return new Response('private upstream details', { status: 500 });
     },
-    spawnImpl: (_command, _args, options) => spawn(process.execPath, ['--input-type=module', '-e', "import fs from 'node:fs'; fs.mkdirSync('out',{recursive:true}); fs.writeFileSync('out/0.txt','done'); console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'complete'}));"], options),
+    spawnImpl: (_command, _args, options) => spawn(process.execPath, ['--input-type=module', '-e', "import fs from 'node:fs'; fs.mkdirSync('out',{recursive:true}); fs.writeFileSync('out/0-metrics.md','done'); console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'complete'}));"], options),
   });
   assert.equal(state.status, 'complete', state.error);
   assert.equal(calls, 2);
@@ -114,7 +114,7 @@ test('auto retries OpenRouter twice then falls back to Claude with three recorde
   assert.equal(inspection.jobs[0].agent, 'claude');
   assert.equal(inspection.files[0].status, 'ready');
   await integrateRun(root, state.id);
-  assert.equal(await fs.readFile(path.join(root, 'out/0.txt'), 'utf8'), 'done');
+  assert.equal(await fs.readFile(path.join(root, 'out/0-metrics.md'), 'utf8'), 'done');
 });
 
 test('manifest accepts 5000 jobs and concurrency 512 and refuses invalid lanes and routes', async t => {
@@ -140,7 +140,7 @@ test('manifest accepts 5000 jobs and concurrency 512 and refuses invalid lanes a
 });
 
 test('auto quota exhaustion waits for the cheap lane instead of jumping to Claude', async t => {
-  const root = await fixture(t), auto = job(0, 'auto', { sensitive: false }); delete auto.model;
+  const root = await fixture(t), auto = job(0, 'auto', { sensitive: false, outputs: ['out/0-metrics.md'] }); delete auto.model;
   const lanes = { openrouter: { model: 'anthropic/claude-sonnet-5', pauseMs: 30 }, claude: { model: 'sonnet' } };
   let calls = 0;
   const state = await runManifest(root, manifest([auto], { lanes }), {
@@ -149,9 +149,9 @@ test('auto quota exhaustion waits for the cheap lane instead of jumping to Claud
       if (url === OPENROUTER_MODELS_URL) return reply({ data: [{ id: lanes.openrouter.model, pricing: { prompt: '0.000002', completion: '0.00001' } }] });
       assert.equal(url, OPENROUTER_ENDPOINT);
       if (++calls === 1) return new Response('credit exhausted', { status: 402 });
-      return reply({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ summary: 'done', files: [{ path: 'out/0.txt', content: 'done' }] }) } }] });
+      return reply({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ summary: 'done', files: [{ path: 'out/0-metrics.md', content: 'done' }] }) } }] });
     },
-    spawnImpl: (_command, _args, options) => spawn(process.execPath, ['--input-type=module', '-e', "import fs from 'node:fs'; fs.mkdirSync('out',{recursive:true}); fs.writeFileSync('out/0.txt','done'); console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'complete'}));"], options),
+    spawnImpl: (_command, _args, options) => spawn(process.execPath, ['--input-type=module', '-e', "import fs from 'node:fs'; fs.mkdirSync('out',{recursive:true}); fs.writeFileSync('out/0-metrics.md','done'); console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'complete'}));"], options),
   });
   assert.equal(state.status, 'complete', state.error);
   assert.deepEqual(state.jobs[0].attempts.map(attempt => attempt.agent), ['openrouter', 'openrouter']);
@@ -216,7 +216,7 @@ test('exhausted rate-limit retries fail with a stable prefix', async t => {
 });
 
 test('auto dependency jobs skip worktree-only lanes and receive completed dependency outputs', async t => {
-  const root = await fixture(t), auto = job(1, 'auto', { after: ['job-0'], sensitive: false }); delete auto.model;
+  const root = await fixture(t), auto = job(1, 'auto', { after: ['job-0'], sensitive: false, outputs: ['out/1-metrics.md'] }); delete auto.model;
   const lanes = { codex: { model: 'gpt-5.4' }, openrouter: { model: 'anthropic/claude-sonnet-5' }, claude: { model: 'sonnet' } };
   const spec = manifest([job(0), auto], { lanes });
   const validation = await validateProject(root, spec, { env });
@@ -227,13 +227,13 @@ test('auto dependency jobs skip worktree-only lanes and receive completed depend
       if (url === OPENROUTER_MODELS_URL) return reply({ data: [{ id: lanes.openrouter.model, pricing: { prompt: '0.000002', completion: '0.00001' } }] });
       if (url !== OPENROUTER_ENDPOINT) return reply(completion('ollama', 0));
       assert.match(options.body, /output 0/);
-      return reply({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ summary: 'done', files: [{ path: 'out/1.txt', content: 'dependency copied' }] }) } }] });
+      return reply({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ summary: 'done', files: [{ path: 'out/1-metrics.md', content: 'dependency copied' }] }) } }] });
     },
   });
   assert.equal(state.status, 'complete', state.error);
   assert.equal(state.jobs[1].lane, 'openrouter');
   const workspace = path.join(root, '.swarm/workspaces', state.id, auto.id);
-  assert.equal(await fs.readFile(path.join(workspace, 'out/1.txt'), 'utf8'), 'dependency copied');
+  assert.equal(await fs.readFile(path.join(workspace, 'out/1-metrics.md'), 'utf8'), 'dependency copied');
 });
 
 test('HTTP outcome metadata is bounded and never retains an error body', async () => {

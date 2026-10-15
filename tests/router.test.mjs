@@ -4,19 +4,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CHEAP_ORDER, ROUTE_ORDER, routeJob } from '../tools/router.mjs';
 
-const job = { id: 'route-job', agent: 'auto', sensitive: false };
-const lanes = Object.fromEntries(ROUTE_ORDER.map(agent => [agent, { model: `${agent}-model` }]));
+// A code job: not sensitive, no bookkeeping outputs. OpenRouter never gets it.
+const job = { id: 'route-job', agent: 'auto', sensitive: false, outputs: ['src/a.js'] };
+// A bookkeeping job: the only kind OpenRouter may run, and only when it is not sensitive.
+const bookkeeping = { ...job, outputs: ['CHANGELOG.md'] };
+const lanes = { ...Object.fromEntries(ROUTE_ORDER.map(agent => [agent, { model: `${agent}-model` }])), hermes: { model: 'hermes-model' } };
 const paused = () => ({ state: 'paused' });
 
-test('route orders are frozen and cheapest first', () => {
-  assert.deepEqual(CHEAP_ORDER, ['hermes', 'cursor', 'codex', 'anthropic', 'openrouter']);
+test('route orders are frozen, cheapest first, and leave Hermes out', () => {
+  assert.deepEqual(CHEAP_ORDER, ['anthropic', 'cursor', 'codex', 'openrouter']);
   assert.deepEqual(ROUTE_ORDER, [...CHEAP_ORDER, 'claude']);
   assert.equal(Object.isFrozen(CHEAP_ORDER), true);
   assert.equal(Object.isFrozen(ROUTE_ORDER), true);
-  assert.deepEqual(routeJob(job, { lanes }), { agent: 'hermes', model: 'hermes-model', reason: 'cheapest healthy lane' });
+  assert.equal(CHEAP_ORDER.includes('hermes') || ROUTE_ORDER.includes('hermes'), false);
+  assert.deepEqual(routeJob(job, { lanes }), { agent: 'anthropic', model: 'anthropic-model', reason: 'cheapest healthy lane' });
   for (let index = 0; index < CHEAP_ORDER.length; index++) {
     const available = Object.fromEntries(ROUTE_ORDER.slice(index).map(agent => [agent, lanes[agent]]));
-    assert.equal(routeJob(job, { lanes: available }).agent, CHEAP_ORDER[index]);
+    assert.equal(routeJob(bookkeeping, { lanes: available }).agent, CHEAP_ORDER[index]);
   }
 });
 
@@ -27,20 +31,27 @@ test('non-auto jobs are route-invalid', () => {
 });
 
 test('missing, null, and non-string models are skipped', () => {
-  assert.equal(routeJob(job, { lanes: {
-    hermes: { model: null }, cursor: {}, codex: { model: 42 },
-    openrouter: lanes.openrouter, claude: lanes.claude,
-  } }).agent, 'openrouter');
+  const available = { anthropic: { model: null }, cursor: {}, codex: { model: 42 }, openrouter: lanes.openrouter, claude: lanes.claude };
+  assert.equal(routeJob(bookkeeping, { lanes: available }).agent, 'openrouter');
+  assert.throws(() => routeJob(job, { lanes: available }), { code: 'route-exhausted' });
 });
 
-test('jobs are sensitive by default and only false allows OpenRouter', () => {
-  const available = { hermes: lanes.hermes, openrouter: lanes.openrouter, claude: lanes.claude };
+test('Hermes never runs an untyped or code job, even when it is the only lane configured', () => {
+  assert.equal(routeJob(job, { lanes }).agent, 'anthropic');
+  assert.throws(() => routeJob(job, { lanes: { hermes: lanes.hermes } }), { code: 'route-exhausted' });
+  assert.throws(() => routeJob(job, { lanes: { hermes: lanes.hermes, claude: lanes.claude } }), { code: 'route-exhausted' });
+});
+
+test('OpenRouter only gets non-sensitive bookkeeping jobs', () => {
+  const available = { openrouter: lanes.openrouter, claude: lanes.claude };
+  assert.equal(routeJob(bookkeeping, { lanes: available }).agent, 'openrouter');
   for (const sensitive of [undefined, true]) {
-    const result = routeJob({ ...job, sensitive }, { lanes: available, health: agent => ({ state: agent === 'hermes' ? 'paused' : 'ok' }) });
-    assert.equal(result.agent, 'hermes');
-    assert.match(result.reason, /lane hermes paused/);
+    assert.throws(() => routeJob({ ...bookkeeping, sensitive }, { lanes: available }), { code: 'route-exhausted' });
   }
-  assert.equal(routeJob(job, { lanes: available, health: agent => ({ state: agent === 'hermes' ? 'paused' : 'ok' }) }).agent, 'openrouter');
+  for (const outputs of [['src/a.js'], [], ['CHANGELOG.md', 'src/a.js'], undefined]) {
+    assert.throws(() => routeJob({ ...bookkeeping, outputs }, { lanes: available }), { code: 'route-exhausted' });
+  }
+  assert.equal(routeJob({ ...bookkeeping, outputs: ['.swarm-manifests/plan.md', 'docs/pr-body.md'] }, { lanes: available }).agent, 'openrouter');
 });
 
 test('expensive tier uses only Claude', () => {
@@ -56,40 +67,42 @@ test('failed lanes are dropped individually and Claude waits until cheap lanes a
   for (let index = 0; index < CHEAP_ORDER.length; index++) {
     const agent = CHEAP_ORDER[index];
     failures[agent] = 1;
-    assert.equal(routeJob(job, { lanes, failures }).agent, agent);
+    assert.equal(routeJob(bookkeeping, { lanes, failures }).agent, agent);
     failures[agent] = 2;
-    const result = routeJob(job, { lanes, failures });
+    const result = routeJob(bookkeeping, { lanes, failures });
     assert.equal(result.agent, ROUTE_ORDER[index + 1]);
     assert.equal(result.reason, `fallback after 2 failures on ${CHEAP_ORDER.slice(0, index + 1).join(', ')}`);
   }
   failures.claude = 1;
-  assert.equal(routeJob(job, { lanes, failures }).agent, 'claude');
+  assert.equal(routeJob(bookkeeping, { lanes, failures }).agent, 'claude');
   failures.claude = 2;
-  assert.throws(() => routeJob(job, { lanes, failures }), { code: 'route-exhausted' });
-  assert.equal(routeJob(job, { lanes, failures: { codex: 3 } }).agent, 'hermes');
+  assert.throws(() => routeJob(bookkeeping, { lanes, failures }), { code: 'route-exhausted' });
+  assert.equal(routeJob(job, { lanes, failures: { codex: 3 } }).agent, 'anthropic');
 });
 
 test('Claude requires two real cheap failures even when accepts rejects all cheap lanes', () => {
   const available = { openrouter: lanes.openrouter, claude: lanes.claude };
-  assert.equal(routeJob(job, { lanes: available, failures: { openrouter: 1 } }).agent, 'openrouter');
-  assert.throws(() => routeJob(job, { lanes: available, failures: { openrouter: 1 }, accepts: resolved => resolved.agent === 'claude' }), { code: 'route-exhausted' });
-  assert.equal(routeJob(job, { lanes: available, failures: { openrouter: 2 } }).agent, 'claude');
-  const result = routeJob(job, { lanes, failures: { hermes: 1, cursor: 1 }, accepts: resolved => resolved.agent === 'claude' });
+  assert.equal(routeJob(bookkeeping, { lanes: available, failures: { openrouter: 1 } }).agent, 'openrouter');
+  assert.throws(() => routeJob(bookkeeping, { lanes: available, failures: { openrouter: 1 }, accepts: resolved => resolved.agent === 'claude' }), { code: 'route-exhausted' });
+  assert.equal(routeJob(bookkeeping, { lanes: available, failures: { openrouter: 2 } }).agent, 'claude');
+  const result = routeJob(job, { lanes, failures: { anthropic: 1, cursor: 1 }, accepts: resolved => resolved.agent === 'claude' });
   assert.equal(result.agent, 'claude');
-  assert.equal(result.reason, 'fallback after 2 failures on hermes, cursor');
-  assert.throws(() => routeJob(job, { lanes: available, failures: { openrouter: 2 }, accepts: () => false }), { code: 'route-exhausted' });
+  assert.equal(result.reason, 'fallback after 2 failures on anthropic, cursor');
+  assert.throws(() => routeJob(bookkeeping, { lanes: available, failures: { openrouter: 2 }, accepts: () => false }), { code: 'route-exhausted' });
 });
 
-test('docs routes stay cheap when Hermes is paused or unavailable', () => {
-  const docs = { ...job, typeRoute: ['hermes'] };
-  assert.equal(routeJob(docs, { lanes, health: agent => ({ state: agent === 'hermes' ? 'paused' : 'ok' }) }).agent, 'cursor');
-  assert.equal(routeJob(docs, { lanes: { ...lanes, hermes: {} } }).agent, 'cursor');
-  assert.deepEqual(routeJob(docs, { lanes, health: paused }), {
+test('a research route runs on Hermes and stays cheap when Hermes is paused or unavailable', () => {
+  const research = { ...job, typeRoute: ['hermes'] };
+  assert.equal(routeJob(research, { lanes }).agent, 'hermes');
+  assert.equal(routeJob(research, { lanes, health: agent => ({ state: agent === 'hermes' ? 'paused' : 'ok' }) }).agent, 'anthropic');
+  assert.equal(routeJob(research, { lanes: { ...lanes, hermes: {} } }).agent, 'anthropic');
+  assert.deepEqual(routeJob(research, { lanes, health: paused }), {
     agent: 'hermes', model: 'hermes-model', reason: 'cheapest healthy lane; lane hermes paused',
   });
-  assert.equal(routeJob(docs, { lanes: { hermes: lanes.hermes, claude: lanes.claude }, health: paused }).agent, 'hermes');
-  assert.equal(routeJob(job, { lanes, health: () => ({ state: 'backoff' }) }).agent, 'hermes');
-  assert.equal(routeJob(job, { lanes, failures: { cursor: 2 }, health: paused }).agent, 'hermes');
+  assert.equal(routeJob(research, { lanes: { hermes: lanes.hermes, claude: lanes.claude }, health: paused }).agent, 'hermes');
+  assert.equal(routeJob(research, { lanes, failures: { hermes: 2 } }).agent, 'anthropic');
+  assert.equal(routeJob(job, { lanes, health: () => ({ state: 'backoff' }) }).agent, 'anthropic');
+  assert.equal(routeJob(job, { lanes, failures: { anthropic: 2 }, health: paused }).agent, 'cursor');
 });
 
 test('accepts receives the resolved job and filters rejected lanes', () => {
@@ -99,9 +112,9 @@ test('accepts receives the resolved job and filters rejected lanes', () => {
     return resolved.agent === 'codex';
   } });
   assert.equal(result.agent, 'codex');
-  assert.deepEqual(seen[0], { ...job, sensitive: true, agent: 'hermes', model: 'hermes-model' });
+  assert.deepEqual(seen[0], { ...job, sensitive: true, agent: 'anthropic', model: 'anthropic-model' });
   assert.equal(seen.some(candidate => candidate.agent === 'openrouter'), false);
-  assert.equal(routeJob(job, { lanes, accepts: () => undefined }).agent, 'hermes');
+  assert.equal(routeJob(job, { lanes, accepts: () => undefined }).agent, 'anthropic');
 });
 
 test('only Claude configured without failures exhausts with actionable message', () => {
@@ -115,20 +128,44 @@ test('only Claude configured without failures exhausts with actionable message',
 });
 
 test('typeRoute order is followed by remaining cheap lanes and skips Claude entries', () => {
-  const typed = { ...job, typeRoute: ['codex', 'cursor'] };
+  const typed = { ...bookkeeping, typeRoute: ['codex', 'cursor'] };
   const failures = {};
-  for (const agent of ['codex', 'cursor', 'hermes', 'anthropic', 'openrouter', 'claude']) {
+  for (const agent of ['codex', 'cursor', 'anthropic', 'openrouter', 'claude']) {
     assert.equal(routeJob(typed, { lanes, failures }).agent, agent);
     failures[agent] = 2;
   }
-  assert.equal(routeJob({ ...job, typeRoute: [] }, { lanes }).agent, 'hermes');
+  assert.equal(routeJob({ ...job, typeRoute: [] }, { lanes }).agent, 'anthropic');
   assert.equal(routeJob({ ...job, typeRoute: ['claude', 'codex'] }, { lanes }).agent, 'codex');
 });
 
-test('typeRoute retains sensitivity, expensive tier, health, and accepts filters', () => {
-  const typed = { ...job, typeRoute: ['openrouter', 'codex'] };
+test('typeRoute retains sensitivity, bookkeeping, expensive tier, health, and accepts filters', () => {
+  const typed = { ...bookkeeping, typeRoute: ['openrouter', 'codex'] };
   assert.equal(routeJob({ ...typed, sensitive: true }, { lanes }).agent, 'codex');
+  assert.equal(routeJob({ ...typed, outputs: ['src/a.js'] }, { lanes }).agent, 'codex');
   assert.equal(routeJob({ ...typed, tier: 'expensive' }, { lanes }).agent, 'claude');
   assert.equal(routeJob(typed, { lanes, health: agent => ({ state: agent === 'openrouter' ? 'paused' : 'ok' }) }).agent, 'codex');
   assert.throws(() => routeJob(typed, { lanes, accepts: resolved => resolved.agent === 'claude' }), { code: 'route-exhausted' });
+});
+
+test('no sensitive job is ever a candidate for OpenRouter, OpenAI, Gemini or Lambda, even when a type route names them', () => {
+  const all = { ...lanes, openai: { model: 'o' }, gemini: { model: 'g' }, lambda: { model: 'l' } };
+  for (const sensitive of [true, undefined, 'false', 0, null]) {
+    for (const agent of ['openrouter', 'openai', 'gemini', 'lambda']) {
+      const typed = { ...bookkeeping, sensitive, typeRoute: [agent] };
+      const picked = routeJob(typed, { lanes: all });
+      assert.notEqual(picked.agent, agent, `${agent} with sensitive=${String(sensitive)}`);
+    }
+  }
+  // not sensitive: these lanes can be named by a type route (OpenRouter still needs bookkeeping outputs)
+  assert.equal(routeJob({ ...job, typeRoute: ['openai'] }, { lanes: all }).agent, 'openai');
+  assert.equal(routeJob({ ...bookkeeping, typeRoute: ['openrouter'] }, { lanes: all }).agent, 'openrouter');
+});
+
+test('isBookkeepingJob refuses traversal, absolute paths, non-strings and holes', async () => {
+  const { isBookkeepingJob } = await import('../tools/openrouter.mjs');
+  assert.equal(isBookkeepingJob(['CHANGELOG.md']), true);
+  assert.equal(isBookkeepingJob(['docs/pr-body.md', '.swarm-manifests/plan.md']), true);
+  for (const bad of [['../../x/CHANGELOG.md'], ['/etc/CHANGELOG.md'], ['C:/x/CHANGELOG.md'], ['a/../CHANGELOG.md'], [['CHANGELOG.md']], [null], [''], [], 'CHANGELOG.md', undefined, new Array(2)]) {
+    assert.equal(isBookkeepingJob(bad), false, JSON.stringify(bad));
+  }
 });

@@ -4,16 +4,16 @@ Set the optional job field `type` to choose a preset. Jobs without a type behave
 
 ## Presets
 
-Routes list agents in candidate order. Timeouts are in milliseconds.
+Routes list agents in candidate order. Timeouts are in milliseconds. The routes come from the lane benchmark ([results](state/lane-benchmark.md)) and your decisions on it.
 
 | Type | Writes | Route | timeoutMs | Skill |
 |---|---|---|---:|---|
-| `build` | any | cursor, codex | 1800000 | none |
-| `fix` | any | cursor, codex | 1800000 | `diagnosing-bugs` |
-| `test` | tests | codex, cursor | 1200000 | `tdd` |
-| `review` | none | hermes, codex | 900000 | `code-review` |
-| `research` | none | hermes, openrouter | 900000 | none |
-| `docs` | docs | hermes | 900000 | none |
+| `build` | any | anthropic, cursor, codex | 1800000 | none |
+| `fix` | any | anthropic, cursor, codex | 1800000 | `diagnosing-bugs` |
+| `test` | tests | codex, anthropic, cursor | 1200000 | `tdd` |
+| `review` | none | codex | 900000 | `code-review` |
+| `research` | none | hermes | 900000 | none |
+| `docs` | docs | anthropic, cursor, codex | 900000 | none |
 | `merge` | any | codex | 1800000 | `resolving-merge-conflicts` |
 | `lead` | manifest | codex | 900000 | none |
 
@@ -51,9 +51,9 @@ For GitHub prior art, the coordinator uses `swarm scout` or `sweep`.
 
 ## Routing
 
-Type routes apply only to `agent: "auto"`. Omit `model` and configure lane models first. The router tries the preset route without Claude, then any remaining cheap lanes in order: Hermes → Cursor → Codex → OpenRouter. Lanes without models or unable to accept the job are skipped. It selects the first healthy cheap lane; if all eligible cheap lanes are paused, it waits on the first one.
+Type routes apply only to `agent: "auto"`. Omit `model` and configure lane models first. The router tries the preset route without Claude, then any remaining cheap lanes in order: Anthropic → Cursor → Codex (OpenRouter only for non-sensitive bookkeeping jobs). Hermes is used only by `research`. Lanes without models or unable to accept the job are skipped. It selects the first healthy cheap lane; if all eligible cheap lanes are paused, it waits on the first one.
 
-Jobs are sensitive by default; only `sensitive: false` allows OpenRouter. `tier: "expensive"` goes straight to Claude and still requires `tierReason`. Two failed or timed-out attempts drop that lane. Claude is eligible only when no cheap candidate remains and cheap lanes have collected at least two real failures. Pauses and rate-limit retries never justify a Claude fallback. Explicit agents keep their named route. See [lanes and routing](lanes.md).
+Jobs are sensitive by default; OpenRouter needs `sensitive: false` and bookkeeping-only outputs. `tier: "expensive"` goes straight to Claude and still requires `tierReason`. Two failed or timed-out attempts drop that lane. Claude is eligible only when no cheap candidate remains and cheap lanes have collected at least two real failures. Pauses and rate-limit retries never justify a Claude fallback. Explicit agents keep their named route. See [lanes and routing](lanes.md).
 
 The applied job, including its prompt and defaults, is saved in the run's `manifest.json`.
 

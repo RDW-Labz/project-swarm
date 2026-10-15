@@ -81,13 +81,14 @@ test('Opus needs tier expensive; Haiku and Sonnet do not', () => {
   assert.ok(worstCaseUsd('claude-haiku-5-5', { inputChars: 1000, maxTokens: 8192 }) < 0.01);
 });
 
-test('router puts anthropic after codex, before openrouter, allows sensitive jobs, mid tier picks Sonnet', () => {
-  const lanes = { codex: { model: 'c' }, anthropic: { model: 'claude-haiku-5-5' }, openrouter: { model: 'o' }, claude: { model: 'sonnet' } };
-  const sensitive = { id: 'r', agent: 'auto', sensitive: true };
-  assert.equal(routeJob(sensitive, { lanes: { anthropic: lanes.anthropic, openrouter: lanes.openrouter, claude: lanes.claude } }).agent, 'anthropic');
+test('router puts anthropic first, allows sensitive jobs, mid tier picks Sonnet, and keeps OpenRouter for bookkeeping', () => {
+  const lanes = { codex: { model: 'c' }, cursor: { model: 'u' }, anthropic: { model: 'claude-haiku-5-5' }, openrouter: { model: 'o' }, claude: { model: 'sonnet' } };
+  const sensitive = { id: 'r', agent: 'auto', sensitive: true, outputs: ['src/a.js'] };
+  assert.equal(routeJob(sensitive, { lanes }).agent, 'anthropic');
   assert.equal(routeJob({ ...sensitive, tier: 'mid' }, { lanes: { anthropic: lanes.anthropic } }).model, 'claude-sonnet-5-5');
-  assert.equal(routeJob({ ...sensitive, sensitive: false }, { lanes }).agent, 'codex');
-  assert.equal(routeJob({ ...sensitive, sensitive: false }, { lanes: { anthropic: lanes.anthropic, openrouter: lanes.openrouter } }).agent, 'anthropic');
+  assert.equal(routeJob({ ...sensitive, sensitive: false }, { lanes }).agent, 'anthropic');
+  assert.equal(routeJob({ ...sensitive, sensitive: false }, { lanes: { codex: lanes.codex, openrouter: lanes.openrouter } }).agent, 'codex');
+  assert.equal(routeJob({ ...sensitive, sensitive: false, outputs: ['CHANGELOG.md'] }, { lanes: { openrouter: lanes.openrouter } }).agent, 'openrouter');
   assert.equal(routeJob({ ...sensitive, tier: 'expensive' }, { lanes }).agent, 'claude');
 });
 
