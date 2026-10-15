@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.69.0
+
+- Added plan preview and approval (Phase 11). `swarm plan "GOAL"` shows the leads and scopes, the job count, the lanes, estimated cost, time and peak concurrency, and risks, saves the plan, and runs nothing. `swarm go "GOAL"` prints the same preview and asks `Run? [y/N]`; `--yes` skips it, and with no terminal `--yes` also needs `--max-usd`. `swarm go --plan ID` runs exactly the saved plan (refused if the repo moved, `--accept-stale` overrides, or if the file was edited). After a run the estimate is shown beside the actuals and fed back into later estimates. See [plan-preview](docs/plan-preview.md).
+- `.swarm/` no longer counts as uncommitted work when `go` checks the working tree.
+
 ## 1.68.0
 
 - Hermes (Qwen3.8 Uncensored IQ3_XXS on dev2) is now on the `docs` and `test` routes, after Anthropic (`docs`: anthropic, hermes, cursor, codex; `test`: codex, anthropic, hermes, cursor). It scored 8/10 in two lane benchmark runs at one job at a time, which was the bar; `build`, `fix` and `review` still never use it, and `research` still starts with it. The Hermes lane default is now one job at a time (was 3).

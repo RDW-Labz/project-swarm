@@ -40,10 +40,10 @@ or another agent with file and command access. The worker adapter does not
 need to match the orchestrator. Paste this into your agent at project start:
 
 ```text
-Use Project Swarm 1.68.0 for this project. Read docs/kickoff.md in the toolkit
+Use Project Swarm 1.69.0 for this project. Read docs/kickoff.md in the toolkit
 and perform its kickoff workflow. Ask me up front which model providers may
 receive project code and what spend ceiling applies; wait before model calls.
-Install from tag v1.68.0 in ~/.project-swarm, run tools/install.mjs --user,
+Install from tag v1.69.0 in ~/.project-swarm, run tools/install.mjs --user,
 link this project, run doctor, validate and run the read-only and writing smoke
 jobs, inspect and integrate the reviewed writing output. Read the installed
 SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
@@ -304,6 +304,8 @@ Integration reports the parsed keys, source and a bounded text excerpt for skill
 - `handoff --to codex|cursor|claude|gemini` — print one paste-ready message that says the reader is now the orchestrator, then the brief and where that agent's instructions live.
 - `checkpoint [--quiet]` — save a snapshot of the brief under `.swarm/project/checkpoints` (the newest 20 are kept), journal it, and refresh `HANDOFF.md`. No model is called. `swarm init` installs a Claude Code `Stop` hook that runs it after each turn.
 - `autopilot [--once] [--interval SECONDS] [--max-steps N]` — a loop with no model that integrates finished runs through the merge queue, resumes runs paused on a quota window, retries failed jobs once (a retry is never retried), and starts the next wave of `.swarm/project/plan.json`. It never merges a PR, deploys, raises a cap, or calls a model; a cap pause or a second failure goes to the journal as a blocker for the owner. See [failover](docs/failover.md).
+- `plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json]` — preview a goal: leads and scopes, job count, lanes, estimated cost, time and peak concurrency, and risks. It saves the plan and runs nothing. `go "GOAL"` prints the same preview and asks `Run? [y/N]` (`--yes` skips it; with no terminal `--yes` also needs `--max-usd`), and `go --plan ID` runs exactly the saved plan. See [plan preview](docs/plan-preview.md).
+- `inbox [--json] [--all]`, `done ID`, `decision "TEXT" --choice C [--option O]... [--id ID]`, `decide ID CHOICE`, `backlog [add "GOAL" [--paths a/,b/] [--max-usd N] | remove ID]` — never wait on a human: a `type: "human"` manifest job holds back only the jobs that depend on it, `swarm inbox` lists what waits on you (most-blocking first) with the command to close each item, and autopilot starts the held jobs once you are done and the next backlog goal while everything else waits. See [failover](docs/failover.md).
 - `scout --model M --brief FILE "goal"` — prior-art research for one large task; `--brief` may be any readable path, including outside the project root; validates license claims and writes a report for review.
 - `sweep --model M --brief FILE --goals FILE [--max-usd N]` — prior-art research across several areas with a dispatch spending threshold; review findings before adoption.
 - `check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX]` — reads what a project actually ships (its dependency manifest, lockfile, and vendored copies) and reports a stale internal pin: a library that exact-pins the shared core package named by `--core` instead of a range (a repo whose own name starts with `--app-prefix` is exempt), an exact pin that no longer matches a vendored copy, a pin older than a newer vendored copy, or (in an application vendoring `--core`) a vendored core wheel's runtime requirement absent from both vendored wheels and direct project dependencies. Without `--core`, the three core-specific rules are skipped in `skippedRules` in their established order: `library-exact-core-pin`, `wheel-requirement-unsatisfied`, `vendored-core-missing-runtime-wheels`. Prints one finding per line (or one JSON object with `--json`) and exits `1` when any finding is present, `0` otherwise.

@@ -25,6 +25,9 @@ import { initProject } from './init.mjs';
 import { resolveCliHosts, sshInvocation, sshEnv, remoteExec, cliHostFailure } from './cli-host.mjs';
 import { isHumanJob, validateHumanJob, liftHumanJobs, addGroup, readStore as readHumanStore, humanGroupReady, updateGroup as updateHumanGroup } from './human-jobs.mjs';
 import { runInboxCommand, inboxDeps } from './inbox-commands.mjs';
+import readline from 'node:readline';
+import { extractPlanFlags, buildGoalPlan, approveRun, loadApprovedPlan, recordRun, formatPreview, savePlan } from './plan-commands.mjs';
+import { MODEL_RATES } from './rates.mjs';
 import { collectInbox } from './inbox.mjs';
 import { readBacklog, nextStartable, markStarted as markBacklogStarted } from './backlog.mjs';
 import { pendingNotifications, macNotify } from './notify.mjs';
@@ -6825,6 +6828,42 @@ function autopilotDeps() {
   };
 }
 
+// Everything the plan preview needs to know about this machine's lanes: where lead and child jobs would go,
+// how many run at once there, and the per-million-token price (null for subscription or local lanes).
+async function planLaneInfo(manifest) {
+  const config = loadLocalConfig({ env: process.env });
+  const lanes = resolveLanes({ config, manifest });
+  const describe = type => {
+    try {
+      const probe = applyJobType({ id: 'plan-probe', type, agent: 'auto', prompt: 'x', context: [], outputs: [type === 'lead' ? 'probe.json' : 'probe.txt'], ...(type === 'lead' ? { area: { goal: 'x', scope: ['a'], maxJobs: 1, concurrency: 1 } } : {}) }).job;
+      const route = pickJobRoute(probe, lanes);
+      const family = ['opus', 'sonnet', 'haiku'].find(name => String(route.model).toLowerCase().includes(name));
+      const rate = route.agent === 'anthropic' && family ? MODEL_RATES[family] : null;
+      return { agent: route.agent, model: route.model, concurrency: lanes[route.agent]?.concurrency ?? 1, price: rate ? { inPerM: rate.in, outPerM: rate.out } : null };
+    } catch { return { agent: 'unknown', model: null, concurrency: 1, price: null }; }
+  };
+  return { lead: describe('lead'), child: describe('build'), runConcurrency: manifest.concurrency ?? 1 };
+}
+
+async function planDeps(root) {
+  return {
+    folders: topLevelFolders, manifestForGoal, laneInfo: planLaneInfo, defaults: GOAL_BUDGET,
+    head: async dir => (await execFileAsync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).then(out => out.stdout.trim(), () => null)),
+  };
+}
+
+async function goChecks(root) {
+  try { const value = JSON.parse(await fs.readFile(path.join(root, 'coordination/checks.json'), 'utf8')).checks ?? []; return Array.isArray(value) ? value : []; } catch { return []; }
+}
+
+async function countChildren(root, runId) {
+  try {
+    let count = 0;
+    for (const job of (await readState(root, runId)).jobs ?? []) if (job.childRun) count += (await readState(root, job.childRun)).jobs?.length ?? 0;
+    return count;
+  } catch { return undefined; }
+}
+
 async function mainInner() {
   const args=process.argv.slice(2);let root=resolveDefaultRoot(ownRoot, process.cwd());
   const testIndex=args.indexOf('--test');
@@ -6876,6 +6915,34 @@ async function mainInner() {
   }
   // Commands that act on the install itself keep the install root even when run from a project folder.
   if(rootIndex===-1&&INSTALL_COMMANDS.includes(args[0]))root=defaultRoot(ownRoot);
+  // Phase 11: `swarm plan`, and go's approval flags (--yes, --plan ID, --accept-stale).
+  if(args.length&&!args[0].startsWith('-')&&/\s/.test(args[0])&&isGoalArgument(args[0]))args.unshift('go');
+  let planned=null,planOpts={yes:false,acceptStale:false,planId:null};
+  if(args[0]==='plan'||args[0]==='go'){
+    let extracted;
+    try{extracted=extractPlanFlags(args.slice(1));}catch(error){fail(error.message,error.code);}
+    if(args[0]==='go'){
+      if(extracted.json)fail('--json belongs to swarm plan');
+      planOpts={yes:extracted.yes,acceptStale:extracted.acceptStale,planId:extracted.planId};
+      args.splice(1,args.length-1,...extracted.rest);
+      if(planOpts.planId){
+        root=await fs.realpath(root);
+        const deps=await planDeps(root);
+        try{planned=await loadApprovedPlan(root,planOpts.planId,{head:await deps.head(root),acceptStale:planOpts.acceptStale});}catch(error){fail(error.message,error.code);}
+        args.splice(1,args.length-1,planned.goal,...extracted.rest);
+      }
+    }else{
+      root=await fs.realpath(root);
+      const [goal,...flags]=extracted.rest;
+      if(!isGoalArgument(goal)||goal===undefined)fail('Usage: swarm plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json]');
+      const planFlags=parseGoFlags(flags);
+      if(planFlags.repo||planFlags.payloadPath)fail('plan does not take --pr or --repo');
+      const plan=await buildGoalPlan(root,goal,{...planFlags,checks:await goChecks(root)},await planDeps(root));
+      await savePlan(root,plan);
+      process.stdout.write(extracted.json?`${JSON.stringify({id:plan.id,preview:plan.preview})}\n`:`${formatPreview(plan.preview)}\nplan saved: ${plan.id}  (run it with: swarm go --plan ${plan.id})\n`);
+      return;
+    }
+  }
   if(['brief','handoff','checkpoint'].includes(args[0])){
     root=await fs.realpath(root);
     const out=await ({brief:runBriefCommand,handoff:runHandoffCommand,checkpoint:runCheckpointCommand})[args[0]](root,args.slice(1));
@@ -6940,7 +7007,7 @@ async function mainInner() {
   // `swarm "goal sentence"` is shorthand for `swarm go "goal sentence"`. Only one argument with
   // whitespace counts, so a mistyped one-word command never starts a paid run.
   if(!args[0].startsWith('-')&&/\s/.test(args[0])&&isGoalArgument(args[0]))args.unshift('go');
-  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | init | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | init | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
@@ -7592,6 +7659,20 @@ async function mainInner() {
   }
   else if(command==='init') result=await initProject(root);
   else if(command==='go'&&isGoalArgument(argument)){
+    const goChecksList=await goChecks(root);
+    // A dirty tree is refused by go itself, before anything is previewed or asked.
+    const dirtyTree=await worktreeDirty(root).catch(()=>false);
+    let plan=planned,planError=null;
+    if(!plan&&!dirtyTree){try{plan=await buildGoalPlan(root,argument,{...goFlags,checks:goChecksList},await planDeps(root));}catch(error){planError=error;}}
+    if(plan&&!planned){try{await savePlan(root,plan);}catch{/* the preview still stands */}}
+    if(planned)goFlags={...goFlags,...Object.fromEntries(Object.entries(planned.flags).filter(([,value])=>value!==undefined))};
+    if(plan)process.stderr.write(`${formatPreview(plan.preview)}\nplan: ${plan.id}\n`);
+    const approval=planError?{approved:false,code:'plan-failed',reason:planError.message}:!plan?{approved:true}:await approveRun({yes:planOpts.yes,interactive:Boolean(process.stdin.isTTY&&process.stdout.isTTY),hasBudget:goFlags.maxUsd!==undefined||Boolean(planned),ask:question=>new Promise(resolve=>{const rl=readline.createInterface({input:process.stdin,output:process.stderr});rl.question(question,answer=>{rl.close();resolve(answer);});})});
+    if(!approval.approved){
+      result=approval.code==='plan-failed'?{status:'failed',stage:'plan',reason:approval.reason}:{status:'cancelled',reason:approval.reason,plan:plan.id};
+      if(approval.code!=='plan-declined')process.exitCode=1;
+    }else{
+    const goStarted=Date.now();
     // First run in a project: init it, then carry its files onto the go branch.
     const firstRun=await autoInit(root,{
       exists:file=>fs.access(path.join(file,'.project-swarm.json')).then(()=>true,()=>false),
@@ -7608,7 +7689,7 @@ async function mainInner() {
     result=await goGoal(root,argument,{...goFlags,checks},{
       dirty: firstRun.ran?async()=>false:worktreeDirty,
       folders: topLevelFolders,
-      plan: (goal,options)=>manifestForGoal(goal,options),
+      plan: (goal,options)=>plan?plan.manifest:manifestForGoal(goal,options),
       runId: goalRunId,
       branch: async(goRoot,name)=>{
         await createGoBranch(goRoot,name);
@@ -7630,6 +7711,11 @@ async function mainInner() {
       rollup: async (goRoot,id)=>rollupRun(await readState(goRoot,id)),
     });
     if(firstRun.ran)result={...result,initialized:{files:firstRun.files}};
+    if(plan&&result?.runId){
+      const children=await countChildren(root,result.runId);
+      result={...result,estimate:await recordRun(root,plan,{...(typeof result.cost==='number'?{costUsd:result.cost}:{}),minutes:Math.round((Date.now()-goStarted)/6000)/10,...(children!==undefined?{children}:{})})};
+    }
+    }
   }
   else if(command==='go'){
     if(!ID.test(argument))await warnProjectVersionMismatch(root);

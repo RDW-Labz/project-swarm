@@ -49,7 +49,8 @@ export async function topLevelFolders(root) {
 const GENERATED = new Set(['coordination/HANDOFF.md', 'coordination/HANDOFF.previous.md']);
 export async function worktreeDirty(root, run = exec) {
   const { stdout } = await run('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' });
-  return stdout.split('\n').filter(line => line.trim() && !GENERATED.has(line.slice(3).trim())).length > 0;
+  // .swarm/ is the runner's own scratch space (plans, journal, runs); it is never the operator's work.
+  return stdout.split('\n').filter(line => line.trim() && !GENERATED.has(line.slice(3).trim()) && !/^"?\.swarm\//.test(line.slice(3).trim())).length > 0;
 }
 
 // New branch only. The branch you were on keeps its current commit.
