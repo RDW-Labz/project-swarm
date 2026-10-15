@@ -25,11 +25,11 @@ test('untyped jobs remain unchanged and are copied', () => {
 test('presets are frozen and match the contract defaults', () => {
   const expected = {
     build: ['any', ['cursor', 'codex'], 1800000, null],
-    fix: ['any', ['cursor', 'codex'], 1800000, 'diagnosing-bugs'],
-    test: ['tests', ['codex', 'cursor'], 1200000, 'tdd'],
+    fix: ['any', ['cursor', 'codex', 'anthropic'], 1800000, 'diagnosing-bugs'],
+    test: ['tests', ['hermes', 'codex', 'cursor'], 1200000, 'tdd'],
     review: ['none', ['hermes', 'codex'], 900000, 'code-review'],
     research: ['none', ['hermes', 'openrouter'], 900000, null],
-    docs: ['docs', ['hermes'], 900000, null],
+    docs: ['docs', ['cursor', 'codex', 'anthropic'], 900000, null],
     merge: ['any', ['codex'], 1800000, 'resolving-merge-conflicts'],
     lead: ['manifest', ['codex'], 900000, null],
   };

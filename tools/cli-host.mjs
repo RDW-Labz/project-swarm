@@ -3,10 +3,12 @@
 // names the host and the absolute path of the CLI there:
 //   "cliHosts": { "hermes": { "target": "dev2@10.10.10.220", "command": "/home/dev2/.local/bin/hermes" } }
 // The job message goes to the remote CLI's stdin. No key, .env file or environment variable is sent:
-// ssh forwards none, and the ssh client reads its own key from ~/.ssh on this machine.
+// the ssh process is given a short environment allowlist, agent and X11 forwarding are off, the host
+// key must already be known, and the ssh client reads its own key from ~/.ssh on this machine.
 import { EXTRA_CLI_AGENTS } from './cli-adapters.mjs';
 
-const SSH_TARGET = /^[A-Za-z0-9._-]+(?:@[A-Za-z0-9._-]+)?$/;
+// A target never starts with `-`, so ssh can never read it as an option.
+const SSH_TARGET = /^[A-Za-z0-9_][A-Za-z0-9._-]*(?:@[A-Za-z0-9_][A-Za-z0-9._-]*)?$/;
 const REMOTE_COMMAND = /^\/[A-Za-z0-9._/+@-]{1,200}$/;
 
 function invalid(message) {
@@ -36,17 +38,30 @@ export function shellQuote(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+// What the local ssh process may see. Only these reach ssh, so nothing else can be forwarded even if
+// the user's ssh config has a SendEnv line.
+export const SSH_ENV_KEYS = ['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'SSH_AUTH_SOCK'];
+export function sshEnv(env = process.env) {
+  return Object.fromEntries(SSH_ENV_KEYS.filter(key => typeof env[key] === 'string').map(key => [key, env[key]]));
+}
+
+// The remote account's login shell must be POSIX (sh, bash, zsh): the command is one single-quoted string.
 export function sshInvocation(host, args) {
   return {
     command: 'ssh',
     args: [
+      '-T',
       '-o', 'BatchMode=yes',
+      '-o', 'StrictHostKeyChecking=yes',
+      '-o', 'ForwardAgent=no',
+      '-o', 'ForwardX11=no',
+      '-o', 'ClearAllForwardings=yes',
+      '-o', 'PermitLocalCommand=no',
       '-o', 'ConnectTimeout=20',
       '-o', 'ConnectionAttempts=4',
       '-o', 'ServerAliveInterval=15',
       '-o', 'ServerAliveCountMax=4',
-      '-o', 'SendEnv=-*',
-      host.target,
+      '--', host.target,
       [host.command, ...args].map(shellQuote).join(' '),
     ],
   };
@@ -57,7 +72,7 @@ export function remoteExec(host, exec) {
   return (command, args, options) => {
     const { command: ssh, args: sshArgs } = sshInvocation(host, args);
     // A flaky link needs longer than a local probe: ssh itself retries the connection up to 4 times.
-    return exec(ssh, sshArgs, { ...options, timeout: Math.max(options?.timeout ?? 0, 90000) });
+    return exec(ssh, sshArgs, { ...options, env: sshEnv(options?.env ?? process.env), timeout: Math.max(options?.timeout ?? 0, 90000) });
   };
 }
 

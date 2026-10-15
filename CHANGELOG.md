@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.64.0
+
+- Hermes (and Qwen) can run on another machine over ssh. The machine config `cliHosts` names the host and the CLI's absolute path (`{"cliHosts":{"hermes":{"target":"user@host","command":"/path/hermes"}}}`); jobs and `swarm doctor hermes` then run there. The job text goes on stdin. The ssh process gets only a short environment allowlist, agent and X11 forwarding are off, the host key must be known, and no key or `.env` file is copied. Exit 255 fails that job as `cli host unreachable`; a bad `cliHosts` entry fails the job, not the run. A security review (Claude Opus) of this code found a missing allowlist on the doctor path, an ineffective `SendEnv=-*`, an ssh target that could start with `-`, and unpinned host-key and forwarding options; all are fixed.
+- Real Hermes prints `Warning: Unknown toolsets: none` on stdout before its first event, which the strict JSONL parser rejected, so no Hermes job could pass. The parser now ignores that exact line for Hermes and nothing else.
+- Default routes by job type now come from the lane benchmark (`docs/state/lane-benchmark.md`): `fix` is cursor, codex, anthropic; `test` is hermes, codex, cursor; `docs` is cursor, codex, anthropic (Hermes failed both docs tasks). `build` is unchanged.
+- Added the lane benchmark harness (`bench/lane-benchmark/`): 10 real tasks from this repo, two each of bug fix, new function, refactor, test-writing and docs, run on every lane and scored by real tests plus a review. First results: Codex, Cursor and Claude 10 of 10, Anthropic Haiku 9, Sonnet 8, OpenRouter 4, Hermes (2-bit qwen3.8) 2. Added to Phase 17 of the plan.
+
 ## 1.63.0
 
 - Added a real `swarm` command. `swarm update` and `tools/install.mjs --user` now write `~/.local/bin/swarm`, a small script that runs the shared runner with the node it was installed with. It works in non-interactive shells, so Claude Code, Cursor and scripts can call `swarm` with no setup. A file already at that path that the installer did not write is never overwritten. `swarm doctor all` reports whether the command is installed and on PATH (`swarm-command-missing`, `swarm-not-on-path`); zsh reads `~/.zshenv` in non-interactive shells, so the PATH line goes there. Neither the installer nor doctor edits a shell profile.

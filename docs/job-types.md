@@ -4,16 +4,16 @@ Set the optional job field `type` to choose a preset. Jobs without a type behave
 
 ## Presets
 
-Routes list agents in candidate order. Timeouts are in milliseconds.
+Routes list agents in candidate order. Timeouts are in milliseconds. The `fix`, `test` and `docs` routes come from the lane benchmark ([results](state/lane-benchmark.md)).
 
 | Type | Writes | Route | timeoutMs | Skill |
 |---|---|---|---:|---|
 | `build` | any | cursor, codex | 1800000 | none |
-| `fix` | any | cursor, codex | 1800000 | `diagnosing-bugs` |
-| `test` | tests | codex, cursor | 1200000 | `tdd` |
+| `fix` | any | cursor, codex, anthropic | 1800000 | `diagnosing-bugs` |
+| `test` | tests | hermes, codex, cursor | 1200000 | `tdd` |
 | `review` | none | hermes, codex | 900000 | `code-review` |
 | `research` | none | hermes, openrouter | 900000 | none |
-| `docs` | docs | hermes | 900000 | none |
+| `docs` | docs | cursor, codex, anthropic | 900000 | none |
 | `merge` | any | codex | 1800000 | `resolving-merge-conflicts` |
 | `lead` | manifest | codex | 900000 | none |
 

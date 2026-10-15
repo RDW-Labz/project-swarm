@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { resolveCliHosts, shellQuote, sshInvocation, remoteExec } from '../tools/cli-host.mjs';
+import { resolveCliHosts, shellQuote, sshInvocation, sshEnv, remoteExec } from '../tools/cli-host.mjs';
 import { runManifest } from '../tools/swarm.mjs';
 
 const HOST = { target: 'dev2@10.10.10.220', command: '/home/dev2/.local/bin/hermes' };
@@ -35,7 +35,7 @@ test('cliHosts accepts a known agent with a host and absolute command, and refus
   assert.deepEqual(resolveCliHosts(undefined), {});
   for (const bad of [
     { openai: HOST }, { hermes: { ...HOST, command: 'hermes' } }, { hermes: { ...HOST, command: '/bin/h; rm -rf /' } },
-    { hermes: { ...HOST, target: 'dev2 @host' } }, { hermes: { ...HOST, key: 'x' } }, { hermes: 'dev2' }, [],
+    { hermes: { ...HOST, target: 'dev2 @host' } }, { hermes: { ...HOST, target: '-Jevil' } }, { hermes: { ...HOST, target: 'dev2@-oProxyCommand=x' } }, { hermes: { ...HOST, key: 'x' } }, { hermes: 'dev2' }, [],
   ]) assert.throws(() => resolveCliHosts(bad), { code: 'cli-hosts-invalid' });
 });
 
@@ -44,7 +44,9 @@ test('the ssh command quotes every argument for the remote shell and sends no en
   assert.throws(() => shellQuote('a\nb'), { code: 'cli-hosts-invalid' });
   const { command, args } = sshInvocation(HOST, ['chat', '--model', "a'b c", '--query-file', '-']);
   assert.equal(command, 'ssh');
-  assert.ok(args.includes('BatchMode=yes') && args.includes('SendEnv=-*'));
+  for (const option of ['BatchMode=yes', 'StrictHostKeyChecking=yes', 'ForwardAgent=no', 'ForwardX11=no', 'ClearAllForwardings=yes', 'PermitLocalCommand=no']) assert.ok(args.includes(option), option);
+  assert.equal(args[0], '-T');
+  assert.equal(args.at(-3), '--');
   assert.equal(args.at(-2), 'dev2@10.10.10.220');
   assert.equal(args.at(-1), "'/home/dev2/.local/bin/hermes' 'chat' '--model' 'a'\\''b c' '--query-file' '-'");
   const seen = [];
@@ -52,6 +54,10 @@ test('the ssh command quotes every argument for the remote shell and sends no en
   assert.equal(seen[0][0], 'ssh');
   assert.equal(seen[0][1].at(-1), "'/home/dev2/.local/bin/hermes' '--version'");
   assert.equal(seen[0][2].timeout, 90000);
+  // doctor's ssh gets the same short environment as a job's, never the caller's whole environment
+  remoteExec(HOST, (...call) => seen.push(call))('hermes', ['--version'], { env: { PATH: '/bin', HOME: '/h', OPENAI_API_KEY: 'sk-secret', SSH_AUTH_SOCK: '/s' } });
+  assert.deepEqual(seen[1][2].env, { PATH: '/bin', HOME: '/h', SSH_AUTH_SOCK: '/s' });
+  assert.equal(JSON.stringify(sshEnv({ ...process.env, OPENAI_API_KEY: 'sk-secret' })).includes('sk-secret'), false);
 });
 
 test('a hermes job runs over ssh with the message on stdin and none of the local secrets', async t => {

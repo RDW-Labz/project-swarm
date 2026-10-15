@@ -174,3 +174,20 @@ A one-request, tool-free worker on your own Anthropic API credits (Messages API 
 - **Models:** `claude-haiku-5-5` is the lane default and `claude-sonnet-5-5` serves `tier: "mid"`. `claude-opus-5-5` runs only for a job that sets `tier: "expensive"`; `validate` refuses it otherwise. Thinking effort is pinned to `low`.
 - **Caps, machine-wide:** $500 total and $20 per UTC day across every project, plus $5 per job, from one ledger at `~/.project-swarm/logs/anthropic-spend.jsonl`. Each request is checked against a worst-case estimate first and the real cost is recorded after. A machine config may only lower the day cap (`spend.lanes.anthropic.dailyUsd`); the total is fixed in code. Raising them is a decision for the account owner, never a manifest field.
 - **Routing:** enable the lane with `"lanes": {"anthropic": {"model": "claude-haiku-5-5"}}` in the machine config. Route order is hermes → cursor → codex → anthropic → openrouter → claude.
+
+## Hermes (or Qwen) on another machine over ssh
+
+Hermes can run on a machine you reach over ssh, such as a GPU box. Add this to the machine config (`~/.config/project-swarm/config.json`):
+
+```json
+{ "cliHosts": { "hermes": { "target": "dev2@10.10.10.220", "command": "/home/dev2/.local/bin/hermes" } },
+  "lanes": { "hermes": { "model": "your-hermes-model" } } }
+```
+
+`command` is the absolute path of the CLI on that machine (a non-interactive ssh shell often has a shorter PATH than a login shell). The job message goes to the remote CLI on stdin, through the same text and envelope adapter as a local Hermes. `swarm doctor hermes` runs its checks there too and reports the host.
+
+- Nothing local travels with the job: the ssh process gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG` and `SSH_AUTH_SOCK`, agent and X11 forwarding are off, the host key must already be in `known_hosts`, and the key is read from your own `~/.ssh`. No `.env` or key file is copied.
+- The remote account's login shell must be POSIX (sh, bash or zsh). The remote command is one single-quoted string.
+- `ssh` makes 4 connection attempts, 20 seconds each. Exit 255 fails that job as "cli host unreachable"; other jobs go on. If the connection drops, the remote CLI may keep running until it next writes.
+- This is separate from the `hosts` list in [remote hosts](executors.md), which is for placing whole jobs on other machines.
+- Real Hermes prints `Warning: Unknown toolsets: none` on stdout before its first event (the adapter's `--toolsets none` is deliberately an unknown name). The parser ignores that exact line and nothing else.

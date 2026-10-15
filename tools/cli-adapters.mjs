@@ -92,7 +92,9 @@ export function extraCliEnvironment(agent,env=process.env){
  return clean;
 }
 export function parseExtraCli(agent,stdout,exitCode,requestedModel){
- const events=stdout.split('\n').filter(line=>line.trim()).map(line=>{try{return JSON.parse(line);}catch{throw Error('Malformed CLI JSONL');}});
+ // Real Hermes prints `Warning: Unknown toolsets: none` on stdout before its first event (the adapter's
+ // `--toolsets none` is deliberately an unrecognized name); that exact line is not an event.
+ const events=stdout.split('\n').filter(line=>line.trim()&&!(agent==='hermes'&&line.trim()==='Warning: Unknown toolsets: none')).map(line=>{try{return JSON.parse(line);}catch{throw Error('Malformed CLI JSONL');}});
  if(!events.length||events.some(event=>!event||typeof event!=='object'||Array.isArray(event)))throw Error('Invalid CLI events');
  if(events.some(event=>['tool_use','tool_result','tool_call'].includes(event.type)||event.parent_tool_use_id||event.stats?.tools?.totalCalls>0||['tool_use','tool_result'].includes(event.event?.content_block?.type)||event.message?.content?.some?.(part=>['tool_use','tool_result'].includes(part.type))))throw Error('Tool activity refused for tool-free CLI job');
  const results=events.filter(event=>event.type==='result');
