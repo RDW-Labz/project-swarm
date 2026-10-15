@@ -6,7 +6,7 @@ Goal: one command takes any goal and runs it across up to thousands of workers, 
 
 ## Ground rules (same as v1)
 
-- Claude Code orchestrates only. Route cheapest-first: Hermes → Cursor → Codex → Anthropic API → OpenRouter → Claude subscription.
+- Claude Code orchestrates only. Route cheapest-first, from the lane benchmark: Anthropic API (Haiku) → Cursor → Codex → Claude subscription (after two failures). Hermes runs only research/summary jobs. OpenRouter runs only non-sensitive bookkeeping jobs.
 - No secrets to workers. Sensitive jobs never go to OpenRouter, OpenAI, Gemini, Lambda, or untrusted sandboxes.
 - One PR per phase. Tests, CHANGELOG, and a version bump go in the same PR. Never merge without Braden's explicit OK.
 - Ask before any cap raise or new paid service.
