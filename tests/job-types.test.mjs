@@ -26,10 +26,10 @@ test('presets are frozen and match the contract defaults', () => {
   const expected = {
     build: ['any', ['anthropic', 'cursor', 'codex'], 1800000, null],
     fix: ['any', ['anthropic', 'cursor', 'codex'], 1800000, 'diagnosing-bugs'],
-    test: ['tests', ['codex', 'anthropic', 'cursor'], 1200000, 'tdd'],
+    test: ['tests', ['codex', 'anthropic', 'hermes', 'cursor'], 1200000, 'tdd'],
     review: ['none', ['codex'], 900000, 'code-review'],
     research: ['none', ['hermes'], 900000, null],
-    docs: ['docs', ['anthropic', 'cursor', 'codex'], 900000, null],
+    docs: ['docs', ['anthropic', 'hermes', 'cursor', 'codex'], 900000, null],
     merge: ['any', ['codex'], 1800000, 'resolving-merge-conflicts'],
     lead: ['manifest', ['codex'], 900000, null],
   };
@@ -166,12 +166,14 @@ test('runManifest saves applied presets and surfaces unavailable skill warnings'
   assert.equal(state.warnings.some(warning => warning.includes('job-type-skill-unavailable')), true);
 });
 
-test('research routes to Hermes; code job types never do', async t => {
+test('research routes to Hermes first; docs and test use it only after Anthropic; the other job types never do', async t => {
   const root = await fixture(t);
   const lanesConfig = { hermes: { model: 'test-model' }, anthropic: { model: 'claude-haiku-5-5' }, codex: { model: 'gpt-5' } };
   const research = await validateProject(root, { ...manifest(job({ type: 'research', context: ['input.txt'], outputs: [] })), lanes: lanesConfig });
   assert.equal(research.routes[0].agent, 'hermes');
-  for (const type of ['build', 'fix', 'test', 'docs', 'review']) {
-    for (const [name, preset] of Object.entries(JOB_TYPES)) if (name === type) assert.equal(preset.route.includes('hermes'), false, type);
+  for (const type of ['build', 'fix', 'review', 'merge', 'lead']) assert.equal(JOB_TYPES[type].route.includes('hermes'), false, type);
+  for (const type of ['docs', 'test']) {
+    const route = JOB_TYPES[type].route;
+    assert.ok(route.includes('hermes') && route.indexOf('hermes') > route.indexOf('anthropic'), type);
   }
 });

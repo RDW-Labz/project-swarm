@@ -9,7 +9,7 @@ export const LANE_AGENTS = Object.freeze([
   'hermes', 'cursor', 'codex', 'claude', 'qwen', 'openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic',
 ]);
 export const LANE_DEFAULTS = Object.freeze(Object.fromEntries(LANE_AGENTS.map(agent => [agent, Object.freeze({
-  concurrency: ({ hermes: 3, cursor: 8, codex: 6, claude: 4, openrouter: 64, anthropic: 16 })[agent] ?? 32,
+  concurrency: ({ hermes: 1, cursor: 8, codex: 6, claude: 4, openrouter: 64, anthropic: 16 })[agent] ?? 32,
   requestsPerMinute: null,
   backoff: Object.freeze({ baseMs: 2000, maxMs: 300000, maxRetries: 5 }),
   pauseMs: 900000,

@@ -41,7 +41,7 @@ test('a mixed local and ssh run finishes after the ssh host dies mid-job', async
   const seen = [];
   const state = await runManifest(root, {
     version: 1,
-    concurrency: 2,
+    concurrency: 2, lanes: { hermes: { concurrency: 2 } },
     hosts: [{ id: 'local', kind: 'local', capacity: 1, heartbeatMs: 30 }, sshHost('dev2', { heartbeatMs: 30 })],
     jobs: hermesJobs(2),
   }, {
@@ -256,7 +256,7 @@ test('ssh exit 255 mid-run moves that job to a live host and cancels nothing', a
 test('a remote command failure fails that job only and never the run', async t => {
   const root = await repo(t);
   const state = await runManifest(root, {
-    version: 1, concurrency: 4,
+    version: 1, concurrency: 4, lanes: { hermes: { concurrency: 4 } },
     hosts: [sshHost('dev2', { target: 'dev2@10.10.10.220' }), { id: 'local', kind: 'local', capacity: 4 }],
     jobs: hermesJobs(4),
   }, {
