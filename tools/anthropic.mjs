@@ -100,11 +100,12 @@ export function usageCostUsd(model, usage = {}) {
   return fresh * input + write * input * CACHE_WRITE + read * input * CACHE_READ + out * output;
 }
 
-// The caps come from code, not from a manifest. A machine config may only lower them.
+// The caps come from code, not from a manifest. The machine config may only lower the day cap
+// (`spend.lanes.anthropic.dailyUsd`); the $500 total is code only.
 export function caps(env = process.env) {
   const lanes = loadLocalConfig({ env })?.spend?.lanes?.anthropic ?? {};
   const lower = (value, fallback) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(value, fallback) : fallback);
-  return { totalUsd: lower(lanes.totalUsd, TOTAL_CAP_USD), dayUsd: lower(lanes.dailyUsd, DAY_CAP_USD), jobUsd: JOB_CAP_USD };
+  return { totalUsd: TOTAL_CAP_USD, dayUsd: lower(lanes.dailyUsd, DAY_CAP_USD), jobUsd: JOB_CAP_USD };
 }
 export function assertWithinCaps({ worstUsd, spent, limits = caps() }) {
   if (spent.job + worstUsd > limits.jobUsd) fail(`Anthropic job cap: $${spent.job.toFixed(4)} spent + $${worstUsd.toFixed(4)} worst case > $${limits.jobUsd}; request refused`);

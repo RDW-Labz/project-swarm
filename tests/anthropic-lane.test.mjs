@@ -47,6 +47,7 @@ test('a refusal or truncation fails the job without echoing the key', async () =
   assert.equal(refused.status, 'failed');
   const cut = await executeApi(job(), [], { env, fetchImpl: async () => reply({ stop_reason: 'max_tokens' }) });
   assert.match(cut.error, /truncated/);
+  assert.equal(cut.costUsd, usageCostUsd('claude-haiku-5-5', { input_tokens: 1000, output_tokens: 200 }));
 });
 
 test('missing key names the keychain item before any request', async () => {

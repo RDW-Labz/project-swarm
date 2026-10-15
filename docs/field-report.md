@@ -75,4 +75,27 @@ report; they are not new release measurements.
 | Queue latency p50 / p95 / max | 119 ms / 120 ms / 120 ms |
 | Merge | 500 files in 971 ms (514.9 files/s) |
 
-A live run of 50 real jobs across every lane was not done. `doctor all` on this machine showed cursor, hermes, and qwen unavailable; openai, gemini, lambda, and openrouter unconfigured; codex's sandbox probe failed; claude's login was not checked. There is no cost-per-tier number from a live run.
+## Live test, 50 real jobs (1.61.0)
+
+50 jobs ran on a throwaway repo with `budget.maxUsd` 2: each job read a 50-line `input.txt` and wrote one sentence restating one line. All 50 completed and all 50 outputs were non-empty. Run time was 1 m 33 s at concurrency 8. Hermes was skipped (dev2 was unreachable). Lanes used were the Anthropic API, OpenRouter, Cursor, Codex, and the Claude subscription.
+
+| Tier | Lane / model | Jobs | Done | Reported cost | Tokens | Avg time |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| cheap | anthropic / claude-haiku-5-5 | 12 | 12 | $0.0038 | 30,007 | 2.7 s |
+| cheap | openrouter / openai/gpt-oss-20b | 10 | 10 | $0.0008 | 15,628 | 10.2 s |
+| cheap | cursor / composer-2.5 | 8 | 8 | subscription, none reported | - | 38.3 s |
+| mid | anthropic / claude-sonnet-5-5 | 6 | 6 | $0.0368 | 14,890 | 3.6 s |
+| mid | codex / gpt-6.1-sol | 8 | 8 | subscription, none reported | 42,237 | 13.8 s |
+| expensive | claude (subscription) / opus | 6 | 6 | $0.2964 | 5,965 | 14.1 s |
+| **All** | | **50** | **50** | **$0.3378** (34 jobs reported a cost) | 108,727 | |
+
+- Cost per job, where reported: Haiku $0.0003, OpenRouter gpt-oss-20b $0.00008, Sonnet $0.0061, Claude Opus $0.049. Cursor and Codex do not report a dollar cost.
+- The Claude Opus figure is the CLI's own reported cost on a subscription, not a bill. The API lanes (Anthropic and OpenRouter) cost $0.0414 together.
+- This is a trivial one-sentence job. Cost scales with real context and output; treat the numbers as a floor, not a forecast.
+
+An earlier attempt at the same 50 jobs failed after 14 and cancelled the rest. Two causes, both fixed before the run above:
+
+- The unreachable `dev2` ssh host had been given jobs and returned `host-exit: 255`, which cancelled the run. The passing run pinned `hosts` to local only. A host that is down at the start still takes jobs until its heartbeat marks it dead; that is worth hardening.
+- Three of the first 12 Anthropic Haiku jobs returned the same path in both `files` and `edits`, which the envelope validator rightly rejects. The Anthropic request now tells the model to return `edits: []` unless one large output needs a single change, and the 12 Haiku jobs in the passing run all completed. A failed Anthropic job also used to be booked at its $0.022 reservation instead of its real cost (about $0.0003); it now records the real cost.
+
+The Hermes lane was not tested. It will be re-run when dev2 is reachable and a model is chosen.

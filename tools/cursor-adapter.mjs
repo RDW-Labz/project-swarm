@@ -74,8 +74,19 @@ export async function resolveCursorBinary(env = process.env, { access = file => 
 // Worktree-only writes, the denied home dirs and the Keychain mach-lookup deny are unchanged.
 export function cursorProfile({ home = os.homedir(), installDir, readPaths = [], ...options }) {
   home = sandboxPath(home);
-  return codexProfile({ ...options, home, readPaths: [...readPaths, sandboxPath(installDir)], extraWrites: [path.join(home, '.cursor')] });
+  const profile = codexProfile({ ...options, home, readPaths: [...readPaths, sandboxPath(installDir)], extraWrites: [path.join(home, '.cursor')] });
+  return profile + CURSOR_NO_KEYCHAIN_RULES;
 }
+
+// cursor-agent shells out to /usr/bin/security to probe and to save its login ("cursor-user"). Inside
+// this seatbelt the Keychain cannot exist, so the call only raised a macOS "a keychain cannot be
+// found" dialog on the operator's screen. The worker authenticates with CURSOR_API_KEY alone, so
+// the helper, its authorization trampoline and the UI agent that draws the dialog are all denied:
+// the call fails silently and cursor-agent falls back to not saving anything.
+export const CURSOR_NO_KEYCHAIN_RULES =
+  '(deny process-exec (literal "/usr/bin/security") (literal "/usr/libexec/security_authtrampoline") (literal "/usr/bin/osascript"))\n' +
+  '(deny file-read* file-write* (literal "/usr/bin/security"))\n' +
+  '(deny mach-lookup (global-name "com.apple.security.agent") (global-name "com.apple.SecurityAgent") (global-name "com.apple.security.authhost") (global-name "com.apple.coreservices.appleevents"))\n';
 
 export function cursorArgs(job, { worktree, message }) {
   if (typeof job.model !== 'string' || !CURSOR_MODEL.test(job.model)) throw Error('cursor requires a valid explicit model');
@@ -103,6 +114,10 @@ export async function cursorEnvironment(env = process.env, exists = async file =
   for (const key of CURSOR_ENV_KEYS) if (typeof env?.[key] === 'string' && !/[\0\r\n]/.test(env[key])) clean[key] = env[key];
   if (typeof env?.CURSOR_API_KEY === 'string' && env.CURSOR_API_KEY) clean.CURSOR_API_KEY = env.CURSOR_API_KEY;
   if (await exists('/etc/ssl/cert.pem')) clean.SSL_CERT_FILE = '/etc/ssl/cert.pem';
+  // The key in CURSOR_API_KEY is the only login. `memory` keeps cursor-agent's session credentials in
+  // process memory, so it never runs `security` or writes a Keychain item (which, inside the seatbelt,
+  // raised a "keychain cannot be found" dialog on the operator's screen) and never writes a login file.
+  clean.AGENT_CLI_CREDENTIAL_STORE = 'memory';
   return clean;
 }
 
