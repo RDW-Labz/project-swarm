@@ -164,6 +164,7 @@ The full spec is [swarm-watch-spec.md](swarm-watch-spec.md) and the reference de
 - 2,000 stub jobs: record memory, CPU, queue latency, state-write time, and merge throughput.
 - 200 real jobs on a throwaway repo across all lanes (Hermes included if dev2 is reachable), with a $10 cap. Record cost and pass rate per tier.
 - One real `swarm go` on a medium project. Record plan accuracy, the conflict rate, and how many fixes it needed after the run.
+- **Lane benchmark** (a small one ran at 1.63.0; see `docs/state/lane-benchmark.md`): 10 real tasks from this repo, 2 each of small bug fix, new function plus test, refactor, test-writing and docs, run on every lane including Hermes on dev2. Each result is scored by real tests (hidden tests, mutants and fact checks the worker never sees) plus a review. Record pass rate, cost, time and quality per lane and per kind. Rerun it whenever a lane, model or the router changes, and use the results to set the default route per job type (`tools/job-types.mjs`). The harness is `bench/lane-benchmark/`.
 - Publish the numbers in `docs/field-report.md`.
 
 ---
