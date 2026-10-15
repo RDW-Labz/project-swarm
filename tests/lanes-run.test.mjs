@@ -41,11 +41,13 @@ async function fixture(t) {
   return root;
 }
 
+const PAUSE_MS = 2000;
+
 test('500 API jobs respect lane caps, retry 429s, pause quota lanes, and prepare lazily', { timeout: 60000 }, async t => {
   const root = await fixture(t), start = Date.now();
   const caps = { ollama: 4, openai: 8, gemini: 16 };
   const lanes = Object.fromEntries(Object.entries(caps).map(([agent, concurrency]) => [agent, {
-    concurrency, backoff: { baseMs: 5, maxMs: 50, maxRetries: 3 }, pauseMs: 300, maxPauseMs: 5000,
+    concurrency, backoff: { baseMs: 5, maxMs: 50, maxRetries: 3 }, pauseMs: PAUSE_MS, maxPauseMs: 5000,
   }]));
   const jobs = Array.from({ length: 500 }, (_, n) => job(n, ['ollama', 'openai', 'gemini'][n % 3]));
   const active = { ollama: 0, openai: 0, gemini: 0 }, attempts = new Map();
@@ -54,7 +56,7 @@ test('500 API jobs respect lane caps, retry 429s, pause quota lanes, and prepare
     env, id: 'lane-500',
     onState: state => {
       const lane = state.lanes?.lanes.gemini;
-      if (lane?.state === 'paused' && state.jobs.some(record => record.status === 'complete' && ['ollama', 'openai'].includes(record.agent) && Date.parse(record.finishedAt) >= Date.parse(lane.until) - 300)) finishedDuringPause = true;
+      if (lane?.state === 'paused' && state.jobs.some(record => record.status === 'complete' && ['ollama', 'openai'].includes(record.agent) && Date.parse(record.finishedAt) >= Date.parse(lane.until) - PAUSE_MS)) finishedDuringPause = true;
     },
     fetchImpl: async (url, options) => {
       const { agent, n } = requestJob(url, options);
