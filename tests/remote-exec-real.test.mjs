@@ -53,18 +53,23 @@ test('real host: a command runs there with stdin, files, an env allowlist, and i
   for (const file of result.files) assert.equal(file.sha256, hashBytes(file.bytes));
 });
 
-test('real host: a non-zero exit is a result; secret paths are never sent; traversal and absolute paths are refused there', { skip, timeout: 600000 }, async () => {
+test('real host: a non-zero exit is a result, not a transport failure', { skip, timeout: 600000 }, async () => {
   const failed = await withRetry(() => transport().run({ host, jobId: jobId(), command: '/bin/sh', args: ['-c', 'echo oops >&2; exit 7'], stdin: '', env, files: [], outputs: [] }));
   assert.equal(failed.exitCode, 7);
-  // The client drops secret paths before anything is sent, so the job simply never sees them.
+});
+
+test('real host: secret paths are dropped before anything is sent, so the job never sees them', { skip, timeout: 600000 }, async () => {
   const probe = await withRetry(() => transport().run({
     host, jobId: jobId(), command: '/bin/sh', env, stdin: '', outputs: [],
     args: ['-c', 'for f in .env .env.local .git/config .ssh/id x/.aws/c ok.txt; do if [ -e "$f" ]; then echo "$f present"; else echo "$f absent"; fi; done'],
     files: ['.env', '.env.local', '.git/config', '.ssh/id', 'x/.aws/c', 'ok.txt'].map(file => ({ path: file, bytes: Buffer.from('x') })),
   }));
   assert.equal(probe.stdout.toString('utf8'), '.env absent\n.env.local absent\n.git/config absent\n.ssh/id absent\nx/.aws/c absent\nok.txt present\n');
-  // Paths that could leave the workspace reach the remote side, which refuses the whole request.
-  for (const bad of ['../escape.txt', '/etc/swarm-test-should-not-exist']) {
-    await assert.rejects(withRetry(() => transport().run({ host, jobId: jobId(), command: '/bin/sh', args: ['-c', 'touch ran'], stdin: '', env, files: [{ path: bad, bytes: Buffer.from('x') }], outputs: [] })), { code: 'host-exit' }, bad);
-  }
 });
+
+// Paths that could leave the workspace do reach the remote side, which refuses the whole request.
+for (const bad of ['../escape.txt', '/etc/swarm-test-should-not-exist']) {
+  test(`real host: the remote side refuses the path ${bad}`, { skip, timeout: 600000 }, async () => {
+    await assert.rejects(withRetry(() => transport().run({ host, jobId: jobId(), command: '/bin/sh', args: ['-c', 'touch ran'], stdin: '', env, files: [{ path: bad, bytes: Buffer.from('x') }], outputs: [] })), { code: 'host-exit' });
+  });
+}
