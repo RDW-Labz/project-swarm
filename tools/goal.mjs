@@ -1,64 +1,157 @@
 // SPDX-License-Identifier: Apache-2.0
-// `swarm go "<goal>"` plans one lead, runs it, then the merge queue, then the rollup.
+// `swarm go "<goal>"` reads the repo's top-level folders, splits the goal across leads,
+// runs on a new branch, then integrates, commits, and rolls up.
 // A manifest path or a run id still uses the older go() path.
+import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
+const exec = promisify(execFile);
 const RUN_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/;
+const FOLDER = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
+
+export const GOAL_BUDGET = Object.freeze({ maxUsd: 5, maxTokens: 2_000_000 });
+export const GOAL_DEFAULTS = Object.freeze({ leads: 'auto', maxJobs: 25, concurrency: 8, maxLeads: 10 });
 
 export function isGoalArgument(argument) {
   return typeof argument === 'string' && argument.trim() === argument && argument.length > 0 && argument.length <= 2000
     && !RUN_ID.test(argument) && !argument.includes('/') && !argument.includes('\\') && !argument.endsWith('.json');
 }
 
-export function manifestForGoal(goal, { checks = [] } = {}) {
-  const text = typeof goal === 'string' ? goal.trim() : '';
-  if (!text || text.length > 2000) {
-    throw Object.assign(new Error('goal must be 1–2000 characters'), { code: 'goal-invalid' });
+export function goalRunId() {
+  return `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+}
+
+function goalError(code, message) {
+  return Object.assign(new Error(`${code}: ${message}`), { code });
+}
+
+export async function topLevelFolders(root) {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  return entries
+    .filter(entry => entry.isDirectory() && !entry.isSymbolicLink() && !entry.name.startsWith('.') && FOLDER.test(entry.name) && entry.name !== 'node_modules')
+    .map(entry => entry.name)
+    .sort();
+}
+
+export async function worktreeDirty(root, run = exec) {
+  const { stdout } = await run('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' });
+  return stdout.trim().length > 0;
+}
+
+// New branch only. The branch you were on keeps its current commit.
+export async function createGoBranch(root, branch, run = exec) {
+  if (!/^swarm\/go-[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(branch)) throw goalError('goal-branch', branch);
+  const current = (await run('git', ['-C', root, 'branch', '--show-current'], { encoding: 'utf8' })).stdout.trim();
+  const tip = current ? (await run('git', ['-C', root, 'rev-parse', current], { encoding: 'utf8' })).stdout.trim() : null;
+  await run('git', ['-C', root, 'checkout', '-b', branch], { encoding: 'utf8' });
+  if (current && tip) {
+    const after = (await run('git', ['-C', root, 'rev-parse', current], { encoding: 'utf8' })).stdout.trim();
+    if (after !== tip) throw goalError('goal-branch', `${current} moved`);
   }
+  return { branch, from: current || null };
+}
+
+function splitFolders(names, count) {
+  const buckets = Array.from({ length: count }, () => []);
+  names.forEach((name, index) => buckets[index % count].push(`${name}/`));
+  return buckets;
+}
+
+export function manifestForGoal(goal, { folders = [], leads = 'auto', maxJobs = GOAL_DEFAULTS.maxJobs, concurrency = GOAL_DEFAULTS.concurrency, checks = [], maxUsd = GOAL_BUDGET.maxUsd, maxTokens = GOAL_BUDGET.maxTokens } = {}) {
+  const text = typeof goal === 'string' ? goal.trim() : '';
+  if (!text || text.length > 2000) throw goalError('goal-invalid', 'goal must be 1–2000 characters');
+  if (!Number.isInteger(maxJobs) || maxJobs < 1 || maxJobs > 500) throw goalError('goal-max-jobs', '--max-jobs must be an integer 1–500');
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 64) throw goalError('goal-concurrency', '--concurrency must be an integer 1–64');
+  const names = [...new Set(folders)].filter(name => !name.startsWith('.') && FOLDER.test(name) && name !== 'node_modules').sort();
+  if (!names.length) throw goalError('goal-no-folders', 'the repo has no top-level folders to split');
+  let count;
+  if (leads === 'auto') count = Math.min(names.length, GOAL_DEFAULTS.maxLeads);
+  else if (Number.isInteger(leads) && leads >= 1 && leads <= GOAL_DEFAULTS.maxLeads) {
+    if (leads > names.length) throw goalError('goal-leads', `${leads} leads need ${leads} top-level folders; found ${names.length}`);
+    count = leads;
+  } else throw goalError('goal-leads', '--leads must be auto or an integer 1–10');
+  const buckets = splitFolders(names, count);
   return {
     version: 1,
-    concurrency: 2,
+    concurrency,
     report: 'short',
+    budget: { maxUsd, maxTokens },
     ...(checks.length ? { checks } : {}),
-    jobs: [{
-      id: 'goal-lead',
+    jobs: buckets.map((scope, index) => ({
+      id: `lead-${index + 1}`,
       type: 'lead',
       agent: 'auto',
-      prompt: `Turn this goal into one child manifest of worker jobs. Stay inside the area scope. Every child job uses a short report.\n\nGOAL:\n${text}`,
+      prompt: `You own only these folders: ${scope.join(', ')}. Turn this goal into child jobs inside that scope. Every child job uses a short report.\n\nGOAL:\n${text}`,
       context: [],
-      outputs: ['coordination/goal-child.json'],
-      area: { goal: text, scope: ['src/', 'tests/', 'docs/', 'README.md'], maxJobs: 8 },
-    }],
+      outputs: [`goal-lead-${index + 1}.json`],
+      area: { goal: text, scope, maxJobs, concurrency },
+    })),
   };
+}
+
+export function resumeCommand(id, pause) {
+  const message = pause?.message ?? '';
+  const part = message.split(';').map(item => item.trim()).find(item => item.startsWith('resume with '));
+  const flags = part ? part.slice('resume with '.length) : '--raise maxUsd=<N> --reason TEXT';
+  return `swarm resume ${id} ${flags}`;
 }
 
 function failed(stage, base, reason) {
   return { status: 'failed', stage, ...base, reason };
 }
 
-// plan, run, wait, integrate (the merge queue), rollup. Commit and ship stay on `go MANIFEST`.
-export async function goGoal(root, goal, flags, deps) {
-  const base = { runId: null, cost: null, warnings: [], integrate: null, rollup: null, reason: null };
-  if (flags?.commitMessage || flags?.payloadPath) return failed('plan', base, 'a goal does not take --commit-message or --pr');
+// Dirty check, plan from real folders, branch, run, merge queue, commit, rollup.
+// A cap pause stops before integrate and says how to resume. The starting branch is not moved.
+export async function goGoal(root, goal, flags = {}, deps) {
+  const base = { runId: null, branch: null, cost: null, warnings: [], integrate: null, rollup: null, reason: null, resume: null };
+  if (flags.payloadPath) return failed('plan', base, 'a goal does not take --pr');
+  if (await deps.dirty(root)) return failed('plan', base, 'goal-dirty: commit or stash changes before swarm go');
+  const maxUsd = flags.maxUsd ?? GOAL_BUDGET.maxUsd;
+  const maxTokens = flags.maxTokens ?? GOAL_BUDGET.maxTokens;
+  const planOptions = {
+    folders: await deps.folders(root),
+    leads: flags.leads ?? 'auto',
+    maxJobs: flags.maxJobs ?? GOAL_DEFAULTS.maxJobs,
+    concurrency: flags.concurrency ?? GOAL_DEFAULTS.concurrency,
+    checks: flags.checks ?? [],
+    maxUsd,
+    maxTokens,
+  };
   let manifest;
-  try { manifest = await deps.plan(root, goal); }
+  try { manifest = await deps.plan(goal, planOptions); }
   catch (error) { return failed('plan', base, error.message); }
   if (!manifest || manifest.report !== 'short') manifest = { ...(manifest ?? {}), report: 'short' };
+  const id = deps.runId();
+  const branch = `swarm/go-${id}`;
+  try { await deps.branch(root, branch); }
+  catch (error) { return failed('branch', { ...base, runId: id, branch }, error.message); }
+  base.runId = id;
+  base.branch = branch;
   let started, waited;
   try {
-    started = await deps.run(root, manifest);
+    started = await deps.run(root, manifest, { id, maxUsd, maxTokens });
     waited = await deps.wait(root, started.id);
   } catch (error) { return failed('run', base, error.message); }
-  base.runId = started.id;
   base.cost = waited.costUsd ?? null;
   base.warnings = waited.warnings ?? [];
+  if (waited.status === 'paused') {
+    return { status: 'paused', stage: 'run', ...base, reason: waited.pause?.message ?? 'run paused on a cap', resume: resumeCommand(started.id, waited.pause) };
+  }
   if (waited.status !== 'complete') return failed('run', base, `run ${waited.status}`);
   let integrated;
   try { integrated = await deps.integrate(root, started.id, { queue: true }); }
   catch (error) { return failed('integrate', base, error.message); }
   base.integrate = integrated;
-  if (integrated?.checksPassed === false || integrated?.checkFailed?.length || integrated?.status === 'failed') {
+  if (integrated?.checksPassed === false || integrated?.checkFailed?.length || integrated?.status === 'failed' || integrated?.status === 'partial') {
     return failed('integrate', base, 'merge queue did not integrate');
   }
+  const files = integrated?.files ?? [];
+  try {
+    const committed = await deps.commit(root, files, flags.commitMessage ?? `swarm go: ${goal}`);
+    if (committed?.status && committed.status !== 'committed') return failed('commit', base, committed.reason ?? 'commit failed');
+  } catch (error) { return failed('commit', base, error.message); }
   let rollup;
   try { rollup = await deps.rollup(root, started.id); }
   catch (error) { return failed('rollup', base, error.message); }

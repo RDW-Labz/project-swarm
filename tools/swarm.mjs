@@ -22,7 +22,7 @@ import { loadLocalConfig } from './local-config.mjs';
 import { resolveLanes, LaneScheduler, classifyProviderOutcome, lanesDir } from './lanes.mjs';
 import { resolveHosts, createHostPool, defaultHostTransport, remoteEnv, checkPulled, isSecretPath } from './executors.mjs';
 import { initProject } from './init.mjs';
-import { isGoalArgument, manifestForGoal, goGoal } from './goal.mjs';
+import { isGoalArgument, manifestForGoal, goGoal, goalRunId, topLevelFolders, worktreeDirty, createGoBranch } from './goal.mjs';
 import { routeJob } from './router.mjs';
 import { resolveBudget, runTotals, jobSpend, spendDir, withSpendStore, laneDayTotals, estimateReservation, reserveSpend, settleSpend, releaseSpend, finalCost, PAID_LANES, capDecision, ledgerRows, mergeLedger, validateIdleItems, runIdleMenu } from './spend.mjs';
 import { JOB_TYPES, applyJobType, jobTypeOutputViolations } from './job-types.mjs';
@@ -6528,11 +6528,11 @@ export async function runManifestChecked(root, manifest, onRunning, { checkBase 
   finally { process.off('SIGINT', abort); process.off('SIGTERM', abort); }
 }
 
-const GO_FLAGS_WITH_VALUE = new Set(['--commit-message', '--repo', '--pr', '--require-section', '--merge-method', '--timeout', '--tag-timeout', '--exempt']);
+const GO_FLAGS_WITH_VALUE = new Set(['--commit-message', '--repo', '--pr', '--require-section', '--merge-method', '--timeout', '--tag-timeout', '--exempt', '--leads', '--max-jobs', '--concurrency', '--max-usd', '--max-tokens']);
 
 // Pure CLI-flag parsing for `go`, kept separate from go() execution so it is directly testable.
 export function parseGoFlags(flags) {
-  let commitMessage, repo, payloadPath, mergeMethod, timeoutMs, tagTimeoutMs, noFlakeCheck, mutants = false;
+  let commitMessage, repo, payloadPath, mergeMethod, timeoutMs, tagTimeoutMs, noFlakeCheck, mutants = false, leads, maxJobs, concurrency, maxUsd, maxTokens;
   const requireSections = [], exemptions = [];
   for (let index = 0; index < flags.length; index++) {
     const flag = flags[index];
@@ -6541,7 +6541,23 @@ export function parseGoFlags(flags) {
     if (!GO_FLAGS_WITH_VALUE.has(flag)) fail(`Unknown flag: ${flag}`);
     const value = flags[++index];
     if (value === undefined) fail(`${flag} requires a value`);
-    if (flag === '--commit-message') commitMessage = value;
+    if (flag === '--leads') {
+      if (value === 'auto') leads = 'auto';
+      else if (/^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 10) leads = Number(value);
+      else fail('--leads must be auto or an integer 1–10');
+    } else if (flag === '--max-jobs') {
+      if (!/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 500) fail('--max-jobs must be an integer 1–500');
+      maxJobs = Number(value);
+    } else if (flag === '--concurrency') {
+      if (!/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 64) fail('--concurrency must be an integer 1–64');
+      concurrency = Number(value);
+    } else if (flag === '--max-usd') {
+      maxUsd = Number(value);
+      if (!Number.isFinite(maxUsd) || maxUsd <= 0) fail('--max-usd requires a positive number');
+    } else if (flag === '--max-tokens') {
+      maxTokens = Number(value);
+      if (!Number.isInteger(maxTokens) || maxTokens < 1) fail('--max-tokens requires a positive integer');
+    } else if (flag === '--commit-message') commitMessage = value;
     else if (flag === '--repo') repo = value;
     else if (flag === '--pr') payloadPath = value;
     else if (flag === '--require-section') requireSections.push(value);
@@ -6556,7 +6572,7 @@ export function parseGoFlags(flags) {
     }
   }
   if (repo && !payloadPath) fail('go requires --pr with --repo');
-  return { commitMessage, repo, payloadPath, requireSections, mergeMethod, timeoutMs, mutants, ...(tagTimeoutMs !== undefined ? { tagTimeoutMs } : {}), ...(noFlakeCheck ? { noFlakeCheck } : {}), ...(exemptions.length ? { exemptions } : {}) };
+  return { commitMessage, repo, payloadPath, requireSections, mergeMethod, timeoutMs, mutants, ...(tagTimeoutMs !== undefined ? { tagTimeoutMs } : {}), ...(noFlakeCheck ? { noFlakeCheck } : {}), ...(exemptions.length ? { exemptions } : {}), ...(leads !== undefined ? { leads } : {}), ...(maxJobs !== undefined ? { maxJobs } : {}), ...(concurrency !== undefined ? { concurrency } : {}), ...(maxUsd !== undefined ? { maxUsd } : {}), ...(maxTokens !== undefined ? { maxTokens } : {}) };
 }
 
 // Run through current/, this file's realpath is a snapshot under <install>/versions/<v>/, which
@@ -6624,7 +6640,7 @@ async function main() {
     }
     root=args[rootIndex+1];args.splice(rootIndex,2);
   }
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | init | go MANIFEST|RUN|"GOAL" [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | init | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
@@ -7258,11 +7274,22 @@ async function main() {
     let checks=[];
     try{checks=JSON.parse(await fs.readFile(path.join(root,'coordination/checks.json'),'utf8')).checks??[];}catch{checks=[];}
     if(!Array.isArray(checks))checks=[];
-    result=await goGoal(root,argument,goFlags,{
-      plan: ()=>manifestForGoal(argument,{checks}),
-      run: async (goRoot,manifest)=>{const state=await runManifestChecked(goRoot,manifest);return {id:state.id};},
-      wait: (goRoot,id)=>waitRun(goRoot,id),
-      integrate: (goRoot,id)=>integrateQueue(goRoot,id),
+    result=await goGoal(root,argument,{...goFlags,checks},{
+      dirty: worktreeDirty,
+      folders: topLevelFolders,
+      plan: (goal,options)=>manifestForGoal(goal,options),
+      runId: goalRunId,
+      branch: createGoBranch,
+      run: async (goRoot,manifest,options)=>{const state=await runManifestChecked(goRoot,manifest,undefined,{id:options.id,maxUsd:options.maxUsd,maxTokens:options.maxTokens});return {id:state.id};},
+      wait: async (goRoot,id)=>{const waited=await waitRun(goRoot,id);if(waited.status==='paused')waited.pause=(await readState(goRoot,id)).pause;return waited;},
+      integrate: async (goRoot,id)=>{
+        const summary=await integrateQueue(goRoot,id);
+        const state=await readState(goRoot,id);
+        const files=new Set(state.integratedFiles??[]);
+        for(const job of state.jobs??[]) if(job.childRun){try{for(const file of (await readState(goRoot,job.childRun)).integratedFiles??[])files.add(file);}catch{/* a child that never integrated has no files */}}
+        return {...summary,files:[...files]};
+      },
+      commit: (goRoot,files,message)=>commitOutputs(goRoot,files,message),
       rollup: async (goRoot,id)=>rollupRun(await readState(goRoot,id)),
     });
   }
@@ -7303,7 +7330,7 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if(command==='wait'){if(result.status==='running')process.exitCode=2;else if(['failed','cancelled'].includes(result.status))process.exitCode=1;return;}
   if(command==='ship'){if(shipExitCode(result.status)!==0)process.exitCode=1;return;}
-  if(command==='go'){if(goExitCode(result.status)!==0)process.exitCode=1;return;}
+  if(command==='go'){if(result.status==='paused')process.exitCode=75;else if(goExitCode(result.status)!==0)process.exitCode=1;return;}
   if(['run','resume'].includes(command)&&result.status==='paused')process.exitCode=75;
   if(['failed','cancelled'].includes(result.status)||(command==='integrate'&&result.status==='partial'))process.exitCode=1;
   // Field lesson 138 (tool half): a check that never started is invalid evidence, not a red
