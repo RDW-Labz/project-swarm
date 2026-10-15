@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import crypto from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,6 +15,8 @@ export const LANE_DEFAULTS = Object.freeze(Object.fromEntries(LANE_AGENTS.map(ag
   pauseMs: 900000,
   maxPauseMs: 900000,
   model: null,
+  // null, or { start, min }: the lane begins at `start` requests in flight and finds its own limit (see report()).
+  adaptive: null,
 })])));
 
 function invalid(agent, field, reason) {
@@ -27,13 +29,18 @@ function integer(agent, field, value, min, max) {
   if (!Number.isInteger(value) || value < min || value > max) throw invalid(agent, field, `must be an integer ${min}–${max}`);
 }
 function validate(agent, lane) {
-  integer(agent, 'concurrency', lane.concurrency, 1, 512);
+  integer(agent, 'concurrency', lane.concurrency, 1, 2048);
   if (lane.requestsPerMinute !== null) integer(agent, 'requestsPerMinute', lane.requestsPerMinute, 1, 100000);
   integer(agent, 'backoff.baseMs', lane.backoff.baseMs, 1, 600000);
   integer(agent, 'backoff.maxMs', lane.backoff.maxMs, lane.backoff.baseMs, 3600000);
   integer(agent, 'backoff.maxRetries', lane.backoff.maxRetries, 0, 20);
   integer(agent, 'pauseMs', lane.pauseMs, 1, 86400000);
   integer(agent, 'maxPauseMs', lane.maxPauseMs, 1, 86400000);
+  if (lane.adaptive !== null) {
+    if (!object(lane.adaptive) || Object.keys(lane.adaptive).some(key => !['start', 'min'].includes(key))) throw invalid(agent, 'adaptive', 'must be null, true or { start, min }');
+    integer(agent, 'adaptive.min', lane.adaptive.min, 1, lane.concurrency);
+    integer(agent, 'adaptive.start', lane.adaptive.start, lane.adaptive.min, lane.concurrency);
+  }
   if (lane.model !== null && (typeof lane.model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,119}$/.test(lane.model))) {
     throw invalid(agent, 'model', 'must be null or a valid model name');
   }
@@ -55,9 +62,15 @@ export function resolveLanes({ config = {}, manifest = {} } = {}) {
             if (!Object.hasOwn(LANE_DEFAULTS[agent].backoff, key)) throw invalid(agent, `backoff.${key}`, 'is unknown');
             lanes[agent].backoff[key] = entry;
           }
-        } else lanes[agent][field] = value;
+        } else if (field === 'adaptive') lanes[agent].adaptive = value === true ? {} : value === false ? null : value;
+        else lanes[agent][field] = value;
       }
     }
+  }
+  // adaptive: true (or a partial object) is filled in from the lane's concurrency once every override is applied.
+  for (const agent of LANE_AGENTS) {
+    const adaptive = lanes[agent].adaptive;
+    if (object(adaptive) && Object.keys(adaptive).every(key => ['start', 'min'].includes(key))) lanes[agent].adaptive = { min: adaptive.min ?? 1, start: adaptive.start ?? Math.max(adaptive.min ?? 1, Math.min(8, lanes[agent].concurrency)) };
   }
   for (const agent of LANE_AGENTS) validate(agent, lanes[agent]);
   return lanes;
@@ -233,7 +246,7 @@ export function writeLanePause({ dir, agent, state, until, consecutiveRateLimits
 
 export class LaneScheduler {
   constructor({ lanes, globalConcurrency, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, random = Math.random, shared = null }) {
-    integer('global', 'concurrency', globalConcurrency, 1, 512);
+    integer('global', 'concurrency', globalConcurrency, 1, 2048);
     this.lanes = resolveLanes({ manifest: { lanes } });
     this.globalConcurrency = globalConcurrency;
     this.now = now;
@@ -253,7 +266,13 @@ export class LaneScheduler {
     this.timer = null;
     this.states = Object.fromEntries(LANE_AGENTS.map(agent => [agent, {
       state: 'ok', until: null, inFlight: 0, machineInFlight: null, peak: 0, queue: [], acquisitions: [], consecutiveRateLimits: 0, used: false,
+      limit: this.lanes[agent].adaptive ? this.lanes[agent].adaptive.start : this.lanes[agent].concurrency, okStreak: 0,
     }]));
+  }
+
+  // How many requests this lane may have in flight right now: its configured cap, or, when adaptive, the limit it has found so far.
+  limitOf(agent) {
+    return this.lanes[agent].adaptive ? this.states[agent].limit : this.lanes[agent].concurrency;
   }
 
   lane(agent) {
@@ -271,17 +290,27 @@ export class LaneScheduler {
   }
 
   // The file is the source of truth for other runs. A local quota pause still wins over a shorter backoff.
-  readShared(time) {
+  // Reads that only look (health, pausedFor, snapshot) reuse the last read while the file is unchanged; a pump always reads fresh.
+  // Liveness of a slot's pid is checked once per pid per read, not once per slot.
+  readShared(time, fresh = false) {
     if (!this.shared) return;
+    // The file is only parsed again when it changed (size or modification time) or a second has passed (a slot's process may have died).
+    let signature = null;
+    try { const stat = statSync(this.shared.file); signature = `${stat.mtimeMs}:${stat.size}`; } catch { /* no file yet */ }
+    if (!fresh && signature !== null && signature === this.sharedSignature && time >= this.lastSharedRead && time - this.lastSharedRead < 1000) return;
+    this.sharedSignature = signature;
+    this.lastSharedRead = time;
     let store;
     try { store = JSON.parse(readFileSync(this.shared.file, 'utf8')); }
     catch { return; }
     if (!validStore(store)) return;
     const host = os.hostname();
+    const seen = new Map();
+    const alive = pid => { if (!seen.has(pid)) seen.set(pid, this.shared.isAlive(pid)); return seen.get(pid); };
     for (const agent of LANE_AGENTS) {
       const lane = this.states[agent];
       const slots = store.slots[agent] ?? [];
-      lane.machineInFlight = slots.filter(slot => slotLive(slot, host, this.shared.isAlive)).length;
+      lane.machineInFlight = slots.filter(slot => slotLive(slot, host, alive)).length;
       const pause = store.pauses[agent];
       if (!pause || !(pause.until > time)) continue;
       const keep = lane.state === 'paused' && lane.until !== null && lane.until >= pause.until && pause.state !== 'paused';
@@ -357,6 +386,7 @@ export class LaneScheduler {
     if (this.closed) return;
     const time = this.now();
     let wakeAt = Infinity;
+    this.readShared(time, true);
     for (const agent of LANE_AGENTS) {
       const lane = this.states[agent];
       this.refresh(lane, time);
@@ -371,7 +401,7 @@ export class LaneScheduler {
         const lane = this.states[agent];
         const limits = this.lanes[agent];
         if (!lane.queue.length || lane.state !== 'ok') continue;
-        if (lane.machineInFlight !== null && lane.machineInFlight >= limits.concurrency) { skipped.add(agent); continue; }
+        if (lane.machineInFlight !== null && lane.machineInFlight >= this.limitOf(agent)) { skipped.add(agent); continue; }
         if (limits.requestsPerMinute !== null && lane.acquisitions.length >= limits.requestsPerMinute) continue;
         if (selected === null || lane.queue[0].arrival < this.states[selected].queue[0].arrival) selected = agent;
       }
@@ -384,7 +414,7 @@ export class LaneScheduler {
         const other = this.states[agent];
         const otherLimits = this.lanes[agent];
         if (!other.queue.length || other.state !== 'ok') continue;
-        if (other.machineInFlight !== null && other.machineInFlight >= otherLimits.concurrency) continue;
+        if (other.machineInFlight !== null && other.machineInFlight >= this.limitOf(agent)) continue;
         if (otherLimits.requestsPerMinute !== null && other.acquisitions.length >= otherLimits.requestsPerMinute) continue;
         otherEarliest = Math.min(otherEarliest, other.queue[0].arrival);
       }
@@ -392,13 +422,13 @@ export class LaneScheduler {
       for (const waiter of lane.queue) {
         if (waiter.arrival > otherEarliest) break;
         if (this.globalInFlight + waiters.length >= this.globalConcurrency) break;
-        if (lane.inFlight + waiters.length >= limits.concurrency) break;
+        if (lane.inFlight + waiters.length >= this.limitOf(selected)) break;
         if (limits.requestsPerMinute !== null && lane.acquisitions.length + waiters.length >= limits.requestsPerMinute) break;
         waiters.push(waiter);
       }
       if (!waiters.length) break;
       let claim;
-      try { claim = await claimLaneSlots({ dir: this.shared.dir, agent: selected, concurrency: limits.concurrency, count: waiters.length, runId: this.shared.runId, now: this.now, isAlive: this.shared.isAlive }); }
+      try { claim = await claimLaneSlots({ dir: this.shared.dir, agent: selected, concurrency: this.limitOf(selected), count: waiters.length, runId: this.shared.runId, now: this.now, isAlive: this.shared.isAlive }); }
       catch (error) {
         for (const waiter of waiters) {
           const index = lane.queue.indexOf(waiter);
@@ -479,7 +509,7 @@ export class LaneScheduler {
       for (const agent of LANE_AGENTS) {
         const lane = this.states[agent];
         const limits = this.lanes[agent];
-        if (!lane.queue.length || lane.state !== 'ok' || lane.inFlight >= limits.concurrency) continue;
+        if (!lane.queue.length || lane.state !== 'ok' || lane.inFlight >= this.limitOf(agent)) continue;
         if (limits.requestsPerMinute !== null && lane.acquisitions.length >= limits.requestsPerMinute) continue;
         if (selected === null || lane.queue[0].arrival < this.states[selected].queue[0].arrival) selected = agent;
       }
@@ -518,6 +548,16 @@ export class LaneScheduler {
     if (this.closed) return;
     const limits = this.lanes[agent];
     lane.used = true;
+    // Adaptive lanes: a full window of clean successes opens one more slot; a rate limit halves the limit (never below min).
+    if (limits.adaptive) {
+      if (outcome.kind === 'ok') {
+        lane.okStreak += 1;
+        if (lane.okStreak >= lane.limit) { lane.limit = Math.min(limits.concurrency, lane.limit + 1); lane.okStreak = 0; }
+      } else if (outcome.kind === 'rate-limited') {
+        lane.limit = Math.max(limits.adaptive.min, Math.floor(lane.limit / 2));
+        lane.okStreak = 0;
+      }
+    }
     if (outcome.kind === 'rate-limited') {
       lane.consecutiveRateLimits += 1;
       const delay = outcome.retryAfterMs ?? Math.min(limits.backoff.maxMs, limits.backoff.baseMs * 2 ** (lane.consecutiveRateLimits - 1)) * (0.5 + this.random() / 2);
@@ -555,6 +595,7 @@ export class LaneScheduler {
       agent, state: lane.state, until: lane.until === null ? null : new Date(lane.until).toISOString(),
       inFlight: this.shared && lane.machineInFlight !== null ? lane.machineInFlight : lane.inFlight, queued: lane.queue.length, concurrency: this.lanes[agent].concurrency,
       consecutiveRateLimits: lane.consecutiveRateLimits,
+      ...(this.lanes[agent].adaptive ? { limit: lane.limit } : {}),
     };
   }
 

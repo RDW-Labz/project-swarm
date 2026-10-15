@@ -954,7 +954,8 @@ async function jsonWrite(root, value, data) {
   const target = await safePath(root, value, { internal: true, parents: true });
   const temporary = `${target}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   try {
-    await fs.writeFile(temporary, `${JSON.stringify(data, null, 2)}\n`, { flag: 'wx' });
+    // A run of thousands of jobs is megabytes of state; pretty-printing it costs more than writing it.
+    await fs.writeFile(temporary, `${JSON.stringify(data, null, value.endsWith('/state.json') && (data?.jobs?.length ?? 0) > 200 ? 0 : 2)}\n`, { flag: 'wx' });
     await fs.rename(temporary, target);
   } catch (error) {
     await fs.unlink(temporary).catch(() => {});
@@ -1222,7 +1223,7 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     if (typeof manifest.contract !== 'string') fail('contract must be a relative file path');
     relative(manifest.contract);
   }
-  if (manifest.concurrency !== undefined && (!Number.isInteger(manifest.concurrency) || manifest.concurrency < 1 || manifest.concurrency > 512)) fail('Concurrency must be 1–512');
+  if (manifest.concurrency !== undefined && (!Number.isInteger(manifest.concurrency) || manifest.concurrency < 1 || manifest.concurrency > 2048)) fail('Concurrency must be 1–2048');
   if (manifest.checks !== undefined) {
     if (!Array.isArray(manifest.checks) || manifest.checks.length > 10) fail('checks must be an array of at most 10 checks');
     for (const check of manifest.checks) {
@@ -1387,8 +1388,10 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
       for (const pattern of job.contextGlob) parseContextGlob(pattern);
     }
     for (const file of outputJobs && !outputJobs.has(job.id) ? [] : job.outputs) {
-      if (writers.has(file.toLowerCase())) fail(`Output collision (case-insensitive): ${file}`);
-      writers.add(file.toLowerCase());
+      // Compared in one normal form (no ./, no trailing slash, lower case), so spelling cannot hide an overlap.
+      const normalOutput = path.posix.normalize(file).replace(/\/+$/, '').toLowerCase();
+      if (writers.has(normalOutput)) fail(`Output collision (case-insensitive): ${file}`);
+      writers.add(normalOutput);
     }
     // Tests a job knowingly leaves uncovered by context; same path rules as context/outputs.
     if (job.ignoreTests !== undefined) {
@@ -1435,8 +1438,12 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     // Unknown command/provider fields cannot create an execution path.
     if (job.type === 'lead') validateLeadArea(job);
     else if (job.area !== undefined) fail(`lead-area-invalid: Job ${job.id}: area requires type lead`, 'lead-area-invalid');
-    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext'];
+    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext'];
     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
+    if (job.cacheContext !== undefined) {
+      if (!Array.isArray(job.cacheContext) || !job.cacheContext.length || job.cacheContext.length > 10 || job.cacheContext.some(file => typeof file !== 'string' || !(job.context ?? []).includes(file)) || new Set(job.cacheContext).size !== job.cacheContext.length) fail(`Job ${job.id}: cacheContext must be 1-10 unique paths that are also in context`, 'cache-context-invalid');
+      if (!['anthropic', 'auto'].includes(job.agent)) fail(`Job ${job.id}: cacheContext is for the anthropic lane (agent anthropic or auto)`, 'cache-context-invalid');
+    }
     if (job.allowProtectedContext !== undefined && (typeof job.allowProtectedContext !== 'string' || !job.allowProtectedContext.trim() || job.allowProtectedContext.length > 200)) fail(`Job ${job.id}: allowProtectedContext must be a reason of 1-200 characters`, 'allow-protected-context-invalid');
   }
   validateParentLeads(manifest);
@@ -1444,7 +1451,14 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
   for (const job of manifest.jobs) for (const afterId of job.after ?? []) if (!ids.has(afterId.toLowerCase())) fail(`Job ${job.id} after names unknown job ${afterId}`);
   const cycle = detectAfterCycle(manifest.jobs);
   if (cycle) fail(`after cycle: ${cycle.join(' -> ')}`);
-  for (const a of writers) for (const b of writers) if (a !== b && pathContains(a, b)) fail(`Overlapping output paths: ${a}, ${b}`);
+  // A path overlaps another when one of its parent folders is itself an output: one set lookup per parent, not one comparison per pair.
+  for (const b of writers) {
+    const parts = b.split('/');
+    for (let length = 1; length < parts.length; length++) {
+      const parent = parts.slice(0, length).join('/');
+      if (writers.has(parent)) fail(`Overlapping output paths: ${parent}, ${b}`);
+    }
+  }
   // Field lesson #294: check output capacity for API agents with maxOutputTokens
   for (const job of manifest.jobs) {
     if (job.maxOutputTokens && API_AGENTS.includes(job.agent)) {
@@ -2434,13 +2448,13 @@ export async function runBaseChecks(root, manifest, { spawnImpl = spawn, gitImpl
 // One live-output scan is shared by validate and run. The legacy board compares exact repository
 // paths; open-scope jobs additionally reserve parent/child path collisions, just as run has always
 // done. Keeping that policy here prevents validate from approving a launch that run will refuse.
-async function liveOutputConflicts(root, jobs, { runId, liveDir, isAlive } = {}) {
+async function liveOutputConflicts(root, jobs, { runId, liveDir, isAlive, runs } = {}) {
   const outputs = jobs.flatMap(job => job.outputs ?? []);
-  let conflicts = await findWriterConflicts({ runId, root, outputs, dir: liveDir, isAlive });
+  let conflicts = await findWriterConflicts({ runId, root, outputs, dir: liveDir, isAlive, runs });
   if (!jobs.some(job => job.scope === 'open')) return conflicts;
   const repo = await repoKey(root);
   const files = (await repoPaths(root, outputs)).map(file => file.toLowerCase());
-  for (const run of await listLiveRuns({ dir: liveDir, isAlive })) {
+  for (const run of runs ?? await listLiveRuns({ dir: liveDir, isAlive })) {
     if (run.runId === runId || run.repo !== repo || conflicts.some(conflict => conflict.runId === run.runId)) continue;
     const shared = run.files.filter(file => files.some(own => pathContains(own, file.toLowerCase()) || pathContains(file.toLowerCase(), own)));
     if (shared.length) conflicts.push({ runId: run.runId, root: run.root, files: shared });
@@ -2695,29 +2709,65 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   const swarmDirWarning = state.worktreesBase ? null : await swarmDirNotIgnoredWarning(root);
   const manifestWarnings = [...jobTypeWarnings.map(warning => warning.message), ...scopeWarnings.map(warning => warning.message), ...sharedRootFullSuiteWarnings(manifest), ...(liveWarning ? [liveWarning.message] : []), ...await lessonQueueWarnings(root), ...(swarmDirWarning ? [swarmDirWarning] : [])];
   const save = async () => { state.lanes = scheduler.snapshot(); state.peakConcurrency = state.lanes.peakGlobal; state.warnings = runWarnings(state, manifestWarnings); state.summary = summarizeRun(state); await jsonWrite(root, `${directory}/state.json`, state); onState(state); };
-  // Coalesce bursts into one writer and one pending publication of the latest state.
-  let writes = null, pendingWrite = false;
+  // Coalesce bursts into one writer and one pending publication of the latest state. A caller waits only for the save that
+  // covers its own change, never for the writer to go quiet: with other jobs' progress arriving all the time that never
+  // happens, and every job start would be held until the running ones ended.
+  let writes = null, pendingWrite = false, requested = 0;
+  const saveWaiters = [];
   const queueSave = () => {
     pendingWrite = true;
+    const mine = ++requested;
+    const covered = new Promise((resolve, reject) => saveWaiters.push({ mine, resolve, reject }));
     if (!writes) writes = (async () => {
-      while (pendingWrite) {
-        await new Promise(resolve => setTimeout(resolve, 20));
+      // The wait grows with the cost of the last save (about 10% of the time goes to saving, however large the run is);
+      // a small run keeps the 20 ms window.
+      let lastSaveMs = 0;
+      try {
+        while (pendingWrite) {
+          await new Promise(resolve => setTimeout(resolve, Math.max(20, Math.min(2000, lastSaveMs * 8))));
+          pendingWrite = false;
+          const target = requested;
+          const began = performance.now();
+          await save();
+          lastSaveMs = performance.now() - began;
+          for (const waiter of saveWaiters.splice(0)) { if (waiter.mine <= target) waiter.resolve(); else saveWaiters.push(waiter); }
+        }
+      } catch (error) {
+        for (const waiter of saveWaiters.splice(0)) waiter.reject(error);
         pendingWrite = false;
-        await save();
+      } finally {
+        // Cleared in the same turn the loop ends, so a caller woken by the last save can never find a writer that has already quit.
+        writes = null;
       }
-    })().finally(() => { writes = null; });
-    return writes;
+    })();
+    // Callers that do not wait (progress ticks, host hooks) must not turn a failed save into an unhandled rejection.
+    covered.catch(() => {});
+    return covered;
   };
   hostHooks.save = queueSave;
   // Throttled progress writes join the same serialized queue and always publish the live
   // record, so a late tick can never resurrect a status the worker loop already finalized.
   const activity = activityRecorder(queueSave, progressIntervalMs, () => cleanup.abort());
-  const cancelled = async () => Boolean(signal?.aborted || await bytesAt(root, `${directory}/cancel`, true));
+  // Every in-flight job polls this (an API job every 100 ms); with a thousand in flight that alone would be ten thousand
+  // file reads a second. One read of the cancel file serves every caller for 250 ms, and a cancel is never un-seen.
+  const cancelCache = { at: -Infinity, value: false, pending: null };
+  const cancelled = async () => {
+    if (signal?.aborted || cancelCache.value) return true;
+    if (performance.now() - cancelCache.at < 250) return false;
+    cancelCache.pending ??= bytesAt(root, `${directory}/cancel`, true).then(bytes => Boolean(bytes), () => false).finally(() => { cancelCache.pending = null; });
+    const value = await cancelCache.pending;
+    cancelCache.at = performance.now();
+    if (value) cancelCache.value = true;
+    return value;
+  };
   const waitingJobs = new Map();
   let waitPoll = null;
   const abortLongPauses = () => {
+    // One look per lane per poll, not one per waiting job (thousands may be waiting).
+    const pausedFor = new Map();
     for (const [controller, waiter] of waitingJobs) {
-      if (scheduler.pausedFor(waiter.agent) > lanes[waiter.agent].maxPauseMs) {
+      if (!pausedFor.has(waiter.agent)) pausedFor.set(waiter.agent, scheduler.pausedFor(waiter.agent));
+      if (pausedFor.get(waiter.agent) > lanes[waiter.agent].maxPauseMs) {
         waiter.onPause(scheduler.health(waiter.agent).until);
         controller.abort();
       }
@@ -2910,7 +2960,11 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         const admit = unreserved ? Promise.resolve(capDecision({ budget: state.budget, run: reservedRunTotals(), laneToday: {}, agent: job.agent })) : admissions.then(async () => {
           const rates = await ratesFor(job);
           let inputChars = job.prompt.length;
-          for (const file of new Set([...job.context, ...job.outputs])) inputChars += (await bytesAt(root, file))?.length ?? 0;
+          for (const file of new Set([...job.context, ...job.outputs])) {
+            const length = (await bytesAt(root, file))?.length ?? 0;
+            // A cache write costs 1.25 times the plain input rate, so cached files are reserved at 1.25 times their size.
+            inputChars += (job.cacheContext ?? []).includes(file) ? Math.ceil(length * 1.25) : length;
+          }
           const reservation = estimateReservation({ job, lane: job.agent, model: job.model, inputChars, rates, laneDefaults: state.budget.lanes });
           const key = `${crypto.createHash('sha256').update(root).digest('hex').slice(0, 12)}/${id}/${job.id}#${record.attempts.length + 1}`;
           const { decision } = await reserveSpend({ dir: spendDirectory, key, lane: job.agent, runId: id, root, jobId: job.id, ...reservation, budget: state.budget, runTotals: reservedRunTotals(), now });
@@ -3019,7 +3073,9 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           // (Hermes, Qwen) and the host names that CLI's absolute path. Every other job runs here.
           const hostFilter = host => host.kind === 'local' || (EXTRA_CLI_AGENTS.includes(job.agent) && typeof host.commands?.[job.agent] === 'string');
           let hostFailure = null;
-          if (hostPool && configuredHosts.some(hostFilter)) {
+          // A tool-free API job is one HTTP request: it uses no local CPU or disk worth rationing, so it never takes a host slot
+          // (the local host's capacity is for workers that run code, and capped every API job at 4 at a time).
+          if (hostPool && !API_AGENTS.includes(job.agent) && configuredHosts.some(hostFilter)) {
             // No usable host is a failure of this job alone, never of the run.
             try { hostPlacement = await hostPool.claim({ signal, sensitive: job.sensitive !== false, hostFilter }); }
             catch (error) { if (error?.code !== 'hosts-exhausted') throw error; hostFailure = error; }
@@ -3261,7 +3317,8 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         attemptResult = result;
         if (record.usage && record.usage.total_tokens == null) {
           const { input_tokens, output_tokens } = record.usage;
-          if (typeof input_tokens === 'number' || typeof output_tokens === 'number') record.usage.total_tokens = (input_tokens ?? 0) + (output_tokens ?? 0);
+          // Cache writes and reads are tokens too; leaving them out would let a cached fan-out run past a token cap.
+          if (typeof input_tokens === 'number' || typeof output_tokens === 'number') record.usage.total_tokens = (input_tokens ?? 0) + (output_tokens ?? 0) + (record.usage.cache_creation_input_tokens ?? 0) + (record.usage.cache_read_input_tokens ?? 0);
         }
         await finishSpend();
         const outcome = result.reportInvalid ? { kind: 'other' } : classifyProviderOutcome(result);
@@ -5499,8 +5556,10 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   warnings.push(...await windowsCiGotchasWarnings(root));
   if (uncovered.length) throw Object.assign(new Error(`Uncovered test references (add the test to context, or list it in ignoreTests with a reason in the prompt): ${uncovered.map(u => `${u.job}: ${u.output} <- ${u.test}`).join('; ')}`), { details: { suggestedIgnoreTests: suggestIgnoreTests(uncovered) } });
   const jobConflicts = new Map();
+  // The live-run list is read once for the whole manifest, not once per job.
+  const liveRuns = await listLiveRuns({ dir: liveDir, isAlive });
   for (const job of manifest.jobs) {
-    const conflicts = await liveOutputConflicts(root, [job], { liveDir, isAlive });
+    const conflicts = await liveOutputConflicts(root, [job], { liveDir, isAlive, runs: liveRuns });
     for (const conflict of conflicts) {
       const key = `${conflict.runId}\u0000${conflict.root}`;
       const existing = jobConflicts.get(key) ?? { ...conflict, jobIds: [] };
@@ -7256,7 +7315,7 @@ async function mainInner() {
     for(let index=1;index<args.length;index++){
       const flag=args[index],value=args[++index];
       if(flag==='--jobs'){if(!/^\d+$/.test(value??''))fail('--jobs must be an integer 1–500');jobs=Number(value);}
-      else if(flag==='--concurrency'){if(!/^\d+$/.test(value??''))fail('--concurrency must be an integer 1–512');concurrency=Number(value);}
+      else if(flag==='--concurrency'){if(!/^\d+$/.test(value??''))fail('--concurrency must be an integer 1–2048');concurrency=Number(value);}
       else fail('Invalid arguments; use --help');
     }
     const dir=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-scale-'));

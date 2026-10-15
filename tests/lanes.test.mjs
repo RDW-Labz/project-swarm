@@ -48,7 +48,7 @@ test('defaults are complete, deeply frozen, and independently resolved', () => {
     assert.deepEqual(lanes[agent], {
       concurrency: ({ hermes: 1, cursor: 8, codex: 6, claude: 4, openrouter: 64, anthropic: 16 })[agent] ?? 32,
       requestsPerMinute: null, backoff: { baseMs: 2000, maxMs: 300000, maxRetries: 5 },
-      pauseMs: 900000, maxPauseMs: 900000, model: null,
+      pauseMs: 900000, maxPauseMs: 900000, model: null, adaptive: null,
     });
   }
   lanes.hermes.backoff.baseMs = 7;
@@ -61,7 +61,7 @@ test('config precedes manifest; lane and backoff fields merge independently', ()
   const manifest = { lanes: { codex: { concurrency: 5, backoff: { maxMs: 400 } }, cursor: { model: 'vendor/model:v1.2_3' } } };
   assert.deepEqual(resolveLanes({ config, manifest }).codex, {
     concurrency: 5, requestsPerMinute: 8, model: 'gpt-5', backoff: { baseMs: 10, maxMs: 400, maxRetries: 2 },
-    pauseMs: 900000, maxPauseMs: 900000,
+    pauseMs: 900000, maxPauseMs: 900000, adaptive: null,
   });
   assert.equal(config.lanes.codex.concurrency, 9);
   assert.equal(manifest.lanes.codex.backoff.baseMs, undefined);
@@ -75,7 +75,7 @@ test('config precedes manifest; lane and backoff fields merge independently', ()
 
 test('every invalid field, shape, range, and model refuses with lanes-invalid', () => {
   const cases = [
-    ['concurrency', [0, 513, 1.5, null, '2', NaN, Infinity]],
+    ['concurrency', [0, 2049, 1.5, null, '2', NaN, Infinity]],
     ['requestsPerMinute', [0, 100001, 1.5, '2', undefined, Infinity]],
     ['pauseMs', [0, 86400001, 1.5, null, '2']],
     ['maxPauseMs', [0, 86400001, 1.5, null, '2']],
@@ -382,7 +382,7 @@ test('health, snapshot, pausedFor, unknown agents and global limits', async () =
       assert.throws(action, { code: 'lanes-invalid' });
     }
   }
-  for (const globalConcurrency of [0, 513, 1.5]) assert.throws(() => new LaneScheduler({ lanes: resolveLanes(), globalConcurrency }), { code: 'lanes-invalid' });
+  for (const globalConcurrency of [0, 2049, 1.5]) assert.throws(() => new LaneScheduler({ lanes: resolveLanes(), globalConcurrency }), { code: 'lanes-invalid' });
   release();
   assert.equal(s.snapshot().lanes.hermes.peak, 1);
   s.close();
@@ -425,4 +425,56 @@ test('a shared lane file caps in-flight across schedulers, shares a 429 pause, a
   assert.equal(store.slots.cursor.length, 1);
   await staleRelease(); await replaced();
   await stale.close(); await next.close();
+});
+
+test('adaptive lanes start low, open one slot per window of successes, halve on a 429, and never leave their bounds', async () => {
+  assert.deepEqual(resolveLanes({ manifest: { lanes: { openai: { concurrency: 20, adaptive: true } } } }).openai.adaptive, { min: 1, start: 8 });
+  assert.deepEqual(resolveLanes({ manifest: { lanes: { openai: { concurrency: 4, adaptive: true } } } }).openai.adaptive, { min: 1, start: 4 });
+  assert.deepEqual(resolveLanes({ manifest: { lanes: { openai: { concurrency: 20, adaptive: { start: 3, min: 2 } } } } }).openai.adaptive, { min: 2, start: 3 });
+  assert.equal(resolveLanes({ manifest: { lanes: { openai: { adaptive: false } } } }).openai.adaptive, null);
+  for (const bad of [{ start: 0 }, { start: 99 }, { min: 5, start: 3 }, { other: 1 }, 'yes', 3]) {
+    assert.throws(() => resolveLanes({ manifest: { lanes: { openai: { concurrency: 10, adaptive: bad } } } }), { code: 'lanes-invalid' }, JSON.stringify(bad));
+  }
+  const { scheduler: s } = fixture({ openai: { concurrency: 6, adaptive: { start: 2, min: 1 } } }, 16);
+  assert.equal(s.health('openai').limit, 2);
+  const held = [await s.acquire('openai'), await s.acquire('openai')];
+  let third = false;
+  const pending = s.acquire('openai').then(release => { third = true; return release; });
+  await Promise.resolve();
+  assert.equal(third, false, 'only two at first');
+  held[0](); s.report('openai', outcome('ok'));
+  held[1](); s.report('openai', outcome('ok'));
+  assert.equal(s.health('openai').limit, 3, 'two successes in a window of two open one slot');
+  (await pending)();
+  for (let n = 0; n < 40; n += 1) s.report('openai', outcome('ok'));
+  assert.equal(s.health('openai').limit, 6, 'never above the configured concurrency');
+  s.report('openai', outcome('rate-limited', { retryAfterMs: 1 }));
+  assert.equal(s.health('openai').limit, 3, 'halved');
+  s.report('openai', outcome('rate-limited', { retryAfterMs: 1 }));
+  s.report('openai', outcome('rate-limited', { retryAfterMs: 1 }));
+  s.report('openai', outcome('rate-limited', { retryAfterMs: 1 }));
+  assert.equal(s.health('openai').limit, 1, 'never below min');
+  s.report('openai', outcome('other'));
+  s.report('openai', outcome('quota-exhausted'));
+  assert.equal(s.health('openai').limit, 1, 'other outcomes do not move it');
+  assert.equal(fixture({ openai: { concurrency: 6 } }).scheduler.health('openai').limit, undefined, 'a fixed lane shows no limit');
+});
+
+test('an adaptive lane in the shared lane file holds to its current limit across the machine', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lanes-adaptive-'));
+  try {
+    let time = 1700000000000;
+    const s = new LaneScheduler({ lanes: resolveLanes({ manifest: { lanes: { openai: { concurrency: 8, adaptive: { start: 2, min: 1 } } } } }), globalConcurrency: 16, now: () => time, shared: { dir, runId: 'r' } });
+    const a = await s.acquire('openai');
+    const b = await s.acquire('openai');
+    let third = false;
+    const pending = s.acquire('openai').then(release => { third = true; return release; });
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.equal(third, false);
+    a(); s.report('openai', outcome('ok'));
+    b(); s.report('openai', outcome('ok'));
+    (await pending)();
+    assert.equal(s.health('openai').limit, 3);
+    await s.close?.();
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

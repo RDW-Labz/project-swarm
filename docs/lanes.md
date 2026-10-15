@@ -1,6 +1,6 @@
 # Lanes and routing
 
-A lane belongs to one agent. It has its own concurrency cap, request rate, backoff, and quota pause. The manifest's `concurrency` is a global cap shared by all lanes: 1–512, default 2. A manifest accepts 1–5000 jobs. Increasing the global cap does not override a lane cap.
+A lane belongs to one agent. It has its own concurrency cap, request rate, backoff, and quota pause. The manifest's `concurrency` is a global cap shared by all lanes: 1–2048, default 2. A manifest accepts 1–5000 jobs. Increasing the global cap does not override a lane cap.
 
 > "Hundreds at once" mostly comes from API workers, Hermes and remote machines. Subscription CLIs (Claude, Codex, Cursor) get rate-limited long before 100 parallel sessions, so each one gets its own lane cap. The global cap is capacity, not a target.
 
@@ -58,7 +58,7 @@ Then use this manifest:
 
 Claude resolves to concurrency 2, base backoff 4000 ms, maximum backoff 300000 ms, and three retries. Replace the placeholder models and context path with available models and an existing file. Validation checks syntax, not model availability.
 
-Unknown agents and fields refuse with `lanes-invalid`. Concurrency must be an integer 1–512; `requestsPerMinute` is `null` or an integer 1–100000. Backoff `baseMs` is 1–600000, `maxMs` is at least `baseMs` and at most 3600000, and `maxRetries` is 0–20. Both pause fields are integers 1–86400000 ms. A lane model is `null` or matches `/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,119}$/`.
+Unknown agents and fields refuse with `lanes-invalid`. Concurrency must be an integer 1–2048; `requestsPerMinute` is `null` or an integer 1–100000. Backoff `baseMs` is 1–600000, `maxMs` is at least `baseMs` and at most 3600000, and `maxRetries` is 0–20. Both pause fields are integers 1–86400000 ms. A lane model is `null` or matches `/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,119}$/`.
 
 ## Rate limits and quota pauses
 
@@ -87,3 +87,11 @@ The router picks the cheapest eligible healthy lane. It skips paused lanes and c
 After two `failed` or `timeout` attempts on a lane for an automatic job, the router drops that lane only. Claude is eligible only when no cheap candidate remains and cheap lanes have collected at least two real failures. Paused cheap lanes wait and never trigger a jump to Claude. Each attempt gets a fresh workspace. `blocked`, `cancelled`, and rate-limit retries never count toward fallback. If no eligible lane remains, the job fails with `route-exhausted`. Explicit jobs do not automatically change agent or model.
 
 Jobs are sensitive by default, including when `sensitive` is omitted. Only `sensitive: false` allows OpenRouter, OpenAI, Gemini, or Lambda. Explicit OpenAI, Gemini, and Lambda jobs without it refuse with `sensitive-provider`: `Job <id>: <agent> only gets jobs that set sensitive: false`. Explicit OpenRouter jobs without `sensitive: false` refuse with `sensitive-openrouter`: `Job <id>: OpenRouter only gets jobs that set sensitive: false`. Output ownership, explicit file lists, hash-checked integration, and all existing path and secret refusals still apply. See the [manifest reference](manifest-reference.md) for job fields.
+
+## Adaptive lanes
+
+`"adaptive": true` (or `{ "start": 4, "min": 2 }`) on a lane lets it find its own limit instead of trusting `concurrency`, which stays the ceiling. The lane starts at `start` requests in flight (default 8, at most the ceiling). Every window of clean successes (as many as the current limit) opens one more slot; a 429 halves the limit, never below `min` (default 1). The provider's `retry-after` still pauses the lane as before. Other failures leave the limit alone. The limit is per run (the machine-wide file still counts the slots every run holds), and `swarm status` shows it as `limit` in the lane's health. Off by default.
+
+```json
+{ "lanes": { "anthropic": { "concurrency": 200, "adaptive": true } } }
+```

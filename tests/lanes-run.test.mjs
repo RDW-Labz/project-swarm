@@ -123,7 +123,7 @@ test('manifest accepts 5000 jobs and concurrency 512 and refuses invalid lanes a
   const jobs = Array.from({ length: 5000 }, (_, n) => job(n, 'ollama', { outputs: [] }));
   assert.equal(validateManifest(manifest(jobs)).jobs.length, 5000);
   assert.throws(() => validateManifest(manifest([...jobs, job(5000)])), /1–5000/);
-  assert.throws(() => validateManifest(manifest(jobs, { concurrency: 513 })), /1–512/);
+  assert.throws(() => validateManifest(manifest(jobs, { concurrency: 2049 })), /1–2048/);
   for (const sensitive of [undefined, true]) {
     assert.throws(() => validateManifest(manifest([job(0, 'openrouter', { sensitive })])), {
       code: 'sensitive-openrouter', message: 'Job job-0: OpenRouter only gets jobs that set sensitive: false',

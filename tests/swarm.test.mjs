@@ -48,7 +48,7 @@ test('rejects traversal, absolute paths, secrets, collisions, and executable ada
   assert.throws(() => validateManifest(manifest([job(), job({ id: 'second' })])), /collision/);
   assert.throws(() => validateManifest(manifest([job({ command: '/tmp/evil' })])), /Unknown/);
   assert.throws(() => validateManifest(manifest([job({ agent: 'unknown-agent' })])), /Unsupported/);
-  assert.throws(() => validateManifest({ ...manifest(), concurrency: 513 }), /Concurrency/);
+  assert.throws(() => validateManifest({ ...manifest(), concurrency: 2049 }), /Concurrency/);
   assert.doesNotThrow(() => validateManifest({ ...manifest(), concurrency: 512 }));
 });
 
