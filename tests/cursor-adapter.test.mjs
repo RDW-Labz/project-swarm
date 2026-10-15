@@ -107,7 +107,7 @@ test('cursorProfile is the codex profile plus the install dir (read+exec) and ~/
 
 test('fail fast: missing key, malformed key and missing binary carry stable codes and never echo a key', async t => {
   assert.throws(() => requireCursorApiKey({}), error => error.message === CURSOR_NOT_AUTHENTICATED && error.code === 'cursor-not-authenticated');
-  assert.equal(CURSOR_NOT_AUTHENTICATED, 'cursor-not-authenticated: set CURSOR_API_KEY in the swarm environment (Keychain login is blocked by the sandbox)');
+  assert.equal(CURSOR_NOT_AUTHENTICATED, 'cursor-not-authenticated: store the key in the Keychain (service project-swarm, account cursor.api_key) or set CURSOR_API_KEY in the swarm environment');
   assert.throws(() => requireCursorApiKey({ CURSOR_API_KEY: '  ' }), /cursor-not-authenticated/);
   assert.throws(() => requireCursorApiKey({ CURSOR_API_KEY: 'has space inside' }), error => /malformed/.test(error.message) && !error.message.includes('has space'));
   assert.equal(requireCursorApiKey({ CURSOR_API_KEY: KEY }), KEY);

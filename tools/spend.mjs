@@ -8,9 +8,9 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LANE_AGENTS } from './lanes.mjs';
 
-export const LANE_DAILY_DEFAULTS = Object.freeze({ openrouter: Object.freeze({ dailyUsd: 5 }) });
-export const PAID_LANES = Object.freeze(['openrouter', 'openai', 'gemini', 'lambda']);
-export const LANE_RESERVE_DEFAULTS = Object.freeze({ openrouter: 0.5, openai: 0.5, gemini: 0.5, lambda: 0.5 });
+export const LANE_DAILY_DEFAULTS = Object.freeze({ openrouter: Object.freeze({ dailyUsd: 5 }), anthropic: Object.freeze({ dailyUsd: 20 }) });
+export const PAID_LANES = Object.freeze(['openrouter', 'openai', 'gemini', 'lambda', 'anthropic']);
+export const LANE_RESERVE_DEFAULTS = Object.freeze({ openrouter: 0.5, openai: 0.5, gemini: 0.5, lambda: 0.5, anthropic: 0.5 });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 function invalid(key, reason, code = 'budget-invalid') {
   return Object.assign(new Error(`${code}: ${key} ${reason}`), { code });

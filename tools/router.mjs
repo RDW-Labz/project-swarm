@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
-export const CHEAP_ORDER = Object.freeze(['hermes', 'cursor', 'codex', 'openrouter']);
-export const ROUTE_ORDER = Object.freeze(['hermes', 'cursor', 'codex', 'openrouter', 'claude']);
+export const CHEAP_ORDER = Object.freeze(['hermes', 'cursor', 'codex', 'anthropic', 'openrouter']);
+export const ROUTE_ORDER = Object.freeze(['hermes', 'cursor', 'codex', 'anthropic', 'openrouter', 'claude']);
+
+// The Anthropic lane's model follows the job's tier: the lane model (Haiku) by default, Sonnet for
+// tier "mid". Opus is never picked here; it needs an explicit anthropic job with tier "expensive".
+const ANTHROPIC_MID_MODEL = 'claude-sonnet-5-5';
+const laneModel = (job, agent, lanes) => (agent === 'anthropic' && job.tier === 'mid' ? ANTHROPIC_MID_MODEL : lanes[agent].model);
 
 export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), failures = {}, accepts = () => true } = {}) {
   if (job?.agent !== 'auto') {
@@ -11,7 +16,7 @@ export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), fa
   }
 
   const configured = agent => typeof lanes[agent]?.model === 'string';
-  const accepted = agent => accepts({ ...job, agent, model: lanes[agent].model }) !== false;
+  const accepted = agent => accepts({ ...job, agent, model: laneModel(job, agent, lanes) }) !== false;
   const order = [...new Set([...(Array.isArray(job.typeRoute) ? job.typeRoute : []).filter(agent => agent !== 'claude'), ...CHEAP_ORDER])];
   let reason = 'cheapest healthy lane';
   let candidates;
@@ -36,11 +41,11 @@ export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), fa
     }
   }
   for (const agent of candidates) {
-    if (health(agent).state !== 'paused') return { agent, model: lanes[agent].model, reason };
+    if (health(agent).state !== 'paused') return { agent, model: laneModel(job, agent, lanes), reason };
   }
   if (candidates.length > 0) {
     const agent = candidates[0];
-    return { agent, model: lanes[agent].model, reason: `${reason}; lane ${agent} paused` };
+    return { agent, model: laneModel(job, agent, lanes), reason: `${reason}; lane ${agent} paused` };
   }
 
   const error = new Error(`route-exhausted: no lane left for job ${job.id} (${reason})`);

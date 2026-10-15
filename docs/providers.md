@@ -1,6 +1,6 @@
 # Providers and setup
 
-Project Swarm supports ten adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
+Project Swarm supports eleven adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
 
 ## Choose the execution style
 
@@ -165,3 +165,12 @@ timeout. No credentials, code or model prompts are sent and redirects are
 refused. Remote origins and cloud keys remain configuration-only. A successful
 HTTP response means reachable, not authenticated or model-verified; a stopped
 server is reported unreachable while its configuration remains present.
+
+## Anthropic API (`anthropic`)
+
+A one-request, tool-free worker on your own Anthropic API credits (Messages API with structured JSON output). Unlike OpenRouter it is allowed for sensitive jobs: Anthropic already receives this code through Claude workers.
+
+- **Key:** read by the swarm parent only, from the Keychain item service `project-swarm`, account `anthropic.api_key` (or `SWARM_ANTHROPIC_API_KEY` for tests). The ambient `ANTHROPIC_API_KEY` is ignored on purpose. It is sent in one request header and never reaches a worker. Store it yourself with `security add-generic-password -s project-swarm -a anthropic.api_key -w`.
+- **Models:** `claude-haiku-5-5` is the lane default and `claude-sonnet-5-5` serves `tier: "mid"`. `claude-opus-5-5` runs only for a job that sets `tier: "expensive"`; `validate` refuses it otherwise. Thinking effort is pinned to `low`.
+- **Caps, machine-wide:** $500 total and $20 per UTC day across every project, plus $5 per job, from one ledger at `~/.project-swarm/logs/anthropic-spend.jsonl`. Each request is checked against a worst-case estimate first and the real cost is recorded after. A machine config may only lower these (`spend.lanes.anthropic.totalUsd` / `dailyUsd`). Raising them is a decision for the account owner, never a manifest field.
+- **Routing:** enable the lane with `"lanes": {"anthropic": {"model": "claude-haiku-5-5"}}` in the machine config. Route order is hermes → cursor → codex → anthropic → openrouter → claude.

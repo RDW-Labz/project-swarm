@@ -6,6 +6,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { execViaFile } from './cli-adapters.mjs';
 import { codexProfile, codexMessage, parseCodexReply, codexWorktreeFallback, sandboxPath, validateReadPaths, DEFAULT_MAX_ATTEMPTS } from './codex-adapter.mjs';
 
@@ -17,7 +18,7 @@ export const CURSOR_FLAGS = ['-p', '--output-format', '--model', '--trust', '--w
 // Never passed: --api-key puts the key in argv; --worktree/--approve-mcps leave the swarm boundary.
 export const CURSOR_FORBIDDEN_FLAGS = ['--api-key', '--worktree', '-w', '--approve-mcps', '--yolo'];
 export const CURSOR_DEFAULTS = Object.freeze({ model: 'composer-2.5', timeoutMs: 300000, maxAttempts: DEFAULT_MAX_ATTEMPTS, allowedPaths: [] });
-export const CURSOR_NOT_AUTHENTICATED = 'cursor-not-authenticated: set CURSOR_API_KEY in the swarm environment (Keychain login is blocked by the sandbox)';
+export const CURSOR_NOT_AUTHENTICATED = 'cursor-not-authenticated: store the key in the Keychain (service project-swarm, account cursor.api_key) or set CURSOR_API_KEY in the swarm environment';
 // Transient transport failures only; a model or auth error is never retried.
 export const CURSOR_BLIP_RE = /\b(?:ECONNRESET|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED)\b|socket hang up|network error|Connection (?:error|failed|reset)|\b(?:502|503|504) (?:Bad Gateway|Service Unavailable|Gateway Timeout)\b/i;
 
@@ -36,9 +37,22 @@ export function cursorConfig(config = {}, home = os.homedir()) {
   return { ...merged, allowedPaths: validateReadPaths(merged.allowedPaths, home, config) };
 }
 
+// The key comes from the swarm parent's environment, else the macOS Keychain item
+// service `project-swarm` account `cursor.api_key` (the same place the OpenRouter key lives). Only
+// this parent reads it; the worker's sandbox blocks the Keychain and gets the key by environment.
+export const CURSOR_KEY_ITEM = Object.freeze({ service: 'project-swarm', account: 'cursor.api_key' });
+export function readCursorKey(env = process.env, { platform = process.platform, exec = execFileSync } = {}) {
+  const fromEnv = env?.CURSOR_API_KEY;
+  if (typeof fromEnv === 'string' && fromEnv.length) return fromEnv;
+  if (env?.SWARM_CURSOR_NO_KEYCHAIN === '1' || platform !== 'darwin') return undefined;
+  try {
+    const out = exec('/usr/bin/security', ['find-generic-password', '-s', CURSOR_KEY_ITEM.service, '-a', CURSOR_KEY_ITEM.account, '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+    return String(out).trim() || undefined;
+  } catch { return undefined; }
+}
 // The key itself is checked only for presence and shape; it is never printed.
 export function requireCursorApiKey(env = process.env) {
-  const key = env?.CURSOR_API_KEY;
+  const key = readCursorKey(env);
   if (typeof key !== 'string' || !key.trim()) throw Object.assign(new Error(CURSOR_NOT_AUTHENTICATED), { code: 'cursor-not-authenticated' });
   if (/[\s\0]/.test(key) || key.length < 8) throw Object.assign(new Error('cursor-not-authenticated: CURSOR_API_KEY is malformed (whitespace, control characters or too short)'), { code: 'cursor-not-authenticated' });
   return key;

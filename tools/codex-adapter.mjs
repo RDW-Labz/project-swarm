@@ -245,6 +245,14 @@ export async function codexDirtyFiles(root, job) {
   }
   return dirty;
 }
+// The seatbelt profile only lets the worker write inside its worktree and scratch directories. The
+// default probe runner (`execViaFile`) hands the child stdout/stderr files in the OS tmp dir, which
+// the profile forbids, so even a healthy sandbox aborted node at startup (SIGABRT) and doctor
+// reported a broken sandbox for a machine where real Codex jobs ran. A pipe needs no file access.
+async function execPiped(command, args, options = {}) {
+  try { return await execGit(command, args, { ...options, encoding: 'utf8' }); }
+  catch (error) { throw Object.assign(Error(`${command} probe failed (${error.signal ?? error.code}): ${String(error.stderr ?? '').trim()}`), { stderr: error.stderr }); }
+}
 async function sandboxProbe(exec) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-sandbox-'));
   const root = await fs.realpath(temporary);
@@ -260,7 +268,7 @@ async function sandboxProbe(exec) {
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 }
 
-export async function codexDoctor({ platform = process.platform, exec = execViaFile } = {}) {
+export async function codexDoctor({ platform = process.platform, exec = execViaFile, sandboxExec = exec === execViaFile ? execPiped : exec } = {}) {
   if (platform !== 'darwin') return { agent: 'codex', status: 'unsupported', platform, configured: false, liveVerified: false, note: 'macOS seatbelt is required' };
   const options = { timeout: 10000, maxBuffer: 1024 * 1024 };
   await exec('/usr/bin/which', ['sandbox-exec'], options);
@@ -271,7 +279,7 @@ export async function codexDoctor({ platform = process.platform, exec = execViaF
   if (missing().length) help = await exec('codex', ['exec', '--help'], options).catch(() => ({ stdout: '' }));
   if (!help.stdout) throw Error('Codex help probe failed (no or empty output)');
   if (missing().length) throw Error(`Codex lacks required flags: ${missing().join(', ')}`);
-  const probe = await sandboxProbe(exec);
+  const probe = await sandboxProbe(sandboxExec);
   return { agent: 'codex', checks: [{ name: 'sandbox probe', status: probe }], status: probe === 'ok' ? 'compatible' : 'failed', platform, version: version.stdout.trim(), auth: 'login status succeeded', liveVerified: false };
 }
 

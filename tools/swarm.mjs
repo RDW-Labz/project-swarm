@@ -25,6 +25,7 @@ import { initProject } from './init.mjs';
 import { isGoalArgument, manifestForGoal, goGoal, goalRunId, topLevelFolders, worktreeDirty, createGoBranch } from './goal.mjs';
 import { SCALE_DEFAULT_CONCURRENCY, SCALE_DEFAULT_JOBS, prepareScaleRepo, scaleStub } from './scale.mjs';
 import { routeJob } from './router.mjs';
+import { anthropicPrice, assertOpusTier as assertAnthropicModel } from './anthropic.mjs';
 import { resolveBudget, runTotals, jobSpend, spendDir, withSpendStore, laneDayTotals, estimateReservation, reserveSpend, settleSpend, releaseSpend, finalCost, PAID_LANES, capDecision, ledgerRows, mergeLedger, validateIdleItems, runIdleMenu } from './spend.mjs';
 import { JOB_TYPES, applyJobType, jobTypeOutputViolations } from './job-types.mjs';
 import { validateLeadArea, validateParentLeads, validateChildManifest, leadPromptBlock, leadRollup } from './leads.mjs';
@@ -41,7 +42,7 @@ import { go, commitOutputs, goExitCode } from './go.mjs';
 import { TICKET_USAGE, parseTicketArgs, ticketPipeline } from './pipeline.mjs';
 import { SCAFFOLD_USAGE, parseScaffoldArgs, scaffoldJob, scaffoldPr, commandHandlers, commandHandlerWarnings } from './scaffold.mjs';
 import { prepareWorkspaceEnvironment, prepareViteCaches, isDesignOnlyCodexJob, createAdapterLogSink, runCodexWithRetry } from './codex-adapter.mjs';
-import { CURSOR_MODEL, CURSOR_BLIP_RE, requireCursorPlatform, requireCursorApiKey, resolveCursorBinary, cursorConfig, cursorProfile, cursorLaunchArgs, cursorMessage, cursorEnvironment, resolveCursorEnvelope, parseCursorOutput, redactCursorKey, cursorDoctor } from './cursor-adapter.mjs';
+import { readCursorKey, CURSOR_MODEL, CURSOR_BLIP_RE, requireCursorPlatform, requireCursorApiKey, resolveCursorBinary, cursorConfig, cursorProfile, cursorLaunchArgs, cursorMessage, cursorEnvironment, resolveCursorEnvelope, parseCursorOutput, redactCursorKey, cursorDoctor } from './cursor-adapter.mjs';
 import { classifyCheckEnvironment, swarmCheckWarnings } from './ship.mjs';
 import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary, listLiveRuns, repoKey, repoPaths } from './board.mjs';
 import { acquireIntegrationLock } from './integration-lock.mjs';
@@ -1266,6 +1267,7 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     // Every job, CLI or API, must name its model: the runner never falls back to a CLI default
     // (for Claude, that default is the user's own, often the most expensive, model).
     if (job.sensitive !== undefined && typeof job.sensitive !== 'boolean') fail(`Job ${job.id}: sensitive must be true or false`);
+    if (job.agent === 'anthropic') { try { assertAnthropicModel(job); } catch (error) { fail(`Job ${job.id}: ${error.message}`, 'anthropic-model'); } }
     if (job.agent === 'openrouter' && job.sensitive !== false) fail(`Job ${job.id}: OpenRouter only gets jobs that set sensitive: false`, 'sensitive-openrouter');
     if (NON_SENSITIVE_ONLY_AGENTS.includes(job.agent) && job.sensitive !== false) fail(`Job ${job.id}: ${job.agent} only gets jobs that set sensitive: false`, 'sensitive-provider');
     if (job.agent === 'auto') {
@@ -2610,6 +2612,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   const ratesFor = job => {
     const configured = worktreeConfig.spend?.rates?.[job.model];
     if (configured) return Promise.resolve(configured);
+    if (job.agent === 'anthropic') { try { const price = anthropicPrice(job.model); return Promise.resolve({ inUsdPerToken: price.longInput ?? price.input, outUsdPerToken: price.longOutput ?? price.output }); } catch { return Promise.resolve(null); } }
     if (job.agent !== 'openrouter') return Promise.resolve(null);
     if (!pricing.has(job.model)) pricing.set(job.model, fetchPricing(job.model, { fetchImpl, signal })
       .then(rate => ({ inUsdPerToken: rate.prompt, outUsdPerToken: rate.completion })).catch(() => null));
@@ -4128,7 +4131,7 @@ export async function workerKeyGuard(root, id, state, { env = process.env, keyEx
   if (hasShell) {
     try { keys.push(await resolveWorkerKey({ env, exec: keyExec, config: loadLocalConfig({ env }) })); } catch (error) { fail(`Refusing: cannot check run ${id} for the worker API key: ${error.message}`); }
   }
-  if (hasCursor && typeof env.CURSOR_API_KEY === 'string' && env.CURSOR_API_KEY) keys.push(env.CURSOR_API_KEY);
+  { const cursorKey = hasCursor ? readCursorKey(env) : undefined; if (cursorKey) keys.push(cursorKey); }
   if (!keys.length) return;
   const hits = [];
   const check = async file => { try { const info = await fs.lstat(file); if (info.isFile()) { const bytes = await fs.readFile(file); if (keys.some(key => containsKey(bytes, key))) hits.push(path.relative(root, file)); } } catch (error) { if (error.code !== 'ENOENT') throw error; } };
