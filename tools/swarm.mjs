@@ -6722,6 +6722,12 @@ function autopilotDeps() {
     readJournal: root => readJournal(root),
     appendEvent: (root, event) => appendEvent(root, event, { best: true }),
     readPlan,
+    checkout: async root => {
+      const git = async args => (await execFileAsync('git', ['-C', root, ...args], { encoding: 'utf8' })).stdout.trim();
+      const branch = await git(['branch', '--show-current']);
+      const linkedWorktree = (await git(['rev-parse', '--git-dir'])) !== (await git(['rev-parse', '--git-common-dir']));
+      return { branch, linkedWorktree, dirty: await worktreeDirty(root) };
+    },
     integrate: async (root, id) => {
       const summary = await integrateQueue(root, id);
       const state = await readState(root, id);

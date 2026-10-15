@@ -5,12 +5,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ACTIONS, decide, autopilotStep, runAutopilot, nextWave } from '../tools/autopilot.mjs';
+import { ACTIONS, decide, autopilotStep, runAutopilot, nextWave, integrationBlocker } from '../tools/autopilot.mjs';
 
 const NOW = Date.parse('2030-01-01T12:00:00.000Z');
 const MIN = 60_000;
 const iso = ms => new Date(ms).toISOString();
-const ALLOWED = new Set(['integrate', 'resume', 'retryFailed', 'startWave', 'appendEvent', 'readJournal', 'loadRuns', 'readPlan']);
+const ALLOWED = new Set(['integrate', 'resume', 'retryFailed', 'startWave', 'appendEvent', 'readJournal', 'loadRuns', 'readPlan', 'checkout']);
 
 async function tempRoot(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'autopilot-test-'));
@@ -31,6 +31,7 @@ function fakeDeps(opts = {}) {
       return event;
     },
     readPlan: async () => { calls.push(['readPlan']); return plan; },
+    checkout: async () => { calls.push(['checkout']); return { branch: 'swarm/work', dirty: false }; },
     integrate: async (...args) => { calls.push(['integrate', ...args]); },
     resume: async (...args) => { calls.push(['resume', ...args]); },
     retryFailed: async (...args) => { calls.push(['retryFailed', ...args]); },
@@ -333,6 +334,7 @@ test('autopilotStep journals run status changes, integrations, retry runs and st
     readJournal: async () => journal,
     appendEvent: async (_root, event) => { journal.push(event); },
     readPlan: async () => ({ waves: [{ id: 'w1', manifest: 'coordination/manifests/w1.json' }] }),
+    checkout: async () => ({ branch: 'swarm/x', dirty: false }),
     integrate: async () => ({ files: 3 }),
     resume: async () => { throw new Error('not used'); },
     retryFailed: async () => ({ run: 'r-retry', status: 'running' }),
@@ -374,4 +376,32 @@ test('the once-only memory stops a paid retry or wave from repeating when the jo
   await autopilotStep(root, deps, { now: () => NOW, memory });
   assert.equal(callsNamed(deps, 'retryFailed').length, 1);
   assert.equal(callsNamed(deps, 'startWave').length, 1);
+});
+
+test('autopilot only integrates from a clean swarm/* branch or a linked worktree; otherwise it adds one blocker', async t => {
+  const run = { id: 'r1', status: 'complete', integrated: false };
+  const cases = [
+    [{ branch: 'main', dirty: false }, /on main/],
+    [{ branch: 'master', dirty: false, linkedWorktree: true }, /on master/],
+    [{ branch: 'swarm/work', dirty: true }, /uncommitted/],
+    [{ branch: 'feat/x', dirty: false }, /not a swarm\/\* branch/],
+    [{ branch: '', dirty: false }, /not on a branch/],
+    [undefined, /could not be inspected/],
+  ];
+  for (const [checkout, pattern] of cases) {
+    const root = await tempRoot(t);
+    const deps = fakeDeps({ runs: [run], checkout: async () => checkout });
+    const memory = new Set();
+    const step = await autopilotStep(root, deps, { now: () => NOW, memory });
+    assert.equal(callsNamed(deps, 'integrate').length, 0);
+    assert.deepEqual(step.blocked, ['integrate-checkout-r1']);
+    const blocker = deps.calls.find(c => c[0] === 'appendEvent' && c[1].kind === 'blocker')[1];
+    assert.match(blocker.text, pattern);
+    await autopilotStep(root, deps, { now: () => NOW, memory });
+    assert.equal(deps.calls.filter(c => c[0] === 'appendEvent' && c[1].kind === 'blocker').length, 1, 'one blocker only');
+  }
+  assert.equal(integrationBlocker({ branch: 'swarm/go-1', dirty: false }), null);
+  assert.equal(integrationBlocker({ branch: 'work', dirty: false, linkedWorktree: true }), null);
+  const throwing = fakeDeps({ runs: [run], checkout: async () => { throw new Error('git missing'); } });
+  assert.equal((await autopilotStep(await tempRoot(t), throwing, { now: () => NOW })).blocked.length, 1);
 });

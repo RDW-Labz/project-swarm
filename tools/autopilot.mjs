@@ -131,6 +131,18 @@ async function safe(fn, fallback) {
 // Every once-only rule (one retry, one start per wave, no repeated integration) is read from the journal.
 // So the step fails closed: a journal that cannot be read or written means no actions, never a repeat of
 // paid work. `memory` also remembers what this process already did, whatever the journal says.
+// Integration only runs from a swarm/* branch or a linked worktree that is not main/master, and only when
+// there is no uncommitted work. Anything else (or a checkout that cannot be read) becomes a blocker.
+export function integrationBlocker(checkout) {
+  if (!checkout || typeof checkout !== 'object') return 'the checkout could not be inspected';
+  const branch = typeof checkout.branch === 'string' ? checkout.branch : '';
+  if (checkout.dirty !== false) return 'the checkout has uncommitted changes (or could not be checked)';
+  if (!branch) return 'the checkout is not on a branch';
+  if (branch === 'main' || branch === 'master') return `the checkout is on ${branch}`;
+  if (!branch.startsWith('swarm/') && checkout.linkedWorktree !== true) return `the checkout is on ${branch}, not a swarm/* branch or its own worktree`;
+  return null;
+}
+
 export async function autopilotStep(root, deps, { now = Date.now, memory = new Set() } = {}) {
   const nowMs = nowValue(now);
   let loadedEvents;
@@ -201,6 +213,19 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
         blocked.push(decision.id);
       }
       continue;
+    }
+    if (decision.action === 'integrate') {
+      let checkout = null;
+      try { checkout = await deps.checkout(root); } catch { checkout = null; }
+      const why = integrationBlocker(checkout);
+      if (why) {
+        const id = `integrate-checkout-${run.id}`;
+        if (!openIds(events).has(id)) {
+          await write({ kind: 'blocker', id, text: `Run ${run.id} is complete but not integrated: ${why}. Move to a swarm/* branch with a clean tree, then run: swarm integrate ${run.id}` });
+          blocked.push(id);
+        }
+        continue;
+      }
     }
     perRun.set(run.id, count + 1);
     actions.push(await execute(decision));

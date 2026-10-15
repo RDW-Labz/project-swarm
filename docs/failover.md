@@ -29,7 +29,7 @@ Stored text is cleaned: control characters become spaces, strings are cut at 200
 
 `swarm autopilot [--once] [--interval SECONDS] [--max-steps N]` drives the project with no model, checking every `--interval` seconds (at least 5, default 30). For each recent run it does the first thing that applies:
 
-1. A run that finished but was not integrated: integrate it through the merge queue. A failed integration is never repeated; it becomes a blocker.
+1. A run that finished but was not integrated: integrate it through the merge queue. It only does this from a clean checkout on a `swarm/*` branch (or a linked worktree that is not main/master). On main/master, another branch, or with uncommitted changes it adds a blocker (`integrate-checkout-<run>`) and integrates nothing. A failed integration is never repeated; it becomes a blocker.
 2. A run paused on a quota window that has passed: resume it. A run paused on a daily lane cap: try again after 15 minutes. A run paused on its own spend cap: **blocker**, because only the owner raises a cap.
 3. A run with failed jobs: retry the failed jobs once, as a new run linked to the first. A retry that also fails is a blocker, never retried again.
 4. If `.swarm/project/plan.json` exists (`{ "waves": [{ "id", "manifest", "after": ["wave id"], "maxUsd?", "maxTokens?" }] }`): start the next wave whose `after` waves are complete and integrated, at most one per step.
