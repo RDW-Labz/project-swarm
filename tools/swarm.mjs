@@ -2706,10 +2706,15 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   const swarmDirWarning = state.worktreesBase ? null : await swarmDirNotIgnoredWarning(root);
   const manifestWarnings = [...jobTypeWarnings.map(warning => warning.message), ...scopeWarnings.map(warning => warning.message), ...sharedRootFullSuiteWarnings(manifest), ...(liveWarning ? [liveWarning.message] : []), ...await lessonQueueWarnings(root), ...(swarmDirWarning ? [swarmDirWarning] : [])];
   const save = async () => { state.lanes = scheduler.snapshot(); state.peakConcurrency = state.lanes.peakGlobal; state.warnings = runWarnings(state, manifestWarnings); state.summary = summarizeRun(state); await jsonWrite(root, `${directory}/state.json`, state); onState(state); };
-  // Coalesce bursts into one writer and one pending publication of the latest state.
-  let writes = null, pendingWrite = false;
+  // Coalesce bursts into one writer and one pending publication of the latest state. A caller waits only for the save that
+  // covers its own change, never for the writer to go quiet: with other jobs' progress arriving all the time that never
+  // happens, and every job start would be held until the running ones ended.
+  let writes = null, pendingWrite = false, requested = 0;
+  const saveWaiters = [];
   const queueSave = () => {
     pendingWrite = true;
+    const mine = ++requested;
+    const covered = new Promise((resolve, reject) => saveWaiters.push({ mine, resolve, reject }));
     if (!writes) writes = (async () => {
       // The wait grows with the cost of the last save (about 10% of the time goes to saving, however large the run is);
       // a small run keeps the 20 ms window.
@@ -2717,18 +2722,32 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
       while (pendingWrite) {
         await new Promise(resolve => setTimeout(resolve, Math.max(20, Math.min(2000, lastSaveMs * 8))));
         pendingWrite = false;
+        const target = requested;
         const began = performance.now();
         await save();
         lastSaveMs = performance.now() - began;
+        for (const waiter of saveWaiters.splice(0)) { if (waiter.mine <= target) waiter.resolve(); else saveWaiters.push(waiter); }
       }
-    })().finally(() => { writes = null; });
-    return writes;
+    })().catch(error => { for (const waiter of saveWaiters.splice(0)) waiter.reject(error); throw error; }).finally(() => { writes = null; });
+    writes.catch(() => {});
+    return covered;
   };
   hostHooks.save = queueSave;
   // Throttled progress writes join the same serialized queue and always publish the live
   // record, so a late tick can never resurrect a status the worker loop already finalized.
   const activity = activityRecorder(queueSave, progressIntervalMs, () => cleanup.abort());
-  const cancelled = async () => Boolean(signal?.aborted || await bytesAt(root, `${directory}/cancel`, true));
+  // Every in-flight job polls this (an API job every 100 ms); with a thousand in flight that alone would be ten thousand
+  // file reads a second. One read of the cancel file serves every caller for 250 ms, and a cancel is never un-seen.
+  const cancelCache = { at: -Infinity, value: false, pending: null };
+  const cancelled = async () => {
+    if (signal?.aborted || cancelCache.value) return true;
+    if (performance.now() - cancelCache.at < 250) return false;
+    cancelCache.pending ??= bytesAt(root, `${directory}/cancel`, true).then(bytes => Boolean(bytes), () => false).finally(() => { cancelCache.pending = null; });
+    const value = await cancelCache.pending;
+    cancelCache.at = performance.now();
+    if (value) cancelCache.value = true;
+    return value;
+  };
   const waitingJobs = new Map();
   let waitPoll = null;
   const abortLongPauses = () => {
@@ -3038,7 +3057,9 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           // (Hermes, Qwen) and the host names that CLI's absolute path. Every other job runs here.
           const hostFilter = host => host.kind === 'local' || (EXTRA_CLI_AGENTS.includes(job.agent) && typeof host.commands?.[job.agent] === 'string');
           let hostFailure = null;
-          if (hostPool && configuredHosts.some(hostFilter)) {
+          // A tool-free API job is one HTTP request: it uses no local CPU or disk worth rationing, so it never takes a host slot
+          // (the local host's capacity is for workers that run code, and capped every API job at 4 at a time).
+          if (hostPool && !API_AGENTS.includes(job.agent) && configuredHosts.some(hostFilter)) {
             // No usable host is a failure of this job alone, never of the run.
             try { hostPlacement = await hostPool.claim({ signal, sensitive: job.sensitive !== false, hostFilter }); }
             catch (error) { if (error?.code !== 'hosts-exhausted') throw error; hostFailure = error; }
