@@ -140,6 +140,25 @@ The alias only works in your interactive shell. Claude Code, Cursor agents, and 
 - **More hosts:** dev2, once reachable, plus optional trusted cloud sandboxes with auto-scaling.
 - Done when: 2,000 stub jobs and 1,000 concurrent fake-API requests on one Mac stay under 1 GB of memory, with no state-write slowdown.
 
+## Phase 14b — Local brain
+
+Use dev2's model (the Strata API, reached the way `dev2chat` does: an ssh tunnel with the swarm key) as a free helper that cuts orchestrator and paid-model use. **Runner-side only: workers never call it and never see its address, key or tunnel.** Built right after Phase 14.
+
+- **`swarm think "question" [--rounds N]`:** a proposer/critic loop on the local model (default 2 rounds, at most 4). Returns a short top-3 with a reason for each, so the orchestrator reads 10 lines instead of reasoning through the options itself.
+- **`swarm digest <file|run-id|diff>`:** condenses long logs, diffs, test output or a run's results to 15 lines or fewer for the orchestrator. Accepts a file path, a run id (its failures and results) or `-` / `git diff` text on stdin.
+- **Failure triage:** when a job fails, the local model first classifies it `retry`, `escalate` or `needs-human` and writes the retry hint. The orchestrator (and autopilot) see only the verdict, the hint and the evidence pointer. `needs-human` becomes an inbox item (Phase 10c); `escalate` moves the job up the route (Claude after two failures stays the rule).
+- **Draft then polish:** docs, PR text and plans are drafted by the local model; a cheap paid model (Haiku) reviews and fixes the draft instead of writing from nothing.
+- **Pre-flight before Claude or Opus:** before any job is routed to Claude or Opus, the local model checks the prompt, the context list and the outputs for the usual mistakes (missing context, unnamed output files, ambiguous goal, a file the job needs that is not in context) and returns fixes. A failed pre-flight is a warning with the fixes; it never blocks on its own.
+
+**Rules**
+- A **local-brain queue** with concurrency 1 to 2 (one model server shared with other people's work). Requests time out; nothing waits on it forever.
+- Everything it returns is **untrusted worker text**: sanitized (control characters, bidi, secrets redacted), length-capped, never executed, never pasted into prompts as instructions, and never allowed to approve, merge, raise a cap or change routing by itself.
+- **Sensitive data:** the local model is on the owner's own machine, so sensitive material may go to it; it is the one remote helper allowed for sensitive jobs. Secret paths and protected paths are still never sent (the same rules as remote hosts).
+- **If dev2 is down** (tunnel, server, or no answer in time), the same request falls back to Haiku on the Anthropic lane (machine-wide caps apply, non-sensitive material only; a sensitive request just reports "local brain unavailable" and does nothing).
+- The tunnel and the API key are read the way `dev2chat` does and kept in memory only.
+- **Saving is measured:** every call records the tokens it kept away from the orchestrator (the input it digested or the reasoning it replaced, estimated) and the paid tokens it used, in the usage ledger, and the dogfood scoreboard gets an "orchestrator tokens saved" column.
+- Done when: on the Phase 17 scale test, triage and digest keep orchestrator reads of failures under 20 lines per failed job, and the scoreboard shows a measured drop in orchestrator tokens for the same work.
+
 ## Phase 15 — Quality at scale
 
 - **Verify every write:** each write job is followed by checks (tests or lint on the files it touched), then a cheap review job. Failures go back to the worker once with the reviewer's notes.
@@ -171,6 +190,6 @@ The full spec is [swarm-watch-spec.md](swarm-watch-spec.md) and the reference de
 
 ## Suggested order
 
-10 → 10b → 10c → 11 → 12 → 14 → 13 → 15 → 16 (use swarm-watch-spec.md) → 17
+10 → 10b → 10c → 11 → 12 → 14 → 14b → 13 → 15 → 16 (use swarm-watch-spec.md) → 17
 
 (The CLI comes first. Failover and the inbox (10b, 10c) come next because they fix the biggest day-to-day stalls; see the addendum. The plan preview follows because it makes every later run safer and easier to use. Throughput comes before the planner and quality work, so those can be tested at real scale.)
