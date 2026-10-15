@@ -161,3 +161,48 @@ test('a notifier that throws never stops autopilot', async () => {
   const step = await autopilotStep('/x', stepDeps({ notify: async () => { throw new Error('osascript'); } }), { now: () => 1, memory: new Set() });
   assert.ok(Array.isArray(step.actions));
 });
+
+test('review fixes: deferred starts are gated and blocked on failure; double validation; ids; claims', async t => {
+  // validating a manifest twice does not trip over the fields validateManifest fills in
+  const m = { version: 1, jobs: [job('a'), human('key'), job('b', { after: ['key'] })] };
+  validateManifest(m);
+  validateManifest(m);
+
+  const group = { id: 'g1', humans: [{ id: 'k', done: true }], started: false, hasDeferred: true, runless: true };
+  const base = { loadRuns: async () => [], readJournal: async () => [], appendEvent: async () => {}, readPlan: async () => null, integrate: async () => ({}), resume: async () => {}, retryFailed: async () => ({}), startWave: async () => ({}), humanGroups: async () => [group] };
+  const blockedOn = [];
+  const writes = [];
+  const run = extra => autopilotStep('/x', { ...base, appendEvent: async (_r, e) => { writes.push(e); }, ...extra }, { now: () => 1, memory: new Set() });
+  // dirty tree or main: nothing starts
+  for (const checkout of [{ branch: 'main', dirty: false }, { branch: 'swarm/x', dirty: true }]) {
+    const step = await run({ checkout: async () => checkout, startDeferred: async () => assert.fail('must not start') });
+    assert.deepEqual(step.actions, []);
+  }
+  // a running run: nothing starts
+  assert.deepEqual((await run({ loadRuns: async () => [{ id: 'r', status: 'running' }], checkout: async () => ({ branch: 'swarm/x', dirty: false }), startDeferred: async () => assert.fail('must not start') })).actions, []);
+  // a failing start becomes a blocker, never silent
+  const failed = await run({ checkout: async () => ({ branch: 'swarm/x', dirty: false }), startDeferred: async () => { throw new Error('boom'); } });
+  assert.equal(failed.actions[0].ok, false);
+  assert.ok(writes.some(e => e.kind === 'blocker' && e.id === 'deferred-g1'), blockedOn.join());
+
+  // a run paused on a spend cap is not idle time for the backlog
+  const capped = await autopilotStep('/x', stepDeps({ loadRuns: async () => [{ id: 'r1', status: 'paused', pause: { reasons: ['run-cap'] } }], nextBacklog: async () => ({ id: 'g' }), startBacklog: async () => assert.fail('must not start') }), { now: () => 1, memory: new Set() });
+  assert.deepEqual(capped.actions, []);
+  // an open human task counts as waiting even when no run is paused
+  const open = await autopilotStep('/x', stepDeps({ loadRuns: async () => [], humanGroups: async () => [{ id: 'h', humans: [{ done: false }], started: false }], nextBacklog: async () => ({ id: 'g4', goal: 'x' }), startBacklog: async () => ({ run: 'r5' }) }), { now: () => 1, memory: new Set() });
+  assert.deepEqual(open.actions.map(a => a.action), ['start-backlog']);
+});
+
+test('decision ids are validated and unique; a second start of a group is refused; inbox close commands name other projects', async t => {
+  const root = await repo(t);
+  assert.equal((await runInboxCommand(root, 'decision', ['Q?', '--choice', 'a', '--id', '../x'])).exitCode, 1);
+  assert.equal((await runInboxCommand(root, 'decision', ['Q?', '--choice', 'a', '--id', 'dd'])).exitCode, 0);
+  assert.equal((await runInboxCommand(root, 'decision', ['Q?', '--choice', 'a', '--id', 'dd'])).exitCode, 1);
+  const { formatInbox } = await import('../tools/inbox.mjs');
+  const text = formatInbox([{ id: 'x:y', kind: 'human', project: '/other', title: 't', steps: [], unblocks: 1, since: new Date().toISOString() }], { now: Date.now(), root });
+  assert.match(text, /swarm --root \/other done x:y/);
+  const { addGroup, updateGroup } = await import('../tools/human-jobs.mjs');
+  await addGroup(root, { id: 'gg', humans: [], deferred: null });
+  await updateGroup(root, 'gg', g => { g.started = { run: null }; });
+  await assert.rejects(updateGroup(root, 'gg', g => { if (g.started) throw new Error('human-group-not-startable'); }), /not-startable/);
+});

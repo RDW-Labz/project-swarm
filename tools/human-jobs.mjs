@@ -5,6 +5,7 @@
 // human in a group is done (and the run that held them is integrated), autopilot starts the saved jobs.
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { safeWritableDir, assertRegularOrMissing, sanitizeText } from './journal.mjs';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -15,7 +16,8 @@ export const isHumanJob = job => job?.type === 'human';
 // Shape check for one human job; returns nothing, throws Error with a stable `code`.
 export function validateHumanJob(job) {
   const bad = (message, code = 'human-job-invalid') => { throw Object.assign(new Error(`Job ${job?.id}: ${message}`), { code }); };
-  for (const key of Object.keys(job)) if (!['id', 'type', 'title', 'steps', 'after'].includes(key)) bad(`a human job may not set ${key}`);
+  // `context` and `outputs` are accepted only as the empty lists validateManifest fills in.
+  for (const key of Object.keys(job)) if (!['id', 'type', 'title', 'steps', 'after'].includes(key) && !(['context', 'outputs'].includes(key) && Array.isArray(job[key]) && !job[key].length)) bad(`a human job may not set ${key}`);
   if (typeof job.title !== 'string' || !job.title.trim() || job.title.length > 120) bad('title must be 1-120 characters');
   if (!Array.isArray(job.steps) || !job.steps.length || job.steps.length > 30 || job.steps.some(step => typeof step !== 'string' || !step.trim() || step.length > 400)) bad('steps must be 1-30 strings of at most 400 characters');
 }
@@ -69,17 +71,23 @@ async function writeStore(root, store) {
   const dir = await safeWritableDir(root, ['.swarm', 'project']);
   const target = path.join(dir, 'human-jobs.json');
   await assertRegularOrMissing(target);
-  const temp = `${target}.${process.pid}.tmp`;
-  await fs.writeFile(temp, `${JSON.stringify(store)}\n`, { flag: 'w', mode: 0o600 });
+  const temp = `${target}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  const handle = await fs.open(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+  try { await handle.writeFile(`${JSON.stringify(store)}\n`); await handle.sync(); } finally { await handle.close(); }
   await fs.rename(temp, target);
 }
 
-export async function addGroup(root, { id, humans, deferred, edges = {}, now = Date.now }) {
+export async function addGroup(root, { id, humans, deferred, edges = {}, runless = false, now = Date.now }) {
   if (typeof id !== 'string' || !ID.test(id)) throw new Error(`human-group-invalid: ${id}`);
   const store = await readStore(root);
   if (store.groups.some(group => group.id === id)) throw new Error(`human-group-exists: ${id}`);
-  store.groups.push({ id, createdAt: new Date(typeof now === 'function' ? now() : now).toISOString(), humans, deferred, edges, started: null });
-  while (store.groups.length > MAX_GROUPS) store.groups.shift();
+  store.groups.push({ id, createdAt: new Date(typeof now === 'function' ? now() : now).toISOString(), humans, deferred, edges, runless, started: null });
+  // Only finished groups are ever dropped; one that still waits is never silently lost.
+  while (store.groups.length > MAX_GROUPS) {
+    const finished = store.groups.findIndex(group => group.started || group.humans.every(human => human.done) && !group.deferred);
+    if (finished === -1) throw new Error('human-group-full: finish or start existing groups first');
+    store.groups.splice(finished, 1);
+  }
   await writeStore(root, store);
 }
 

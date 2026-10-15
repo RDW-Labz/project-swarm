@@ -149,16 +149,17 @@ export async function collectInbox(roots, deps) {
   return items.sort(compare);
 }
 
-function closeCommand(item) {
-  if (item.kind === 'human') return `close: swarm done ${item.id}`;
+function closeCommand(item, root) {
+  const swarm = root && item.project && item.project !== root ? `swarm --root ${item.project}` : 'swarm';
+  if (item.kind === 'human') return `close: ${swarm} done ${item.id}`;
   if (item.kind === 'decision') {
     const choice = item.default ?? item.choices?.[0] ?? 'CHOICE';
-    return `close: swarm decide ${item.id} ${choice}`;
+    return `close: ${swarm} decide ${item.id} ${choice}`;
   }
   return 'close: resolve the blocker, then run swarm inbox again';
 }
 
-export function formatInbox(items, { now } = {}) {
+export function formatInbox(items, { now, root } = {}) {
   if (items.length === 0) return 'Nothing needs you.';
   const ms = nowOf(now);
   return [...items].sort(compare).map(item => {
@@ -166,7 +167,7 @@ export function formatInbox(items, { now } = {}) {
     lines.push(`  unblocks ${item.unblocks} waiting ${formatAge(ageMs(item.since, ms))}`);
     if (item.project) lines.push(`  project: ${item.project}`);
     (item.steps ?? []).forEach((step, index) => lines.push(`  ${index + 1}. ${step}`));
-    lines.push(`  ${closeCommand(item)}`);
+    lines.push(`  ${closeCommand(item, root)}`);
     return lines.join('\n');
   }).join('\n\n');
 }
@@ -217,11 +218,12 @@ export async function decide(root, ref, choice, deps) {
     throw new Error(`inbox-choice-invalid: ${picked}`);
   }
   const changed = picked !== String(item.choice);
-  await appendEvent(root, { kind: 'decision', id, confirmed: true, choice: picked, text: sanitizeText(item.text ?? '') }, { now });
   let goal = null;
+  // The change goal is queued first, so a full backlog leaves the decision open instead of closing it unrecorded.
   if (changed) {
     goal = `Change decision ${id} to ${picked}`;
     await addGoal(root, { goal, paths: [] }, { now });
   }
+  await appendEvent(root, { kind: 'decision', id, confirmed: true, choice: picked, text: sanitizeText(item.text ?? '') }, { now });
   return { id, choice: picked, changed, goal };
 }

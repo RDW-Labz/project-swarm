@@ -259,6 +259,11 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
       if (!group.runless && !(run?.status === 'complete' && (run.integrated === true || integratedIds.has(group.id)))) continue;
       const key = `start-deferred:${group.id}`;
       if (memory.has(key) || actions.filter(x => x.action === 'start-deferred').length >= 1) continue;
+      // Same gate as integration and backlog starts: a clean swarm/* branch, and nothing running.
+      if (runs.some(r => r.status === 'running')) continue;
+      let safeCheckout = false;
+      try { safeCheckout = integrationBlocker(await deps.checkout(root)) === null; } catch { safeCheckout = false; }
+      if (!safeCheckout) continue;
       memory.add(key);
       let ok = true;
       let message = 'ok';
@@ -269,12 +274,16 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
       const result = ok ? 'ok' : message.slice(0, RESULT_LIMIT);
       await write({ kind: 'action', action: 'start-deferred', run: group.id, reason: 'human jobs done', result });
       actions.push({ action: 'start-deferred', run: group.id, ok, result });
+      if (!ok) await write({ kind: 'blocker', id: `deferred-${group.id}`, text: `Jobs held for human tasks of run ${group.id} could not start: ${result}. They are saved in .swarm/project/human-jobs.json` });
     }
   }
 
   // Never sit idle: when every live run is waiting (on a person or a quota window), start the next backlog goal.
   if (!journalBroken && typeof deps.nextBacklog === 'function' && !actions.some(x => ['start-deferred', 'start-backlog'].includes(x.action))) {
-    const waiting = runs.some(r => r.status === 'paused');
+    // Waiting means a quota window or an open human task. A run paused on a spend cap is the owner's call, not idle time.
+    const capped = r => (r.pause?.reasons ?? []).some(reason => ['run-cap', 'child-paused', 'lane-cap'].includes(reason));
+    const groupsWaiting = typeof deps.humanGroups === 'function' && (await safe(() => deps.humanGroups(root), [])).some(group => !group.started && group.humans?.some(human => !human.done));
+    const waiting = runs.some(r => r.status === 'paused' && !capped(r)) || groupsWaiting;
     const running = runs.some(r => r.status === 'running');
     if (waiting && !running) {
       let safeCheckout = false;

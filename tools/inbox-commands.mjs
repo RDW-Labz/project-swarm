@@ -69,7 +69,7 @@ export async function runInboxCommand(root, command, args, { installRoot, now = 
       const notes = [];
       const items = await collectInbox(await inboxRoots(root, installRoot, args.includes('--all')), inboxDeps({ now, onNote: note => notes.push(note) }));
       const tail = notes.length ? `\n${notes.join('\n')}` : '';
-      return { stdout: args.includes('--json') ? `${JSON.stringify(items)}\n` : `${formatInbox(items, { now })}${tail}\n`, exitCode: 0 };
+      return { stdout: args.includes('--json') ? `${JSON.stringify(items)}\n` : `${formatInbox(items, { now, root })}${tail}\n`, exitCode: 0 };
     }
     if (command === 'done') {
       if (args.length !== 1) return bad(command);
@@ -89,6 +89,10 @@ export async function runInboxCommand(root, command, args, { installRoot, now = 
       if (!ids || ids.values.length > 1 || ids.rest.length !== 1 || ids.rest[0].startsWith('--')) return bad(command);
       const text = sanitizeText(ids.rest[0]);
       const id = ids.values[0] ?? `d-${Math.floor(now() / 1000).toString(36)}`;
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) return bad(command);
+      if ((await readJournal(root, { limit: Infinity })).some(event => event.kind === 'decision' && String(event.id) === id)) return { stdout: `decision id already used: ${id}\n`, exitCode: 1 };
+      choice.values[0] = sanitizeText(choice.values[0]);
+      options.values = options.values.map(value => sanitizeText(value));
       const pool = [...new Set([choice.values[0], ...options.values])];
       await appendEvent(root, { kind: 'decision', id, text, choice: choice.values[0], ...(options.values.length ? { options: pool } : {}), confirm: true }, { now });
       return { stdout: `decision recorded: ${id}; confirm with: swarm decide ${id} ${choice.values[0]}\n`, exitCode: 0 };

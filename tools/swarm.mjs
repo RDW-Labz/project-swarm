@@ -30,7 +30,7 @@ import { readBacklog, nextStartable, markStarted as markBacklogStarted } from '.
 import { pendingNotifications, macNotify } from './notify.mjs';
 import { resolveDefaultRoot, INSTALL_COMMANDS, runBriefCommand, runHandoffCommand, runCheckpointCommand, journalAfterCommand } from './project-commands.mjs';
 import { runAutopilot } from './autopilot.mjs';
-import { appendEvent, readJournal, safeWritableDir } from './journal.mjs';
+import { appendEvent, readJournal, safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 import { loadRuns } from './brief.mjs';
 import { projectStatus, formatStatus } from './status.mjs';
 import { zshCompletion, completeRuns } from './completion.mjs';
@@ -2511,7 +2511,7 @@ export async function runManifest(root, manifest, options = {}) {
   validateManifest(manifest);
   const id = options.id ?? runId();
   const lifted = liftHumanJobs(manifest);
-  await addGroup(root, { id, humans: lifted.humans, deferred: lifted.deferred, edges: lifted.edges });
+  await addGroup(root, { id, humans: lifted.humans, deferred: lifted.deferred, edges: lifted.edges, runless: !lifted.run.jobs.length });
   const humanJobs = lifted.humans.map(human => human.id);
   if (!lifted.run.jobs.length) return { id, root, status: 'paused', jobs: [], humanJobs, pause: { reasons: ['human'], until: null, jobs: humanJobs, message: 'waiting for human jobs' } };
   const state = await runManifestMain(root, lifted.run, { ...options, id });
@@ -6779,14 +6779,14 @@ function autopilotDeps() {
     },
     humanGroups: async root => {
       const { groups } = await readHumanStore(root);
-      return Promise.all(groups.map(async group => ({ id: group.id, humans: group.humans, started: Boolean(group.started), hasDeferred: Boolean(group.deferred?.jobs?.length), runless: !(await fs.stat(path.join(root, '.swarm', 'runs', group.id, 'state.json')).then(() => true, () => false)) })));
+      return Promise.all(groups.map(async group => ({ id: group.id, humans: group.humans, started: Boolean(group.started), hasDeferred: Boolean(group.deferred?.jobs?.length), runless: group.runless === true })));
     },
     startDeferred: async (root, group) => {
       const stored = (await readHumanStore(root)).groups.find(item => item.id === group.id);
       if (!stored?.deferred || stored.started) throw new Error('human-group-not-startable');
       // Marked before the run starts, so a crash can never start the same jobs twice.
-      await updateHumanGroup(root, group.id, item => { item.started = { run: null, at: new Date().toISOString() }; });
-      const next = await runManifestChecked(root, stored.deferred, undefined, autopilotCaps(stored.deferred.budget));
+      await updateHumanGroup(root, group.id, item => { if (item.started) throw new Error('human-group-not-startable'); item.started = { run: null, at: new Date().toISOString() }; });
+      const next = await runManifestChecked(root, stored.deferred, undefined, autopilotCaps({}, stored.deferred.budget));
       await updateHumanGroup(root, group.id, item => { item.started.run = next.id; });
       return { run: next.id, status: next.status };
     },
@@ -6795,7 +6795,8 @@ function autopilotDeps() {
       const claims = [];
       const claim = job => { for (const file of [...(job.outputs ?? []), ...(job.outputDirs ?? [])]) claims.push(file); };
       for (const run of runs.filter(item => item.status === 'paused' || item.status === 'running')) {
-        try { for (const job of JSON.parse(await bytesAt(root, `.swarm/runs/${run.id}/manifest.json`, true)).jobs ?? []) claim(job); } catch { claims.push('.'); }
+        // A manifest that cannot be read means overlap cannot be ruled out: nothing starts.
+        try { for (const job of JSON.parse(await bytesAt(root, `.swarm/runs/${run.id}/manifest.json`, true)).jobs ?? []) claim(job); } catch { return null; }
       }
       for (const group of (await readHumanStore(root)).groups.filter(item => !item.started)) for (const job of group.deferred?.jobs ?? []) claim(job);
       return nextStartable(items, { activeClaims: claims });
@@ -6812,12 +6813,13 @@ function autopilotDeps() {
     notify: async root => {
       if (loadLocalConfig({ env: process.env }).notify !== true) return;
       const file = path.join(await safeWritableDir(root, ['.swarm', 'project']), 'notified.json');
+      await assertRegularOrMissing(file);
       let notified = { items: [], digestDay: null };
       try { notified = JSON.parse(await fs.readFile(file, 'utf8')); } catch { /* first run */ }
       const items = await collectInbox([root], inboxDeps());
       const out = pendingNotifications(items, notified, { now: Date.now() });
       for (const message of out.messages) await macNotify(message);
-      if (out.messages.length) await fs.writeFile(file, `${JSON.stringify(out.notified)}\n`);
+      if (out.messages.length) { const temp = `${file}.${process.pid}.${Date.now()}.tmp`; await fs.writeFile(temp, `${JSON.stringify(out.notified)}\n`, { flag: 'wx', mode: 0o600 }); await fs.rename(temp, file); }
     },
   };
 }
