@@ -148,7 +148,7 @@ const fixedNow = () => Date.parse('2026-10-14T12:00:00Z');
 const entry = overrides => ({ day: '2026-10-14', lane: 'openrouter', runId: 'r', root: '/fixture', jobId: 'j', usd: 0.5, tokens: 10, kind: 'reservation', pid: process.pid, host: os.hostname(), at: '2026-10-14T12:00:00Z', flagged: false, ...overrides });
 
 test('reservation defaults, rate validation and every estimation source', () => {
-  assert.deepEqual(PAID_LANES, ['openrouter', 'openai', 'gemini', 'lambda']);
+  assert.deepEqual(PAID_LANES, ['openrouter', 'openai', 'gemini', 'lambda', 'anthropic']);
   assert.ok(Object.isFrozen(PAID_LANES) && Object.isFrozen(LANE_RESERVE_DEFAULTS));
   assert.equal(spendDir({ SWARM_SPEND_DIR: '/fixture/spend' }, '/home'), '/fixture/spend');
   assert.equal(spendDir({}, '/home'), '/home/.project-swarm/spend');

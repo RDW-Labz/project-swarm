@@ -18,6 +18,7 @@ A lane belongs to one agent. It has its own concurrency cap, request rate, backo
 | `ollama` | 32 | unlimited | `null` |
 | `lambda` | 32 | unlimited | `null` |
 | `openrouter` | 64 | unlimited | `null` |
+| `anthropic` | 16 | unlimited | `null` |
 
 Every lane defaults to `requestsPerMinute: null`, `backoff: { baseMs: 2000, maxMs: 300000, maxRetries: 5 }`, `pauseMs: 900000`, and `maxPauseMs: 900000`. A lane's `model` is used for automatic routing; explicit jobs keep their own model.
 
@@ -79,7 +80,7 @@ Every worker sees the project as it was when the run started. At run start, the 
 
 ## Automatic routing and fallback
 
-Use `agent: "auto"` and omit `model`; supplying a model refuses with `auto-model-forbidden`. Configure non-null lane models first. The cheap lane order is **Hermes → Cursor → Codex → OpenRouter**. A job type tries its preset route first, without Claude, then the remaining cheap lanes in that order. Other agents still support explicit jobs. `validate` reports the current choice in `routes: [{ jobId, agent, model, reason }]`; dispatch resolves it again using current health.
+Use `agent: "auto"` and omit `model`; supplying a model refuses with `auto-model-forbidden`. Configure non-null lane models first. The cheap lane order is **Hermes → Cursor → Codex → Anthropic → OpenRouter**, with Claude (subscription) last. A job type tries its preset route first, without Claude, then the remaining cheap lanes in that order. Other agents still support explicit jobs. `validate` reports the current choice in `routes: [{ jobId, agent, model, reason }]`; dispatch resolves it again using current health.
 
 The router picks the cheapest eligible healthy lane. It skips paused lanes and candidates that cannot accept the job's fields. If every remaining eligible lane is paused, it returns the first one with a reason naming the pause. Backoff alone does not remove a candidate. `tier: "expensive"` starts at Claude and still requires `tierReason`.
 

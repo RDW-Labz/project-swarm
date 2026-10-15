@@ -5,7 +5,7 @@
 // - anthropic/* models are pinned to the Anthropic provider, with no fallback;
 // - deepseek/* models may only write bookkeeping files (PR payloads, changelogs, mutants files,
 //   metrics), never code;
-// - spend caps: $5 per job and $25 per UTC day, checked against a worst-case estimate before
+// - spend caps: $5 per job and $5 per UTC day, checked against a worst-case estimate before
 //   each request and recorded from the provider's reported cost after it.
 // The key is read by the swarm parent only (env OPENROUTER_API_KEY, else the macOS keychain item
 // named by config `keychain.service`, default "project-swarm", account "openrouter.api_key"),
@@ -28,7 +28,13 @@ export function openRouterKeyItem(config = {}) {
 }
 export const OPENROUTER_KEY_ITEM = Object.freeze(openRouterKeyItem());
 export const JOB_CAP_USD = 5;
-export const DAY_CAP_USD = 25;
+// The operator's rule is $5/day. The machine config (`spend.lanes.openrouter.dailyUsd`) sets it and
+// may only lower the built-in ceiling; with no config the built-in is the same $5.
+export const DAY_CAP_USD = 5;
+export function dayCapUsd(env = process.env) {
+  let value; try { value = loadLocalConfig({ env })?.spend?.lanes?.openrouter?.dailyUsd; } catch { value = undefined; }
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(value, DAY_CAP_USD) : DAY_CAP_USD;
+}
 // Bookkeeping outputs a deepseek/* model may write. Anything else (all code, tests, configs)
 // refuses. An allowlist, not a denylist: a new sensitive path can never slip through.
 export const BOOKKEEPING_OUTPUTS = Object.freeze([
@@ -145,9 +151,9 @@ export function worstCaseUsd(pricing, { inputChars, maxTokens }) {
   return inputChars * pricing.prompt + maxTokens * pricing.completion;
 }
 
-export function assertWithinCaps({ worstUsd, spent }) {
+export function assertWithinCaps({ worstUsd, spent, dayCap = DAY_CAP_USD }) {
   if (spent.job + worstUsd > JOB_CAP_USD) fail(`OpenRouter job cap: $${spent.job.toFixed(4)} spent + $${worstUsd.toFixed(4)} worst case > $${JOB_CAP_USD}; request refused`);
-  if (spent.today + worstUsd > DAY_CAP_USD) fail(`OpenRouter day cap: $${spent.today.toFixed(4)} spent today + $${worstUsd.toFixed(4)} worst case > $${DAY_CAP_USD}; request refused`);
+  if (spent.today + worstUsd > dayCap) fail(`OpenRouter day cap: $${spent.today.toFixed(4)} spent today + $${worstUsd.toFixed(4)} worst case > $${dayCap}; request refused`);
 }
 
 // Lesson 325: retain provider termination metadata even when content validation fails.

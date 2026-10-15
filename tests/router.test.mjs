@@ -9,7 +9,7 @@ const lanes = Object.fromEntries(ROUTE_ORDER.map(agent => [agent, { model: `${ag
 const paused = () => ({ state: 'paused' });
 
 test('route orders are frozen and cheapest first', () => {
-  assert.deepEqual(CHEAP_ORDER, ['hermes', 'cursor', 'codex', 'openrouter']);
+  assert.deepEqual(CHEAP_ORDER, ['hermes', 'cursor', 'codex', 'anthropic', 'openrouter']);
   assert.deepEqual(ROUTE_ORDER, [...CHEAP_ORDER, 'claude']);
   assert.equal(Object.isFrozen(CHEAP_ORDER), true);
   assert.equal(Object.isFrozen(ROUTE_ORDER), true);
@@ -117,7 +117,7 @@ test('only Claude configured without failures exhausts with actionable message',
 test('typeRoute order is followed by remaining cheap lanes and skips Claude entries', () => {
   const typed = { ...job, typeRoute: ['codex', 'cursor'] };
   const failures = {};
-  for (const agent of ['codex', 'cursor', 'hermes', 'openrouter', 'claude']) {
+  for (const agent of ['codex', 'cursor', 'hermes', 'anthropic', 'openrouter', 'claude']) {
     assert.equal(routeJob(typed, { lanes, failures }).agent, agent);
     failures[agent] = 2;
   }

@@ -193,3 +193,86 @@ test('a returning host kills the orphaned job before reuse and the spend is coun
   assert.equal(state.orphanCostUsd, 0.4);
   assert.equal(state.jobs[0].hostUses.length, 2);
 });
+
+const hostJobs = count => Array.from({ length: count }, (_, n) => ({ id: `job-${n}`, agent: 'ollama', model: 'test-model', prompt: `Write out/${n}.txt`, context: ['input.txt'], outputs: [`out/${n}.txt`], timeoutMs: 5000 }));
+const answer = async (_url, options) => reply(completion(Number(/out\/(\d+)\.txt/.exec(String(options?.body ?? ''))[1])));
+const sshDown = (calls = []) => ({
+  async ping(host) { calls.push(`ping:${host.id}`); throw Object.assign(new Error('host-unreachable: ssh exit 255 (connection failed)'), { code: 'host-unreachable' }); },
+  async run(placement) { calls.push(`run:${placement.host.id}`); throw new Error('an excluded host must never run a job'); },
+});
+
+test('an unreachable ssh host fails its check before placement and the whole run finishes on local', async t => {
+  const root = await repo(t);
+  const calls = [];
+  const state = await runManifest(root, {
+    version: 1, concurrency: 4,
+    hosts: [{ id: 'local', kind: 'local', capacity: 4 }, { id: 'dev2', kind: 'ssh', target: 'dev2@10.10.10.220', capacity: 2 }],
+    jobs: hostJobs(6),
+  }, { env, fetchImpl: answer, hostTransport: sshDown(calls) });
+  assert.equal(state.status, 'complete', state.error);
+  assert.equal(state.jobs.filter(job => job.status === 'complete').length, 6);
+  assert.deepEqual(state.jobs.flatMap(job => job.hostUses ?? []).filter(id => id !== 'local'), []);
+  assert.ok(calls.includes('ping:dev2') && !calls.includes('run:dev2'));
+  assert.deepEqual(state.hostsExcluded.map(host => host.id), ['dev2']);
+  assert.ok(state.warnings.some(warning => /host-unavailable: dev2/.test(warning)));
+});
+
+test('ssh exit 255 mid-run moves that job to a live host and cancels nothing', async t => {
+  const root = await repo(t);
+  let first = true;
+  const state = await runManifest(root, {
+    version: 1, concurrency: 4,
+    hosts: [{ id: 'dev2', kind: 'ssh', target: 'dev2@10.10.10.220', capacity: 1 }, { id: 'local', kind: 'local', capacity: 4 }],
+    jobs: hostJobs(5),
+  }, {
+    env, fetchImpl: answer,
+    hostTransport: {
+      async ping() { return true; },
+      async run(placement) { if (first) { first = false; throw Object.assign(new Error('host-unreachable: ssh exit 255 (connection failed)'), { code: 'host-unreachable' }); } throw new Error('the host stays out once it failed'); },
+    },
+  });
+  assert.equal(state.status, 'complete', state.error);
+  assert.equal(state.jobs.filter(job => job.status === 'complete').length, 5);
+  const moved = state.jobs.find(job => job.hostUses?.includes('dev2'));
+  assert.equal(moved.hostUses.at(-1), 'local');
+  assert.equal(state.jobs.some(job => job.status === 'cancelled'), false);
+});
+
+test('a remote command failure fails that job only and never the run', async t => {
+  const root = await repo(t);
+  const state = await runManifest(root, {
+    version: 1, concurrency: 4,
+    hosts: [{ id: 'dev2', kind: 'ssh', target: 'dev2@10.10.10.220', capacity: 1 }, { id: 'local', kind: 'local', capacity: 4 }],
+    jobs: hostJobs(4),
+  }, {
+    env, fetchImpl: answer,
+    hostTransport: { async ping() { return true; }, async run() { throw Object.assign(new Error('host-exit: 2'), { code: 'host-exit' }); } },
+  });
+  assert.equal(state.jobs.filter(job => job.status === 'complete').length >= 3, true);
+  assert.equal(state.jobs.some(job => job.status === 'cancelled'), false);
+  assert.ok(!/Coordinator failed/.test(JSON.stringify(state.jobs.map(job => job.error))));
+});
+
+test('when no usable host is left a job fails alone with hosts-exhausted', async t => {
+  const root = await repo(t);
+  const state = await runManifest(root, {
+    version: 1, concurrency: 2,
+    hosts: [{ id: 'dev2', kind: 'ssh', target: 'dev2@10.10.10.220', capacity: 1 }],
+    jobs: hostJobs(2),
+  }, { env, fetchImpl: answer, hostTransport: sshDown() });
+  assert.deepEqual(state.jobs.map(job => job.status), ['failed', 'failed']);
+  assert.ok(state.jobs.every(job => /hosts-exhausted/.test(job.error)));
+  assert.ok(!/Coordinator failed/.test(JSON.stringify(state.jobs.map(job => job.error))));
+});
+
+test('a host marked enabled: false is kept in config but never pinged or used', async t => {
+  const root = await repo(t);
+  const calls = [];
+  const state = await runManifest(root, {
+    version: 1, concurrency: 2,
+    hosts: [{ id: 'local', kind: 'local', capacity: 2 }, { id: 'dev2', kind: 'ssh', target: 'dev2@10.10.10.220', capacity: 2, enabled: false }],
+    jobs: hostJobs(3),
+  }, { env, fetchImpl: answer, hostTransport: sshDown(calls) });
+  assert.equal(state.status, 'complete', state.error);
+  assert.deepEqual(calls, []);
+});

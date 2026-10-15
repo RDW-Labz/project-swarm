@@ -229,3 +229,22 @@ test('closing the ssh session leaves no remote process', async t => {
   assert.deepEqual(JSON.parse(stdout), { costUsd: 0.2 });
   await assert.rejects(fs.access(path.join(jobsDir, 'abc12345.json')));
 });
+
+test('ssh exit 255 and a missing ssh client are host-unreachable; another exit code is a plain host-exit', async () => {
+  const { defaultHostTransport } = await import('../tools/executors.mjs');
+  const exiting = code => () => { const handlers = {}; const child = { stdout: { on() {} }, stdin: { write() {} }, on(name, fn) { handlers[name] = fn; }, kill() {} }; setImmediate(() => handlers.exit?.(code)); return child; };
+  const host = { id: 'dev2', kind: 'ssh', target: 'dev2@10.10.10.220' };
+  await assert.rejects(defaultHostTransport({ spawnImpl: exiting(255) }).ping(host), { code: 'host-unreachable' });
+  await assert.rejects(defaultHostTransport({ spawnImpl: exiting(1) }).ping(host), { code: 'host-exit' });
+  const missing = () => { const handlers = {}; const child = { stdout: { on() {} }, on(name, fn) { handlers[name] = fn; }, kill() {} }; setImmediate(() => handlers.error?.(Object.assign(new Error('spawn ssh ENOENT'), { code: 'ENOENT' }))); return child; };
+  await assert.rejects(defaultHostTransport({ spawnImpl: missing }).ping(host), { code: 'host-unreachable' });
+});
+
+test('resolveHosts keeps an enabled: false host and enabledHosts drops it; all disabled means no pool', async () => {
+  const { resolveHosts, enabledHosts } = await import('../tools/executors.mjs');
+  const hosts = resolveHosts([{ id: 'local', kind: 'local', capacity: 2 }, { id: 'dev2', kind: 'ssh', target: 'dev2@10.10.10.220', capacity: 2, enabled: false }]);
+  assert.equal(hosts[1].enabled, false);
+  assert.deepEqual(enabledHosts(hosts).map(host => host.id), ['local']);
+  assert.equal(enabledHosts(resolveHosts([{ id: 'dev2', kind: 'ssh', target: 'dev2@10.10.10.220', capacity: 2, enabled: false }])), null);
+  assert.throws(() => resolveHosts([{ id: 'a', kind: 'local', capacity: 1, enabled: 'no' }]), { code: 'hosts-invalid' });
+});

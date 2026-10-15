@@ -9,7 +9,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { CURSOR_FLAGS, CURSOR_DEFAULTS, CURSOR_NOT_AUTHENTICATED, cursorArgs, cursorLaunchArgs, cursorEnvironment, cursorProfile, cursorMessage, cursorConfig, cursorDoctor, requireCursorApiKey, resolveCursorBinary, parseCursorOutput, resolveCursorEnvelope, redactCursorKey } from '../tools/cursor-adapter.mjs';
+import { CURSOR_FLAGS, CURSOR_NO_KEYCHAIN_RULES, CURSOR_DEFAULTS, CURSOR_NOT_AUTHENTICATED, cursorArgs, cursorLaunchArgs, cursorEnvironment, cursorProfile, cursorMessage, cursorConfig, cursorDoctor, requireCursorApiKey, resolveCursorBinary, parseCursorOutput, resolveCursorEnvelope, redactCursorKey } from '../tools/cursor-adapter.mjs';
 import { runCodexWithRetry, git } from '../tools/codex-adapter.mjs';
 import { validateManifest, runManifest, inspectRun, integrateRun, resolveWorktree, doctor } from '../tools/swarm.mjs';
 
@@ -85,14 +85,18 @@ test('cursorLaunchArgs wraps the real binary in sandbox-exec and refuses the key
 
 test('cursorEnvironment is an allowlist plus CURSOR_API_KEY; no other secret or the endpoint override passes', async () => {
   const env = await cursorEnvironment({ PATH: '/bin', HOME: '/h', LANG: 'C', CURSOR_API_KEY: KEY, CURSOR_API_ENDPOINT: 'https://evil.example', OPENAI_API_KEY: 'o', ANTHROPIC_API_KEY: 'a', GITHUB_TOKEN: 'g', AWS_SECRET_ACCESS_KEY: 's', SWARM_CLAUDE_WORKER_API_KEY: 'w', BAD: 'x\ny' }, async () => true);
-  assert.deepEqual(env, { PATH: '/bin', HOME: '/h', LANG: 'C', CURSOR_API_KEY: KEY, SSL_CERT_FILE: '/etc/ssl/cert.pem' });
-  assert.deepEqual(await cursorEnvironment({ PATH: '/bin' }, async () => false), { PATH: '/bin' });
+  assert.deepEqual(env, { PATH: '/bin', HOME: '/h', LANG: 'C', CURSOR_API_KEY: KEY, SSL_CERT_FILE: '/etc/ssl/cert.pem', AGENT_CLI_CREDENTIAL_STORE: 'memory' });
+  // memory store: cursor-agent never touches the Keychain or writes a login file
+  assert.deepEqual(await cursorEnvironment({ PATH: '/bin' }, async () => false), { PATH: '/bin', AGENT_CLI_CREDENTIAL_STORE: 'memory' });
 });
 
 test('cursorProfile is the codex profile plus the install dir (read+exec) and ~/.cursor (read+write); Keychain stays denied', async t => {
   const base = await tempDir(t, 'swarm-cursor-profile-');
   const home = path.join(base, 'home'), worktree = path.join(base, 'wt'), installDir = path.join(base, 'install', 'versions', '1');
-  const profile = cursorProfile({ home, worktree, commonDir: path.join(base, 'repo/.git'), metadataDir: path.join(base, 'repo/.git/worktrees/wt'), installDir });
+  const fullProfile = cursorProfile({ home, worktree, commonDir: path.join(base, 'repo/.git'), metadataDir: path.join(base, 'repo/.git/worktrees/wt'), installDir });
+  // The no-Keychain-helper rules are the cursor-only suffix; everything before them is the codex profile.
+  const profile = fullProfile.slice(0, fullProfile.length - CURSOR_NO_KEYCHAIN_RULES.length);
+  assert.ok(fullProfile.endsWith(CURSOR_NO_KEYCHAIN_RULES));
   const execLine = profile.split('\n').find(line => line.startsWith('(allow process-exec'));
   assert.ok(execLine.includes(`(subpath "${installDir}")`));
   const writeLine = profile.split('\n').find(line => line.startsWith('(allow file-write*'));
@@ -107,7 +111,7 @@ test('cursorProfile is the codex profile plus the install dir (read+exec) and ~/
 
 test('fail fast: missing key, malformed key and missing binary carry stable codes and never echo a key', async t => {
   assert.throws(() => requireCursorApiKey({}), error => error.message === CURSOR_NOT_AUTHENTICATED && error.code === 'cursor-not-authenticated');
-  assert.equal(CURSOR_NOT_AUTHENTICATED, 'cursor-not-authenticated: set CURSOR_API_KEY in the swarm environment (Keychain login is blocked by the sandbox)');
+  assert.equal(CURSOR_NOT_AUTHENTICATED, 'cursor-not-authenticated: store the key in the Keychain (service project-swarm, account cursor.api_key) or set CURSOR_API_KEY in the swarm environment');
   assert.throws(() => requireCursorApiKey({ CURSOR_API_KEY: '  ' }), /cursor-not-authenticated/);
   assert.throws(() => requireCursorApiKey({ CURSOR_API_KEY: 'has space inside' }), error => /malformed/.test(error.message) && !error.message.includes('has space'));
   assert.equal(requireCursorApiKey({ CURSOR_API_KEY: KEY }), KEY);
@@ -302,4 +306,12 @@ test('integration (real seatbelt): the fake cursor-agent can exec from its insta
   assert.deepEqual(integrated.files, ['output.txt']);
   assert.equal((await fs.readFile(path.join(root, 'output.txt'), 'utf8')).trim(), 'ssh=blocked home=blocked cursor=allowed');
   assert.equal(await fs.readFile(path.join(home, '.cursor/marker'), 'utf8'), 'x');
+});
+
+test('cursor profile denies the Keychain helper and its dialog agent so a worker never raises a login popup', async () => {
+  const { cursorProfile, CURSOR_NO_KEYCHAIN_RULES } = await import('../tools/cursor-adapter.mjs');
+  const profile = cursorProfile({ worktree: '/tmp/wt', commonDir: '/tmp/wt/.git', metadataDir: '/tmp/wt/.git', installDir: '/tmp/cursor-install' });
+  assert.ok(profile.endsWith(CURSOR_NO_KEYCHAIN_RULES));
+  assert.match(profile, /deny process-exec[^\n]*\/usr\/bin\/security/);
+  assert.match(profile, /deny mach-lookup[^\n]*com\.apple\.security\.agent/);
 });

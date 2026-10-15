@@ -12,6 +12,12 @@ export const REMOTE_COMMAND = 'swarm-remote-exec';
 function invalid(message) {
   return Object.assign(new Error(message), { code: 'hosts-invalid' });
 }
+function hostUnreachable(message) {
+  return Object.assign(new Error(`host-unreachable: ${message}`), { code: 'host-unreachable' });
+}
+function hostsExhausted(sensitive) {
+  return Object.assign(new Error(`hosts-exhausted: no usable host is left for this ${sensitive ? 'sensitive ' : ''}job (every host that could run it failed its check or went down)`), { code: 'hosts-exhausted' });
+}
 function hostDead(host) {
   return Object.assign(new Error(`host-dead: ${host.id}`), { code: 'host-dead', host: host.id });
 }
@@ -54,8 +60,9 @@ export function resolveHosts(source) {
   return source.map(host => {
     if (!host || typeof host !== 'object' || Array.isArray(host)) throw invalid('host must be an object');
     for (const key of Object.keys(host)) {
-      if (!['id', 'kind', 'capacity', 'target', 'driver', 'heartbeatMs', 'trusted'].includes(key)) throw invalid(`unknown host field ${key}`);
+      if (!['id', 'kind', 'capacity', 'target', 'driver', 'heartbeatMs', 'trusted', 'enabled'].includes(key)) throw invalid(`unknown host field ${key}`);
     }
+    if (host.enabled !== undefined && typeof host.enabled !== 'boolean') throw invalid(`${host.id}.enabled must be true or false`);
     if (host.trusted !== undefined && typeof host.trusted !== 'boolean') throw invalid(`${host.id}.trusted must be true or false`);
     if (host.kind !== 'sandbox' && host.trusted !== undefined) throw invalid(`${host.id} trusted is only for a sandbox host`);
     if (typeof host.id !== 'string' || !HOST_ID.test(host.id) || ids.has(host.id)) throw invalid(`invalid host id ${host.id}`);
@@ -72,8 +79,16 @@ export function resolveHosts(source) {
     if (host.kind === 'sandbox') {
       if (!Array.isArray(host.driver) || !host.driver.length || host.driver.some(part => typeof part !== 'string' || !part)) throw invalid(`${host.id}.driver must be a command argv`);
     } else if (host.driver !== undefined) throw invalid(`${host.id} cannot set driver`);
-    return { id: host.id, kind: host.kind, capacity: host.capacity, ...(host.target ? { target: host.target } : {}), ...(host.driver ? { driver: [...host.driver] } : {}), ...(host.kind === 'sandbox' ? { trusted: host.trusted === true } : {}), heartbeatMs: host.heartbeatMs ?? 5000 };
+    return { id: host.id, kind: host.kind, capacity: host.capacity, ...(host.target ? { target: host.target } : {}), ...(host.driver ? { driver: [...host.driver] } : {}), ...(host.kind === 'sandbox' ? { trusted: host.trusted === true } : {}), ...(host.enabled === false ? { enabled: false } : {}), heartbeatMs: host.heartbeatMs ?? 5000 };
   });
+}
+
+// A host entry marked `enabled: false` stays in the config but is never used. No usable host at all
+// means the run stays on this machine, exactly as if no hosts were configured.
+export function enabledHosts(hosts) {
+  if (!hosts) return null;
+  const live = hosts.filter(host => host.enabled !== false);
+  return live.length ? live : null;
 }
 
 export function sshArgv(host, remoteCommand) {
@@ -101,7 +116,7 @@ function accepts(host, sensitive) {
 
 // One machine's hosts. Three missed heartbeats in a row mark a remote host dead and free its jobs.
 export function createHostPool({ hosts, ping = async () => true, kill = null, onOrphanSpend = null, setTimer = setTimeout, clearTimer = clearTimeout }) {
-  const entries = hosts.map(host => ({ host, inFlight: 0, dead: false, misses: 0, reviving: false, orphans: [], orphanSpend: 0, controllers: new Set() }));
+  const entries = hosts.map(host => ({ host, inFlight: 0, dead: false, excluded: false, misses: 0, reviving: false, orphans: [], orphanSpend: 0, controllers: new Set() }));
   const queue = [];
   let closed = false;
   let timer = null;
@@ -120,7 +135,7 @@ export function createHostPool({ hosts, ping = async () => true, kill = null, on
           progressed = true;
           break;
         }
-        const chosen = entries.find(entry => !entry.dead && !entry.reviving && entry.inFlight < entry.host.capacity && accepts(entry.host, waiter.sensitive));
+        const chosen = entries.find(entry => !entry.excluded && !entry.dead && !entry.reviving && entry.inFlight < entry.host.capacity && accepts(entry.host, waiter.sensitive));
         if (!chosen) continue;
         queue.splice(index, 1);
         chosen.inFlight += 1;
@@ -176,7 +191,7 @@ export function createHostPool({ hosts, ping = async () => true, kill = null, on
     timer = null;
     if (closed) return;
     for (const entry of entries) {
-      if (closed || entry.host.kind === 'local' || entry.reviving) continue;
+      if (closed || entry.host.kind === 'local' || entry.reviving || entry.excluded) continue;
       let alive = false;
       try { alive = await ping(entry.host); } catch { alive = false; }
       if (closed || entry.reviving) continue;
@@ -202,15 +217,55 @@ export function createHostPool({ hosts, ping = async () => true, kill = null, on
   const claim = ({ signal, sensitive = true } = {}) => new Promise((resolve, reject) => {
     if (closed || signal?.aborted) { reject(abortError()); return; }
     if (!entries.some(entry => accepts(entry.host, sensitive))) { reject(untrustedError()); return; }
+    if (!usable(sensitive)) { reject(hostsExhausted(sensitive)); return; }
     const waiter = { resolve, reject, signal, sensitive };
     queue.push(waiter);
     pump();
   });
 
+  // A host can still serve a job unless a failed check or connection excluded it for this run.
+  const usable = sensitive => entries.some(entry => !entry.excluded && accepts(entry.host, sensitive));
+  const failWaiters = () => {
+    for (let index = queue.length - 1; index >= 0; index -= 1) {
+      if (usable(queue[index].sensitive)) continue;
+      const [waiter] = queue.splice(index, 1);
+      waiter.reject(hostsExhausted(waiter.sensitive));
+    }
+  };
+  // Takes a host out of this run for good: its running jobs get the host-dead signal and are placed
+  // again, queued jobs wait for another host, and it is never revived by a later heartbeat.
+  const exclude = (entry, reason) => {
+    if (entry.excluded) return false;
+    entry.excluded = true;
+    entry.reason = reason;
+    for (const slot of entry.controllers) {
+      if (slot.remoteId) entry.orphans.push(slot.remoteId);
+      slot.controller.abort(hostDead(entry.host));
+    }
+    entry.controllers.clear();
+    failWaiters();
+    pump();
+    return true;
+  };
+
+  // Checks every remote host once, in parallel, before the first job is placed. A host that fails is
+  // excluded for the whole run. Returns [{ id, reason }].
+  const preflight = async () => {
+    const checked = await Promise.all(entries.filter(entry => entry.host.kind !== 'local').map(async entry => {
+      try { if (await ping(entry.host)) return null; } catch (error) { return { entry, reason: error?.message ?? 'ping failed' }; }
+      return { entry, reason: 'ping failed' };
+    }));
+    const failed = checked.filter(Boolean);
+    for (const { entry, reason } of failed) exclude(entry, reason);
+    return failed.map(({ entry, reason }) => ({ id: entry.host.id, reason }));
+  };
+
   timer = setTimer(() => { beat().catch(() => {}); }, heartbeatMs);
   return {
     claim,
-    snapshot: () => entries.map(entry => ({ id: entry.host.id, kind: entry.host.kind, inFlight: entry.inFlight, dead: entry.dead, capacity: entry.host.capacity })),
+    preflight,
+    markDown(id, reason = 'connection failed') { const entry = entries.find(item => item.host.id === id && item.host.kind !== 'local'); return entry ? exclude(entry, reason) : false; },
+    snapshot: () => entries.map(entry => ({ id: entry.host.id, kind: entry.host.kind, inFlight: entry.inFlight, dead: entry.dead, excluded: entry.excluded, capacity: entry.host.capacity })),
     orphanSpend: () => entries.reduce((sum, entry) => sum + entry.orphanSpend, 0),
     close() {
       closed = true;
@@ -229,7 +284,9 @@ function spawnCollected(spawnImpl, argv, { input, env, signal } = {}) {
     const out = [];
     child.stdout?.on?.('data', chunk => out.push(Buffer.from(chunk)));
     const fail = error => reject(error?.code === 'host-dead' ? error : Object.assign(new Error(`host-exit: ${error?.message ?? 'spawn failed'}`), { code: 'host-exit' }));
-    child.on('error', fail);
+    const unreachable = message => reject(hostUnreachable(message));
+    // A missing ssh client or a refused spawn means this host cannot be reached at all.
+    child.on('error', error => (error?.code === 'host-dead' ? fail(error) : unreachable(error?.message ?? 'spawn failed')));
     if (signal) {
       const stop = () => {
         child.kill?.('SIGTERM');
@@ -242,6 +299,7 @@ function spawnCollected(spawnImpl, argv, { input, env, signal } = {}) {
     child.on('exit', code => {
       if (signal?.reason?.code === 'host-dead') return;
       if (code === 0) resolve(Buffer.concat(out));
+      else if (code === 255) unreachable('ssh exit 255 (connection failed)');
       else reject(Object.assign(new Error(`host-exit: ${code}`), { code: 'host-exit' }));
     });
   });
