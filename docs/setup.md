@@ -77,6 +77,16 @@ Run commands against that project with `--root`:
 node ~/.project-swarm/tools/swarm.mjs --root /path/to/your-project doctor
 ```
 
+`swarm init` is the same link plus the project setup a fresh repo needs. From the shared install:
+
+```sh
+node ~/.project-swarm/current/tools/swarm.mjs --root /path/to/your-project init
+```
+
+It detects the stack (node, python, go, rust), copies `test` and `lint` scripts and CI `run:` checks into `coordination/checks.json`, adds `.swarm/` to `.gitignore`, and adds that ignore to an ESLint flat config or `pytest.ini` when the edit is obvious. A config it cannot edit safely is named in `warnings`. It writes the agent pointers and seeds `coordination/` the same way as `install.mjs`. Running it again keeps files that are already there.
+
+`swarm go "<goal>"` is the one command after that. The goal is a sentence, not a manifest path or a run id. It builds one lead for that sentence, turns short reports on, runs the lead, integrates through the merge queue, and returns the rollup. Provider logins still have to exist on the machine. `--commit-message` and `--pr` stay on `go MANIFEST`.
+
 Without `--root`, the runner uses its own install directory as the project. `update` and `version` refuse `--root` before any git operation; invoke those commands on the shared install runner without a project root. With `--root`, manifests, copied inputs, outputs, and `.swarm/` records are all resolved in the selected project. An explicit root is not permission to use files from other projects as context. If the project's `.project-swarm.json` version differs from the running install's version, `run` and `validate` print one warning line to stderr and continue.
 
 ## Run the smallest useful exchange
