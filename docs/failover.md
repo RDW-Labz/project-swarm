@@ -39,3 +39,12 @@ Autopilot never merges a PR, deploys, raises a cap, passes `--raise` to a resume
 ## Taking over
 
 Kill the session, start another agent (Codex, Cursor, Gemini, Claude), run `swarm brief`, and continue from its next actions. Runs started earlier are still going; `swarm brief` lists them.
+
+## Never wait on a human (Phase 10c)
+
+Plan around a manual step instead of stopping at it:
+
+- A step only the owner can do (a login, a key, an approval, a deploy) is a `type: "human"` job with `title` and copy-paste `steps`; the jobs it blocks name it in `after`. The run finishes everything else. The rest is saved and autopilot starts it after `swarm done RUN:JOB` and integration of the run.
+- Build against the gap: an interface plus a mock with tests, and a small follow-up job that `after`s the human job for the real hookup. Anything touching auth, payments or secrets stays behind a flag and marked "not wired".
+- Pick a sensible default for a design choice, build it, and record it: `swarm decision "Use SQLite?" --choice yes --option no --id db`. The owner confirms with `swarm decide db yes`; a different answer becomes a backlog goal.
+- `swarm inbox` lists everything waiting, most-blocking first. `swarm backlog add "GOAL" --paths src/` queues goals autopilot starts while everything else is waiting.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-export const ACTIONS = ['integrate', 'resume', 'retry-failed', 'start-wave'];
+export const ACTIONS = ['integrate', 'resume', 'retry-failed', 'start-wave', 'start-deferred', 'start-backlog'];
 
 const MINUTE = 60_000;
 const MAX_ACTIONS_PER_RUN = 3;
@@ -94,6 +94,7 @@ export function decide(run, ctx) {
     if (reasons.includes('run-cap') || reasons.includes('child-paused')) {
       return { action: 'block', run: id, id: `cap-${id}`, text: `Run ${id} is paused on a spend cap. Raising a cap needs the owner: swarm resume ${id} --raise maxUsd=<N> --reason TEXT` };
     }
+    if (reasons.includes('human')) return { action: 'wait', run: id, reason: 'waiting for human jobs' };
     if (reasons.includes('lane-cap')) {
       if (cooledDown(events, 'resume', id, now, 15)) return { action: 'resume', run: id, reason: 'lane cap, retry after 15 minutes' };
       return { action: 'wait', run: id, reason: 'lane-cap cooldown' };
@@ -247,6 +248,56 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     await write({ kind: 'action', action: 'start-wave', wave: wave.id, reason: 'dependencies complete', result });
     actions.push({ action: 'start-wave', wave: wave.id, ok, result });
   }
+
+  // Jobs that waited for human tasks start once every task is done and the run that held them is integrated.
+  if (!journalBroken && typeof deps.humanGroups === 'function') {
+    const groups = await safe(() => deps.humanGroups(root), []);
+    const integratedIds = new Set(events.filter(e => e && e.kind === 'integration' && (e.status === 'complete' || e.status === 'integrated')).map(e => e.run));
+    for (const group of Array.isArray(groups) ? groups : []) {
+      if (!group || group.started || !Array.isArray(group.humans) || !group.humans.length || !group.humans.every(h => h.done) || !group.hasDeferred) continue;
+      const run = runs.find(r => r.id === group.id);
+      if (!group.runless && !(run?.status === 'complete' && (run.integrated === true || integratedIds.has(group.id)))) continue;
+      const key = `start-deferred:${group.id}`;
+      if (memory.has(key) || actions.filter(x => x.action === 'start-deferred').length >= 1) continue;
+      memory.add(key);
+      let ok = true;
+      let message = 'ok';
+      try {
+        const out = await deps.startDeferred(root, group);
+        if (typeof out?.run === 'string') await write({ kind: 'run', id: out.run, status: out.status ?? 'running', deferredFrom: group.id });
+      } catch (error) { ok = false; message = String(error?.message ?? error); }
+      const result = ok ? 'ok' : message.slice(0, RESULT_LIMIT);
+      await write({ kind: 'action', action: 'start-deferred', run: group.id, reason: 'human jobs done', result });
+      actions.push({ action: 'start-deferred', run: group.id, ok, result });
+    }
+  }
+
+  // Never sit idle: when every live run is waiting (on a person or a quota window), start the next backlog goal.
+  if (!journalBroken && typeof deps.nextBacklog === 'function' && !actions.some(x => ['start-deferred', 'start-backlog'].includes(x.action))) {
+    const waiting = runs.some(r => r.status === 'paused');
+    const running = runs.some(r => r.status === 'running');
+    if (waiting && !running) {
+      let safeCheckout = false;
+      try { safeCheckout = integrationBlocker(await deps.checkout(root)) === null; } catch { safeCheckout = false; }
+      const item = safeCheckout ? await safe(() => deps.nextBacklog(root, runs), null) : null;
+      const key = item ? `start-backlog:${item.id}` : null;
+      if (item && !memory.has(key)) {
+        memory.add(key);
+        let ok = true;
+        let message = 'ok';
+        try {
+          const out = await deps.startBacklog(root, item);
+          if (typeof out?.run === 'string') await write({ kind: 'run', id: out.run, status: out.status ?? 'running', backlog: item.id });
+        } catch (error) { ok = false; message = String(error?.message ?? error); }
+        const result = ok ? 'ok' : message.slice(0, RESULT_LIMIT);
+        await write({ kind: 'action', action: 'start-backlog', reason: `backlog goal ${item.id}`, result });
+        actions.push({ action: 'start-backlog', backlog: item.id, ok, result });
+        if (!ok) await write({ kind: 'blocker', id: `backlog-${item.id}`, text: `Backlog goal ${item.id} could not start: ${result}` });
+      }
+    }
+  }
+
+  if (typeof deps.notify === 'function') { try { await deps.notify(root); } catch { /* a notifier never stops the loop */ } }
 
   return { actions, blocked, idle: actions.length === 0 && blocked.length === 0, ...(journalBroken ? { error: journalBroken } : {}) };
 }

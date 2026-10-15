@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.67.0
+
+- Added human jobs and the inbox (Phase 10c). A manifest job `{ "id", "type": "human", "title", "steps": [...] }` is a task only the owner can do. The run finishes every job that does not depend on it; the jobs that do wait in `.swarm/project/human-jobs.json`, and autopilot starts them once every human job in the group is done and the run that held them is integrated. Nothing is spent while they wait.
+- Added `swarm inbox [--json] [--all]` (what waits on you, most-blocking first, with the steps and the command to close each item; `--all` adds the projects in `.swarm-projects.json`), `swarm done ID`, `swarm decision "TEXT" --choice C [--option O]... [--id ID]` (record the default the swarm picked), and `swarm decide ID CHOICE` (confirm it; a different choice adds a backlog goal "Change decision ID to CHOICE").
+- Added `swarm backlog` (`add "GOAL" [--paths a/,b/] [--max-usd N]`, `remove ID`). When every live run is waiting on a person or a quota window and nothing is running, autopilot starts the next goal that does not overlap files the waiting runs write, from a clean `swarm/*` branch, inside its budget. A goal with no `--paths` starts only when nothing else is waiting.
+- Autopilot can send a macOS notification when a new inbox item would unblock 20 or more jobs, and one daily digest; off unless the machine config has `"notify": true`. It never notifies for an item that unblocks nothing.
+- Fixed a test of the lane pause that failed on slow CI runners.
+
 ## 1.66.0
 
 - Added orchestrator failover (Phase 10b). The runner now keeps a project journal (`.swarm/project/journal.ndjson`) written on every command, with secrets redacted. `swarm brief` prints a briefing of under 4 KB (goal, done, running, what needs the owner, the next 3 commands, the rules); `swarm handoff --to codex|cursor|claude|gemini` prints a paste-ready message; `swarm checkpoint` saves a snapshot; `swarm note` also writes to the journal. `coordination/HANDOFF.md` is regenerated from the journal after every command (a hand-written one is kept as `HANDOFF.previous.md`). `swarm init` now tells every agent to run `swarm brief` at session start, writes `GEMINI.md`, and installs a Claude Code `Stop` hook (in the git-ignored `.claude/settings.local.json`) that runs `swarm checkpoint`. See [failover](docs/failover.md).

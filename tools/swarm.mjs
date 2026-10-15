@@ -23,9 +23,14 @@ import { resolveLanes, LaneScheduler, classifyProviderOutcome, lanesDir } from '
 import { resolveHosts, enabledHosts, createHostPool, defaultHostTransport, remoteEnv, checkPulled, isSecretPath } from './executors.mjs';
 import { initProject } from './init.mjs';
 import { resolveCliHosts, sshInvocation, sshEnv, remoteExec, cliHostFailure } from './cli-host.mjs';
+import { isHumanJob, validateHumanJob, liftHumanJobs, addGroup, readStore as readHumanStore, humanGroupReady, updateGroup as updateHumanGroup } from './human-jobs.mjs';
+import { runInboxCommand, inboxDeps } from './inbox-commands.mjs';
+import { collectInbox } from './inbox.mjs';
+import { readBacklog, nextStartable, markStarted as markBacklogStarted } from './backlog.mjs';
+import { pendingNotifications, macNotify } from './notify.mjs';
 import { resolveDefaultRoot, INSTALL_COMMANDS, runBriefCommand, runHandoffCommand, runCheckpointCommand, journalAfterCommand } from './project-commands.mjs';
 import { runAutopilot } from './autopilot.mjs';
-import { appendEvent, readJournal } from './journal.mjs';
+import { appendEvent, readJournal, safeWritableDir } from './journal.mjs';
 import { loadRuns } from './brief.mjs';
 import { projectStatus, formatStatus } from './status.mjs';
 import { zshCompletion, completeRuns } from './completion.mjs';
@@ -1252,6 +1257,12 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
   for (const job of manifest.jobs) {
     if (!job || typeof job.id !== 'string' || !ID.test(job.id) || ids.has(job.id.toLowerCase())) fail(`Invalid or duplicate job id: ${job?.id}`);
     ids.add(job.id.toLowerCase());
+    // A human job is a task for the owner: shape-checked here, lifted out of the run before anything starts.
+    if (isHumanJob(job)) {
+      try { validateHumanJob(job); } catch (error) { fail(error.message, error.code ?? 'human-job-invalid'); }
+      job.context = []; job.outputs = [];
+      continue;
+    }
     if (job.type !== undefined && (typeof job.type !== 'string' || !Object.hasOwn(JOB_TYPES, job.type))) fail(`Job ${job.id}: unknown type ${job.type}`, 'job-type-invalid');
     if (job.typeRoute !== undefined && (!job.type || !isDeepStrictEqual(job.typeRoute, JOB_TYPES[job.type].route))) fail(`Job ${job.id}: typeRoute must equal the preset route for its type`, 'job-type-invalid');
     if (![...CLI_AGENTS, ...API_AGENTS, 'auto'].includes(job.agent)) fail(`Unsupported agent: ${job.agent}`);
@@ -2492,7 +2503,22 @@ async function applyManifestJobTypes(root, manifest, { env, home = os.homedir() 
   };
 }
 
+// Human jobs never reach the worker pipeline: the run keeps every job that does not depend on one, and the
+// rest waits in .swarm/project/human-jobs.json until the owner has done them (see tools/human-jobs.mjs).
 export async function runManifest(root, manifest, options = {}) {
+  if (!Array.isArray(manifest?.jobs) || !manifest.jobs.some(isHumanJob)) return runManifestMain(root, manifest, options);
+  root = await fs.realpath(root);
+  validateManifest(manifest);
+  const id = options.id ?? runId();
+  const lifted = liftHumanJobs(manifest);
+  await addGroup(root, { id, humans: lifted.humans, deferred: lifted.deferred, edges: lifted.edges });
+  const humanJobs = lifted.humans.map(human => human.id);
+  if (!lifted.run.jobs.length) return { id, root, status: 'paused', jobs: [], humanJobs, pause: { reasons: ['human'], until: null, jobs: humanJobs, message: 'waiting for human jobs' } };
+  const state = await runManifestMain(root, lifted.run, { ...options, id });
+  return { ...state, humanJobs };
+}
+
+async function runManifestMain(root, manifest, options = {}) {
   const { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks, checkBase = false, acceptRedBase = false, reason, baseChecks = {}, sync = false, acceptCoveredRedBase = true, jobs = null, maxUsd, maxTokens, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), resumeState = null, parentRun, leadJob, hostTransport = null, heartbeatMs = null } = options;
   root = await fs.realpath(root);
   validateManifest(manifest);
@@ -6602,7 +6628,7 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
 // this, any manifest with an `auto` job, including every manifest `swarm go` plans, died here with
 // "Unsupported API adapter".
 export function agentsToCheck(manifest) {
-  return [...new Set(manifest.jobs.map(job => job.agent))].filter(agent => agent !== 'auto');
+  return [...new Set(manifest.jobs.filter(job => !isHumanJob(job)).map(job => job.agent))].filter(agent => agent !== 'auto');
 }
 
 // Shared by the `run` command and `go`'s run stage: validate, confirm every used agent is
@@ -6751,6 +6777,48 @@ function autopilotDeps() {
       const next = await runManifestChecked(root, manifest, undefined, autopilotCaps({ maxUsd: wave.maxUsd, maxTokens: wave.maxTokens }, manifest.budget));
       return { run: next.id, status: next.status };
     },
+    humanGroups: async root => {
+      const { groups } = await readHumanStore(root);
+      return Promise.all(groups.map(async group => ({ id: group.id, humans: group.humans, started: Boolean(group.started), hasDeferred: Boolean(group.deferred?.jobs?.length), runless: !(await fs.stat(path.join(root, '.swarm', 'runs', group.id, 'state.json')).then(() => true, () => false)) })));
+    },
+    startDeferred: async (root, group) => {
+      const stored = (await readHumanStore(root)).groups.find(item => item.id === group.id);
+      if (!stored?.deferred || stored.started) throw new Error('human-group-not-startable');
+      // Marked before the run starts, so a crash can never start the same jobs twice.
+      await updateHumanGroup(root, group.id, item => { item.started = { run: null, at: new Date().toISOString() }; });
+      const next = await runManifestChecked(root, stored.deferred, undefined, autopilotCaps(stored.deferred.budget));
+      await updateHumanGroup(root, group.id, item => { item.started.run = next.id; });
+      return { run: next.id, status: next.status };
+    },
+    nextBacklog: async (root, runs) => {
+      const { items } = await readBacklog(root);
+      const claims = [];
+      const claim = job => { for (const file of [...(job.outputs ?? []), ...(job.outputDirs ?? [])]) claims.push(file); };
+      for (const run of runs.filter(item => item.status === 'paused' || item.status === 'running')) {
+        try { for (const job of JSON.parse(await bytesAt(root, `.swarm/runs/${run.id}/manifest.json`, true)).jobs ?? []) claim(job); } catch { claims.push('.'); }
+      }
+      for (const group of (await readHumanStore(root)).groups.filter(item => !item.started)) for (const job of group.deferred?.jobs ?? []) claim(job);
+      return nextStartable(items, { activeClaims: claims });
+    },
+    startBacklog: async (root, item) => {
+      const caps = autopilotCaps({ maxUsd: item.maxUsd });
+      const manifest = manifestForGoal(item.goal, { folders: await topLevelFolders(root), maxUsd: caps.maxUsd, maxTokens: caps.maxTokens });
+      // Marked before the run starts so a crash can never start a goal twice; the run id is in the journal.
+      await markBacklogStarted(root, item.id, 'pending');
+      const next = await runManifestChecked(root, manifest, undefined, caps);
+      return { run: next.id, status: next.status };
+    },
+    // Off unless the machine config says `"notify": true`.
+    notify: async root => {
+      if (loadLocalConfig({ env: process.env }).notify !== true) return;
+      const file = path.join(await safeWritableDir(root, ['.swarm', 'project']), 'notified.json');
+      let notified = { items: [], digestDay: null };
+      try { notified = JSON.parse(await fs.readFile(file, 'utf8')); } catch { /* first run */ }
+      const items = await collectInbox([root], inboxDeps());
+      const out = pendingNotifications(items, notified, { now: Date.now() });
+      for (const message of out.messages) await macNotify(message);
+      if (out.messages.length) await fs.writeFile(file, `${JSON.stringify(out.notified)}\n`);
+    },
   };
 }
 
@@ -6812,6 +6880,13 @@ async function mainInner() {
     if(out.exitCode)process.exitCode=out.exitCode;
     return;
   }
+  if(['inbox','done','decide','decision','backlog'].includes(args[0])){
+    root=await fs.realpath(root);
+    const out=await runInboxCommand(root,args[0],args.slice(1),{installRoot:ownRoot});
+    process.stdout.write(out.stdout);
+    if(out.exitCode)process.exitCode=out.exitCode;
+    return;
+  }
   if(args[0]==='autopilot'){
     root=await fs.realpath(root);
     let once=false,intervalMs=30000,maxSteps=Infinity;
@@ -6859,7 +6934,7 @@ async function mainInner() {
   // `swarm "goal sentence"` is shorthand for `swarm go "goal sentence"`. Only one argument with
   // whitespace counts, so a mistyped one-word command never starts a paid run.
   if(!args[0].startsWith('-')&&/\s/.test(args[0])&&isGoalArgument(args[0]))args.unshift('go');
-  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | init | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | init | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
