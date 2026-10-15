@@ -10,10 +10,10 @@ Routes list agents in candidate order. Timeouts are in milliseconds. The routes 
 |---|---|---|---:|---|
 | `build` | any | anthropic, cursor, codex | 1800000 | none |
 | `fix` | any | anthropic, cursor, codex | 1800000 | `diagnosing-bugs` |
-| `test` | tests | codex, anthropic, cursor | 1200000 | `tdd` |
+| `test` | tests | codex, anthropic, hermes, cursor | 1200000 | `tdd` |
 | `review` | none | codex | 900000 | `code-review` |
 | `research` | none | hermes | 900000 | none |
-| `docs` | docs | anthropic, cursor, codex | 900000 | none |
+| `docs` | docs | anthropic, hermes, cursor, codex | 900000 | none |
 | `merge` | any | codex | 1800000 | `resolving-merge-conflicts` |
 | `lead` | manifest | codex | 900000 | none |
 

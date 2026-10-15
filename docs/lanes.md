@@ -8,7 +8,7 @@ A lane belongs to one agent. It has its own concurrency cap, request rate, backo
 
 | Agent | Concurrency | Requests per minute | Routing model |
 |---|---:|---|---|
-| `hermes` | 3 | unlimited | `null` |
+| `hermes` | 1 | unlimited | `null` |
 | `cursor` | 8 | unlimited | `null` |
 | `codex` | 6 | unlimited | `null` |
 | `claude` | 4 | unlimited | `null` |

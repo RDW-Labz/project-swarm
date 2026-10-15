@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.68.0
+
+- Hermes (Qwen3.8 Uncensored IQ3_XXS on dev2) is now on the `docs` and `test` routes, after Anthropic (`docs`: anthropic, hermes, cursor, codex; `test`: codex, anthropic, hermes, cursor). It scored 8/10 in two lane benchmark runs at one job at a time, which was the bar; `build`, `fix` and `review` still never use it, and `research` still starts with it. The Hermes lane default is now one job at a time (was 3).
+
 ## 1.67.0
 
 - Added human jobs and the inbox (Phase 10c). A manifest job `{ "id", "type": "human", "title", "steps": [...] }` is a task only the owner can do. The run finishes every job that does not depend on it; the jobs that do wait in `.swarm/project/human-jobs.json`, and autopilot starts them once every human job in the group is done and the run that held them is integrated. Nothing is spent while they wait.

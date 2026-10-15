@@ -46,7 +46,7 @@ test('defaults are complete, deeply frozen, and independently resolved', () => {
     assert.ok(Object.isFrozen(LANE_DEFAULTS[agent]));
     assert.ok(Object.isFrozen(LANE_DEFAULTS[agent].backoff));
     assert.deepEqual(lanes[agent], {
-      concurrency: ({ hermes: 3, cursor: 8, codex: 6, claude: 4, openrouter: 64, anthropic: 16 })[agent] ?? 32,
+      concurrency: ({ hermes: 1, cursor: 8, codex: 6, claude: 4, openrouter: 64, anthropic: 16 })[agent] ?? 32,
       requestsPerMinute: null, backoff: { baseMs: 2000, maxMs: 300000, maxRetries: 5 },
       pauseMs: 900000, maxPauseMs: 900000, model: null,
     });
@@ -366,14 +366,14 @@ test('health, snapshot, pausedFor, unknown agents and global limits', async () =
   const f = fixture({}, 3);
   const s = f.scheduler;
   assert.deepEqual(s.snapshot(), { globalConcurrency: 3, globalInFlight: 0, peakGlobal: 0, lanes: {} });
-  assert.deepEqual(s.health('hermes'), { agent: 'hermes', state: 'ok', until: null, inFlight: 0, queued: 0, concurrency: 3, consecutiveRateLimits: 0 });
+  assert.deepEqual(s.health('hermes'), { agent: 'hermes', state: 'ok', until: null, inFlight: 0, queued: 0, concurrency: 1, consecutiveRateLimits: 0 });
   assert.deepEqual(s.snapshot().lanes, {});
   const release = await s.acquire('hermes');
   s.report('cursor', outcome('quota-exhausted'));
   assert.deepEqual(s.snapshot(), {
     globalConcurrency: 3, globalInFlight: 1, peakGlobal: 1,
     lanes: {
-      hermes: { agent: 'hermes', state: 'ok', until: null, inFlight: 1, queued: 0, concurrency: 3, consecutiveRateLimits: 0, peak: 1 },
+      hermes: { agent: 'hermes', state: 'ok', until: null, inFlight: 1, queued: 0, concurrency: 1, consecutiveRateLimits: 0, peak: 1 },
       cursor: { agent: 'cursor', state: 'paused', until: new Date(f.now() + 900000).toISOString(), inFlight: 0, queued: 0, concurrency: 8, consecutiveRateLimits: 0, peak: 0 },
     },
   });
