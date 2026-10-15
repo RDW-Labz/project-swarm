@@ -38,9 +38,13 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-14 | 5 | leads-core: Implemented section A; 90 tests passed.; Deviation: oversized prompt goal, scope and out | codex | gpt-6.1-sol | pass | 42,962 | subscription |
 | 2026-10-14 | 5 | leads-run: status: blocked. Existing type-lead fixtures lack required area; need access to tests/job | codex | gpt-6.1-sol | blocked: blocked: no summary given | 158,156 | subscription |
 | 2026-10-14 | 5 | leads-docs: Documented lead areas, child validation, errors, lifecycle, integration, and rollups wit | codex | gpt-6.1-sol | pass | 44,416 | subscription |
+| 2026-10-15 | - | completion: Implemented command metadata, zsh completion, and newest-first run discovery capped at 2 | codex | gpt-6.1-sol | pass | 21,256 | subscription |
+| 2026-10-15 | - | swarm-bin: Implemented executable wrapper installation, safe quoting, foreign-file refusal, and comm | codex | gpt-6.1-sol | pass | 22,753 | subscription |
+| 2026-10-15 | - | status: Implemented project status, five suggested commands, and compact plain-text formatting.; All | codex | gpt-6.1-sol | pass | 27,170 | subscription |
 
 ## Daily summary
 
 | date | tier | calls | pass | fail/blocked | tokens | rough cost |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-10-14 | codex | 34 | 29 | 5 | 2,887,673 | subscription |
+| 2026-10-15 | codex | 3 | 3 | 0 | 71,179 | subscription |
