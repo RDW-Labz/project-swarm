@@ -50,6 +50,8 @@ For large goals, split work into lead jobs with non-overlapping areas. The orche
 
 Lane caps and rate-limit pauses are machine-wide. Every run on this machine, including lead child runs and other repositories, shares one lane file next to the shared install. A 429 or quota pause in one run pauses that lane for all of them. Deleting a project's `.swarm/` does not reset it.
 
+A manifest or the shared config can name `hosts` (`local`, `ssh`, or `sandbox`) with a per-host capacity. Remote jobs ship the copied workspace and pull back only declared outputs, hash-checked. Secret files and API keys are not copied to the remote host. A sensitive job stays on a local or ssh host unless a sandbox sets `trusted: true`. A host is dead after three missed heartbeats in a row; one miss leaves its jobs in place. A remote job has an id, and `swarm-remote-exec` kills its child if the connection closes. A host that comes back is told to kill orphaned ids before it is used again. See [remote hosts](references/executors.md).
+
 `node {{SWARM_RUNNER}} ticket MANIFEST --pr PAYLOAD` runs the guarded one-command pipeline; `--resume RUN` skips its saved green stages.
 `node {{SWARM_RUNNER}} scaffold job` generates a validated manifest; `scaffold job --command <swarm command>` adds handler modules resolved from CLI dispatch to context; `scaffold pr --from RUN --title T` generates a payload with a mutation stub that requires real evidence before shipping.
 
