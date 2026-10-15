@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "id": "review-11",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "approval gate before spending money, saved-plan loading",
+      "type": "review",
+      "prompt": "Safety review of Phase 11 (plan preview and approval). Files: tools/plan-preview.mjs, tools/plan-commands.mjs, docs/plans/phase11-design.md (the rules), and coordination/review/phase11.diff (swarm.mjs and goal.mjs changes). Check with evidence: (1) can anything run a goal, start a lead or spend money without the owner approving it: no terminal and no --yes, --yes without --max-usd, a declined or empty answer, EOF on stdin, shorthand `swarm \"goal\"`, `go --plan`, manifest/run-id arguments to go; (2) saved plans: path traversal through the plan id, symlinked .swarm/plans, a plan edited after preview (hash covers manifest only: are flags or goal editable and used?), stale-HEAD check bypass, plan replay (running the same plan twice); (3) does go --plan really run exactly the previewed manifest (budget, caps) and can saved flags override the owner CLI caps in a dangerous direction; (4) calibration: can a bad actual (NaN, huge, negative, attacker text) poison estimates or crash; (5) terminal output: control characters or escape sequences from goal text or folder names reaching the terminal. Report findings ranked high/medium/low with file and line.",
+      "context": [
+        "docs/plans/phase11-design.md",
+        "tools/plan-preview.mjs",
+        "tools/plan-commands.mjs",
+        "coordination/review/phase11.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 1800000
+    }
+  ]
+}

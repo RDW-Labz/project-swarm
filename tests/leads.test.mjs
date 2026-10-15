@@ -117,3 +117,16 @@ test('a child contract other than the parent contract is refused', () => {
   assert.throws(() => validateChildManifest(child, { lead, area, parentManifest: { contract: 'docs/c.md' } }), /contract must be the parent contract/);
   assert.equal(validateChildManifest({ ...child, contract: 'docs/c.md' }, { lead, area, parentManifest: { contract: 'docs/c.md' } }).contract, 'docs/c.md');
 });
+
+test('a child report is always "short": a sentence from the lead is coerced, and a short-report parent gets short children', () => {
+  const sentence = child({ jobs: [worker({ report: 'Short report: changed files, risks.' })] });
+  const out = validateChildManifest(sentence, options({}, { parentManifest: {} }));
+  assert.equal(out.jobs[0].report, 'short');
+  assert.equal(out.report, undefined);
+  const plain = validateChildManifest(child(), options({}, { parentManifest: {} }));
+  assert.equal(plain.jobs[0].report, undefined);
+  const shortParent = validateChildManifest(child(), options({}, { parentManifest: { report: 'short' } }));
+  assert.equal(shortParent.report, 'short');
+  assert.equal(shortParent.jobs[0].report, 'short');
+  assert.equal(sentence.jobs[0].report, 'Short report: changed files, risks.', 'the input is not changed');
+});

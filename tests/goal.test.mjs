@@ -178,3 +178,31 @@ test('go refuses a dirty repo, then commits only on swarm/go-<runId> and leaves 
   assert.equal((await exec('git', ['-C', root, 'show', 'HEAD:app/note.txt'], { encoding: 'utf8' })).stdout, 'note\n');
   assert.equal(gitArgs.some(args => args.includes('checkout') && args.includes('main')), false);
 });
+
+test('topLevelFolders skips folders with no tracked files in a git repo, and lists every folder outside git', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-folders-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'src'));
+  await fs.mkdir(path.join(root, 'empty'));
+  await fs.mkdir(path.join(root, 'untracked'));
+  await fs.writeFile(path.join(root, 'src/a.txt'), 'a\n');
+  await fs.writeFile(path.join(root, 'untracked/b.txt'), 'b\n');
+  assert.deepEqual(await topLevelFolders(root), ['empty', 'src', 'untracked']);
+  const { execFile } = await import('node:child_process');
+  const run = (...args) => new Promise((resolve, reject) => execFile('git', ['-C', root, ...args], error => (error ? reject(error) : resolve())));
+  await run('init', '-q');
+  await run('add', 'src');
+  assert.deepEqual(await topLevelFolders(root), ['src']);
+});
+
+test('lead prompts list the tracked files inside their scope, capped and cleaned', () => {
+  const files = ['src/a.js', 'src/b.js', 'tests/t.js', 'src‮/evil.js', 'README.md'];
+  const m = manifestForGoal('do it', { folders: ['src', 'tests'], files, leads: 2, maxJobs: 5, concurrency: 1 });
+  const src = m.jobs.find(job => job.area.scope.includes('src/')).prompt;
+  assert.match(src, /FILES IN YOUR SCOPE \(2 of 2/);
+  assert.match(src, /- src\/a\.js\n- src\/b\.js/);
+  assert.ok(!src.includes('tests/t.js') && !src.includes('README.md') && !/‮/.test(src));
+  const many = manifestForGoal('x', { folders: ['src'], files: Array.from({ length: 300 }, (_, n) => `src/f${n}.js`), leads: 1, maxJobs: 5, concurrency: 1 });
+  assert.match(many.jobs[0].prompt, /\(200 of 300/);
+  assert.equal(manifestForGoal('x', { folders: ['src'], leads: 1 }).jobs[0].prompt.includes('FILES IN YOUR SCOPE'), false);
+});
