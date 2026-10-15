@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "plan-preview",
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase11-design.md specifies: tools/plan-preview.mjs with the exported names, signatures, return shapes and rules, and tests/plan-preview.test.mjs. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`; tests use node:test and node:assert/strict, start with `import './_isolate-config.mjs';`, and use temporary directories. Import safeWritableDir and assertRegularOrMissing from tools/journal.mjs (do not rewrite them). Write only your declared output files and do not edit tools/swarm.mjs. Cover every rule in the design with a test: the estimate formulas (a goal manifest from manifestForGoal in tools/goal.mjs with 1 and 3 leads, and a manifest without leads), calibration ratios and clamps and no compounding, every risk code, subscription lanes costing 0, formatPreview text (including control characters in names), savePlan/loadPlan round trip, refusal of a bad id, a tampered manifest, a missing plan, an existing plan id and a symlinked .swarm/plans.",
+      "context": [
+        "docs/plans/phase11-design.md",
+        "tools/journal.mjs",
+        "tools/goal.mjs"
+      ],
+      "outputs": [
+        "tools/plan-preview.mjs",
+        "tests/plan-preview.test.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    }
+  ]
+}
