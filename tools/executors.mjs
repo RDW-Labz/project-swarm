@@ -2,7 +2,8 @@
 import crypto from 'node:crypto';
 
 const HOST_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
-const SSH_TARGET = /^[A-Za-z0-9._-]+(?:@[A-Za-z0-9._-]+)?$/;
+// A target never starts with `-`, so ssh can never read it as an option.
+const SSH_TARGET = /^[A-Za-z0-9_][A-Za-z0-9._-]*(?:@[A-Za-z0-9_][A-Za-z0-9._-]*)?$/;
 const REMOTE_JOB_ID = /^[a-f0-9]{8,32}$/;
 const SECRET_DIRS = new Set(['.git', '.swarm', '.ssh', '.aws', '.gnupg']);
 const REMOTE_ENV = new Set(['PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'TZ', 'SWARM_PORT_BASE']);
@@ -60,7 +61,7 @@ export function resolveHosts(source) {
   return source.map(host => {
     if (!host || typeof host !== 'object' || Array.isArray(host)) throw invalid('host must be an object');
     for (const key of Object.keys(host)) {
-      if (!['id', 'kind', 'capacity', 'target', 'driver', 'heartbeatMs', 'trusted', 'enabled'].includes(key)) throw invalid(`unknown host field ${key}`);
+      if (!['id', 'kind', 'capacity', 'target', 'driver', 'heartbeatMs', 'trusted', 'enabled', 'commands', 'remoteExec'].includes(key)) throw invalid(`unknown host field ${key}`);
     }
     if (host.enabled !== undefined && typeof host.enabled !== 'boolean') throw invalid(`${host.id}.enabled must be true or false`);
     if (host.trusted !== undefined && typeof host.trusted !== 'boolean') throw invalid(`${host.id}.trusted must be true or false`);
@@ -79,7 +80,11 @@ export function resolveHosts(source) {
     if (host.kind === 'sandbox') {
       if (!Array.isArray(host.driver) || !host.driver.length || host.driver.some(part => typeof part !== 'string' || !part)) throw invalid(`${host.id}.driver must be a command argv`);
     } else if (host.driver !== undefined) throw invalid(`${host.id} cannot set driver`);
-    return { id: host.id, kind: host.kind, capacity: host.capacity, ...(host.target ? { target: host.target } : {}), ...(host.driver ? { driver: [...host.driver] } : {}), ...(host.kind === 'sandbox' ? { trusted: host.trusted === true } : {}), ...(host.enabled === false ? { enabled: false } : {}), heartbeatMs: host.heartbeatMs ?? 5000 };
+    if (host.remoteExec !== undefined && (typeof host.remoteExec !== 'string' || !/^\/[A-Za-z0-9._/+@-]{1,200}$/.test(host.remoteExec))) throw invalid(`${host.id}.remoteExec must be an absolute path`);
+    if (host.commands !== undefined) {
+      if (!host.commands || typeof host.commands !== 'object' || Array.isArray(host.commands) || Object.values(host.commands).some(command => typeof command !== 'string' || !command.startsWith('/') || /[\0\r\n]/.test(command))) throw invalid(`${host.id}.commands must contain absolute CLI paths`);
+    }
+    return { id: host.id, kind: host.kind, capacity: host.capacity, ...(host.target ? { target: host.target } : {}), ...(host.driver ? { driver: [...host.driver] } : {}), ...(host.commands ? { commands: { ...host.commands } } : {}), ...(host.remoteExec ? { remoteExec: host.remoteExec } : {}), ...(host.kind === 'sandbox' ? { trusted: host.trusted === true } : {}), ...(host.enabled === false ? { enabled: false } : {}), heartbeatMs: host.heartbeatMs ?? 5000 };
   });
 }
 
@@ -91,8 +96,10 @@ export function enabledHosts(hosts) {
   return live.length ? live : null;
 }
 
+// Same hardening as the Hermes-over-ssh path: no prompts, the host key must already be known, no agent,
+// X11 or other forwarding, no pty, and `--` so the target can never be read as an option.
 export function sshArgv(host, remoteCommand) {
-  return ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', host.target, remoteCommand];
+  return ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ForwardAgent=no', '-o', 'ForwardX11=no', '-o', 'ClearAllForwardings=yes', '-o', 'PermitLocalCommand=no', '-o', 'ConnectTimeout=10', '-o', 'ConnectionAttempts=2', '--', host.target, remoteCommand];
 }
 
 export function sandboxArgv(host, remoteCommand) {
@@ -135,7 +142,7 @@ export function createHostPool({ hosts, ping = async () => true, kill = null, on
           progressed = true;
           break;
         }
-        const chosen = entries.find(entry => !entry.excluded && !entry.dead && !entry.reviving && entry.inFlight < entry.host.capacity && accepts(entry.host, waiter.sensitive));
+        const chosen = entries.find(entry => !entry.excluded && !entry.dead && !entry.reviving && entry.inFlight < entry.host.capacity && accepts(entry.host, waiter.sensitive) && (!waiter.hostFilter || waiter.hostFilter(entry.host)));
         if (!chosen) continue;
         queue.splice(index, 1);
         chosen.inFlight += 1;
@@ -214,20 +221,20 @@ export function createHostPool({ hosts, ping = async () => true, kill = null, on
     if (!closed) timer = setTimer(() => { beat().catch(() => {}); }, heartbeatMs);
   };
 
-  const claim = ({ signal, sensitive = true } = {}) => new Promise((resolve, reject) => {
+  const claim = ({ signal, sensitive = true, hostFilter = null } = {}) => new Promise((resolve, reject) => {
     if (closed || signal?.aborted) { reject(abortError()); return; }
-    if (!entries.some(entry => accepts(entry.host, sensitive))) { reject(untrustedError()); return; }
-    if (!usable(sensitive)) { reject(hostsExhausted(sensitive)); return; }
-    const waiter = { resolve, reject, signal, sensitive };
+    if (!entries.some(entry => accepts(entry.host, sensitive) && (!hostFilter || hostFilter(entry.host)))) { reject(untrustedError()); return; }
+    if (!usable(sensitive, hostFilter)) { reject(hostsExhausted(sensitive)); return; }
+    const waiter = { resolve, reject, signal, sensitive, hostFilter };
     queue.push(waiter);
     pump();
   });
 
   // A host can still serve a job unless a failed check or connection excluded it for this run.
-  const usable = sensitive => entries.some(entry => !entry.excluded && accepts(entry.host, sensitive));
+  const usable = (sensitive, hostFilter = null) => entries.some(entry => !entry.excluded && accepts(entry.host, sensitive) && (!hostFilter || hostFilter(entry.host)));
   const failWaiters = () => {
     for (let index = queue.length - 1; index >= 0; index -= 1) {
-      if (usable(queue[index].sensitive)) continue;
+      if (usable(queue[index].sensitive, queue[index].hostFilter)) continue;
       const [waiter] = queue.splice(index, 1);
       waiter.reject(hostsExhausted(waiter.sensitive));
     }
@@ -306,20 +313,27 @@ function spawnCollected(spawnImpl, argv, { input, env, signal } = {}) {
 }
 
 export function defaultHostTransport({ spawnImpl }) {
-  const argvFor = (host, command) => host.kind === 'sandbox' ? sandboxArgv(host, command) : sshArgv(host, command);
+  // `swarm-remote-exec` is looked up on the host's PATH unless the host names its absolute path (a
+  // non-interactive ssh shell often has a shorter PATH than a login shell).
+  const argvFor = (host, command) => {
+    const target = command === REMOTE_COMMAND || command.startsWith(`${REMOTE_COMMAND} `) ? command.replace(REMOTE_COMMAND, host.remoteExec ?? REMOTE_COMMAND) : command;
+    return host.kind === 'sandbox' ? sandboxArgv(host, target) : sshArgv(host, target);
+  };
   return {
     async ping(host) {
       await spawnCollected(spawnImpl, argvFor(host, 'true'), {});
       return true;
     },
-    async run({ host, jobId, files = [], outputs = [], env, signal }) {
+    async run({ host, jobId, files = [], outputs = [], command, args = [], stdin = '', env, keepHome = false, signal }) {
       if (typeof jobId !== 'string' || !REMOTE_JOB_ID.test(jobId)) throw Object.assign(new Error('host-exit: remote job id'), { code: 'host-exit' });
       const safe = files.filter(file => file && !isSecretPath(file.path));
-      const payload = Buffer.from(`${JSON.stringify({ id: jobId, files: safe.map(file => ({ path: file.path, bytes: Buffer.from(file.bytes).toString('base64') })), outputs })}\n`);
+      const payload = Buffer.from(`${JSON.stringify({ id: jobId, command, args, stdin, keepHome: keepHome === true, env: remoteEnv(env), files: safe.map(file => ({ path: file.path, bytes: Buffer.from(file.bytes).toString('base64') })), outputs })}\n`);
       const stdout = await spawnCollected(spawnImpl, argvFor(host, REMOTE_COMMAND), { input: payload, env: remoteEnv(env), signal });
       const pulled = JSON.parse(stdout.toString('utf8'));
-      checkPulled(pulled.files ?? []);
-      return { files: (pulled.files ?? []).map(file => ({ ...file, bytes: Buffer.isBuffer(file.bytes) ? file.bytes : Buffer.from(file.bytes) })) };
+      if (pulled.id !== jobId) throw Object.assign(new Error('host-pull-mismatch: id'), { code: 'host-pull-mismatch' });
+      const decoded = (pulled.files ?? []).map(file => ({ ...file, bytes: Buffer.from(file.bytes, 'base64') }));
+      checkPulled(decoded);
+      return { exitCode: pulled.exitCode, stdout: Buffer.from(pulled.stdout ?? '', 'base64'), files: decoded };
     },
     async kill(host, ids) {
       const safe = [...ids];

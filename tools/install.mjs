@@ -194,6 +194,42 @@ async function ensureSwarmIgnore(root){
  return true;
 }
 
+// After each Claude Code turn, snapshot the project journal. It needs no model, and it keeps the state
+// current even if the next turn is rate limited. The guard makes it a no-op where `swarm` is not on PATH.
+// Existing hooks and settings are kept; an unreadable settings file is left alone.
+export const CHECKPOINT_HOOK='command -v swarm >/dev/null 2>&1 && swarm checkpoint --quiet || true';
+async function ensureCheckpointHook(root){
+ // Personal and local to this checkout: Claude Code reads settings.local.json and it is not committed, so
+ // the hook is never pushed onto collaborators who do not run swarm.
+ const relative='.claude/settings.local.json';
+ const destination=await safeTarget(root,relative,{createParents:true});
+ const before=await readOptional(destination);
+ let settings={};
+ if(before.trim()){
+  try{settings=JSON.parse(before);}catch{return {status:'skipped',reason:'settings.json is not valid JSON'};}
+  if(!settings||typeof settings!=='object'||Array.isArray(settings))return {status:'skipped',reason:'settings.json is not an object'};
+ }
+ if(settings.hooks!==undefined&&(typeof settings.hooks!=='object'||settings.hooks===null||Array.isArray(settings.hooks)))return {status:'skipped',reason:'hooks is not an object'};
+ settings.hooks??={};
+ if(settings.hooks.Stop!==undefined&&!Array.isArray(settings.hooks.Stop))return {status:'skipped',reason:'hooks.Stop is not a list'};
+ settings.hooks.Stop??=[];
+ const present=settings.hooks.Stop.some(entry=>Array.isArray(entry?.hooks)&&entry.hooks.some(hook=>hook?.command===CHECKPOINT_HOOK));
+ if(present)return {status:'unchanged'};
+ settings.hooks.Stop.push({hooks:[{type:'command',command:CHECKPOINT_HOOK}]});
+ const temp=`${destination}.swarm-tmp`;
+ await fs.writeFile(temp,`${JSON.stringify(settings,null,2)}\n`);
+ await fs.rename(temp,destination);
+ await ensureLocalSettingsIgnored(root);
+ return {status:before.trim()?'updated':'created'};
+}
+
+async function ensureLocalSettingsIgnored(root){
+ const destination=await safeTarget(root,'.gitignore');
+ const before=await readOptional(destination);
+ if(before.split(/\r?\n/).some(line=>['.claude/settings.local.json','/.claude/settings.local.json'].includes(line.trim())))return;
+ await fs.writeFile(destination,before+(before&&!before.endsWith('\n')?'\n':'')+'.claude/settings.local.json\n');
+}
+
 // Links one project to a shared install instead of copying the runner into it. The project
 // gets a small pointer file; the install root keeps a deduped registry of linked projects.
 export async function installProject(targetDirectory,{source=packageRoot,agentFiles=true}={}){
@@ -253,12 +289,13 @@ export async function installProject(targetDirectory,{source=packageRoot,agentFi
   }
  }
  const agentPaths=[];
- if(agentFiles)for(const [template,to] of [['AGENTS.md','AGENTS.md'],['CLAUDE.md','CLAUDE.md'],['cursor-rule.mdc','.cursor/rules/project-swarm.mdc']]){
+ if(agentFiles)for(const [template,to] of [['AGENTS.md','AGENTS.md'],['CLAUDE.md','CLAUDE.md'],['GEMINI.md','GEMINI.md'],['cursor-rule.mdc','.cursor/rules/project-swarm.mdc']]){
   await writeAgentPointer(root,to,await fs.readFile(path.join(installRoot,'templates/agent-pointers',template),'utf8'),installRoot);
   agentPaths.push(to);
  }
+ const claudeHook=agentFiles?await ensureCheckpointHook(root):null;
  const gitignoreAdded=await ensureSwarmIgnore(root);
- return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,gitignoreAdded};
+ return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,claudeHook,gitignoreAdded};
 }
 
 if(process.argv[1]&&realpathSync(process.argv[1])===fileURLToPath(import.meta.url)){

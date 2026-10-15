@@ -5,70 +5,24 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runManifest } from '../tools/swarm.mjs';
-import { hashBytes } from '../tools/executors.mjs';
 
 const exec = promisify(execFile);
 const env = { OPENAI_API_KEY: 'sk-secret-must-not-ship', SWARM_CONFIG: process.env.SWARM_CONFIG };
-const reply = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
-const completion = n => ({ done: true, done_reason: 'stop', message: { content: JSON.stringify({ summary: 'done', files: [{ path: `out/${n}.txt`, content: `output ${n}` + '\n' }] }) } });
 
-test('a mixed local and ssh run finishes after the ssh host dies mid-job', async t => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-executors-'));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  await fs.writeFile(path.join(root, 'input.txt'), 'original\n');
-  await exec('git', ['init', '-q', root]);
-  await exec('git', ['-C', root, 'add', 'input.txt']);
-  await exec('git', ['-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture']);
-  let remoteRunning = false;
-  let gate = null;
-  const opened = new Promise(resolve => { gate = resolve; });
-  const seen = [];
-  const state = await runManifest(root, {
-    version: 1,
-    concurrency: 2,
-    hosts: [
-      { id: 'local', kind: 'local', capacity: 1, heartbeatMs: 30 },
-      { id: 'dev2', kind: 'ssh', target: 'worker@dev2', capacity: 1, heartbeatMs: 30 },
-    ],
-    jobs: [0, 1].map(n => ({ id: `job-${n}`, agent: 'ollama', model: 'test-model', prompt: `Write out/${n}.txt`, context: ['input.txt'], outputs: [`out/${n}.txt`], timeoutMs: 5000 })),
-  }, {
-    env,
-    heartbeatMs: 30,
-    fetchImpl: async (_url, options) => {
-      const match = /out\/(\d+)\.txt/.exec(String(options?.body ?? ''));
-      assert.ok(match, 'request names its output');
-      if (gate) { const pending = opened; gate = null; await pending; }
-      return reply(completion(Number(match[1])));
-    },
-    hostTransport: {
-      async ping(host) { return host.id !== 'dev2' || !remoteRunning; },
-      async run(placement) {
-        seen.push(placement.env);
-        remoteRunning = true;
-        gate?.();
-        if (placement.signal.aborted) throw Object.assign(new Error(`host-dead: ${placement.host.id}`), { code: 'host-dead' });
-        await new Promise((resolve, reject) => {
-          const fail = () => reject(Object.assign(new Error(`host-dead: ${placement.host.id}`), { code: 'host-dead' }));
-          if (placement.signal.aborted) fail();
-          else placement.signal.addEventListener('abort', fail, { once: true });
-        });
-      },
-    },
-  });
-  assert.equal(state.status, 'complete', state.error);
-  const moved = state.jobs.find(job => job.hostUses?.includes('dev2'));
-  assert.ok(moved, 'a job was placed on ssh');
-  assert.equal(moved.hostUses.at(-1), 'local');
-  assert.equal(state.jobs.filter(job => job.status === 'complete').length, 2);
-  assert.equal(seen.some(shipped => shipped && Object.prototype.hasOwnProperty.call(shipped, 'OPENAI_API_KEY')), false);
-  for (const job of state.jobs) {
-    const text = await fs.readFile(path.join(root, job.workspace, job.outputs[0]), 'utf8');
-    assert.match(text, /^output \d+\n$/);
-  }
-});
+// Only the text-envelope CLIs (Hermes, Qwen) run on a remote host. These tests use Hermes jobs, a fake
+// local Hermes process, and a transport stub that answers like swarm-remote-exec does (stdout + exit code).
+const COMMANDS = { hermes: '/opt/hermes' };
+const outputOf = text => Number(/out\/(\d+)\.txt/.exec(String(text))[1]);
+const hermesLine = n => `${JSON.stringify({ type: 'result', exit_code: 0, text: JSON.stringify({ summary: 'done', files: [{ path: `out/${n}.txt`, content: `output ${n}\n` }] }) })}\n`;
+const localHermes = () => spawn(process.execPath, ['-e', `let input='';process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{const n=/out\\/(\\d+)\\.txt/.exec(input)[1];process.stdout.write(JSON.stringify({type:'result',exit_code:0,text:JSON.stringify({summary:'done',files:[{path:'out/'+n+'.txt',content:'output '+n+'\\n'}]})})+'\\n');});`], { stdio: ['pipe', 'pipe', 'pipe'] });
+const remoteAnswer = request => ({ exitCode: 0, stdout: Buffer.from(hermesLine(outputOf(request.stdin))), files: [] });
+const sshHost = (id = 'dev2', extra = {}) => ({ id, kind: 'ssh', target: 'worker@dev2', capacity: 1, commands: COMMANDS, ...extra });
+const hermesJob = (n, extra) => ({ id: `job-${n}`, agent: 'hermes', model: 'test-model', prompt: `Write out/${n}.txt`, context: ['input.txt'], outputs: [`out/${n}.txt`], timeoutMs: 5000, ...extra });
+const hermesJobs = count => Array.from({ length: count }, (_, n) => hermesJob(n));
+const oneJob = extra => hermesJob(0, extra);
 
 async function repo(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-executors-'));
@@ -79,24 +33,101 @@ async function repo(t) {
   await exec('git', ['-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture']);
   return root;
 }
+const written = (root, job) => fs.readFile(path.join(root, job.workspace, job.outputs[0]), 'utf8');
 
-const oneJob = extra => ({ id: 'job-0', agent: 'ollama', model: 'test-model', prompt: 'Write out/0.txt', context: ['input.txt'], outputs: ['out/0.txt'], timeoutMs: 5000, ...extra });
+test('a mixed local and ssh run finishes after the ssh host dies mid-job', async t => {
+  const root = await repo(t);
+  let remoteRunning = false;
+  const seen = [];
+  const state = await runManifest(root, {
+    version: 1,
+    concurrency: 2,
+    hosts: [{ id: 'local', kind: 'local', capacity: 1, heartbeatMs: 30 }, sshHost('dev2', { heartbeatMs: 30 })],
+    jobs: hermesJobs(2),
+  }, {
+    env,
+    heartbeatMs: 30,
+    spawnImpl: localHermes,
+    hostTransport: {
+      async ping(host) { return host.id !== 'dev2' || !remoteRunning; },
+      async run(request) {
+        seen.push(request.env);
+        remoteRunning = true;
+        if (request.signal.aborted) throw Object.assign(new Error(`host-dead: ${request.host.id}`), { code: 'host-dead' });
+        await new Promise((resolve, reject) => {
+          const fail = () => reject(Object.assign(new Error(`host-dead: ${request.host.id}`), { code: 'host-dead' }));
+          if (request.signal.aborted) fail();
+          else request.signal.addEventListener('abort', fail, { once: true });
+        });
+      },
+    },
+  });
+  assert.equal(state.status, 'complete', state.error);
+  const moved = state.jobs.find(job => job.hostUses?.includes('dev2'));
+  assert.ok(moved, 'a job was placed on ssh');
+  assert.equal(moved.hostUses.at(-1), 'local');
+  assert.equal(state.jobs.filter(job => job.status === 'complete').length, 2);
+  assert.equal(seen.some(shipped => shipped && Object.prototype.hasOwnProperty.call(shipped, 'OPENAI_API_KEY')), false);
+  for (const job of state.jobs) assert.match(await written(root, job), /^output \d+\n$/);
+});
 
-function pulledFile() {
-  const bytes = Buffer.from('output 0\n');
-  return { files: [{ path: 'out/0.txt', bytes, sha256: hashBytes(bytes) }] };
-}
+test('a Hermes job on an ssh host runs the named CLI there with the message on stdin and ships no workspace or secret', async t => {
+  const root = await repo(t);
+  const requests = [];
+  const state = await runManifest(root, { version: 1, hosts: [sshHost()], jobs: [oneJob({ sensitive: false })] }, {
+    env,
+    hostTransport: { async ping() { return true; }, async run(request) { requests.push(request); return remoteAnswer(request); } },
+  });
+  assert.equal(state.status, 'complete', state.error);
+  assert.equal(state.jobs[0].host, 'dev2');
+  assert.equal(await written(root, state.jobs[0]), 'output 0\n');
+  const [request] = requests;
+  assert.equal(request.command, '/opt/hermes');
+  assert.ok(request.args.includes('--oneshot') && request.args.includes('--toolsets'));
+  assert.match(request.stdin, /original/);
+  assert.deepEqual(request.files, []);
+  assert.deepEqual(request.outputs, []);
+  assert.equal(JSON.stringify(request.env ?? {}).includes('sk-secret-must-not-ship'), false);
+});
+
+test('a remote CLI that exits non-zero or answers badly fails that job only', async t => {
+  const root = await repo(t);
+  const state = await runManifest(root, { version: 1, concurrency: 2, hosts: [sshHost('dev2', { capacity: 2 })], jobs: hermesJobs(2) }, {
+    env,
+    hostTransport: {
+      async ping() { return true; },
+      async run(request) { return outputOf(request.stdin) === 0 ? { exitCode: 1, stdout: Buffer.alloc(0), files: [] } : remoteAnswer(request); },
+    },
+  });
+  assert.deepEqual(state.jobs.map(job => job.status), ['failed', 'complete']);
+  assert.match(state.jobs[0].error, /CLI process failed|exit/i);
+});
+
+test('a job whose agent cannot run remotely stays local even when only remote hosts are configured', async t => {
+  const root = await repo(t);
+  let remoteCalls = 0;
+  const reply = n => new Response(JSON.stringify({ done: true, done_reason: 'stop', message: { content: JSON.stringify({ summary: 'done', files: [{ path: `out/${n}.txt`, content: `output ${n}\n` }] }) } }), { headers: { 'content-type': 'application/json' } });
+  const state = await runManifest(root, { version: 1, hosts: [sshHost()], jobs: [{ ...oneJob(), agent: 'ollama' }] }, {
+    env,
+    fetchImpl: async (_url, options) => reply(outputOf(options.body)),
+    hostTransport: { async ping() { remoteCalls += 1; return true; }, async run() { remoteCalls += 1; throw new Error('must not run remotely'); } },
+  });
+  assert.equal(state.status, 'complete', state.error);
+  assert.equal(state.jobs[0].hostUses, undefined);
+  assert.equal(await written(root, state.jobs[0]), 'output 0\n');
+  assert.equal(remoteCalls <= 1, true, 'only the host check may touch the host');
+});
 
 test('a sensitive job does not run on an untrusted sandbox', async t => {
   const root = await repo(t);
   let ran = false;
   const state = await runManifest(root, {
     version: 1,
-    hosts: [{ id: 'box', kind: 'sandbox', capacity: 1, driver: ['swarm-sandbox', 'run'], heartbeatMs: 1000 }],
+    hosts: [{ id: 'box', kind: 'sandbox', capacity: 1, driver: ['swarm-sandbox', 'run'], commands: COMMANDS, heartbeatMs: 1000 }],
     jobs: [oneJob()],
   }, {
     env,
-    hostTransport: { async ping() { return true; }, async run() { ran = true; return pulledFile(); } },
+    hostTransport: { async ping() { return true; }, async run() { ran = true; return { exitCode: 0, stdout: Buffer.alloc(0), files: [] }; } },
   });
   assert.equal(ran, false);
   assert.equal(state.status, 'failed');
@@ -105,18 +136,12 @@ test('a sensitive job does not run on an untrusted sandbox', async t => {
 
 test('a trusted sandbox can run a sensitive job and an untrusted sandbox can run a non-sensitive one', async t => {
   const root = await repo(t);
-  const trusted = await runManifest(root, {
-    version: 1,
-    hosts: [{ id: 'box', kind: 'sandbox', capacity: 1, driver: ['swarm-sandbox', 'run'], trusted: true, heartbeatMs: 1000 }],
-    jobs: [oneJob()],
-  }, { env, hostTransport: { async ping() { return true; }, async run() { return pulledFile(); } } });
+  const box = extra => ({ id: 'box', kind: 'sandbox', capacity: 1, driver: ['swarm-sandbox', 'run'], commands: COMMANDS, heartbeatMs: 1000, ...extra });
+  const transport = { async ping() { return true; }, async run(request) { return remoteAnswer(request); } };
+  const trusted = await runManifest(root, { version: 1, hosts: [box({ trusted: true })], jobs: [oneJob()] }, { env, hostTransport: transport });
   assert.equal(trusted.status, 'complete', trusted.error);
   assert.equal(trusted.jobs[0].host, 'box');
-  const open = await runManifest(root, {
-    version: 1,
-    hosts: [{ id: 'box', kind: 'sandbox', capacity: 1, driver: ['swarm-sandbox', 'run'], heartbeatMs: 1000 }],
-    jobs: [oneJob({ sensitive: false })],
-  }, { env, hostTransport: { async ping() { return true; }, async run() { return pulledFile(); } } });
+  const open = await runManifest(root, { version: 1, hosts: [box()], jobs: [oneJob({ sensitive: false })] }, { env, hostTransport: transport });
   assert.equal(open.status, 'complete', open.error);
   assert.equal(open.jobs[0].host, 'box');
 });
@@ -125,11 +150,7 @@ test('one missed ping does not move a remote job', async t => {
   const root = await repo(t);
   let armed = false;
   let missed = false;
-  const state = await runManifest(root, {
-    version: 1,
-    hosts: [{ id: 'dev2', kind: 'ssh', target: 'worker@dev2', capacity: 1, heartbeatMs: 30 }],
-    jobs: [oneJob()],
-  }, {
+  const state = await runManifest(root, { version: 1, hosts: [sshHost('dev2', { heartbeatMs: 30 })], jobs: [oneJob()] }, {
     env,
     heartbeatMs: 30,
     hostTransport: {
@@ -138,7 +159,7 @@ test('one missed ping does not move a remote job', async t => {
         missed = true;
         return false;
       },
-      async run(placement) {
+      async run(request) {
         armed = true;
         await new Promise((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error('no heartbeat')), 2000);
@@ -146,8 +167,8 @@ test('one missed ping does not move a remote job', async t => {
           poll();
         });
         await new Promise(resolve => setTimeout(resolve, 100));
-        assert.equal(placement.signal.aborted, false);
-        return pulledFile();
+        assert.equal(request.signal.aborted, false);
+        return remoteAnswer(request);
       },
     },
   });
@@ -159,11 +180,7 @@ test('a returning host kills the orphaned job before reuse and the spend is coun
   const root = await repo(t);
   const events = [];
   let down = false;
-  const state = await runManifest(root, {
-    version: 1,
-    hosts: [{ id: 'dev2', kind: 'ssh', target: 'worker@dev2', capacity: 1, heartbeatMs: 20 }],
-    jobs: [oneJob()],
-  }, {
+  const state = await runManifest(root, { version: 1, hosts: [sshHost('dev2', { heartbeatMs: 20 })], jobs: [oneJob()] }, {
     env,
     heartbeatMs: 20,
     hostTransport: {
@@ -172,17 +189,17 @@ test('a returning host kills the orphaned job before reuse and the spend is coun
         events.push(`kill:${ids[0]}`);
         return { costUsd: 0.4 };
       },
-      async run(placement) {
+      async run(request) {
         events.push('run');
         if (events.filter(event => event === 'run').length === 1) {
           down = true;
           await new Promise((resolve, reject) => {
-            const fail = () => { down = false; reject(Object.assign(new Error(`host-dead: ${placement.host.id}`), { code: 'host-dead' })); };
-            if (placement.signal.aborted) fail();
-            else placement.signal.addEventListener('abort', fail, { once: true });
+            const fail = () => { down = false; reject(Object.assign(new Error(`host-dead: ${request.host.id}`), { code: 'host-dead' })); };
+            if (request.signal.aborted) fail();
+            else request.signal.addEventListener('abort', fail, { once: true });
           });
         }
-        return pulledFile();
+        return remoteAnswer(request);
       },
     },
   });
@@ -194,11 +211,9 @@ test('a returning host kills the orphaned job before reuse and the spend is coun
   assert.equal(state.jobs[0].hostUses.length, 2);
 });
 
-const hostJobs = count => Array.from({ length: count }, (_, n) => ({ id: `job-${n}`, agent: 'ollama', model: 'test-model', prompt: `Write out/${n}.txt`, context: ['input.txt'], outputs: [`out/${n}.txt`], timeoutMs: 5000 }));
-const answer = async (_url, options) => reply(completion(Number(/out\/(\d+)\.txt/.exec(String(options?.body ?? ''))[1])));
 const sshDown = (calls = []) => ({
   async ping(host) { calls.push(`ping:${host.id}`); throw Object.assign(new Error('host-unreachable: ssh exit 255 (connection failed)'), { code: 'host-unreachable' }); },
-  async run(placement) { calls.push(`run:${placement.host.id}`); throw new Error('an excluded host must never run a job'); },
+  async run(request) { calls.push(`run:${request.host.id}`); throw new Error('an excluded host must never run a job'); },
 });
 
 test('an unreachable ssh host fails its check before placement and the whole run finishes on local', async t => {
@@ -206,9 +221,9 @@ test('an unreachable ssh host fails its check before placement and the whole run
   const calls = [];
   const state = await runManifest(root, {
     version: 1, concurrency: 4,
-    hosts: [{ id: 'local', kind: 'local', capacity: 4 }, { id: 'dev2', kind: 'ssh', target: 'dev2@10.10.10.220', capacity: 2 }],
-    jobs: hostJobs(6),
-  }, { env, fetchImpl: answer, hostTransport: sshDown(calls) });
+    hosts: [{ id: 'local', kind: 'local', capacity: 4 }, sshHost('dev2', { target: 'dev2@10.10.10.220', capacity: 2 })],
+    jobs: hermesJobs(6),
+  }, { env, spawnImpl: localHermes, hostTransport: sshDown(calls) });
   assert.equal(state.status, 'complete', state.error);
   assert.equal(state.jobs.filter(job => job.status === 'complete').length, 6);
   assert.deepEqual(state.jobs.flatMap(job => job.hostUses ?? []).filter(id => id !== 'local'), []);
@@ -222,13 +237,13 @@ test('ssh exit 255 mid-run moves that job to a live host and cancels nothing', a
   let first = true;
   const state = await runManifest(root, {
     version: 1, concurrency: 4,
-    hosts: [{ id: 'dev2', kind: 'ssh', target: 'dev2@10.10.10.220', capacity: 1 }, { id: 'local', kind: 'local', capacity: 4 }],
-    jobs: hostJobs(5),
+    hosts: [sshHost('dev2', { target: 'dev2@10.10.10.220' }), { id: 'local', kind: 'local', capacity: 4 }],
+    jobs: hermesJobs(5),
   }, {
-    env, fetchImpl: answer,
+    env, spawnImpl: localHermes,
     hostTransport: {
       async ping() { return true; },
-      async run(placement) { if (first) { first = false; throw Object.assign(new Error('host-unreachable: ssh exit 255 (connection failed)'), { code: 'host-unreachable' }); } throw new Error('the host stays out once it failed'); },
+      async run() { if (first) { first = false; throw Object.assign(new Error('host-unreachable: ssh exit 255 (connection failed)'), { code: 'host-unreachable' }); } throw new Error('the host stays out once it failed'); },
     },
   });
   assert.equal(state.status, 'complete', state.error);
@@ -242,13 +257,16 @@ test('a remote command failure fails that job only and never the run', async t =
   const root = await repo(t);
   const state = await runManifest(root, {
     version: 1, concurrency: 4,
-    hosts: [{ id: 'dev2', kind: 'ssh', target: 'dev2@10.10.10.220', capacity: 1 }, { id: 'local', kind: 'local', capacity: 4 }],
-    jobs: hostJobs(4),
+    hosts: [sshHost('dev2', { target: 'dev2@10.10.10.220' }), { id: 'local', kind: 'local', capacity: 4 }],
+    jobs: hermesJobs(4),
   }, {
-    env, fetchImpl: answer,
+    env, spawnImpl: localHermes,
     hostTransport: { async ping() { return true; }, async run() { throw Object.assign(new Error('host-exit: 2'), { code: 'host-exit' }); } },
   });
-  assert.equal(state.jobs.filter(job => job.status === 'complete').length >= 3, true);
+  // Whichever jobs landed on the failing host fail with its error; every other job completes.
+  assert.ok(state.jobs.every(job => ['complete', 'failed'].includes(job.status)));
+  assert.ok(state.jobs.filter(job => job.status === 'failed').every(job => /host-exit: 2/.test(job.error)));
+  assert.ok(state.jobs.filter(job => job.status === 'complete').length >= 2);
   assert.equal(state.jobs.some(job => job.status === 'cancelled'), false);
   assert.ok(!/Coordinator failed/.test(JSON.stringify(state.jobs.map(job => job.error))));
 });
@@ -257,9 +275,9 @@ test('when no usable host is left a job fails alone with hosts-exhausted', async
   const root = await repo(t);
   const state = await runManifest(root, {
     version: 1, concurrency: 2,
-    hosts: [{ id: 'dev2', kind: 'ssh', target: 'dev2@10.10.10.220', capacity: 1 }],
-    jobs: hostJobs(2),
-  }, { env, fetchImpl: answer, hostTransport: sshDown() });
+    hosts: [sshHost('dev2', { target: 'dev2@10.10.10.220' })],
+    jobs: hermesJobs(2),
+  }, { env, hostTransport: sshDown() });
   assert.deepEqual(state.jobs.map(job => job.status), ['failed', 'failed']);
   assert.ok(state.jobs.every(job => /hosts-exhausted/.test(job.error)));
   assert.ok(!/Coordinator failed/.test(JSON.stringify(state.jobs.map(job => job.error))));
@@ -270,9 +288,9 @@ test('a host marked enabled: false is kept in config but never pinged or used', 
   const calls = [];
   const state = await runManifest(root, {
     version: 1, concurrency: 2,
-    hosts: [{ id: 'local', kind: 'local', capacity: 2 }, { id: 'dev2', kind: 'ssh', target: 'dev2@10.10.10.220', capacity: 2, enabled: false }],
-    jobs: hostJobs(3),
-  }, { env, fetchImpl: answer, hostTransport: sshDown(calls) });
+    hosts: [{ id: 'local', kind: 'local', capacity: 2 }, sshHost('dev2', { target: 'dev2@10.10.10.220', capacity: 2, enabled: false })],
+    jobs: hermesJobs(3),
+  }, { env, spawnImpl: localHermes, hostTransport: sshDown(calls) });
   assert.equal(state.status, 'complete', state.error);
   assert.deepEqual(calls, []);
 });

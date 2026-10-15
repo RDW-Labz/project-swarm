@@ -23,7 +23,10 @@ test('host records reject bad shapes and keep ssh, sandbox, and local apart', ()
   assert.throws(() => resolveHosts([{ id: 'box', kind: 'sandbox', capacity: 1 }]), { code: 'hosts-invalid' });
   const sandbox = resolveHosts([{ id: 'box', kind: 'sandbox', capacity: 2, driver: ['swarm-sandbox', '--run'] }]);
   assert.deepEqual(sandbox[0].driver, ['swarm-sandbox', '--run']);
-  assert.deepEqual(sshArgv(hosts()[1], 'true').slice(0, 6), ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', 'worker@dev2']);
+  const ssh = sshArgv(hosts()[1], 'true');
+  assert.deepEqual([ssh[0], ssh[1]], ['ssh', '-T']);
+  for (const option of ['BatchMode=yes', 'StrictHostKeyChecking=yes', 'ForwardAgent=no', 'ForwardX11=no', 'ClearAllForwardings=yes', 'PermitLocalCommand=no']) assert.ok(ssh.includes(option), option);
+  assert.deepEqual(ssh.slice(-3), ['--', 'worker@dev2', 'true']);
   assert.throws(() => resolveHosts([{ id: 'dev2', kind: 'ssh', target: 'worker@dev2', capacity: 1, trusted: true }]), { code: 'hosts-invalid' });
   assert.equal(resolveHosts([{ id: 'box', kind: 'sandbox', capacity: 1, driver: ['box'], trusted: true }])[0].trusted, true);
 });
@@ -67,7 +70,7 @@ test('a dead ssh host frees its job so the waiting job can take the live host', 
 
 test('the default ssh transport ships no secret env and checks the pulled hash', async () => {
   const body = Buffer.from('remote output\n');
-  const pulled = JSON.stringify({ files: [{ path: 'out/0.txt', bytes: body.toString('utf8'), sha256: hashBytes(body) }] });
+  const pulled = JSON.stringify({ id: 'abc12345', exitCode: 0, stdout: '', files: [{ path: 'out/0.txt', bytes: body.toString('base64'), sha256: hashBytes(body) }] });
   let seenEnv = null;
   let sent = '';
   const transport = defaultHostTransport({
@@ -247,4 +250,17 @@ test('resolveHosts keeps an enabled: false host and enabledHosts drops it; all d
   assert.deepEqual(enabledHosts(hosts).map(host => host.id), ['local']);
   assert.equal(enabledHosts(resolveHosts([{ id: 'dev2', kind: 'ssh', target: 'dev2@10.10.10.220', capacity: 2, enabled: false }])), null);
   assert.throws(() => resolveHosts([{ id: 'a', kind: 'local', capacity: 1, enabled: 'no' }]), { code: 'hosts-invalid' });
+});
+
+test('a host may name the absolute path of swarm-remote-exec; relative paths and option-like targets are refused',async()=>{
+ const base={id:'dev2',kind:'ssh',target:'worker@dev2',capacity:1};
+ assert.equal(resolveHosts([{...base,remoteExec:'/home/w/bin/swarm-remote-exec'}])[0].remoteExec,'/home/w/bin/swarm-remote-exec');
+ for(const bad of ['swarm-remote-exec','../x','/bin/x;rm',5])assert.throws(()=>resolveHosts([{...base,remoteExec:bad}]),{code:'hosts-invalid'});
+ for(const target of ['-Jevil','worker@-oProxyCommand=x'])assert.throws(()=>resolveHosts([{...base,target}]),{code:'hosts-invalid'});
+ let argv;
+ const spawnImpl=(command,args)=>{argv=[command,...args];const handlers={};const child={stdout:{on(){}},stdin:{write(){}},on(name,fn){handlers[name]=fn;},kill(){}};setImmediate(()=>handlers.exit?.(0));return child;};
+ await defaultHostTransport({spawnImpl}).ping({...base,remoteExec:'/home/w/bin/swarm-remote-exec'}).catch(()=>{});
+ await defaultHostTransport({spawnImpl}).kill({...base,remoteExec:'/home/w/bin/swarm-remote-exec'},['abcdef0123456789']).catch(()=>{});
+ assert.equal(argv.at(-1),'/home/w/bin/swarm-remote-exec --kill abcdef0123456789');
+ assert.equal(argv.at(-2),'worker@dev2');
 });

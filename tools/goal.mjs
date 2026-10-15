@@ -45,9 +45,11 @@ export async function topLevelFolders(root) {
     .sort();
 }
 
+// swarm regenerates these after every command, so they never count as the operator's uncommitted work.
+const GENERATED = new Set(['coordination/HANDOFF.md', 'coordination/HANDOFF.previous.md']);
 export async function worktreeDirty(root, run = exec) {
   const { stdout } = await run('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' });
-  return stdout.trim().length > 0;
+  return stdout.split('\n').filter(line => line.trim() && !GENERATED.has(line.slice(3).trim())).length > 0;
 }
 
 // New branch only. The branch you were on keeps its current commit.
