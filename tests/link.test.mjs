@@ -49,7 +49,7 @@ test('link seeds each missing coordination file, reports kept files, and never o
 test('link adds an effective .swarm ignore without duplicating it or clobbering text',async t=>{
  const {source,root}=await fixture(t);await fs.writeFile(path.join(root,'.gitignore'),'custom\n');
  await installProject(root,{source});await installProject(root,{source});
- assert.equal(await fs.readFile(path.join(root,'.gitignore'),'utf8'),'custom\n.swarm/\n');
+ assert.equal(await fs.readFile(path.join(root,'.gitignore'),'utf8'),'custom\n.claude/settings.local.json\n.swarm/\n');
  // An earlier ignore cancelled by a later negation must not fool the installer.
  await fs.writeFile(path.join(root,'.gitignore'),'.swarm/\n!.swarm/\n');
  await installProject(root,{source});execFileSync('git',['init'],{cwd:root,stdio:'ignore'});

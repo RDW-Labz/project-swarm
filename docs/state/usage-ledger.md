@@ -43,11 +43,20 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-15 | - | status: Implemented project status, five suggested commands, and compact plain-text formatting.; All | codex | gpt-6.1-sol | pass | 27,170 | subscription |
 | 2026-10-15 | - | review-cli-host: Quoting (shellQuote/sshInvocation) is sound for POSIX remote shells, the message tr | claude | opus | pass | 8,619 | $0.26 |
 | 2026-10-15 | - | review-routing: Through routeJob a sensitive job cannot reach OpenRouter: the check at router.mjs:34 | claude | opus | pass | 9,138 | $0.29 |
+| 2026-10-15 | - | journal: Anthropic response truncated: stop_reason max_tokens | anthropic | claude-haiku-5-5 | failed: Anthropic response truncated: stop_reason max_tokens | - | $0.01 |
+| 2026-10-15 | - | brief: Anthropic response truncated: stop_reason max_tokens | anthropic | claude-haiku-5-5 | failed: Anthropic response truncated: stop_reason max_tokens | - | $0.01 |
+| 2026-10-15 | - | autopilot: Anthropic response truncated: stop_reason max_tokens | anthropic | claude-haiku-5-5 | failed: Anthropic response truncated: stop_reason max_tokens | - | $0.01 |
+| 2026-10-15 | - | remote-exec: Implemented request/response protocol, isolated workspaces, environment filtering, outp | codex | gpt-6.1-sol | pass | 83,417 | subscription |
+| 2026-10-15 | - | journal: Implemented tools/journal.mjs per design section 1 (exports KINDS, journalPath, appendEvent | anthropic | claude-haiku-5-5 | pass | 38,200 | $0.02 |
+| 2026-10-15 | - | brief: Implemented tools/brief.mjs (loadRuns, buildBrief, renderBrief, renderHandoff, renderAgentHan | anthropic | claude-haiku-5-5 | pass | 37,890 | $0.01 |
+| 2026-10-15 | - | autopilot: Implements tools/autopilot.mjs per design section 3 (decide, nextWave, autopilotStep, run | anthropic | claude-haiku-5-5 | pass | 36,276 | $0.01 |
+| 2026-10-15 | - | review-10b: Phase 10b review, no edits. remote-exec path, symlink, command and env checks hold. Two | claude | opus | pass | 26,335 | $0.78 |
 
 ## Daily summary
 
 | date | tier | calls | pass | fail/blocked | tokens | rough cost |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-10-14 | codex | 34 | 29 | 5 | 2,887,673 | subscription |
-| 2026-10-15 | claude | 2 | 2 | 0 | 17,757 | $0.55 |
-| 2026-10-15 | codex | 3 | 3 | 0 | 71,179 | subscription |
+| 2026-10-15 | anthropic | 6 | 3 | 3 | 112,366 | $0.07 |
+| 2026-10-15 | claude | 3 | 3 | 0 | 44,092 | $1.33 |
+| 2026-10-15 | codex | 4 | 4 | 0 | 154,596 | subscription |

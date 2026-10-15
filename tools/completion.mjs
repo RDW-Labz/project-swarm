@@ -44,6 +44,10 @@ export const COMMANDS = [
   command('idle', 'Pick zero-quota work while waiting.'),
   command('ticket', 'Run a ticket through the pipeline.', 'manifest', '--pr --check --repo --branch --commit-message --require-section --resume --wait-required-only'),
   command('scaffold', 'Write a job or PR manifest.', 'none', '--id --agent --model --tier --context --outputs --command --prompt-file --ticket --out --from --title --repo'),
+  command('brief', 'Print a short briefing so any agent can take over.', 'none', '--json'),
+  command('handoff', 'Print a paste-ready handoff message for another agent.', 'none', '--to'),
+  command('checkpoint', 'Save a snapshot of the project state.', 'none', '--quiet'),
+  command('autopilot', 'Drive the project forward with no model.', 'none', '--once --interval --max-steps'),
   command('completion', 'Print the zsh completion script.'),
   command('help', 'Show command usage.'),
 ];

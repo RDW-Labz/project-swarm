@@ -198,3 +198,52 @@ test('update refuses nested installs and foreign release tags without moving HEA
  await assert.rejects(updateInstall(root),/release tag is not a matching project-swarm install/);
  assert.equal(await git(root,['rev-parse','HEAD']),before);
 });
+
+test('update runs the installer of the release it installs, in a fresh process (not the one already loaded)',async t=>{
+ const root=await tempDir(t);
+ await initRepo(root);
+ const installer=label=>`import fs from 'node:fs';import path from 'node:path';
+fs.writeFileSync(path.join(process.env.HOME,'installer-ran'),JSON.stringify({label:${JSON.stringify(label)},version:JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8')).version}));
+console.log(JSON.stringify({status:'installed',version:'from-'+${JSON.stringify(label)}}));
+`;
+ const release=async(version,label)=>{
+  await fs.mkdir(path.join(root,'tools'),{recursive:true});
+  await fs.writeFile(path.join(root,'tools/install.mjs'),installer(label));
+  await fs.mkdir(path.join(root,'skills/project-swarm'),{recursive:true});
+  await fs.writeFile(path.join(root,'skills/project-swarm/SKILL.md'),'---\nname: project-swarm\ndescription: x\n---\nRunner: {{SWARM_RUNNER}}\n');
+  await fs.writeFile(path.join(root,'SECURITY.md'),'sec\n');await fs.writeFile(path.join(root,'CONTRIBUTING.md'),'contrib\n');
+  await fs.mkdir(path.join(root,'docs'),{recursive:true});await fs.writeFile(path.join(root,'docs/guide.md'),'guide\n');
+  await fs.writeFile(path.join(root,'package.json'),JSON.stringify({name:'project-swarm',version},null,2));
+  await fs.writeFile(path.join(root,'CHANGELOG.md'),`# Changelog\n\n## ${version}\n\n- release ${version}\n`);
+  await commitAll(root,`v${version}`);await git(root,['tag',`v${version}`]);
+ };
+ await release('1.0.0','old-release');
+ await release('1.1.0','new-release');
+ const origin=await tempDir(t);
+ await execFileAsync('git',['init','--bare',origin]);
+ await git(root,['remote','add','origin',origin]);
+ await git(root,['push','origin','--tags']);
+ await git(root,['checkout','--detach','v1.0.0']);
+ const home=await tempDir(t);
+ const result=await updateInstall(root,{home,doctorAllImpl:async()=>({status:'report',providers:[]})});
+ assert.equal(result.to,'1.1.0');
+ const ran=JSON.parse(await fs.readFile(path.join(home,'installer-ran'),'utf8'));
+ assert.deepEqual(ran,{label:'new-release',version:'1.1.0'});
+});
+
+test('an installer that fails makes the update fail with its message',async t=>{
+ const root=await tempDir(t);
+ await initRepo(root);
+ for(const [version,body] of [['1.0.0','console.log("{}")'],['1.1.0','console.error("boom: disk full");process.exit(2)']]){
+  await fs.mkdir(path.join(root,'tools'),{recursive:true});await fs.writeFile(path.join(root,'tools/install.mjs'),body);
+  await fs.mkdir(path.join(root,'skills/project-swarm'),{recursive:true});await fs.writeFile(path.join(root,'skills/project-swarm/SKILL.md'),'---\nname: project-swarm\ndescription: x\n---\n');
+  await fs.writeFile(path.join(root,'SECURITY.md'),'s\n');await fs.writeFile(path.join(root,'CONTRIBUTING.md'),'c\n');await fs.mkdir(path.join(root,'docs'),{recursive:true});await fs.writeFile(path.join(root,'docs/g.md'),'g\n');
+  await fs.writeFile(path.join(root,'package.json'),JSON.stringify({name:'project-swarm',version},null,2));
+  await fs.writeFile(path.join(root,'CHANGELOG.md'),`# Changelog\n\n## ${version}\n\n- x\n`);
+  await commitAll(root,`v${version}`);await git(root,['tag',`v${version}`]);
+ }
+ const origin=await tempDir(t);
+ await execFileAsync('git',['init','--bare',origin]);await git(root,['remote','add','origin',origin]);await git(root,['push','origin','--tags']);
+ await git(root,['checkout','--detach','v1.0.0']);
+ await assert.rejects(updateInstall(root,{home:await tempDir(t),doctorAllImpl:async()=>({})}),/update-install-failed: boom: disk full/);
+});
