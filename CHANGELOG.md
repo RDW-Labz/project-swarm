@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.62.0
+
+- Added the `anthropic` lane: one-request, tool-free workers on your own Anthropic API credits through the Messages API. The key comes from the Keychain (service `project-swarm`, account `anthropic.api_key`) and is never sent to a worker. Sensitive jobs are allowed. Haiku 5.5 is the lane default, Sonnet 5.5 serves `tier: "mid"`, and Opus 5.5 runs only for a job with `tier: "expensive"`. Spend is capped machine-wide at $500 total and $20 a day, plus $5 a job, checked against a worst-case estimate before each request. Route order is now hermes, cursor, codex, anthropic, openrouter, claude. Auto jobs with `tier: "expensive"` still go to the Claude subscription.
+- Cursor workers read `CURSOR_API_KEY` from the Keychain (service `project-swarm`, account `cursor.api_key`) when it is not set, and run with `AGENT_CLI_CREDENTIAL_STORE=memory` so `cursor-agent` never runs `security` or saves a login. The Cursor sandbox also denies `/usr/bin/security` and the Keychain dialog agent, so a worker can no longer raise a macOS keychain dialog.
+- `doctor codex` no longer reports a healthy sandbox as broken. Its probe gave the sandboxed `node` stdout and stderr files in the OS tmp dir, which the seatbelt forbids, so node aborted at startup. It now uses pipes.
+- The OpenRouter daily cap is $5, down from $25, and can be lowered further in the machine config (`spend.lanes.openrouter.dailyUsd`).
+- Remote hosts are checked before any job is placed. A host that fails its ping is left out of the run (`hostsExcluded`, `host-unavailable` warning). ssh exit 255, a refused connection or a missing ssh client takes the host out and the job is placed again on a live host. Any other remote failure fails that one job, and a job with no usable host fails alone with `hosts-exhausted`. Nothing else is cancelled. A host entry can set `"enabled": false` to stay in the config without being used.
+- A failed Anthropic job now records its real cost instead of its reservation.
+- Added a live 50-job run to [the field report](docs/field-report.md): 50 of 50 jobs completed for $0.34 reported, with cost per tier.
+
 ## 1.61.0
 
 - Added `swarm scale`. It runs 500 stub jobs with no model spend, at concurrency 500, in a throwaway repo and prints peak RAM, peak CPU, queue latency, and merge throughput. The measured run is in [the field report](docs/field-report.md). A live 50-job spread across every lane was not measured here: most lanes are not configured.
