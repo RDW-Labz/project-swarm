@@ -196,3 +196,14 @@ Cursor also discovers its always-applied project rule; agents without an
 AGENTS.md convention can follow that same explicit prompt. Keep HANDOFF.md
 and TASK.md current after every dispatch; use the [exact handoff](kickoff.md#handoff)
 at the 10th build dispatch.
+
+## The `swarm` command
+
+`swarm update` and `tools/install.mjs --user` write `~/.local/bin/swarm`. It is a small script that runs `~/.project-swarm/current/tools/swarm.mjs` with the node that was installed, so it works in shells that never load your aliases (Claude Code, Cursor, cron, `bash -c`). A shell alias only exists in your interactive terminal, so remove any old `alias swarm=...` line after you update.
+
+Two lines are left to you, because the installer never edits a shell profile:
+
+- `export PATH="$HOME/.local/bin:$PATH"` in `~/.zshenv` (zsh reads that file in non-interactive shells; `~/.zshrc` is only for interactive ones). `swarm doctor all` warns with `swarm-not-on-path` until this is done.
+- For tab completion in `~/.zshrc`: `fpath=(~/.project-swarm/completions $fpath)` then `autoload -Uz compinit && compinit`. `swarm completion zsh` prints the same script.
+
+Run `swarm` alone for a short project status, or `swarm "goal"` to run a goal. The first `swarm go` in a project runs `swarm init` and commits its files on the go branch.

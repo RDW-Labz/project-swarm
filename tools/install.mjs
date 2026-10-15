@@ -9,6 +9,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { installSwarmCommand } from './swarm-bin.mjs';
+import { zshCompletion } from './completion.mjs';
 const packageRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const execFileAsync=promisify(execFile);
 const AGENT_HOMES=['.claude','.codex'];
@@ -145,10 +147,16 @@ export async function installUser({source=packageRoot,home=os.homedir(),dev=fals
    written.push(destination);
   }
  }
- const record={version:pkg.version,installedAt:new Date().toISOString(),skillTargets:written,versionDir,runner};
+ // A real `swarm` executable for agents and scripts (non-interactive shells never load aliases),
+ // and the zsh completion file. Neither edits a shell profile; doctor says what is left to do.
+ const swarmCommand=await installSwarmCommand({home,runner});
+ const completionFile=path.join(home,'.project-swarm','completions','_swarm');
+ await fs.mkdir(path.dirname(completionFile),{recursive:true});
+ await fs.writeFile(completionFile,zshCompletion());
+ const record={version:pkg.version,installedAt:new Date().toISOString(),skillTargets:written,versionDir,runner,swarmCommand:swarmCommand.path,completion:completionFile};
  const recordPath=path.join(source,'.swarm-install.json');
  await fs.writeFile(recordPath,`${JSON.stringify(record,null,2)}\n`);
- return {status:'installed',version:pkg.version,source,skillTargets:written,skipped,installRecord:recordPath,versionDir,runner};
+ return {status:'installed',version:pkg.version,source,skillTargets:written,skipped,installRecord:recordPath,versionDir,runner,swarmCommand,completionFile};
 }
 
 const AGENT_START='<!-- project-swarm:start -->';

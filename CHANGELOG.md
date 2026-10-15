@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.63.0
+
+- Added a real `swarm` command. `swarm update` and `tools/install.mjs --user` now write `~/.local/bin/swarm`, a small script that runs the shared runner with the node it was installed with. It works in non-interactive shells, so Claude Code, Cursor and scripts can call `swarm` with no setup. A file already at that path that the installer did not write is never overwritten. `swarm doctor all` reports whether the command is installed and on PATH (`swarm-command-missing`, `swarm-not-on-path`); zsh reads `~/.zshenv` in non-interactive shells, so the PATH line goes there. Neither the installer nor doctor edits a shell profile.
+- `swarm` with no arguments prints a short status for the project: whether it is initialized, the last run, lanes up and down, today's spend, and the 5 most useful next commands (`--json` for scripts).
+- `swarm "goal"` is shorthand for `swarm go "goal"`. Only a single quoted argument with whitespace counts, so a mistyped one-word command never starts a paid run.
+- `swarm go` runs `swarm init` the first time in a project. The files init writes are committed as `swarm init` on the go branch, never on the branch you started from.
+- Added zsh completion: `swarm completion zsh` prints it, the installer writes it to `~/.project-swarm/completions/_swarm`, and run ids come from `swarm __complete runs`. Add `fpath=(~/.project-swarm/completions $fpath)` and `autoload -Uz compinit && compinit` to `~/.zshrc`.
+
 ## 1.62.0
 
 - Added the `anthropic` lane: one-request, tool-free workers on your own Anthropic API credits through the Messages API. The key comes from the Keychain (service `project-swarm`, account `anthropic.api_key`) and is never sent to a worker. Sensitive jobs are allowed. Haiku 5.5 is the lane default, Sonnet 5.5 serves `tier: "mid"`, and Opus 5.5 runs only for a job with `tier: "expensive"`. Spend is capped machine-wide at $500 total and $20 a day, plus $5 a job, checked against a worst-case estimate before each request. Route order is now hermes, cursor, codex, anthropic, openrouter, claude. Auto jobs with `tier: "expensive"` still go to the Claude subscription.

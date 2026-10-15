@@ -22,7 +22,10 @@ import { loadLocalConfig } from './local-config.mjs';
 import { resolveLanes, LaneScheduler, classifyProviderOutcome, lanesDir } from './lanes.mjs';
 import { resolveHosts, enabledHosts, createHostPool, defaultHostTransport, remoteEnv, checkPulled, isSecretPath } from './executors.mjs';
 import { initProject } from './init.mjs';
-import { isGoalArgument, manifestForGoal, goGoal, goalRunId, topLevelFolders, worktreeDirty, createGoBranch } from './goal.mjs';
+import { projectStatus, formatStatus } from './status.mjs';
+import { zshCompletion, completeRuns } from './completion.mjs';
+import { checkSwarmCommand } from './swarm-bin.mjs';
+import { autoInit, isGoalArgument, manifestForGoal, goGoal, goalRunId, topLevelFolders, worktreeDirty, createGoBranch } from './goal.mjs';
 import { SCALE_DEFAULT_CONCURRENCY, SCALE_DEFAULT_JOBS, prepareScaleRepo, scaleStub } from './scale.mjs';
 import { routeJob } from './router.mjs';
 import { anthropicPrice, assertOpusTier as assertAnthropicModel } from './anthropic.mjs';
@@ -6668,7 +6671,33 @@ async function main() {
     }
     root=args[rootIndex+1];args.splice(rootIndex,2);
   }
-  if(args[0]==='--help'||args[0]==='help'||!args.length){process.stdout.write('Project Swarm\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | init | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(!args.length||(args.length===1&&args[0]==='--json')){
+    // `swarm` alone: where this project stands and what to run next.
+    root=await fs.realpath(root);
+    const spendToday=async()=>{
+      const day=new Date().toISOString().slice(0,10);
+      const totals=await withSpendStore(store=>laneDayTotals(store,{day}),{dir:spendDir(process.env)});
+      const byLane=Object.fromEntries(Object.entries(totals).map(([lane,total])=>[lane,total.usd]));
+      return {usd:Object.values(byLane).reduce((sum,usd)=>sum+usd,0),byLane};
+    };
+    const status=await projectStatus(root,{doctorAll:()=>doctorAll({root,probeLocal:true}),spendToday});
+    process.stdout.write(args[0]==='--json'?`${JSON.stringify(status)}\n`:`${formatStatus(status)}\n`);
+    return;
+  }
+  if(args[0]==='completion'){
+    if(args.length===2&&args[1]==='zsh'){process.stdout.write(zshCompletion());return;}
+    process.stdout.write('Usage: swarm completion zsh\nPrints the zsh completion script. The installer also writes it to ~/.project-swarm/completions/_swarm. Add to ~/.zshrc:\n  fpath=(~/.project-swarm/completions $fpath)\n  autoload -Uz compinit && compinit\n');
+    if(args.length>1)process.exitCode=1;
+    return;
+  }
+  if(args[0]==='__complete'){
+    if(args[1]==='runs'&&args.length===2)process.stdout.write((await completeRuns(root)).map(id=>`${id}\n`).join(''));
+    return;
+  }
+  // `swarm "goal sentence"` is shorthand for `swarm go "goal sentence"`. Only one argument with
+  // whitespace counts, so a mistyped one-word command never starts a paid run.
+  if(!args[0].startsWith('-')&&/\s/.test(args[0])&&isGoalArgument(args[0]))args.unshift('go');
+  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | init | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
@@ -7261,6 +7290,10 @@ async function main() {
   if(command==='doctor'){
     result=argument==='all'?await doctorAll({root,probeLocal}):await doctor({root,agent:argument??'claude',probeLocal});
     result.warnings=await (await import('./preflight.mjs')).projectToolWarnings(root);
+    if(argument==='all'){
+      result.swarmCommand=await checkSwarmCommand({home:os.homedir()});
+      result.warnings.push(...result.swarmCommand.warnings);
+    }
   }
   else if(command==='board')result={...await boardSummary(),spendUsd:await todaySpendUsd(root),providerLimit:await claudeProviderLimitGuard(root)};
   else if(command==='orphans')result=await listOrphanWorktrees(root);
@@ -7316,15 +7349,31 @@ async function main() {
   }
   else if(command==='init') result=await initProject(root);
   else if(command==='go'&&isGoalArgument(argument)){
+    // First run in a project: init it, then carry its files onto the go branch.
+    const firstRun=await autoInit(root,{
+      exists:file=>fs.access(path.join(file,'.project-swarm.json')).then(()=>true,()=>false),
+      dirty:worktreeDirty,
+      init:initProject,
+      changed:async file=>{
+        const {stdout}=await execFileAsync('git',['-C',file,'status','--porcelain','-z','--untracked-files=all'],{encoding:'utf8'});
+        return stdout.split('\0').filter(Boolean).map(entry=>entry.slice(3));
+      },
+    });
     let checks=[];
     try{checks=JSON.parse(await fs.readFile(path.join(root,'coordination/checks.json'),'utf8')).checks??[];}catch{checks=[];}
     if(!Array.isArray(checks))checks=[];
     result=await goGoal(root,argument,{...goFlags,checks},{
-      dirty: worktreeDirty,
+      dirty: firstRun.ran?async()=>false:worktreeDirty,
       folders: topLevelFolders,
       plan: (goal,options)=>manifestForGoal(goal,options),
       runId: goalRunId,
-      branch: createGoBranch,
+      branch: async(goRoot,name)=>{
+        await createGoBranch(goRoot,name);
+        if(firstRun.ran&&firstRun.files.length){
+          const committed=await commitOutputs(goRoot,firstRun.files,'swarm init');
+          if(committed.status!=='committed')throw Error(`init commit failed: ${committed.reason}`);
+        }
+      },
       run: async (goRoot,manifest,options)=>{const state=await runManifestChecked(goRoot,manifest,undefined,{id:options.id,maxUsd:options.maxUsd,maxTokens:options.maxTokens});return {id:state.id};},
       wait: async (goRoot,id)=>{const waited=await waitRun(goRoot,id);if(waited.status==='paused')waited.pause=(await readState(goRoot,id)).pause;return waited;},
       integrate: async (goRoot,id)=>{
@@ -7337,6 +7386,7 @@ async function main() {
       commit: (goRoot,files,message)=>commitOutputs(goRoot,files,message),
       rollup: async (goRoot,id)=>rollupRun(await readState(goRoot,id)),
     });
+    if(firstRun.ran)result={...result,initialized:{files:firstRun.files}};
   }
   else if(command==='go'){
     if(!ID.test(argument))await warnProjectVersionMismatch(root);

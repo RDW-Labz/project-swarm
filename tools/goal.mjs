@@ -19,6 +19,16 @@ export function isGoalArgument(argument) {
     && !RUN_ID.test(argument) && !argument.includes('/') && !argument.includes('\\') && !argument.endsWith('.json');
 }
 
+// First `swarm go` in a project: run init once, before anything else. A dirty tree is left alone so
+// goGoal refuses it as usual; the files init wrote are committed on the go branch, never on the
+// branch the operator started from.
+export async function autoInit(root, deps) {
+  if (await deps.exists(root)) return { ran: false, files: [] };
+  if (await deps.dirty(root)) return { ran: false, files: [], skipped: 'goal-dirty' };
+  const result = await deps.init(root);
+  return { ran: true, result, files: await deps.changed(root) };
+}
+
 export function goalRunId() {
   return `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
 }
