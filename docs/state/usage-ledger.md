@@ -51,12 +51,16 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-15 | - | brief: Implemented tools/brief.mjs (loadRuns, buildBrief, renderBrief, renderHandoff, renderAgentHan | anthropic | claude-haiku-5-5 | pass | 37,890 | $0.01 |
 | 2026-10-15 | - | autopilot: Implements tools/autopilot.mjs per design section 3 (decide, nextWave, autopilotStep, run | anthropic | claude-haiku-5-5 | pass | 36,276 | $0.01 |
 | 2026-10-15 | - | review-10b: Phase 10b review, no edits. remote-exec path, symlink, command and env checks hold. Two | claude | opus | pass | 26,335 | $0.78 |
+| 2026-10-15 | - | inbox: Implements tools/inbox.mjs (collectInbox, formatInbox, markDone, decide, plus helpers depende | anthropic | claude-haiku-5-5 | pass | 35,180 | $0.01 |
+| 2026-10-15 | - | backlog: Implements tools/backlog.mjs for section 3 of the Phase 10c design: readBacklog, addGoal, r | anthropic | claude-haiku-5-5 | pass | 29,965 | $0.01 |
+| 2026-10-15 | - | notify: Implemented tools/notify.mjs (pendingNotifications and macNotify per design section 4) and t | anthropic | claude-haiku-5-5 | pass | 14,204 | $0.00 |
+| 2026-10-15 | - | review-10c: complete | claude | opus | pass | 12,922 | $0.43 |
 
 ## Daily summary
 
 | date | tier | calls | pass | fail/blocked | tokens | rough cost |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-10-14 | codex | 34 | 29 | 5 | 2,887,673 | subscription |
-| 2026-10-15 | anthropic | 6 | 3 | 3 | 112,366 | $0.07 |
-| 2026-10-15 | claude | 3 | 3 | 0 | 44,092 | $1.33 |
+| 2026-10-15 | anthropic | 9 | 6 | 3 | 191,715 | $0.09 |
+| 2026-10-15 | claude | 4 | 4 | 0 | 57,014 | $1.76 |
 | 2026-10-15 | codex | 4 | 4 | 0 | 154,596 | subscription |

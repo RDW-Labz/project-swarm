@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "id": "inbox",
+      "type": "build",
+      "agent": "anthropic",
+      "prompt": "Build exactly what docs/plans/phase10c-design.md specifies for your module: same exported names, signatures, return shapes and rules. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`; tests use node:test and node:assert/strict, start with `import './_isolate-config.mjs';`, and use temporary directories and injected fakes (never a real osascript, network or model). Write only your declared output files. Cover every rule in the design for your module with a test, including refusal and limit cases. Do not edit tools/swarm.mjs. Import helpers from tools/journal.mjs (safeWritableDir, assertRegularOrMissing, sanitizeText, appendEvent, readJournal, openItems) rather than rewriting them. Your module: section 2, tools/inbox.mjs, with tests/inbox.test.mjs. collectInbox gets all file access through the injected deps, so tests pass fake run states and journals; test sorting by unblocks (transitive dependents, completed ones not counted), the three item kinds, multi-project roots, an unreadable root skipped, markDone/decide behavior and their refusal cases, and that decide with a different choice adds a backlog goal through deps.addGoal.",
+      "context": [
+        "docs/plans/phase10c-design.md",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tools/inbox.mjs",
+        "tests/inbox.test.mjs"
+      ],
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    },
+    {
+      "id": "backlog",
+      "type": "build",
+      "agent": "anthropic",
+      "prompt": "Build exactly what docs/plans/phase10c-design.md specifies for your module: same exported names, signatures, return shapes and rules. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`; tests use node:test and node:assert/strict, start with `import './_isolate-config.mjs';`, and use temporary directories and injected fakes (never a real osascript, network or model). Write only your declared output files. Cover every rule in the design for your module with a test, including refusal and limit cases. Do not edit tools/swarm.mjs. Import helpers from tools/journal.mjs (safeWritableDir, assertRegularOrMissing, sanitizeText, appendEvent, readJournal, openItems) rather than rewriting them. Your module: section 3, tools/backlog.mjs, with tests/backlog.test.mjs. Test limits (50 items, goal length), overlap rules (equal, inside, outside, no-paths item only when nothing is waiting), symlinked .swarm/project refused, sanitizing, remove and status changes.",
+      "context": [
+        "docs/plans/phase10c-design.md",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tools/backlog.mjs",
+        "tests/backlog.test.mjs"
+      ],
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    },
+    {
+      "id": "notify",
+      "type": "build",
+      "agent": "anthropic",
+      "prompt": "Build exactly what docs/plans/phase10c-design.md specifies for your module: same exported names, signatures, return shapes and rules. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`; tests use node:test and node:assert/strict, start with `import './_isolate-config.mjs';`, and use temporary directories and injected fakes (never a real osascript, network or model). Write only your declared output files. Cover every rule in the design for your module with a test, including refusal and limit cases. Do not edit tools/swarm.mjs. Import helpers from tools/journal.mjs (safeWritableDir, assertRegularOrMissing, sanitizeText, appendEvent, readJournal, openItems) rather than rewriting them. Your module: section 4, tools/notify.mjs, with tests/notify.test.mjs. Test threshold 20, grouping, one digest per day, nothing for zero-unblock items, no repeat for notified items, macNotify returns false off darwin and passes no shell string (argv only) on darwin with the message escaped.",
+      "context": [
+        "docs/plans/phase10c-design.md",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tools/notify.mjs",
+        "tests/notify.test.mjs"
+      ],
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    }
+  ]
+}

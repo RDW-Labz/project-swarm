@@ -34,8 +34,19 @@ Stored text is cleaned: control characters become spaces, strings are cut at 200
 3. A run with failed jobs: retry the failed jobs once, as a new run linked to the first. A retry that also fails is a blocker, never retried again.
 4. If `.swarm/project/plan.json` exists (`{ "waves": [{ "id", "manifest", "after": ["wave id"], "maxUsd?", "maxTokens?" }] }`): start the next wave whose `after` waves are complete and integrated, at most one per step.
 
+Only one autopilot runs per project: it holds `.swarm/project/autopilot.lock` (its PID) and a second one refuses to start; a lock from a dead process is cleared.
+
 Autopilot never merges a PR, deploys, raises a cap, passes `--raise` to a resume, or calls a model. Anything it starts keeps the original spend caps, or `swarm go`'s default ($5 and 2M tokens) when none was set. It fails closed: if the journal cannot be read or written it does nothing, and it also remembers what it already did in this process, so a paid retry or wave cannot repeat. A blocker is written once and shows up in `swarm brief` under "Needs the owner".
 
 ## Taking over
 
 Kill the session, start another agent (Codex, Cursor, Gemini, Claude), run `swarm brief`, and continue from its next actions. Runs started earlier are still going; `swarm brief` lists them.
+
+## Never wait on a human (Phase 10c)
+
+Plan around a manual step instead of stopping at it:
+
+- A step only the owner can do (a login, a key, an approval, a deploy) is a `type: "human"` job with `title` and copy-paste `steps`; the jobs it blocks name it in `after`. The run finishes everything else. The rest is saved and autopilot starts it after `swarm done RUN:JOB` and integration of the run.
+- Build against the gap: an interface plus a mock with tests, and a small follow-up job that `after`s the human job for the real hookup. Anything touching auth, payments or secrets stays behind a flag and marked "not wired".
+- Pick a sensible default for a design choice, build it, and record it: `swarm decision "Use SQLite?" --choice yes --option no --id db`. The owner confirms with `swarm decide db yes`; a different answer becomes a backlog goal.
+- `swarm inbox` lists everything waiting, most-blocking first. `swarm backlog add "GOAL" --paths src/` queues goals autopilot starts while everything else is waiting.

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "id": "review-10c",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "autopilot starting paid runs (spend caps) and file writes",
+      "type": "review",
+      "prompt": "Safety review of Phase 10c. Files: tools/human-jobs.mjs, tools/inbox.mjs, tools/inbox-commands.mjs, tools/backlog.mjs, tools/notify.mjs, docs/plans/phase10c-design.md (the rules), and coordination/review/phase10c.diff (changes to swarm.mjs and autopilot.mjs). Check with evidence: (1) can autopilot start a deferred group or a backlog goal twice, without a spend cap (default $5/2M tokens must apply), from main/master or a dirty tree, or while a run is running; can a crash start the same work twice; (2) can a human job or backlog goal text forge journal events or run a command (notify: osascript argv, escaping); (3) file writes: symlinks under .swarm/project, atomic writes of human-jobs.json and backlog.json, id handling (path traversal in RUN:JOB, group ids); (4) can `swarm done` or `decide` close the wrong item, another project, or an already-closed one; can `inbox --all` read outside registered projects; (5) manifests with a human job: does any path skip validation of the blocked jobs (they are validated by validateManifest before lifting, and again when started), and can after-edges to a human job be lost. Report findings ranked high/medium/low with file and line.",
+      "context": [
+        "docs/plans/phase10c-design.md",
+        "tools/human-jobs.mjs",
+        "tools/inbox.mjs",
+        "tools/inbox-commands.mjs",
+        "tools/backlog.mjs",
+        "tools/notify.mjs",
+        "coordination/review/phase10c.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 1800000
+    }
+  ]
+}

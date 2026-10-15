@@ -45,8 +45,8 @@ function callsNamed(deps, name) {
   return deps.calls.filter(c => c[0] === name);
 }
 
-test('ACTIONS lists the four autopilot actions', () => {
-  assert.deepEqual(ACTIONS, ['integrate', 'resume', 'retry-failed', 'start-wave']);
+test('ACTIONS lists the autopilot actions', () => {
+  assert.deepEqual(ACTIONS, ['integrate', 'resume', 'retry-failed', 'start-wave', 'start-deferred', 'start-backlog']);
 });
 
 test('decide integrates a complete run that is not integrated', () => {
