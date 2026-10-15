@@ -14,9 +14,12 @@ const FOLDER = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
 export const GOAL_BUDGET = Object.freeze({ maxUsd: 5, maxTokens: 2_000_000 });
 export const GOAL_DEFAULTS = Object.freeze({ leads: 'auto', maxJobs: 25, concurrency: 8, maxLeads: 10 });
 
+// A goal is any sentence that is not a run id. One token with a slash or ending .json is a manifest path; a sentence is a
+// goal even when it mentions paths (the caller also checks that the argument is not an existing .json file).
 export function isGoalArgument(argument) {
-  return typeof argument === 'string' && argument.trim() === argument && argument.length > 0 && argument.length <= 2000
-    && !RUN_ID.test(argument) && !argument.includes('/') && !argument.includes('\\') && !argument.endsWith('.json');
+  if (typeof argument !== 'string' || argument.trim() !== argument || argument.length === 0 || argument.length > 2000 || RUN_ID.test(argument)) return false;
+  if (/\s/.test(argument)) return true;
+  return !argument.includes('/') && !argument.includes('\\') && !argument.endsWith('.json');
 }
 
 // First `swarm go` in a project: run init once, before anything else. A dirty tree is left alone so

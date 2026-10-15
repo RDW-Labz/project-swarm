@@ -206,3 +206,85 @@ test('a saved plan made while the project was not sensitive is refused once it i
   assert.equal(out.status, 'failed');
   assert.match(out.reason, /not sensitive/);
 });
+
+const manifestWith = (job) => ({ version: 1, jobs: [{ id: 'w', agent: 'codex', model: 'gpt-6.1-sol', prompt: 'x', context: [], outputs: ['docs/out.md'], ...job }] });
+async function validateRefused(root, home, manifest, pattern) {
+  await fs.writeFile(path.join(root, 'm.json'), JSON.stringify(manifest));
+  const error = await fail(root, home, ['validate', 'm.json']);
+  assert.match(error.stdout + error.stderr, pattern);
+}
+
+test('a protected file is also refused as job context, unless the owner gives a reason on that job', async t => {
+  const root = await project(t), home = await temp(t);
+  await initJson(root, home, ['--not-sensitive', '--no-base-check', '--no-map', '--protect', 'secrets/', '--protect', 'notes/internal.md']);
+  await fs.mkdir(path.join(root, 'secrets'));
+  await fs.writeFile(path.join(root, 'secrets/key.txt'), 'k\n');
+  await fs.mkdir(path.join(root, 'notes'));
+  await fs.writeFile(path.join(root, 'notes/internal.md'), 'n\n');
+  await exec('git', ['-C', root, 'add', '-A']);
+  await exec('git', ['-C', root, '-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'notes']);
+  for (const context of [['notes/internal.md'], ['secrets/key.txt'], ['SECRETS/key.txt']]) {
+    await validateRefused(root, home, manifestWith({ context }), /protected-path: job w reads/);
+  }
+  await fs.writeFile(path.join(root, 'm.json'), JSON.stringify(manifestWith({ context: ['notes/internal.md', 'secrets/key.txt'], allowProtectedContext: 'the job documents the internal notes' })));
+  assert.equal(JSON.parse((await run(root, home, ['validate', 'm.json'])).stdout).status, 'valid');
+  for (const reason of ['', '   ', 5, 'x'.repeat(201)]) await validateRefused(root, home, manifestWith({ context: ['notes/internal.md'], allowProtectedContext: reason }), /allowProtectedContext/);
+  // writes stay refused even with the reason: it only opens reading
+  await validateRefused(root, home, manifestWith({ outputs: ['secrets/new.txt'], allowProtectedContext: 'reading only' }), /protected-path: job w writes/);
+  // a lead cannot give its children the exception
+  const { validateChildManifest } = await import('../tools/leads.mjs');
+  const lead = { id: 'lead', type: 'lead', agent: 'codex', prompt: 'x', outputs: ['goal.json'], area: { goal: 'g', scope: ['docs/'], maxJobs: 2, concurrency: 1 } };
+  const { validateLeadArea } = await import('../tools/leads.mjs');
+  assert.throws(() => validateChildManifest({ version: 1, jobs: [{ id: 'c', agent: 'codex', prompt: 'x', context: ['notes/internal.md'], outputs: ['docs/a.md'], allowProtectedContext: 'because' }] }, { lead, area: validateLeadArea(lead), parentManifest: {} }), /allowProtectedContext/);
+});
+
+test('a contextGlob that expands to a protected file is refused before any worker starts', async t => {
+  const { runManifest } = await import('../tools/swarm.mjs');
+  const root = await project(t), home = await temp(t);
+  await initJson(root, home, ['--not-sensitive', '--no-base-check', '--no-map', '--protect', 'secrets/']);
+  await fs.mkdir(path.join(root, 'secrets'));
+  await fs.writeFile(path.join(root, 'secrets/key.txt'), 'k\n');
+  await exec('git', ['-C', root, 'add', '-A']);
+  await exec('git', ['-C', root, '-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'more']);
+  let called = false;
+  const state = await runManifest(root, { version: 1, jobs: [{ id: 'g', agent: 'ollama', model: 'm', sensitive: false, prompt: 'x', context: ['src/math.mjs'], contextGlob: ['secrets/*.txt'], outputs: ['out/a.txt'], timeoutMs: 5000 }] }, { env: { SWARM_CONFIG: process.env.SWARM_CONFIG, SWARM_SPEND_DIR: path.join(root, '.swarm/spend') }, fetchImpl: async () => { called = true; throw new Error('no'); } });
+  assert.equal(state.status, 'failed');
+  assert.match(state.error, /protected-path: job g reads secrets\/key\.txt/);
+  assert.equal(called, false);
+});
+
+test('symlinks are resolved: a path that really points at a protected file or outside the project is refused', async t => {
+  const root = await project(t), home = await temp(t);
+  await initJson(root, home, ['--not-sensitive', '--no-base-check', '--no-map', '--protect', 'secrets/']);
+  await fs.mkdir(path.join(root, 'secrets'));
+  await fs.writeFile(path.join(root, 'secrets/key.txt'), 'k\n');
+  await fs.mkdir(path.join(root, 'docs'));
+  await fs.symlink(path.join(root, 'secrets'), path.join(root, 'docs/innocent'));
+  await fs.symlink(path.join(root, '.env'), path.join(root, 'notes.txt'));
+  await fs.symlink(os.tmpdir(), path.join(root, 'elsewhere'));
+  await validateRefused(root, home, manifestWith({ outputs: ['docs/innocent/new.txt'] }), /protected-path: job w writes docs\/innocent\/new\.txt \(resolves to secrets\/new\.txt; protected: secrets\/\)/);
+  await validateRefused(root, home, manifestWith({ context: ['docs/innocent/key.txt'] }), /protected-path: job w reads docs\/innocent\/key\.txt/);
+  await validateRefused(root, home, manifestWith({ context: ['notes.txt'] }), /protected-path: job w reads notes\.txt \(resolves to \.env/);
+  await validateRefused(root, home, manifestWith({ deletes: ['docs/innocent/key.txt'] }), /protected-path: job w deletes/);
+  await validateRefused(root, home, manifestWith({ outputs: ['elsewhere/out.txt'] }), /path-outside-project: job w writes elsewhere\/out\.txt/);
+  await validateRefused(root, home, manifestWith({ context: ['elsewhere/passwd'] }), /path-outside-project: job w reads/);
+  // an ordinary path still validates
+  await fs.writeFile(path.join(root, 'm.json'), JSON.stringify(manifestWith({ context: ['src/math.mjs'], outputs: ['docs/ok.md'] })));
+  assert.equal(JSON.parse((await run(root, home, ['validate', 'm.json'])).stdout).status, 'valid');
+});
+
+test('swarm go and swarm plan treat a sentence as a goal even when it mentions paths; a manifest path or run id is not a goal', async t => {
+  const { isGoalArgument } = await import('../tools/goal.mjs');
+  for (const goal of ['fix the a/b path', 'update docs/readme.md and tests/x.test.mjs', 'rename old.json to new.json', 'use C:\\temp\\x as scratch']) assert.equal(isGoalArgument(goal), true, goal);
+  for (const notGoal of ['coordination/manifests/phase1.json', 'm.json', 'a/b', '1792095332637-00d5eba7', ' padded ', '']) assert.equal(isGoalArgument(notGoal), false, notGoal);
+  const root = await project(t), home = await temp(t);
+  const plan = await run(root, home, ['plan', 'update src/math.mjs and the tests/ folder']);
+  assert.match(plan.stdout, /plan saved: plan-/);
+  const goal = JSON.parse((await fail(root, home, ['go', 'notes about src/config.json'])).stdout);
+  assert.equal(goal.status, 'cancelled', 'treated as a goal, and stopped at the approval');
+  await fs.writeFile(path.join(root, 'real.json'), '{"version":1}');
+  const manifest = await fail(root, home, ['go', 'real.json']);
+  assert.ok(!/cancelled|plan saved/.test(manifest.stdout), 'an existing .json file is a manifest');
+  const missing = await fail(root, home, ['go', 'nope/missing.json']);
+  assert.ok(!/cancelled/.test(missing.stdout));
+});

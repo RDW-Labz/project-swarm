@@ -23,7 +23,7 @@ import { resolveLanes, LaneScheduler, classifyProviderOutcome, lanesDir } from '
 import { resolveHosts, enabledHosts, createHostPool, defaultHostTransport, remoteEnv, checkPulled, isSecretPath } from './executors.mjs';
 import { initProject, checkProject, refreshRepoMap } from './init.mjs';
 import { summarizeMap, mapIsFresh, readRepoMap } from './repo-map.mjs';
-import { protectedViolations, formatBaseCheck, validateProfile } from './init-profile.mjs';
+import { protectedViolations, protectedPathHit, formatBaseCheck, validateProfile } from './init-profile.mjs';
 import { resolveCliHosts, sshInvocation, sshEnv, remoteExec, cliHostFailure } from './cli-host.mjs';
 import { isHumanJob, validateHumanJob, liftHumanJobs, addGroup, readStore as readHumanStore, humanGroupReady, updateGroup as updateHumanGroup } from './human-jobs.mjs';
 import { runInboxCommand, inboxDeps } from './inbox-commands.mjs';
@@ -1435,8 +1435,9 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     // Unknown command/provider fields cannot create an execution path.
     if (job.type === 'lead') validateLeadArea(job);
     else if (job.area !== undefined) fail(`lead-area-invalid: Job ${job.id}: area requires type lead`, 'lead-area-invalid');
-    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report'];
+    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext'];
     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
+    if (job.allowProtectedContext !== undefined && (typeof job.allowProtectedContext !== 'string' || !job.allowProtectedContext.trim() || job.allowProtectedContext.length > 200)) fail(`Job ${job.id}: allowProtectedContext must be a reason of 1-200 characters`, 'allow-protected-context-invalid');
   }
   validateParentLeads(manifest);
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
@@ -2762,6 +2763,8 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
     // Keep only hashes until each job is dispatched.
     const snapshotHashes = new Map(Object.entries(state.snapshotHashes ?? {}));
     for (const job of manifest.jobs) job.context = await expandJobContext(root, job);
+    // contextGlob patterns only become files here, so the protected-path gate runs once more on the expanded lists.
+    await enforceProtectedPaths(root, manifest.jobs, { resources: manifest.resources ?? [] });
     for (const file of new Set(manifest.jobs.flatMap(job => [...job.context, ...job.outputs]).concat(resourceFiles))) {
       if (!resumeState) snapshotHashes.set(file, await snapshotHash(root, file));
     }
@@ -5247,7 +5250,7 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   manifest = appliedTypes.manifest;
   // Paths the owner declared protected at init are never written by any job. Checked on the final manifest (after job types),
   // and child manifests of leads come through here too. A profile that cannot be read fails closed.
-  await enforceProtectedPaths(root, manifest.jobs);
+  await enforceProtectedPaths(root, manifest.jobs, { resources: manifest.resources ?? [] });
   const resolvedLanes = resolveLanes({ config: loadLocalConfig({ env, home }), manifest });
   const routes = manifest.jobs.filter(job => job.agent === 'auto').map(job => ({ jobId: job.id, ...pickJobRoute(job, resolvedLanes) }));
   if (routes.length) {
@@ -6848,16 +6851,60 @@ async function projectProfile(root) {
   } catch { return null; }
 }
 
+// `go X`: X is a manifest when it is an existing .json file, whatever else it looks like.
+async function existingManifestFile(root, argument) {
+  if (typeof argument !== 'string' || !argument.endsWith('.json')) return false;
+  try { return (await fs.stat(path.resolve(root, argument))).isFile(); } catch { return false; }
+}
+
 // The profile for the protected-path gate: null when the project has none, an error when it exists but is not valid
 // (a broken profile must never quietly switch the protection off).
-async function enforceProtectedPaths(root, jobs) {
-  let pointer;
-  try { pointer = JSON.parse(await fs.readFile(path.join(root, '.project-swarm.json'), 'utf8')); } catch (error) { if (error.code === 'ENOENT') return; fail('profile-invalid: .project-swarm.json is not valid JSON; run swarm init', 'profile-invalid'); }
-  if (!pointer || pointer.profile === undefined) return;
-  const { profile, errors } = validateProfile(pointer.profile);
-  if (errors.length) fail(`profile-invalid: ${errors[0]}; run swarm init to repair it`, 'profile-invalid');
-  const hits = protectedViolations(profile, jobs);
-  if (hits.length) fail(`protected-path: job ${hits[0].job} ${hits[0].kind === 'deletes' ? 'deletes' : 'writes'} ${hits[0].path} (protected: ${hits[0].entry})`, 'protected-path');
+async function enforceProtectedPaths(root, jobs, { resources = [] } = {}) {
+  let profile = null;
+  try {
+    const pointer = JSON.parse(await fs.readFile(path.join(root, '.project-swarm.json'), 'utf8'));
+    if (pointer && pointer.profile !== undefined) {
+      const checked = validateProfile(pointer.profile);
+      if (checked.errors.length) fail(`profile-invalid: ${checked.errors[0]}; run swarm init to repair it`, 'profile-invalid');
+      profile = checked.profile;
+    }
+  } catch (error) { if (error.code !== 'ENOENT') { if (error.code === 'profile-invalid') throw error; fail('profile-invalid: .project-swarm.json is not valid JSON; run swarm init', 'profile-invalid'); } }
+  const all = [...jobs, ...(resources.length ? [{ id: '(resources)', context: resources }] : [])];
+  const verb = kind => (kind === 'deletes' ? 'deletes' : kind === 'context' ? 'reads' : 'writes');
+  const hits = profile ? protectedViolations(profile, all) : [];
+  if (hits.length) fail(`protected-path: job ${hits[0].job} ${verb(hits[0].kind)} ${hits[0].path} (protected: ${hits[0].entry})`, 'protected-path');
+  // Symlinks: what a path really points at is what counts. Anything that resolves outside the project is refused, and
+  // anything that resolves into a protected path is treated as that path.
+  const realRoot = await fs.realpath(root);
+  const known = new Map();
+  const resolveReal = async file => {
+    const absolute = path.resolve(realRoot, file);
+    const rest = [];
+    let probe = absolute;
+    for (;;) {
+      if (known.has(probe)) return path.join(known.get(probe), ...rest.reverse());
+      try { const real = await fs.realpath(probe); known.set(probe, real); return path.join(real, ...rest.reverse()); }
+      catch (error) {
+        if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+        rest.push(path.basename(probe));
+        const parent = path.dirname(probe);
+        if (parent === probe) return absolute;
+        probe = parent;
+      }
+    }
+  };
+  for (const job of all) {
+    for (const [field, kind] of [['outputs', 'output'], ['outputDirs', 'output'], ['deletes', 'deletes'], ['context', 'context']]) {
+      for (const file of Array.isArray(job[field]) ? job[field] : []) {
+        if (typeof file !== 'string') continue;
+        const real = await resolveReal(file);
+        if (real !== realRoot && !real.startsWith(realRoot + path.sep)) fail(`path-outside-project: job ${job.id} ${verb(kind)} ${file}, which resolves outside the project`, 'path-outside-project');
+        const relative = path.relative(realRoot, real).split(path.sep).join('/');
+        const entry = profile && !(kind === 'context' && typeof job.allowProtectedContext === 'string' && job.allowProtectedContext.trim()) ? protectedPathHit(profile, relative) : null;
+        if (entry) fail(`protected-path: job ${job.id} ${verb(kind)} ${file} (resolves to ${relative}; protected: ${entry})`, 'protected-path');
+      }
+    }
+  }
 }
 
 // Owner flags beat the profile; the profile beats the built-in defaults.
@@ -7770,7 +7817,7 @@ async function mainInner() {
     if(shipIdleWarning)result={...result,warnings:[...(result.warnings??[]),shipIdleWarning.message]};
   }
   else if(command==='init') result=await initProject(root);
-  else if(command==='go'&&isGoalArgument(argument)){
+  else if(command==='go'&&isGoalArgument(argument)&&!(await existingManifestFile(root,argument))){
     const goChecksList=await goChecks(root);
     // A dirty tree is refused by go itself, before anything is previewed or asked.
     const dirtyTree=await worktreeDirty(root).catch(()=>false);

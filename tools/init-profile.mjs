@@ -79,7 +79,10 @@ export function protectedViolations(profile, jobs) {
   for (const job of Array.isArray(jobs) ? jobs : []) {
     const id = job?.id ?? job?.name;
     // outputDirs is the open-scope list of folders a codex job may write anywhere inside.
-    for (const [field, kind] of [['outputs', 'output'], ['outputDirs', 'output'], ['deletes', 'deletes']]) {
+    // Reading a protected file is refused too, unless the owner wrote allowProtectedContext (with a reason) on that job.
+    const mayRead = typeof job?.allowProtectedContext === 'string' && job.allowProtectedContext.trim() !== '';
+    for (const [field, kind] of [['outputs', 'output'], ['outputDirs', 'output'], ['deletes', 'deletes'], ['context', 'context']]) {
+      if (kind === 'context' && mayRead) continue;
       const files = Array.isArray(job?.[field]) ? job[field] : [];
       for (const file of files) {
         const entry = typeof file === 'string' ? protectedPathHit(profile, file) : null;
