@@ -30,6 +30,7 @@ import { readBacklog, nextStartable, markStarted as markBacklogStarted } from '.
 import { pendingNotifications, macNotify } from './notify.mjs';
 import { resolveDefaultRoot, INSTALL_COMMANDS, runBriefCommand, runHandoffCommand, runCheckpointCommand, journalAfterCommand } from './project-commands.mjs';
 import { runAutopilot } from './autopilot.mjs';
+import { acquireAutopilotLock } from './autopilot-lock.mjs';
 import { appendEvent, readJournal, safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 import { loadRuns } from './brief.mjs';
 import { projectStatus, formatStatus } from './status.mjs';
@@ -6906,7 +6907,10 @@ async function mainInner() {
     const controller=new AbortController();
     const abort=()=>controller.abort();
     process.once('SIGINT',abort);process.once('SIGTERM',abort);
-    const steps=await runAutopilot(root,autopilotDeps(),{once,intervalMs,maxSteps,signal:controller.signal});
+    let release;
+    try{release=await acquireAutopilotLock(root);}catch(error){if(error.code==='autopilot-running')fail(error.message,'autopilot-running');throw error;}
+    let steps;
+    try{steps=await runAutopilot(root,autopilotDeps(),{once,intervalMs,maxSteps,signal:controller.signal});}finally{await release();}
     process.stdout.write(`${JSON.stringify({status:'ok',steps:steps.length,actions:steps.flatMap(step=>step.actions.map(action=>({action:action.action,run:action.run??action.wave,ok:action.ok}))),blocked:[...new Set(steps.flatMap(step=>step.blocked))]})}\n`);
     return;
   }

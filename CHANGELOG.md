@@ -6,6 +6,7 @@
 - Added `swarm inbox [--json] [--all]` (what waits on you, most-blocking first, with the steps and the command to close each item; `--all` adds the projects in `.swarm-projects.json`), `swarm done ID`, `swarm decision "TEXT" --choice C [--option O]... [--id ID]` (record the default the swarm picked), and `swarm decide ID CHOICE` (confirm it; a different choice adds a backlog goal "Change decision ID to CHOICE").
 - Added `swarm backlog` (`add "GOAL" [--paths a/,b/] [--max-usd N]`, `remove ID`). When every live run is waiting on a person or a quota window and nothing is running, autopilot starts the next goal that does not overlap files the waiting runs write, from a clean `swarm/*` branch, inside its budget. A goal with no `--paths` starts only when nothing else is waiting.
 - Autopilot can send a macOS notification when a new inbox item would unblock 20 or more jobs, and one daily digest; off unless the machine config has `"notify": true`. It never notifies for an item that unblocks nothing.
+- Only one autopilot runs per project: `swarm autopilot` takes a lock file (`.swarm/project/autopilot.lock`, with its PID) and refuses to start while a live process holds it; a lock left by a dead process is cleared.
 - Fixed a test of the lane pause that failed on slow CI runners.
 
 ## 1.66.0
