@@ -39,7 +39,7 @@ import { loadRuns } from './brief.mjs';
 import { projectStatus, formatStatus } from './status.mjs';
 import { zshCompletion, completeRuns } from './completion.mjs';
 import { checkSwarmCommand } from './swarm-bin.mjs';
-import { autoInit, GOAL_BUDGET, isGoalArgument, manifestForGoal, goGoal, goalRunId, topLevelFolders, worktreeDirty, createGoBranch } from './goal.mjs';
+import { autoInit, GOAL_BUDGET, isGoalArgument, manifestForGoal, goGoal, goalRunId, topLevelFolders, trackedFiles, worktreeDirty, createGoBranch } from './goal.mjs';
 import { SCALE_DEFAULT_CONCURRENCY, SCALE_DEFAULT_JOBS, prepareScaleRepo, scaleStub } from './scale.mjs';
 import { routeJob } from './router.mjs';
 import { anthropicPrice, assertOpusTier as assertAnthropicModel } from './anthropic.mjs';
@@ -2490,6 +2490,7 @@ function selectRunManifest(manifest, jobs) {
 async function applyManifestJobTypes(root, manifest, { env, home = os.homedir() }) {
   const withReport = job => {
     if (manifest.report !== 'short' && job.report !== 'short') return job;
+    if (API_AGENTS.includes(job.agent)) return { ...job, report: 'short' };
     return { ...job, report: 'short', prompt: job.prompt.includes(REPORT_PROMPT_LINE) ? job.prompt : `${job.prompt}\n\n${REPORT_PROMPT_LINE}` };
   };
   const typedJob = (job, options) => applyJobType((manifest.report === 'short' || job.report === 'short') && job.prompt.endsWith(`\n\n${REPORT_PROMPT_LINE}`) ? { ...job, prompt: job.prompt.slice(0, -REPORT_PROMPT_LINE.length - 2) } : job, options);
@@ -2871,6 +2872,8 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         if (original.agent === 'auto') {
           record.route = pickJobRoute(original, lanes, { health: routeHealth(await today()), failures });
           job = { ...job, agent: record.route.agent, model: record.route.model };
+          // The API lanes carry the short report inside their envelope (`result`); the "finish with one JSON line" instruction is for CLI lanes and makes small models drop the files.
+          if (API_AGENTS.includes(job.agent) && job.report === 'short' && job.prompt.endsWith(`\n\n${REPORT_PROMPT_LINE}`)) job = { ...job, prompt: job.prompt.slice(0, -REPORT_PROMPT_LINE.length - 2) };
           if (job.agent === 'codex') requireCodexPlatform(platform);
           if (job.agent === 'cursor') {
             requireCursorPlatform(platform);
@@ -6849,7 +6852,7 @@ async function planLaneInfo(manifest) {
 
 async function planDeps(root) {
   return {
-    folders: topLevelFolders, manifestForGoal, laneInfo: planLaneInfo, defaults: GOAL_BUDGET,
+    folders: topLevelFolders, files: trackedFiles, manifestForGoal, laneInfo: planLaneInfo, defaults: GOAL_BUDGET,
     head: async dir => (await execFileAsync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).then(out => out.stdout.trim(), () => null)),
   };
 }
@@ -6858,12 +6861,21 @@ async function goChecks(root) {
   try { const value = JSON.parse(await fs.readFile(path.join(root, 'coordination/checks.json'), 'utf8')).checks ?? []; return Array.isArray(value) ? value : []; } catch { return []; }
 }
 
-async function countChildren(root, runId) {
+// What a finished goal run really used: its child jobs and, when the jobs report it, their cost.
+async function runStats(root, runId) {
   try {
-    let count = 0;
-    for (const job of (await readState(root, runId)).jobs ?? []) if (job.childRun) count += (await readState(root, job.childRun)).jobs?.length ?? 0;
-    return count;
-  } catch { return undefined; }
+    let children = 0, costUsd = 0, costed = false;
+    const add = job => { if (Number.isFinite(job.costUsd)) { costUsd += job.costUsd; costed = true; } };
+    for (const job of (await readState(root, runId)).jobs ?? []) {
+      add(job);
+      if (job.childRun) {
+        const child = await readState(root, job.childRun);
+        children += child.jobs?.length ?? 0;
+        for (const childJob of child.jobs ?? []) add(childJob);
+      }
+    }
+    return { children, ...(costed ? { costUsd: Math.round(costUsd * 1e6) / 1e6 } : {}) };
+  } catch { return {}; }
 }
 
 async function mainInner() {
@@ -7713,19 +7725,22 @@ async function mainInner() {
       run: async (goRoot,manifest,options)=>{const state=await runManifestChecked(goRoot,manifest,undefined,{id:options.id,maxUsd:options.maxUsd,maxTokens:options.maxTokens});return {id:state.id};},
       wait: async (goRoot,id)=>{const waited=await waitRun(goRoot,id);if(waited.status==='paused')waited.pause=(await readState(goRoot,id)).pause;return waited;},
       integrate: async (goRoot,id)=>{
-        const summary=await integrateQueue(goRoot,id);
+        // A worker that also returns files it was not asked to write has those files dropped (never applied). go goes on without them and says so.
+        const summary=await integrateQueue(goRoot,id,{acceptDropped:true});
         const state=await readState(goRoot,id);
         const files=new Set(state.integratedFiles??[]);
-        for(const job of state.jobs??[]) if(job.childRun){try{for(const file of (await readState(goRoot,job.childRun)).integratedFiles??[])files.add(file);}catch{/* a child that never integrated has no files */}}
-        return {...summary,files:[...files]};
+        const dropped=[];
+        for(const job of state.jobs??[]) if(job.childRun){try{const child=await readState(goRoot,job.childRun);for(const file of child.integratedFiles??[])files.add(file);for(const childJob of child.jobs??[])if(childJob.droppedWrites?.length)dropped.push(`${childJob.id}: ${childJob.droppedWrites.join(', ')}`);}catch{/* a child that never integrated has no files */}}
+        return {...summary,files:[...files],...(dropped.length?{droppedWrites:dropped}:{})};
       },
       commit: (goRoot,files,message)=>commitOutputs(goRoot,files,message),
       rollup: async (goRoot,id)=>rollupRun(await readState(goRoot,id)),
     });
     if(firstRun.ran)result={...result,initialized:{files:firstRun.files}};
-    if(plan&&result?.runId){
-      const children=await countChildren(root,result.runId);
-      result={...result,estimate:await recordRun(root,plan,{...(Number.isFinite(result.cost)?{costUsd:result.cost}:{}),minutes:Math.round((Date.now()-goStarted)/6000)/10,...(children!==undefined?{children}:{})})};
+    // Only a finished run says anything about cost and time; a failed or paused one would skew the estimates.
+    if(plan&&result?.runId&&result.status==='complete'){
+      const stats=await runStats(root,result.runId);
+      result={...result,estimate:await recordRun(root,plan,{...(Number.isFinite(result.cost)?{costUsd:result.cost}:{}),...stats,minutes:Math.round((Date.now()-goStarted)/6000)/10})};
     }
     }
   }

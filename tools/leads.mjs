@@ -98,6 +98,10 @@ export function validateChildManifest(child, { lead, area, parentManifest, leadS
     if (childBudget[key] === undefined) childBudget[key] = amount;
   }
   const result = { ...child, concurrency, budget: childBudget };
+  // `report` has one legal value. A lead that writes a sentence there (the prompt says "use a short report") means "short"; a parent that asked for short reports gets them from every child.
+  const shortReports = parentManifest.report === 'short';
+  if (shortReports || child.report !== undefined) result.report = 'short';
+  result.jobs = child.jobs.map(job => (shortReports || job.report !== undefined ? { ...job, report: 'short' } : job));
   for (const key of ['checks', 'preChecks']) if (parentManifest[key] !== undefined) result[key] = parentManifest[key];
   if (child.contract === undefined && parentManifest.contract !== undefined) result.contract = parentManifest.contract;
   return result;
@@ -108,7 +112,7 @@ export function leadPromptBlock({ job, area, outputPath }) {
   const short = (value, max) => value.length > max ? `${value.slice(0, max - 3)}...` : value;
   const file = area.scope[0].endsWith('/') ? `${area.scope[0]}result.txt` : area.scope[0];
   const example = { version: 1, jobs: [{ id: 'worker', agent: area.agents[0], prompt: 'Implement the goal.', outputs: [file.length <= 200 ? file : '<file inside scope>'] }] };
-  return `\nLead goal: ${short(area.goal, 400)}\nScope: ${short(JSON.stringify(area.scope), 700)}\nMax jobs: ${area.maxJobs}; allowed agents: ${area.agents.join(', ')}; concurrency cap: ${area.concurrency}.\nOnly output: ${short(outputPath, 200)}, holding one JSON manifest {"version":1,"jobs":[...]}.\nAllowed top-level keys: ${CHILD_KEYS.join(', ')}.\nAllowed job keys: ${JOB_KEYS.join(', ')}.\nEvery job output and deletes entry must be inside the scope. Child jobs cannot be leads or run commands.\nExample: ${JSON.stringify(example)}`;
+  return `\nLead goal: ${short(area.goal, 400)}\nScope: ${short(JSON.stringify(area.scope), 700)}\nMax jobs: ${area.maxJobs}; allowed agents: ${area.agents.join(', ')}; concurrency cap: ${area.concurrency}.\nOnly output: ${short(outputPath, 200)}, holding one JSON manifest {"version":1,"jobs":[...]}.\nAllowed top-level keys: ${CHILD_KEYS.join(', ')}.\nAllowed job keys: ${JOB_KEYS.join(', ')}.\nEvery job output and deletes entry must be inside the scope. outputs, context and deletes are exact file paths, never folders (no trailing slash): to change an existing file list it in both context and outputs, to create a file name the new file. Plan from the file list you are given; you cannot read file contents, so tell each child job to read the files it needs. A job's report, if you set it, is exactly the word short. Child jobs cannot be leads or run commands.\nExample: ${JSON.stringify(example)}`;
 }
 
 export function leadRollup(childState, rollup) {

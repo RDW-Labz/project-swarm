@@ -37,10 +37,17 @@ function goalError(code, message) {
   return Object.assign(new Error(`${code}: ${message}`), { code });
 }
 
-export async function topLevelFolders(root) {
+// In a git repo only folders that hold tracked files count: a lead scoped to an empty or untracked folder cannot
+// see it in its workspace and fails on its own prompt.
+export async function topLevelFolders(root, run = exec) {
   const entries = await fs.readdir(root, { withFileTypes: true });
+  let tracked = null;
+  try {
+    const { stdout } = await run('git', ['-C', root, 'ls-files', '-z'], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+    tracked = new Set(stdout.split('\0').filter(file => file.includes('/')).map(file => file.slice(0, file.indexOf('/'))));
+  } catch { tracked = null; }
   return entries
-    .filter(entry => entry.isDirectory() && !entry.isSymbolicLink() && !entry.name.startsWith('.') && FOLDER.test(entry.name) && entry.name !== 'node_modules')
+    .filter(entry => entry.isDirectory() && !entry.isSymbolicLink() && !entry.name.startsWith('.') && FOLDER.test(entry.name) && entry.name !== 'node_modules' && (tracked === null || tracked.has(entry.name)))
     .map(entry => entry.name)
     .sort();
 }
@@ -72,7 +79,25 @@ function splitFolders(names, count) {
   return buckets;
 }
 
-export function manifestForGoal(goal, { folders = [], leads = 'auto', maxJobs = GOAL_DEFAULTS.maxJobs, concurrency = GOAL_DEFAULTS.concurrency, checks = [], maxUsd = GOAL_BUDGET.maxUsd, maxTokens = GOAL_BUDGET.maxTokens } = {}) {
+// The tracked files of a repo (paths only), for the lead prompts; a lead reads nothing else, so without this it cannot
+// know which files its scope holds.
+export async function trackedFiles(root, run = exec) {
+  try {
+    const { stdout } = await run('git', ['-C', root, 'ls-files', '-z'], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+    return stdout.split('\0').filter(Boolean).slice(0, 50000);
+  } catch { return []; }
+}
+
+const MAX_LISTED = 200;
+const clean = value => String(value).replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, ' ').slice(0, 200);
+function scopeListing(scope, files) {
+  const inside = files.filter(file => scope.some(entry => (entry.endsWith('/') ? file.startsWith(entry) : file === entry)));
+  if (!inside.length) return '';
+  const shown = inside.slice(0, MAX_LISTED).map(file => `- ${clean(file)}`).join('\n');
+  return `\n\nFILES IN YOUR SCOPE (${Math.min(inside.length, MAX_LISTED)} of ${inside.length}, exact paths; you cannot read them yourself, so plan from these names):\n${shown}`;
+}
+
+export function manifestForGoal(goal, { folders = [], files = [], leads = 'auto', maxJobs = GOAL_DEFAULTS.maxJobs, concurrency = GOAL_DEFAULTS.concurrency, checks = [], maxUsd = GOAL_BUDGET.maxUsd, maxTokens = GOAL_BUDGET.maxTokens } = {}) {
   const text = typeof goal === 'string' ? goal.trim() : '';
   if (!text || text.length > 2000) throw goalError('goal-invalid', 'goal must be 1–2000 characters');
   if (!Number.isInteger(maxJobs) || maxJobs < 1 || maxJobs > 500) throw goalError('goal-max-jobs', '--max-jobs must be an integer 1–500');
@@ -96,7 +121,7 @@ export function manifestForGoal(goal, { folders = [], leads = 'auto', maxJobs = 
       id: `lead-${index + 1}`,
       type: 'lead',
       agent: 'auto',
-      prompt: `You own only these folders: ${scope.join(', ')}. Turn this goal into child jobs inside that scope. Every child job uses a short report.\n\nGOAL:\n${text}`,
+      prompt: `You own only these folders: ${scope.join(', ')}. Turn this goal into child jobs inside that scope. Every child job uses a short report.\n\nGOAL:\n${text}${scopeListing(scope, files)}`,
       context: [],
       outputs: [`goal-lead-${index + 1}.json`],
       area: { goal: text, scope, maxJobs, concurrency },
