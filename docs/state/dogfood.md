@@ -33,3 +33,4 @@ One row per plan phase, built with the swarm itself. Rules (from Braden): worker
 - **Rule exception:** the rerun used the working copy as the runner (the change is unmerged); dev2's copy got the new tools by copy. Codex, Cursor and Claude were not rerun: the change does not touch them.
 - **Review job:** Claude Opus on the routing change (sensitive-job routing), $0.29, before the PR. Findings fixed: no sensitive job can be a candidate for OpenRouter/OpenAI/Gemini/Lambda, bookkeeping check refuses `..`, absolute paths and non-strings.
 - **Waiting on Braden:** none.
+- **Hermes at one job at a time (10 more jobs on dev2):** 6/10, same score as at two at a time, so the owner's 8/10 bar was not met and Hermes stays research-only. Three failures were the Hermes CLI exiting 1 with no message; replaying one by hand worked, so it looks intermittent on dev2's shared model server. Nothing on dev2 was changed.
