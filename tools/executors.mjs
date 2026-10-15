@@ -3,8 +3,11 @@ import crypto from 'node:crypto';
 
 const HOST_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const SSH_TARGET = /^[A-Za-z0-9._-]+(?:@[A-Za-z0-9._-]+)?$/;
+const REMOTE_JOB_ID = /^[a-f0-9]{8,32}$/;
 const SECRET_DIRS = new Set(['.git', '.swarm', '.ssh', '.aws', '.gnupg']);
 const REMOTE_ENV = new Set(['PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'TZ', 'SWARM_PORT_BASE']);
+const DEAD_AFTER_MISSES = 3;
+export const REMOTE_COMMAND = 'swarm-remote-exec';
 
 function invalid(message) {
   return Object.assign(new Error(message), { code: 'hosts-invalid' });
@@ -51,8 +54,10 @@ export function resolveHosts(source) {
   return source.map(host => {
     if (!host || typeof host !== 'object' || Array.isArray(host)) throw invalid('host must be an object');
     for (const key of Object.keys(host)) {
-      if (!['id', 'kind', 'capacity', 'target', 'driver', 'heartbeatMs'].includes(key)) throw invalid(`unknown host field ${key}`);
+      if (!['id', 'kind', 'capacity', 'target', 'driver', 'heartbeatMs', 'trusted'].includes(key)) throw invalid(`unknown host field ${key}`);
     }
+    if (host.trusted !== undefined && typeof host.trusted !== 'boolean') throw invalid(`${host.id}.trusted must be true or false`);
+    if (host.kind !== 'sandbox' && host.trusted !== undefined) throw invalid(`${host.id} trusted is only for a sandbox host`);
     if (typeof host.id !== 'string' || !HOST_ID.test(host.id) || ids.has(host.id)) throw invalid(`invalid host id ${host.id}`);
     ids.add(host.id);
     if (!['local', 'ssh', 'sandbox'].includes(host.kind)) throw invalid(`${host.id}.kind must be local, ssh, or sandbox`);
@@ -67,7 +72,7 @@ export function resolveHosts(source) {
     if (host.kind === 'sandbox') {
       if (!Array.isArray(host.driver) || !host.driver.length || host.driver.some(part => typeof part !== 'string' || !part)) throw invalid(`${host.id}.driver must be a command argv`);
     } else if (host.driver !== undefined) throw invalid(`${host.id} cannot set driver`);
-    return { id: host.id, kind: host.kind, capacity: host.capacity, ...(host.target ? { target: host.target } : {}), ...(host.driver ? { driver: [...host.driver] } : {}), heartbeatMs: host.heartbeatMs ?? 5000 };
+    return { id: host.id, kind: host.kind, capacity: host.capacity, ...(host.target ? { target: host.target } : {}), ...(host.driver ? { driver: [...host.driver] } : {}), ...(host.kind === 'sandbox' ? { trusted: host.trusted === true } : {}), heartbeatMs: host.heartbeatMs ?? 5000 };
   });
 }
 
@@ -83,39 +88,87 @@ function abortError() {
   return Object.assign(new Error('Host pool closed or claim aborted'), { name: 'AbortError' });
 }
 
-// One machine's hosts. A dead ssh or sandbox host drops its in-flight jobs so the runner can place them again.
-export function createHostPool({ hosts, ping = async () => true, setTimer = setTimeout, clearTimer = clearTimeout }) {
-  const entries = hosts.map(host => ({ host, inFlight: 0, dead: false, controllers: new Set() }));
-  const byId = new Map(entries.map(entry => [entry.host.id, entry]));
+function untrustedError() {
+  return Object.assign(new Error('host-untrusted: a sensitive job needs a local host, an ssh host, or a sandbox with trusted: true'), { code: 'host-untrusted' });
+}
+
+// A sensitive job stays on this machine or on ssh. A sandbox takes one only when it is marked trusted.
+function accepts(host, sensitive) {
+  if (!sensitive) return true;
+  if (host.kind === 'local' || host.kind === 'ssh') return true;
+  return host.trusted === true;
+}
+
+// One machine's hosts. Three missed heartbeats in a row mark a remote host dead and free its jobs.
+export function createHostPool({ hosts, ping = async () => true, kill = null, onOrphanSpend = null, setTimer = setTimeout, clearTimer = clearTimeout }) {
+  const entries = hosts.map(host => ({ host, inFlight: 0, dead: false, misses: 0, reviving: false, orphans: [], orphanSpend: 0, controllers: new Set() }));
   const queue = [];
   let closed = false;
   let timer = null;
   const heartbeatMs = Math.min(...hosts.map(host => host.heartbeatMs));
 
   const pump = () => {
-    while (queue.length) {
-      const chosen = entries.find(entry => !entry.dead && entry.inFlight < entry.host.capacity);
-      if (!chosen) return;
-      const waiter = queue.shift();
-      if (waiter.signal?.aborted) { waiter.reject(abortError()); continue; }
-      chosen.inFlight += 1;
-      const controller = new AbortController();
-      chosen.controllers.add(controller);
-      const onAbort = () => controller.abort(abortError());
-      waiter.signal?.addEventListener('abort', onAbort, { once: true });
-      let released = false;
-      waiter.resolve({
-        host: chosen.host,
-        signal: controller.signal,
-        release() {
-          if (released) return;
-          released = true;
-          chosen.controllers.delete(controller);
-          waiter.signal?.removeEventListener('abort', onAbort);
-          chosen.inFlight = Math.max(0, chosen.inFlight - 1);
-          pump();
-        },
-      });
+    if (closed) return;
+    let progressed = true;
+    while (progressed && queue.length) {
+      progressed = false;
+      for (let index = 0; index < queue.length; index += 1) {
+        const waiter = queue[index];
+        if (waiter.signal?.aborted) {
+          queue.splice(index, 1);
+          waiter.reject(abortError());
+          progressed = true;
+          break;
+        }
+        const chosen = entries.find(entry => !entry.dead && !entry.reviving && entry.inFlight < entry.host.capacity && accepts(entry.host, waiter.sensitive));
+        if (!chosen) continue;
+        queue.splice(index, 1);
+        chosen.inFlight += 1;
+        const controller = new AbortController();
+        const slot = { controller, remoteId: null };
+        chosen.controllers.add(slot);
+        const onAbort = () => controller.abort(abortError());
+        waiter.signal?.addEventListener('abort', onAbort, { once: true });
+        let released = false;
+        waiter.resolve({
+          host: chosen.host,
+          signal: controller.signal,
+          bind(remoteId) { slot.remoteId = remoteId; },
+          release() {
+            if (released) return;
+            released = true;
+            chosen.controllers.delete(slot);
+            waiter.signal?.removeEventListener('abort', onAbort);
+            chosen.inFlight = Math.max(0, chosen.inFlight - 1);
+            pump();
+          },
+        });
+        progressed = true;
+        break;
+      }
+    }
+  };
+
+  const revive = async entry => {
+    if (entry.reviving || closed) return;
+    entry.reviving = true;
+    const ids = [...entry.orphans];
+    try {
+      let report = {};
+      if (ids.length && kill) report = await kill(entry.host, ids) ?? {};
+      if (closed) return;
+      entry.orphans = entry.orphans.filter(id => !ids.includes(id));
+      entry.dead = false;
+      entry.misses = 0;
+      entry.reviving = false;
+      const spent = report?.costUsd;
+      if (typeof spent === 'number' && Number.isFinite(spent)) {
+        entry.orphanSpend += spent;
+        try { await onOrphanSpend?.(spent); } catch { /* the spend is already on the pool */ }
+      }
+      pump();
+    } catch {
+      entry.reviving = false;
     }
   };
 
@@ -123,21 +176,33 @@ export function createHostPool({ hosts, ping = async () => true, setTimer = setT
     timer = null;
     if (closed) return;
     for (const entry of entries) {
-      if (entry.dead || entry.host.kind === 'local') continue;
+      if (closed || entry.host.kind === 'local' || entry.reviving) continue;
       let alive = false;
       try { alive = await ping(entry.host); } catch { alive = false; }
-      if (closed || entry.dead) continue;
-      if (alive) continue;
+      if (closed || entry.reviving) continue;
+      if (alive) {
+        entry.misses = 0;
+        if (entry.dead) await revive(entry);
+        continue;
+      }
+      if (entry.dead) continue;
+      entry.misses += 1;
+      if (entry.misses < DEAD_AFTER_MISSES) continue;
       entry.dead = true;
-      for (const controller of entry.controllers) controller.abort(hostDead(entry.host));
+      entry.misses = 0;
+      for (const slot of entry.controllers) {
+        if (slot.remoteId) entry.orphans.push(slot.remoteId);
+        slot.controller.abort(hostDead(entry.host));
+      }
       entry.controllers.clear();
     }
     if (!closed) timer = setTimer(() => { beat().catch(() => {}); }, heartbeatMs);
   };
 
-  const claim = ({ signal } = {}) => new Promise((resolve, reject) => {
+  const claim = ({ signal, sensitive = true } = {}) => new Promise((resolve, reject) => {
     if (closed || signal?.aborted) { reject(abortError()); return; }
-    const waiter = { resolve, reject, signal };
+    if (!entries.some(entry => accepts(entry.host, sensitive))) { reject(untrustedError()); return; }
+    const waiter = { resolve, reject, signal, sensitive };
     queue.push(waiter);
     pump();
   });
@@ -146,12 +211,13 @@ export function createHostPool({ hosts, ping = async () => true, setTimer = setT
   return {
     claim,
     snapshot: () => entries.map(entry => ({ id: entry.host.id, kind: entry.host.kind, inFlight: entry.inFlight, dead: entry.dead, capacity: entry.host.capacity })),
+    orphanSpend: () => entries.reduce((sum, entry) => sum + entry.orphanSpend, 0),
     close() {
       closed = true;
       if (timer !== null) clearTimer(timer);
       timer = null;
       for (const waiter of queue.splice(0)) waiter.reject(abortError());
-      for (const entry of entries) for (const controller of entry.controllers) controller.abort(abortError());
+      for (const entry of entries) for (const slot of entry.controllers) slot.controller.abort(abortError());
     },
   };
 }
@@ -172,7 +238,7 @@ function spawnCollected(spawnImpl, argv, { input, env, signal } = {}) {
       if (signal.aborted) stop();
       else signal.addEventListener('abort', stop, { once: true });
     }
-    if (input) child.stdin?.end?.(input);
+    if (input != null) child.stdin?.write?.(input);
     child.on('exit', code => {
       if (signal?.reason?.code === 'host-dead') return;
       if (code === 0) resolve(Buffer.concat(out));
@@ -188,13 +254,21 @@ export function defaultHostTransport({ spawnImpl }) {
       await spawnCollected(spawnImpl, argvFor(host, 'true'), {});
       return true;
     },
-    async run({ host, files = [], outputs = [], env, signal }) {
+    async run({ host, jobId, files = [], outputs = [], env, signal }) {
+      if (typeof jobId !== 'string' || !REMOTE_JOB_ID.test(jobId)) throw Object.assign(new Error('host-exit: remote job id'), { code: 'host-exit' });
       const safe = files.filter(file => file && !isSecretPath(file.path));
-      const payload = Buffer.from(JSON.stringify({ files: safe.map(file => ({ path: file.path, bytes: Buffer.from(file.bytes).toString('base64') })), outputs }));
-      const stdout = await spawnCollected(spawnImpl, argvFor(host, 'swarm-remote-exec'), { input: payload, env: remoteEnv(env), signal });
+      const payload = Buffer.from(`${JSON.stringify({ id: jobId, files: safe.map(file => ({ path: file.path, bytes: Buffer.from(file.bytes).toString('base64') })), outputs })}\n`);
+      const stdout = await spawnCollected(spawnImpl, argvFor(host, REMOTE_COMMAND), { input: payload, env: remoteEnv(env), signal });
       const pulled = JSON.parse(stdout.toString('utf8'));
       checkPulled(pulled.files ?? []);
       return { files: (pulled.files ?? []).map(file => ({ ...file, bytes: Buffer.isBuffer(file.bytes) ? file.bytes : Buffer.from(file.bytes) })) };
+    },
+    async kill(host, ids) {
+      const safe = [...ids];
+      if (!safe.length || safe.some(id => typeof id !== 'string' || !REMOTE_JOB_ID.test(id))) throw Object.assign(new Error('host-exit: orphan id'), { code: 'host-exit' });
+      const stdout = await spawnCollected(spawnImpl, argvFor(host, `${REMOTE_COMMAND} --kill ${safe.join(',')}`), {});
+      const text = stdout.toString('utf8').trim();
+      return text ? JSON.parse(text) : {};
     },
   };
 }

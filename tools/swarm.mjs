@@ -2590,7 +2590,16 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   const configuredHosts = resolveHosts(manifest.hosts ?? worktreeConfig.hosts);
   if (configuredHosts && heartbeatMs) for (const host of configuredHosts) host.heartbeatMs = heartbeatMs;
   const hostTransportUsed = configuredHosts ? (hostTransport ?? defaultHostTransport({ spawnImpl })) : null;
-  const hostPool = configuredHosts ? createHostPool({ hosts: configuredHosts, ping: host => hostTransportUsed.ping(host) }) : null;
+  const hostHooks = { save: () => Promise.resolve() };
+  const hostPool = configuredHosts ? createHostPool({
+    hosts: configuredHosts,
+    ping: host => hostTransportUsed.ping(host),
+    kill: hostTransportUsed.kill ? (host, ids) => hostTransportUsed.kill(host, ids) : null,
+    onOrphanSpend: async costUsd => {
+      state.orphanCostUsd = Math.round(((state.orphanCostUsd ?? 0) + costUsd) * 1e6) / 1e6;
+      await hostHooks.save();
+    },
+  }) : null;
   const spendDirectory = spendDir(env);
   const today = () => withSpendStore(store => laneDayTotals(store, { day: new Date(now()).toISOString().slice(0, 10) }), { dir: spendDirectory, now });
   const pricing = new Map(), inFlight = new Map();
@@ -2635,6 +2644,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
     })().finally(() => { writes = null; });
     return writes;
   };
+  hostHooks.save = queueSave;
   // Throttled progress writes join the same serialized queue and always publish the live
   // record, so a late tick can never resurrect a status the worker loop already finalized.
   const activity = activityRecorder(queueSave, progressIntervalMs, () => cleanup.abort());
@@ -2909,12 +2919,15 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           await write(root, `${directory}/${job.id}/message.txt`, message, true);
           adapterStarted = !API_AGENTS.includes(job.agent);
           if (hostPool) {
-            hostPlacement = await hostPool.claim({ signal });
+            hostPlacement = await hostPool.claim({ signal, sensitive: job.sensitive !== false });
             (record.hostUses ??= []).push(hostPlacement.host.id);
             record.host = hostPlacement.host.id;
           }
           if (hostPlacement && hostPlacement.host.kind !== 'local') {
             const empty = { files: [], stdout: '', stderr: '', response: '', actualModel: job.model ?? null, modelsSeen: [], modelMismatch: false, usage: null, modelUsage: null, costUsd: null, permissionDenials: [] };
+            const remoteId = crypto.randomBytes(8).toString('hex');
+            hostPlacement.bind(remoteId);
+            record.remoteJobId = remoteId;
             try {
               const shipped = [];
               for (const file of new Set([...(job.context ?? []), ...(job.outputs ?? [])])) {
@@ -2922,7 +2935,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
                 const bytes = await bytesAt(workspaceRoot, file);
                 if (bytes) shipped.push({ path: file, bytes });
               }
-              const pulled = await hostTransportUsed.run({ host: hostPlacement.host, cwd: workspaceRoot, files: shipped, outputs: job.outputs ?? [], env: remoteEnv(env), signal: hostPlacement.signal });
+              const pulled = await hostTransportUsed.run({ host: hostPlacement.host, jobId: remoteId, cwd: workspaceRoot, files: shipped, outputs: job.outputs ?? [], env: remoteEnv(env), signal: hostPlacement.signal });
               checkPulled(pulled.files ?? []);
               for (const file of pulled.files ?? []) {
                 if (!(job.outputs ?? []).includes(file.path)) continue;
@@ -3579,6 +3592,7 @@ export async function todaySpendUsd(root, { now = () => new Date() } = {}) {
       let state; try { state = await readState(projectRoot, id); } catch { continue; }
       if (!state.startedAt || new Date(state.startedAt) < dayStart) continue;
       for (const job of state.jobs ?? []) if (typeof job.costUsd === 'number') total += job.costUsd;
+      if (typeof state.orphanCostUsd === 'number') total += state.orphanCostUsd;
     }
   }
   return Math.round(total * 100) / 100;
@@ -3630,6 +3644,7 @@ export async function waitRun(root, id, { timeoutMs, pollMs = 1000, sleep = ms =
     if (costUsd !== null) { total += costUsd; any = true; }
     jobs.push({ id: record.id, status: record.status, costUsd, tokens: jobTokens(record), notes: cappedNotes(parsed) });
   }
+  if (typeof state.orphanCostUsd === 'number' && Number.isFinite(state.orphanCostUsd)) { total += state.orphanCostUsd; any = true; }
   return { runId: id, status: state.status, durationMs: summarizeRun(state, now()).elapsedMs, costUsd: any ? total : null, tokens: tokensTotal(jobs.map(job => job.tokens)), costNotReported: costNotReported(jobs), warnings: runWarnings(state), jobs };
 }
 

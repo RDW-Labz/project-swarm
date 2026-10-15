@@ -4,7 +4,9 @@
 
 - Added remote hosts. A manifest or the shared config can name `hosts`: `local`, `ssh` (a `user@host` that already has a host key), or `sandbox` (a command argv). Each host has a capacity. Jobs stay on the local executor unless a host is set.
 - A remote job ships its copied workspace, runs there, and pulls back only its declared outputs. The pull is hash-checked. Secret paths (`.env`, `.ssh`, `.git`, and the rest of the reserved set) are not shipped, and the remote environment keeps only `PATH`, locale, `TERM`, `TZ`, and `SWARM_PORT_BASE`. API keys stay on the machine that already has them.
-- Each remote host is pinged on a heartbeat. A dead host's in-flight jobs are placed again on a live host, so a mixed local and ssh run still finishes. See [remote hosts](docs/executors.md).
+- Each remote host is pinged on a heartbeat. A host is dead after 3 missed heartbeats in a row; one miss leaves its jobs in place. A dead host's in-flight jobs are placed again on a live host, so a mixed local and ssh run still finishes. See [remote hosts](docs/executors.md).
+- A sensitive job runs only on a local host, an ssh host, or a sandbox marked `trusted: true`.
+- Each remote job has an id. `swarm-remote-exec` exits and kills its child if the connection closes. When a dead host answers again, the runner kills any orphaned ids before reusing it, and counts spend that kill reports.
 
 ## 1.58.0
 
