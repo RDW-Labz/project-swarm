@@ -18,21 +18,33 @@ async function git(cwd, args) {
   return (await execFileAsync('git', args, { cwd, encoding: 'utf8' })).stdout.trim();
 }
 
-export async function repoKey(root) {
-  try {
-    return await fs.realpath(await git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
-  } catch {
-    return await fs.realpath(root);
-  }
+// A repo's identity does not change while a command runs, and a manifest of thousands of jobs asks for it once per job.
+const memo = new Map();
+function memoized(key, make) {
+  const hit = memo.get(key);
+  const at = Date.now();
+  if (hit && at - hit.at < 2000) return hit.value;
+  const value = make();
+  memo.set(key, { at, value });
+  value.catch(() => memo.delete(key));
+  return value;
+}
+
+export function repoKey(root) {
+  return memoized(`key:${root}`, async () => {
+    try {
+      return await fs.realpath(await git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
+    } catch {
+      return await fs.realpath(root);
+    }
+  });
 }
 
 export async function repoPaths(root, outputs) {
-  let toplevel;
-  try {
-    toplevel = await fs.realpath(await git(root, ['rev-parse', '--show-toplevel']));
-  } catch {
-    return [...outputs];
-  }
+  const toplevel = await memoized(`top:${root}`, async () => {
+    try { return await fs.realpath(await git(root, ['rev-parse', '--show-toplevel'])); } catch { return null; }
+  });
+  if (toplevel === null) return [...outputs];
   const realRoot = await fs.realpath(root);
   return outputs.map(file => path.relative(toplevel, path.join(realRoot, file)).split(path.sep).join('/'));
 }
@@ -78,11 +90,11 @@ export async function listLiveRuns({ dir = liveDir(), isAlive = pidAlive } = {})
   return runs.sort((a, b) => a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : 0);
 }
 
-export async function findWriterConflicts({ runId, root, outputs, dir = liveDir(), isAlive }) {
+export async function findWriterConflicts({ runId, root, outputs, dir = liveDir(), isAlive, runs: given }) {
   const realRoot = await fs.realpath(root);
   const repo = await repoKey(realRoot);
   const files = new Set(await repoPaths(realRoot, outputs));
-  const runs = await listLiveRuns({ dir, isAlive });
+  const runs = given ?? await listLiveRuns({ dir, isAlive });
   const conflicts = [];
   for (const run of runs) {
     if (run.runId === runId || run.repo !== repo) continue;

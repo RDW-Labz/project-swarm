@@ -29,7 +29,7 @@ export function queueLatencyMs(jobs) {
 
 export function stubManifest(count, concurrency) {
   if (!Number.isInteger(count) || count < 1 || count > 500) throw Object.assign(new Error('scale jobs must be an integer 1–500'), { code: 'scale-jobs' });
-  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 512) throw Object.assign(new Error('scale concurrency must be an integer 1–512'), { code: 'scale-concurrency' });
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 2048) throw Object.assign(new Error('scale concurrency must be an integer 1–2048'), { code: 'scale-concurrency' });
   const jobs = Array.from({ length: count }, (_, n) => ({
     id: `job-${n}`,
     agent: 'ollama',

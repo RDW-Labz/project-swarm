@@ -3,6 +3,9 @@
 // Copyright 2026 Project Swarm contributors
 // Fresh, project-local workers. No daemon or terminal attachment; a worker shell exists only inside a sandbox (codex, claude shell jobs).
 import fs from 'node:fs/promises';
+// File work for thousands of jobs shares libuv's thread pool (4 threads by default, which capped a run at 4 jobs in flight).
+// It is read when the pool starts, so it is set before the first async file call.
+process.env.UV_THREADPOOL_SIZE ||= '32';
 import { createReadStream, realpathSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -954,7 +957,8 @@ async function jsonWrite(root, value, data) {
   const target = await safePath(root, value, { internal: true, parents: true });
   const temporary = `${target}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   try {
-    await fs.writeFile(temporary, `${JSON.stringify(data, null, 2)}\n`, { flag: 'wx' });
+    // A run of thousands of jobs is megabytes of state; pretty-printing it costs more than writing it.
+    await fs.writeFile(temporary, `${JSON.stringify(data, null, (data?.jobs?.length ?? 0) > 200 ? 0 : 2)}\n`, { flag: 'wx' });
     await fs.rename(temporary, target);
   } catch (error) {
     await fs.unlink(temporary).catch(() => {});
@@ -1222,7 +1226,7 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     if (typeof manifest.contract !== 'string') fail('contract must be a relative file path');
     relative(manifest.contract);
   }
-  if (manifest.concurrency !== undefined && (!Number.isInteger(manifest.concurrency) || manifest.concurrency < 1 || manifest.concurrency > 512)) fail('Concurrency must be 1–512');
+  if (manifest.concurrency !== undefined && (!Number.isInteger(manifest.concurrency) || manifest.concurrency < 1 || manifest.concurrency > 2048)) fail('Concurrency must be 1–2048');
   if (manifest.checks !== undefined) {
     if (!Array.isArray(manifest.checks) || manifest.checks.length > 10) fail('checks must be an array of at most 10 checks');
     for (const check of manifest.checks) {
@@ -1444,7 +1448,14 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
   for (const job of manifest.jobs) for (const afterId of job.after ?? []) if (!ids.has(afterId.toLowerCase())) fail(`Job ${job.id} after names unknown job ${afterId}`);
   const cycle = detectAfterCycle(manifest.jobs);
   if (cycle) fail(`after cycle: ${cycle.join(' -> ')}`);
-  for (const a of writers) for (const b of writers) if (a !== b && pathContains(a, b)) fail(`Overlapping output paths: ${a}, ${b}`);
+  // A path overlaps another when one of its parent folders is itself an output: one set lookup per parent, not one comparison per pair.
+  for (const b of writers) {
+    const parts = b.split('/');
+    for (let length = 1; length < parts.length; length++) {
+      const parent = parts.slice(0, length).join('/');
+      if (writers.has(parent)) fail(`Overlapping output paths: ${parent}, ${b}`);
+    }
+  }
   // Field lesson #294: check output capacity for API agents with maxOutputTokens
   for (const job of manifest.jobs) {
     if (job.maxOutputTokens && API_AGENTS.includes(job.agent)) {
@@ -2434,13 +2445,13 @@ export async function runBaseChecks(root, manifest, { spawnImpl = spawn, gitImpl
 // One live-output scan is shared by validate and run. The legacy board compares exact repository
 // paths; open-scope jobs additionally reserve parent/child path collisions, just as run has always
 // done. Keeping that policy here prevents validate from approving a launch that run will refuse.
-async function liveOutputConflicts(root, jobs, { runId, liveDir, isAlive } = {}) {
+async function liveOutputConflicts(root, jobs, { runId, liveDir, isAlive, runs } = {}) {
   const outputs = jobs.flatMap(job => job.outputs ?? []);
-  let conflicts = await findWriterConflicts({ runId, root, outputs, dir: liveDir, isAlive });
+  let conflicts = await findWriterConflicts({ runId, root, outputs, dir: liveDir, isAlive, runs });
   if (!jobs.some(job => job.scope === 'open')) return conflicts;
   const repo = await repoKey(root);
   const files = (await repoPaths(root, outputs)).map(file => file.toLowerCase());
-  for (const run of await listLiveRuns({ dir: liveDir, isAlive })) {
+  for (const run of runs ?? await listLiveRuns({ dir: liveDir, isAlive })) {
     if (run.runId === runId || run.repo !== repo || conflicts.some(conflict => conflict.runId === run.runId)) continue;
     const shared = run.files.filter(file => files.some(own => pathContains(own, file.toLowerCase()) || pathContains(file.toLowerCase(), own)));
     if (shared.length) conflicts.push({ runId: run.runId, root: run.root, files: shared });
@@ -2700,10 +2711,15 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   const queueSave = () => {
     pendingWrite = true;
     if (!writes) writes = (async () => {
+      // The wait grows with the cost of the last save (about 10% of the time goes to saving, however large the run is);
+      // a small run keeps the 20 ms window.
+      let lastSaveMs = 0;
       while (pendingWrite) {
-        await new Promise(resolve => setTimeout(resolve, 20));
+        await new Promise(resolve => setTimeout(resolve, Math.max(20, Math.min(2000, lastSaveMs * 8))));
         pendingWrite = false;
+        const began = performance.now();
         await save();
+        lastSaveMs = performance.now() - began;
       }
     })().finally(() => { writes = null; });
     return writes;
@@ -2716,8 +2732,11 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   const waitingJobs = new Map();
   let waitPoll = null;
   const abortLongPauses = () => {
+    // One look per lane per poll, not one per waiting job (thousands may be waiting).
+    const pausedFor = new Map();
     for (const [controller, waiter] of waitingJobs) {
-      if (scheduler.pausedFor(waiter.agent) > lanes[waiter.agent].maxPauseMs) {
+      if (!pausedFor.has(waiter.agent)) pausedFor.set(waiter.agent, scheduler.pausedFor(waiter.agent));
+      if (pausedFor.get(waiter.agent) > lanes[waiter.agent].maxPauseMs) {
         waiter.onPause(scheduler.health(waiter.agent).until);
         controller.abort();
       }
@@ -5499,8 +5518,10 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   warnings.push(...await windowsCiGotchasWarnings(root));
   if (uncovered.length) throw Object.assign(new Error(`Uncovered test references (add the test to context, or list it in ignoreTests with a reason in the prompt): ${uncovered.map(u => `${u.job}: ${u.output} <- ${u.test}`).join('; ')}`), { details: { suggestedIgnoreTests: suggestIgnoreTests(uncovered) } });
   const jobConflicts = new Map();
+  // The live-run list is read once for the whole manifest, not once per job.
+  const liveRuns = await listLiveRuns({ dir: liveDir, isAlive });
   for (const job of manifest.jobs) {
-    const conflicts = await liveOutputConflicts(root, [job], { liveDir, isAlive });
+    const conflicts = await liveOutputConflicts(root, [job], { liveDir, isAlive, runs: liveRuns });
     for (const conflict of conflicts) {
       const key = `${conflict.runId}\u0000${conflict.root}`;
       const existing = jobConflicts.get(key) ?? { ...conflict, jobIds: [] };
@@ -7256,7 +7277,7 @@ async function mainInner() {
     for(let index=1;index<args.length;index++){
       const flag=args[index],value=args[++index];
       if(flag==='--jobs'){if(!/^\d+$/.test(value??''))fail('--jobs must be an integer 1–500');jobs=Number(value);}
-      else if(flag==='--concurrency'){if(!/^\d+$/.test(value??''))fail('--concurrency must be an integer 1–512');concurrency=Number(value);}
+      else if(flag==='--concurrency'){if(!/^\d+$/.test(value??''))fail('--concurrency must be an integer 1–2048');concurrency=Number(value);}
       else fail('Invalid arguments; use --help');
     }
     const dir=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-scale-'));

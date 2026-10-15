@@ -58,7 +58,7 @@ Then use this manifest:
 
 Claude resolves to concurrency 2, base backoff 4000 ms, maximum backoff 300000 ms, and three retries. Replace the placeholder models and context path with available models and an existing file. Validation checks syntax, not model availability.
 
-Unknown agents and fields refuse with `lanes-invalid`. Concurrency must be an integer 1–512; `requestsPerMinute` is `null` or an integer 1–100000. Backoff `baseMs` is 1–600000, `maxMs` is at least `baseMs` and at most 3600000, and `maxRetries` is 0–20. Both pause fields are integers 1–86400000 ms. A lane model is `null` or matches `/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,119}$/`.
+Unknown agents and fields refuse with `lanes-invalid`. Concurrency must be an integer 1–2048; `requestsPerMinute` is `null` or an integer 1–100000. Backoff `baseMs` is 1–600000, `maxMs` is at least `baseMs` and at most 3600000, and `maxRetries` is 0–20. Both pause fields are integers 1–86400000 ms. A lane model is `null` or matches `/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,119}$/`.
 
 ## Rate limits and quota pauses
 

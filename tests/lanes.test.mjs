@@ -75,7 +75,7 @@ test('config precedes manifest; lane and backoff fields merge independently', ()
 
 test('every invalid field, shape, range, and model refuses with lanes-invalid', () => {
   const cases = [
-    ['concurrency', [0, 513, 1.5, null, '2', NaN, Infinity]],
+    ['concurrency', [0, 2049, 1.5, null, '2', NaN, Infinity]],
     ['requestsPerMinute', [0, 100001, 1.5, '2', undefined, Infinity]],
     ['pauseMs', [0, 86400001, 1.5, null, '2']],
     ['maxPauseMs', [0, 86400001, 1.5, null, '2']],
@@ -382,7 +382,7 @@ test('health, snapshot, pausedFor, unknown agents and global limits', async () =
       assert.throws(action, { code: 'lanes-invalid' });
     }
   }
-  for (const globalConcurrency of [0, 513, 1.5]) assert.throws(() => new LaneScheduler({ lanes: resolveLanes(), globalConcurrency }), { code: 'lanes-invalid' });
+  for (const globalConcurrency of [0, 2049, 1.5]) assert.throws(() => new LaneScheduler({ lanes: resolveLanes(), globalConcurrency }), { code: 'lanes-invalid' });
   release();
   assert.equal(s.snapshot().lanes.hermes.peak, 1);
   s.close();
