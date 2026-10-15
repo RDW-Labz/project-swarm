@@ -140,13 +140,13 @@ test('USD cap permits the third forty-cent job and holds the last two', async t 
 });
 
 test('auto routing treats a capped cheap lane as paused and selects the next cheap lane', async t => {
-  const options = await fixture(t, { spend: { lanes: { hermes: { dailyTokens: 100 } } } });
-  await reserveSpend({ dir: options.env.SWARM_SPEND_DIR, key: 'earlier/paid#1', lane: 'hermes', runId: 'earlier', root: options.root, jobId: 'paid', usd: 0, tokens: 100, budget: resolveBudget(), runTotals: {} });
-  const auto = job(0, { agent: 'auto', sensitive: false }); delete auto.model;
-  const state = await runManifest(options.root, manifest([auto], { lanes: { hermes: { model: 'test-model' }, openrouter: { model: 'test/model' } } }), {
+  const options = await fixture(t, { spend: { lanes: { anthropic: { dailyTokens: 100 } } } });
+  await reserveSpend({ dir: options.env.SWARM_SPEND_DIR, key: 'earlier/paid#1', lane: 'anthropic', runId: 'earlier', root: options.root, jobId: 'paid', usd: 0, tokens: 100, budget: resolveBudget(), runTotals: {} });
+  const auto = job(0, { agent: 'auto', sensitive: false, outputs: ['out/0-metrics.md'] }); delete auto.model;
+  const state = await runManifest(options.root, manifest([auto], { lanes: { anthropic: { model: 'claude-haiku-5-5' }, openrouter: { model: 'test/model' } } }), {
     ...options, env: { ...options.env, OPENROUTER_API_KEY: 'sk-or-test' },
-    spawnImpl: () => { throw Error('capped Hermes must not launch'); },
-    fetchImpl: async (_url, request) => !request?.body ? reply({ data: [{ id: 'test/model', pricing: { prompt: '0.000002', completion: '0.00001' } }] }) : reply({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ summary: 'done', files: [{ path: 'out/0.txt', content: 'done' }] }) } }] }),
+    spawnImpl: () => { throw Error('capped Anthropic must not launch'); },
+    fetchImpl: async (_url, request) => !request?.body ? reply({ data: [{ id: 'test/model', pricing: { prompt: '0.000002', completion: '0.00001' } }] }) : reply({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ summary: 'done', files: [{ path: 'out/0-metrics.md', content: 'done' }] }) } }] }),
   });
   assert.equal(state.status, 'complete', state.error);
   assert.equal(state.jobs[0].agent, 'openrouter');

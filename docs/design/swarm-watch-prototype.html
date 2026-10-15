@@ -1,0 +1,614 @@
+<title>Swarm Watch</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+/* Layout: mission-control console. Header strip → KPI row → swarm map + lanes → waves/throughput + attention → leads + merge queue. Navy base, lime primary, one hue per lane. */
+:root{
+  color-scheme: dark;
+  --bg:#0c1430; --bg2:#101b3e; --card:#15214a; --card2:#1a2856; --line:#273770; --line2:#33468a;
+  --fg:#dfe6fb; --muted:#94a2cf; --faint:#66739f;
+  --lime:#b9f25c; --lime-dim:#7fae3a; --sky:#5aa8ff; --teal:#3fd6c4; --amber:#ffb547; --coral:#ff8a6b; --lav:#c39bff; --gold:#f2d26b; --red:#ff5f6f;
+  --queued:#34467e; --locked:#232f5c;
+  --display:"Unbounded", "Figtree", system-ui, sans-serif;
+  --body:"Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --r:18px; --r-sm:12px;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{min-height:100%}
+body{
+  margin:0; font-family:var(--body); color:var(--fg); font-size:14px;
+  background:
+    radial-gradient(1200px 600px at 85% -10%, rgba(90,168,255,.16), transparent 60%),
+    radial-gradient(900px 500px at -10% 20%, rgba(185,242,92,.08), transparent 60%),
+    linear-gradient(180deg, var(--bg2), var(--bg) 40%);
+  background-color:var(--bg);
+}
+.wrap{max-width:1500px; margin:0 auto; padding-block:18px 40px; padding-left:max(16px, env(safe-area-inset-left,0px)); padding-right:max(16px, env(safe-area-inset-right,0px)); display:grid; gap:16px}
+.mono{font-family:var(--mono)}
+.num{font-variant-numeric:tabular-nums}
+.label{font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted)}
+
+/* Header */
+.top{display:flex; flex-wrap:wrap; align-items:center; gap:14px 20px; padding:16px 20px; border-radius:var(--r);
+  background:linear-gradient(120deg, rgba(26,40,86,.95), rgba(21,33,74,.85)); border:1px solid var(--line); position:relative}
+.brand{display:flex; align-items:center; gap:12px; min-width:0}
+.logo{width:38px; height:38px; border-radius:12px; display:grid; place-items:center;
+  background:conic-gradient(from 200deg, var(--lime), var(--teal), var(--sky), var(--lav), var(--coral), var(--lime)); box-shadow:0 0 24px rgba(185,242,92,.25)}
+.logo i{width:30px; height:30px; border-radius:9px; background:var(--card); display:grid; place-items:center; font-style:normal; font-family:var(--display); font-size:13px; color:var(--lime)}
+.brand h1{font-family:var(--display); font-weight:700; font-size:18px; margin:0; letter-spacing:.01em}
+.goal{color:var(--muted); font-size:13px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:52ch}
+.top .spacer{flex:1}
+.chips{display:flex; flex-wrap:wrap; gap:8px; align-items:center}
+.chip{display:inline-flex; align-items:center; gap:7px; padding:6px 12px; border-radius:999px; font-size:12px; font-weight:600;
+  background:var(--card2); border:1px solid var(--line2); color:var(--fg); white-space:nowrap}
+.chip.live{color:#0c1430; background:var(--lime); border-color:transparent}
+.chip.live .dot{background:#0c1430}
+.chip.done{background:rgba(185,242,92,.14); color:var(--lime); border-color:rgba(185,242,92,.35)}
+.chip.demo{background:rgba(242,210,107,.12); color:var(--gold); border-color:rgba(242,210,107,.35)}
+.dot{width:8px; height:8px; border-radius:50%; background:currentColor; display:inline-block}
+.pulse{animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1; transform:scale(1)}50%{opacity:.35; transform:scale(.7)}}
+.seg{display:inline-flex; padding:3px; gap:2px; border-radius:999px; background:var(--bg); border:1px solid var(--line)}
+.seg button{all:unset; cursor:pointer; padding:5px 11px; border-radius:999px; font-size:12px; font-weight:600; color:var(--muted); transition:background .2s, color .2s}
+.seg button[aria-pressed="true"]{background:var(--card2); color:var(--fg); box-shadow:inset 0 0 0 1px var(--line2)}
+.seg button:focus-visible, .btn:focus-visible{outline:2px solid var(--sky); outline-offset:2px}
+.btn{all:unset; cursor:pointer; display:inline-flex; align-items:center; gap:7px; padding:7px 14px; border-radius:999px; font-size:12px; font-weight:700;
+  background:linear-gradient(180deg, var(--card2), var(--card)); border:1px solid var(--line2); transition:transform .15s, border-color .2s}
+.btn:hover{border-color:var(--sky); transform:translateY(-1px)}
+
+/* Cards */
+.card{background:linear-gradient(180deg, rgba(26,40,86,.9), rgba(21,33,74,.92)); border:1px solid var(--line); border-radius:var(--r); padding:16px 18px; min-width:0; position:relative}
+.card h2{font-family:var(--display); font-weight:500; font-size:14px; margin:0; letter-spacing:.02em}
+.card-head{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; flex-wrap:wrap}
+.hud::before,.hud::after{content:""; position:absolute; width:14px; height:14px; border-color:rgba(185,242,92,.55); border-style:solid; pointer-events:none}
+.hud::before{top:8px; left:8px; border-width:2px 0 0 2px; border-radius:6px 0 0 0}
+.hud::after{bottom:8px; right:8px; border-width:0 2px 2px 0; border-radius:0 0 6px 0}
+
+/* KPIs */
+.kpis{display:grid; grid-template-columns:repeat(6, minmax(0,1fr)); gap:12px}
+.kpi{padding:14px 16px; border-radius:var(--r); border:1px solid var(--line); background:linear-gradient(160deg, var(--card2), var(--card)); display:grid; gap:6px; align-content:start; min-width:0}
+.kpi .v{font-family:var(--display); font-size:24px; font-weight:700; line-height:1.1}
+.kpi .v small{font-family:var(--body); font-size:13px; font-weight:600; color:var(--muted); margin-left:4px}
+.kpi .sub{font-size:12px; color:var(--muted); display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+.pill{display:inline-flex; align-items:center; gap:5px; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700; font-family:var(--mono)}
+.pill.good{background:rgba(185,242,92,.14); color:var(--lime)}
+.pill.warn{background:rgba(255,181,71,.14); color:var(--amber)}
+.pill.bad{background:rgba(255,95,111,.15); color:var(--red)}
+.pill.info{background:rgba(90,168,255,.15); color:var(--sky)}
+.pill.lav{background:rgba(195,155,255,.15); color:var(--lav)}
+.bar{height:8px; border-radius:999px; background:var(--bg); overflow:hidden; position:relative}
+.bar > span{position:absolute; inset:0 auto 0 0; border-radius:999px; transition:width .5s ease}
+.ringwrap{display:flex; align-items:center; gap:12px}
+.ring{width:54px; height:54px; flex:none}
+svg text{font-family:var(--mono)}
+
+/* Main grid */
+.grid-main{display:grid; grid-template-columns:minmax(0,1.75fr) minmax(0,1fr); gap:16px; align-items:start}
+.grid-mid{display:grid; grid-template-columns:minmax(0,1.75fr) minmax(0,1fr); gap:16px; align-items:start}
+.grid-bottom{display:grid; grid-template-columns:minmax(0,1.75fr) minmax(0,1fr); gap:16px; align-items:start}
+.legend{display:flex; flex-wrap:wrap; gap:10px 14px; font-size:12px; color:var(--muted)}
+.legend span{display:inline-flex; align-items:center; gap:6px}
+.sw{width:10px; height:10px; border-radius:3px; display:inline-block}
+#mapWrap{position:relative}
+#map{display:block; width:100%}
+#tip{position:absolute; pointer-events:none; z-index:5; min-width:220px; max-width:300px; padding:10px 12px; border-radius:12px; background:rgba(12,20,48,.96); border:1px solid var(--line2); box-shadow:0 12px 30px rgba(0,0,0,.4); font-size:12px; display:grid; gap:4px}
+#tip b{font-family:var(--mono); font-size:12px}
+
+/* Lanes */
+.lanes{display:grid; gap:12px}
+.lane{display:grid; gap:7px; padding:11px 12px; border-radius:var(--r-sm); background:rgba(12,20,48,.45); border:1px solid var(--line)}
+.lane-top{display:flex; align-items:center; gap:9px; min-width:0}
+.lane-name{font-weight:700}
+.lane-model{color:var(--faint); font-family:var(--mono); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.lane-top .grow{flex:1; min-width:0}
+.lane-nums{font-family:var(--mono); font-size:12px; color:var(--muted); white-space:nowrap}
+.lane-meta{display:flex; flex-wrap:wrap; gap:6px; font-size:11px; color:var(--muted)}
+.lane .bar{height:10px}
+.lane .bar i{position:absolute; top:-2px; bottom:-2px; width:2px; background:var(--fg); opacity:.7; border-radius:2px; transition:left .5s ease}
+.lane.off{opacity:.6}
+
+/* Waves */
+.waves{display:grid; gap:10px}
+.wave{display:grid; grid-template-columns:110px minmax(0,1fr) 92px; gap:12px; align-items:center}
+.wave .bar{height:12px}
+.wave .w-name{font-weight:700; font-size:13px}
+.wave .w-name small{display:block; color:var(--faint); font-weight:500; font-size:11px}
+.charts{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:16px}
+.chart{display:grid; gap:6px; min-width:0}
+.chart svg{width:100%; height:120px; display:block}
+
+/* Attention */
+.feed{display:grid; gap:8px; max-height:420px; overflow:auto; padding-right:4px}
+.ev{display:grid; grid-template-columns:auto minmax(0,1fr); gap:10px; padding:9px 10px; border-radius:12px; background:rgba(12,20,48,.45); border:1px solid var(--line); animation:slidein .35s ease}
+@keyframes slidein{from{opacity:.0; transform:translateY(-6px)} to{opacity:1; transform:none}}
+.ev .stripe{width:4px; border-radius:4px}
+.ev .t{font-size:13px; font-weight:600; overflow-wrap:anywhere}
+.ev .d{font-size:12px; color:var(--muted); overflow-wrap:anywhere}
+.ev .w{font-family:var(--mono); font-size:11px; color:var(--faint)}
+.untrusted{font-size:10px; font-family:var(--mono); letter-spacing:.08em; text-transform:uppercase; color:var(--faint); border:1px dashed var(--line2); padding:1px 6px; border-radius:999px; margin-left:6px}
+
+/* Leads table */
+.tablewrap{overflow-x:auto}
+table{width:100%; border-collapse:separate; border-spacing:0; font-size:13px}
+th{text-align:left; font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); font-weight:500; padding:0 10px 8px}
+td{padding:10px; border-top:1px solid var(--line); vertical-align:middle; white-space:nowrap}
+td .bar{min-width:120px}
+.lead-name{font-weight:700}
+.lead-scope{font-family:var(--mono); font-size:11px; color:var(--faint)}
+
+/* Merge queue */
+.mq-row{display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:10px}
+.mq-stat{padding:10px; border-radius:12px; background:rgba(12,20,48,.45); border:1px solid var(--line); display:grid; gap:2px}
+.mq-stat b{font-family:var(--display); font-size:18px}
+.batches{display:flex; gap:5px; flex-wrap:wrap; margin-top:12px}
+.batch{width:22px; height:22px; border-radius:7px; display:grid; place-items:center; font-family:var(--mono); font-size:10px; font-weight:700; color:#0c1430; animation:pop .3s ease}
+@keyframes pop{from{transform:scale(.4); opacity:0} to{transform:none; opacity:1}}
+
+.foot{display:flex; flex-wrap:wrap; justify-content:space-between; gap:10px; color:var(--faint); font-size:12px}
+kbd{font-family:var(--mono); font-size:11px; padding:2px 7px; border-radius:6px; border:1px solid var(--line2); background:var(--card); color:var(--muted)}
+
+@media (max-width:1180px){ .kpis{grid-template-columns:repeat(3, minmax(0,1fr))} .grid-main,.grid-mid,.grid-bottom{grid-template-columns:minmax(0,1fr)} }
+@media (max-width:640px){ .kpis{grid-template-columns:repeat(2, minmax(0,1fr))} .charts{grid-template-columns:1fr} .mq-row{grid-template-columns:repeat(2,minmax(0,1fr))} .wave{grid-template-columns:90px minmax(0,1fr) 70px} .goal{max-width:70vw} }
+@media (prefers-reduced-motion:reduce){ *{animation:none!important; transition:none!important} }
+</style>
+
+<div class="wrap">
+  <header class="top hud">
+    <div class="brand">
+      <div class="logo" aria-hidden="true"><i>SW</i></div>
+      <div style="min-width:0">
+        <h1>Swarm Watch</h1>
+        <div class="goal" id="goal">go-7f3a · "Add order history, invoices and refunds to the dealer portal"</div>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <div class="chips">
+      <span class="chip live" id="status"><span class="dot pulse"></span>LIVE</span>
+      <span class="chip demo">Demo data</span>
+      <span class="chip mono num" id="clock">00:00 elapsed</span>
+      <span class="chip mono">branch swarm/go-7f3a</span>
+      <div class="seg" role="group" aria-label="Demo speed">
+        <button id="sp1" aria-pressed="true">1×</button>
+        <button id="sp4" aria-pressed="false">4×</button>
+        <button id="sp10" aria-pressed="false">10×</button>
+      </div>
+      <button class="btn" id="pauseBtn">Pause demo</button>
+      <button class="btn" id="replayBtn">Replay</button>
+    </div>
+  </header>
+
+  <section class="kpis" aria-label="Run summary">
+    <div class="kpi"><span class="label">Progress</span>
+      <div class="ringwrap">
+        <svg class="ring" viewBox="0 0 54 54" aria-hidden="true"><circle cx="27" cy="27" r="22" fill="none" stroke="#0c1430" stroke-width="7"/><circle id="ringArc" cx="27" cy="27" r="22" fill="none" stroke="url(#rg)" stroke-width="7" stroke-linecap="round" stroke-dasharray="0 200" transform="rotate(-90 27 27)"/><defs><linearGradient id="rg" x1="0" x2="1"><stop offset="0" stop-color="#3fd6c4"/><stop offset="1" stop-color="#b9f25c"/></linearGradient></defs></svg>
+        <div><div class="v num" id="kDone">0<small>/ 1,200</small></div><div class="sub" id="kPct">0% done</div></div>
+      </div>
+    </div>
+    <div class="kpi"><span class="label">In flight</span><div class="v num" id="kFlight">0</div><div class="sub"><span id="kPeak">peak 0</span><svg id="spark" width="80" height="22" viewBox="0 0 80 22" aria-hidden="true"><path id="sparkPath" fill="none" stroke="#5aa8ff" stroke-width="2"/></svg></div></div>
+    <div class="kpi"><span class="label">First-try pass</span><div class="v num" id="kPass">–</div><div class="sub" id="kPassSub">retries 0 · failed 0</div></div>
+    <div class="kpi"><span class="label">Spend</span><div class="v num" id="kSpend">$0.00<small>/ $5</small></div><div class="bar"><span id="kSpendBar" style="width:0%; background:linear-gradient(90deg,var(--teal),var(--lime))"></span></div><div class="sub" id="kForecast">forecast –</div></div>
+    <div class="kpi"><span class="label">ETA</span><div class="v num" id="kEta">–</div><div class="sub" id="kRate">0 jobs/s</div></div>
+    <div class="kpi"><span class="label">Merged</span><div class="v num" id="kMerged">0</div><div class="sub" id="kMergeSub">queue 0 · conflicts 0</div></div>
+  </section>
+
+  <section class="grid-main">
+    <div class="card hud">
+      <div class="card-head">
+        <div><h2>Swarm map</h2><div class="label" style="margin-top:4px">one square per job · grouped by lead</div></div>
+        <div class="seg" role="group" aria-label="Color squares by">
+          <button id="cState" aria-pressed="true">By state</button>
+          <button id="cLane" aria-pressed="false">By lane</button>
+        </div>
+      </div>
+      <div class="legend" id="legend" style="margin-bottom:12px"></div>
+      <div id="mapWrap"><canvas id="map" height="400"></canvas><div id="tip" hidden></div></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Lanes</h2><span class="label">in flight / limit</span></div>
+      <div class="lanes" id="lanes"></div>
+    </div>
+  </section>
+
+  <section class="grid-mid">
+    <div class="card">
+      <div class="card-head"><h2>Waves</h2><span class="label">contracts → build → verify</span></div>
+      <div class="waves" id="waves"></div>
+      <div class="charts">
+        <div class="chart"><span class="label">In flight over time</span><svg id="chFlight" viewBox="0 0 300 120" preserveAspectRatio="none" aria-label="Jobs in flight over time"></svg></div>
+        <div class="chart"><span class="label">Finished per second</span><svg id="chRate" viewBox="0 0 300 120" preserveAspectRatio="none" aria-label="Jobs finished per second"></svg></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Needs attention</h2><span class="pill warn" id="attnCount">0</span></div>
+      <div class="feed" id="feed"></div>
+    </div>
+  </section>
+
+  <section class="grid-bottom">
+    <div class="card">
+      <div class="card-head"><h2>Leads</h2><span class="label">each lead owns one area of the repo</span></div>
+      <div class="tablewrap"><table><thead><tr><th>Lead</th><th>Progress</th><th>Running</th><th>Retries</th><th>Spend</th><th>State</th></tr></thead><tbody id="leads"></tbody></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Merge queue</h2><span class="label">batches of 10 · bisect on red</span></div>
+      <div class="mq-row">
+        <div class="mq-stat"><span class="label">Waiting</span><b class="num" id="mWait">0</b></div>
+        <div class="mq-stat"><span class="label">Batches</span><b class="num" id="mBatch">0</b></div>
+        <div class="mq-stat"><span class="label">Bisects</span><b class="num" id="mBisect">0</b></div>
+        <div class="mq-stat"><span class="label">Conflicts</span><b class="num" id="mConf">0</b></div>
+      </div>
+      <div class="label" style="margin-top:14px">Last batches</div>
+      <div class="batches" id="batches"></div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <span>Read-only view · binds to 127.0.0.1 · worker text is shown as data, never instructions</span>
+    <span><kbd>space</kbd> pause demo · <kbd>c</kbd> color mode · <kbd>r</kbd> replay</span>
+  </footer>
+</div>
+
+<script>
+(() => {
+const TOTAL_TARGET = 1200;
+const LANES = {
+  hermes:     { name:'Hermes',     model:'dev2 · offline',        color:'#3fd6c4', limit:0,   max:0,   adaptive:false, off:true },
+  cursor:     { name:'Cursor',     model:'composer-2.5 · sub',     color:'#5aa8ff', limit:8,   max:8,   adaptive:false },
+  codex:      { name:'Codex',      model:'gpt-6.1 · sub',          color:'#ffb547', limit:6,   max:6,   adaptive:false },
+  anthropic:  { name:'Anthropic',  model:'haiku-5.5 / sonnet-5.5', color:'#ff8a6b', limit:120, max:420, adaptive:true },
+  openrouter: { name:'OpenRouter', model:'gpt-oss-20b',            color:'#c39bff', limit:80,  max:260, adaptive:true },
+  claude:     { name:'Claude',     model:'opus · sub · last',      color:'#f2d26b', limit:4,   max:4,   adaptive:false },
+};
+const ORDER = Object.keys(LANES);
+const LEADS = [
+  { id:'api',   name:'API routes',  scope:'server/api/',     n:260, sensitive:false },
+  { id:'web',   name:'Portal UI',   scope:'app/web/',        n:280, sensitive:false },
+  { id:'auth',  name:'Payments',    scope:'server/payments/',n:120, sensitive:true },
+  { id:'data',  name:'Data layer',  scope:'db/ + models/',   n:160, sensitive:true },
+  { id:'tests', name:'Test suite',  scope:'tests/',          n:240, sensitive:false },
+  { id:'docs',  name:'Docs',        scope:'docs/',           n:140, sensitive:false },
+];
+const NOUNS = ['orders','invoices','refunds','receipts','history','totals','filters','export','search','pager','status','ledger','balance','audit','notify','webhook','tax','discount','vehicle','customer'];
+const VERBS = ['list','create','update','detail','summary','table','form','card','handler','schema','query','guard'];
+const PREF = {
+  contract:['codex','cursor','anthropic'],
+  build:['cursor','codex','anthropic','openrouter'],
+  test:['codex','anthropic','openrouter'],
+  docs:['hermes','anthropic','openrouter'],
+};
+const NEXT = { openrouter:'anthropic', anthropic:'codex', cursor:'codex', codex:'claude', claude:'claude', hermes:'anthropic' };
+const DUR = { cursor:[30,55], codex:[12,28], anthropic:[3,10], openrouter:[6,15], claude:[14,24], hermes:[8,16] };
+const FAIL = { cursor:.02, codex:.02, anthropic:.035, openrouter:.07, claude:.01, hermes:.04 };
+const BUDGET = 5;
+const STATE_COL = { locked:'#232f5c', queued:'#3a4d8a', running:'#5aa8ff', retry:'#ffb547', failed:'#ff5f6f', done:'#b9f25c' };
+
+let jobs, lanes, sim, events, samples, mq, batches, colorMode='state', speed=1, paused=false, rng;
+
+function mulberry(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const rand = (a,b) => a + rng()*(b-a);
+const pick = arr => arr[Math.floor(rng()*arr.length)];
+
+function reset(){
+  rng = mulberry(7);
+  jobs = []; events = []; samples = []; batches = [];
+  mq = { waiting:[], batches:0, bisects:0, conflicts:0, merged:0, acc:0 };
+  lanes = {}; for (const k of ORDER) lanes[k] = { ...LANES[k], inFlight:0, done:0, r429:0, cost:0, fails:0, durSum:0, durN:0 };
+  sim = { t:0, peak:0, retries:0, failed:0, firstPass:0, finished:0, spend:0, complete:false, gate:false };
+  for (const L of LEADS){
+    L.wave = 1;
+    const w1 = Math.max(4, Math.round(L.n*.06)), w3 = Math.round(L.n*.24);
+    for (let i=0;i<L.n;i++){
+      const wave = i < w1 ? 1 : (i >= L.n - w3 ? 3 : 2);
+      let type = wave===1 ? 'contract' : wave===2 ? 'build' : 'test';
+      if (L.id==='tests' && wave===2) type='test';
+      if (L.id==='docs' && wave>1) type='docs';
+      const base = L.scope.split(' ')[0].replace(/\/$/,'');
+      const title = wave===1 ? `${base}/contracts/${pick(NOUNS)}.ts` : type==='docs' ? `docs/${pick(NOUNS)}-${pick(VERBS)}.md` : type==='test' ? `tests/${pick(NOUNS)}.${pick(VERBS)}.test.ts` : `${base}/${pick(NOUNS)}/${pick(VERBS)}.ts`;
+      jobs.push({ id:`${L.id}-${String(i+1).padStart(3,'0')}`, lead:L.id, wave, type, title, state:'locked', lane:null, model:null, start:0, dur:0, attempts:0, cost:0 });
+    }
+  }
+  push('good','Plan approved', `6 leads · ${jobs.length.toLocaleString()} jobs · 3 waves · budget $${BUDGET}`, null);
+  push('info','Hermes lane offline', 'dev2 unreachable at start; excluded for this run', null);
+  layoutMap(); renderAll(true);
+}
+
+function push(kind, title, detail, job, worker){
+  events.unshift({ kind, title, detail, job, worker, t:sim.t });
+  if (events.length > 60) events.length = 60;
+  feedDirty = true;
+}
+let feedDirty = true;
+
+function eligible(j){ const L = LEADS.find(l=>l.id===j.lead); return j.wave <= L.wave; }
+
+function chooseLane(j){
+  const L = LEADS.find(l=>l.id===j.lead);
+  const list = j.forceLane ? [j.forceLane] : PREF[j.type];
+  for (const k of list){
+    const ln = lanes[k];
+    if (ln.off) continue;
+    if (L.sensitive && k==='openrouter') continue;
+    if (ln.inFlight < Math.floor(ln.limit)) return k;
+  }
+  return null;
+}
+
+function modelFor(k, j){
+  if (k==='anthropic') return (j.attempts>0 || j.type==='contract') ? 'sonnet-5.5' : 'haiku-5.5';
+  return LANES[k].model.split(' · ')[0].split(' / ')[0];
+}
+
+function step(dt){
+  sim.t += dt;
+  // adaptive limits (AIMD)
+  for (const k of ORDER){
+    const ln = lanes[k]; if (!ln.adaptive) continue;
+    if (ln.inFlight >= ln.limit*0.92 && rng() < 0.08){
+      ln.limit = Math.max(20, ln.limit*0.8); ln.r429++;
+      if (rng() < 0.35) push('lav', `${ln.name} rate limited`, `429 · backing off to ${Math.floor(ln.limit)} in flight`, null);
+    } else ln.limit = Math.min(ln.max, ln.limit + 3*dt);
+  }
+  // finish running
+  for (const j of jobs){
+    if (j.state!=='running' || j.start + j.dur > sim.t) continue;
+    const ln = lanes[j.lane]; ln.inFlight--; ln.durSum += j.dur; ln.durN++;
+    if (rng() < FAIL[j.lane]){
+      ln.fails++;
+      if (j.attempts < 2){
+        const nl = NEXT[j.lane]; j.state='retry'; j.forceLane = (LEADS.find(l=>l.id===j.lead).sensitive && nl==='openrouter') ? 'anthropic' : nl; sim.retries++;
+        push('warn', `Retry ${j.id} on ${LANES[j.forceLane].name}`, j.title, j, pick(['Tests failed: expected 200, got 422','Report line invalid; re-asked once','Edit did not match file','Missing import in handler']));
+      } else { j.state='failed'; sim.failed++; sim.finished++; push('bad', `Failed ${j.id}`, `${j.title} · 3 attempts`, j, 'Checks still red after escalation'); }
+    } else {
+      j.state='done'; sim.finished++; ln.done++; if (j.attempts===0) sim.firstPass++;
+      mq.waiting.push(j);
+    }
+  }
+  // unlock waves
+  for (const L of LEADS){
+    const mine = jobs.filter(j=>j.lead===L.id);
+    if (L.wave===1 && mine.filter(j=>j.wave===1).every(j=>j.state==='done'||j.state==='failed')){ L.wave=2; push('good', `${L.name}: contracts locked`, 'wave 2 build unlocked', null); }
+    if (L.wave===2){ const w2 = mine.filter(j=>j.wave===2); if (w2.filter(j=>j.state==='done'||j.state==='failed').length >= w2.length*.85){ L.wave=3; push('info', `${L.name}: verify wave started`, 'tests and integration checks', null); } }
+  }
+  // start jobs
+  for (const j of jobs){
+    if (j.state==='locked' && eligible(j)) j.state='queued';
+    if (j.state!=='queued' && j.state!=='retry') continue;
+    if (!eligible(j)) continue;
+    const k = chooseLane(j); if (!k) continue;
+    const ln = lanes[k]; ln.inFlight++;
+    if (j.state==='retry') j.attempts++;
+    j.state='running'; j.lane=k; j.model=modelFor(k,j); j.start=sim.t; j.dur=rand(...DUR[k]);
+    let c = 0;
+    if (k==='anthropic') c = j.model.startsWith('sonnet') ? rand(.004,.012) : rand(.0004,.0012);
+    if (k==='openrouter') c = rand(.00005,.0003);
+    j.cost += c; ln.cost += c; sim.spend += c;
+  }
+  // merge queue
+  mq.acc += dt;
+  while (mq.acc >= 0.15 && mq.waiting.length){
+    mq.acc -= 0.15;
+    const b = mq.waiting.splice(0, 10); mq.batches++;
+    let res = 'ok';
+    if (rng() < 0.03){ mq.bisects++; res='bisect'; const bad = pick(b); bad.state='retry'; bad.forceLane = NEXT[bad.lane]==='openrouter'?'anthropic':NEXT[bad.lane]; sim.finished--; lanes[bad.lane].done--; sim.retries++; if (bad.attempts===0) sim.firstPass--; push('warn', `Batch ${mq.batches} red · bisected`, `${bad.id} sent back; ${b.length-1} others merged`, bad, 'Integration check failed after batch'); mq.merged += b.length-1; }
+    else if (rng() < 0.02){ mq.conflicts++; res='conflict'; const c = pick(b); push('warn', `Conflict on ${c.id}`, `${c.title} changed since snapshot · requeued as merge job`, c); mq.merged += b.length; }
+    else mq.merged += b.length;
+    batches.unshift(res); if (batches.length > 36) batches.length = 36;
+  }
+  if (!mq.waiting.length) mq.acc = Math.min(mq.acc, 0.15);
+  // samples
+  const inflight = ORDER.reduce((s,k)=>s+lanes[k].inFlight,0);
+  sim.peak = Math.max(sim.peak, inflight);
+  samples.push({ t:sim.t, inflight, finished:sim.finished });
+  if (samples.length > 240) samples.shift();
+  // completion
+  if (!sim.complete && sim.finished >= jobs.length && !mq.waiting.length && inflight===0){
+    sim.complete = true;
+    push('good', 'Final gate passed', 'full test suite green · Claude review of whole diff: approve', null);
+    push('good', 'Run complete', `branch swarm/go-7f3a ready for your review`, null);
+  }
+}
+
+/* ---------- swarm map (canvas) ---------- */
+const canvas = document.getElementById('map'), ctx = canvas.getContext('2d'), tip = document.getElementById('tip');
+let cells = [], groups = [], cs = 10, gap = 3;
+function layoutMap(){
+  const w = canvas.parentElement.clientWidth; const dpr = window.devicePixelRatio || 1;
+  cs = w < 520 ? 7 : 10; gap = w < 520 ? 2 : 3;
+  const step = cs + gap, cols = Math.max(10, Math.floor((w + gap) / step));
+  cells = []; groups = []; let y = 0;
+  for (const L of LEADS){
+    const mine = jobs.filter(j=>j.lead===L.id);
+    groups.push({ L, y });
+    y += 20;
+    mine.forEach((j, i) => { cells.push({ j, x:(i % cols)*step, y: y + Math.floor(i/cols)*step }); });
+    y += Math.ceil(mine.length/cols)*step + 12;
+  }
+  canvas.style.height = y + 'px'; canvas.width = Math.round(w*dpr); canvas.height = Math.round(y*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+function cellColor(j){
+  if (colorMode==='lane' && j.lane && j.state!=='locked' && j.state!=='queued') return LANES[j.lane].color;
+  if (j.state==='running') return LANES[j.lane].color;
+  return STATE_COL[j.state];
+}
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+function drawMap(now){
+  const w = canvas.width/(window.devicePixelRatio||1), h = canvas.height/(window.devicePixelRatio||1);
+  ctx.clearRect(0,0,w,h);
+  ctx.font = '500 11px "JetBrains Mono", monospace'; ctx.textBaseline = 'top';
+  for (const g of groups){
+    const mine = jobs.filter(j=>j.lead===g.L.id), d = mine.filter(j=>j.state==='done').length;
+    ctx.fillStyle = '#94a2cf'; ctx.fillText(`${g.L.name.toUpperCase()}  ·  ${g.L.scope}  ·  ${d}/${mine.length}${g.L.sensitive?'  ·  SENSITIVE':''}`, 0, g.y + 2);
+  }
+  const pulse = reduce ? 1 : 0.55 + 0.45*Math.sin(now/220);
+  for (const c of cells){
+    const j = c.j; const col = cellColor(j);
+    ctx.globalAlpha = j.state==='done' && colorMode==='state' ? 0.85 : j.state==='running' ? pulse : 1;
+    if (j.state==='running' && !reduce){ ctx.shadowColor = col; ctx.shadowBlur = 8; } else ctx.shadowBlur = 0;
+    ctx.fillStyle = col; roundRect(c.x, c.y, cs, cs, cs>8?3:2); ctx.fill();
+  }
+  ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+}
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  const c = cells.find(c => x>=c.x && x<=c.x+cs && y>=c.y && y<=c.y+cs);
+  if (!c){ tip.hidden = true; return; }
+  const j = c.j, L = LEADS.find(l=>l.id===j.lead);
+  const stateTxt = { locked:'waiting for its wave', queued:'queued', running:'running', retry:'waiting to retry', failed:'failed', done:'done' }[j.state];
+  tip.innerHTML = `<b>${j.id}</b><span>${esc(j.title)}</span><span style="color:var(--muted)">${L.name} · wave ${j.wave} · ${j.type}</span><span>${j.lane ? `<span class="sw" style="background:${LANES[j.lane].color}"></span> ${LANES[j.lane].name} · ${esc(j.model)}` : 'no lane yet'}</span><span style="color:var(--muted)">${stateTxt}${j.attempts?` · attempt ${j.attempts+1}`:''}${j.cost?` · $${j.cost.toFixed(4)}`:''}</span>`;
+  tip.hidden = false;
+  const tx = Math.min(x + 14, r.width - 240), ty = y + 16;
+  tip.style.left = Math.max(0,tx) + 'px'; tip.style.top = ty + 'px';
+});
+canvas.addEventListener('mouseleave', () => tip.hidden = true);
+
+/* ---------- rendering ---------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtT = s => { s = Math.max(0, Math.round(s)); const m = Math.floor(s/60), r = s%60; return `${String(m).padStart(2,'0')}:${String(r).padStart(2,'0')}`; };
+const fmt$ = v => v < 0.01 && v > 0 ? `$${v.toFixed(4)}` : `$${v.toFixed(2)}`;
+
+function renderLegend(){
+  $('legend').innerHTML = colorMode==='state'
+    ? [['locked','waiting on wave'],['queued','queued'],['running','running (lane color)'],['retry','retry'],['failed','failed'],['done','done']].map(([k,t])=>`<span><i class="sw" style="background:${STATE_COL[k]}"></i>${t}</span>`).join('')
+    : ORDER.map(k=>`<span><i class="sw" style="background:${LANES[k].color}"></i>${LANES[k].name}</span>`).join('');
+}
+
+function rate(){
+  if (samples.length < 6) return 0;
+  const a = samples[Math.max(0, samples.length-25)], b = samples[samples.length-1];
+  return b.t>a.t ? (b.finished-a.finished)/(b.t-a.t) : 0;
+}
+
+function renderAll(force){
+  const total = jobs.length, done = jobs.filter(j=>j.state==='done').length;
+  const inflight = ORDER.reduce((s,k)=>s+lanes[k].inFlight,0);
+  $('clock').textContent = `${fmtT(sim.t)} elapsed`;
+  const st = $('status');
+  if (sim.complete){ st.className='chip done'; st.innerHTML='<span class="dot"></span>COMPLETE'; }
+  else if (paused){ st.className='chip'; st.innerHTML='<span class="dot" style="color:var(--amber)"></span>PAUSED'; }
+  else { st.className='chip live'; st.innerHTML='<span class="dot pulse"></span>LIVE'; }
+  // KPIs
+  $('kDone').innerHTML = `${done.toLocaleString()}<small>/ ${total.toLocaleString()}</small>`;
+  const pct = done/total; $('kPct').textContent = `${Math.round(pct*100)}% done`;
+  $('ringArc').setAttribute('stroke-dasharray', `${(pct*138.2).toFixed(1)} 200`);
+  $('kFlight').textContent = inflight.toLocaleString(); $('kPeak').textContent = `peak ${sim.peak.toLocaleString()}`;
+  const sp = samples.slice(-40); const mx = Math.max(1, ...sp.map(s=>s.inflight));
+  $('sparkPath').setAttribute('d', sp.map((s,i)=>`${i?'L':'M'}${(i/(Math.max(1,sp.length-1))*78+1).toFixed(1)} ${(20 - s.inflight/mx*18).toFixed(1)}`).join(' '));
+  const fp = sim.finished ? sim.firstPass/sim.finished : 0;
+  $('kPass').textContent = sim.finished ? `${(fp*100).toFixed(1)}%` : '–';
+  $('kPassSub').innerHTML = `<span class="pill ${sim.retries? 'warn':'good'}">retries ${sim.retries}</span><span class="pill ${sim.failed?'bad':'good'}">failed ${sim.failed}</span>`;
+  $('kSpend').innerHTML = `${fmt$(sim.spend)}<small>/ $${BUDGET}</small>`;
+  $('kSpendBar').style.width = Math.min(100, sim.spend/BUDGET*100) + '%';
+  const fc = pct > 0.05 ? sim.spend/pct : null;
+  $('kForecast').innerHTML = fc===null ? 'forecast –' : `forecast <span class="pill ${fc < BUDGET*0.8 ? 'good' : fc < BUDGET ? 'warn' : 'bad'}">${fmt$(fc)}</span>`;
+  const r = rate(); const remaining = total - sim.finished;
+  $('kEta').textContent = sim.complete ? 'done' : r > 0.05 ? fmtT(remaining / r) : '–';
+  $('kRate').textContent = `${r.toFixed(1)} jobs/s`;
+  $('kMerged').textContent = mq.merged.toLocaleString();
+  $('kMergeSub').textContent = `queue ${mq.waiting.length} · conflicts ${mq.conflicts}`;
+  // lanes
+  $('lanes').innerHTML = ORDER.map(k => {
+    const ln = lanes[k], lim = Math.floor(ln.limit), max = ln.max || 1;
+    const fill = ln.off ? 0 : Math.min(100, ln.inFlight / max * 100), limPos = ln.off ? 0 : Math.min(100, lim / max * 100);
+    const avg = ln.durN ? (ln.durSum/ln.durN).toFixed(1)+'s' : '–';
+    const pass = (ln.done+ln.fails) ? Math.round(ln.done/(ln.done+ln.fails)*100)+'%' : '–';
+    return `<div class="lane${ln.off?' off':''}">
+      <div class="lane-top"><i class="sw" style="background:${ln.color}; width:12px; height:12px; border-radius:4px"></i>
+        <div class="grow"><div class="lane-name">${ln.name}</div><div class="lane-model">${esc(ln.model)}</div></div>
+        <div class="lane-nums num">${ln.off ? '<span class="pill bad">offline</span>' : `${ln.inFlight} / ${lim}`}</div></div>
+      <div class="bar"><span style="width:${fill}%; background:linear-gradient(90deg, ${ln.color}99, ${ln.color})"></span>${ln.adaptive?`<i style="left:${limPos}%" title="current limit"></i>`:''}</div>
+      <div class="lane-meta"><span class="pill info">${ln.done.toLocaleString()} done</span><span class="pill ${pass==='–'||parseInt(pass)>=95?'good':'warn'}">pass ${pass}</span><span class="pill lav">avg ${avg}</span>${ln.adaptive?`<span class="pill ${ln.r429?'warn':'good'}">429s ${ln.r429}</span>`:''}<span class="pill ${ln.cost?'info':'good'}">${ln.cost? fmt$(ln.cost) : (['cursor','codex','claude'].includes(k)?'subscription':'free')}</span></div>
+    </div>`;
+  }).join('');
+  // waves
+  const wl = ['Contracts','Build','Verify'], ws = ['shared interfaces','parallel implementation','tests + integration'], wc = ['#3fd6c4','#5aa8ff','#b9f25c'];
+  $('waves').innerHTML = [1,2,3].map(w => {
+    const js = jobs.filter(j=>j.wave===w), d = js.filter(j=>j.state==='done').length, run = js.filter(j=>j.state==='running').length;
+    const p = js.length ? d/js.length*100 : 0, rp = js.length ? run/js.length*100 : 0;
+    return `<div class="wave"><div class="w-name">${wl[w-1]}<small>${ws[w-1]}</small></div>
+      <div class="bar"><span style="width:${p}%; background:${wc[w-1]}"></span><span style="left:${p}%; width:${rp}%; background:${wc[w-1]}55"></span></div>
+      <div class="num mono" style="font-size:12px; color:var(--muted); text-align:right">${d}/${js.length}</div></div>`;
+  }).join('');
+  drawChart('chFlight', samples.map(s=>s.inflight), '#5aa8ff');
+  const rates = samples.map((s,i)=>{ const a = samples[Math.max(0,i-8)]; return s.t>a.t ? (s.finished-a.finished)/(s.t-a.t) : 0; });
+  drawChart('chRate', rates, '#b9f25c', 1);
+  // feed
+  if (feedDirty || force){
+    const col = { good:'var(--lime)', info:'var(--sky)', warn:'var(--amber)', bad:'var(--red)', lav:'var(--lav)' };
+    $('feed').innerHTML = events.slice(0,30).map(e => `<div class="ev"><span class="stripe" style="background:${col[e.kind]}"></span><div style="min-width:0">
+      <div class="t">${esc(e.title)}</div><div class="d">${esc(e.detail)}</div>
+      ${e.worker?`<div class="w">“${esc(e.worker)}”<span class="untrusted">worker text</span></div>`:''}
+      <div class="w">${fmtT(e.t)}${e.job?` · ${e.job.lane?LANES[e.job.lane].name:''}`:''}</div></div></div>`).join('');
+    $('attnCount').textContent = events.filter(e=>e.kind==='warn'||e.kind==='bad').length;
+    feedDirty = false;
+  }
+  // leads
+  $('leads').innerHTML = LEADS.map(L => {
+    const mine = jobs.filter(j=>j.lead===L.id), d = mine.filter(j=>j.state==='done').length, run = mine.filter(j=>j.state==='running').length;
+    const rt = mine.reduce((s,j)=>s+j.attempts,0), fl = mine.filter(j=>j.state==='failed').length, cost = mine.reduce((s,j)=>s+j.cost,0);
+    const p = d/mine.length*100;
+    const state = d===mine.length ? '<span class="pill good">done</span>' : fl ? `<span class="pill bad">${fl} failed</span>` : `<span class="pill info">wave ${L.wave}</span>`;
+    return `<tr><td><div class="lead-name">${L.name}${L.sensitive?' <span class="pill warn">sensitive</span>':''}</div><div class="lead-scope">${L.scope}</div></td>
+      <td><div style="display:flex; align-items:center; gap:10px"><div class="bar" style="flex:1"><span style="width:${p}%; background:linear-gradient(90deg,var(--teal),var(--lime))"></span></div><span class="num mono" style="font-size:12px">${Math.round(p)}%</span></div></td>
+      <td class="num mono">${run}</td><td class="num mono">${rt}</td><td class="num mono">${fmt$(cost)}</td><td>${state}</td></tr>`;
+  }).join('');
+  // merge queue
+  $('mWait').textContent = mq.waiting.length; $('mBatch').textContent = mq.batches; $('mBisect').textContent = mq.bisects; $('mConf').textContent = mq.conflicts;
+  const bc = { ok:'#b9f25c', bisect:'#ffb547', conflict:'#ff8a6b' };
+  $('batches').innerHTML = batches.map(b => `<span class="batch" style="background:${bc[b]}" title="${b}">${b==='ok'?'✓':b==='bisect'?'½':'!'}</span>`).join('');
+}
+
+function drawChart(id, vals, color, dec=0){
+  const svg = $(id); const W = 300, H = 120, pad = 18;
+  const max = Math.max(1, ...vals); const n = vals.length;
+  const x = i => n<2 ? 0 : (i/(n-1))*W, y = v => H - pad - (v/max)*(H - pad - 10);
+  const line = vals.map((v,i)=>`${i?'L':'M'}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(' ');
+  const gid = id+'g';
+  const last = vals.length ? vals[vals.length-1] : 0;
+  svg.innerHTML = `<defs><linearGradient id="${gid}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".35"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
+    ${[0.25,0.5,0.75].map(f=>`<line x1="0" x2="${W}" y1="${y(max*f)}" y2="${y(max*f)}" stroke="#273770" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join('')}
+    <line x1="0" x2="${W}" y1="${H-pad}" y2="${H-pad}" stroke="#33468a" vector-effect="non-scaling-stroke"/>
+    ${n>1?`<path d="${line} L${W} ${H-pad} L0 ${H-pad} Z" fill="url(#${gid})"/><path d="${line}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>`:''}
+    <text x="4" y="12" font-size="10" fill="#94a2cf">max ${max.toFixed(dec)}</text>
+    <text x="${W-4}" y="${H-4}" font-size="10" fill="${color}" text-anchor="end">now ${last.toFixed(dec)}</text>`;
+}
+
+/* ---------- loop + controls ---------- */
+let lastTick = performance.now(), acc = 0;
+function frame(now){
+  const dtReal = Math.min(0.25, (now - lastTick)/1000); lastTick = now;
+  if (!paused && !sim.complete){
+    acc += dtReal;
+    while (acc >= 0.15){ acc -= 0.15; step(0.9*speed); }
+  }
+  drawMap(now);
+  if (now - (frame.lastRender||0) > 200){ renderAll(); frame.lastRender = now; }
+  requestAnimationFrame(frame);
+}
+function setSpeed(s){ speed = s; for (const [id,v] of [['sp1',1],['sp4',4],['sp10',10]]) $(id).setAttribute('aria-pressed', String(v===s)); }
+$('sp1').onclick = () => setSpeed(1); $('sp4').onclick = () => setSpeed(4); $('sp10').onclick = () => setSpeed(10);
+function togglePause(){ paused = !paused; $('pauseBtn').textContent = paused ? 'Resume demo' : 'Pause demo'; renderAll(); }
+$('pauseBtn').onclick = togglePause;
+$('replayBtn').onclick = () => { reset(); paused=false; $('pauseBtn').textContent='Pause demo'; };
+function setColor(m){ colorMode = m; $('cState').setAttribute('aria-pressed', String(m==='state')); $('cLane').setAttribute('aria-pressed', String(m==='lane')); renderLegend(); }
+$('cState').onclick = () => setColor('state'); $('cLane').onclick = () => setColor('lane');
+addEventListener('keydown', e => {
+  if (e.target.closest('input,textarea')) return;
+  if (e.key===' '){ e.preventDefault(); togglePause(); }
+  if (e.key==='c') setColor(colorMode==='state'?'lane':'state');
+  if (e.key==='r') $('replayBtn').click();
+});
+let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(layoutMap, 120); });
+
+reset(); renderLegend();
+for (let i=0;i<40;i++) step(0.9);   // open in a realistic working state
+renderAll(true);
+requestAnimationFrame(frame);
+})();
+</script>

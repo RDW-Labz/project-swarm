@@ -24,12 +24,12 @@ test('untyped jobs remain unchanged and are copied', () => {
 
 test('presets are frozen and match the contract defaults', () => {
   const expected = {
-    build: ['any', ['cursor', 'codex'], 1800000, null],
-    fix: ['any', ['cursor', 'codex', 'anthropic'], 1800000, 'diagnosing-bugs'],
-    test: ['tests', ['hermes', 'codex', 'cursor'], 1200000, 'tdd'],
-    review: ['none', ['hermes', 'codex'], 900000, 'code-review'],
-    research: ['none', ['hermes', 'openrouter'], 900000, null],
-    docs: ['docs', ['cursor', 'codex', 'anthropic'], 900000, null],
+    build: ['any', ['anthropic', 'cursor', 'codex'], 1800000, null],
+    fix: ['any', ['anthropic', 'cursor', 'codex'], 1800000, 'diagnosing-bugs'],
+    test: ['tests', ['codex', 'anthropic', 'cursor'], 1200000, 'tdd'],
+    review: ['none', ['codex'], 900000, 'code-review'],
+    research: ['none', ['hermes'], 900000, null],
+    docs: ['docs', ['anthropic', 'cursor', 'codex'], 900000, null],
     merge: ['any', ['codex'], 1800000, 'resolving-merge-conflicts'],
     lead: ['manifest', ['codex'], 900000, null],
   };
@@ -104,8 +104,8 @@ test('unknown types and forged internal routes refuse', () => {
       assert.throws(() => check(input), { code: 'job-type-invalid', message: 'Job typed: unknown type ' + type });
     }
   }
-  validateManifest(manifest(job({ type: 'build', typeRoute: ['cursor', 'codex'] })));
-  for (const input of [job({ typeRoute: ['codex'] }), job({ type: 'build', typeRoute: ['codex', 'cursor'] }), job({ type: 'build', typeRoute: [] })]) {
+  validateManifest(manifest(job({ type: 'build', typeRoute: ['anthropic', 'cursor', 'codex'] })));
+  for (const input of [job({ typeRoute: ['codex'] }), job({ type: 'build', typeRoute: ['cursor', 'codex'] }), job({ type: 'build', typeRoute: [] })]) {
     assert.throws(() => validateManifest(manifest(input)), { code: 'job-type-invalid' });
   }
 });
@@ -136,7 +136,7 @@ test('validateProject returns skill warnings and the applied prompt before routi
   const input = job({ type: 'review', context: ['input.txt'] });
   const value = { ...manifest(input), lanes: { hermes: { model: 'test-model' }, codex: { model: 'gpt-5' } } };
   const result = await validateProject(root, value);
-  assert.equal(result.routes[0].agent, 'hermes');
+  assert.equal(result.routes[0].agent, 'codex');
   assert.equal(result.jobs[0].prompt, applyJobType(input).job.prompt);
   assert.equal(result.jobs[0].timeoutMs, 900000);
   assert.equal(result.warnings.filter(warning => warning.code === 'job-type-skill-unavailable').length, 1);
@@ -164,4 +164,14 @@ test('runManifest saves applied presets and surfaces unavailable skill warnings'
   const saved = JSON.parse(await fs.readFile(path.join(root, '.swarm/runs/typed-run/manifest.json'), 'utf8'));
   assert.deepEqual(saved.jobs[0], applyJobType(input).job);
   assert.equal(state.warnings.some(warning => warning.includes('job-type-skill-unavailable')), true);
+});
+
+test('research routes to Hermes; code job types never do', async t => {
+  const root = await fixture(t);
+  const lanesConfig = { hermes: { model: 'test-model' }, anthropic: { model: 'claude-haiku-5-5' }, codex: { model: 'gpt-5' } };
+  const research = await validateProject(root, { ...manifest(job({ type: 'research', context: ['input.txt'], outputs: [] })), lanes: lanesConfig });
+  assert.equal(research.routes[0].agent, 'hermes');
+  for (const type of ['build', 'fix', 'test', 'docs', 'review']) {
+    for (const [name, preset] of Object.entries(JOB_TYPES)) if (name === type) assert.equal(preset.route.includes('hermes'), false, type);
+  }
 });

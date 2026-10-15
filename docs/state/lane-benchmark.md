@@ -51,17 +51,22 @@ Ten tasks from this repo, two of each kind, run on every lane and checked by rea
 
 ## Route defaults set from this
 
-Cheapest lane first, using only lanes that passed both tasks of the kind:
+What the data said, cheapest lane first, using only lanes that passed both tasks of the kind: `fix` cursor, codex, haiku, sonnet, claude; `test` hermes and all the others; `docs` cursor, codex, haiku, sonnet, claude; `build` cursor, codex (haiku and sonnet failed the refactors, because of the one-edit limit below).
 
-| Job type | Route before | Route now | Why |
-| --- | --- | --- | --- |
-| `fix` | cursor, codex | cursor, codex, anthropic | Haiku passed both bug fixes at about $0.001 each, so it is a cheap third choice |
-| `test` | codex, cursor | hermes, codex, cursor | Hermes passed both test-writing tasks for free; the next two also passed both |
-| `docs` | hermes | cursor, codex, anthropic | Hermes failed both docs tasks; these three passed both |
-| `build` | cursor, codex | unchanged | Cursor and Codex passed all four build tasks (new function and refactor); the API lanes failed refactors |
-| `review`, `research`, `merge`, `lead` | | unchanged | not in this benchmark |
+What was set, after review (the owner's decisions):
 
-The global cheap order (Hermes first, OpenRouter fourth) is unchanged because it is your standing rule. With this model, Hermes would be tried first for untyped `auto` jobs and would fail most of them. Removing `lanes.hermes.model` from the machine config keeps it out of untyped routing, while the typed `test` route still uses it.
+| | Setting |
+| --- | --- |
+| Cheap order for code | anthropic (Haiku), cursor, codex; Claude only after 2 failures |
+| Hermes | out of the default order; runs only `research` jobs (2 of 10 passed) |
+| OpenRouter | only non-sensitive bookkeeping jobs (4 of 10 passed) |
+| `build`, `fix`, `docs` | anthropic, cursor, codex |
+| `test` | codex, anthropic, cursor |
+| `review` | codex |
+| `research` | hermes |
+| `merge`, `lead` | codex (unchanged, not benchmarked) |
+
+Haiku goes first even though it failed refactors here: those failures are the edit limit, which the next change removes, and Haiku costs about $0.002 a job.
 
 ## How it was run, and the limits
 

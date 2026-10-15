@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
-export const CHEAP_ORDER = Object.freeze(['hermes', 'cursor', 'codex', 'anthropic', 'openrouter']);
-export const ROUTE_ORDER = Object.freeze(['hermes', 'cursor', 'codex', 'anthropic', 'openrouter', 'claude']);
+import { isBookkeepingJob } from './openrouter.mjs';
+
+// Code jobs: Haiku first, then Cursor, then Codex; the Claude subscription only after 2 failures.
+// Hermes is not in this order: it runs only where a job type names it (research). OpenRouter runs
+// only bookkeeping jobs (PR payloads, changelogs, metrics) that are not sensitive. The order comes
+// from the lane benchmark (docs/state/lane-benchmark.md).
+export const CHEAP_ORDER = Object.freeze(['anthropic', 'cursor', 'codex', 'openrouter']);
+export const ROUTE_ORDER = Object.freeze([...CHEAP_ORDER, 'claude']);
 
 // The Anthropic lane's model follows the job's tier: the lane model (Haiku) by default, Sonnet for
 // tier "mid". Opus is never picked here; it needs an explicit anthropic job with tier "expensive".
@@ -25,12 +31,12 @@ export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), fa
     candidates = configured('claude') && !(failures.claude >= 2) && accepted('claude') ? ['claude'] : [];
   } else {
     candidates = order.filter(agent => configured(agent)
-      && (agent !== 'openrouter' || job.sensitive === false)
+      && (agent !== 'openrouter' || (job.sensitive === false && isBookkeepingJob(job.outputs)))
       && accepted(agent));
     const failed = candidates.filter(agent => failures[agent] >= 2);
     if (failed.length) reason = `fallback after 2 failures on ${failed.join(', ')}`;
     candidates = candidates.filter(agent => !(failures[agent] >= 2));
-    const totalFailures = CHEAP_ORDER.reduce((sum, agent) => sum + (failures[agent] ?? 0), 0);
+    const totalFailures = order.reduce((sum, agent) => sum + (failures[agent] ?? 0), 0);
     if (!candidates.length && totalFailures >= 2 && configured('claude')
       && !(failures.claude >= 2) && accepted('claude')) {
       candidates = ['claude'];
