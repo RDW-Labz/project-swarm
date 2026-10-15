@@ -6,6 +6,7 @@ One row per plan phase, built with the swarm itself. Rules (from Braden): worker
 | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | --- | --- | --- | --- |
 | 10 (real `swarm` command) | 3 | 100% (3 of 3) | 0 | 0 | codex: $0 reported (subscription), 71,179 tokens | 0% of jobs (the orchestrator session itself is Claude) | 2 m 10 s | none during the run | 0 / 0 | 5 (see below) | First row. Baseline. |
 | Lane benchmark + Hermes over ssh (1.64.0) | 10 per lane, 70 in all (7 lanes) | 53/70 (76%): 10/10 on codex, cursor, claude; 9 haiku; 8 sonnet; 4 openrouter; 2 hermes | 0 (single attempt each) | 17 of 70 failed the check; 9 of those hit the one-edit-per-file limit | anthropic $0.55 incl. reviews; openrouter $0.008; others subscription or local | claude 10 of 70 jobs (14%) | ~1 min per Mac lane; Hermes 5 min on dev2 | the VPN to dev2 dropped most of the time, ~40 min of retries | 0 / 0 | 7 (see below) | First phase with Hermes in the mix and the first scored comparison of lanes; Hermes with a 2-bit model is not yet a useful default |
+| Multi-edit + benchmark rerun (1.65.0) | 40 (4 lanes x 10) | 28/40 (70%): hermes 6, haiku 9, sonnet 10, openrouter 3 | 0 (single attempt each) | 12 of 40 failed the check; 0 on the edit limit (was 9) | anthropic about $0.37 incl. reviews; openrouter $0.008; hermes local | 0% of jobs; one Claude review job ($0.29) before the PR | Mac lanes about 6 min; Hermes 4 min on dev2 | none | 0 / 0 | 4 (see below) | Better: the edit limit is gone (Hermes 2 to 6, Sonnet 8 to 10) and the review of the routing change found a real gap. Same: run-to-run noise of 1-2 jobs per lane |
 
 ## Phase 10 notes
 
@@ -24,3 +25,11 @@ One row per plan phase, built with the swarm itself. Rules (from Braden): worker
 - **Review job:** run before the PR on `cli-host` (secrets over ssh). Claude Opus, $0.26. It found 5 real gaps, all fixed.
 - **Waiting on Braden:** none; the time went to the VPN to dev2 (about 90% packet loss), which made each ssh call a retry loop.
 - **Worse than last phase:** wall time per task, because of the link. **Better:** the runner now has a measured lane comparison and Hermes runs end to end.
+
+## Multi-edit and rerun notes
+
+- **What the swarm did:** it reran the four affected lanes (40 jobs) and the harness scored them; the code change itself (validator, ordered edit application, Hermes pass-through, prompts, tests) was written by the orchestrator, because it is one tight change across the adapters.
+- **Manual fixes (4):** (1) found that Hermes/Qwen dropped `edits` and fixed it; (2) hardened routing after the Claude review (router-level refusal of sensitive jobs for non-sensitive lanes, stricter bookkeeping paths); (3) rewrote the router tests and adapted four run tests for the new order; (4) re-scored Hermes results here because dev2 still had the old, unfair docs check.
+- **Rule exception:** the rerun used the working copy as the runner (the change is unmerged); dev2's copy got the new tools by copy. Codex, Cursor and Claude were not rerun: the change does not touch them.
+- **Review job:** Claude Opus on the routing change (sensitive-job routing), $0.29, before the PR. Findings fixed: no sensitive job can be a candidate for OpenRouter/OpenAI/Gemini/Lambda, bookkeeping check refuses `..`, absolute paths and non-strings.
+- **Waiting on Braden:** none.

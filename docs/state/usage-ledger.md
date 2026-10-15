@@ -42,11 +42,12 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-15 | - | swarm-bin: Implemented executable wrapper installation, safe quoting, foreign-file refusal, and comm | codex | gpt-6.1-sol | pass | 22,753 | subscription |
 | 2026-10-15 | - | status: Implemented project status, five suggested commands, and compact plain-text formatting.; All | codex | gpt-6.1-sol | pass | 27,170 | subscription |
 | 2026-10-15 | - | review-cli-host: Quoting (shellQuote/sshInvocation) is sound for POSIX remote shells, the message tr | claude | opus | pass | 8,619 | $0.26 |
+| 2026-10-15 | - | review-routing: Through routeJob a sensitive job cannot reach OpenRouter: the check at router.mjs:34 | claude | opus | pass | 9,138 | $0.29 |
 
 ## Daily summary
 
 | date | tier | calls | pass | fail/blocked | tokens | rough cost |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-10-14 | codex | 34 | 29 | 5 | 2,887,673 | subscription |
-| 2026-10-15 | claude | 1 | 1 | 0 | 8,619 | $0.26 |
+| 2026-10-15 | claude | 2 | 2 | 0 | 17,757 | $0.55 |
 | 2026-10-15 | codex | 3 | 3 | 0 | 71,179 | subscription |
