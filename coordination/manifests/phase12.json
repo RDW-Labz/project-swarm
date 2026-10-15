@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "id": "profile-module",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase12-design.md specifies. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`. Import helpers from tools/journal.mjs (safeWritableDir, assertRegularOrMissing, sanitizeText) instead of rewriting them. Write only your declared output file; do not edit tools/swarm.mjs or tools/init.mjs. Keep code compact: short functions, no long comments. Your file: tools/init-profile.mjs only: sections 1 and 3 of the design (profile functions, runBaseChecks, formatBaseCheck, checkSetup).",
+      "context": [
+        "docs/plans/phase12-design.md",
+        "tools/journal.mjs",
+        "tools/init.mjs"
+      ],
+      "outputs": [
+        "tools/init-profile.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    },
+    {
+      "id": "profile-tests",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase12-design.md specifies. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`. Import helpers from tools/journal.mjs (safeWritableDir, assertRegularOrMissing, sanitizeText) instead of rewriting them. Write only your declared output file; do not edit tools/swarm.mjs or tools/init.mjs. Keep code compact: short functions, no long comments. Tests use node:test and node:assert/strict, start with `import './_isolate-config.mjs';`, use temporary directories and injected fakes, and cover every rule in the design for the module including each refusal and limit; keep the file under 450 lines. The module is written by someone else from the same design, so import it by the exported names only. Your file: tests/init-profile.test.mjs only, for tools/init-profile.mjs (sections 1 and 3).",
+      "context": [
+        "docs/plans/phase12-design.md",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tests/init-profile.test.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    },
+    {
+      "id": "map-module",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase12-design.md specifies. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`. Import helpers from tools/journal.mjs (safeWritableDir, assertRegularOrMissing, sanitizeText) instead of rewriting them. Write only your declared output file; do not edit tools/swarm.mjs or tools/init.mjs. Keep code compact: short functions, no long comments. Your file: tools/repo-map.mjs only: section 2 of the design.",
+      "context": [
+        "docs/plans/phase12-design.md",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tools/repo-map.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    },
+    {
+      "id": "map-tests",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase12-design.md specifies. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`. Import helpers from tools/journal.mjs (safeWritableDir, assertRegularOrMissing, sanitizeText) instead of rewriting them. Write only your declared output file; do not edit tools/swarm.mjs or tools/init.mjs. Keep code compact: short functions, no long comments. Tests use node:test and node:assert/strict, start with `import './_isolate-config.mjs';`, use temporary directories and injected fakes, and cover every rule in the design for the module including each refusal and limit; keep the file under 450 lines. The module is written by someone else from the same design, so import it by the exported names only. Your file: tests/repo-map.test.mjs only, for tools/repo-map.mjs (section 2): JS/TS, Python, Go and Rust fixtures, resolution, test links, incremental reuse, determinism, limits, read/write round trip with a symlinked .swarm/project refused.",
+      "context": [
+        "docs/plans/phase12-design.md",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tests/repo-map.test.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    }
+  ]
+}

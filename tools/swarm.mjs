@@ -21,7 +21,9 @@ import { portBlockFor, resolvePortBlock } from './ports.mjs';
 import { loadLocalConfig } from './local-config.mjs';
 import { resolveLanes, LaneScheduler, classifyProviderOutcome, lanesDir } from './lanes.mjs';
 import { resolveHosts, enabledHosts, createHostPool, defaultHostTransport, remoteEnv, checkPulled, isSecretPath } from './executors.mjs';
-import { initProject } from './init.mjs';
+import { initProject, checkProject, refreshRepoMap } from './init.mjs';
+import { summarizeMap, mapIsFresh, readRepoMap } from './repo-map.mjs';
+import { protectedViolations, protectedPathHit, formatBaseCheck, validateProfile } from './init-profile.mjs';
 import { resolveCliHosts, sshInvocation, sshEnv, remoteExec, cliHostFailure } from './cli-host.mjs';
 import { isHumanJob, validateHumanJob, liftHumanJobs, addGroup, readStore as readHumanStore, humanGroupReady, updateGroup as updateHumanGroup } from './human-jobs.mjs';
 import { runInboxCommand, inboxDeps } from './inbox-commands.mjs';
@@ -1433,8 +1435,9 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     // Unknown command/provider fields cannot create an execution path.
     if (job.type === 'lead') validateLeadArea(job);
     else if (job.area !== undefined) fail(`lead-area-invalid: Job ${job.id}: area requires type lead`, 'lead-area-invalid');
-    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report'];
+    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext'];
     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
+    if (job.allowProtectedContext !== undefined && (typeof job.allowProtectedContext !== 'string' || !job.allowProtectedContext.trim() || job.allowProtectedContext.length > 200)) fail(`Job ${job.id}: allowProtectedContext must be a reason of 1-200 characters`, 'allow-protected-context-invalid');
   }
   validateParentLeads(manifest);
   // A second pass: every `after` id must exist and the whole graph must be acyclic.
@@ -2760,6 +2763,8 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
     // Keep only hashes until each job is dispatched.
     const snapshotHashes = new Map(Object.entries(state.snapshotHashes ?? {}));
     for (const job of manifest.jobs) job.context = await expandJobContext(root, job);
+    // contextGlob patterns only become files here, so the protected-path gate runs once more on the expanded lists.
+    await enforceProtectedPaths(root, manifest.jobs, { resources: manifest.resources ?? [] });
     for (const file of new Set(manifest.jobs.flatMap(job => [...job.context, ...job.outputs]).concat(resourceFiles))) {
       if (!resumeState) snapshotHashes.set(file, await snapshotHash(root, file));
     }
@@ -4645,6 +4650,8 @@ async function integrateRunLocked(root, id, options = {}) {
       // Field lesson 128: the job's own context, concatenated once, is the only source a worker
       // could have copied a real sha/provenance string from verbatim.
       const contextText = (await Promise.all(declared.context.map(async file => (await bytesAt(root, file))?.toString('utf8') ?? ''))).join('\n');
+      // The same protected-path gate as at run time, again where files are about to land in the project.
+      await enforceProtectedPaths(root, [declared]);
       for (const file of declared.outputs) {
         const current = await bytesAt(root, file);
         const currentHash = current === null ? null : digest(current);
@@ -5241,6 +5248,9 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   root=await fs.realpath(root);validateManifest(manifest);
   const appliedTypes = await applyManifestJobTypes(root, manifest, { env, home });
   manifest = appliedTypes.manifest;
+  // Paths the owner declared protected at init are never written by any job. Checked on the final manifest (after job types),
+  // and child manifests of leads come through here too. A profile that cannot be read fails closed.
+  await enforceProtectedPaths(root, manifest.jobs, { resources: manifest.resources ?? [] });
   const resolvedLanes = resolveLanes({ config: loadLocalConfig({ env, home }), manifest });
   const routes = manifest.jobs.filter(job => job.agent === 'auto').map(job => ({ jobId: job.id, ...pickJobRoute(job, resolvedLanes) }));
   if (routes.length) {
@@ -6831,6 +6841,89 @@ function autopilotDeps() {
   };
 }
 
+// The project's profile from .project-swarm.json, or null when there is none or it is not valid.
+async function projectProfile(root) {
+  try {
+    const pointer = JSON.parse(await fs.readFile(path.join(root, '.project-swarm.json'), 'utf8'));
+    if (!pointer?.profile) return null;
+    const { profile, errors } = validateProfile(pointer.profile);
+    return errors.length ? null : profile;
+  } catch { return null; }
+}
+
+// `go X`: X is a manifest when it is an existing .json file, whatever else it looks like.
+async function existingManifestFile(root, argument) {
+  if (typeof argument !== 'string' || !argument.endsWith('.json')) return false;
+  try { return (await fs.stat(path.resolve(root, argument))).isFile(); } catch { return false; }
+}
+
+// The profile for the protected-path gate: null when the project has none, an error when it exists but is not valid
+// (a broken profile must never quietly switch the protection off).
+async function enforceProtectedPaths(root, jobs, { resources = [] } = {}) {
+  let profile = null;
+  try {
+    const pointer = JSON.parse(await fs.readFile(path.join(root, '.project-swarm.json'), 'utf8'));
+    if (pointer && pointer.profile !== undefined) {
+      const checked = validateProfile(pointer.profile);
+      if (checked.errors.length) fail(`profile-invalid: ${checked.errors[0]}; run swarm init to repair it`, 'profile-invalid');
+      profile = checked.profile;
+    }
+  } catch (error) { if (error.code !== 'ENOENT') { if (error.code === 'profile-invalid') throw error; fail('profile-invalid: .project-swarm.json is not valid JSON; run swarm init', 'profile-invalid'); } }
+  const all = [...jobs, ...(resources.length ? [{ id: '(resources)', context: resources }] : [])];
+  const verb = kind => (kind === 'deletes' ? 'deletes' : kind === 'context' ? 'reads' : 'writes');
+  const hits = profile ? protectedViolations(profile, all) : [];
+  if (hits.length) fail(`protected-path: job ${hits[0].job} ${verb(hits[0].kind)} ${hits[0].path} (protected: ${hits[0].entry})`, 'protected-path');
+  // Symlinks: what a path really points at is what counts. Anything that resolves outside the project is refused, and
+  // anything that resolves into a protected path is treated as that path.
+  const realRoot = await fs.realpath(root);
+  const known = new Map();
+  const resolveReal = async file => {
+    const absolute = path.resolve(realRoot, file);
+    const rest = [];
+    let probe = absolute;
+    for (;;) {
+      if (known.has(probe)) return path.join(known.get(probe), ...rest.reverse());
+      try { const real = await fs.realpath(probe); known.set(probe, real); return path.join(real, ...rest.reverse()); }
+      catch (error) {
+        if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+        rest.push(path.basename(probe));
+        const parent = path.dirname(probe);
+        if (parent === probe) return absolute;
+        probe = parent;
+      }
+    }
+  };
+  for (const job of all) {
+    for (const [field, kind] of [['outputs', 'output'], ['outputDirs', 'output'], ['deletes', 'deletes'], ['context', 'context']]) {
+      for (const file of Array.isArray(job[field]) ? job[field] : []) {
+        if (typeof file !== 'string') continue;
+        const real = await resolveReal(file);
+        if (real !== realRoot && !real.startsWith(realRoot + path.sep)) fail(`path-outside-project: job ${job.id} ${verb(kind)} ${file}, which resolves outside the project`, 'path-outside-project');
+        const relative = path.relative(realRoot, real).split(path.sep).join('/');
+        const entry = profile && !(kind === 'context' && typeof job.allowProtectedContext === 'string' && job.allowProtectedContext.trim()) ? protectedPathHit(profile, relative) : null;
+        if (entry) fail(`protected-path: job ${job.id} ${verb(kind)} ${file} (resolves to ${relative}; protected: ${entry})`, 'protected-path');
+      }
+    }
+  }
+}
+
+// Owner flags beat the profile; the profile beats the built-in defaults.
+function withProfileDefaults(flags, profile) {
+  return { ...flags, maxUsd: flags.maxUsd ?? profile?.budget?.maxUsd, maxTokens: flags.maxTokens ?? profile?.budget?.maxTokens, ...(profile?.sensitive === false ? { sensitive: false } : {}) };
+}
+
+function withProfileRisks(preview, profile) {
+  if (profile?.baseCheck?.status !== 'red') return preview;
+  return { ...preview, risks: [...preview.risks, { code: 'base-red', message: formatBaseCheck(profile.baseCheck) }] };
+}
+
+async function refreshMapQuietly(root) {
+  try {
+    const head = (await execFileAsync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).then(out => out.stdout.trim(), () => null));
+    if (head && !mapIsFresh(await readRepoMap(root), head)) await refreshRepoMap(root);
+  } catch { /* the map is a convenience, never a reason to fail a plan */ }
+}
+
 // Everything the plan preview needs to know about this machine's lanes: where lead and child jobs would go,
 // how many run at once there, and the per-million-token price (null for subscription or local lanes).
 async function planLaneInfo(manifest) {
@@ -6951,11 +7044,62 @@ async function mainInner() {
       if(!isGoalArgument(goal)||goal===undefined)fail('Usage: swarm plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json]');
       const planFlags=parseGoFlags(flags);
       if(planFlags.repo||planFlags.payloadPath)fail('plan does not take --pr or --repo');
-      const plan=await buildGoalPlan(root,goal,{...planFlags,checks:await goChecks(root)},await planDeps(root));
+      await refreshMapQuietly(root);
+      const profile=await projectProfile(root);
+      const plan=await buildGoalPlan(root,goal,{...withProfileDefaults(planFlags,profile),checks:await goChecks(root)},await planDeps(root));
+      plan.preview=withProfileRisks(plan.preview,profile);
       await savePlan(root,plan);
       process.stdout.write(extracted.json?`${JSON.stringify({id:plan.id,preview:plan.preview})}\n`:`${formatPreview(plan.preview)}\nplan saved: ${plan.id}  (run it with: swarm go --plan ${plan.id})\n`);
       return;
     }
+  }
+  // Phase 12: `swarm init` (profile, base check, repo map), `swarm init --check`, `swarm map`.
+  if(args[0]==='init'||args[0]==='map'){
+    root=await fs.realpath(root);
+    const flags=args.slice(1);
+    const usage=args[0]==='init'?'Usage: swarm init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map]':'Usage: swarm map [--json]';
+    const opts={protect:[]};
+    let json=false,check=false;
+    for(let index=0;index<flags.length;index++){
+      const flag=flags[index];
+      if(flag==='--json'){json=true;continue;}
+      if(args[0]==='init'&&flag==='--check'){check=true;continue;}
+      if(args[0]==='init'&&flag==='--sensitive'){opts.sensitive=true;continue;}
+      if(args[0]==='init'&&flag==='--not-sensitive'){opts.sensitive=false;continue;}
+      if(args[0]==='init'&&flag==='--no-base-check'){opts.baseCheck=false;continue;}
+      if(args[0]==='init'&&flag==='--base-check'){opts.baseCheck=true;continue;}
+      if(args[0]==='init'&&flag==='--no-map'){opts.map=false;continue;}
+      if(args[0]==='init'&&['--protect','--max-usd','--max-tokens'].includes(flag)){
+        const value=flags[++index];
+        if(value===undefined||value.startsWith('--'))fail(`${flag} requires a value`);
+        if(flag==='--protect')opts.protect.push(value);
+        else{const number=Number(value);if(!Number.isFinite(number)||number<=0||(flag==='--max-tokens'&&!Number.isInteger(number)))fail(`${flag} requires a positive ${flag==='--max-tokens'?'integer':'number'}`);opts[flag==='--max-usd'?'maxUsd':'maxTokens']=number;}
+        continue;
+      }
+      fail(usage);
+    }
+    if(flags.includes('--sensitive')&&flags.includes('--not-sensitive'))fail('--sensitive and --not-sensitive cannot be combined');
+    if(flags.includes('--base-check')&&flags.includes('--no-base-check'))fail('--base-check and --no-base-check cannot be combined');
+    if(check&&flags.some(flag=>!['--check','--json'].includes(flag)))fail('--check only takes --json');
+    if(args[0]==='map'){
+      const map=await refreshRepoMap(root);
+      const summary=summarizeMap(map);
+      process.stdout.write(json?`${JSON.stringify({head:map.head,stats:map.stats,summary})}\n`:`repo map: ${summary.files} files, ${Object.entries(summary.languages).map(([name,count])=>`${name} ${count}`).join(', ')||'no known languages'}; ${summary.tests} tests, ${summary.links} test links; ${map.stats.reused} reused\n${summary.hubs.slice(0,5).map(hub=>`  ${hub.path} (imported by ${hub.count})`).join('\n')}\n`);
+      return;
+    }
+    if(check){
+      const pkg=JSON.parse(await fs.readFile(path.join(ownRoot,'package.json'),'utf8'));
+      const report=await checkProject(root,{installVersion:pkg.version});
+      process.stdout.write(json?`${JSON.stringify(report)}\n`:`${report.items.map(item=>`${item.level==='fail'?'FAIL':item.level} ${item.id}: ${item.message}`).join('\n')}\n`);
+      if(!report.ok)process.exitCode=1;
+      return;
+    }
+    const ask=opts.sensitive===undefined&&process.stdin.isTTY&&process.stdout.isTTY?()=>new Promise(resolve=>{const rl=readline.createInterface({input:process.stdin,output:process.stderr});let done=false;rl.on('close',()=>{if(!done)resolve(true);});rl.question('Is this project sensitive (private code or data)? [Y/n] ',reply=>{done=true;rl.close();resolve(!/^n/i.test(reply.trim()));});}):undefined;
+    const interactive=Boolean(process.stdin.isTTY&&process.stdout.isTTY);
+    const confirmBase=interactive?checks=>new Promise(resolve=>{const rl=readline.createInterface({input:process.stdin,output:process.stderr});let done=false;rl.on('close',()=>{if(!done)resolve(false);});rl.question(`Run the project's own checks now to record whether they already fail?\n${checks.map(check=>`  ${check.name}: ${check.argv.join(' ')}`).join('\n')}\n[y/N] `,reply=>{done=true;rl.close();resolve(/^y/i.test(reply.trim()));});}):undefined;
+    const result=await initProject(root,{...opts,ask,confirmBase});
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
   }
   if(['brief','handoff','checkpoint'].includes(args[0])){
     root=await fs.realpath(root);
@@ -7021,7 +7165,7 @@ async function mainInner() {
   // `swarm "goal sentence"` is shorthand for `swarm go "goal sentence"`. Only one argument with
   // whitespace counts, so a mistyped one-word command never starts a paid run.
   if(!args[0].startsWith('-')&&/\s/.test(args[0])&&isGoalArgument(args[0]))args.unshift('go');
-  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | init | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
@@ -7673,16 +7817,20 @@ async function mainInner() {
     if(shipIdleWarning)result={...result,warnings:[...(result.warnings??[]),shipIdleWarning.message]};
   }
   else if(command==='init') result=await initProject(root);
-  else if(command==='go'&&isGoalArgument(argument)){
+  else if(command==='go'&&isGoalArgument(argument)&&!(await existingManifestFile(root,argument))){
     const goChecksList=await goChecks(root);
     // A dirty tree is refused by go itself, before anything is previewed or asked.
     const dirtyTree=await worktreeDirty(root).catch(()=>false);
     let plan=planned,planError=dirtyTree?Error('goal-dirty: commit or stash changes before swarm go'):null;
-    if(!plan&&!planError){try{plan=await buildGoalPlan(root,argument,{...goFlags,checks:goChecksList},await planDeps(root));}catch(error){planError=error;}}
+    const profile=await projectProfile(root);
+    if(!plan&&!planError){try{await refreshMapQuietly(root);plan=await buildGoalPlan(root,argument,{...withProfileDefaults(goFlags,profile),checks:goChecksList},await planDeps(root));plan.preview=withProfileRisks(plan.preview,profile);}catch(error){planError=error;}}
+    if(planned&&!planError&&profile?.sensitive!==false&&planned.manifest.jobs.some(job=>job.sensitive===false)){
+      planError=Error('plan-stale: the plan was made while the project was marked not sensitive, and it is sensitive now; make a new plan');
+    }
     if(planned&&!planError){
       // The preview shown for a saved plan is recomputed, never read from the file; the owner's own caps can only tighten the saved ones.
       const calibration=await readCalibration(root);
-      plan={...planned,preview:estimatePlan(planned.manifest,{lanes:await planLaneInfo(planned.manifest),calibration}),appliedCostRatio:calibration.costRatio,appliedTimeRatio:calibration.timeRatio};
+      plan={...planned,preview:withProfileRisks(estimatePlan(planned.manifest,{lanes:await planLaneInfo(planned.manifest),calibration}),profile),appliedCostRatio:calibration.costRatio,appliedTimeRatio:calibration.timeRatio};
       const tighter=(cli,saved)=>[cli,saved].filter(value=>typeof value==='number'&&Number.isFinite(value)&&value>0).reduce((min,value)=>Math.min(min,value),Infinity);
       const saved={...Object.fromEntries(Object.entries(planned.flags).filter(([,value])=>value!==undefined))};
       goFlags={...goFlags,...saved};
@@ -7701,7 +7849,7 @@ async function mainInner() {
     const firstRun=await autoInit(root,{
       exists:file=>fs.access(path.join(file,'.project-swarm.json')).then(()=>true,()=>false),
       dirty:worktreeDirty,
-      init:initProject,
+      init:dir=>initProject(dir,{baseCheck:false,map:false}),
       changed:async file=>{
         const {stdout}=await execFileAsync('git',['-C',file,'status','--porcelain','-z','--untracked-files=all'],{encoding:'utf8'});
         return stdout.split('\0').filter(Boolean).map(entry=>entry.slice(3));
