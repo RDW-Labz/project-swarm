@@ -264,3 +264,41 @@ test('a paid job refused before a completion request releases its reservation', 
   assert.deepEqual(calls, []);
   assert.deepEqual(await storeEntries(options), []);
 });
+
+test('2,048 paid jobs starting at once never reserve or spend more than the $1 run cap and $1 lane day cap, plus one job\'s reservation', { timeout: 180000 }, async t => {
+  const options = await fixture(t), calls = [];
+  const total = 2048;
+  const jobs = Array.from({ length: total }, (_, n) => paidJob(n));
+  const storeFile = path.join(options.env.SWARM_SPEND_DIR, 'daily.json');
+  let peakTotal = 0, peakOne = 0, sampling = true;
+  const sample = async () => {
+    while (sampling) {
+      try {
+        const entries = Object.values(JSON.parse(await fs.readFile(storeFile, 'utf8')).entries ?? {});
+        const sum = entries.reduce((acc, entry) => acc + (Number(entry.usd) || 0), 0);
+        peakTotal = Math.max(peakTotal, sum);
+        for (const entry of entries) peakOne = Math.max(peakOne, Number(entry.usd) || 0);
+      } catch { /* the store is replaced atomically; a missed sample is fine */ }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  };
+  const sampler = sample();
+  const state = await runManifest(options.root, manifest(jobs, { concurrency: total, lanes: { openrouter: { concurrency: total } }, budget: { maxUsd: 1, lanes: { openrouter: { dailyUsd: 1 } } } }), paidOptions({
+    ...options, root: options.root, fetchImpl: paidWorker(calls, { cost: 0.2, delayMs: 100 }),
+  }));
+  sampling = false;
+  await sampler;
+  assert.equal(state.status, 'paused', state.error);
+  const spent = state.jobs.reduce((acc, record) => acc + (record.costUsd ?? 0), 0);
+  const entries = await storeEntries(options);
+  const reservation = Math.max(peakOne, ...entries.map(entry => Number(entry.usd) || 0));
+  assert.ok(reservation > 0, 'a reservation was recorded');
+  assert.ok(calls.length >= 1 && calls.length < 20, `${calls.length} requests were made`);
+  assert.ok(spent <= 1 + reservation, `spent ${spent} against a cap of 1 plus ${reservation}`);
+  assert.ok(peakTotal <= 1 + reservation, `reserved and spent peaked at ${peakTotal}`);
+  assert.ok(entries.reduce((acc, entry) => acc + (Number(entry.usd) || 0), 0) <= 1 + reservation);
+  const held = state.jobs.filter(record => record.status === 'held');
+  assert.equal(held.length + calls.length, total, 'every job either ran or was held, none lost');
+  assert.ok(held.every(record => ['run-cap', 'lane-cap'].includes(record.heldReason)));
+  assert.ok(held.every(record => record.attempts.length === 0), 'a held job never made a request');
+});
