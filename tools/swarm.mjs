@@ -22,6 +22,7 @@ import { loadLocalConfig } from './local-config.mjs';
 import { resolveLanes, LaneScheduler, classifyProviderOutcome, lanesDir } from './lanes.mjs';
 import { resolveHosts, enabledHosts, createHostPool, defaultHostTransport, remoteEnv, checkPulled, isSecretPath } from './executors.mjs';
 import { initProject } from './init.mjs';
+import { resolveCliHosts, sshInvocation, remoteExec, cliHostFailure } from './cli-host.mjs';
 import { projectStatus, formatStatus } from './status.mjs';
 import { zshCompletion, completeRuns } from './completion.mjs';
 import { checkSwarmCommand } from './swarm-bin.mjs';
@@ -1614,6 +1615,13 @@ function summarizeAgentFailure({ exitCode, stdout, stderr }) {
 }
 
 export async function execute(job, cwd, message, { spawnImpl, signal, cancelled = () => false, killImpl, onOutput = () => {}, codex, cursor, claudeShell, resumeSessionId, logDirectory, workerKey }) {
+  // Hermes/Qwen may run on another machine over ssh (machine config `cliHosts`). A bad config fails
+  // this job only.
+  let cliHost = null;
+  if (EXTRA_CLI_AGENTS.includes(job.agent)) {
+    try { cliHost = resolveCliHosts(loadLocalConfig({ env: process.env }).cliHosts)[job.agent] ?? null; }
+    catch (error) { return { ...setupFailedResult(error.message), setupFailed: false, code: error.code }; }
+  }
   let sink;
   try { if (logDirectory) sink = await createAdapterLogSink(logDirectory, { privateData: job.privateData === true, workerKey }); }
   catch (error) { return { ...setupFailedResult(error.message), setupFailed: false, code: error.code, stream: error.stream }; }
@@ -1661,7 +1669,7 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
         return;
       }
       if(EXTRA_CLI_AGENTS.includes(job.agent)){
-        let parsed, failed=cleanupError||reason||(error?'CLI launch failed':null),files=[],response='';
+        let parsed, failed=cleanupError||reason||(error?'CLI launch failed':null)||(cliHost&&code===255?cliHostFailure(code):null),files=[],response='';
         if(!failed)try{parsed=parseExtraCli(job.agent,stdout,code,job.model);const value=validateEnvelope(parsed.value,job.outputs);files=value.files;response=job.report === 'short' && value.result ? `${value.summary}\n${JSON.stringify(value.result)}\n` : value.summary;}catch(problem){failed=problem.message;}
         resolve({finalObject:parsed?.value?.result ?? parsed?.value ?? null,cleanupError,terminationReason:reason??null,status:cleanupError?'failed':reason==='timeout'?'timeout':reason==='cancelled'?'cancelled':failed?'failed':'complete',error:failed??null,files,response,stdout:failed?'':JSON.stringify({type:'result',provider:job.agent,status:'complete',actualModel:parsed.actualModel,usage:parsed.usage})+'\n',stderr:'',exitCode:code,actualModel:parsed?.actualModel??null,modelsSeen:parsed?.modelsSeen??[],modelMismatch:parsed?.modelMismatch??false,usage:parsed?.usage??null,modelUsage:null,costUsd:null});return;
       }
@@ -1708,6 +1716,8 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
         : job.agent === 'cursor' ? spawnImpl('sandbox-exec', cursorLaunchArgs(job, { ...cursor, message }), { cwd, shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: cursor.env })
         // Decision #154: the whole claude process, not each command, runs inside the profile.
         : claudeShell ? spawnImpl('sandbox-exec', ['-f', claudeShell.profile, claudeShell.bin, ...claudeShellArgs(job)], { cwd, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe'], env: claudeShell.env })
+        // Over ssh the local environment never travels: ssh gets only what it needs to find its own key.
+        : cliHost ? (() => { const ssh = sshInvocation(cliHost, extraCliArgs(job)); return spawnImpl(ssh.command, ssh.args, { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], env: Object.fromEntries(['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'SSH_AUTH_SOCK'].filter(key => typeof process.env[key] === 'string').map(key => [key, process.env[key]])) }); })()
         : spawnImpl(job.agent, job.agent==='claude'?claudeArgs(job,{resume:resumeSessionId}):extraCliArgs(job), { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], env: job.agent==='claude'?process.env:extraCliEnvironment(job.agent) });
       child.on('error', error => finish(null, error));
       child.once('exit',()=>{
@@ -5950,7 +5960,10 @@ export async function doctor({exec=execViaFile, agent='claude', env=process.env,
   if(agent==='codex')return {...await codexDoctor({exec,platform}),toolchains};
   if(agent==='cursor')return {...await cursorDoctor({exec,platform,env}),toolchains};
   if(process.platform==='win32')fail('Use macOS, Linux, or WSL; native Windows process-group cleanup is not supported');
-  if(EXTRA_CLI_AGENTS.includes(agent))return {...await extraCliDoctor(agent,exec),toolchains};
+  if(EXTRA_CLI_AGENTS.includes(agent)){
+    const host=resolveCliHosts(loadLocalConfig({env}).cliHosts)[agent];
+    return {...await extraCliDoctor(agent,host?remoteExec(host,exec):exec),...(host?{host:host.target,hostCommand:host.command}:{}),toolchains};
+  }
   if(agent!=='claude')return {...await(probeLocal ? probeLocalProvider(agent,env,{timeoutMs:probeTimeoutMs,fetchImpl}) : apiDoctor(agent,env)),toolchains};
   const options={timeout:10000,maxBuffer:1024*1024};
   const version=await exec('claude',['--version'],options);
