@@ -60,12 +60,16 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-15 | - | module: Creates tools/plan-preview.mjs implementing the phase 11 contract: PRIORS, estimatePlan, for | anthropic | claude-haiku-5-5 | pass | 39,408 | $0.01 |
 | 2026-10-15 | - | tests: Adds tests/plan-preview.test.mjs covering the Phase 11 estimate formulas, calibration ratios | anthropic | claude-haiku-5-5 | pass | 25,280 | $0.01 |
 | 2026-10-15 | - | review-11: Phase 11 review: 4 high, 8 medium, 5 low. Biggest: (1) on a dirty tree in a project witho | claude | opus | pass | 15,071 | $0.43 |
+| 2026-10-15 | - | profile-module: Wrote tools/init-profile.mjs covering sections 1 and 3 of the design: detectProtecte | anthropic | claude-haiku-5-5 | pass | 42,192 | $0.02 |
+| 2026-10-15 | - | profile-tests: Wrote tests/init-profile.test.mjs covering sections 1 and 3 of the Phase 12 design ag | anthropic | claude-haiku-5-5 | pass | 40,306 | $0.02 |
+| 2026-10-15 | - | map-module: Implements section 2 of the phase 12 design in tools/repo-map.mjs: buildRepoMap (increme | anthropic | claude-haiku-5-5 | pass | 39,528 | $0.02 |
+| 2026-10-15 | - | map-tests: Adds tests/repo-map.test.mjs for tools/repo-map.mjs (section 2 of the design). It covers | anthropic | claude-haiku-5-5 | pass | 30,087 | $0.01 |
 
 ## Daily summary
 
 | date | tier | calls | pass | fail/blocked | tokens | rough cost |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-10-14 | codex | 34 | 29 | 5 | 2,887,673 | subscription |
-| 2026-10-15 | anthropic | 13 | 8 | 5 | 256,403 | $0.15 |
+| 2026-10-15 | anthropic | 17 | 12 | 5 | 408,516 | $0.22 |
 | 2026-10-15 | claude | 5 | 5 | 0 | 72,085 | $2.19 |
 | 2026-10-15 | codex | 4 | 4 | 0 | 154,596 | subscription |

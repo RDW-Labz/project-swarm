@@ -5,7 +5,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installProject } from './install.mjs';
+import { execFile } from 'node:child_process';
 import { loadChecksFromCi, DEFAULT_CI_PATH } from './checks-from-ci.mjs';
+import { DEFAULT_PROFILE_BUDGET, detectProtectedPaths, normalizeProtectedPath, validateProfile, runBaseChecks, checkSetup } from './init-profile.mjs';
+import { buildRepoMap, readRepoMap, writeRepoMap, summarizeMap } from './repo-map.mjs';
+import { trackedFiles } from './goal.mjs';
 
 const FLAT_ESLINT = ['eslint.config.js', 'eslint.config.mjs', 'eslint.config.cjs', 'eslint.config.ts'];
 
@@ -109,7 +113,61 @@ async function ensureToolIgnores(root) {
   return { changed, warnings };
 }
 
-export async function initProject(root, { source = installSource(), install = installProject } = {}) {
+const WALK_SKIP = new Set(['.git', 'node_modules', '.swarm', 'dist', 'build', '__pycache__', '.venv', 'target']);
+
+// The project's files: tracked ones in a git repo, otherwise a bounded walk.
+export async function listProjectFiles(root) {
+  const tracked = await trackedFiles(root);
+  if (tracked.length) return tracked;
+  const out = [];
+  const walk = async dir => {
+    for (const entry of await fs.readdir(path.join(root, dir), { withFileTypes: true }).catch(() => [])) {
+      if (out.length >= 20000 || entry.isSymbolicLink()) continue;
+      const rel = dir ? `${dir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) { if (!WALK_SKIP.has(entry.name)) await walk(rel); } else if (entry.isFile()) out.push(rel);
+    }
+  };
+  await walk('');
+  return out;
+}
+
+export async function gitHead(root) {
+  return new Promise(resolve => execFile('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }, (error, stdout) => resolve(error ? null : stdout.trim())));
+}
+
+// Runs one check as the owner would: argv, no shell, in the project folder.
+export function runCheckArgv(argv, { cwd, timeoutMs }) {
+  return new Promise((resolve, reject) => {
+    execFile(argv[0], argv.slice(1), { cwd, timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, encoding: 'utf8' }, (error, stdout, stderr) => {
+      if (!error) return resolve({ exitCode: 0, stdout, stderr });
+      if (typeof error.code === 'number') return resolve({ exitCode: error.code, stdout: stdout ?? '', stderr: stderr ?? '' });
+      reject(error);
+    });
+  });
+}
+
+export async function refreshRepoMap(root, { now = Date.now } = {}) {
+  const previous = await readRepoMap(root);
+  const head = await gitHead(root);
+  const map = await buildRepoMap(root, {
+    previous, head, now, list: listProjectFiles,
+    readFile: file => fs.readFile(file),
+    stat: file => fs.stat(file),
+  });
+  await writeRepoMap(root, map);
+  return map;
+}
+
+async function readChecks(root) {
+  try {
+    const parsed = JSON.parse(await fs.readFile(path.join(root, 'coordination/checks.json'), 'utf8'));
+    return Array.isArray(parsed.checks) ? parsed.checks.filter(check => Array.isArray(check?.argv) && check.argv.length) : [];
+  } catch { return []; }
+}
+
+export async function initProject(root, { source = installSource(), install = installProject, sensitive, protect = [], maxUsd, maxTokens, baseCheck = true, map = true, ask, run = runCheckArgv, now = Date.now } = {}) {
+  // The earlier answers are read before install rewrites the pointer file.
+  const priorPointer = await fs.readFile(path.join(root, '.project-swarm.json'), 'utf8').then(text => JSON.parse(text), () => null);
   const linked = await install(root, { source });
   const stack = await detectStack(root);
   const collected = await collectChecks(root, stack);
@@ -117,9 +175,43 @@ export async function initProject(root, { source = installSource(), install = in
   const ignores = await ensureToolIgnores(root);
   const pointerPath = path.join(root, '.project-swarm.json');
   const pointer = JSON.parse(await fs.readFile(pointerPath, 'utf8'));
+  const prior = priorPointer?.profile && typeof priorPointer.profile === 'object' ? priorPointer.profile : {};
   pointer.stack = stack;
+  // The owner's answers are kept: init never asks twice, and an explicit flag overrides.
+  let answer = sensitive ?? prior.sensitive;
+  if (answer === undefined) answer = ask ? await ask() : true;
+  const detected = await detectProtectedPaths(root, { list: listProjectFiles });
+  const profile = {
+    stack,
+    sensitive: answer !== false,
+    protectedPaths: [...new Set([...(prior.protectedPaths ?? []), ...detected, ...protect.map(normalizeProtectedPath)])].sort(),
+    budget: { ...DEFAULT_PROFILE_BUDGET, ...(prior.budget ?? {}), ...(maxUsd !== undefined ? { maxUsd } : {}), ...(maxTokens !== undefined ? { maxTokens } : {}) },
+    baseCheck: baseCheck
+      ? await runBaseChecks(root, await readChecks(root), { run, head: await gitHead(root), now })
+      : (prior.baseCheck ?? { status: 'skipped', ranAt: new Date(now()).toISOString(), head: await gitHead(root), checks: [] }),
+  };
+  const { profile: valid, errors } = validateProfile(profile);
+  if (errors.length) throw Object.assign(new Error(`init-profile-invalid: ${errors[0]}`), { code: 'init-profile-invalid' });
+  pointer.profile = valid;
   await fs.writeFile(pointerPath, `${JSON.stringify(pointer, null, 2)}\n`);
   const warnings = [...ignores.warnings];
   for (const skip of collected.skipped) warnings.push(`checks-from-ci-skipped (${skip.reason}): ${skip.raw}`);
-  return { ...linked, stack, checks: checksFile, ignores: ignores.changed, warnings };
+  if (valid.baseCheck.status === 'red') warnings.push(`base-red: checks already fail before any change: ${valid.baseCheck.checks.filter(check => !check.ok).map(check => check.name).join(', ')}`);
+  let repoMap = null;
+  if (map) { try { repoMap = summarizeMap(await refreshRepoMap(root, { now })); } catch (error) { warnings.push(`repo-map-failed: ${String(error.message).slice(0, 120)}`); } }
+  return { ...linked, stack, profile: valid, checks: checksFile, ignores: ignores.changed, repoMap, warnings };
+}
+
+// Read-only health check of the setup (swarm init --check).
+export async function checkProject(root, { installVersion } = {}) {
+  const read = async name => JSON.parse(await fs.readFile(path.join(root, name), 'utf8'));
+  return checkSetup(root, {
+    readJson: read,
+    exists: name => fs.access(path.join(root, name)).then(() => true, () => false),
+    stat: name => fs.stat(path.join(root, name)),
+    head: () => gitHead(root),
+    installVersion,
+    readMap: () => readRepoMap(root),
+    now: Date.now,
+  });
 }

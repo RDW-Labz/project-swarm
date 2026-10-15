@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.70.0
+
+- `swarm init` v2 (Phase 12). It now writes a **project profile** into `.project-swarm.json`: the stack, whether the project is sensitive (asked once at a terminal, default sensitive without one; `--sensitive` / `--not-sensitive`), **protected paths** that no job may write (detected `.env`, `secrets/`, keys and certificates, plus `--protect PATH`), a default budget (`--max-usd`, `--max-tokens`), and the **base check**: the project's own checks run once at init and recorded, so old failures are not blamed on workers (`--no-base-check` skips it). Running init again keeps the owner's answers.
+- Added the **repo map** (`.swarm/project/repo-map.json`): files with their exports, imports (the import graph), external packages and test-to-source links for JS/TS, Python, Go and Rust, refreshed incrementally (unchanged files are reused). `swarm map` builds or refreshes it and prints a summary; `init` and `plan` keep it fresh.
+- Added `swarm init --check`, a read-only health check of the setup (pointer, version, profile, checks, base check, map, ignores, agent pointers); it exits 1 only on a failure and leaves no journal line.
+- `validate`, `run` and lead child manifests refuse a job that writes or deletes a protected path (`protected-path`). `go` and `plan` use the profile's budget when no flag is given, plan lead jobs as `sensitive: false` when the profile says so, and show a `base-red` risk when the recorded base checks fail. The first run of `swarm go` in a new project initializes it without running the checks or building the map.
+
 ## 1.69.0
 
 - Added plan preview and approval (Phase 11). `swarm plan "GOAL"` shows the leads and scopes, the job count, the lanes, estimated cost, time and peak concurrency, and risks, saves the plan, and runs nothing. `swarm go "GOAL"` prints the same preview and asks `Run? [y/N]`; `--yes` skips it, and with no terminal `--yes` also needs `--max-usd`. `swarm go --plan ID` runs exactly the saved plan (refused if the repo moved, `--accept-stale` overrides, or if the file was edited). After a run the estimate is shown beside the actuals and fed back into later estimates. See [plan-preview](docs/plan-preview.md).

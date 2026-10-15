@@ -164,7 +164,8 @@ export async function runCheckpointCommand(root, args, { now = Date.now } = {}) 
 // Called once at the end of every command (see main()).
 export async function journalAfterCommand(root, argv, { status, ms, printed, now = Date.now } = {}) {
   const command = argv.filter((arg, index) => !(arg === '--root' || argv[index - 1] === '--root'))[0] ?? '';
-  if (!command || NO_JOURNAL.includes(command) || !isSwarmProject(root)) return;
+  // `swarm init --check` promises to write nothing, so it leaves no journal line either.
+  if (!command || NO_JOURNAL.includes(command) || !isSwarmProject(root) || (command === 'init' && argv.includes('--check'))) return;
   await appendEvent(root, journalCommandEvent(argv, status, ms), { now, best: true });
   const rest = argv.filter((arg, index) => !(arg === '--root' || argv[index - 1] === '--root')).slice(1);
   const argument = pickArgument(rest);

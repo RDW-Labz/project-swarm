@@ -26,7 +26,7 @@ export function extractPlanFlags(args) {
 
 // Builds the manifest exactly as `go` would and the preview for it. Nothing runs.
 export async function buildGoalPlan(root, goal, flags, deps) {
-  const options = { folders: await deps.folders(root), files: deps.files ? await deps.files(root) : [], leads: flags.leads ?? 'auto', maxJobs: flags.maxJobs, concurrency: flags.concurrency, checks: flags.checks ?? [], maxUsd: flags.maxUsd ?? deps.defaults.maxUsd, maxTokens: flags.maxTokens ?? deps.defaults.maxTokens };
+  const options = { folders: await deps.folders(root), files: deps.files ? await deps.files(root) : [], leads: flags.leads ?? 'auto', maxJobs: flags.maxJobs, concurrency: flags.concurrency, checks: flags.checks ?? [], ...(flags.sensitive === false ? { sensitive: false } : {}), maxUsd: flags.maxUsd ?? deps.defaults.maxUsd, maxTokens: flags.maxTokens ?? deps.defaults.maxTokens };
   for (const key of ['maxJobs', 'concurrency']) if (options[key] === undefined) delete options[key];
   const manifest = deps.manifestForGoal(goal, options);
   const calibration = await readCalibration(root);

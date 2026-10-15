@@ -97,7 +97,7 @@ function scopeListing(scope, files) {
   return `\n\nFILES IN YOUR SCOPE (${Math.min(inside.length, MAX_LISTED)} of ${inside.length}, exact paths; you cannot read them yourself, so plan from these names):\n${shown}`;
 }
 
-export function manifestForGoal(goal, { folders = [], files = [], leads = 'auto', maxJobs = GOAL_DEFAULTS.maxJobs, concurrency = GOAL_DEFAULTS.concurrency, checks = [], maxUsd = GOAL_BUDGET.maxUsd, maxTokens = GOAL_BUDGET.maxTokens } = {}) {
+export function manifestForGoal(goal, { folders = [], files = [], sensitive, leads = 'auto', maxJobs = GOAL_DEFAULTS.maxJobs, concurrency = GOAL_DEFAULTS.concurrency, checks = [], maxUsd = GOAL_BUDGET.maxUsd, maxTokens = GOAL_BUDGET.maxTokens } = {}) {
   const text = typeof goal === 'string' ? goal.trim() : '';
   if (!text || text.length > 2000) throw goalError('goal-invalid', 'goal must be 1–2000 characters');
   if (!Number.isInteger(maxJobs) || maxJobs < 1 || maxJobs > 500) throw goalError('goal-max-jobs', '--max-jobs must be an integer 1–500');
@@ -121,6 +121,7 @@ export function manifestForGoal(goal, { folders = [], files = [], leads = 'auto'
       id: `lead-${index + 1}`,
       type: 'lead',
       agent: 'auto',
+      ...(sensitive === false ? { sensitive: false } : {}),
       prompt: `You own only these folders: ${scope.join(', ')}. Turn this goal into child jobs inside that scope. Every child job uses a short report.\n\nGOAL:\n${text}${scopeListing(scope, files)}`,
       context: [],
       outputs: [`goal-lead-${index + 1}.json`],
