@@ -20,7 +20,7 @@ const USAGE = {
   brain: 'Usage: swarm brain status|stats|test [--json] [--markdown]\n',
 };
 const bad = command => ({ stdout: USAGE[command], exitCode: 1 });
-const SECRET_PATH = /(^|\/)(\.env(\..*)?|\.git|\.ssh|\.aws|\.gnupg|id_rsa|id_ed25519)(\/|$)|\.(pem|key|p12|pfx|keystore)$/i;
+const SECRET_PATH = /(^|\/)(\.env(\..*)?|\.git|\.git-credentials|\.ssh|\.aws|\.gnupg|\.docker|\.swarm|\.npmrc|\.netrc|\.pypirc|id_rsa|id_ed25519|id_ecdsa|credentials(\.json)?)(\/|$)|\.(pem|key|p12|pfx|keystore)$/i;
 const MAX_FILE = 2 * 1024 * 1024;
 
 export function brainSettings(env = process.env) {
@@ -53,8 +53,10 @@ export function haikuFallback({ env = process.env, fetchImpl = fetch, now = () =
     const body = await response.json().catch(() => null);
     const text = Array.isArray(body?.content) ? body.content.filter(block => block.type === 'text').map(block => block.text).join('') : '';
     const usage = body?.usage ?? {};
-    const paidUsd = usageCostUsd(model, usage);
-    appendLedger(file, { ts: stamp.toISOString(), jobId, model, costUsd: paidUsd, estimated: false });
+    // A reply without usage is recorded at the worst case, never at zero.
+    const known = Number.isFinite(Number(usage.input_tokens)) && Number.isFinite(Number(usage.output_tokens));
+    const paidUsd = known ? usageCostUsd(model, usage) : worstUsd;
+    appendLedger(file, { ts: stamp.toISOString(), jobId, model, costUsd: paidUsd, estimated: !known });
     return { text, usage: { inTokens: Number(usage.input_tokens) || 0, outTokens: Number(usage.output_tokens) || 0 }, paidUsd };
   };
 }
@@ -83,6 +85,7 @@ export function createProjectBrain({ root, env = process.env, openLink = openBra
   let linkPromise = null;
   const getLink = async () => {
     if (!settings.enabled || !settings.sshTarget || !settings.sshKey || !settings.keyCommand) return null;
+    if (linkPromise && (await linkPromise)?.status().up === false) linkPromise = null;
     linkPromise ??= openLink({ sshTarget: settings.sshTarget, sshKey: expandHome(settings.sshKey), remotePort: settings.remotePort ?? 8000, keyCommand: settings.keyCommand }, {}).catch(() => null);
     return linkPromise;
   };
@@ -100,11 +103,18 @@ const oneLine = text => sanitizeText(String(text)).replace(/\s+/g, ' ').trim();
 async function readProjectFile(root, profile, relative, { max = MAX_FILE } = {}) {
   const clean = path.posix.normalize(String(relative).split(path.sep).join('/'));
   if (path.isAbsolute(clean) || clean.startsWith('..') || SECRET_PATH.test(clean) || protectedPathHit(profile, clean)) throw new Error(`brain-path-refused: ${oneLine(relative)} is a protected or secret path`);
+  const realRoot = await fs.realpath(root);
   const real = await fs.realpath(path.join(root, clean));
-  if (!real.startsWith(`${await fs.realpath(root)}${path.sep}`)) throw new Error(`brain-path-refused: ${oneLine(relative)} resolves outside the project`);
-  const stat = await fs.stat(real);
-  if (!stat.isFile() || stat.size > max) throw new Error(`brain-path-refused: ${oneLine(relative)} is not a plain file under ${max} bytes`);
-  return fs.readFile(real, 'utf8');
+  if (!real.startsWith(`${realRoot}${path.sep}`)) throw new Error(`brain-path-refused: ${oneLine(relative)} resolves outside the project`);
+  // What the path really points at is checked too: a link to .env or a protected folder is that file.
+  const target = path.relative(realRoot, real).split(path.sep).join('/');
+  if (SECRET_PATH.test(target) || protectedPathHit(profile, target)) throw new Error(`brain-path-refused: ${oneLine(relative)} is a protected or secret path`);
+  const handle = await fs.open(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > max) throw new Error(`brain-path-refused: ${oneLine(relative)} is not a plain file under ${max} bytes`);
+    return await handle.readFile('utf8');
+  } finally { await handle.close(); }
 }
 
 function flagValue(args, name) {
@@ -152,7 +162,7 @@ export async function runBrainCommand(root, command, args, { env = process.env, 
     if (command === 'think') {
       const rounds = flagValue(rest0, '--rounds');
       if (!rounds || rounds.rest.length !== 1) return finish(bad('think'));
-      const result = await think(project.ask, rounds.rest[0], { ...(rounds.value !== undefined ? { rounds: Number(rounds.value) } : {}) });
+      const result = await think(request => project.ask({ ...request, sensitive }), rounds.rest[0], { ...(rounds.value !== undefined ? { rounds: Number(rounds.value) } : {}) });
       await project.saved('think', result.savedTokens);
       return finish({ stdout: json ? `${JSON.stringify(result)}\n` : `${result.top3.map((entry, index) => `${index + 1}. ${entry.title} - ${entry.reason}`).join('\n')}\n(via ${result.via}, ${result.rounds} rounds)\n`, exitCode: 0 });
     }
@@ -161,7 +171,7 @@ export async function runBrainCommand(root, command, args, { env = process.env, 
       if (!kind || kind.rest.length !== 1 || (kind.value !== undefined && !['log', 'diff', 'tests', 'run'].includes(kind.value))) return finish(bad('digest'));
       const source = kind.rest[0];
       let text;
-      if (source === '-') { const chunks = []; for await (const chunk of stdin) chunks.push(chunk); text = Buffer.concat(chunks).toString('utf8').slice(0, MAX_FILE); }
+      if (source === '-') { const chunks = []; let size = 0; for await (const chunk of stdin) { chunks.push(chunk); size += chunk.length; if (size >= MAX_FILE) break; } text = Buffer.concat(chunks).toString('utf8').slice(0, MAX_FILE); }
       else if (/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(source) && await fs.stat(path.join(root, '.swarm', 'runs', source)).then(() => true, () => false)) text = runDigestText(await readState(root, source));
       else text = await readProjectFile(root, profile, source);
       const result = await digest((request) => project.ask({ ...request, sensitive }), text, { kind: kind.value ?? 'log' });
@@ -172,6 +182,20 @@ export async function runBrainCommand(root, command, args, { env = process.env, 
       const context = flagValue(rest0, '--context');
       const out = context && flagValue(context.rest, '--out');
       if (!context || !out || out.rest.length !== 2 || !['docs', 'pr', 'plan'].includes(out.rest[0])) return finish(bad('draft'));
+      // The destination is checked before any model is asked (and before anything is paid for): inside the project, not a secret or
+      // protected path, and no folder on the way may be a link out of the project.
+      let target = null;
+      if (out.value) {
+        const clean = path.posix.normalize(out.value);
+        if (path.isAbsolute(clean) || clean.startsWith('..') || SECRET_PATH.test(clean) || protectedPathHit(profile, clean)) throw new Error(`brain-path-refused: ${oneLine(out.value)} is protected or outside the project`);
+        target = path.join(root, clean);
+        const realRoot = await fs.realpath(root);
+        let probe = path.dirname(target);
+        while (!(await fs.lstat(probe).then(() => true, () => false))) probe = path.dirname(probe);
+        const realParent = await fs.realpath(probe);
+        if (realParent !== realRoot && !realParent.startsWith(`${realRoot}${path.sep}`)) throw new Error(`brain-path-refused: ${oneLine(out.value)} would be written outside the project`);
+        if (SECRET_PATH.test(path.relative(realRoot, path.join(realParent, path.relative(probe, target))).split(path.sep).join('/'))) throw new Error(`brain-path-refused: ${oneLine(out.value)} is a secret path`);
+      }
       const files = context.value ? context.value.split(',').filter(Boolean).slice(0, 10) : [];
       const texts = [];
       for (const file of files) texts.push(`--- ${oneLine(file)}\n${(await readProjectFile(root, profile, file, { max: 200000 })).slice(0, 20000)}`);
@@ -184,13 +208,10 @@ export async function runBrainCommand(root, command, args, { env = process.env, 
       };
       const result = await draftThenPolish(ask, polish, { kind: out.rest[0], brief: out.rest[1], context: texts.join('\n\n') });
       await project.saved('draft', result.savedTokens);
-      if (out.value) {
-        const target = path.join(root, out.value);
-        const clean = path.posix.normalize(out.value);
-        if (path.isAbsolute(clean) || clean.startsWith('..') || SECRET_PATH.test(clean) || protectedPathHit(profile, clean)) throw new Error(`brain-path-refused: ${oneLine(out.value)} is protected or outside the project`);
+      if (target) {
         await fs.mkdir(path.dirname(target), { recursive: true });
-        await assertRegularOrMissing(target);
-        await fs.writeFile(target, `${result.text}\n`, { flag: 'wx' }).catch(error => { throw error.code === 'EEXIST' ? new Error(`brain-path-refused: ${oneLine(out.value)} already exists`) : error; });
+        const handle = await fs.open(target, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o644).catch(error => { throw error.code === 'EEXIST' ? new Error(`brain-path-refused: ${oneLine(out.value)} already exists`) : error; });
+        try { await handle.writeFile(`${result.text}\n`); } finally { await handle.close(); }
       }
       return finish({ stdout: json ? `${JSON.stringify(result)}\n` : `${result.text}\n${result.polished ? '' : `(${result.polishNote})\n`}`, exitCode: 0 });
     }
@@ -205,17 +226,28 @@ export async function runBrainCommand(root, command, args, { env = process.env, 
 export async function triageRun(root, runId, { project, readState, projectProfile }) {
   const state = await readState(root, runId);
   const profile = await projectProfile?.(root);
-  const sensitive = profile?.sensitive !== false;
+  const projectSensitive = profile?.sensitive !== false;
+  // A job is sensitive unless both the project and the job itself say it is not.
+  let manifestJobs = [];
+  try { manifestJobs = JSON.parse(await fs.readFile(path.join(root, '.swarm', 'runs', runId, 'manifest.json'), 'utf8')).jobs ?? []; } catch { manifestJobs = []; }
   const verdicts = [];
   for (const job of (state.jobs ?? []).filter(entry => ['failed', 'timeout'].includes(entry.status)).slice(0, 20)) {
     let tail = '';
-    try { tail = (await fs.readFile(path.join(root, '.swarm', 'runs', runId, job.id, 'response.txt'), 'utf8')).slice(-2000); } catch { /* no response to read */ }
-    const result = await triage(request => project.ask({ ...request, sensitive }), { jobId: job.id, status: job.status, error: job.error ?? '', tail, attempts: job.attempts?.length ?? 0, agent: job.agent ?? '', sensitive });
+    try {
+      const handle = await fs.open(path.join(root, '.swarm', 'runs', runId, job.id, 'response.txt'), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+      try { tail = (await handle.readFile('utf8')).slice(-2000); } finally { await handle.close(); }
+    } catch { /* no response to read */ }
+    const sensitive = projectSensitive || manifestJobs.find(entry => entry.id === job.id)?.sensitive !== false;
+    const attempts = Array.isArray(job.attempts) ? job.attempts.length : Number(job.attempts) || 0;
+    const result = await triage(request => project.ask({ ...request, sensitive }), { jobId: job.id, status: job.status, error: job.error ?? '', tail, attempts, agent: job.agent ?? '', sensitive });
     await project.saved('triage', result.savedTokens);
     verdicts.push({ job: job.id, verdict: result.verdict, hint: result.hint, via: result.via });
     try {
       const dir = path.join(root, '.swarm', 'runs', runId, job.id);
-      await fs.writeFile(path.join(dir, 'triage.json'), `${JSON.stringify({ verdict: result.verdict, hint: result.hint, via: result.via, at: new Date().toISOString() })}\n`);
+      const file = path.join(dir, 'triage.json');
+      await assertRegularOrMissing(file);
+      const handle = await fs.open(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW, 0o600);
+      try { await handle.writeFile(`${JSON.stringify({ verdict: result.verdict, hint: result.hint, via: result.via, at: new Date().toISOString() })}\n`); } finally { await handle.close(); }
     } catch { /* a missing job folder only means no record on disk */ }
   }
   return verdicts;

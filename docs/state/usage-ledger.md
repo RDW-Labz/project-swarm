@@ -72,6 +72,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-15 | - | brain-tests: Adds tests/brain.test.mjs for tools/brain.mjs as specified in section 2 of docs/plans/p | anthropic | claude-haiku-5-5 | pass | 23,811 | $0.01 |
 | 2026-10-15 | - | tasks-module: Implements section 3 of the design in tools/brain-tasks.mjs: think, digest, triage, dr | anthropic | claude-haiku-5-5 | pass | 28,587 | $0.01 |
 | 2026-10-15 | - | tasks-tests: Adds tests/brain-tasks.test.mjs for tools/brain-tasks.mjs, using injected fake ask func | anthropic | claude-haiku-5-5 | pass | 22,244 | $0.01 |
+| 2026-10-15 | - | review-14b: Phase 14b safety review. Highs: think ignores project sensitivity, so it can fall back t | claude | opus | pass | 64,577 | $0.56 |
 
 ## Daily summary
 
@@ -79,5 +80,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-10-14 | codex | 34 | 29 | 5 | 2,887,673 | subscription |
 | 2026-10-15 | anthropic | 23 | 18 | 5 | 548,350 | $0.28 |
-| 2026-10-15 | claude | 7 | 7 | 0 | 106,788 | $3.19 |
+| 2026-10-15 | claude | 8 | 8 | 0 | 171,365 | $3.75 |
 | 2026-10-15 | codex | 4 | 4 | 0 | 154,596 | subscription |

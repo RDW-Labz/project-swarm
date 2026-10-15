@@ -95,7 +95,9 @@ export function createBrain({ getLink, fallback = null, concurrency = 1, timeout
       }
     }
     if (req.sensitive || !fallback) throw fail('brain-unavailable', 'local brain unavailable');
-    const r = await fallback(messages, { maxTokens: req.maxTokens });
+    // A request abandoned at its timeout must not go on to pay for an answer nobody will read.
+    if (signal.aborted) throw fail('brain-unavailable', 'brain-unavailable: timeout');
+    const r = await fallback(messages, { maxTokens: req.maxTokens, signal });
     const paidUsd = Number.isFinite(r?.paidUsd) && r.paidUsd > 0 ? r.paidUsd : 0;
     return { text: r?.text, via: 'haiku', usage: usageOf(r?.usage, messages, r?.text), paidUsd };
   }
@@ -139,7 +141,8 @@ export function createBrain({ getLink, fallback = null, concurrency = 1, timeout
     const messages = buildMessages(req);
     const normalized = {
       kind: req.kind,
-      sensitive: req.sensitive === true,
+      // Unspecified means sensitive: nothing goes to a paid model unless the caller said it may.
+      sensitive: req.sensitive !== false,
       maxTokens: Number.isFinite(req.maxTokens) && req.maxTokens > 0 ? Math.floor(req.maxTokens) : 600,
       temperature: Number.isFinite(req.temperature) ? req.temperature : 0.2,
       savedTokens: req.savedTokens,

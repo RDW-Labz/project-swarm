@@ -6,7 +6,7 @@ import { createBrain, BRAIN_LIMITS, estimateTokens, summarizeBrainLedger } from 
 import { sanitizeText } from '../tools/journal.mjs';
 
 const OK = { text: 'ok', model: 'm', usage: { inTokens: 3, outTokens: 2 } };
-const req = (extra = {}) => ({ kind: 'think', system: 's', user: 'u', ...extra });
+const req = (extra = {}) => ({ kind: 'think', system: 's', user: 'u', sensitive: false, ...extra });
 const never = () => new Promise(() => {});
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const settle = async () => { for (let i = 0; i < 10; i++) await flush(); };
@@ -320,4 +320,22 @@ test('a saved-only event adds saved tokens without counting as a call', () => {
   assert.equal(sum.savedTokens, 900);
   assert.deepEqual(sum.byKind.digest, { calls: 1, savedTokens: 900 });
   assert.equal(sum.byKind.think.calls, 0);
+});
+
+test('a request that does not say whether it is sensitive is treated as sensitive: it never reaches the fallback', async () => {
+  const fb = fallback();
+  const b = createBrain({ getLink: async () => null, fallback: fb });
+  await assert.rejects(b.ask({ kind: 'think', system: 's', user: 'u' }), { code: 'brain-unavailable' });
+  assert.equal(fb.n, 0);
+  await b.close();
+});
+
+test('a request abandoned at its timeout does not go on to pay for the fallback', async () => {
+  const fb = fallback();
+  const slowLink = { status: () => ({ up: true }), chat: (messages, { signal }) => new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('x'), { code: 'brain-unavailable' })))), close() {} };
+  const b = createBrain({ getLink: async () => slowLink, fallback: fb, timeoutMs: 40 });
+  await assert.rejects(b.ask(req()), { code: 'brain-unavailable' });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(fb.n, 0);
+  await b.close();
 });

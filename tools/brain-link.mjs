@@ -48,6 +48,8 @@ export async function openBrainLink(config, deps = {}) {
   const now = deps.now ?? Date.now;
   const { sshTarget, sshKey, remotePort = 8000, keyCommand, readyTimeoutMs = 20000 } = config ?? {};
   if (!sshTarget || !sshKey || !keyCommand) throw unavailable('config');
+  // A target that starts with a dash would be read by ssh as an option (-oProxyCommand=...), so only user@host or host is accepted.
+  if (typeof sshTarget !== 'string' || !/^(?:[A-Za-z0-9._-]{1,64}@)?[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$/.test(sshTarget) || !Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) throw unavailable('config');
   const sshBase = ['-i', sshKey, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=10'];
   let key = null;
   let proc = null;
@@ -62,7 +64,7 @@ export async function openBrainLink(config, deps = {}) {
     // The link to dev2 can drop a connection attempt; three tries, a second apart, before giving up.
     let out, lastError = null;
     for (let attempt = 0; attempt < 3 && out === undefined; attempt += 1) {
-      try { out = await execFile('ssh', [...sshBase, sshTarget, keyCommand], { timeout: 30000 }); }
+      try { out = await execFile('ssh', [...sshBase, '--', sshTarget, keyCommand], { timeout: 30000 }); }
       catch (error) { lastError = error; if (attempt < 2) await sleep(1000); }
     }
     if (out === undefined) throw unavailable('key');
@@ -73,7 +75,7 @@ export async function openBrainLink(config, deps = {}) {
 
   function startTunnel() {
     const args = ['-N', '-L', `127.0.0.1:${port}:127.0.0.1:${remotePort}`, ...sshBase,
-      '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=10', '-o', 'ServerAliveCountMax=3', sshTarget];
+      '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=10', '-o', 'ServerAliveCountMax=3', '--', sshTarget];
     proc = spawn('ssh', args, { stdio: ['ignore', 'ignore', 'ignore'] });
     const down = () => { exited = true; up = false; };
     proc.on('error', down);

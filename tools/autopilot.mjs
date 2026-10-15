@@ -230,6 +230,8 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     }
     // A failed job is classified before it is retried. Only the verdict is used here: needs-human becomes a blocker for the
     // owner (an inbox item) instead of a retry; the hint is for the owner's eyes and is never put into a prompt.
+    // A run with an open triage blocker is the owner's to look at; it is not triaged again every step.
+    if (decision.action === 'retry-failed' && [...openIds(events)].some(id => id.startsWith(`triage-${run.id}-`))) continue;
     if (decision.action === 'retry-failed' && typeof deps.triage === 'function') {
       const verdicts = await safe(() => deps.triage(root, run.id), []);
       const list = Array.isArray(verdicts) ? verdicts : [];

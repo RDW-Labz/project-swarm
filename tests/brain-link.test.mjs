@@ -197,3 +197,20 @@ test('the key stays out of status, tunnel args and errors; it goes only in the a
   assert.equal(auth, 'Bearer ' + KEY);
   link.close();
 });
+
+test('an ssh target that could be read as an option, or a bad port, is refused before anything runs', async () => {
+  for (const sshTarget of ['-oProxyCommand=touch /tmp/x', 'a b', 'user@', '', 'x'.repeat(300)]) {
+    const r = rig();
+    await assert.rejects(openBrainLink({ ...CONFIG, sshTarget }, r.deps), { code: 'brain-unavailable' }, sshTarget);
+    assert.equal(r.sp.calls.length, 0);
+  }
+  for (const remotePort of [0, 70000, 1.5, '8000']) await assert.rejects(openBrainLink({ ...CONFIG, remotePort }, rig().deps), { code: 'brain-unavailable' });
+});
+
+test('ssh is told where options end before the target', async () => {
+  const r = rig();
+  const link = await openBrainLink(CONFIG, r.deps);
+  const args = r.sp.calls[0].args;
+  assert.equal(args[args.indexOf(CONFIG.sshTarget) - 1], '--');
+  link.close();
+});

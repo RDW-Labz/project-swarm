@@ -34,6 +34,7 @@ Also automatic:
 
 ## Rules
 
+- A request that does not say whether it is sensitive is treated as sensitive.
 - One queue, concurrency 1 to 2 (the model server is shared). Requests time out; nothing waits forever.
 - Everything it returns is untrusted text: sanitized (control characters, bidi, secrets redacted), length-capped, never executed, never used as instructions, and it can never approve, merge, raise a cap or change routing.
 - **Sensitive material only goes to the local model.** A project marked sensitive (the default, see [init](init.md)) never has a request sent to Haiku: if dev2 is down the command says "local brain unavailable" and does nothing. A project marked not sensitive falls back to Haiku on the Anthropic lane under the machine-wide caps.

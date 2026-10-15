@@ -97,7 +97,8 @@ export function prefilterLog(text, { maxChars = 12000 } = {}) {
 export async function digest(ask, text, { kind = 'log', maxLines = 15 } = {}) {
   if (!Number.isInteger(maxLines) || maxLines < 1 || maxLines > 15) throw invalid('maxLines');
   const input = String(text ?? '');
-  const prepared = prefilterLog(input, { maxChars: 12000 });
+  // Redacted before anything is cut or sent: a secret in a log must not reach any model.
+  const prepared = prefilterLog(sanitizeLong(input), { maxChars: 12000 });
   const system = `Condense the ${oneLine(kind, 20)} data into at most ${maxLines} plain lines, one per line. No markdown tables. Keep numbers and file names exactly. ${SAFE}`;
   const user = `<data>\n${prepared}\n</data>`;
   const res = await ask({ kind: 'digest', system, user, maxTokens: 400, savedTokens: Math.max(0, est(prepared) - Math.ceil(maxLines * 50)) });
@@ -154,7 +155,10 @@ function parseIssues(text) {
 export async function preflight(ask, jobs) {
   const list = Array.isArray(jobs) ? jobs.slice(0, 30) : [];
   const results = [];
+  // A slow brain must not hold up a run: one minute for the whole pass, the rest are skipped.
+  const deadline = Date.now() + 60000;
   for (const job of list) {
+    if (Date.now() > deadline) break;
     const j = job ?? {};
     const user = `<prompt>\n${cut(sanitizeLong(j.prompt), 3000)}\n</prompt>\n<context>\n${listText(j.context)}\n</context>\n<outputs>\n${listText(j.outputs)}\n</outputs>\nagent: ${oneLine(j.agent ?? '', 80)}`;
     let issues;

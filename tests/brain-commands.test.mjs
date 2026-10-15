@@ -185,3 +185,45 @@ test('brain stats totals the ledger; a project brain with no config is down and 
   assert.equal((await runBrainCommand(root, 'brain', ['bogus'], { createBrain: () => fakeProject() })).exitCode, 1);
   assert.match(runDigestText({ id: 'r', status: 'failed', jobs: [{ id: 'x', status: 'failed', error: 'e' }, { id: 'y', status: 'complete' }] }), /job x failed error: e/);
 });
+
+test('review fixes: think carries the project sensitivity; a link to a secret file is refused; draft checks --out before any model call', async t => {
+  const root = await tmp(t);
+  const sensitiveProject = fakeProject({ think: JSON.stringify(options) });
+  await run(root, 'think', ['q'], sensitiveProject, { projectProfile: async () => ({ sensitive: true, protectedPaths: [] }) });
+  assert.equal(sensitiveProject.asked[0].sensitive, true);
+  const open = fakeProject({ think: JSON.stringify(options) });
+  await run(root, 'think', ['q'], open, { projectProfile: async () => ({ sensitive: false, protectedPaths: [] }) });
+  assert.equal(open.asked[0].sensitive, false);
+  await fs.writeFile(path.join(root, '.env'), 'S=1');
+  await fs.symlink(path.join(root, '.env'), path.join(root, 'innocent.txt'));
+  const project = fakeProject({ digest: 'x', draft: 'x' });
+  const link = await run(root, 'digest', ['innocent.txt'], project);
+  assert.match(link.stdout, /brain-path-refused/);
+  await fs.mkdir(path.join(root, 'real'));
+  await fs.symlink(os.tmpdir(), path.join(root, 'real/out'));
+  const out = await run(root, 'draft', ['docs', 'b', '--out', 'real/out/leak.md'], project);
+  assert.match(out.stdout, /outside the project/);
+  assert.equal(project.asked.length, 0, 'refused before the model was asked');
+  await assert.rejects(fs.stat(path.join(os.tmpdir(), 'leak.md')));
+  for (const name of ['.npmrc', 'id_ecdsa', '.git-credentials', 'credentials.json']) {
+    await fs.writeFile(path.join(root, name), 'x');
+    assert.match((await run(root, 'digest', [name], project)).stdout, /brain-path-refused/, name);
+  }
+});
+
+test('review fixes: triage treats a job as sensitive unless project and job both say it is not; autopilot does not triage a run again while its blocker is open', async t => {
+  const root = await tmp(t);
+  await fs.mkdir(path.join(root, '.swarm/runs/r1'), { recursive: true });
+  await fs.writeFile(path.join(root, '.swarm/runs/r1/manifest.json'), JSON.stringify({ jobs: [{ id: 'a', sensitive: true }, { id: 'b', sensitive: false }] }));
+  const readState = async () => ({ id: 'r1', jobs: [{ id: 'a', status: 'failed', error: 'e', attempts: 1 }, { id: 'b', status: 'failed', error: 'e', attempts: 1 }] });
+  const project = fakeProject({ triage: JSON.stringify({ verdict: 'retry', hint: '' }) });
+  await triageRun(root, 'r1', { project, readState, projectProfile: async () => ({ sensitive: false }) });
+  assert.deepEqual(project.asked.map(request => request.sensitive), [true, false]);
+  let triaged = 0;
+  const events = [{ kind: 'blocker', id: 'triage-r1-a', text: 'x' }];
+  const deps = { loadRuns: async () => [{ id: 'r1', status: 'failed', counts: { failed: 1 } }], readJournal: async () => events, appendEvent: async () => {}, readPlan: async () => null, checkout: async () => ({ branch: 'swarm/x', dirty: false }), integrate: async () => ({}), resume: async () => {}, startWave: async () => ({}), retryFailed: async () => assert.fail('no retry while a human blocker is open'), triage: async () => { triaged++; return []; } };
+  await autopilotStep('/x', deps, { now: () => 1, memory: new Set() });
+  assert.equal(triaged, 0);
+  const numberAttempts = await triageRun(root, 'r1', { project: fakeProject({ triage: JSON.stringify({ verdict: 'retry', hint: '' }) }), readState: async () => ({ id: 'r1', jobs: [{ id: 'a', status: 'failed', error: 'e', attempts: 3 }] }), projectProfile: async () => null });
+  assert.equal(numberAttempts[0].verdict, 'escalate', 'a numeric attempts count still caps retries');
+});
