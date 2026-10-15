@@ -96,3 +96,19 @@ test('a manifest can ask for an adaptive lane, and the setting is validated', ()
   assert.doesNotThrow(() => validateManifest({ version: 1, lanes: { openai: { concurrency: 40, adaptive: { start: 4, min: 2 } } }, jobs }));
   assert.throws(() => validateManifest({ version: 1, lanes: { openai: { concurrency: 40, adaptive: { start: 99 } } }, jobs }), /lanes-invalid/);
 });
+
+test('review fixes: overlap spelled differently is still refused; tokens include cache tokens', async t => {
+  const out = (a, b) => validateManifest({ version: 1, jobs: [{ id: 'a', agent: 'codex', model: 'gpt-6.1-sol', prompt: 'x', context: [], outputs: [a] }, { id: 'b', agent: 'codex', model: 'gpt-6.1-sol', prompt: 'x', context: [], outputs: [b] }] });
+  assert.throws(() => out('Docs', 'docs/A.md'), /Overlapping output paths/);
+  assert.throws(() => out('docs/x.md', 'DOCS/x.md'), /Output collision/);
+  // cache tokens count toward a job's total tokens
+  const root = await repo(t);
+  const reply = { type: 'message', model: 'claude-haiku-5-5', stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify({ summary: 'ok', files: [{ path: 'out/1.txt', content: 'o\n' }], edits: [] }) }], usage: { input_tokens: 100, output_tokens: 50, cache_creation_input_tokens: 400, cache_read_input_tokens: 1000 } };
+  const logs = path.join(root, '.swarm/logs');
+  const state = await runManifest(root, { version: 1, jobs: [{ id: 'c', agent: 'anthropic', model: 'claude-haiku-5-5', sensitive: true, prompt: 'Write out/1.txt', context: ['input.txt'], cacheContext: ['input.txt'], outputs: ['out/1.txt'], timeoutMs: 30000 }] }, {
+    env: { ...env(root), SWARM_ANTHROPIC_API_KEY: 'sk-ant-test-0123456789', SWARM_LOGS_DIR: logs }, id: 'tokens',
+    fetchImpl: async () => new Response(JSON.stringify(reply), { headers: { 'content-type': 'application/json' } }),
+  });
+  assert.equal(state.status, 'complete', state.jobs[0]?.error);
+  assert.equal(state.jobs[0].usage.total_tokens, 100 + 50 + 400 + 1000);
+});

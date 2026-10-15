@@ -20,29 +20,32 @@ async function git(cwd, args) {
 
 // A repo's identity does not change while a command runs, and a manifest of thousands of jobs asks for it once per job.
 const memo = new Map();
+// Only answers git really gave are remembered; a fallback made while git failed is never cached, and the map stays small.
 function memoized(key, make) {
   const hit = memo.get(key);
   const at = Date.now();
   if (hit && at - hit.at < 2000) return hit.value;
-  const value = make();
+  const raw = make();
+  const value = raw.then(result => result.answer);
+  if (memo.size > 100) memo.delete(memo.keys().next().value);
   memo.set(key, { at, value });
-  value.catch(() => memo.delete(key));
+  raw.then(result => { if (!result.cache) memo.delete(key); }, () => memo.delete(key));
   return value;
 }
 
 export function repoKey(root) {
   return memoized(`key:${root}`, async () => {
     try {
-      return await fs.realpath(await git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
+      return { cache: true, answer: await fs.realpath(await git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir'])) };
     } catch {
-      return await fs.realpath(root);
+      return { cache: false, answer: await fs.realpath(root) };
     }
   });
 }
 
 export async function repoPaths(root, outputs) {
   const toplevel = await memoized(`top:${root}`, async () => {
-    try { return await fs.realpath(await git(root, ['rev-parse', '--show-toplevel'])); } catch { return null; }
+    try { return { cache: true, answer: await fs.realpath(await git(root, ['rev-parse', '--show-toplevel'])) }; } catch { return { cache: false, answer: null }; }
   });
   if (toplevel === null) return [...outputs];
   const realRoot = await fs.realpath(root);

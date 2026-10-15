@@ -3,9 +3,6 @@
 // Copyright 2026 Project Swarm contributors
 // Fresh, project-local workers. No daemon or terminal attachment; a worker shell exists only inside a sandbox (codex, claude shell jobs).
 import fs from 'node:fs/promises';
-// File work for thousands of jobs shares libuv's thread pool (4 threads by default, which capped a run at 4 jobs in flight).
-// It is read when the pool starts, so it is set before the first async file call.
-process.env.UV_THREADPOOL_SIZE ||= '32';
 import { createReadStream, realpathSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -958,7 +955,7 @@ async function jsonWrite(root, value, data) {
   const temporary = `${target}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   try {
     // A run of thousands of jobs is megabytes of state; pretty-printing it costs more than writing it.
-    await fs.writeFile(temporary, `${JSON.stringify(data, null, (data?.jobs?.length ?? 0) > 200 ? 0 : 2)}\n`, { flag: 'wx' });
+    await fs.writeFile(temporary, `${JSON.stringify(data, null, value.endsWith('/state.json') && (data?.jobs?.length ?? 0) > 200 ? 0 : 2)}\n`, { flag: 'wx' });
     await fs.rename(temporary, target);
   } catch (error) {
     await fs.unlink(temporary).catch(() => {});
@@ -1391,8 +1388,10 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
       for (const pattern of job.contextGlob) parseContextGlob(pattern);
     }
     for (const file of outputJobs && !outputJobs.has(job.id) ? [] : job.outputs) {
-      if (writers.has(file.toLowerCase())) fail(`Output collision (case-insensitive): ${file}`);
-      writers.add(file.toLowerCase());
+      // Compared in one normal form (no ./, no trailing slash, lower case), so spelling cannot hide an overlap.
+      const normalOutput = path.posix.normalize(file).replace(/\/+$/, '').toLowerCase();
+      if (writers.has(normalOutput)) fail(`Output collision (case-insensitive): ${file}`);
+      writers.add(normalOutput);
     }
     // Tests a job knowingly leaves uncovered by context; same path rules as context/outputs.
     if (job.ignoreTests !== undefined) {
@@ -2723,17 +2722,26 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
       // The wait grows with the cost of the last save (about 10% of the time goes to saving, however large the run is);
       // a small run keeps the 20 ms window.
       let lastSaveMs = 0;
-      while (pendingWrite) {
-        await new Promise(resolve => setTimeout(resolve, Math.max(20, Math.min(2000, lastSaveMs * 8))));
+      try {
+        while (pendingWrite) {
+          await new Promise(resolve => setTimeout(resolve, Math.max(20, Math.min(2000, lastSaveMs * 8))));
+          pendingWrite = false;
+          const target = requested;
+          const began = performance.now();
+          await save();
+          lastSaveMs = performance.now() - began;
+          for (const waiter of saveWaiters.splice(0)) { if (waiter.mine <= target) waiter.resolve(); else saveWaiters.push(waiter); }
+        }
+      } catch (error) {
+        for (const waiter of saveWaiters.splice(0)) waiter.reject(error);
         pendingWrite = false;
-        const target = requested;
-        const began = performance.now();
-        await save();
-        lastSaveMs = performance.now() - began;
-        for (const waiter of saveWaiters.splice(0)) { if (waiter.mine <= target) waiter.resolve(); else saveWaiters.push(waiter); }
+      } finally {
+        // Cleared in the same turn the loop ends, so a caller woken by the last save can never find a writer that has already quit.
+        writes = null;
       }
-    })().catch(error => { for (const waiter of saveWaiters.splice(0)) waiter.reject(error); throw error; }).finally(() => { writes = null; });
-    writes.catch(() => {});
+    })();
+    // Callers that do not wait (progress ticks, host hooks) must not turn a failed save into an unhandled rejection.
+    covered.catch(() => {});
     return covered;
   };
   hostHooks.save = queueSave;
@@ -2952,7 +2960,11 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         const admit = unreserved ? Promise.resolve(capDecision({ budget: state.budget, run: reservedRunTotals(), laneToday: {}, agent: job.agent })) : admissions.then(async () => {
           const rates = await ratesFor(job);
           let inputChars = job.prompt.length;
-          for (const file of new Set([...job.context, ...job.outputs])) inputChars += (await bytesAt(root, file))?.length ?? 0;
+          for (const file of new Set([...job.context, ...job.outputs])) {
+            const length = (await bytesAt(root, file))?.length ?? 0;
+            // A cache write costs 1.25 times the plain input rate, so cached files are reserved at 1.25 times their size.
+            inputChars += (job.cacheContext ?? []).includes(file) ? Math.ceil(length * 1.25) : length;
+          }
           const reservation = estimateReservation({ job, lane: job.agent, model: job.model, inputChars, rates, laneDefaults: state.budget.lanes });
           const key = `${crypto.createHash('sha256').update(root).digest('hex').slice(0, 12)}/${id}/${job.id}#${record.attempts.length + 1}`;
           const { decision } = await reserveSpend({ dir: spendDirectory, key, lane: job.agent, runId: id, root, jobId: job.id, ...reservation, budget: state.budget, runTotals: reservedRunTotals(), now });
@@ -3305,7 +3317,8 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         attemptResult = result;
         if (record.usage && record.usage.total_tokens == null) {
           const { input_tokens, output_tokens } = record.usage;
-          if (typeof input_tokens === 'number' || typeof output_tokens === 'number') record.usage.total_tokens = (input_tokens ?? 0) + (output_tokens ?? 0);
+          // Cache writes and reads are tokens too; leaving them out would let a cached fan-out run past a token cap.
+          if (typeof input_tokens === 'number' || typeof output_tokens === 'number') record.usage.total_tokens = (input_tokens ?? 0) + (output_tokens ?? 0) + (record.usage.cache_creation_input_tokens ?? 0) + (record.usage.cache_read_input_tokens ?? 0);
         }
         await finishSpend();
         const outcome = result.reportInvalid ? { kind: 'other' } : classifyProviderOutcome(result);

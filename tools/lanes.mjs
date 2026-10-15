@@ -70,7 +70,7 @@ export function resolveLanes({ config = {}, manifest = {} } = {}) {
   // adaptive: true (or a partial object) is filled in from the lane's concurrency once every override is applied.
   for (const agent of LANE_AGENTS) {
     const adaptive = lanes[agent].adaptive;
-    if (object(adaptive) && Object.keys(adaptive).every(key => ['start', 'min'].includes(key))) lanes[agent].adaptive = { min: adaptive.min ?? 1, start: adaptive.start ?? Math.min(8, lanes[agent].concurrency) };
+    if (object(adaptive) && Object.keys(adaptive).every(key => ['start', 'min'].includes(key))) lanes[agent].adaptive = { min: adaptive.min ?? 1, start: adaptive.start ?? Math.max(adaptive.min ?? 1, Math.min(8, lanes[agent].concurrency)) };
   }
   for (const agent of LANE_AGENTS) validate(agent, lanes[agent]);
   return lanes;

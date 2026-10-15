@@ -65,6 +65,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-15 | - | map-module: Implements section 2 of the phase 12 design in tools/repo-map.mjs: buildRepoMap (increme | anthropic | claude-haiku-5-5 | pass | 39,528 | $0.02 |
 | 2026-10-15 | - | map-tests: Adds tests/repo-map.test.mjs for tools/repo-map.mjs (section 2 of the design). It covers | anthropic | claude-haiku-5-5 | pass | 30,087 | $0.01 |
 | 2026-10-15 | - | review-12: complete | claude | opus | pass | 16,779 | $0.53 |
+| 2026-10-15 | - | review-14: complete | claude | opus | pass | 17,924 | $0.47 |
 
 ## Daily summary
 
@@ -72,5 +73,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-10-14 | codex | 34 | 29 | 5 | 2,887,673 | subscription |
 | 2026-10-15 | anthropic | 17 | 12 | 5 | 408,516 | $0.22 |
-| 2026-10-15 | claude | 6 | 6 | 0 | 88,864 | $2.72 |
+| 2026-10-15 | claude | 7 | 7 | 0 | 106,788 | $3.19 |
 | 2026-10-15 | codex | 4 | 4 | 0 | 154,596 | subscription |

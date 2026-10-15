@@ -373,7 +373,9 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     }
     if (job.agent === 'anthropic') {
       const ledger = anthropicLedgerPath(env), stamp = now();
-      const worstUsd = anthropicWorstUsd(job.model, { inputChars: instructions.length + input.length, maxTokens: limit });
+      // Cached files cost 1.25 times the plain input rate on their first (writing) request, so the worst case counts them that way.
+      const cachedChars = (Array.isArray(job.cacheContext) ? cappedContext.filter(file => job.cacheContext.includes(file.path)) : []).reduce((sum, file) => sum + String(file.content).length, 0);
+      const worstUsd = anthropicWorstUsd(job.model, { inputChars: instructions.length + input.length + Math.ceil(cachedChars * 0.25), maxTokens: limit });
       assertAnthropicCaps({ worstUsd, spent: anthropicSpentSoFar(readAnthropicLedger(ledger), { jobId: job.id, day: stamp.toISOString().slice(0, 10) }), limits: anthropicCaps(env) });
       spend = { ledger, worstUsd, stamp };
     }
