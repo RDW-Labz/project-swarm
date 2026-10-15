@@ -8,7 +8,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { resolveDefaultRoot, projectRootFrom, journalCommandEvent, eventsFromResult, writeHandoffFile, runCheckpointCommand, pickArgument, journalAfterCommand } from '../tools/project-commands.mjs';
+import { resolveDefaultRoot, projectRootFrom, findProjectRoot, journalCommandEvent, eventsFromResult, writeHandoffFile, runCheckpointCommand, pickArgument, journalAfterCommand } from '../tools/project-commands.mjs';
 import { readJournal, appendEvent } from '../tools/journal.mjs';
 import { worktreeDirty } from '../tools/goal.mjs';
 
@@ -125,6 +125,29 @@ test('a shared install runs against the project you stand in; a checkout stays i
   const bare = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-p10b-bare-'));
   t.after(() => fs.rm(bare, { recursive: true, force: true }));
   assert.equal(projectRootFrom(bare), bare);
+  assert.equal(findProjectRoot(bare), null);
+  assert.equal(resolveDefaultRoot('/home/u/.project-swarm/versions/1.2.3-abcd', bare), '/home/u/.project-swarm/versions/1.2.3-abcd');
+});
+
+test('from a shared install, status in an uninitialized git folder reports that folder and suggests swarm init; outside git it uses the install', async t => {
+  const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-p10b-inst-')));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const install = path.join(base, 'home/.project-swarm/versions/9.9.9-test');
+  await fs.mkdir(install, { recursive: true });
+  await fs.cp(path.dirname(swarm), path.join(install, 'tools'), { recursive: true });
+  await fs.copyFile(path.join(path.dirname(swarm), '../package.json'), path.join(install, 'package.json'));
+  const repo = path.join(base, 'repo');
+  await fs.mkdir(path.join(repo, 'src'), { recursive: true });
+  await fs.mkdir(path.join(repo, '.git'));
+  const outside = path.join(base, 'plain');
+  await fs.mkdir(outside);
+  const env = { ...process.env, HOME: path.join(base, 'home') };
+  const status = cwd => exec(process.execPath, [path.join(install, 'tools/swarm.mjs'), ], { cwd, env }).then(r => r.stdout);
+  const inRepo = await status(path.join(repo, 'src'));
+  assert.ok(inRepo.includes('status for ' + repo + '\n'), inRepo);
+  assert.match(inRepo, /Initialized: no; run: swarm init/);
+  assert.ok(!inRepo.includes('versions/9.9.9-test'));
+  assert.ok((await status(outside)).includes('versions/9.9.9-test'));
 });
 
 test('journal events: command arguments are trimmed and redacted; run, integrate, ship and go results become events', () => {

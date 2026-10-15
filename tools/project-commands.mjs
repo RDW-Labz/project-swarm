@@ -16,21 +16,24 @@ export const NO_JOURNAL = Object.freeze(['version', 'update', 'completion', '__c
 export const INSTALL_COMMANDS = Object.freeze(['version', 'update', 'onboard']);
 
 // The nearest folder at or above `cwd` that is a swarm project or a git work tree; `cwd` itself otherwise.
-export function projectRootFrom(cwd) {
-  const start = path.resolve(cwd);
-  let dir = start;
+export function findProjectRoot(cwd) {
+  let dir = path.resolve(cwd);
   for (;;) {
     if (existsSync(path.join(dir, '.project-swarm.json')) || existsSync(path.join(dir, '.git'))) return dir;
     const parent = path.dirname(dir);
-    if (parent === dir) return start;
+    if (parent === dir) return null;
     dir = parent;
   }
 }
+export function projectRootFrom(cwd) {
+  return findProjectRoot(cwd) ?? path.resolve(cwd);
+}
 
 // Run from the shared install (`.../versions/<x>/tools/swarm.mjs`), the default root is the project the
-// operator is standing in, not the install. Run from a checkout, it stays that checkout.
+// operator is standing in (nearest swarm project or git root), initialized or not. Only outside any git
+// repo does it fall back to the install. Run from a checkout, it stays that checkout.
 export function resolveDefaultRoot(ownRoot, cwd) {
-  return path.basename(path.dirname(ownRoot)) === 'versions' ? projectRootFrom(cwd) : ownRoot;
+  return path.basename(path.dirname(ownRoot)) === 'versions' ? (findProjectRoot(cwd) ?? ownRoot) : ownRoot;
 }
 
 export function isSwarmProject(root) {
