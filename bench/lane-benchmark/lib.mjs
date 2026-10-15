@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { TASKS } from './tasks.mjs';
 
 export const LANES = {
-  hermes: { agent: 'hermes', model: 'qwen3.8-flash-next-iq2_xs', concurrency: 2, paid: false },
+  hermes: { agent: 'hermes', model: 'qwen3.8-flash-next-iq2_xs', concurrency: 1, paid: false },
   cursor: { agent: 'cursor', model: 'composer-2.5', concurrency: 4, paid: false },
   codex: { agent: 'codex', model: 'gpt-6.1-sol', concurrency: 4, paid: false },
   'anthropic-haiku': { agent: 'anthropic', model: 'claude-haiku-5-5', concurrency: 6, paid: true },

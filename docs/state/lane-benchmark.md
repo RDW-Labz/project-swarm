@@ -1,77 +1,77 @@
 # Lane benchmark
 
-Ten tasks from this repo, two of each kind, run on every lane and checked by real tests plus a review. Base: `202df20d74`. Quality is a Claude Haiku review from 1 to 5 of the diff (a cheaper reviewer keeps the run inside its budget; it is told the automatic result).
+Ten tasks from this repo, two of each kind, run on every lane and checked by real tests plus a review. Base: `202df20d74`. Quality is a Claude Haiku review from 1 to 5 of the diff (a cheaper reviewer keeps the run inside its budget; it is told the automatic result). Review cost: $0.01.
 
 ## Per lane
 
-| Lane | Agent / model | Passed | Cost | Median time | Quality |
-| --- | --- | ---: | --- | ---: | ---: |
-| hermes | hermes / qwen3.8-flash-next-iq2_xs | 2/10 | subscription (116,387 tokens) | 40 s | 1.8 |
-| cursor | cursor / composer-2.5 | 10/10 | subscription (0 tokens) | 25 s | 3.8 |
-| codex | codex / gpt-6.1-sol | 10/10 | subscription (131,678 tokens) | 22 s | 4.1 |
-| anthropic-haiku | anthropic / claude-haiku-5-5 | 9/10 | $0.02 | 13 s | 3.6 |
-| anthropic-sonnet | anthropic / claude-sonnet-5-5 | 8/10 | $0.29 | 9 s | 3.3 |
-| openrouter | openrouter / openai/gpt-oss-20b | 4/10 | $0.0061 | 40 s | 2.3 |
-| claude | claude / sonnet | 10/10 | subscription (17,012 tokens) | 14 s | 4.0 |
+| Lane | Agent / model | Passed | Before multi-edit | Cost | Median time | Quality |
+| --- | --- | ---: | ---: | --- | ---: | ---: |
+| hermes | hermes / qwen3.8-flash-next-iq2_xs | 6/10 | 2/10 | subscription (67,969 tokens) | 14 s | 2.8 |
+| cursor | cursor / composer-2.5 | 10/10 | unchanged (not rerun) | subscription (0 tokens) | 25 s | 3.8 |
+| codex | codex / gpt-6.1-sol | 10/10 | unchanged (not rerun) | subscription (131,678 tokens) | 22 s | 4.1 |
+| anthropic-haiku | anthropic / claude-haiku-5-5 | 9/10 | 9/10 | $0.02 | 13 s | 4.0 |
+| anthropic-sonnet | anthropic / claude-sonnet-5-5 | 10/10 | 8/10 | $0.29 | 8 s | 4.3 |
+| openrouter | openrouter / openai/gpt-oss-20b | 3/10 | 4/10 | $0.0079 | 104 s | 2.0 |
+| claude | claude / sonnet | 10/10 | unchanged (not rerun) | subscription (17,012 tokens) | 14 s | 4.0 |
 
 ## Per task (✓ passed, ✗ failed, then the quality score)
 
 | Task | Kind | hermes | cursor | codex | anthropic-haiku | anthropic-sonnet | openrouter | claude |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| bug-percentile | bug-fix | ✗ 1 | ✓ 3 | ✓ 4 | ✓ 4 | ✓ 4 | ✗ 1 | ✓ 5 |
-| bug-router-failover | bug-fix | ✗ 1 | ✓ 4 | ✓ 4 | ✓ 5 | ✓ 4 | ✓ 4 | ✓ 4 |
-| new-parse-duration | new-function | ✗ 2 | ✓ 4 | ✓ 4 | ✓ 4 | ✓ 4 | ✓ 4 | ✓ 4 |
-| new-cost-summary | new-function | ✗ 2 | ✓ 3 | ✓ 4 | ✓ 3 | ✓ 4 | ✗ 2 | ✓ 4 |
-| refactor-anthropic-rates | refactor | ✗ 1 | ✓ 5 | ✓ 5 | ✓ 4 | ✗ 1 | ✓ 4 | ✓ 4 |
-| refactor-spend-reserve | refactor | ✗ 1 | ✓ 5 | ✓ 5 | ✗ 1 | ✗ 1 | ✗ 1 | ✓ 4 |
-| tests-model-matches | test-writing | ✓ 4 | ✓ 4 | ✓ 4 | ✓ 4 | ✓ 4 | ✗ 2 | ✓ 4 |
-| tests-npm-script | test-writing | ✓ 4 | ✓ 4 | ✓ 4 | ✓ 4 | ✓ 4 | ✗ 1 | ✓ 4 |
-| docs-anthropic-lane | docs | ✗ 1 | ✓ 3 | ✓ 4 | ✓ 4 | ✓ 4 | ✓ 3 | ✓ 4 |
-| docs-host-failures | docs | ✗ 1 | ✓ 3 | ✓ 3 | ✓ 3 | ✓ 3 | ✗ 1 | ✓ 3 |
+| bug-percentile | bug-fix | ✗ 1 | ✓ 3 | ✓ 4 | ✓ 5 | ✓ 5 | ✗ 1 | ✓ 5 |
+| bug-router-failover | bug-fix | ✓ 5 | ✓ 4 | ✓ 4 | ✓ 4 | ✓ 5 | ✓ 4 | ✓ 4 |
+| new-parse-duration | new-function | ✓ 3 | ✓ 4 | ✓ 4 | ✓ 4 | ✓ 4 | ✓ 4 | ✓ 4 |
+| new-cost-summary | new-function | ✗ 1 | ✓ 3 | ✓ 4 | ✓ 4 | ✓ 4 | ✓ 3 | ✓ 4 |
+| refactor-anthropic-rates | refactor | ✓ 5 | ✓ 5 | ✓ 5 | ✓ 4 | ✓ 5 | ✗ 1 | ✓ 4 |
+| refactor-spend-reserve | refactor | ✓ 5 | ✓ 5 | ✓ 5 | ✓ 5 | ✓ 5 | ✗ 1 | ✓ 4 |
+| tests-model-matches | test-writing | ✗ 1 | ✓ 4 | ✓ 4 | ✗ 2 | ✓ 4 | ✗ 2 | ✓ 4 |
+| tests-npm-script | test-writing | ✗ 1 | ✓ 4 | ✓ 4 | ✓ 4 | ✓ 4 | ✗ 1 | ✓ 4 |
+| docs-anthropic-lane | docs | ✓ 3 | ✓ 3 | ✓ 4 | ✓ 4 | ✓ 4 | ✗ 2 | ✓ 4 |
+| docs-host-failures | docs | ✓ 3 | ✓ 3 | ✓ 3 | ✓ 4 | ✓ 3 | ✗ 1 | ✓ 3 |
 
 ## Lanes that passed both tasks of a kind with quality 4 or more (cheapest first)
 
 | Kind | Lanes |
 | --- | --- |
 | bug-fix | codex → anthropic-haiku → anthropic-sonnet → claude |
-| new-function | codex → anthropic-sonnet → claude |
-| refactor | cursor → codex → claude |
-| test-writing | hermes → cursor → codex → anthropic-haiku → anthropic-sonnet → claude |
-| docs | none passed both with quality 4 or more |
-
+| new-function | codex → anthropic-haiku → anthropic-sonnet → claude |
+| refactor | hermes → cursor → codex → anthropic-haiku → anthropic-sonnet → claude |
+| test-writing | cursor → codex → anthropic-sonnet → claude |
+| docs | anthropic-haiku |
 ## Findings
 
-- **Codex, Cursor and Claude (Sonnet) passed 10 of 10.** They work in place or on whole files, so a multi-site refactor is no problem. Codex had the best average quality (4.1), Claude 4.0 and Cursor 3.8. Cursor reports no tokens or cost, so its cost column is empty. The Claude CLI reported $0.63 of equivalent cost for its ten jobs; the subscription covers it.
-- **Anthropic Haiku is the best paid lane: 9 of 10 for about $0.002 a job** ($0.02 for all ten, median 13 s). Sonnet cost 14 times as much ($0.29) and passed fewer (8 of 10), because both of its failures were refactors that hit the edit limit below. Haiku is the better default for API work.
-- **OpenRouter `openai/gpt-oss-20b` passed 4 of 10** ($0.006 total). It is cheap but not good enough to be a default route for anything that writes code.
-- **Hermes with `qwen3.8-flash-next-iq2_xs` on dev2 passed 2 of 10**, both test-writing tasks (each killed 4 of 4 mutants). It runs free, locally, at about 40 s a job. It failed bug fixes, new functions, refactors and docs: 5 of its 8 failures were the edit limit below, the rest were wrong or incomplete code. This is a 2-bit quantized model. A larger one may do better, and this benchmark is how to find out.
-- **The one-edit-per-file rule of the API and Hermes lanes is the biggest single cause of failures (9 of the 17 failed jobs).** A tool-free worker may return the whole file or one find/replace per output. A refactor or bug fix that needs two separate changes in a large file fails with `edits[].path ... is duplicate`. Allowing several ordered edits per path (each `find` unique when applied) would likely lift Haiku, Sonnet and Hermes on bug-fix and refactor. That is a runner change, not done here.
-- **`docs-host-failures` was a bad task as first written.** It asked for two strings that only exist in `tools/swarm.mjs`, which the worker was never given, so every lane failed. The check was fixed and all saved outputs were re-scored, so every row here uses the fixed check.
-- **Reviews:** the first review pass showed the reviewer only the diff, and it marked correct minimal fixes "unverified". The second pass attaches the base files. Quality scores come from a Claude Haiku reviewer and are a rough guide. Pass or fail is the hard number.
+- **The one-edit-per-file limit was the main thing holding back the tool-free lanes, and removing it worked.** After the change (several ordered edits per file), Hermes went from 2 to 6 of 10, Sonnet from 8 to 10, and no job failed on the edit limit any more (it was 9 of the first 17 failures). Haiku stayed at 9: it now passes both refactors but failed `tests-model-matches` this time, which it passed before. OpenRouter went from 4 to 3 (it now passes `new-cost-summary` but failed two others). A change of one or two jobs on the same lane is run-to-run noise at this sample size.
+- **A second bug sat behind the first.** The Hermes and Qwen adapter validated `edits` but returned only `files`, so a Hermes answer made of edits would have been marked complete with no change applied. Fixed in the same change.
+- **Codex, Cursor and Claude (Sonnet) passed 10 of 10 again.** Codex has the best average quality (4.1). Cursor reports no tokens or cost. The Claude CLI reported $0.63 of equivalent cost for its ten jobs; the subscription covers it.
+- **Anthropic Haiku is the best paid default: 9 of 10 for about $0.002 a job** ($0.02 for all ten, median 13 s, quality 4.0). **Sonnet passed 10 of 10 (quality 4.3) at 14 times the cost** ($0.29). That makes Sonnet the right mid tier, not the default.
+- **OpenRouter `openai/gpt-oss-20b` passed 3 of 10** ($0.008) and was slow (median 104 s). It stays out of code routing.
+- **Hermes with `qwen3.8-flash-next-iq2_xs` on dev2 passed 6 of 10 twice** (quality about 3): once at two jobs at a time and once at one job at a time, free and local, 12 to 75 s a job. Concurrency was not the cause of its failures. The passing set moved a little between runs (`bug-percentile` and two test tasks flipped, `docs-host-failures` passed the second time), which is the noise to expect. Its failures are mostly the Hermes CLI exiting 1 with no message on the longer generations (three jobs, 42 to 75 s each). Replaying one of those messages by hand a few minutes later worked first time (exit 0, 16 s). That points at something intermittent on dev2's side (the model server is shared) rather than a bug in the adapter. This is below the 8 of 10 bar set for adding it back to code routing, so it stays research-only.
+- **`docs-host-failures` was a bad task as first written.** It asked for two strings that only exist in `tools/swarm.mjs`, which the worker was never given, so every lane failed. The check was fixed and all saved outputs were re-scored (dev2 had the old check; its results were re-scored here from the saved outputs).
+- **Reviews:** the first review pass showed the reviewer only the diff, and it marked correct minimal fixes "unverified". Later passes attach the base files. Quality scores come from a Claude Haiku reviewer and are a rough guide. Pass or fail is the hard number.
 
-## Route defaults set from this
+## Route defaults
 
-What the data said, cheapest lane first, using only lanes that passed both tasks of the kind: `fix` cursor, codex, haiku, sonnet, claude; `test` hermes and all the others; `docs` cursor, codex, haiku, sonnet, claude; `build` cursor, codex (haiku and sonnet failed the refactors, because of the one-edit limit below).
-
-What was set, after review (the owner's decisions):
+What was set, from the first run and the owner's decisions (the rerun does not change them):
 
 | | Setting |
 | --- | --- |
 | Cheap order for code | anthropic (Haiku), cursor, codex; Claude only after 2 failures |
-| Hermes | out of the default order; runs only `research` jobs (2 of 10 passed) |
-| OpenRouter | only non-sensitive bookkeeping jobs (4 of 10 passed) |
+| Hermes | out of the default order; runs only `research` jobs (6 of 10 in two runs, short of the 8 of 10 needed to add it to docs and test routes) |
+| OpenRouter | only non-sensitive bookkeeping jobs |
 | `build`, `fix`, `docs` | anthropic, cursor, codex |
 | `test` | codex, anthropic, cursor |
 | `review` | codex |
 | `research` | hermes |
 | `merge`, `lead` | codex (unchanged, not benchmarked) |
 
-Haiku goes first even though it failed refactors here: those failures are the edit limit, which the next change removes, and Haiku costs about $0.002 a job.
+The rerun supports these: Haiku passes both refactors now, so the edit limit is no longer a reason to keep it away from `build`. One thing to decide later: `test` has Haiku second, but Haiku was the lane that flipped on test-writing between runs; Sonnet passed both test tasks both times.
 
 ## How it was run, and the limits
 
-- **Harness:** `bench/lane-benchmark/`. `prepare` builds a one-commit copy of the repo (no history, no `bench/`) with the bugs and the removed doc sections in place. `lane` runs one lane with the installed runner and checks each output with tests, hidden tests, mutants and fact lists. `reverify` re-checks saved outputs. `report --review` adds the review and renders this page. Hidden tests, mutants and fact lists are never in the repo a worker can read.
-- **Where:** six lanes ran on this Mac with the installed runner 1.62.0. Hermes ran on dev2 itself: the runner, harness and base repo were copied there (no keys, no .env), Hermes ran locally, and only the results file came back. dev2's copy had one patch the installed runner lacks: the parser fix for the `Warning: Unknown toolsets: none` line that real Hermes prints on stdout (in this PR). Without it every Hermes job failed with "Malformed CLI JSONL".
-- **Cost:** about $0.55 of Anthropic API credit (jobs and reviews) and $0.008 of OpenRouter. The other lanes are subscriptions or local.
+- **Harness:** `bench/lane-benchmark/`. `prepare` builds a one-commit copy of the repo (no history, no `bench/`) with the bugs and the removed doc sections in place. `lane` runs one lane with a runner and checks each output with tests, hidden tests, mutants and fact lists. `reverify` re-checks saved outputs. `report --review` adds the review and renders this page. Hidden tests, mutants and fact lists are never in the repo a worker can read.
+- **Run 1 (1.62.0, installed runner):** six lanes on this Mac. Hermes ran on dev2 itself: the runner, harness and base repo were copied there (no keys, no .env), Hermes ran locally, and only the results file came back. dev2's copy had the Hermes parser fix before it was merged.
+- **Run 3 (Hermes alone, one job at a time):** on dev2 with the then-current harness and the multi-edit runner. Result 6/10, same as run 2. Nothing on dev2 was changed: no model, disk or server change, only normal jobs submitted to the running Hermes.
+- **Run 2 (after the multi-edit change, working copy of 1.65.0):** only the four lanes the change touches (Haiku, Sonnet, OpenRouter, Hermes). Codex, Cursor and Claude were not rerun: their jobs do not go through the envelope the change affects. This used the working copy, not the installed runner, because the change is not merged yet.
+- **Cost:** about $0.9 of Anthropic API credit over the runs (jobs plus reviews) and $0.016 of OpenRouter, inside the $2 budget. The other lanes are subscriptions or local.
 - **Small sample:** two tasks per kind and one run per lane, so one flaky job moves a number by 10 points. Treat this as a first look. Rerun it whenever a lane, model or the router changes (Phase 17).
 - **Scoring runs worker-written code** (the tests) in a throwaway copy with a minimal environment and a 2-minute limit per run.

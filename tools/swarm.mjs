@@ -1669,9 +1669,9 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
         return;
       }
       if(EXTRA_CLI_AGENTS.includes(job.agent)){
-        let parsed, failed=cleanupError||reason||(error?'CLI launch failed':null)||(cliHost&&code===255?cliHostFailure(code):null),files=[],response='';
-        if(!failed)try{parsed=parseExtraCli(job.agent,stdout,code,job.model);const value=validateEnvelope(parsed.value,job.outputs);files=value.files;response=job.report === 'short' && value.result ? `${value.summary}\n${JSON.stringify(value.result)}\n` : value.summary;}catch(problem){failed=problem.message;}
-        resolve({finalObject:parsed?.value?.result ?? parsed?.value ?? null,cleanupError,terminationReason:reason??null,status:cleanupError?'failed':reason==='timeout'?'timeout':reason==='cancelled'?'cancelled':failed?'failed':'complete',error:failed??null,files,response,stdout:failed?'':JSON.stringify({type:'result',provider:job.agent,status:'complete',actualModel:parsed.actualModel,usage:parsed.usage})+'\n',stderr:'',exitCode:code,actualModel:parsed?.actualModel??null,modelsSeen:parsed?.modelsSeen??[],modelMismatch:parsed?.modelMismatch??false,usage:parsed?.usage??null,modelUsage:null,costUsd:null});return;
+        let parsed, failed=cleanupError||reason||(error?'CLI launch failed':null)||(cliHost&&code===255?cliHostFailure(code):null),files=[],edits=[],response='';
+        if(!failed)try{parsed=parseExtraCli(job.agent,stdout,code,job.model);const value=validateEnvelope(parsed.value,job.outputs);files=value.files;edits=value.edits??[];response=job.report === 'short' && value.result ? `${value.summary}\n${JSON.stringify(value.result)}\n` : value.summary;}catch(problem){failed=problem.message;}
+        resolve({finalObject:parsed?.value?.result ?? parsed?.value ?? null,cleanupError,terminationReason:reason??null,status:cleanupError?'failed':reason==='timeout'?'timeout':reason==='cancelled'?'cancelled':failed?'failed':'complete',error:failed??null,files,edits,response,stdout:failed?'':JSON.stringify({type:'result',provider:job.agent,status:'complete',actualModel:parsed.actualModel,usage:parsed.usage})+'\n',stderr:'',exitCode:code,actualModel:parsed?.actualModel??null,modelsSeen:parsed?.modelsSeen??[],modelMismatch:parsed?.modelMismatch??false,usage:parsed?.usage??null,modelUsage:null,costUsd:null});return;
       }
       let result, parseError; const events=[];
       for (const line of stdout.split('\n').filter(Boolean)) {
@@ -3010,11 +3010,21 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
               // Row #185: an `edits` reply is applied here, against the exact bytes already sitting
               // in this job's workspace (its declared output's starting content) — never guessed at
               // by the adapter, which never touches a filesystem.
-              for (const edit of result.edits ?? []) {
-                const current = await bytesAt(workspaceRoot, edit.path);
-                const applied = applyEdit(current === null ? '' : current.toString('utf8'), edit.find, edit.replace);
-                if (applied.error) { result = { ...result, status: 'failed', error: `${applied.error}: ${edit.path}` }; break; }
-                await write(workspaceRoot, edit.path, applied.content, false, record.baseModes[edit.path]);
+              // Several edits to one path run in order on the content as it stands after the earlier
+              // ones, in memory; the file is written once, and only if every edit applied.
+              const editsByPath = new Map();
+              for (const edit of result.edits ?? []) (editsByPath.get(edit.path) ?? editsByPath.set(edit.path, []).get(edit.path)).push(edit);
+              for (const [editPath, list] of editsByPath) {
+                const current = await bytesAt(workspaceRoot, editPath);
+                let content = current === null ? '' : current.toString('utf8');
+                let failure = null;
+                for (const [index, edit] of list.entries()) {
+                  const applied = applyEdit(content, edit.find, edit.replace);
+                  if (applied.error) { failure = `${applied.error}: ${editPath}${list.length > 1 ? ` (edit ${index + 1} of ${list.length})` : ''}`; break; }
+                  content = applied.content;
+                }
+                if (failure) { result = { ...result, status: 'failed', error: failure }; break; }
+                await write(workspaceRoot, editPath, content, false, record.baseModes[editPath]);
               }
             }
           }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.65.0
+
+- API workers (Anthropic, OpenRouter, OpenAI, Gemini, Ollama, Lambda) and Hermes/Qwen can now change a large existing file with several edits. Before, only one find/replace per output was allowed, so a bug fix or refactor that needed two changes in one file failed with `edits[].path ... is duplicate` (9 of the 17 failures in the lane benchmark). Edits to one path are applied in order, each `find` must occur exactly once in the file as it stands after the earlier edits, at most 200 edits, and a path is never in both `files` and `edits`. If any edit does not apply the job fails and the file is left as it was (`edit-no-match: <file> (edit 2 of 3)`). Every tool-free worker is now told this rule in its prompt.
+- Fixed Hermes and Qwen dropping `edits`: the envelope was validated but only `files` were returned, so a worker that answered with edits was marked complete with no change applied.
+- Reran the lane benchmark for the lanes this affects; see `docs/state/lane-benchmark.md`.
+
 ## 1.64.0
 
 - Hermes (and Qwen) can run on another machine over ssh. The machine config `cliHosts` names the host and the CLI's absolute path (`{"cliHosts":{"hermes":{"target":"user@host","command":"/path/hermes"}}}`); jobs and `swarm doctor hermes` then run there. The job text goes on stdin. The ssh process gets only a short environment allowlist, agent and X11 forwarding are off, the host key must be known, and no key or `.env` file is copied. Exit 255 fails that job as `cli host unreachable`; a bad `cliHosts` entry fails the job, not the run. A security review (Claude Opus) of this code found a missing allowlist on the doctor path, an ineffective `SendEnv=-*`, an ssh target that could start with `-`, and unpinned host-key and forwarding options; all are fixed.
