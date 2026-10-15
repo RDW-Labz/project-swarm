@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.60.0
+
+- Added `swarm init`. It links a project to the shared install, detects the stack, copies test and lint scripts and CI checks into `coordination/checks.json`, adds `.swarm/` to `.gitignore` and to an ESLint flat config or `pytest.ini` when that edit is obvious, writes agent pointers, and seeds `coordination/`. See [setup](docs/setup.md).
+- Added `swarm go "<goal>"`. A cheap planning step reads the repo's real top-level folders and splits the goal into leads with non-overlapping scopes (`--leads` auto, max 10; `--max-jobs` 25 per lead; `--concurrency` 8). Lane caps still limit how many jobs run at once. The run starts with a budget of $5 and 2,000,000 tokens; `--max-usd` and `--max-tokens` change it. A cap pause names the `swarm resume` command. `go` refuses a dirty tree, does the work on `swarm/go-<runId>`, commits there, and prints that branch plus the rollup. It does not move the branch you were on. A manifest path or a run id still uses the existing `go` command.
+
 ## 1.59.0
 
 - Added remote hosts. A manifest or the shared config can name `hosts`: `local`, `ssh` (a `user@host` that already has a host key), or `sandbox` (a command argv). Each host has a capacity. Jobs stay on the local executor unless a host is set.
