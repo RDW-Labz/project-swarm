@@ -228,6 +228,24 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
         continue;
       }
     }
+    // A failed job is classified before it is retried. Only the verdict is used here: needs-human becomes a blocker for the
+    // owner (an inbox item) instead of a retry; the hint is for the owner's eyes and is never put into a prompt.
+    if (decision.action === 'retry-failed' && typeof deps.triage === 'function') {
+      const verdicts = await safe(() => deps.triage(root, run.id), []);
+      const list = Array.isArray(verdicts) ? verdicts : [];
+      if (list.length) await write({ kind: 'action', action: 'triage', run: run.id, reason: list.map(v => `${v.job}:${v.verdict}`).join(' ').slice(0, 300), result: 'ok' });
+      const human = list.filter(v => v && v.verdict === 'needs-human');
+      if (human.length) {
+        for (const v of human) {
+          const id = `triage-${run.id}-${v.job}`;
+          if (!openIds(events).has(id)) {
+            await write({ kind: 'blocker', id, text: `Job ${v.job} of run ${run.id} needs a person (local triage): swarm inspect ${run.id} --results${v.hint ? `. Hint (untrusted): ${String(v.hint).slice(0, 200)}` : ''}` });
+            blocked.push(id);
+          }
+        }
+        continue;
+      }
+    }
     perRun.set(run.id, count + 1);
     actions.push(await execute(decision));
   }

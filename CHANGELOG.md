@@ -1,11 +1,18 @@
 # Changelog
 
+## 1.72.0
+
+- Local brain (Phase 14b). dev2's model, reached like `dev2chat` (ssh tunnel, key read over ssh and kept in memory), as a free helper for the runner: `swarm think "QUESTION"` (proposer and critic, top 3 with reasons), `swarm digest <file|run-id|->` (15 lines or fewer), `swarm draft docs|pr|plan "BRIEF"` (local draft, Haiku polish for projects that are not sensitive), and `swarm brain status|stats|test`. Autopilot triages failed jobs before retrying (`needs-human` becomes a blocker; only the verdict is used), and `swarm run` pre-flights jobs for Claude or Opus (warnings only). Workers never touch it. See [local brain](docs/local-brain.md).
+- Rules: queue of 1 to 2; output is untrusted text (sanitized, capped, never instructions); a sensitive project is never sent to Haiku (the brain says "unavailable" instead); secret and protected paths and symlinks out of the project are refused; every call records the orchestrator tokens it saved in `.swarm/project/brain-ledger.ndjson`.
+- Configure it with `localBrain` in the machine config; without it only the Haiku fallback exists.
+
 ## 1.71.0
 
 - Throughput (Phase 14). A profile-driven pass: 2,000 stub API jobs now run in about 7 seconds with 177 MiB of memory (before: over 10 minutes), and 1,000 requests can be in flight at once in 148 MiB (before: never more than 4). The causes: API jobs took a local host slot, the machine-wide lane file was re-read and re-probed constantly, every in-flight job polled the cancel file, the output-overlap check was quadratic, per-job git and live-run scans, and state saves that grew with the run. See [throughput](docs/throughput.md). The concurrency ceiling is now 2048 (was 512).
 - Added adaptive lanes: `"adaptive": true` lets a lane find its own limit (start low, one more slot per window of successes, halve on a 429, never below `min`).
 - Added `cacheContext` for the Anthropic lane: shared context files go first in their own prompt-cache block, so a big fan-out pays full price for them once.
 - Added `bench/throughput/stress.mjs`, the stress harness behind these numbers.
+- A Claude Opus review of this phase found 2 high and 6 medium issues, all fixed: a save requested in the same turn the writer quit could be lost, cached prompt tokens now count in a job's token total and the pre-request cost bound and reservation price cache writes at 1.25 times, a failed save no longer becomes an unhandled rejection for callers that do not wait, repo identity is cached only when git answered, output overlap is compared in one normal form (case, `./`, trailing slash), compact state applies only to `state.json`, and a lane's default adaptive start respects its `min`.
 
 ## 1.70.0
 
