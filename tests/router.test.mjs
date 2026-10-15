@@ -146,3 +146,26 @@ test('typeRoute retains sensitivity, bookkeeping, expensive tier, health, and ac
   assert.equal(routeJob(typed, { lanes, health: agent => ({ state: agent === 'openrouter' ? 'paused' : 'ok' }) }).agent, 'codex');
   assert.throws(() => routeJob(typed, { lanes, accepts: resolved => resolved.agent === 'claude' }), { code: 'route-exhausted' });
 });
+
+test('no sensitive job is ever a candidate for OpenRouter, OpenAI, Gemini or Lambda, even when a type route names them', () => {
+  const all = { ...lanes, openai: { model: 'o' }, gemini: { model: 'g' }, lambda: { model: 'l' } };
+  for (const sensitive of [true, undefined, 'false', 0, null]) {
+    for (const agent of ['openrouter', 'openai', 'gemini', 'lambda']) {
+      const typed = { ...bookkeeping, sensitive, typeRoute: [agent] };
+      const picked = routeJob(typed, { lanes: all });
+      assert.notEqual(picked.agent, agent, `${agent} with sensitive=${String(sensitive)}`);
+    }
+  }
+  // not sensitive: these lanes can be named by a type route (OpenRouter still needs bookkeeping outputs)
+  assert.equal(routeJob({ ...job, typeRoute: ['openai'] }, { lanes: all }).agent, 'openai');
+  assert.equal(routeJob({ ...bookkeeping, typeRoute: ['openrouter'] }, { lanes: all }).agent, 'openrouter');
+});
+
+test('isBookkeepingJob refuses traversal, absolute paths, non-strings and holes', async () => {
+  const { isBookkeepingJob } = await import('../tools/openrouter.mjs');
+  assert.equal(isBookkeepingJob(['CHANGELOG.md']), true);
+  assert.equal(isBookkeepingJob(['docs/pr-body.md', '.swarm-manifests/plan.md']), true);
+  for (const bad of [['../../x/CHANGELOG.md'], ['/etc/CHANGELOG.md'], ['C:/x/CHANGELOG.md'], ['a/../CHANGELOG.md'], [['CHANGELOG.md']], [null], [''], [], 'CHANGELOG.md', undefined, new Array(2)]) {
+    assert.equal(isBookkeepingJob(bad), false, JSON.stringify(bad));
+  }
+});

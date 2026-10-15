@@ -2,6 +2,10 @@
 
 import { isBookkeepingJob } from './openrouter.mjs';
 
+// Lanes that only ever get jobs marked `sensitive: false`. validateManifest also refuses a sensitive job
+// on these; the router checks too, so a sensitive job is never even a candidate.
+const NON_SENSITIVE_ONLY = Object.freeze(['openrouter', 'openai', 'gemini', 'lambda']);
+
 // Code jobs: Haiku first, then Cursor, then Codex; the Claude subscription only after 2 failures.
 // Hermes is not in this order: it runs only where a job type names it (research). OpenRouter runs
 // only bookkeeping jobs (PR payloads, changelogs, metrics) that are not sensitive. The order comes
@@ -31,7 +35,8 @@ export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), fa
     candidates = configured('claude') && !(failures.claude >= 2) && accepted('claude') ? ['claude'] : [];
   } else {
     candidates = order.filter(agent => configured(agent)
-      && (agent !== 'openrouter' || (job.sensitive === false && isBookkeepingJob(job.outputs)))
+      && (!NON_SENSITIVE_ONLY.includes(agent) || job.sensitive === false)
+      && (agent !== 'openrouter' || isBookkeepingJob(job.outputs))
       && accepted(agent));
     const failed = candidates.filter(agent => failures[agent] >= 2);
     if (failed.length) reason = `fallback after 2 failures on ${failed.join(', ')}`;
