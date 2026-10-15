@@ -92,3 +92,9 @@ Read-only. Items, in this order: `pointer` (`.project-swarm.json` exists and par
 ## Done when
 
 A fresh clone of a real project goes from `swarm init` to a green `swarm plan` with no hand edits (a test does this in a temporary repo with a `package.json` test script), and `swarm init --check` reports no `fail` afterward.
+
+## Changes after the safety review
+
+- The base check runs only with `--base-check` or after a terminal confirms the listed commands (it executes what the repository ships); it uses a small environment and its own process group.
+- `.project-swarm.json` and `coordination/checks.json` are always protected; `outputDirs` count as outputs; names compare in NFC; a profile that is not valid makes `validate`, `run` and `integrate` refuse (`profile-invalid`); the gate also runs when `integrate` is about to apply files.
+- `checkSetup`'s `exists`, `readJson` and `stat` take paths relative to the project root; `buildRepoMap`'s `stat` may return `size` or `bytes`, and a symlink, device or fifo is listed but never read.
