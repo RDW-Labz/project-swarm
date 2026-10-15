@@ -59,3 +59,20 @@ The 1.15.0 follow-up records eight more [release lessons](lessons.md)
 `ship`, base-commit flake detection, and a job-declared result file.
 The historical costs and counts above remain observations from the original
 report; they are not new release measurements.
+
+## Scale test (1.61.0)
+
+`swarm scale` ran 500 stub jobs on this machine (macOS, Node 22.23.3, 10 cores). The adapter answered locally. No model was called. Spend was $0. Concurrency was 500, and the run's own peak was 500.
+
+| Measure | Value |
+| --- | ---: |
+| Jobs complete | 500 |
+| Spend | $0 |
+| Peak RSS | 130.9 MiB (137,232,384 bytes) |
+| Peak CPU | 44.6% of 10 cores |
+| CPU time | 1,488 ms user, 1,661 ms system |
+| Run time | 10.1 s |
+| Queue latency p50 / p95 / max | 119 ms / 120 ms / 120 ms |
+| Merge | 500 files in 971 ms (514.9 files/s) |
+
+A live run of 50 real jobs across every lane was not done. `doctor all` on this machine showed cursor, hermes, and qwen unavailable; openai, gemini, lambda, and openrouter unconfigured; codex's sandbox probe failed; claude's login was not checked. There is no cost-per-tier number from a live run.

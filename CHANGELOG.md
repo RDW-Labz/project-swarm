@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.61.0
+
+- Added `swarm scale`. It runs 500 stub jobs with no model spend, at concurrency 500, in a throwaway repo and prints peak RAM, peak CPU, queue latency, and merge throughput. The measured run is in [the field report](docs/field-report.md). A live 50-job spread across every lane was not measured here: most lanes are not configured.
+
 ## 1.60.0
 
 - Added `swarm init`. It links a project to the shared install, detects the stack, copies test and lint scripts and CI checks into `coordination/checks.json`, adds `.swarm/` to `.gitignore` and to an ESLint flat config or `pytest.ini` when that edit is obvious, writes agent pointers, and seeds `coordination/`. See [setup](docs/setup.md).
