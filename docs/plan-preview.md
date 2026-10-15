@@ -26,7 +26,9 @@ plan saved: plan-... (run it with: swarm go --plan plan-...)
 - `swarm go "GOAL"` prints the same preview (to stderr) and asks `Run? [y/N]`. Only `y` or `yes` runs it.
 - `--yes` skips the question. With no terminal (a script, cron, another agent) `--yes` is required, and it also needs `--max-usd`.
 - `swarm go --plan ID` runs exactly the saved plan. It refuses if the repository moved since the plan was made (`plan-stale`; pass `--accept-stale` to go on) or if the saved file was edited (`plan-invalid: hash`).
-- Plans live in `.swarm/plans/`. A dirty working tree is still refused by `go` before anything is asked.
+- A plan runs once (`plan-already-run` after that). The saved file is checked against a hash of the manifest, goal, flags and HEAD, so an accidental or casual edit is refused; the preview shown at approval is recomputed from the saved manifest, never read from the file. `--max-usd` and `--max-tokens` on `go --plan` can only tighten the saved caps.
+- Plans live in `.swarm/plans/`. A dirty working tree is refused by `go` before anything is previewed or asked.
+- Lanes this preview cannot price (OpenAI, Gemini, OpenRouter, Lambda, or an unknown Anthropic model) are flagged as a risk (`unpriced-lane`) rather than counted as $0.
 
 ## Learning from real runs
 

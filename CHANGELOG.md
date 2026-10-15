@@ -3,7 +3,8 @@
 ## 1.69.0
 
 - Added plan preview and approval (Phase 11). `swarm plan "GOAL"` shows the leads and scopes, the job count, the lanes, estimated cost, time and peak concurrency, and risks, saves the plan, and runs nothing. `swarm go "GOAL"` prints the same preview and asks `Run? [y/N]`; `--yes` skips it, and with no terminal `--yes` also needs `--max-usd`. `swarm go --plan ID` runs exactly the saved plan (refused if the repo moved, `--accept-stale` overrides, or if the file was edited). After a run the estimate is shown beside the actuals and fed back into later estimates. See [plan-preview](docs/plan-preview.md).
-- `.swarm/` no longer counts as uncommitted work when `go` checks the working tree.
+- A saved plan runs once, is checked against a hash of its manifest, goal, flags and HEAD, and its preview is recomputed at approval; caps on `go --plan` can only tighten the saved ones; paid lanes the preview cannot price are flagged. A Claude Opus review of this phase found 4 high and 8 medium issues, all fixed.
+- `.swarm/` no longer counts as uncommitted work when `go` checks the working tree (untracked `.swarm/` entries only).
 
 ## 1.68.0
 

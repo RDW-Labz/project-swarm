@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Glue for `swarm plan`, `swarm go` approval and `swarm go --plan ID` (Phase 11). Dependencies are passed in.
 import crypto from 'node:crypto';
-import { estimatePlan, formatPreview, planHash, savePlan, loadPlan, readCalibration, recordActual, writeCalibration } from './plan-preview.mjs';
+import { isGoalArgument } from './goal.mjs';
+import { estimatePlan, formatPreview, planHash, markPlanRun, savePlan, loadPlan, readCalibration, recordActual, writeCalibration } from './plan-preview.mjs';
 
 export const newPlanId = (now = Date.now) => `plan-${now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
 
@@ -31,9 +32,11 @@ export async function buildGoalPlan(root, goal, flags, deps) {
   const calibration = await readCalibration(root);
   const preview = estimatePlan(manifest, { lanes: await deps.laneInfo(manifest), calibration, now: deps.now });
   const now = deps.now ?? Date.now;
+  const head = await deps.head(root);
+  const planFlags = { leads: options.leads, maxJobs: flags.maxJobs, concurrency: flags.concurrency, maxUsd: options.maxUsd, maxTokens: options.maxTokens };
   return {
-    id: newPlanId(now), goal, createdAt: new Date(now()).toISOString(), head: await deps.head(root), hash: planHash(manifest),
-    flags: { leads: options.leads, maxJobs: flags.maxJobs, concurrency: flags.concurrency, maxUsd: options.maxUsd, maxTokens: options.maxTokens },
+    id: newPlanId(now), goal, createdAt: new Date(now()).toISOString(), head, hash: planHash({ manifest, goal, flags: planFlags, head }),
+    flags: planFlags,
     manifest, preview, appliedCostRatio: calibration.costRatio ?? 1, appliedTimeRatio: calibration.timeRatio ?? 1,
   };
 }
@@ -49,9 +52,13 @@ export async function approveRun({ yes, interactive, hasBudget, ask }) {
   return answer === 'y' || answer === 'yes' ? { approved: true } : { approved: false, code: 'plan-declined', reason: 'not approved' };
 }
 
+// A saved plan is run only if it still describes this repository and is a goal plan; the preview shown at approval
+// is recomputed by the caller, never read from the file.
 export async function loadApprovedPlan(root, id, { head, acceptStale }) {
   const plan = await loadPlan(root, id);
-  if (!acceptStale && plan.head && head && plan.head !== head) throw Object.assign(new Error(`plan-stale: the repository moved since this plan was made (${String(plan.head).slice(0, 7)} -> ${String(head).slice(0, 7)}); make a new plan or pass --accept-stale`), { code: 'plan-stale' });
+  if (typeof plan.goal !== 'string' || !isGoalArgument(plan.goal)) throw Object.assign(new Error('plan-invalid: goal'), { code: 'plan-invalid' });
+  const hex = value => String(value ?? '').replace(/[^0-9a-f]/gi, '').slice(0, 7);
+  if (!acceptStale && (!plan.head || !head || plan.head !== head)) throw Object.assign(new Error(`plan-stale: the repository moved since this plan was made (${hex(plan.head) || 'none'} -> ${hex(head) || 'none'}); make a new plan or pass --accept-stale`), { code: 'plan-stale' });
   return plan;
 }
 
@@ -66,4 +73,4 @@ export async function recordRun(root, plan, actual, { now = Date.now } = {}) {
   return compare;
 }
 
-export { formatPreview, savePlan };
+export { formatPreview, savePlan, markPlanRun, estimatePlan, readCalibration };

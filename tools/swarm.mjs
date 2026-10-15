@@ -26,7 +26,7 @@ import { resolveCliHosts, sshInvocation, sshEnv, remoteExec, cliHostFailure } fr
 import { isHumanJob, validateHumanJob, liftHumanJobs, addGroup, readStore as readHumanStore, humanGroupReady, updateGroup as updateHumanGroup } from './human-jobs.mjs';
 import { runInboxCommand, inboxDeps } from './inbox-commands.mjs';
 import readline from 'node:readline';
-import { extractPlanFlags, buildGoalPlan, approveRun, loadApprovedPlan, recordRun, formatPreview, savePlan } from './plan-commands.mjs';
+import { extractPlanFlags, buildGoalPlan, approveRun, loadApprovedPlan, recordRun, formatPreview, savePlan, markPlanRun, estimatePlan, readCalibration } from './plan-commands.mjs';
 import { MODEL_RATES } from './rates.mjs';
 import { collectInbox } from './inbox.mjs';
 import { readBacklog, nextStartable, markStarted as markBacklogStarted } from './backlog.mjs';
@@ -6839,7 +6839,9 @@ async function planLaneInfo(manifest) {
       const route = pickJobRoute(probe, lanes);
       const family = ['opus', 'sonnet', 'haiku'].find(name => String(route.model).toLowerCase().includes(name));
       const rate = route.agent === 'anthropic' && family ? MODEL_RATES[family] : null;
-      return { agent: route.agent, model: route.model, concurrency: lanes[route.agent]?.concurrency ?? 1, price: rate ? { inPerM: rate.in, outPerM: rate.out } : null };
+      // Paid lanes other than a known Anthropic model cannot be priced here; the preview says so instead of showing $0.
+      const metered = ['anthropic', 'openai', 'gemini', 'openrouter', 'lambda'].includes(route.agent);
+      return { agent: route.agent, model: route.model, concurrency: lanes[route.agent]?.concurrency ?? 1, price: rate ? { inPerM: rate.in, outPerM: rate.out } : null, metered };
     } catch { return { agent: 'unknown', model: null, concurrency: 1, price: null }; }
   };
   return { lead: describe('lead'), child: describe('build'), runConcurrency: manifest.concurrency ?? 1 };
@@ -7494,10 +7496,11 @@ async function mainInner() {
     shipFlags=parseShipFlags(flags);
   }
   // go's flags are parsed and validated up front, for the same reason as ship.
-  let goFlags=null;
+  let goFlags=null,planFlagsFromCli={};
   if(command==='go'){
     const flags=rest.splice(0,rest.length);
     goFlags=parseGoFlags(flags);
+    planFlagsFromCli={maxUsd:goFlags.maxUsd,maxTokens:goFlags.maxTokens};
   }
   // validate/run's --evidence names a local file whose failures block is appended to every job
   // prompt before validation/execution; stripped here for the same reason as monitor/integrate above.
@@ -7662,12 +7665,21 @@ async function mainInner() {
     const goChecksList=await goChecks(root);
     // A dirty tree is refused by go itself, before anything is previewed or asked.
     const dirtyTree=await worktreeDirty(root).catch(()=>false);
-    let plan=planned,planError=null;
-    if(!plan&&!dirtyTree){try{plan=await buildGoalPlan(root,argument,{...goFlags,checks:goChecksList},await planDeps(root));}catch(error){planError=error;}}
-    if(plan&&!planned){try{await savePlan(root,plan);}catch{/* the preview still stands */}}
-    if(planned)goFlags={...goFlags,...Object.fromEntries(Object.entries(planned.flags).filter(([,value])=>value!==undefined))};
-    if(plan)process.stderr.write(`${formatPreview(plan.preview)}\nplan: ${plan.id}\n`);
-    const approval=planError?{approved:false,code:'plan-failed',reason:planError.message}:!plan?{approved:true}:await approveRun({yes:planOpts.yes,interactive:Boolean(process.stdin.isTTY&&process.stdout.isTTY),hasBudget:goFlags.maxUsd!==undefined||Boolean(planned),ask:question=>new Promise(resolve=>{const rl=readline.createInterface({input:process.stdin,output:process.stderr});rl.question(question,answer=>{rl.close();resolve(answer);});})});
+    let plan=planned,planError=dirtyTree?Error('goal-dirty: commit or stash changes before swarm go'):null;
+    if(!plan&&!planError){try{plan=await buildGoalPlan(root,argument,{...goFlags,checks:goChecksList},await planDeps(root));}catch(error){planError=error;}}
+    if(planned&&!planError){
+      // The preview shown for a saved plan is recomputed, never read from the file; the owner's own caps can only tighten the saved ones.
+      const calibration=await readCalibration(root);
+      plan={...planned,preview:estimatePlan(planned.manifest,{lanes:await planLaneInfo(planned.manifest),calibration}),appliedCostRatio:calibration.costRatio,appliedTimeRatio:calibration.timeRatio};
+      const tighter=(cli,saved)=>[cli,saved].filter(value=>typeof value==='number'&&Number.isFinite(value)&&value>0).reduce((min,value)=>Math.min(min,value),Infinity);
+      const saved={...Object.fromEntries(Object.entries(planned.flags).filter(([,value])=>value!==undefined))};
+      goFlags={...goFlags,...saved};
+      for(const key of ['maxUsd','maxTokens']){const limit=tighter(planFlagsFromCli[key],saved[key]);if(Number.isFinite(limit))goFlags[key]=limit;}
+    }
+    if(plan&&!planError)process.stderr.write(`${formatPreview(plan.preview)}\nplan: ${plan.id}\n`);
+    const approval=planError?{approved:false,code:'plan-failed',reason:planError.message}:await approveRun({yes:planOpts.yes,interactive:Boolean(process.stdin.isTTY&&process.stdout.isTTY),hasBudget:(typeof planFlagsFromCli.maxUsd==='number'&&planFlagsFromCli.maxUsd>0)||Boolean(planned),ask:question=>new Promise(resolve=>{const rl=readline.createInterface({input:process.stdin,output:process.stderr});let answered=false;rl.on('close',()=>{if(!answered)resolve('');});rl.question(question,answer=>{answered=true;rl.close();resolve(answer);});})});
+    if(approval.approved&&!planned){try{await savePlan(root,plan);}catch{/* the preview still stood; the run goes on */}}
+    if(approval.approved&&planned){try{await markPlanRun(root,planned.id);}catch(error){approval.approved=false;approval.code='plan-failed';approval.reason=error.message;}}
     if(!approval.approved){
       result=approval.code==='plan-failed'?{status:'failed',stage:'plan',reason:approval.reason}:{status:'cancelled',reason:approval.reason,plan:plan.id};
       if(approval.code!=='plan-declined')process.exitCode=1;
@@ -7713,7 +7725,7 @@ async function mainInner() {
     if(firstRun.ran)result={...result,initialized:{files:firstRun.files}};
     if(plan&&result?.runId){
       const children=await countChildren(root,result.runId);
-      result={...result,estimate:await recordRun(root,plan,{...(typeof result.cost==='number'?{costUsd:result.cost}:{}),minutes:Math.round((Date.now()-goStarted)/6000)/10,...(children!==undefined?{children}:{})})};
+      result={...result,estimate:await recordRun(root,plan,{...(Number.isFinite(result.cost)?{costUsd:result.cost}:{}),minutes:Math.round((Date.now()-goStarted)/6000)/10,...(children!==undefined?{children}:{})})};
     }
     }
   }

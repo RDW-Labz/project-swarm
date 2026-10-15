@@ -59,6 +59,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-15 | - | plan-preview: Anthropic response truncated: stop_reason max_tokens | anthropic | claude-haiku-5-5 | failed: Anthropic response truncated: stop_reason max_tokens | - | $0.02 |
 | 2026-10-15 | - | module: Creates tools/plan-preview.mjs implementing the phase 11 contract: PRIORS, estimatePlan, for | anthropic | claude-haiku-5-5 | pass | 39,408 | $0.01 |
 | 2026-10-15 | - | tests: Adds tests/plan-preview.test.mjs covering the Phase 11 estimate formulas, calibration ratios | anthropic | claude-haiku-5-5 | pass | 25,280 | $0.01 |
+| 2026-10-15 | - | review-11: Phase 11 review: 4 high, 8 medium, 5 low. Biggest: (1) on a dirty tree in a project witho | claude | opus | pass | 15,071 | $0.43 |
 
 ## Daily summary
 
@@ -66,5 +67,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-10-14 | codex | 34 | 29 | 5 | 2,887,673 | subscription |
 | 2026-10-15 | anthropic | 13 | 8 | 5 | 256,403 | $0.15 |
-| 2026-10-15 | claude | 4 | 4 | 0 | 57,014 | $1.76 |
+| 2026-10-15 | claude | 5 | 5 | 0 | 72,085 | $2.19 |
 | 2026-10-15 | codex | 4 | 4 | 0 | 154,596 | subscription |

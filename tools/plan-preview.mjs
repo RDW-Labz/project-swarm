@@ -17,7 +17,8 @@ const WRITE = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
 const isNum = x => typeof x === 'number' && Number.isFinite(x);
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 const round = (x, d) => Math.round(x * 10 ** d) / 10 ** d;
-const txt = s => String(s ?? '').replace(/[\x00-\x1f\x7f]/g, ' ');
+const txt = s => String(s ?? '').replace(/[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, ' ');
+const planBody = plan => ({ manifest: plan.manifest, goal: plan.goal, flags: plan.flags, head: plan.head });
 const money = n => (n > 0 && n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`);
 const applied = x => (isNum(x) && x > 0 ? x : 1);
 const usd = (inTok, outTok, price) => (price ? (inTok * price.inPerM + outTok * price.outPerM) / 1e6 : 0);
@@ -51,8 +52,8 @@ function median(xs) {
 export function estimatePlan(manifest, { lanes = {}, calibration = {} } = {}) {
   const jobs = Array.isArray(manifest?.jobs) ? manifest.jobs : [];
   const leads = jobs.filter(j => j.type === 'lead');
-  const costRatio = isNum(calibration.costRatio) ? calibration.costRatio : 1;
-  const timeRatio = isNum(calibration.timeRatio) ? calibration.timeRatio : 1;
+  const costRatio = isNum(calibration.costRatio) ? clamp(calibration.costRatio, 0.1, 10) : 1;
+  const timeRatio = isNum(calibration.timeRatio) ? clamp(calibration.timeRatio, 0.1, 10) : 1;
   const cpl = isNum(calibration.childrenPerLead) ? calibration.childrenPerLead : PRIORS.childrenPerLead;
   const expectedChildren = leads.length ? leads.reduce((s, l) => s + clamp(cpl, 1, leadCap(l)), 0) : jobs.length;
   const maxChildren = leads.length ? leads.reduce((s, l) => s + leadCap(l), 0) : jobs.length;
@@ -72,6 +73,10 @@ export function estimatePlan(manifest, { lanes = {}, calibration = {} } = {}) {
   if (leads.length) rows.push({ agent: lanes.lead?.agent ?? null, model: lanes.lead?.model ?? null, role: 'lead', jobs: leads.length, costUsd: round(leadUsd, 4) });
   if (expectedChildren) rows.push({ agent: lanes.child?.agent ?? null, model: lanes.child?.model ?? null, role: 'child', jobs: expectedChildren, costUsd: round(childUsd, 4) });
   const risks = [];
+  for (const role of ['lead', 'child']) {
+    const lane = lanes[role];
+    if (lane && lane.metered && !lane.price && (role === 'child' ? expectedChildren : leads.length)) risks.push({ code: 'unpriced-lane', message: `${role} jobs go to ${lane.agent}, a paid lane this preview cannot price; the real cost is not in the estimate` });
+  }
   const paths = jobs.flatMap(j => [...(j.area?.scope ?? []), ...(j.context ?? []), ...(j.outputs ?? [])]).filter(p => typeof p === 'string');
   const sensitive = paths.filter(isSensitive);
   if (sensitive.length) risks.push({ code: 'sensitive-folder', message: `sensitive paths: ${sensitive.slice(0, 3).join(', ')}` });
@@ -103,9 +108,9 @@ export function formatPreview(p) {
   lines.push(`Goal: ${txt(p.goal ?? '(none)')}`);
   lines.push(`Leads: ${p.leads.length}${scopes.length ? ` (scopes: ${scopes.join(', ')})` : ''}`);
   lines.push(`Jobs: about ${p.jobs.expectedChildren} (at most ${p.jobs.maxChildren})`);
-  for (const l of p.lanes) lines.push(`${txt(l.agent)} ${txt(l.model)}: ${l.jobs} ${l.role} jobs, about ${money(l.costUsd)}`);
+  for (const l of p.lanes) lines.push(`${txt(l.agent)} ${txt(l.model)}: ${Number(l.jobs)} ${txt(l.role)} jobs, about ${money(Number(l.costUsd) || 0)}`);
   const e = p.estimate;
-  const free = p.lanes.some(l => l.costUsd === 0 && l.jobs > 0) ? ' (subscription lanes are not counted)' : '';
+  const free = p.lanes.some(l => l.costUsd === 0 && l.jobs > 0) ? ' (subscription and unpriced lanes are not counted)' : '';
   lines.push(`Cost: about ${money(e.costUsd)} (range ${money(e.costRange[0])} to ${money(e.costRange[1])})${free}`);
   lines.push(`Time: about ${e.minutes} min`);
   lines.push(`Peak concurrency: ${e.peakConcurrency}`);
@@ -114,7 +119,7 @@ export function formatPreview(p) {
   else {
     lines.push('Risks:');
     const shown = p.risks.slice(0, 20);
-    for (const r of shown) lines.push(`- ${r.code}: ${txt(r.message)}`);
+    for (const r of shown) lines.push(`- ${txt(r.code)}: ${txt(r.message)}`);
     if (p.risks.length > shown.length) lines.push(`- ... ${p.risks.length - shown.length} more`);
   }
   return lines.join('\n');
@@ -141,7 +146,7 @@ async function writeNew(dir, name, text, replace) {
 
 export async function savePlan(root, plan) {
   if (typeof plan?.id !== 'string' || !PLAN_ID.test(plan.id)) throw new Error('plan-invalid: id');
-  if (plan.hash !== planHash(plan.manifest)) throw new Error('plan-invalid: hash');
+  if (plan.hash !== planHash(planBody(plan))) throw new Error('plan-invalid: hash');
   const dir = await safeWritableDir(root, ['.swarm', 'plans']);
   try {
     return await writeNew(dir, `${plan.id}.json`, JSON.stringify(plan, null, 2) + '\n', false);
@@ -153,15 +158,26 @@ export async function savePlan(root, plan) {
 
 export async function loadPlan(root, id) {
   if (typeof id !== 'string' || !PLAN_ID.test(id)) throw new Error('plan-invalid: id');
-  const file = path.join(root, '.swarm', 'plans', `${id}.json`);
-  try { await assertRegularOrMissing(file); } catch { throw new Error('plan-invalid: not a regular file'); }
+  const realRoot = await fs.realpath(root);
+  let dir;
+  try { dir = await fs.realpath(path.join(realRoot, '.swarm', 'plans')); } catch (error) { if (error.code === 'ENOENT') throw new Error(`plan-not-found: ${id}`); throw error; }
+  if (!dir.startsWith(realRoot + path.sep)) throw new Error('plan-invalid: plans folder leaves the project');
   let text;
-  try { text = await fs.readFile(file, 'utf8'); }
-  catch (error) { if (error.code === 'ENOENT') throw new Error(`plan-not-found: ${id}`); throw error; }
+  try {
+    const handle = await fs.open(path.join(dir, `${id}.json`), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      if (!(await handle.stat()).isFile()) throw new Error('plan-invalid: not a regular file');
+      text = await handle.readFile('utf8');
+    } finally { await handle.close(); }
+  } catch (error) {
+    if (error.code === 'ENOENT') throw new Error(`plan-not-found: ${id}`);
+    if (error.code === 'ELOOP') throw new Error('plan-invalid: not a regular file');
+    throw error;
+  }
   let plan;
   try { plan = JSON.parse(text); } catch { throw new Error('plan-invalid: json'); }
   if (!plan || plan.id !== id || !plan.manifest) throw new Error('plan-invalid: shape');
-  if (plan.hash !== planHash(plan.manifest)) throw new Error('plan-invalid: hash');
+  if (plan.hash !== planHash(planBody(plan))) throw new Error('plan-invalid: hash');
   return plan;
 }
 
@@ -173,7 +189,8 @@ export async function readCalibration(root) {
   catch (error) { if (error.code === 'ENOENT') return EMPTY(); throw error; }
   let parsed;
   try { parsed = JSON.parse(text); } catch { return EMPTY(); }
-  return { ...EMPTY(), ...parsed, runs: Array.isArray(parsed?.runs) ? parsed.runs : [] };
+  const ratio = value => (isNum(value) ? clamp(value, 0.1, 10) : 1);
+  return { ...EMPTY(), ...parsed, costRatio: ratio(parsed?.costRatio), timeRatio: ratio(parsed?.timeRatio), runs: Array.isArray(parsed?.runs) ? parsed.runs : [] };
 }
 
 export function recordActual(calibration, { id, estimate = {}, actual = {} }) {
@@ -203,4 +220,17 @@ export function recordActual(calibration, { id, estimate = {}, actual = {} }) {
 export async function writeCalibration(root, calibration) {
   const dir = await safeWritableDir(root, ['.swarm', 'project']);
   return writeNew(dir, 'estimates.json', JSON.stringify(calibration, null, 2) + '\n', true);
+}
+
+// A plan is run once. The marker is created exclusively, so two runs of the same plan cannot both start.
+export async function markPlanRun(root, id) {
+  if (typeof id !== 'string' || !PLAN_ID.test(id)) throw new Error('plan-invalid: id');
+  const dir = await safeWritableDir(root, ['.swarm', 'plans']);
+  try {
+    const handle = await fs.open(path.join(dir, `${id}.ran`), fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+    await handle.close();
+  } catch (error) {
+    if (error.code === 'EEXIST') throw Object.assign(new Error(`plan-already-run: ${id} was already run; make a new plan`), { code: 'plan-already-run' });
+    throw error;
+  }
 }

@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { manifestForGoal } from '../tools/goal.mjs';
-import { estimatePlan, formatPreview, planHash, savePlan, loadPlan, recordActual, PRIORS } from '../tools/plan-preview.mjs';
+import { estimatePlan, formatPreview, planHash, savePlan, loadPlan, recordActual, markPlanRun, PRIORS } from '../tools/plan-preview.mjs';
 
 const PRICE = { inPerM: 1, outPerM: 5 };
 const EMPTY = { runs: [], costRatio: 1, timeRatio: 1 };
@@ -20,7 +20,7 @@ const goal1 = (opts = {}) => manifestForGoal('add tests', { folders: ['a', 'b'],
 const codes = preview => preview.risks.map(risk => risk.code);
 const planFor = manifest => ({
   id: 'plan-abc123', goal: 'add tests', createdAt: '2024-01-01T00:00:00.000Z', head: 'deadbeef',
-  hash: planHash(manifest), flags: { maxUsd: 5 }, manifest,
+  hash: planHash({ manifest, goal: 'add tests', flags: { maxUsd: 5 }, head: 'deadbeef' }), flags: { maxUsd: 5 }, manifest,
   preview: estimatePlan(manifest, { lanes: lanes(), calibration: {} }),
 });
 
@@ -123,7 +123,7 @@ test('subscription lanes cost zero and formatPreview strips control characters',
   assert.equal(p.estimate.costUsd, 0);
   const text = formatPreview(p);
   assert.ok(!/[\u0000-\u0008\u000b-\u001f\u007f]/.test(text));
-  assert.match(text, /subscription lanes are not counted/);
+  assert.match(text, /subscription and unpriced lanes are not counted/);
   assert.match(text, /Leads: 1/);
   assert.match(text, /Risks:/);
   assert.ok(text.split('\n').length < 40);
@@ -138,7 +138,7 @@ test('save and load round trip', async t => {
   const back = await loadPlan(root, 'plan-abc123');
   assert.equal(back.id, plan.id);
   assert.deepEqual(back.manifest, m);
-  assert.equal(back.hash, planHash(m));
+  assert.equal(back.hash, plan.hash);
 });
 
 test('loadPlan refuses a bad id', async t => {
@@ -175,4 +175,41 @@ test('savePlan refuses a symlinked .swarm/plans', async t => {
   await fs.symlink(outside, path.join(root, '.swarm', 'plans'));
   await assert.rejects(savePlan(root, planFor(goal1())));
   assert.deepEqual(await fs.readdir(outside), []);
+});
+
+test('review fixes: the hash covers goal, flags and head; ratios are clamped; C1 and bidi characters are stripped; metered unpriced lanes are a risk', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-pp-fix-'));
+  try {
+    const plan = planFor(goal1());
+    await savePlan(root, plan);
+    const file = path.join(root, '.swarm/plans/plan-abc123.json');
+    for (const [key, value] of [['goal', 'something else'], ['head', 'cafebabe'], ['flags', { maxUsd: 500 }]]) {
+      const saved = JSON.parse(await fs.readFile(file, 'utf8'));
+      saved[key] = value;
+      await fs.writeFile(file, JSON.stringify(saved));
+      await assert.rejects(loadPlan(root, 'plan-abc123'), /plan-invalid: hash/, key);
+      await fs.writeFile(file, JSON.stringify(plan));
+    }
+    await fs.rm(path.join(root, '.swarm/plans'), { recursive: true });
+    await fs.mkdir(path.join(root, 'elsewhere'));
+    await fs.symlink(path.join(root, 'elsewhere'), path.join(root, '.swarm/plans'));
+    await assert.rejects(loadPlan(root, 'plan-abc123'), /plan-invalid|plan-not-found/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  const huge = estimatePlan(goal1(), { lanes: lanes(), calibration: { costRatio: 1e-9, timeRatio: 1e9 } });
+  const base = estimatePlan(goal1(), { lanes: lanes(), calibration: {} });
+  near(huge.estimate.costUsd, base.estimate.costUsd * 0.1, 1e-3);
+  near(huge.estimate.minutes, base.estimate.minutes * 10, 0.2);
+  const text = formatPreview({ ...base, goal: 'a\u0085b\u202ec\u200bd', risks: [{ code: 'x\u001b[31m', message: 'm\u009b1' }] });
+  assert.ok(!/[\u0080-\u009f\u202e\u200b\u001b]/.test(text));
+  const metered = estimatePlan(goal1(), { lanes: { ...lanes(), child: { agent: 'openai', model: 'gpt', concurrency: 4, price: null, metered: true } }, calibration: {} });
+  assert.ok(codes(metered).includes('unpriced-lane'));
+});
+
+test('markPlanRun creates its marker once', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-pp-ran-'));
+  try {
+    await markPlanRun(root, 'plan-abc123');
+    await assert.rejects(markPlanRun(root, 'plan-abc123'), { code: 'plan-already-run' });
+    await assert.rejects(markPlanRun(root, '../x'), /plan-invalid: id/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
