@@ -96,3 +96,27 @@ test('schema sanitizer drops unsupported keywords and open result objects', () =
   const out = anthropicSchema({ type: 'object', properties: { result: { type: 'object', additionalProperties: true }, s: { type: 'string', minLength: 1, maxLength: 5 }, a: { type: 'array', maxItems: 3, uniqueItems: true, items: { type: 'string' } } } });
   assert.deepEqual(out, { type: 'object', properties: { s: { type: 'string' }, a: { type: 'array', items: { type: 'string' } } } });
 });
+
+test('cacheContext puts the shared files first in their own cacheable block, and cache tokens are priced', async () => {
+  const dir = tmp(); let seen;
+  const env = { SWARM_LOGS_DIR: dir, SWARM_ANTHROPIC_API_KEY: KEY };
+  const context = [{ path: 'coordination/CONTRACT.md', content: 'the shared contract' }, { path: 'src/a.js', content: 'export const a = 1;' }];
+  const usage = { input_tokens: 300, cache_creation_input_tokens: 2000, cache_read_input_tokens: 5000, output_tokens: 100 };
+  const result = await executeApi(job({ cacheContext: ['coordination/CONTRACT.md'], outputs: ['src/a.js'], context: context.map(file => file.path) }), context, {
+    env, fetchImpl: async (url, init) => { seen = JSON.parse(init.body); return reply({ usage, content: [{ type: 'text', text: JSON.stringify({ summary: 'ok', files: [{ path: 'src/a.js', content: 'x' }], edits: [] }) }] }); },
+  });
+  assert.equal(result.status, 'complete');
+  const blocks = seen.messages[0].content;
+  assert.equal(blocks.length, 2);
+  assert.deepEqual(blocks[0].cache_control, { type: 'ephemeral' });
+  assert.deepEqual(JSON.parse(blocks[0].text).files.map(file => file.path), ['coordination/CONTRACT.md']);
+  assert.equal(blocks[1].cache_control, undefined);
+  const second = JSON.parse(blocks[1].text);
+  assert.deepEqual(second.files.map(file => file.path), ['src/a.js']);
+  assert.equal(second.task, 'say ok');
+  assert.equal(result.costUsd, usageCostUsd('claude-haiku-5-5', usage));
+  assert.ok(usageCostUsd('claude-haiku-5-5', usage) < usageCostUsd('claude-haiku-5-5', { input_tokens: 7300, output_tokens: 100 }), 'cheaper than the same tokens uncached');
+  // without cacheContext the request is the single string it always was
+  await executeApi(job({ context: context.map(file => file.path) }), context, { env, fetchImpl: async (url, init) => { seen = JSON.parse(init.body); return reply(); } });
+  assert.equal(typeof seen.messages[0].content, 'string');
+});

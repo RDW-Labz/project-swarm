@@ -350,7 +350,15 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       // Key goes in a header only. Thinking depth is the only control these models take, so it is
       // pinned low: a bounded one-shot job never needs to pay for deep reasoning.
       headers['x-api-key'] = config.key; headers['anthropic-version'] = ANTHROPIC_VERSION;
-      body = { model: job.model, max_tokens: limit, system: instructions, messages: [{ role: 'user', content: input }], output_config: { effort: 'low', format: { type: 'json_schema', schema: anthropicSchema(schema) } } };
+      // cacheContext names context files shared by many jobs (a contract, a style guide, the repo map). They go first, in their own
+      // block marked cacheable, so a fan-out pays full price for them once and about a tenth after; the rest of the task follows.
+      // Below the model's minimum size (1024 to 4096 tokens) the marker is simply ignored.
+      const cached = new Set(Array.isArray(job.cacheContext) ? job.cacheContext : []);
+      const shared = cappedContext.filter(file => cached.has(file.path));
+      const content = shared.length
+        ? [{ type: 'text', text: JSON.stringify({ files: shared }), cache_control: { type: 'ephemeral' } }, { type: 'text', text: JSON.stringify({ task: `${skillsBlock}${job.prompt}`, declaredOutputs: job.outputs, files: cappedContext.filter(file => !cached.has(file.path)) }) }]
+        : input;
+      body = { model: job.model, max_tokens: limit, system: instructions, messages: [{ role: 'user', content }], output_config: { effort: 'low', format: { type: 'json_schema', schema: anthropicSchema(schema) } } };
     }
     else if (job.agent === 'lambda') { if (config.key) headers.authorization = `Bearer ${config.key}`; headers['x-helm-session'] = `${env.SWARM_LAMBDA_SESSION || 'swarm'}-${randomBytes(16).toString('hex')}-${job.id}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, ...(config.selfHosted && env.SWARM_LAMBDA_THINKING !== 'on' ? { chat_template_kwargs: { enable_thinking: false } } : {}), response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
     else { if (config.key) headers.authorization = `Bearer ${config.key}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, format: schema, options: { num_predict: limit } }; }

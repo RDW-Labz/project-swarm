@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.71.0
+
+- Throughput (Phase 14). A profile-driven pass: 2,000 stub API jobs now run in about 7 seconds with 177 MiB of memory (before: over 10 minutes), and 1,000 requests can be in flight at once in 148 MiB (before: never more than 4). The causes: API jobs took a local host slot, the machine-wide lane file was re-read and re-probed constantly, every in-flight job polled the cancel file, the output-overlap check was quadratic, per-job git and live-run scans, and state saves that grew with the run. See [throughput](docs/throughput.md). The concurrency ceiling is now 2048 (was 512).
+- Added adaptive lanes: `"adaptive": true` lets a lane find its own limit (start low, one more slot per window of successes, halve on a 429, never below `min`).
+- Added `cacheContext` for the Anthropic lane: shared context files go first in their own prompt-cache block, so a big fan-out pays full price for them once.
+- Added `bench/throughput/stress.mjs`, the stress harness behind these numbers.
+
 ## 1.70.0
 
 - `swarm init` v2 (Phase 12). It now writes a **project profile** into `.project-swarm.json`: the stack, whether the project is sensitive (asked once at a terminal, default sensitive without one; `--sensitive` / `--not-sensitive`), **protected paths** that no job may write (detected `.env`, `secrets/`, keys and certificates, plus `--protect PATH`), a default budget (`--max-usd`, `--max-tokens`), and the **base check**: the project's own checks run once at init and recorded, so old failures are not blamed on workers (they run only with `--base-check`, or after a terminal confirms the listed commands, with a small environment; `--no-base-check` skips them). Running init again keeps the owner's answers.
