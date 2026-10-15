@@ -8,6 +8,8 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { runCheckArgv, refreshRepoMap } from '../tools/init.mjs';
+import { protectedViolations, validateProfile } from '../tools/init-profile.mjs';
 
 const exec = promisify(execFile);
 const swarm = path.join(path.dirname(fileURLToPath(import.meta.url)), '../tools/swarm.mjs');
@@ -49,7 +51,7 @@ const snapshot = async root => {
 
 test('init writes the profile: stack, sensitivity, protected paths, budget, a green base check, and the repo map', async t => {
   const root = await project(t), home = await temp(t);
-  const result = await initJson(root, home, ['--not-sensitive', '--protect', 'secrets/', '--max-usd', '3']);
+  const result = await initJson(root, home, ['--not-sensitive', '--base-check', '--protect', 'secrets/', '--max-usd', '3']);
   assert.equal(result.profile.sensitive, false);
   assert.ok(result.profile.protectedPaths.includes('.env'));
   assert.ok(result.profile.protectedPaths.includes('secrets/'));
@@ -64,7 +66,7 @@ test('init writes the profile: stack, sensitivity, protected paths, budget, a gr
 
 test('a failing project is recorded red, with a warning, and the plan carries the base-red risk', async t => {
   const root = await project(t, 'node -e "process.exit(3)"'), home = await temp(t);
-  const result = await initJson(root, home, ['--not-sensitive']);
+  const result = await initJson(root, home, ['--not-sensitive', '--base-check']);
   assert.equal(result.profile.baseCheck.status, 'red');
   assert.ok(result.warnings.some(warning => warning.startsWith('base-red')));
   const plan = (await run(root, home, ['plan', 'add a thing to src'])).stdout;
@@ -134,11 +136,73 @@ test('the profile feeds plan: budget default, sensitive false on the leads; flag
 
 test('done when: a fresh project goes from init to a plan with no hand edits, and init --check finds nothing wrong', async t => {
   const root = await project(t), home = await temp(t);
-  await initJson(root, home, ['--not-sensitive']);
+  await initJson(root, home, ['--not-sensitive', '--base-check']);
   const plan = await run(root, home, ['plan', 'add a thing to src']);
   assert.match(plan.stdout, /plan saved: plan-/);
   assert.ok(!/base-red/.test(plan.stdout));
   const check = await run(root, home, ['init', '--check']);
   assert.ok(!/FAIL/.test(check.stdout));
   assert.equal((await pointer(root)).profile.baseCheck.status, 'green');
+});
+
+test('the base check never runs unasked, and runs with a scrubbed environment when asked', async t => {
+  const root = await project(t, 'node -e "process.exit(process.env.SECRET_TOKEN_FOR_TEST ? 1 : 0)"'), home = await temp(t);
+  const asked = JSON.parse((await exec(process.execPath, [swarm, '--root', root, 'init', '--not-sensitive'], { env: { ...process.env, HOME: home, SWARM_CONFIG: process.env.SWARM_CONFIG, SECRET_TOKEN_FOR_TEST: 'x' }, input: '' })).stdout.trim().split('\n').pop());
+  assert.equal(asked.profile.baseCheck.status, 'skipped');
+  assert.ok(asked.warnings.some(warning => warning.startsWith('base-check-skipped')));
+  const ran = JSON.parse((await exec(process.execPath, [swarm, '--root', root, 'init', '--base-check'], { env: { ...process.env, HOME: home, SWARM_CONFIG: process.env.SWARM_CONFIG, SECRET_TOKEN_FOR_TEST: 'x' }, input: '' })).stdout.trim().split('\n').pop());
+  assert.equal(ran.profile.baseCheck.status, 'green', 'the secret was not in the check environment');
+  assert.equal((await fail(root, home, ['init', '--base-check', '--no-base-check'])).code, 1);
+});
+
+test('a check that outlives its timeout, with a child of its own, is cut off and cleaned up', async t => {
+  const cwd = await temp(t);
+  const started = Date.now();
+  await assert.rejects(runCheckArgv([process.execPath, '-e', "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'inherit' }); setTimeout(() => {}, 30000);"], { cwd, timeoutMs: 400 }), /timed out/);
+  assert.ok(Date.now() - started < 5000);
+  const ok = await runCheckArgv([process.execPath, '-e', 'process.exit(2)'], { cwd, timeoutMs: 5000 });
+  assert.equal(ok.exitCode, 2);
+});
+
+test('a broken profile fails closed; the pointer and checks file are always protected; open-scope folders count', async t => {
+  const root = await project(t), home = await temp(t);
+  await initJson(root, home, ['--not-sensitive', '--no-base-check', '--no-map', '--protect', 'keep/']);
+  const write = outputs => fs.writeFile(path.join(root, 'm.json'), JSON.stringify({ version: 1, jobs: [{ id: 'w', agent: 'codex', model: 'gpt-6.1-sol', prompt: 'x', context: [], outputs }] }));
+  for (const outputs of [['.project-swarm.json'], ['coordination/checks.json'], ['Keep/x.txt']]) {
+    await write(outputs);
+    const error = await fail(root, home, ['validate', 'm.json']);
+    assert.match(error.stdout + error.stderr, /protected-path/, outputs[0]);
+  }
+  const profile = { sensitive: true, protectedPaths: ['keep/'] };
+  assert.equal(protectedViolations(validateProfile(profile).profile, [{ id: 'o', outputs: ['docs/a.md'], outputDirs: ['keep/'] }]).length, 1);
+  const raw = await pointer(root);
+  raw.profile.protectedPaths = ['../not-valid'];
+  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify(raw));
+  await write(['docs/a.md']);
+  const broken = await fail(root, home, ['validate', 'm.json']);
+  assert.match(broken.stdout + broken.stderr, /profile-invalid/);
+});
+
+test('the repo map lists a symlink to a device without reading it', async t => {
+  const root = await project(t);
+  await fs.symlink('/dev/zero', path.join(root, 'zero.js'));
+  await exec('git', ['-C', root, 'add', 'zero.js']);
+  const started = Date.now();
+  const map = await refreshRepoMap(root);
+  assert.ok(Date.now() - started < 5000);
+  assert.equal(map.files['zero.js'].lang, null);
+  assert.deepEqual(map.files['zero.js'].exports, []);
+});
+
+test('a saved plan made while the project was not sensitive is refused once it is sensitive again', async t => {
+  const root = await project(t), home = await temp(t);
+  await initJson(root, home, ['--not-sensitive', '--no-base-check', '--no-map']);
+  const id = /plan saved: (\S+)/.exec((await run(root, home, ['plan', 'add a thing to src'])).stdout)[1];
+  await initJson(root, home, ['--sensitive', '--no-base-check', '--no-map']);
+  await exec('git', ['-C', root, 'add', '-A']);
+  await exec('git', ['-C', root, '-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'swarm init']);
+  const error = await run(root, home, ['go', '--plan', id, '--yes', '--accept-stale']).then(() => null, e => e);
+  const out = JSON.parse((error ? error.stdout : '{}').trim().split('\n').pop() || '{}');
+  assert.equal(out.status, 'failed');
+  assert.match(out.reason, /not sensitive/);
 });

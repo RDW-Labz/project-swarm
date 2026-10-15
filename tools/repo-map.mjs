@@ -7,6 +7,7 @@ import { safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 export const MAP_VERSION = 1;
 const MAX_FILES = 20000;
 const MAX_BYTES = 1024 * 1024;
+const SCAN_BYTES = 256 * 1024;
 const MAX_LINKS = 5;
 const MAX_IMPORTERS = 200;
 const MAX_EXPORTS = 200;
@@ -17,8 +18,8 @@ const TEST_NAME = /\.test\.|\.spec\.|_test\.|^test_.*\.py$/;
 const JS_EXTS = ['.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx'];
 const IDENT = /^[A-Za-z_$][\w$]*$/;
 const JS_SPEC_RES = [
-  /\bimport\s+[^'"`;]*?\bfrom\s*['"]([^'"]+)['"]/g,
-  /\bexport\s+[^'"`;]*?\bfrom\s*['"]([^'"]+)['"]/g,
+  /\bimport\s+[^'"`;]{0,300}?\bfrom\s*['"]([^'"\n]{1,300})['"]/g,
+  /\bexport\s+[^'"`;]{0,300}?\bfrom\s*['"]([^'"\n]{1,300})['"]/g,
   /\bimport\s*['"]([^'"]+)['"]/g,
   /\bimport\(\s*['"]([^'"]+)['"]\s*\)/g,
   /\brequire\(\s*['"]([^'"]+)['"]\s*\)/g,
@@ -55,10 +56,10 @@ function namesFrom(body, mode) {
 }
 
 function jsExports(text) {
-  const out = [...text.matchAll(/^\s*export\s+(?:async\s+)?(?:function\*?|class|const|let|var)\s+([A-Za-z_$][\w$]*)/gm)].map(m => m[1]);
+  const out = [...text.matchAll(/^[ \t]*export\s+(?:async\s+)?(?:function\*?|class|const|let|var)\s+([A-Za-z_$][\w$]*)/gm)].map(m => m[1]);
   if (/export\s+default\b/.test(text)) out.push('default');
-  for (const m of text.matchAll(/export\s*\{([^}]*)\}/g)) out.push(...namesFrom(m[1], 'as'));
-  for (const m of text.matchAll(/module\.exports\s*=\s*\{([^}]*)\}/g)) out.push(...namesFrom(m[1], 'colon'));
+  for (const m of text.matchAll(/export\s*\{([^}]{0,2000})\}/g)) out.push(...namesFrom(m[1], 'as'));
+  for (const m of text.matchAll(/module\.exports\s*=\s*\{([^}]{0,2000})\}/g)) out.push(...namesFrom(m[1], 'colon'));
   for (const m of text.matchAll(/\bexports\.([A-Za-z_$][\w$]*)\s*=/g)) out.push(m[1]);
   return out;
 }
@@ -108,25 +109,25 @@ function pyItem(mod, dots, dir, known) {
 
 function pyItems(text, dir, known) {
   const items = [];
-  for (const m of text.matchAll(/^\s*import\s+([\w.]+(?:\s*,\s*[\w.]+)*)/gm)) {
+  for (const m of text.matchAll(/^[ \t]*import\s+([\w.]+(?:\s*,\s*[\w.]+)*)/gm)) {
     for (const mod of m[1].split(',')) items.push(pyItem(mod.trim(), 0, dir, known));
   }
-  for (const m of text.matchAll(/^\s*from\s+(\.*)([\w.]*)\s+import\b/gm)) items.push(pyItem(m[2], m[1].length, dir, known));
+  for (const m of text.matchAll(/^[ \t]*from\s+(\.*)([\w.]*)\s+import\b/gm)) items.push(pyItem(m[2], m[1].length, dir, known));
   return items;
 }
 
 function goExtract(text) {
   const exports = [...text.matchAll(/^func\s+([A-Z]\w*)\s*\(/gm), ...text.matchAll(/^type\s+([A-Z]\w*)/gm)].map(m => m[1]);
   const paths = [];
-  for (const m of text.matchAll(/^\s*import\s*\(([^)]*)\)/gm)) paths.push(...[...m[1].matchAll(/"([^"]+)"/g)].map(x => x[1]));
-  for (const m of text.matchAll(/^\s*import\s+(?:[\w.]+\s+)?"([^"]+)"/gm)) paths.push(m[1]);
+  for (const m of text.matchAll(/^[ \t]*import\s*\(([^)]*)\)/gm)) paths.push(...[...m[1].matchAll(/"([^"]+)"/g)].map(x => x[1]));
+  for (const m of text.matchAll(/^[ \t]*import\s+(?:[\w.]+\s+)?"([^"]+)"/gm)) paths.push(m[1]);
   return { exports, imports: [], external: uniq(paths) };
 }
 
 function rustExtract(text, dir, known) {
-  const exports = [...text.matchAll(/^\s*pub(?:\([^)]*\))?\s+(?:async\s+)?(?:fn|struct|enum|trait|const|type)\s+([A-Za-z_]\w*)/gm)].map(m => m[1]);
+  const exports = [...text.matchAll(/^[ \t]*pub(?:\([^)]*\))?\s+(?:async\s+)?(?:fn|struct|enum|trait|const|type)\s+([A-Za-z_]\w*)/gm)].map(m => m[1]);
   const imports = [];
-  for (const m of text.matchAll(/^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;/gm)) {
+  for (const m of text.matchAll(/^[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;/gm)) {
     const target = path.posix.join(dir, m[1]);
     const file = [target + '.rs', target + '/mod.rs'].find(c => known.has(c));
     if (file) imports.push(file);
@@ -148,12 +149,15 @@ const sizeOf = st => (Number.isFinite(st.size) ? st.size : st.bytes);
 async function analyze(rel, abs, st, readFile, known) {
   const entry = { bytes: sizeOf(st), mtimeMs: st.mtimeMs, lang: null, exports: [], imports: [], external: [], isTest: isTestPath(rel) };
   const lang = langOf(rel);
+  // Symlinks, devices and fifos are listed but never read (the caller's stat must not follow links).
+  if (st.isSymbolicLink?.() === true || st.isFile?.() === false) return entry;
   if (!lang || sizeOf(st) > MAX_BYTES) return entry;
   let buf;
   try { buf = await readFile(abs); } catch { return entry; }
   const bytes = Buffer.from(buf);
   if (bytes.subarray(0, 8000).includes(0)) return entry;
-  const info = extract(lang, bytes.toString('utf8'), rel, known);
+  // Hostile or generated files are only scanned up to 256 KiB, so no pattern can run for long.
+  const info = extract(lang, bytes.subarray(0, SCAN_BYTES).toString('utf8'), rel, known);
   return { ...entry, lang, exports: uniq(info.exports), imports: info.imports, external: info.external };
 }
 
@@ -249,7 +253,9 @@ export async function readRepoMap(root) {
   try {
     await assertRegularOrMissing(file);
     const map = JSON.parse(await fs.readFile(file, 'utf8'));
-    return map && map.version === MAP_VERSION ? map : null;
+    const sound = map && map.version === MAP_VERSION && map.files && typeof map.files === 'object' && Array.isArray(map.testLinks) && map.importedBy && typeof map.importedBy === 'object'
+      && Object.values(map.files).every(entry => entry && Array.isArray(entry.exports) && Array.isArray(entry.imports) && Array.isArray(entry.external));
+    return sound ? map : null;
   } catch {
     return null;
   }

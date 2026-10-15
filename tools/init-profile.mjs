@@ -8,15 +8,16 @@ const STATUSES = ['green', 'red', 'skipped', 'none'];
 const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck'];
 const REQUIRED_KEYS = ['sensitive', 'protectedPaths', 'budget', 'baseCheck'];
 const BASE_KEYS = ['status', 'ranAt', 'head', 'checks'];
-const ALWAYS_PROTECTED = ['.git/', '.swarm/'];
+// The pointer (profile) and the checks file decide what later runs may do and execute, so no job may rewrite them.
+const ALWAYS_PROTECTED = ['.git/', '.swarm/', '.project-swarm.json', 'coordination/checks.json'];
 const SECRET_FOLDERS = ['secrets', 'credentials', '.ssh', '.aws', '.gnupg', 'private', 'keys'];
 const SECRET_EXTENSIONS = ['.pem', '.key', '.p12', '.pfx', '.keystore'];
-const SECRET_NAMES = ['id_rsa', 'id_ed25519', 'credentials.json', 'serviceAccount.json'];
+const SECRET_NAMES = ['id_rsa', 'id_ed25519', 'credentials.json', 'serviceaccount.json', '.envrc', '.npmrc', '.netrc', '.pypirc'];
 const GLOB_CHARS = ['*', '?', '[', ']', '{', '}'];
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const lastChars = (text, count) => [...String(text).slice(-count * 4)].slice(-count).join('');
-const oneLine = text => [...String(text)].slice(0, 159).join('');
+const oneLine = text => [...sanitizeText(String(text)).replace(/[\r\n\u0080-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, ' ')].slice(0, 159).join('');
 const item = (id, level, message) => ({ id, level, message: oneLine(message) });
 async function quiet(fn) { try { return await fn(); } catch { return null; } }
 async function defaultReadText(file) { return fs.readFile(file, 'utf8'); }
@@ -27,7 +28,7 @@ function secretEntries(file) {
   const lower = name.toLowerCase();
   const found = [];
   if (lower === '.env' || lower.startsWith('.env.')) found.push(file);
-  if (SECRET_EXTENSIONS.includes(path.extname(lower)) || SECRET_NAMES.includes(name)) found.push(file);
+  if (SECRET_EXTENSIONS.includes(path.extname(lower)) || SECRET_NAMES.includes(lower)) found.push(file);
   parts.slice(0, -1).forEach((part, index) => {
     if (SECRET_FOLDERS.includes(part.toLowerCase())) found.push(`${parts.slice(0, index + 1).join('/')}/`);
   });
@@ -60,10 +61,11 @@ export function normalizeProtectedPath(value) {
 }
 
 export function protectedPathHit(profile, file) {
-  const target = path.posix.normalize(String(file).split('\\').join('/')).toLowerCase();
+  // APFS treats NFC and NFD spellings as one file, so both sides are compared in NFC.
+  const target = path.posix.normalize(String(file).split('\\').join('/')).normalize('NFC').toLowerCase();
   const entries = [...ALWAYS_PROTECTED, ...(profile?.protectedPaths ?? [])];
   for (const entry of entries) {
-    const key = entry.toLowerCase();
+    const key = entry.normalize('NFC').toLowerCase();
     const hit = key.endsWith('/')
       ? target === key.slice(0, -1) || target.startsWith(key)
       : target === key || target.startsWith(`${key}/`);
@@ -76,7 +78,8 @@ export function protectedViolations(profile, jobs) {
   const out = [];
   for (const job of Array.isArray(jobs) ? jobs : []) {
     const id = job?.id ?? job?.name;
-    for (const [field, kind] of [['outputs', 'output'], ['deletes', 'deletes']]) {
+    // outputDirs is the open-scope list of folders a codex job may write anywhere inside.
+    for (const [field, kind] of [['outputs', 'output'], ['outputDirs', 'output'], ['deletes', 'deletes']]) {
       const files = Array.isArray(job?.[field]) ? job[field] : [];
       for (const file of files) {
         const entry = typeof file === 'string' ? protectedPathHit(profile, file) : null;
@@ -189,9 +192,9 @@ async function runOne(root, check, run, timeoutMs) {
     const res = await run(check.argv, { cwd: root, timeoutMs });
     const exitCode = Number.isInteger(res?.exitCode) ? res.exitCode : null;
     const text = [res?.stderr, res?.stdout].filter(Boolean).map(String).join('\n');
-    return { name, ok: exitCode === 0, exitCode, tail: sanitizeText(lastChars(text, 500)) };
+    return { name, ok: exitCode === 0, exitCode, tail: sanitizeText(lastChars(text, 300)) };
   } catch (error) {
-    return { name, ok: false, exitCode: null, tail: sanitizeText(lastChars(error?.message ?? error, 500)) };
+    return { name, ok: false, exitCode: null, tail: sanitizeText(lastChars(error?.message ?? error, 300)) };
   }
 }
 
