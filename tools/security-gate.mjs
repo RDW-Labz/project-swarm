@@ -2,13 +2,18 @@
 import * as scan from './security-scan.mjs';
 import * as deps from './security-deps.mjs';
 import {appendFile,mkdir} from 'node:fs/promises';
-import {existsSync} from 'node:fs';
+import {existsSync,readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 
-export const DEFAULT_POLICY=Object.freeze({enabled:true,minAgeDays:30,minWeeklyDownloads:100,blockSeverities:['high','critical'],allowCopyleft:false,approvedLicenses:[],allowedSecretFingerprints:[],requireVulnerabilityScan:true,codeScan:'auto',codeScanSensitive:false});
-const ARR=['blockSeverities','approvedLicenses','allowedSecretFingerprints'];
+export const SEMGREP_RULES_SHA256='3ad961b22a3ac752a1ba8815a4ea234feb8b605ede0a4026397ad31cc5e07da2';
+export const SEMGREP_RULES_PATH=fileURLToPath(new URL('./security-rules/semgrep-local.yml',import.meta.url));
+export const UNPARSED_MANIFESTS=Object.freeze({'pnpm-lock.yaml':'pnpm','pnpm-workspace.yaml':'pnpm','yarn.lock':'yarn','.yarnrc.yml':'yarn','go.mod':'go','go.sum':'go','go.work':'go','cargo.toml':'cargo','cargo.lock':'cargo','pyproject.toml':'python','pipfile':'python','pipfile.lock':'python','poetry.lock':'python','setup.py':'python','uv.lock':'python','setup.cfg':'python','composer.json':'php','composer.lock':'php','gemfile':'ruby','gemfile.lock':'ruby','pom.xml':'jvm','build.gradle':'jvm','build.gradle.kts':'jvm','gradle-wrapper.properties':'jvm','gradle.lockfile':'jvm','settings.gradle':'jvm','settings.gradle.kts':'jvm','.npmrc':'node','.yarnrc':'node','.pnpmfile.cjs':'node','bun.lock':'bun','bun.lockb':'bun','environment.yml':'conda','package.swift':'swift','podfile':'cocoapods','podfile.lock':'cocoapods','pubspec.yaml':'dart','pubspec.lock':'dart','mix.exs':'elixir','mix.lock':'elixir','packages.config':'dotnet','.gitmodules':'git submodules'});
+
+export const DEFAULT_POLICY=Object.freeze({enabled:true,minAgeDays:30,minWeeklyDownloads:100,blockSeverities:['high','critical'],allowCopyleft:false,approvedLicenses:[],allowedSecretFingerprints:[],allowUnparsedManifests:[],requireVulnerabilityScan:true,codeScan:'local',codeScanSensitive:false});
+const ARR=['blockSeverities','approvedLicenses','allowedSecretFingerprints','allowUnparsedManifests'];
 const NUM=['minAgeDays','minWeeklyDownloads'];
 const BOOL=['allowCopyleft','requireVulnerabilityScan','codeScanSensitive'];
 
@@ -20,22 +25,47 @@ if(r.enabled===false)p.enabled=false;
 for(const k of NUM)if(Number.isFinite(r[k])&&r[k]>=0)p[k]=r[k];
 for(const k of BOOL)if(typeof r[k]==='boolean')p[k]=r[k];
 for(const k of ARR)if(Array.isArray(r[k])&&r[k].every(x=>typeof x==='string'))p[k]=[...r[k]];
-if(r.codeScan==='auto'||r.codeScan==='off')p.codeScan=r.codeScan;
+if(r.codeScan==='auto'||r.codeScan==='off'||r.codeScan==='local')p.codeScan=r.codeScan;
 return p;
 }
 
 const base=f=>path.basename(String(f||''));
-const isPkg=f=>base(f)==='package.json';
-const isReq=f=>{const b=base(f);return b.startsWith('requirements')&&b.endsWith('.txt');};
-const MANIFESTS=new Set(['package.json','package-lock.json','npm-shrinkwrap.json','yarn.lock','pnpm-lock.yaml','pyproject.toml','Pipfile','Pipfile.lock','go.mod','go.sum','Cargo.toml','Cargo.lock']);
+const lbase=f=>base(f).toLowerCase();
+const normPath=f=>String(f||'').replace(/^\.\//,'').toLowerCase();
+const POLICY_FILE='.project-swarm.json';
+const isPkg=f=>lbase(f)==='package.json';
+const isReq=f=>{const b=lbase(f);return b.startsWith('requirements')&&b.endsWith('.txt');};
+const MANIFESTS=new Set(['package.json','package-lock.json','npm-shrinkwrap.json','yarn.lock','pnpm-lock.yaml','pyproject.toml','pipfile','pipfile.lock','go.mod','go.sum','cargo.toml','cargo.lock']);
 const NPM_LOCKS=['package-lock.json','npm-shrinkwrap.json'];
-const isDepFile=f=>MANIFESTS.has(base(f))||isReq(f);
+const isDepFile=f=>MANIFESTS.has(lbase(f))||isReq(f);
 const isText=b=>!Buffer.from(b).subarray(0,8000).includes(0);
 const txt=b=>b==null?null:Buffer.from(b).toString('utf8');
 const isObj=x=>!!x&&typeof x==='object';
-const clean=s=>String(s??'').slice(0,120).replace(/[^A-Za-z0-9 @\/._:()+,;-]/g,'?');
+const clean=s=>String(s??'').slice(0,120).replace(/[^A-Za-z0-9 @\\/._:()+,;-]/g,'?');
+
+const LIFECYCLE=['preinstall','install','postinstall','prepare','prepublish','prepublishOnly','prepack','postpack','preuninstall','uninstall','postuninstall'];
+
+export function unparsedEcosystem(file){
+const lp=normPath(file);
+const b=path.posix.basename(lp);
+if(Object.hasOwn(UNPARSED_MANIFESTS,b))return UNPARSED_MANIFESTS[b];
+if(lp.startsWith('.github/workflows/'))return 'ci workflow';
+if(lp.startsWith('vendor/')||lp.startsWith('third_party/')||lp.includes('/vendor/')||lp.includes('/third_party/'))return 'vendored code';
+if(/\.(csproj|fsproj|vbproj)$/.test(lp))return 'dotnet';
+if(lp.endsWith('.gemspec'))return 'ruby';
+const parent=lp.split('/').slice(0,-1).pop();
+if(parent==='requirements'&&(b.endsWith('.txt')||b.endsWith('.in')))return 'python';
+if(b.startsWith('requirements')&&b.endsWith('.in'))return 'python';
+if(b.startsWith('constraints')&&b.endsWith('.txt'))return 'python';
+return null;
+}
+
+const allowedUnparsed=(file,list)=>{const p=normPath(file);return (list||[]).some(e=>typeof e==='string'&&normPath(e)===p);};
 
 const parseJson=s=>{if(typeof s!=='string')return s??null;try{return JSON.parse(s);}catch{return null;}};
+const readJson=b=>{if(b==null)return {ok:true,value:{}};try{return {ok:true,value:JSON.parse(txt(b))};}catch{return {ok:false,value:undefined};}};
+const profileOf=v=>({security:v?.profile?.security,sensitive:v?.profile?.sensitive});
+const scriptsOf=b=>{const j=readJson(b);const s=j.ok?j.value?.scripts:undefined;return isObj(s)?s:{};};
 const hasList=j=>Array.isArray(j)||isObj(j?.vulnerabilities)||Array.isArray(j?.results)||Array.isArray(j?.dependencies)||isObj(j?.advisories);
 function usable(r){
 if(!r)return false;
@@ -47,7 +77,7 @@ return true;
 }
 const safeParse=(fn,s,warnings)=>{try{return (typeof fn==='function'?fn(s):[])||[];}catch{warnings.push('could not parse scanner output');return [];}};
 
-export async function runSecurityGate({changes=[],policy,exec,fetchImpl,now=Date.now,cwd,fingerprintKey,sensitive=true,cache=new Map(),fileExists}={}){
+export async function runSecurityGate({changes=[],policy,exec,fetchImpl,now=Date.now,cwd,fingerprintKey,sensitive=true,cache=new Map(),fileExists,readRules=()=>readFileSync(SEMGREP_RULES_PATH)}={}){
 const pol=normalizePolicy(policy);
 if(pol.enabled===false)return{ok:true,blocks:[],tickets:[],warnings:[],skipped:['security gate disabled by policy'],checked:[]};
 const blocks=[],tickets=[],warnings=[],skipped=[],checked=[];
@@ -86,7 +116,7 @@ else if(scan.licenseBlocked(r.license,{allowCopyleft:pol.allowCopyleft,approved:
 if(changes.some(c=>isDepFile(c.file))){
 checked.push('vulnerability');
 const exists=typeof fileExists==='function'?fileExists:(p=>existsSync(p));
-const hasNpmLock=changes.some(c=>NPM_LOCKS.includes(base(c.file)))||NPM_LOCKS.some(f=>exists(path.join(cwd||'.',f)));
+const hasNpmLock=changes.some(c=>NPM_LOCKS.includes(lbase(c.file)))||NPM_LOCKS.some(f=>exists(path.join(cwd||'.',f)));
 const all=[];let usableCount=0;
 const tally=(tool,r,fn)=>{
 if(!r)return;
@@ -102,13 +132,80 @@ const scoped=newNames&&newNames.size>0?all.filter(v=>newNames.has(v.name)):all;
 for(const v of scan.blockingVulns(scoped,pol.blockSeverities)||[])blocks.push({check:'vulnerability',severity:clean(v.severity),message:`${clean(v.name)} has a ${clean(v.severity)} vulnerability`});
 }
 
-const textPaths=live.filter(c=>isText(c.bytes)).map(c=>c.file).slice(0,200);
-if(pol.codeScan==='auto'&&textPaths.length){
-if(sensitive&&pol.codeScanSensitive!==true)skipped.push('code scan skipped: sensitive project (semgrep needs the network)');
+const unparsed=changes.map(c=>({c,eco:unparsedEcosystem(c.file)})).filter(x=>x.eco);
+if(unparsed.length)checked.push('unsupported-manifest');
+for(const {c,eco} of unparsed){if(allowedUnparsed(c.file,pol.allowUnparsedManifests))continue;blocks.push({check:'unsupported-manifest',severity:'high',message:`${c.file} changed: ${eco} dependencies are not parsed yet; the owner must review it`});}
+
+const policyFiles=changes.filter(c=>normPath(c.file)===POLICY_FILE);
+if(policyFiles.length)checked.push('policy-change');
+for(const c of policyFiles){
+const prev=readJson(c.previous),next=readJson(c.bytes);
+const p=profileOf(prev.ok?prev.value:undefined),n=profileOf(next.value);
+const differs=['security','sensitive'].some(k=>JSON.stringify(p[k])!==JSON.stringify(n[k]));
+if(!next.ok||differs)blocks.push({check:'policy-change',severity:'critical',message:'.project-swarm.json changes the security policy or sensitivity: the owner must make this change by hand'});
+}
+
+const pkgChanges=changes.filter(c=>isPkg(c.file));
+if(pkgChanges.length)checked.push('install-script');
+for(const c of pkgChanges){
+const before=scriptsOf(c.previous),after=scriptsOf(c.bytes);
+for(const k of LIFECYCLE){const nv=after[k];if(nv==null)continue;if(JSON.stringify(nv)!==JSON.stringify(before[k]))blocks.push({check:'install-script',severity:'high',message:`${c.file}: lifecycle script ${k} changed; the owner must review it`});}
+}
+
+const textTotal=live.filter(c=>isText(c.bytes)).length;
+const textLive=live.filter(c=>isText(c.bytes)).slice(0,200);
+const textPaths=textLive.map(c=>c.file);
+if(textTotal>200)warnings.push(`code scan covered the first 200 of ${textTotal} files`);
+const takeSemgrep=s=>{for(const f of safeParse(scan.parseSemgrep,s.stdout,warnings)){const sev=String(f.severity).toLowerCase();if(sev==='high'||sev==='medium')tickets.push({title:`${f.ruleId} in ${f.path}:${f.line}`,severity:sev,path:f.path,line:f.line});}};
+if(pol.codeScan==='off')skipped.push('code scan disabled by policy');
+else if(textPaths.length){
+let mode=pol.codeScan;
+if(mode==='auto'&&sensitive&&pol.codeScanSensitive!==true){mode='local';warnings.push('code scan: auto needs the network, using the pinned local rules');}
+if(mode==='local'){
+let rulesBytes=null,rulesOk=false;
+try{rulesBytes=await readRules();rulesOk=createHash('sha256').update(rulesBytes).digest('hex')===SEMGREP_RULES_SHA256;}catch{rulesOk=false;}
+if(!rulesOk){checked.push('code-scan');blocks.push({check:'code-scan',severity:'high',message:'pinned semgrep rules changed or unreadable (hash mismatch)'});}
+else{
+let tmp=null;
+try{tmp=mkdtempSync(path.join(os.tmpdir(),'swarm-scan-'));}catch{tmp=null;}
+if(!tmp){checked.push('code-scan');blocks.push({check:'code-scan',severity:'high',message:'could not prepare the isolated code scan'});}
+else{
+try{
+const scanDir=path.join(tmp,'scan'),home=path.join(tmp,'home'),rulesFile=path.join(tmp,'rules.yml');
+mkdirSync(scanDir,{recursive:true});
+mkdirSync(home,{recursive:true});
+writeFileSync(rulesFile,rulesBytes,{mode:0o600});
+const env={PATH:process.env.PATH,HOME:home,SEMGREP_SEND_METRICS:'off',SEMGREP_ENABLE_VERSION_CHECK:'0'};
+const copied=[];
+for(const c of textLive){
+const rel=String(c.file||'');
+if(!rel||path.isAbsolute(rel)||rel.split(/[\\/]+/).includes('..'))continue;
+const dest=path.join(scanDir,rel);
+mkdirSync(path.dirname(dest),{recursive:true});
+writeFileSync(dest,Buffer.from(c.bytes));
+copied.push(rel);
+}
+const probe=await run(['semgrep','--version'],'semgrep',{timeoutMs:30000,cwd:scanDir,env});
+if(probe){
+checked.push('code-scan');
+if(copied.length){
+const s=await run(['semgrep','--config',rulesFile,'--metrics=off','--disable-version-check','--json','--quiet','--',...copied],'semgrep',{timeoutMs:180000,cwd:scanDir,env});
+if(s)takeSemgrep(s);
+}
+}
+}catch{
+checked.push('code-scan');
+blocks.push({check:'code-scan',severity:'high',message:'could not prepare the isolated code scan'});
+}finally{
+try{rmSync(tmp,{recursive:true,force:true});}catch{}
+}
+}
+}
+}
 else if(await run(['semgrep','--version'],'semgrep',{timeoutMs:30000})){
 checked.push('code-scan');
 const s=await run(['semgrep','--config','auto','--metrics=off','--json','--quiet','--',...textPaths],'semgrep',{timeoutMs:180000});
-if(s)for(const f of safeParse(scan.parseSemgrep,s.stdout,warnings)){const sev=String(f.severity).toLowerCase();if(sev==='high'||sev==='medium')tickets.push({title:`${f.ruleId} in ${f.path}:${f.line}`,severity:sev,path:f.path,line:f.line});}
+if(s)takeSemgrep(s);
 }
 }
 

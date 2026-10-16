@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import { runManifest, resumeRun, validateProject, doctor } from '../tools/swarm.mjs';
 import { resolveLanes } from '../tools/lanes.mjs';
 import { resolveBudget } from '../tools/spend.mjs';
+import { routeJob, RENTED_MIN_READY } from '../tools/router.mjs';
 
 const exec = promisify(execFile);
 const KEY = 'rented-secret-key-0123456789';
@@ -151,7 +152,7 @@ test('review fixes: ask never uses the rented lane; manifest lane overrides cann
   assert.notEqual(result.status, 0);
 });
 
-test('with a live GPU session, auto-routed contract jobs spread over the replicas with no key, and a job that fails there is escalated off the rented lane', async t => {
+test('with a live GPU session, four ready auto jobs stay off the rented lane (it takes auto jobs only at RENTED_MIN_READY ready jobs)', async t => {
   const f = await fixture(t, null);
   const { gpuSessionPath } = await import('../tools/rented.mjs');
   const session = { version: 1, target: 'ubuntu@203.0.113.9', key: '/k', model: MODEL, replicas: 2, endpoints: ['http://127.0.0.1:18000', 'http://127.0.0.1:18001'], perReplica: 8, hourlyUsd: 3, capUsd: 20, maxHours: 4, startedAt: '2030-01-01T11:00:00.000Z', expiresAt: '2100-01-01T00:00:00.000Z' };
@@ -159,16 +160,18 @@ test('with a live GPU session, auto-routed contract jobs spread over the replica
   const env = { ...f.env }; delete env.SWARM_RENTED_API_KEY;
   const clock = clockAt(), { seen, fetchImpl } = server(clock, 0.1);
   const auto = n => { const { model: _model, ...rest } = job(n, { agent: 'auto' }); return rest; };
-  const state = await runManifest(f.root, { version: 1, concurrency: 4, contract: 'contract.md', budget: { maxUsd: 20 }, jobs: [auto(0), auto(1), auto(2), auto(3)] }, { ...options({ ...f, env }, fetchImpl, clock), id: 'sess' });
-  assert.equal(state.status, 'complete', state.jobs.map(entry => entry.error).join('; '));
-  assert.ok(state.jobs.every(entry => entry.agent === 'rented'), JSON.stringify(state.jobs.map(entry => entry.agent)));
-  const hosts = new Set(seen.requests.map(request => new URL(request.url).port));
-  assert.deepEqual([...hosts].sort(), ['18000', '18001'], 'both replicas served requests');
-  assert.ok(seen.requests.every(request => request.init.headers.authorization === undefined), 'no key is sent: the servers are on loopback behind the tunnel');
-  // one failure on the rented lane: the next attempt is Haiku (no Anthropic key here, so it surfaces as a refusal naming that lane, never a second rented try)
-  const down = async () => new Response('{}', { status: 500 });
-  const failed = await runManifest(f.root, { version: 1, concurrency: 1, contract: 'contract.md', lanes: { anthropic: { model: 'claude-haiku-5-5' } }, budget: { maxUsd: 20 }, jobs: [auto(9)] }, { ...options({ ...f, env }, down, clock), id: 'esc' });
-  const record = failed.jobs[0];
-  assert.equal(record.routeFailures.rented, 1);
-  assert.notEqual(record.agent, 'rented', JSON.stringify({ attempts: record.attempts, status: record.status, error: record.error, route: record.route }));
+  const state = await runManifest(f.root, { version: 1, concurrency: 4, contract: 'contract.md', lanes: { anthropic: { model: 'claude-haiku-5-5' } }, budget: { maxUsd: 20 }, jobs: [auto(0), auto(1), auto(2), auto(3)] }, { ...options({ ...f, env }, fetchImpl, clock), id: 'sess' });
+  assert.ok(state.jobs.every(entry => entry.agent !== 'rented'), JSON.stringify(state.jobs.map(entry => entry.agent)));
+  assert.equal(seen.requests.filter(request => new URL(request.url).hostname === '127.0.0.1').length, 0, 'no request reached the rented replicas');
+});
+
+test('auto routing takes the rented lane only at RENTED_MIN_READY ready auto jobs, never for a sensitive job, and escalates off it after one failure', () => {
+  const lanes = { rented: { model: MODEL }, anthropic: { model: 'claude-haiku-5-5' } };
+  const auto = job(0, { agent: 'auto' });
+  assert.equal(RENTED_MIN_READY, 700);
+  assert.equal(routeJob(auto, { lanes, ready: 699, contract: 'contract.md' }).agent, 'anthropic');
+  assert.equal(routeJob(auto, { lanes, ready: 700, contract: 'contract.md' }).agent, 'rented');
+  assert.equal(routeJob(auto, { lanes, ready: 700, contract: 'contract.md', failures: { rented: 1 } }).agent, 'anthropic');
+  const sensitive = job(1, { agent: 'auto', sensitive: true });
+  assert.notEqual(routeJob(sensitive, { lanes, ready: 700, contract: 'contract.md' }).agent, 'rented');
 });

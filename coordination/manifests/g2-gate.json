@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/security-gate.test.mjs"
+      ],
+      "id": "g2-gate",
+      "context": [
+        "tools/security-gate.mjs",
+        "tools/security-scan.mjs"
+      ],
+      "outputs": [
+        "tools/security-gate.mjs"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Keep the first line, plain ESM, no dependencies except node built-ins, every existing export (add the new ones named), and all current behaviour except where changed below. Do not edit tests. Return the complete new tools/security-gate.mjs applying these fixes from a Claude Opus review. (1) SEMGREP_RULES_SHA256 becomes '3ad961b22a3ac752a1ba8815a4ea234feb8b605ede0a4026397ad31cc5e07da2'. (2) The local code scan runs isolated: read the rules bytes ONCE (readRules()), verify the sha256 (block as today on mismatch or unreadable), then create a temp directory with fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-scan-')) holding scan/ (every changed text file written at its repo-relative path, skipping any path that is absolute or contains a .. segment), home/ (an empty directory used as HOME), and rules.yml (the verified bytes, mode 0o600); run semgrep with cwd = the scan directory, '--config' the temp rules.yml, the other flags as today, file paths relative to the scan directory after '--', and an env object that has only PATH (from process.env), HOME (the temp home), SEMGREP_SEND_METRICS 'off' and SEMGREP_ENABLE_VERSION_CHECK '0'; the 'semgrep --version' probe uses the same env; always remove the temp directory in a finally; ticket paths stay the repo-relative paths. When more than 200 changed text files exist add the warning 'code scan covered the first 200 of N files'. (3) Case-insensitive file names: every file-name test on a changed path (package.json, lockfiles, requirements text files, the unparsed manifest names, .project-swarm.json) lower-cases the last path segment (and for prefix rules the whole path) before comparing; UNPARSED_MANIFESTS keys are lower-case. (4) New check policy-change: when a change touches the file .project-swarm.json at the repository root (compare the lower-cased path), parse the previous and the new bytes as JSON (a missing previous counts as {}); if the new bytes do not parse, or the profile's security value or sensitive value differs between previous and new (compare JSON.stringify of each, a missing value differs from a present one), add a block { check: 'policy-change', severity: 'critical', message: '.project-swarm.json changes the security policy or sensitivity: the owner must make this change by hand' }. (5) New check install-script: for every changed package.json (any folder), compare previous and new scripts for these lifecycle keys: preinstall, install, postinstall, prepare, prepublish, prepublishOnly, prepack, postpack, preuninstall, uninstall, postuninstall; an added or changed value is a block { check: 'install-script', severity: 'high', message: '<file>: lifecycle script <key> changed; the owner must review it' }. (6) Export unparsedEcosystem(file) returning an ecosystem name or null: look up the lower-cased last segment in UNPARSED_MANIFESTS (existing names plus these new lower-case names: .npmrc, .yarnrc and .pnpmfile.cjs (node), bun.lock and bun.lockb (bun), uv.lock (python), setup.cfg (python), environment.yml (conda), gradle-wrapper.properties, gradle.lockfile, settings.gradle and settings.gradle.kts (jvm), package.swift (swift), podfile and podfile.lock (cocoapods), pubspec.yaml and pubspec.lock (dart), mix.exs and mix.lock (elixir), packages.config (dotnet), .gitmodules (git submodules)); plus path rules on the lower-cased path: starts with '.github/workflows/' gives 'ci workflow'; starts with 'vendor/' or 'third_party/' or contains '/vendor/' or '/third_party/' gives 'vendored code'; ends with .csproj, .fsproj or .vbproj gives 'dotnet', ends with .gemspec gives 'ruby'; is a text or .in file inside a folder named requirements, or a .in file whose name starts with requirements, or a text file whose name starts with constraints, gives 'python'. The unsupported-manifest check uses unparsedEcosystem. Requirements text files whose name starts with requirements and ends with .txt, in any folder, keep being parsed by the dependency check as today. (7) allowUnparsedManifests matching: compare the lower-cased normalized path (strip a leading ./) for exact equality; an entry without a slash only matches a file at the repository root (path equals the entry); an entry with a slash must equal the whole path.\nignoreTests: tests/security-gate.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/security-deps.test.mjs"
+      ],
+      "id": "g2-deps",
+      "context": [
+        "tools/security-deps.mjs"
+      ],
+      "outputs": [
+        "tools/security-deps.mjs"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Keep the first line, plain ESM, no dependencies except node built-ins, every existing export (add the new ones named), and all current behaviour except where changed below. Do not edit tests. Return the complete new tools/security-deps.mjs with ONE change: manifest detection is case-insensitive on the last path segment: a path whose last segment lower-cased is package.json is an npm manifest, and one whose last segment lower-cased starts with requirements and ends with .txt is a pypi requirements file (matching 'PACKAGE.JSON', 'Package.Json', 'Requirements-Dev.TXT'); nothing else changes.\nignoreTests: tests/security-deps.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

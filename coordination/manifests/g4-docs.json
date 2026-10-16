@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/kickoff.test.mjs",
+        "tests/security-gate.test.mjs"
+      ],
+      "id": "g4-doc",
+      "context": [
+        "docs/security-gate.md",
+        "tools/security-gate.mjs"
+      ],
+      "outputs": [
+        "docs/security-gate.md"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Rewrite docs/security-gate.md to match the code in your context after the review of the A1 follow-up; keep the structure and fix drift. It must state: every integration is gated (plain integrate runs the gate on the planned writes before its first write; because the dependency scanners read files from disk and plain integrate has no rollback, a change to a dependency manifest or lockfile (package.json, package-lock.json, npm-shrinkwrap.json, requirements text files) is refused by plain integrate with \"Use integrate --queue\"; the queue audits the written files and rolls back; a gate that throws fails closed with security-gate-error and nothing is written); the default codeScan is local (NOT auto); the offline scan: 19 pinned rules (JavaScript, TypeScript, Python) in tools/security-rules/semgrep-local.yml with the sha256 pinned in the code, read once and copied into a fresh temp scan folder with a private HOME so a repo-written .semgrepignore or semgrep settings cannot change it, metrics off, version check off, a minimal environment with no tokens, no network; file names are compared case-insensitively (so PACKAGE.JSON and Cargo.TOML cannot slip through on macOS or Windows); new checks: policy-change (a batch that changes the security policy or sensitivity in .project-swarm.json is blocked: the owner makes that change by hand) and install-script (a changed lifecycle script in package.json: preinstall, install, postinstall, prepare, prepublish, prepublishOnly, prepack, postpack, preuninstall, uninstall, postuninstall); the unparsed list now also covers .npmrc, .yarnrc, .pnpmfile.cjs, bun and uv locks, setup.cfg, environment.yml, gradle wrapper and lockfile files, .gitmodules, CI workflows, vendored folders (vendor, third_party), .csproj and .gemspec files and requirements files inside a requirements folder or ending in .in or named constraints; allowUnparsedManifests matches exact paths (a bare name only at the repository root). Limits to state honestly: the registry checks, npm audit and osv-scanner send dependency names over the network even for sensitive projects; only the first 200 changed text files are code-scanned (a warning says so); the rules are a small starter set, not a full scanner.\nignoreTests: tests/kickoff.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/security-gate.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "sensitive": true,
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/router.test.mjs",
+        "tests/t101-release.test.mjs",
+        "tests/update.test.mjs"
+      ],
+      "id": "g4-changelog",
+      "context": [
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "CHANGELOG.md"
+      ],
+      "prompt": "Edit CHANGELOG.md in place; change nothing else. In the \"## 1.80.0\" section add this bullet after the last bullet: \"- A Claude Opus review of the follow-up found 3 high and 6 medium issues, all fixed: plain integrate now refuses dependency manifest and lockfile changes (it cannot audit them before writing; use --queue) and fails closed when the gate cannot run; file names are compared case-insensitively; a batch cannot change the security policy or sensitivity in .project-swarm.json; changed install lifecycle scripts block; the unparsed-manifest list is much longer (npmrc, yarnrc, bun and uv locks, gradle wrapper, gitmodules, CI workflows, vendored folders and more) and the allow-list matches exact paths; the offline Semgrep scan runs in a fresh temp folder with a private HOME and a minimal environment; 4 more pinned rules (19 in all, validated and exercised with a real Semgrep); the router counts only non-sensitive auto jobs that are ready now.\"\nignoreTests: tests/anthropic-lane.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/codex-envelope.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lesson-t80-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-aa-core.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ab-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ag-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ah-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-context.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-o.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-x.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/job-types.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/openrouter.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/router.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/t101-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/update.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "g4-dogfood",
+      "context": [
+        "docs/state/dogfood.md"
+      ],
+      "outputs": [
+        "docs/state/dogfood.md"
+      ],
+      "prompt": "Return edits (exact old text found once, and its replacement) using the anchor given; change nothing else. In docs/state/dogfood.md, in the \"## Phase 14e notes\" section, find the bullet that starts \"- A1 follow-up and router:\" and add after that whole bullet this bullet: \"- Review of the follow-up (Opus, $0.42): 3 high, 6 medium, 11 low; the fixes were another 15 swarm jobs, all complete on the first try; two worker slips were caught by running things (a YAML quoting error in a new rule, found by Semgrep validate; a legacy test expectation the worker did not update).\""
+    }
+  ]
+}

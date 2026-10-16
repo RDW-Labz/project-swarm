@@ -1,110 +1,88 @@
-=== tests/security-scan.test.mjs
-not ok 3 - swarm-secret-allow marker suppresses a finding
-  ---
-  error: |-
-    Expected values to be strictly deep-equal:
-    + actual - expected
-    
-    + [
-    +   {
-    +     fingerprint: '218c83c46ff5',
-    +     line: 1,
-    +     name: 'GitHub token',
-not ok 5 - files with NUL bytes or above maxBytes are skipped
-  ---
-  error: |-
-    Expected values to be strictly deep-equal:
-    + actual - expected
-    
-    + [
-    +   {
-    +     fingerprint: '218c83c46ff5',
-    +     line: 2,
-    +     name: 'GitHub token',
-not ok 12 - parseSemgrep maps severities and cuts long messages to 200 characters
-  ---
-  error: "Cannot read properties of undefined (reading 'length')"
-  code: 'ERR_TEST_FAILURE'
-  name: 'TypeError'
-    TestContext.<anonymous> (file:///Users/bean/project-swarm/tests/security-scan.test.mjs:112:84)
-    Test.runInAsyncScope (node:async_hooks:214:14)
-=== tests/security-deps.test.mjs
-not ok 3 - newDependencies skips unchanged and removed packages
-  ---
-  error: |-
-    Expected values to be strictly deep-equal:
-    + actual - expected
-    
-    + [
-    +   {
-    +     dev: false,
-    +     ecosystem: 'npm',
-    +     file: 'package.json',
-not ok 6 - newDependencies reads new pypi requirements
-  ---
-  error: |-
-    Expected values to be strictly deep-equal:
-    + actual - expected
-    
-      [
-        'flask',
-    +   'git+https://x/y.git',
-        'django'
-      ]
 === tests/security-gate.test.mjs
-not ok 2 - made-up package blocks; real old popular package passes
+not ok 30 - UNPARSED_MANIFESTS maps the known unparsed manifests to their ecosystems
   ---
   error: |-
     Expected values to be strictly equal:
-    
-    false !== true
-    
-  code: 'ERR_ASSERTION'
-  name: 'AssertionError'
-  expected: true
-  actual: false
-not ok 3 - known-vulnerable dependency blocks; low-only does not
-  ---
-  error: |-
-    Expected values to be strictly equal:
-    
-    false !== true
-    
-  code: 'ERR_ASSERTION'
-  name: 'AssertionError'
-  expected: true
-  actual: false
-not ok 4 - copyleft license blocks unless allowed; unknown license only warns
-  ---
-  error: |-
-    Expected values to be strictly equal:
-    
-    false !== true
-    
-  code: 'ERR_ASSERTION'
-  name: 'AssertionError'
-  expected: true
-  actual: false
-not ok 6 - semgrep finding makes a ticket without blocking; missing tools are skipped
-  ---
-  error: |-
-    Expected values to be strictly equal:
-    
-    0 !== 1
-    
-  code: 'ERR_ASSERTION'
-  name: 'AssertionError'
-  expected: 1
-  actual: 0
-=== tests/security-queue.test.mjs
-not ok 6 - a made-up dependency is blocked by package-check and a real one passes
-  ---
-  error: |-
-    Expected values to be strictly deep-equal:
     + actual - expected
     
-    + [
-    +   {
-    +     blocks: [
-    +       {
-    +         check: 'vulnerability',
+    + undefined
+    - 'cargo'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+not ok 33 - allowUnparsedManifests lets a changed manifest through by path or by basename
+  ---
+  error: |-
+    Expected values to be strictly equal:
+    
+    true !== false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  actual: true
+=== tests/security-queue.test.mjs
+not ok 11 - sensitive project runs the local pinned semgrep with metrics off
+  ---
+  error: |-
+    The expression evaluated to a falsy value:
+    
+      assert.ok(sg[2].endsWith('semgrep-local.yml'))
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+=== tests/security-plain-integrate.test.mjs
+not ok 5 - injected securityGate exec and fetchImpl are honoured by plain integrate for a made-up dependency
+  ---
+  error: 'security-gate-blocked security-gate-blocked: a dependency manifest or lockfile changed; plain integrate cannot audit it before writing it. Nothing was written. Use integrate --queue.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+    file:///Users/bean/project-swarm/tests/security-plain-integrate.test.mjs:42:12
+    async TestContext.<anonymous> (file:///Users/bean/project-swarm/tests/security-plain-integrate.test.mjs:106:3)
+=== tests/field-lessons-batch-a.test.mjs
+not ok 3 - L109: manifest preChecks run before checks when an integrated file is a lockfile
+  ---
+  error: '2 subtests failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: L110: integrate reports a compact failures array; --evidence appends prior failures to every job prompt
+    # Subtest: integrate reports a compact failures array for a failed check
+    ok 1 - integrate reports a compact failures array for a failed check
+      ---
+=== tests/field-lessons-batch-e.test.mjs
+not ok 2 - L159: packaging config that no check builds is flagged
+  ---
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: L160: .swarm/env.json reaches every check, mutant and worker; env --print pastes it
+    # Subtest: integrate checks see PLAYWRIGHT_BROWSERS_PATH from the root env file
+    ok 1 - integrate checks see PLAYWRIGHT_BROWSERS_PATH from the root env file
+      ---
+=== tests/field-lessons-batch-f.test.mjs
+not ok 2 - L166: shipRun wires integratedFiles into ship(), so the \#147 lock check runs on a real ship
+  ---
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: L167: .swarm/gotchas.md reaches every job prompt and env --print
+    # Subtest: loadGotchas: the root's own file wins; a linked worktree with none falls back to its main root's file; missing is null
+    ok 1 - loadGotchas: the root's own file wins; a linked worktree with none falls back to its main root's file; missing is null
+      ---
+=== tests/gpu.test.mjs
+not ok 9 - routing: a complete non-sensitive job goes to rented first; one failure escalates to Haiku, then Codex
+  ---
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'anthropic'
+    - 'rented'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'

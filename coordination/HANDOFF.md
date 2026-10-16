@@ -6,18 +6,18 @@
 Project Swarm brief
 Goal: none
 Done:
-  - run 1792118789990-4470d174 integrated, 2 files
-  - run 1792118502158-73f4b6e7 integrated, 3 files
-  - run 1792118419929-49e19b0d integrated, 1 files
-  - run 1792118128685-988c5b50 integrated, 2 files
-  - run 1792117536054-546fccd6 integrated, 3 files
-  - run 1792117477157-2b3d320c integrated, 2 files
-  - run 1792117292419-757c7830 integrated, 4 files
-  - run 1792115875477-5b17059e integrated, 1 files
+  - run 1792162511858-2eb1504d integrated, 2 files
+  - run 1792162430882-f5278f78 integrated, 1 files
+  - run 1792162171081-8c0fe631 integrated, 4 files
+  - run 1792161950265-58141c23 integrated, 7 files
+  - run 1792161741823-2f60cbb1 integrated, 1 files
+  - run 1792161702272-9e84d4e5 integrated, 1 files
+  - run 1792161444223-75fcdb13 integrated, 4 files
+  - run 1792160103024-07f23848 integrated, 2 files
 Running: none
 Needs the owner: none
 Next 3 actions:
-  1. swarm integrate 1792118564076-75870466 --queue
+  1. swarm inspect 1792162230460-9414f641 --results
   2. swarm "describe the goal in one sentence"
   3. swarm status
 Rules:

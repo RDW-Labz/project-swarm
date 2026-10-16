@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/security-gate.test.mjs"
+      ],
+      "id": "f2-gate",
+      "context": [
+        "tools/security-gate.mjs",
+        "tools/security-scan.mjs"
+      ],
+      "outputs": [
+        "tools/security-gate.mjs"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Return the complete new tools/security-gate.mjs (plain ESM; same first line and every existing export; change ONLY what follows; keep all current behaviour otherwise). Owner decisions for the A1 follow-up. (1) Offline code scan for every project, sensitive or not. Export SEMGREP_RULES_SHA256 = 'b1e4324cb8ff7cac8c087b8c97956d503b5da6830e59ce9267ed066fe800d437' and SEMGREP_RULES_PATH = fileURLToPath(new URL('./security-rules/semgrep-local.yml', import.meta.url)) (import fileURLToPath from node:url, createHash from node:crypto, readFileSync from node:fs, tmpdir from node:os). policy.codeScan is now 'local' (DEFAULT), 'auto' or 'off' (normalizePolicy accepts only these three strings; the default in DEFAULT_POLICY becomes 'local'). 'local': read the pinned rules file (use an injectable readRules() argument of runSecurityGate defaulting to a function that reads SEMGREP_RULES_PATH as a Buffer) and compare its sha256 with SEMGREP_RULES_SHA256: a mismatch or an unreadable file is a block { check: 'code-scan', severity: 'high', message: 'pinned semgrep rules changed or unreadable (hash mismatch)' } and no scan runs; otherwise, when exec(['semgrep','--version']) works, run exec(['semgrep','--config', SEMGREP_RULES_PATH, '--metrics=off','--disable-version-check','--json','--quiet','--', ...changedTextPaths], { cwd, timeoutMs: 180000, env: { PATH: process.env.PATH, HOME: tmpdir(), SEMGREP_SEND_METRICS: 'off', SEMGREP_ENABLE_VERSION_CHECK: '0' } }); a missing semgrep adds 'semgrep not installed' to skipped; this works with no network. 'auto' (registry rules, needs the network) runs exactly like today (--config auto --metrics=off, paths after --) but only when sensitive is false or policy.codeScanSensitive === true; for a sensitive project 'auto' is downgraded to 'local' and a warning 'code scan: auto needs the network, using the pinned local rules' is added. 'off' skips with the note 'code scan disabled by policy'. Tickets stay { title, severity, path, line } (no message), do not block. The runSecurityGate argument list also accepts readRules. Remove the old behaviour that skipped the scan for sensitive projects. (2) Manifests of ecosystems the gate cannot parse fail closed. Export UNPARSED_MANIFESTS: an object mapping a file's last path segment to an ecosystem name: pnpm-lock.yaml and pnpm-workspace.yaml (pnpm), yarn.lock and .yarnrc.yml (yarn), go.mod, go.sum and go.work (go), Cargo.toml and Cargo.lock (cargo), pyproject.toml, Pipfile, Pipfile.lock, poetry.lock and setup.py (python), composer.json and composer.lock (php), Gemfile and Gemfile.lock (ruby), pom.xml, build.gradle and build.gradle.kts (jvm). When any change (including a deletion) touches such a file, add a block { check: 'unsupported-manifest', severity: 'high', message: '<file> changed: <ecosystem> dependencies are not parsed yet; the owner must review it' } unless policy.allowUnparsedManifests (new array of strings, default [], accepted by normalizePolicy as an array of strings) contains the full file path or its last segment; add 'unsupported-manifest' to checked when such a file was present. These blocks go through recordGate like any block (the inbox blocker is created there). Do not edit tests.\nignoreTests: tests/security-gate.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

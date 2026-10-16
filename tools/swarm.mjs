@@ -35,7 +35,7 @@ import { collectInbox } from './inbox.mjs';
 import { runGpuCommand } from './gpu-commands.mjs';
 import { parseUncovered, ignoreUncovered } from './uncovered-tests.mjs';
 import { createTestChecker } from './best-of.mjs';
-import { runSecurityGate, recordGate } from './security-gate.mjs';
+import { runSecurityGate, recordGate, formatBlocks } from './security-gate.mjs';
 import { runBrainCommand, createProjectBrain, triageRun, preflightManifest, brainStats, brainSettings } from './brain-commands.mjs';
 import { readBacklog, nextStartable, markStarted as markBacklogStarted } from './backlog.mjs';
 import { pendingNotifications, macNotify } from './notify.mjs';
@@ -1450,9 +1450,10 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     // Unknown command/provider fields cannot create an execution path.
     if (job.type === 'lead') validateLeadArea(job);
     else if (job.area !== undefined) fail(`lead-area-invalid: Job ${job.id}: area requires type lead`, 'lead-area-invalid');
-    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext', 'batch', 'contract', 'acceptance', 'bestOf'];
+    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext', 'batch', 'contract', 'acceptance', 'bestOf', 'hard'];
     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
     if (job.batch !== undefined && typeof job.batch !== 'boolean') fail(`Job ${job.id}: batch must be true or false`, 'batch-invalid');
+    if (job.hard !== undefined && typeof job.hard !== 'boolean') fail(`Job ${job.id}: hard must be true or false`, 'hard-invalid');
     if (job.bestOf !== undefined && (!Number.isInteger(job.bestOf) || job.bestOf < 1 || job.bestOf > 8 || !['rented', 'auto'].includes(job.agent))) fail(`Job ${job.id}: bestOf must be a whole number from 1 to 8, and only for the rented lane`, 'bestof-invalid');
     if (job.contract !== undefined && (typeof job.contract !== 'string' || !job.contract.trim() || job.contract.length > 200 || !Array.isArray(job.context) || !job.context.includes(job.contract))) fail(`Job ${job.id}: contract must name a file that is also in context`, 'contract-invalid');
     if (job.acceptance !== undefined && (!Array.isArray(job.acceptance) || job.acceptance.length > 20 || job.acceptance.some(item => typeof item !== 'string' || !item.trim() || item.length > 300))) fail(`Job ${job.id}: acceptance must be a list of at most 20 non-empty strings of at most 300 characters`, 'acceptance-invalid');
@@ -2566,7 +2567,7 @@ async function runManifestMain(root, manifest, options = {}) {
   const runLanes = resolveLanes({ config: loadLocalConfig({ env }), manifest, env });
   const dispatchJobs = manifest.jobs.map(job => {
     if (job.agent !== 'auto') return job;
-    const route = pickJobRoute(job, runLanes, { contract: manifest.contract });
+    const route = pickJobRoute(job, runLanes, { contract: manifest.contract, ready: readyAutoJobs(manifest) });
     return { ...job, agent: route.agent, model: route.model };
   });
   const scopeWarnings = manifest.jobs.map(narrowOutputScopeWarning).filter(Boolean);
@@ -2993,7 +2994,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
       const failures = record.routeFailures ??= {};
       try {
         if (original.agent === 'auto') {
-          record.route = pickJobRoute(original, lanes, { health: routeHealth(await today()), failures, contract: manifest.contract });
+          record.route = pickJobRoute(original, lanes, { health: routeHealth(await today()), failures, contract: manifest.contract, ready: readyAutoJobs(manifest) });
           job = { ...job, agent: record.route.agent, model: record.route.model };
           // The API lanes carry the short report inside their envelope (`result`); the "finish with one JSON line" instruction is for CLI lanes and makes small models drop the files.
           if (API_AGENTS.includes(job.agent) && job.report === 'short' && job.prompt.endsWith(`\n\n${REPORT_PROMPT_LINE}`)) job = { ...job, prompt: job.prompt.slice(0, -REPORT_PROMPT_LINE.length - 2) };
@@ -3414,7 +3415,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
           } else { record.status = 'failed'; record.error = `rate-limited: ${result.error ?? job.agent}`; }
         } else if (!result.reportInvalid && original.agent === 'auto' && !['blocked', 'cancelled'].includes(result.status) && (outcome.kind === 'quota-exhausted' || ['failed', 'timeout'].includes(result.status))) {
           if (['failed', 'timeout'].includes(result.status)) failures[job.agent] = (failures[job.agent] ?? 0) + 1;
-          try { pickJobRoute(original, lanes, { health: agent => scheduler.health(agent), failures, contract: manifest.contract }); retry = true; }
+          try { pickJobRoute(original, lanes, { health: agent => scheduler.health(agent), failures, contract: manifest.contract, ready: readyAutoJobs(manifest) }); retry = true; }
           catch (error) { record.status = 'failed'; record.error = error.message; }
         }
         if (outcome.kind === 'quota-exhausted' && !retry) { record.heldReason = 'quota'; record.heldUntil = scheduler.health(job.agent).until; }
@@ -4983,6 +4984,30 @@ async function integrateRunLocked(root, id, options = {}) {
       const result = await applyQueuePlans(root, id, state, manifest, queuePlans, { batchSize, conflicts: queueConflicts, skipped: queueSkipped, noChecks, noFlakeCheck, spawnImpl, releaseIntegrationLock, securityGate, warnings: [...designWarnings, ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)] });
       return { ...result, ...(children.length ? { children } : {}) };
     }
+    // Plain integrate has no rollback, so the security gate (same policy, same checks as the queue's) runs on the planned writes BEFORE the first one:
+    // there is no integration path without it.
+    {
+      const profile = await projectProfile(root);
+      const plainPolicy = securityGate.policy ?? profile?.security;
+      // Plain integrate has no rollback and the dependency scanners (npm audit, pip-audit, osv-scanner) read files from disk, so a change to a dependency
+      // manifest or lockfile cannot be audited before it is written: it must go through the queue (which audits the written files and rolls back).
+      if (plainPolicy?.enabled !== false && writes.some(change => /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json)$|(^|\/)requirements[^/]*\.txt$/i.test(change.file))) {
+        fail('security-gate-blocked: a dependency manifest or lockfile changed; plain integrate cannot audit it before writing it. Nothing was written. Use integrate --queue.', 'security-gate-blocked');
+      }
+      let plainGate;
+      try {
+        plainGate = await runSecurityGate({ changes: writes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: securityGate.policy ?? profile?.security, exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: profile?.sensitive !== false, fingerprintKey: await securityFingerprintKey(root), cache: new Map() });
+      } catch (error) {
+        fail(`security-gate-error: the gate could not run (${String(error?.message ?? error).slice(0, 200)}). Nothing was written.`, 'security-gate-error');
+      }
+      if (!plainGate.ok) {
+        await recordGate({ root, runId: id, jobs: integratedJobs, gate: plainGate, appendEvent: (rootDir, event) => appendEvent(rootDir, event, { best: true }) });
+        fail(`security-gate-blocked: nothing was written. ${formatBlocks(plainGate).slice(0, 600)}`, 'security-gate-blocked');
+      }
+      const plainNotes = [...(plainGate.skipped ?? []), ...(plainGate.warnings ?? [])];
+      if (plainNotes.length) state.securityNotes = plainNotes;
+      if (plainGate.tickets?.length) state.securityTickets = plainGate.tickets;
+    }
     // Every path, output, base hash, and mutants source has passed before the first project write.
     const journal = await startIntegrationJournal(root, id, 'integrate', integratedJobs, writes, releaseIntegrationLock);
     try {
@@ -5422,6 +5447,9 @@ export function modelRouteChangeNoSmokeTestWarning(manifest, job) {
   return { code: 'model-route-no-smoke-test', jobId: job.id, files: changed, message: `model-route-no-smoke-test: Job ${job.id} changes ${changed.join(', ')}; declare a check named model-route-smoke (or an argv containing model-route-smoke/streaming-smoke) that sends one real streaming message through the project's own client before this route change lands` };
 }
 
+// How many non-sensitive auto-routed jobs this run has ready now (no unmet `after`): the rented GPU lane is only for a big queue (see tools/router.mjs RENTED_MIN_READY).
+const readyAutoJobs = manifest => (manifest?.jobs ?? []).filter(job => job.agent === 'auto' && job.sensitive === false && !(Array.isArray(job.after) && job.after.length)).length;
+
 function pickJobRoute(job, lanes, options = {}) {
   return routeJob(job, { lanes, ...options, accepts: candidate => {
     if (candidate.after && isWorktreeWriter(candidate)) return false;
@@ -5447,7 +5475,7 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   // and child manifests of leads come through here too. A profile that cannot be read fails closed.
   await enforceProtectedPaths(root, manifest.jobs, { resources: manifest.resources ?? [] });
   const resolvedLanes = resolveLanes({ config: loadLocalConfig({ env, home }), manifest, env });
-  const routes = manifest.jobs.filter(job => job.agent === 'auto').map(job => ({ jobId: job.id, ...pickJobRoute(job, resolvedLanes, { contract: manifest.contract }) }));
+  const routes = manifest.jobs.filter(job => job.agent === 'auto').map(job => ({ jobId: job.id, ...pickJobRoute(job, resolvedLanes, { contract: manifest.contract, ready: readyAutoJobs(manifest) }) }));
   if (routes.length) {
     const byId = new Map(routes.map(route => [route.jobId, route]));
     manifest = { ...manifest, jobs: manifest.jobs.map(job => byId.has(job.id) ? { ...job, agent: byId.get(job.id).agent, model: byId.get(job.id).model } : job) };
