@@ -33,6 +33,7 @@ import { extractPlanFlags, buildGoalPlan, approveRun, loadApprovedPlan, recordRu
 import { MODEL_RATES } from './rates.mjs';
 import { collectInbox } from './inbox.mjs';
 import { runGpuCommand } from './gpu-commands.mjs';
+import { parseUncovered, ignoreUncovered } from './uncovered-tests.mjs';
 import { runBrainCommand, createProjectBrain, triageRun, preflightManifest, brainStats, brainSettings } from './brain-commands.mjs';
 import { readBacklog, nextStartable, markStarted as markBacklogStarted } from './backlog.mjs';
 import { pendingNotifications, macNotify } from './notify.mjs';
@@ -3424,7 +3425,15 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
             catch { fail(`lead-child-invalid: ${original.id}: manifest unreadable`, 'lead-child-invalid'); }
             child = validateChildManifest(child, { lead: original, area: validateLeadArea(original), parentManifest: manifest });
             validateManifest(child);
-            await validateProject(root, child, { env, liveDir });
+            // A lead cannot know which tests mention the files it assigns; add them to ignoreTests (as scaffold does) instead of failing the run.
+            try { await validateProject(root, child, { env, liveDir }); }
+            catch (error) {
+              const refs = parseUncovered(error.message);
+              if (!refs.length) throw error;
+              child = { ...child, jobs: ignoreUncovered(child.jobs, refs) };
+              validateManifest(child);
+              await validateProject(root, child, { env, liveDir });
+            }
             const childId = `${id}-${original.id}`;
             if (!ID.test(childId)) fail(`lead-child-invalid: ${original.id}: child run id too long`, 'lead-child-invalid');
             const outputs = child.jobs.flatMap(job => job.outputs);

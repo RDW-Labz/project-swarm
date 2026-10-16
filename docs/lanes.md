@@ -90,7 +90,7 @@ Jobs are sensitive by default, including when `sensitive` is omitted. Only `sens
 
 ## The rented lane
 
-`rented` is the lane for an OpenAI-compatible server you rent and start yourself. It has no routing model and is never picked automatically; its endpoint, model, price and limits come from the machine config's `rentedGpu` block, and its cost is by the hour. See [rented GPU](rented-gpu.md).
+`rented` is the lane for small, fast coding models served by vLLM on a GPU node you rent, one server per GPU; requests are spread over the servers. It has no routing model of its own: it is routable only while `swarm gpu up` has a live session, and then only for jobs marked `sensitive: false` that carry their exact files, the manifest's contract file and acceptance tests; one failure sends the job to Haiku, then Codex. Its cost is by the hour. See [rented GPU](rented-gpu.md).
 
 ## Adaptive lanes
 

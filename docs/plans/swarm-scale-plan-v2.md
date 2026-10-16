@@ -176,7 +176,17 @@ Anthropic Message Batches only, at half price. Opt-in per run (`--batch`), per j
 
 ## Phase 14d — Rented GPU lane
 
-`agent: "rented"`: any OpenAI-compatible endpoint (vLLM or SGLang) we spin up in the cloud. Config: endpoint URL, model, Keychain key, hourly cost, max hours per run, max concurrency (adaptive). The spend guard counts the hourly cost toward the run and day caps, warns at 80% and stops launching at the cap; trusted for sensitive jobs only when marked `trusted: true`. Includes a runbook for renting one 8x H100 node, starting vLLM with an open model, connecting and shutting it down. **Nothing is rented by the build;** the 2-hour live test needs the owner's separate approval before Phase 17. Built; see [rented GPU](../rented-gpu.md) and `phase14d-design.md`.
+`agent: "rented"`: any OpenAI-compatible endpoint (vLLM or SGLang) we spin up in the cloud. Config: endpoint URL, model, Keychain key, hourly cost, max hours per run, max concurrency (adaptive). The spend guard counts the hourly cost toward the run and day caps, warns at 80% and stops launching at the cap; only jobs marked `sensitive: false` ever go to a rented host (`trusted` is gone). Includes a runbook for renting a node, connecting and shutting it down (revised in 14e for small models). **Nothing is rented by the build;** the 2-hour live test needs the owner's separate approval before Phase 17. Built; see [rented GPU](../rented-gpu.md) and `phase14d-design.md`.
+
+## Phase 14e — Small-model GPU swarm
+
+- Rented GPUs run SMALL fast coding models (about 7B to 35B, mixture-of-experts preferred; shortlist Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B, Devstral Small 2, Nemotron-3.5-Lightning as an NVFP4 extra) as the main worker lane. dev2's Qwen stays the free reviewer and brain.
+- `swarm gpu up|down|status` starts one vLLM replica per GPU over ssh. It sends commands only: no files, keys or .env. Servers stay on the node's loopback behind an ssh tunnel. The lane load-balances across replicas (least in flight; an unhealthy replica is skipped for 30 s).
+- `swarm gpu bakeoff` ranks candidates on one GPU using our own tasks (the lane benchmark now, the lessons eval set once Phase 15 builds it). It reports pass rate, tokens per second at 1, 50 and 200 concurrent agents, agents per GPU and cost per passing task. FP8 runs first; NVFP4 runs only as an extra. Results go to docs/state/gpu-bakeoff.md.
+- Every job on this lane carries exact files, the manifest contract and acceptance tests. One failure escalates to Haiku, then Codex.
+- Safety before any rental: a hard dollar cap per session (the session lasts at most cap divided by hourly price); a timer on the node that removes the servers and powers it off; rented hosts take only sensitive: false jobs; nothing is copied to the node.
+- Done when: the bake-off ran once on one rented GPU with Braden's approval, and docs/state/gpu-bakeoff.md names the winner.
+- Status: built, nothing rented; see [rented GPU](../rented-gpu.md).
 
 ## Phase 15 — Quality at scale
 

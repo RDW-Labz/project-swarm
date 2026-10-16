@@ -1,0 +1,129 @@
+{
+  "version": 1,
+  "concurrency": 5,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "docs",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "id": "docs-lanes",
+      "context": [
+        "docs/lanes.md",
+        "docs/rented-gpu.md"
+      ],
+      "outputs": [
+        "docs/lanes.md"
+      ],
+      "prompt": "The file is large: do not return it whole. Return `edits` (exact old text found once in the file, and its replacement) using the short anchor strings given below. Change nothing else. In docs/lanes.md, replace the whole paragraph that starts with the anchor \"`rented` is the lane for an OpenAI-compatible server you rent\" with this paragraph: \"`rented` is the lane for small, fast coding models served by vLLM on a GPU node you rent, one server per GPU; requests are spread over the servers. It has no routing model of its own: it is routable only while `swarm gpu up` has a live session, and then only for jobs marked `sensitive: false` that carry their exact files, the manifest's contract file and acceptance tests; one failure sends the job to Haiku, then Codex. Its cost is by the hour. See [rented GPU](rented-gpu.md).\"\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/kickoff.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/lanes.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/leads-run.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/rented-run.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.",
+      "ignoreTests": [
+        "tests/gpu.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/lanes.test.mjs",
+        "tests/leads-run.test.mjs",
+        "tests/rented-run.test.mjs"
+      ]
+    },
+    {
+      "type": "docs",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "id": "docs-plan",
+      "context": [
+        "docs/plans/swarm-scale-plan-v2.md",
+        "docs/rented-gpu.md"
+      ],
+      "outputs": [
+        "docs/plans/swarm-scale-plan-v2.md"
+      ],
+      "prompt": "The file is large: do not return it whole. Return `edits` (exact old text found once in the file, and its replacement) using the short anchor strings given below. Change nothing else. In docs/plans/swarm-scale-plan-v2.md: (1) in the \"Phase 14d\" section, replace the sentence \"trusted for sensitive jobs only when marked `trusted: true`.\" with \"only jobs marked `sensitive: false` ever go to a rented host (`trusted` is gone).\" and replace \"Includes a runbook for renting one 8x H100 node, starting vLLM with an open model, connecting and shutting it down.\" with \"Includes a runbook for renting a node, connecting and shutting it down (revised in 14e for small models).\"; (2) insert a new section right before the line \"## Phase 15 — Quality at scale\" (use that line as the anchor and put the new section before it) titled \"## Phase 14e — Small-model GPU swarm\" with these bullets: rented GPUs run SMALL fast coding models (about 7B to 35B, mixture-of-experts preferred; shortlist Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B, Devstral Small 2, Nemotron-3.5-Lightning as an NVFP4 extra) as the main worker lane while dev2's Qwen stays the free reviewer and brain; `swarm gpu up|down|status` starts one vLLM replica per GPU over ssh (commands only, no files, keys or .env sent, servers on the node's loopback behind an ssh tunnel) and the lane load-balances across them (least in flight, unhealthy replica skipped for 30 s); `swarm gpu bakeoff` ranks candidates on one GPU on our own tasks (the lane benchmark now, the lessons eval set once Phase 15 builds it), reporting pass rate, tokens per second at 1, 50 and 200 concurrent agents, agents per GPU and cost per passing task, FP8 first and NVFP4 only as an extra run, written to docs/state/gpu-bakeoff.md; every job on this lane carries exact files, the manifest contract and acceptance tests, and one failure escalates to Haiku, then Codex; safety before any rental: hard dollar cap per session (the session lasts at most cap divided by hourly price), a timer on the node that removes the servers and powers it off, rented hosts take only sensitive:false jobs, nothing copied to the node; \"Done when: the bake-off ran once on one rented GPU with Braden's approval and docs/state/gpu-bakeoff.md names the winner.\" Status: built, nothing rented; see [rented GPU](../rented-gpu.md)."
+    },
+    {
+      "type": "docs",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "sensitive": true,
+      "id": "docs-changelog",
+      "context": [
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "CHANGELOG.md"
+      ],
+      "prompt": "Edit the file in place; change nothing else. In CHANGELOG.md, section \"## 1.74.0\": (1) replace the text \"A sensitive job is accepted only on a server marked `trusted: true`. Never chosen by automatic routing.\" with \"Only jobs marked `sensitive: false` ever go to a rented host. Automatic routing picks the lane only while `swarm gpu up` has a live session.\" ; (2) replace \"the runbook for renting an 8x H100 node, serving an open model, connecting and shutting it down is in [rented GPU](docs/rented-gpu.md).\" with \"the runbook for renting a node, connecting and shutting it down is in [rented GPU](docs/rented-gpu.md).\"; (3) append after the sentence \"Twelve adapters now.\" (use it as the anchor, keep it) a new line break and these two bullets: \"- Small-model GPU swarm (Phase 14e): `swarm gpu models|up|down|status|bakeoff`. `up` runs one vLLM replica per GPU on a node you rented (ssh commands only; no file, key or .env is sent; servers listen on the node's loopback behind an ssh tunnel), sets a hard dollar cap (the session lasts at most the cap divided by the hourly price) and a timer on the node that removes the servers and powers it off; the rented lane spreads requests over the replicas (least in flight, an unreachable replica is skipped for 30 seconds). `bakeoff` ranks candidate small coding models on one GPU on our own tasks (the lane benchmark; the lessons eval set joins in Phase 15), reporting pass rate, tokens per second at 1, 50 and 200 concurrent agents, agents per GPU and cost per passing task, FP8 first and NVFP4 only with `--extra-quant`; the report is docs/state/gpu-bakeoff.md. Jobs on this lane must carry exact files, the manifest contract and `acceptance` tests (new job field); one failure escalates to Haiku, then Codex. `trusted` is gone: a rented host never takes a sensitive job.\" and \"- Batch mode is now opt-in per project: the machine config default (`batch.enabled`) applies only to the folders in `batch.projects` (so BinGo stays off); `--batch` and a manifest `batch` still work anywhere. Batch results stay on Anthropic's servers for up to 29 days; the docs say so.\"\nignoreTests: tests/anthropic-lane.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/codex-envelope.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lesson-t80-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-aa-core.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ab-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ag-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ah-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-context.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-o.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-x.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/job-types.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/openrouter.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/router.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/t101-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/update.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.",
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/router.test.mjs",
+        "tests/t101-release.test.mjs",
+        "tests/update.test.mjs"
+      ]
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "id": "docs-dogfood",
+      "context": [
+        "docs/state/dogfood.md"
+      ],
+      "outputs": [
+        "docs/state/dogfood.md"
+      ],
+      "prompt": "The file is large: do not return it whole. Return `edits` (exact old text found once in the file, and its replacement) using the short anchor strings given below. Change nothing else. In docs/state/dogfood.md add this line directly after the table row that starts with \"| 14d (rented GPU lane)\" (use the text \"| 14d (rented GPU lane)\" as the anchor and add the new row after that whole line; the row is one line): \"| 14e (small-model GPU swarm) | 5 swarm jobs after the hand-written core (3 docs edits, 1 changelog, 1 test file) + 1 Claude review | see Phase 14e notes | see notes | see notes | anthropic about $0.05 for the jobs | 0% of jobs; one Claude Opus review job before the PR | a few minutes | Braden: approval before anything is rented | 0 / 0 | the core code (gpu.mjs, gpu-bakeoff.mjs, gpu-commands.mjs, router and lane changes, 24 tests) was written by the orchestrator, against the dogfood rule | Worse than 14d on dogfooding: the core was hand-written; fixed by routing the rest through the swarm |\". Then append at the end of the file a section \"## Phase 14e notes\" with these bullets: \"- Honest account: phases 14 and 14e had no worker jobs for their core code; 14b, 14c and 14d had 13 worker jobs for about two thirds, then half, of their first-draft lines. The rule slipped when the work was tightly coupled across the router, lanes and runner.\" ; \"- Found by a real swarm go from main (1.73.0): a docs-only goal fails because every docs file is named by some test, and the lead's child manifest does not list those tests in ignoreTests (Uncovered test references). Needs a fix: go should add ignoreTests with a reason for docs and test jobs.\" ; \"- Review job: Claude Opus on spend, secrets and sensitive routing before the PR.\""
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "id": "tests-gpu-cli",
+      "context": [
+        "tools/gpu-commands.mjs",
+        "tools/gpu.mjs",
+        "tools/gpu-bakeoff.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "outputs": [
+        "tests/gpu-cli.test.mjs"
+      ],
+      "prompt": "Write tests/gpu-cli.test.mjs (node:test, node:assert/strict, plain ESM, first line `// SPDX-License-Identifier: Apache-2.0`, second line `import './_isolate-config.mjs';`). Test tools/gpu-commands.mjs with no real network or ssh, in the style of tests/gpu.test.mjs: (1) upOptions expands a leading ~/ in --key to the home directory and converts numbers; (2) parseGpuFlags rejects an unknown flag and a flag missing its value, and accepts --yes --json --extra-quant; (3) runGpuCommand([\"models\"]) prints every shortlist label; (4) runGpuCommand([\"status\"]) with a temp SWARM_CONFIG env and no session prints a line saying there is no GPU session; (5) runGpuCommand([\"bakeoff\", ...flags, \"--yes\", \"--repo\", tempDir]) with injected deps: `deps.gpu` giving ssh (returns \"GPU 0: x\" for nvidia-smi -L and \"\" otherwise), openTunnel (returns {pid: 1}), stopTunnel, fetchImpl (returns {ok:true, json: async () => ({usage:{completion_tokens:50}})}), deps.bench = { buildBaseRepo: () => ({head:\"h\"}), runLane: () => ({ results: [{pass:true},{pass:false}] }) }, deps.runner = \"x\", deps.baseInfo = {head:\"h\"}, and flags --models \"Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8\" --levels 1,2 --target ubuntu@203.0.113.9 --key /k --hourly-usd 3 --max-usd 6; assert it writes docs/state/gpu-bakeoff.md under the temp dir containing \"1/2\" hmm use \"(50%)\", prints a reminder to terminate the instance, and leaves no gpu-session.json afterwards; (6) --levels 0 is rejected with gpu-usage. Create the temp dir with fs.mkdtempSync and remove it after. Use the exact exports in the context files; do not invent names."
+    }
+  ]
+}
