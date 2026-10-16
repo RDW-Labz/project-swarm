@@ -1,0 +1,92 @@
+{
+ "version": 1,
+ "concurrency": 4,
+ "budget": {
+  "maxUsd": 2
+ },
+ "jobs": [
+  {
+   "id": "journal",
+   "type": "build",
+   "agent": "anthropic",
+   "prompt": "Build exactly what docs/plans/phase10b-design.md specifies for your module: same exported names, signatures, return shapes and rules. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`; tests use node:test and node:assert/strict, start with `import './_isolate-config.mjs';`, and use temporary directories. Write only your declared output files. Cover every rule in the design for your module with a test, including the refusal and limit cases. Do not edit tools/swarm.mjs. Your module: section 1, tools/journal.mjs, with tests/journal.test.mjs.",
+   "context": [
+    "docs/plans/phase10b-design.md",
+    "tools/status.mjs"
+   ],
+   "outputs": [
+    "tools/journal.mjs",
+    "tests/journal.test.mjs"
+   ],
+   "model": "claude-haiku-5-5",
+   "sensitive": true,
+   "maxOutputTokens": 32000,
+   "outputCapBytes": {
+    "total": 100000,
+    "perFile": 60000
+   }
+  },
+  {
+   "id": "brief",
+   "type": "build",
+   "agent": "anthropic",
+   "prompt": "Build exactly what docs/plans/phase10b-design.md specifies for your module: same exported names, signatures, return shapes and rules. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`; tests use node:test and node:assert/strict, start with `import './_isolate-config.mjs';`, and use temporary directories. Write only your declared output files. Cover every rule in the design for your module with a test, including the refusal and limit cases. Do not edit tools/swarm.mjs. Your module: section 2, tools/brief.mjs, with tests/brief.test.mjs. Import appendEvent-free helpers only from ./journal.mjs: `openItems` (assume it exists exactly as in section 1; in your tests import it from the real ../tools/journal.mjs if present, otherwise build events by hand and pass them in, since buildBrief takes events as an argument).",
+   "context": [
+    "docs/plans/phase10b-design.md",
+    "tools/status.mjs"
+   ],
+   "outputs": [
+    "tools/brief.mjs",
+    "tests/brief.test.mjs"
+   ],
+   "model": "claude-haiku-5-5",
+   "sensitive": true,
+   "maxOutputTokens": 32000,
+   "outputCapBytes": {
+    "total": 100000,
+    "perFile": 60000
+   }
+  },
+  {
+   "id": "autopilot",
+   "type": "build",
+   "agent": "anthropic",
+   "prompt": "Build exactly what docs/plans/phase10b-design.md specifies for your module: same exported names, signatures, return shapes and rules. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`; tests use node:test and node:assert/strict, start with `import './_isolate-config.mjs';`, and use temporary directories. Write only your declared output files. Cover every rule in the design for your module with a test, including the refusal and limit cases. Do not edit tools/swarm.mjs. Your module: section 3, tools/autopilot.mjs, with tests/autopilot.test.mjs. Use fake deps in every test. Include tests that prove the hard limits: only the listed deps are called, resume gets no raises argument, no more than 3 actions per run per step, a throwing dependency does not stop the step, blockers are written once per id.",
+   "context": [
+    "docs/plans/phase10b-design.md",
+    "tools/status.mjs"
+   ],
+   "outputs": [
+    "tools/autopilot.mjs",
+    "tests/autopilot.test.mjs"
+   ],
+   "model": "claude-haiku-5-5",
+   "sensitive": true,
+   "maxOutputTokens": 32000,
+   "outputCapBytes": {
+    "total": 100000,
+    "perFile": 60000
+   }
+  },
+  {
+   "id": "remote-exec",
+   "type": "build",
+   "agent": "codex",
+   "model": "gpt-6.1-sol",
+   "prompt": "Build exactly what docs/plans/phase10b-design.md specifies for your module: same exported names, signatures, return shapes and rules. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`; tests use node:test and node:assert/strict, start with `import './_isolate-config.mjs';`, and use temporary directories. Write only your declared output files. Cover every rule in the design for your module with a test, including the refusal and limit cases. Do not edit tools/swarm.mjs. Your task: section 4. Rewrite tools/remote-exec.mjs and the defaultHostTransport run function in tools/executors.mjs to the new protocol, keeping kill/liveness behavior and the existing exports other code and tests use. Add tests/remote-exec.test.mjs that runs the real remote-exec script as a local child process (spawn node tools/remote-exec.mjs, write the request line to its stdin, read the response line) with a tiny node script as the command, covering: success with outputs and sha256, non-zero exit code returned as a result, refused paths (absolute, .., .env, .git), a missing output skipped, env allowlist and HOME, stdin delivered to the command, kill on stdin close, and `--kill`. Also add a test that defaultHostTransport.run with a fake spawnImpl sends the new request and checks sha256 and the id. Run the existing tests/executors.test.mjs and tests/executors-run.test.mjs and keep them passing (update their stubs only if the transport run signature requires it).",
+   "context": [
+    "docs/plans/phase10b-design.md",
+    "tools/remote-exec.mjs",
+    "tools/executors.mjs"
+   ],
+   "outputs": [
+    "tools/remote-exec.mjs",
+    "tools/executors.mjs",
+    "tests/remote-exec.test.mjs",
+    "tests/executors.test.mjs",
+    "tests/executors-run.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}

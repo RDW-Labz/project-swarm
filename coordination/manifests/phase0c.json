@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "checks": [
+    {
+      "name": "cursor-tests",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/cursor-adapter.test.mjs",
+        "tests/cursor-claims.test.mjs"
+      ]
+    }
+  ],
+  "jobs": [
+    {
+      "id": "ci-fix",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "cheap",
+      "prompt": "Fix two CI problems in tests/cursor-adapter.test.mjs only; change no tools/ code.\n\n1. Ubuntu CI fails `doctor cursor reports version and flags from a fake binary and never prints the key` with `/usr/bin/which probe failed (1)`: the test passes platform 'darwin' but cursorDoctor still runs the real `/usr/bin/which sandbox-exec`, which does not exist on Linux. Give that test the same skip the real-seatbelt test uses (skip unless sandbox-exec is actually available, with a short reason), keeping its final `platform: 'linux'` -> 'unsupported' assertion running everywhere by moving it into its own small test.\n2. CodeQL high alert at line ~194: `CURSOR_NOT_AUTHENTICATED.replace(/[()]/g, '\\\\$&')` is incomplete regex escaping. Replace it with an assertion that does not build a regex from the string, e.g. `error => error.message.includes(CURSOR_NOT_AUTHENTICATED)` returning true.\n\nRun `node --import ./tests/_isolate-config.mjs --test tests/cursor-adapter.test.mjs` and keep it passing.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/cursor-adapter.mjs"
+      ],
+      "outputs": [
+        "tests/cursor-adapter.test.mjs"
+      ],
+      "timeoutMs": 900000
+    }
+  ]
+}

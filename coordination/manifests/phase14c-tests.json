@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "tests-flow",
+      "type": "test",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase14c-design.md specifies for the tests of tools/batch.mjs (already written; import it by its exported names, read it from context). Use node:test and node:assert/strict, start with `import './_isolate-config.mjs';`, use injected fakes only: a fake fetch that plays the batches API (create returns {id, processing_status}; GET batch returns in_progress then ended with a results_url; the results URL returns JSON lines), a fake sleep and fake timers so nothing waits over 100 ms real time. Keep your file under 300 lines. Write only your declared output file. Your file: tests/batch-flow.test.mjs. Cover: the collection window and flush, splits into several batches by request count and by bytes, custom_id sanitizing and uniqueness, each result type mapped to the right Response (succeeded, errored with each error type status, canceled, expired, missing line), request validation, the key only in headers.",
+      "context": [
+        "docs/plans/phase14c-design.md",
+        "tools/batch.mjs"
+      ],
+      "outputs": [
+        "tests/batch-flow.test.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    },
+    {
+      "id": "tests-edges",
+      "type": "test",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase14c-design.md specifies for the tests of tools/batch.mjs (already written; import it by its exported names, read it from context). Use node:test and node:assert/strict, start with `import './_isolate-config.mjs';`, use injected fakes only: a fake fetch that plays the batches API (create returns {id, processing_status}; GET batch returns in_progress then ended with a results_url; the results URL returns JSON lines), a fake sleep and fake timers so nothing waits over 100 ms real time. Keep your file under 300 lines. Write only your declared output file. Your file: tests/batch-edges.test.mjs. Cover: create failure statuses passed through, network failure rejecting, poll tolerance of 5 failures then rejection on the sixth, expiry after expireMs, abort before sending and after sending, cancel when every request of a sent batch is aborted, cancelAll, close then submit rejecting with batch-closed, status(), onEvent never carrying the key or request bodies, batchEligible truth table, batchCostUsd and estimateBatchSavings.",
+      "context": [
+        "docs/plans/phase14c-design.md",
+        "tools/batch.mjs"
+      ],
+      "outputs": [
+        "tests/batch-edges.test.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    }
+  ]
+}
