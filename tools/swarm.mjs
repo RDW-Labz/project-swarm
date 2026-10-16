@@ -32,6 +32,7 @@ import readline from 'node:readline';
 import { extractPlanFlags, buildGoalPlan, approveRun, loadApprovedPlan, recordRun, formatPreview, savePlan, markPlanRun, estimatePlan, readCalibration } from './plan-commands.mjs';
 import { MODEL_RATES } from './rates.mjs';
 import { collectInbox } from './inbox.mjs';
+import { runGpuCommand } from './gpu-commands.mjs';
 import { runBrainCommand, createProjectBrain, triageRun, preflightManifest, brainStats, brainSettings } from './brain-commands.mjs';
 import { readBacklog, nextStartable, markStarted as markBacklogStarted } from './backlog.mjs';
 import { pendingNotifications, macNotify } from './notify.mjs';
@@ -45,7 +46,7 @@ import { zshCompletion, completeRuns } from './completion.mjs';
 import { checkSwarmCommand } from './swarm-bin.mjs';
 import { autoInit, GOAL_BUDGET, isGoalArgument, manifestForGoal, goGoal, goalRunId, topLevelFolders, trackedFiles, worktreeDirty, createGoBranch } from './goal.mjs';
 import { SCALE_DEFAULT_CONCURRENCY, SCALE_DEFAULT_JOBS, prepareScaleRepo, scaleStub } from './scale.mjs';
-import { routeJob } from './router.mjs';
+import { routeJob, rentedContractProblem } from './router.mjs';
 import { anthropicPrice, assertOpusTier as assertAnthropicModel, readAnthropicKey, ANTHROPIC_ENDPOINT } from './anthropic.mjs';
 import { loadRentedConfig, createRentalMeter, rentalDecision, rentedSensitiveOk, RENTED_DEFAULTS } from './rented.mjs';
 import { accrueSpend, resolveBudget, runTotals, jobSpend, spendDir, withSpendStore, laneDayTotals, estimateReservation, reserveSpend, settleSpend, releaseSpend, finalCost, PAID_LANES, capDecision, ledgerRows, mergeLedger, validateIdleItems, runIdleMenu } from './spend.mjs';
@@ -1446,9 +1447,11 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     // Unknown command/provider fields cannot create an execution path.
     if (job.type === 'lead') validateLeadArea(job);
     else if (job.area !== undefined) fail(`lead-area-invalid: Job ${job.id}: area requires type lead`, 'lead-area-invalid');
-    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext', 'batch'];
+    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext', 'batch', 'contract', 'acceptance'];
     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
     if (job.batch !== undefined && typeof job.batch !== 'boolean') fail(`Job ${job.id}: batch must be true or false`, 'batch-invalid');
+    if (job.contract !== undefined && (typeof job.contract !== 'string' || !job.contract.trim() || job.contract.length > 200 || !Array.isArray(job.context) || !job.context.includes(job.contract))) fail(`Job ${job.id}: contract must name a file that is also in context`, 'contract-invalid');
+    if (job.acceptance !== undefined && (!Array.isArray(job.acceptance) || job.acceptance.length > 20 || job.acceptance.some(item => typeof item !== 'string' || !item.trim() || item.length > 300))) fail(`Job ${job.id}: acceptance must be a list of at most 20 non-empty strings of at most 300 characters`, 'acceptance-invalid');
     if (job.cacheContext !== undefined) {
       if (!Array.isArray(job.cacheContext) || !job.cacheContext.length || job.cacheContext.length > 10 || job.cacheContext.some(file => typeof file !== 'string' || !(job.context ?? []).includes(file)) || new Set(job.cacheContext).size !== job.cacheContext.length) fail(`Job ${job.id}: cacheContext must be 1-10 unique paths that are also in context`, 'cache-context-invalid');
       if (!['anthropic', 'auto'].includes(job.agent)) fail(`Job ${job.id}: cacheContext is for the anthropic lane (agent anthropic or auto)`, 'cache-context-invalid');
@@ -2556,10 +2559,10 @@ async function runManifestMain(root, manifest, options = {}) {
   const appliedTypes = await applyManifestJobTypes(root, manifest, { env });
   manifest = appliedTypes.manifest;
   manifest = selectRunManifest(manifest, jobs);
-  const runLanes = resolveLanes({ config: loadLocalConfig({ env }), manifest });
+  const runLanes = resolveLanes({ config: loadLocalConfig({ env }), manifest, env });
   const dispatchJobs = manifest.jobs.map(job => {
     if (job.agent !== 'auto') return job;
-    const route = pickJobRoute(job, runLanes);
+    const route = pickJobRoute(job, runLanes, { contract: manifest.contract });
     return { ...job, agent: route.agent, model: route.model };
   });
   const scopeWarnings = manifest.jobs.map(narrowOutputScopeWarning).filter(Boolean);
@@ -2670,7 +2673,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
     state.idle = manifest.idle ?? worktreeConfig.idle ?? [];
     validateRunIdle(state.idle);
   }
-  const lanes = resolveLanes({ config: worktreeConfig, manifest });
+  const lanes = resolveLanes({ config: worktreeConfig, manifest, env });
   const laneDirectory = lanesDir(env);
   const scheduler = new LaneScheduler({ lanes, globalConcurrency: state.concurrency, now, shared: { dir: laneDirectory, runId: id } });
   const configuredHosts = enabledHosts(resolveHosts(manifest.hosts ?? worktreeConfig.hosts));
@@ -2704,7 +2707,8 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
   };
   // The rented lane bills by the hour, not by the request. One meter per run counts the time the node was needed; the guard below
   // checks it against the run and day caps (and the hour limit) before every rented launch, warns at 80%, and never kills a running job.
-  const rentedConfig = manifest.jobs.some(job => job.agent === 'rented') ? loadRentedConfig(env).config : null;
+  // Auto-routed jobs may land on the rented lane too (only while a GPU session is live, which gives the lane a model).
+  const rentedConfig = manifest.jobs.some(job => job.agent === 'rented' || (job.agent === 'auto' && lanes.rented?.model)) ? loadRentedConfig(env).config : null;
   const rentalMeter = rentedConfig ? createRentalMeter({ hourlyUsd: rentedConfig.hourlyUsd, maxHours: rentedConfig.maxHoursPerRun, minBillableMinutes: RENTED_DEFAULTS.minBillableMinutes, now }) : null;
   const rentalPrior = { usd: resumeState?.rental?.usd ?? 0, hours: resumeState?.rental?.hours ?? 0 };
   const rentalView = rentalMeter ? { usd: () => rentalPrior.usd + rentalMeter.usd(), hours: () => rentalPrior.hours + rentalMeter.hours() } : null;
@@ -2985,7 +2989,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
       const failures = record.routeFailures ??= {};
       try {
         if (original.agent === 'auto') {
-          record.route = pickJobRoute(original, lanes, { health: routeHealth(await today()), failures });
+          record.route = pickJobRoute(original, lanes, { health: routeHealth(await today()), failures, contract: manifest.contract });
           job = { ...job, agent: record.route.agent, model: record.route.model };
           // The API lanes carry the short report inside their envelope (`result`); the "finish with one JSON line" instruction is for CLI lanes and makes small models drop the files.
           if (API_AGENTS.includes(job.agent) && job.report === 'short' && job.prompt.endsWith(`\n\n${REPORT_PROMPT_LINE}`)) job = { ...job, prompt: job.prompt.slice(0, -REPORT_PROMPT_LINE.length - 2) };
@@ -3011,7 +3015,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
         }, 50);
         // A batch job runs nothing here while it waits (hours, possibly): it does not hold a lane or global slot, or a run could never gather
         // more than a lane's worth of requests into one batch. Its spend is still reserved and capped in the admission step below.
-        const heldInBatch = batchEligible(job, batchPolicyFor(manifest, batchFlag, env));
+        const heldInBatch = batchEligible(job, batchPolicyFor(manifest, batchFlag, env, root));
         batchDecisions.set(job.id, heldInBatch);
         try { release = heldInBatch ? async () => {} : await scheduler.acquire(job.agent, { signal: AbortSignal.any([signal, waiting.signal]) }); }
         finally {
@@ -3406,7 +3410,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
           } else { record.status = 'failed'; record.error = `rate-limited: ${result.error ?? job.agent}`; }
         } else if (!result.reportInvalid && original.agent === 'auto' && !['blocked', 'cancelled'].includes(result.status) && (outcome.kind === 'quota-exhausted' || ['failed', 'timeout'].includes(result.status))) {
           if (['failed', 'timeout'].includes(result.status)) failures[job.agent] = (failures[job.agent] ?? 0) + 1;
-          try { pickJobRoute(original, lanes, { health: agent => scheduler.health(agent), failures }); retry = true; }
+          try { pickJobRoute(original, lanes, { health: agent => scheduler.health(agent), failures, contract: manifest.contract }); retry = true; }
           catch (error) { record.status = 'failed'; record.error = error.message; }
         }
         if (outcome.kind === 'quota-exhausted' && !retry) { record.heldReason = 'quota'; record.heldUntil = scheduler.health(job.agent).until; }
@@ -5391,8 +5395,8 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   // Paths the owner declared protected at init are never written by any job. Checked on the final manifest (after job types),
   // and child manifests of leads come through here too. A profile that cannot be read fails closed.
   await enforceProtectedPaths(root, manifest.jobs, { resources: manifest.resources ?? [] });
-  const resolvedLanes = resolveLanes({ config: loadLocalConfig({ env, home }), manifest });
-  const routes = manifest.jobs.filter(job => job.agent === 'auto').map(job => ({ jobId: job.id, ...pickJobRoute(job, resolvedLanes) }));
+  const resolvedLanes = resolveLanes({ config: loadLocalConfig({ env, home }), manifest, env });
+  const routes = manifest.jobs.filter(job => job.agent === 'auto').map(job => ({ jobId: job.id, ...pickJobRoute(job, resolvedLanes, { contract: manifest.contract }) }));
   if (routes.length) {
     const byId = new Map(routes.map(route => [route.jobId, route]));
     manifest = { ...manifest, jobs: manifest.jobs.map(job => byId.has(job.id) ? { ...job, agent: byId.get(job.id).agent, model: byId.get(job.id).model } : job) };
@@ -5663,13 +5667,15 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   }
   const blockedJobIds = new Set(warnings.filter(warning => ['live-output-conflict', 'cursor-claim-conflict'].includes(warning.code)).flatMap(warning => warning.jobIds));
   const startableJobs = manifest.jobs.filter(job => !blockedJobIds.has(job.id)).map(job => job.id);
-  // The rented lane needs its machine config, and takes a sensitive job only from a server the owner marked trusted.
+  // The rented lane needs its machine config (or a running GPU session) and takes only jobs marked sensitive: false, each with its full contract.
   const rentedJobs = manifest.jobs.filter(job => job.agent === 'rented');
   if (rentedJobs.length) {
     const { config: rented, errors } = loadRentedConfig(env);
     if (!rented) fail(`rented-not-configured: ${errors[0] ?? 'add a rentedGpu block to the machine config (see docs/rented-gpu.md)'}`, 'rented-not-configured');
     for (const job of rentedJobs) {
-      if (!rentedSensitiveOk(rented, job)) fail(`Job ${job.id}: the rented lane only gets jobs that set sensitive: false, unless the server is marked trusted: true in rentedGpu`, 'sensitive-provider');
+      if (!rentedSensitiveOk(rented, job)) fail(`Job ${job.id}: the rented lane only gets jobs that set sensitive: false (a rented server is never trusted with sensitive work)`, 'sensitive-provider');
+      const problem = rentedContractProblem({ ...job, contract: job.contract ?? manifest.contract });
+      if (problem) fail(`Job ${job.id}: a rented-lane job must ${problem}; failures go to Haiku, then Codex`, 'rented-contract');
       if (job.model !== rented.model) fail(`Job ${job.id}: model must be ${rented.model}, the model the rented server serves`, 'rented-model');
     }
   }
@@ -7017,9 +7023,12 @@ async function existingManifestFile(root, argument) {
 
 // Which jobs may go to the Message Batches API: --batch (all eligible), the manifest's `batch` (true or { types }), or the
 // machine config's `batch` ({ enabled, types }); a job's own batch true/false is applied by batchEligible.
-function batchPolicyFor(manifest, flag, env) {
+export function batchPolicyFor(manifest, flag, env, root) {
   let config = {};
   try { config = loadLocalConfig({ env }).batch ?? {}; } catch { config = {}; }
+  // The machine-wide default is opt-in per project: it applies only to roots listed in `batch.projects`. --batch and a manifest's own `batch` still work anywhere.
+  const listed = typeof root === 'string' && Array.isArray(config.projects) && config.projects.some(item => typeof item === 'string' && path.resolve(item) === path.resolve(root));
+  if (!listed) config = {};
   const own = manifest?.batch;
   const types = Array.isArray(own?.types) ? own.types : own === undefined && config.enabled === true && Array.isArray(config.types) ? config.types : [];
   const all = flag === true || own === true || (own === undefined && config.enabled === true && !(Array.isArray(config.types) && config.types.length));
@@ -7095,9 +7104,9 @@ async function refreshMapQuietly(root) {
 
 // Everything the plan preview needs to know about this machine's lanes: where lead and child jobs would go,
 // how many run at once there, and the per-million-token price (null for subscription or local lanes).
-async function planLaneInfo(manifest, { batch = false } = {}) {
+async function planLaneInfo(manifest, { batch = false, root } = {}) {
   const config = loadLocalConfig({ env: process.env });
-  const lanes = resolveLanes({ config, manifest });
+  const lanes = resolveLanes({ config, manifest, env: process.env });
   const describe = type => {
     try {
       const probe = applyJobType({ id: 'plan-probe', type, agent: 'auto', prompt: 'x', context: [], outputs: [type === 'lead' ? 'probe.json' : 'probe.txt'], ...(type === 'lead' ? { area: { goal: 'x', scope: ['a'], maxJobs: 1, concurrency: 1 } } : {}) }).job;
@@ -7111,7 +7120,7 @@ async function planLaneInfo(manifest, { batch = false } = {}) {
   };
   const child = describe('build');
   // Batch applies to the children when they go to the Anthropic lane and the policy (--batch, manifest, config) allows it.
-  if (batchEligible({ agent: child.agent, type: 'build' }, batchPolicyFor(manifest, batch, process.env))) child.batch = true;
+  if (batchEligible({ agent: child.agent, type: 'build' }, batchPolicyFor(manifest, batch, process.env, root))) child.batch = true;
   return { lead: describe('lead'), child, runConcurrency: manifest.concurrency ?? 1 };
 }
 
@@ -7280,6 +7289,11 @@ async function mainInner() {
     if(out.exitCode)process.exitCode=out.exitCode;
     return;
   }
+  if(args[0]==='gpu'){
+    try{await runGpuCommand(args.slice(1),{env:process.env,out:text=>process.stdout.write(`${text}\n`),bakeRoot:root});}
+    catch(error){process.stderr.write(`${error.message}\n`);process.exitCode=error.code==='gpu-usage'?2:1;}
+    return;
+  }
   if(['think','digest','draft','brain'].includes(args[0])){
     root=await fs.realpath(root);
     const out=await runBrainCommand(root,args[0],args.slice(1),{readState,projectProfile});
@@ -7344,7 +7358,7 @@ async function mainInner() {
   // `swarm "goal sentence"` is shorthand for `swarm go "goal sentence"`. Only one argument with
   // whitespace counts, so a mistyped one-word command never starts a paid run.
   if(!args[0].startsWith('-')&&/\s/.test(args[0])&&isGoalArgument(args[0]))args.unshift('go');
-  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models | up --target T --key K --model M --hourly-usd N --max-usd N [--max-hours H] [--gpus N] [--yes] | down | status [--json] | bakeoff --target T --key K --hourly-usd N --max-usd N [--models a,b] [--extra-nvfp4] [--levels 1,50,200] [--yes] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
@@ -8017,7 +8031,7 @@ async function mainInner() {
     if(planned&&!planError){
       // The preview shown for a saved plan is recomputed, never read from the file; the owner's own caps can only tighten the saved ones.
       const calibration=await readCalibration(root);
-      plan={...planned,preview:withProfileRisks(estimatePlan(planned.manifest,{lanes:await planLaneInfo(planned.manifest,{batch:planned.flags.batch===true}),calibration}),profile),appliedCostRatio:calibration.costRatio,appliedTimeRatio:calibration.timeRatio};
+      plan={...planned,preview:withProfileRisks(estimatePlan(planned.manifest,{lanes:await planLaneInfo(planned.manifest,{batch:planned.flags.batch===true,root}),calibration}),profile),appliedCostRatio:calibration.costRatio,appliedTimeRatio:calibration.timeRatio};
       const tighter=(cli,saved)=>[cli,saved].filter(value=>typeof value==='number'&&Number.isFinite(value)&&value>0).reduce((min,value)=>Math.min(min,value),Infinity);
       const saved={...Object.fromEntries(Object.entries(planned.flags).filter(([,value])=>value!==undefined))};
       goFlags={...goFlags,...saved};

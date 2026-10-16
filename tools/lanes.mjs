@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
-import { validateRentedConfig } from './rented.mjs';
+import { validateRentedConfig, effectiveRentedRaw } from './rented.mjs';
 import path from 'node:path';
 
 export const LANE_AGENTS = Object.freeze([
@@ -47,11 +47,14 @@ function validate(agent, lane) {
   }
 }
 
-export function resolveLanes({ config = {}, manifest = {} } = {}) {
+export function resolveLanes({ config = {}, manifest = {}, env = process.env } = {}) {
   const lanes = Object.fromEntries(LANE_AGENTS.map(agent => [agent, { ...LANE_DEFAULTS[agent], backoff: { ...LANE_DEFAULTS[agent].backoff }, ...(LANE_DEFAULTS[agent].adaptive ? { adaptive: { ...LANE_DEFAULTS[agent].adaptive } } : {}) }]));
   // The rented lane's ceiling and starting point come from the machine config's rentedGpu block.
-  const rented = config.rentedGpu === undefined ? null : validateRentedConfig(config.rentedGpu).config;
+  // A running GPU session (swarm gpu up) lays its replicas and model over that block and makes the lane routable; without one the lane never is.
+  const { raw: rentedRaw, session: gpuSession } = effectiveRentedRaw(config.rentedGpu, env);
+  const rented = rentedRaw === undefined ? null : validateRentedConfig(rentedRaw).config;
   if (rented) { lanes.rented.concurrency = rented.concurrency; lanes.rented.adaptive = { ...rented.adaptive }; }
+  if (rented && gpuSession) lanes.rented.model = rented.model;
   for (const source of [config.lanes, manifest.lanes]) {
     if (source === undefined) continue;
     if (!object(source)) throw invalid('lanes', 'value', 'must be an object');

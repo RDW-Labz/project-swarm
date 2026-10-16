@@ -25,7 +25,8 @@ test('valid config is normalized', () => {
   assert.equal(c.maxHoursPerRun, 3);
   assert.equal(c.concurrency, 64);
   assert.equal(c.dailyUsd, 80);
-  assert.equal(c.trusted, false);
+  assert.equal(c.auth, 'key');
+  assert.deepEqual(c.endpoints, ['https://203.0.113.9']);
   assert.deepEqual(c.adaptive, { start: 4, min: 1 });
 });
 
@@ -36,7 +37,6 @@ test('defaults are applied to omitted fields', () => {
   assert.equal(c.maxHoursPerRun, 4);
   assert.equal(c.concurrency, 32);
   assert.equal(c.dailyUsd, 98);
-  assert.equal(c.trusted, false);
   assert.equal(c.name, 'rented');
   assert.deepEqual(c.keyItem, RENTED_DEFAULTS.keyItem);
   assert.equal(c.endpoint, 'https://x.example');
@@ -120,9 +120,19 @@ test('dailyUsd must be above 0', () => {
   for (const v of [0, -5, '80']) bad({ dailyUsd: v }, 'dailyUsd');
 });
 
-test('trusted must be boolean', () => {
-  assert.equal(ok({ trusted: true }).config.trusted, true);
-  for (const v of ['yes', 1, null]) bad({ trusted: v }, 'trusted');
+test('a rented host can never be trusted with sensitive work', () => {
+  ok({ trusted: false });
+  for (const v of [true, 'yes', 1, null]) bad({ trusted: v }, 'trusted');
+});
+
+test('endpoints: a list of replicas, https or loopback; auth none only for loopback', () => {
+  const r = ok({ endpoint: undefined, endpoints: ['http://127.0.0.1:18000', 'http://127.0.0.1:18001'], auth: 'none' });
+  assert.deepEqual(r.config.endpoints, ['http://127.0.0.1:18000', 'http://127.0.0.1:18001']);
+  assert.deepEqual(r.config.chatUrls, ['http://127.0.0.1:18000/v1/chat/completions', 'http://127.0.0.1:18001/v1/chat/completions']);
+  bad({ endpoint: undefined, endpoints: [] }, 'endpoints');
+  bad({ endpoint: undefined, endpoints: Array.from({ length: 17 }, (_, n) => `http://127.0.0.1:${18000 + n}`) }, 'endpoints');
+  bad({ auth: 'none' }, 'auth none');
+  bad({ auth: 'maybe' }, 'auth');
 });
 
 test('name rules', () => {
@@ -162,21 +172,18 @@ test('all errors are collected', () => {
 });
 
 test('rentedSensitiveOk', () => {
-  const t = ok({ trusted: true }).config;
   const f = ok({ trusted: false }).config;
   assert.equal(rentedSensitiveOk(f, { sensitive: false }), true);
   assert.equal(rentedSensitiveOk(f, {}), false);
   assert.equal(rentedSensitiveOk(f, { sensitive: true }), false);
   assert.equal(rentedSensitiveOk(f, { sensitive: 'false' }), false);
-  assert.equal(rentedSensitiveOk(t, { sensitive: true }), true);
-  assert.equal(rentedSensitiveOk(t, {}), true);
   assert.equal(rentedSensitiveOk(null, { sensitive: false }), false);
 });
 
 test('RENTED_DEFAULTS values and frozen', () => {
   assert.ok(Object.isFrozen(RENTED_DEFAULTS));
   assert.deepEqual(RENTED_DEFAULTS, {
-    maxHoursPerRun: 4, concurrency: 32, minBillableMinutes: 1, warnAt: 0.8, trusted: false,
+    maxHoursPerRun: 4, concurrency: 32, minBillableMinutes: 1, warnAt: 0.8,
     keyItem: { service: 'project-swarm', account: 'rented.api_key' },
   });
   assert.throws(() => { RENTED_DEFAULTS.warnAt = 1; }, TypeError);

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 import { execFileSync } from 'node:child_process';
-import { loadLocalConfig } from './local-config.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { loadLocalConfig, resolveConfigPath } from './local-config.mjs';
 
-export const RENTED_DEFAULTS = Object.freeze({ maxHoursPerRun: 4, concurrency: 32, minBillableMinutes: 1, warnAt: 0.8, trusted: false, keyItem: Object.freeze({ service: 'project-swarm', account: 'rented.api_key' }) });
+export const RENTED_DEFAULTS = Object.freeze({ maxHoursPerRun: 4, concurrency: 32, minBillableMinutes: 1, warnAt: 0.8, keyItem: Object.freeze({ service: 'project-swarm', account: 'rented.api_key' }) });
 
-const KEYS = new Set(['name', 'endpoint', 'model', 'keyItem', 'hourlyUsd', 'maxHoursPerRun', 'concurrency', 'dailyUsd', 'trusted']);
+const KEYS = new Set(['name', 'endpoint', 'endpoints', 'auth', 'model', 'keyItem', 'hourlyUsd', 'maxHoursPerRun', 'concurrency', 'dailyUsd', 'trusted']);
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/;
 const NAME_RE = /^[A-Za-z0-9 ._-]{1,40}$/;
 const LOOPBACK = new Set(['127.0.0.1', '[::1]', 'localhost']);
@@ -18,20 +20,27 @@ export function validateRentedConfig(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { config: null, errors: ['rentedGpu: must be an object'] };
   for (const k of Object.keys(raw)) if (!KEYS.has(k)) errors.push(`rentedGpu.${k}: unknown key`);
 
-  let origin = null;
-  if (typeof raw.endpoint !== 'string') errors.push('rentedGpu.endpoint: must be a URL string');
-  else {
+  // One endpoint, or a list (one vLLM replica per GPU, reached through ssh tunnels); jobs are spread across them.
+  const given = raw.endpoints === undefined ? [raw.endpoint] : raw.endpoints;
+  const origins = [];
+  if (raw.endpoints !== undefined && (!Array.isArray(raw.endpoints) || raw.endpoints.length < 1 || raw.endpoints.length > 16)) errors.push('rentedGpu.endpoints: must be a list of 1 to 16 URLs');
+  else for (const item of given) {
+    if (typeof item !== 'string') { errors.push('rentedGpu.endpoint: must be a URL string'); break; }
     try {
-      const u = new URL(raw.endpoint);
+      const u = new URL(item);
       const hostOk = u.protocol === 'https:' || (u.protocol === 'http:' && LOOPBACK.has(u.hostname));
       if (!hostOk) errors.push('rentedGpu.endpoint: must be https (http only for loopback)');
       else if (u.username || u.password || u.search || u.hash) errors.push('rentedGpu.endpoint: must not contain credentials, query or hash');
       else if (u.pathname !== '/' && u.pathname !== '/v1') errors.push('rentedGpu.endpoint: path must be / or /v1');
-      else origin = u.origin;
+      else origins.push(u.origin);
     } catch {
       errors.push('rentedGpu.endpoint: must be a valid URL');
     }
   }
+  const auth = raw.auth ?? 'key';
+  if (!['key', 'none'].includes(auth)) errors.push('rentedGpu.auth: must be "key" or "none"');
+  else if (auth === 'none' && origins.some(origin => !LOOPBACK.has(new URL(origin).hostname))) errors.push('rentedGpu.auth none: only for loopback endpoints (an ssh tunnel)');
+  const origin = origins[0] ?? null;
 
   if (typeof raw.model !== 'string' || !MODEL_RE.test(raw.model)) errors.push('rentedGpu.model: invalid model id');
 
@@ -48,8 +57,8 @@ export function validateRentedConfig(raw) {
   if (dailyUsd === undefined) dailyUsd = isNum(hourlyUsd) && isNum(maxHoursPerRun) ? r2(hourlyUsd * maxHoursPerRun) : undefined;
   if (!(isNum(dailyUsd) && dailyUsd > 0)) errors.push('rentedGpu.dailyUsd: must be a number above 0');
 
-  const trusted = raw.trusted === undefined ? RENTED_DEFAULTS.trusted : raw.trusted;
-  if (typeof trusted !== 'boolean') errors.push('rentedGpu.trusted: must be a boolean');
+  // Rented hosts only ever run jobs marked sensitive:false; there is no way to trust one.
+  if (raw.trusted !== undefined && raw.trusted !== false) errors.push('rentedGpu.trusted: not supported; rented hosts only run jobs marked sensitive: false');
 
   const name = raw.name ?? 'rented';
   if (typeof name !== 'string' || !NAME_RE.test(name)) errors.push('rentedGpu.name: at most 40 characters of [A-Za-z0-9 ._-]');
@@ -70,7 +79,9 @@ export function validateRentedConfig(raw) {
       maxHoursPerRun,
       concurrency,
       dailyUsd,
-      trusted,
+      auth,
+      endpoints: origins,
+      chatUrls: origins.map(item => `${item}/v1/chat/completions`),
       chatUrl: `${origin}/v1/chat/completions`,
       modelsUrl: `${origin}/v1/models`,
       adaptive: { start: Math.min(4, concurrency), min: 1 },
@@ -142,8 +153,7 @@ export function rentalDecision({ meter, config, budget, runUsd, laneTodayUsd, wa
 
 export function rentedSensitiveOk(config, job) {
   if (!config) return false;
-  if (job && job.sensitive === false) return true;
-  return config.trusted === true;
+  return Boolean(job) && job.sensitive === false;
 }
 
 export function formatRentalSummary(meter, config) {
@@ -164,10 +174,84 @@ export function readRentedKey(env = process.env, keyItem = RENTED_DEFAULTS.keyIt
   } catch { return null; }
 }
 
+// The running GPU session (written by `swarm gpu up`, removed by `swarm gpu down`) sits next to the machine config.
+export function gpuSessionPath(env = process.env) { return path.join(path.dirname(resolveConfigPath({ env })), 'gpu-session.json'); }
+
+export function readGpuSession(env = process.env, { now = Date.now } = {}) {
+  try {
+    const session = JSON.parse(fs.readFileSync(gpuSessionPath(env), 'utf8'));
+    if (!session || !Array.isArray(session.endpoints) || !session.endpoints.length || typeof session.model !== 'string') return null;
+    if (typeof session.expiresAt === 'string' && Date.parse(session.expiresAt) <= now()) return null;
+    return session;
+  } catch { return null; }
+}
+
+// The machine config's rentedGpu block with the running session laid over it: the session names the replicas, the model, the
+// price and the hours; it has no key (the servers listen only on the node's loopback, reached through the ssh tunnel).
+export function effectiveRentedRaw(raw, env = process.env, { now = Date.now } = {}) {
+  const session = readGpuSession(env, { now });
+  if (!session) return { raw, session: null };
+  const hours = Number.isFinite(session.maxHours) ? session.maxHours : RENTED_DEFAULTS.maxHoursPerRun;
+  const merged = { ...(raw ?? {}), endpoints: session.endpoints, auth: 'none', model: session.model, hourlyUsd: session.hourlyUsd, maxHoursPerRun: raw?.maxHoursPerRun === undefined ? hours : Math.min(raw.maxHoursPerRun, hours), concurrency: Math.min(2048, session.endpoints.length * (session.perReplica ?? 32)) };
+  delete merged.endpoint; delete merged.dailyUsd;
+  if (Number.isFinite(session.capUsd)) merged.dailyUsd = session.capUsd;
+  return { raw: merged, session };
+}
+
 // The machine config's rentedGpu block, validated: { config, errors } (config null when absent or invalid).
 export function loadRentedConfig(env = process.env) {
   let raw;
   try { raw = loadLocalConfig({ env }).rentedGpu; } catch { raw = undefined; }
-  if (raw === undefined) return { config: null, errors: [] };
-  return validateRentedConfig(raw);
+  const { raw: effective } = effectiveRentedRaw(raw, env);
+  if (effective === undefined) return { config: null, errors: [] };
+  return validateRentedConfig(effective);
+}
+
+// --- load balancing across replicas ---------------------------------------------------------------------------------
+const balancers = new Map();
+export function createBalancer(urls, { now = Date.now, cooldownMs = 30000 } = {}) {
+  const state = urls.map(url => ({ url, inflight: 0, badUntil: 0 }));
+  let turn = 0;
+  return {
+    // The healthy replica with the fewest requests in flight (a recently failed one only when none is healthy), skipping `tried`.
+    acquire(tried = new Set()) {
+      const open = state.filter(item => !tried.has(item.url));
+      const healthy = open.filter(item => item.badUntil <= now());
+      const pool = healthy.length ? healthy : open.sort((a, b) => a.badUntil - b.badUntil).slice(0, 1);
+      if (!pool.length) return null;
+      const least = Math.min(...pool.map(item => item.inflight));
+      const tied = pool.filter(item => item.inflight === least);
+      const pick = tied[turn++ % tied.length];
+      pick.inflight += 1;
+      let released = false;
+      return { url: pick.url, release(ok) { if (released) return; released = true; pick.inflight -= 1; pick.badUntil = ok ? 0 : now() + cooldownMs; } };
+    },
+    snapshot: () => state.map(item => ({ url: item.url, inflight: item.inflight, healthy: item.badUntil <= now() })),
+  };
+}
+export function balancerFor(urls, options) {
+  const key = urls.join('|');
+  if (!balancers.has(key)) balancers.set(key, createBalancer(urls, options));
+  return balancers.get(key);
+}
+// One request, sent to the least busy healthy replica; a replica that cannot be reached is skipped (for 30 s) and the next one tried.
+export async function balancedFetch(urls, fetchImpl, init, options = {}) {
+  const balancer = options.balancer ?? balancerFor(urls, options);
+  const tried = new Set();
+  let last;
+  for (let attempt = 0; attempt < urls.length; attempt += 1) {
+    const slot = balancer.acquire(tried);
+    if (!slot) break;
+    tried.add(slot.url);
+    try {
+      const response = await fetchImpl(slot.url, init);
+      slot.release(response.status < 500);
+      return response;
+    } catch (error) {
+      slot.release(false);
+      last = error;
+      if (init?.signal?.aborted) throw error;
+    }
+  }
+  throw last ?? new Error('no replica available');
 }

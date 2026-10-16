@@ -28,6 +28,7 @@ export const COMMANDS = [
   command('digest', 'Condense a log, diff, test output or run to 15 lines.', 'none', '--kind --json'),
   command('draft', 'Draft docs, PR text or a plan locally, then polish.', 'none', '--context --out --json'),
   command('brain', 'Local brain status, stats or a test call.', 'none', '--json --markdown'),
+  command('gpu', 'Rented GPU session: models, up, down, status, bake-off (never rents).', 'none', '--target --key --model --models --hourly-usd --max-usd --max-hours --gpus --per-replica --max-model-len --image --levels --repo --yes --json --extra-nvfp4'),
   command('init', 'Initialize a project: profile, base check, repo map.', 'none', '--check --json --sensitive --not-sensitive --protect --max-usd --max-tokens --base-check --no-base-check --no-map'),
   command('map', 'Build or refresh the repo map.', 'none', '--json'),
   command('scale', 'Run stub jobs to measure scale.', 'none', '--jobs --concurrency'),

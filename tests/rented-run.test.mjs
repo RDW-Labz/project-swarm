@@ -15,7 +15,7 @@ const exec = promisify(execFile);
 const KEY = 'rented-secret-key-0123456789';
 const MODEL = 'Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8';
 const rentedGpu = (extra = {}) => ({ name: 'h100-node', endpoint: 'http://127.0.0.1:8000', model: MODEL, hourlyUsd: 30, maxHoursPerRun: 3, concurrency: 16, ...extra });
-const job = (n, extra = {}) => ({ id: `job-${n}`, agent: 'rented', model: MODEL, sensitive: false, prompt: `Write out/${n}.txt`, context: ['input.txt'], outputs: [`out/${n}.txt`], timeoutMs: 20000, ...extra });
+const job = (n, extra = {}) => ({ id: `job-${n}`, agent: 'rented', model: MODEL, sensitive: false, prompt: `Write out/${n}.txt`, context: ['input.txt', 'contract.md'], outputs: [`out/${n}.txt`], contract: 'contract.md', acceptance: ['out file exists and is not empty'], timeoutMs: 20000, ...extra });
 
 async function fixture(t, gpu = rentedGpu()) {
   const temp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-rented-')));
@@ -23,6 +23,7 @@ async function fixture(t, gpu = rentedGpu()) {
   await fs.mkdir(root);
   t.after(() => fs.rm(temp, { recursive: true, force: true }));
   await fs.writeFile(path.join(root, 'input.txt'), 'x\n');
+  await fs.writeFile(path.join(root, 'contract.md'), 'Write the file as plain text.\n');
   await fs.writeFile(path.join(root, '.gitignore'), '.swarm/\n');
   await fs.writeFile(path.join(temp, 'config.json'), JSON.stringify(gpu === null ? {} : { rentedGpu: gpu }));
   await exec('git', ['init', '-q', root]);
@@ -60,15 +61,16 @@ test('a rented job runs against the configured server with the Keychain key, no 
   assert.ok(!JSON.stringify(state).includes(KEY));
 });
 
-test('a sensitive job is refused on a server that is not trusted, allowed on one marked trusted; the model must match', async t => {
+test('a sensitive job is always refused on a rented server; the model must match; the contract is required', async t => {
   const f = await fixture(t);
   const manifest = extra => ({ version: 1, budget: { maxUsd: 5 }, jobs: [job(0, { sensitive: true, ...extra })] });
   await assert.rejects(validateProject(f.root, manifest(), { env: f.env }), { code: 'sensitive-provider' });
   await assert.rejects(validateProject(f.root, { version: 1, jobs: [job(0, { sensitive: undefined })] }, { env: f.env }), { code: 'sensitive-provider' });
   await assert.rejects(validateProject(f.root, manifest({ sensitive: false, model: 'other/model' }), { env: f.env }), { code: 'rented-model' });
   await validateProject(f.root, manifest({ sensitive: false }), { env: f.env });
-  const trusted = await fixture(t, rentedGpu({ trusted: true }));
-  await validateProject(trusted.root, manifest(), { env: trusted.env });
+  await assert.rejects(validateProject(f.root, { version: 1, jobs: [job(0, { acceptance: undefined })] }, { env: f.env }), { code: 'rented-contract' });
+  await assert.rejects(validateProject(f.root, { version: 1, jobs: [job(0, { contract: 'not-in-context.md' })] }, { env: f.env }), /shared contract file/);
+  await assert.rejects(validateProject(f.root, { version: 1, jobs: [job(0, { context: [] })] }, { env: f.env }), /contract file/i);
   const none = await fixture(t, null);
   await assert.rejects(validateProject(none.root, manifest({ sensitive: false }), { env: none.env }), { code: 'rented-not-configured' });
 });
@@ -147,4 +149,26 @@ test('review fixes: ask never uses the rented lane; manifest lane overrides cann
   const { spawnSync } = await import('node:child_process');
   const result = spawnSync(process.execPath, ['tools/swarm.mjs', '--root', f.root, 'ask', '--model', MODEL, '--agent', 'rented', 'hello'], { encoding: 'utf8', env: { ...process.env, ...f.env } });
   assert.notEqual(result.status, 0);
+});
+
+test('with a live GPU session, auto-routed contract jobs spread over the replicas with no key, and a job that fails there is escalated off the rented lane', async t => {
+  const f = await fixture(t, null);
+  const { gpuSessionPath } = await import('../tools/rented.mjs');
+  const session = { version: 1, target: 'ubuntu@203.0.113.9', key: '/k', model: MODEL, replicas: 2, endpoints: ['http://127.0.0.1:18000', 'http://127.0.0.1:18001'], perReplica: 8, hourlyUsd: 3, capUsd: 20, maxHours: 4, startedAt: '2030-01-01T11:00:00.000Z', expiresAt: '2100-01-01T00:00:00.000Z' };
+  await fs.writeFile(gpuSessionPath(f.env), JSON.stringify(session));
+  const env = { ...f.env }; delete env.SWARM_RENTED_API_KEY;
+  const clock = clockAt(), { seen, fetchImpl } = server(clock, 0.1);
+  const auto = n => { const { model: _model, ...rest } = job(n, { agent: 'auto' }); return rest; };
+  const state = await runManifest(f.root, { version: 1, concurrency: 4, contract: 'contract.md', budget: { maxUsd: 20 }, jobs: [auto(0), auto(1), auto(2), auto(3)] }, { ...options({ ...f, env }, fetchImpl, clock), id: 'sess' });
+  assert.equal(state.status, 'complete', state.jobs.map(entry => entry.error).join('; '));
+  assert.ok(state.jobs.every(entry => entry.agent === 'rented'), JSON.stringify(state.jobs.map(entry => entry.agent)));
+  const hosts = new Set(seen.requests.map(request => new URL(request.url).port));
+  assert.deepEqual([...hosts].sort(), ['18000', '18001'], 'both replicas served requests');
+  assert.ok(seen.requests.every(request => request.init.headers.authorization === undefined), 'no key is sent: the servers are on loopback behind the tunnel');
+  // one failure on the rented lane: the next attempt is Haiku (no Anthropic key here, so it surfaces as a refusal naming that lane, never a second rented try)
+  const down = async () => new Response('{}', { status: 500 });
+  const failed = await runManifest(f.root, { version: 1, concurrency: 1, contract: 'contract.md', lanes: { anthropic: { model: 'claude-haiku-5-5' } }, budget: { maxUsd: 20 }, jobs: [auto(9)] }, { ...options({ ...f, env }, down, clock), id: 'esc' });
+  const record = failed.jobs[0];
+  assert.equal(record.routeFailures.rented, 1);
+  assert.notEqual(record.agent, 'rented', JSON.stringify({ attempts: record.attempts, status: record.status, error: record.error, route: record.route }));
 });

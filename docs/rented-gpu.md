@@ -1,96 +1,132 @@
 # Rented GPU lane (`rented`)
 
-A lane for an OpenAI-compatible server you start yourself in the cloud, usually vLLM or SGLang serving an open model on a rented GPU node (for example one 8x H100 machine). Thousands of cheap, parallel requests with no per-token bill: you pay by the hour for the node instead. **Swarm never rents or starts anything for you.** Renting and shutting down are manual steps (below); swarm only talks to the server and guards the spend.
+A lane for **small, fast coding models** (about 7B to 35B, mixture-of-experts preferred) served by vLLM on a GPU node you rent: **one server per GPU**, jobs spread over all of them. It is the main cheap worker lane while a node is up; dev2's big Qwen stays the free reviewer and brain (see [local brain](local-brain.md)). You pay by the hour for the node, not per token. **Swarm never rents anything.** You rent and terminate the node; swarm only runs commands on it, keeps a session, and guards the spend.
 
-Use it for work that suits a big open model and can wait for a server you started on purpose: sweeps, test and doc generation, review passes. It is never chosen by automatic routing: a job uses it only with `agent: "rented"`.
+## The rules (all enforced in code)
 
-## How the money is counted
+- **Only `sensitive: false` jobs** ever go to a rented host. There is no setting that changes this (`trusted: true` is refused in the config). Sensitive work goes to dev2, Haiku, Codex or Claude.
+- **No key and no file ever goes to the node.** `swarm gpu up` sends commands only (never `scp`, never a `.env`). The servers listen on the node's loopback and are reached through an ssh tunnel, so there is no API key to leak. A model that needs a Hugging Face token is not supported by `gpu up`; use a public model.
+- **Hard dollar cap per session** (`--max-usd`, required): the session lasts at most `max-usd / hourly-usd` hours (or `--max-hours`, default 4, if that is shorter).
+- **Auto-destroy timer on the node itself:** at the expiry it removes the servers and powers the node off (best effort: it needs passwordless sudo). The timer still fires if your Mac sleeps or the link drops. **Powering off does not stop billing at most providers: terminate the instance.**
+- **Contract on every job:** a job routed to this lane must name its exact files (`outputs` and `context`), carry the manifest's `contract` file in its context, and list `acceptance` tests (see below). Jobs without all four go to other lanes.
+- **Escalation:** one failure on this lane sends the job to Haiku, then Codex.
+- `swarm gpu up` and `swarm gpu bakeoff` print a plan and stop unless you add `--yes`.
 
-The cost is time, not tokens. For each run, one meter counts the hours the node was needed, from the first rented job's admission to the end of the run, at `hourlyUsd` (at least one minute once opened). That rental counts toward:
+## Which models
 
-- the **run cap** (`--max-usd`, manifest `budget.maxUsd`), together with everything else the run spends;
-- the **lane's day cap** across all runs and projects (default one run's maximum, `hourlyUsd x maxHoursPerRun`; raise or lower with `dailyUsd` in the config, or `spend.lanes.rented.dailyUsd`);
-- the **hours limit** `maxHoursPerRun`.
+`swarm gpu models` lists the shortlist (ids are a starting point; check each exists on Hugging Face before renting). FP8 is the safe path on every Blackwell card; NVFP4 only as an extra run.
 
-The guard runs before each rented job starts. It **warns at 80%** of any of the three (a line in the run's warnings) and **stops launching at the cap**: remaining jobs are held (`run-cap`, `lane-cap` or `rental-hours`) and the run pauses. Jobs already running are never killed, and the guard looks only when a rented job is about to start (and every 10 seconds, for the warning and the shared day total), so a run can pass a cap by whatever the rental costs until the run ends: stop the run yourself if you see the warning. A run with no USD cap does not start rented jobs. After `rental-hours`, `swarm resume` refuses: start a new run (and shut the server down).
+| Model | Why |
+| --- | --- |
+| Qwen3.6-35B-A3B (FP8) | 35B total, 3B active; strongest vendor-reported coding score of the group; Apache 2.0 |
+| Qwen3-Coder-30B-A3B-Instruct (FP8) | The coding-specialist baseline; 3B active; Apache 2.0 |
+| Devstral Small 2 (24B dense) | The dense control: no mixture-of-experts; Apache 2.0 |
+| Nemotron-3.5-Lightning-30B-A3B (NVFP4, extra run) | The NVFP4-on-Blackwell test; weaker coding scores; NVFP4 support on RTX-class (SM120) cards is not confirmed |
 
-Two runs using the node at the same time each meter it at the full hourly price, so they count it twice: that errs toward stopping early.
+Vendor numbers decide nothing here. The bake-off ranks them on our own tasks.
 
-**The meter does not stop the server.** The node bills until you terminate it. Set a spending alert and a hard limit at the provider too.
+## Bake-off: `swarm gpu bakeoff`
 
-## Config
+On **one** rented GPU, one model after another (FP8 first, `--extra-nvfp4` adds NVFP4):
 
-In `~/.config/project-swarm/config.json`:
+```
+swarm gpu bakeoff --target ubuntu@<ip> --key ~/.ssh/<key> --hourly-usd 1.8 --max-usd 12
+```
+
+For each model it starts one server, runs our lane benchmark (10 real tasks scored by hidden tests; the lessons eval set joins once Phase 15 builds `evals/`), then measures throughput with **1, 50 and 200 concurrent agents** (`--levels` to change). It reports and writes `docs/state/gpu-bakeoff.md`:
+
+- **pass rate** on our tasks;
+- **tokens per second**, total and per agent, at each level;
+- **agents per GPU**: the highest tested level with under 5% errors and at least 10 tokens/s each;
+- **cost per passing task**: the model's whole slot on the node (load, our tasks, throughput) at the hourly price, divided by tasks passed.
+
+Models are ranked by pass rate, then cost per passing task. A model that fails to start or crashes is recorded, not fatal; no new model starts once the cap is spent. After the run, terminate the instance.
+
+## Using the winner: `swarm gpu up|down|status`
+
+```
+swarm gpu up --target ubuntu@<ip> --key ~/.ssh/<key> --model Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8 --hourly-usd 1.8 --max-usd 12 --yes
+swarm gpu status
+swarm gpu down
+```
+
+- `up` counts the GPUs (`nvidia-smi -L`), starts one vLLM container per GPU (`swarm-vllm-0`, `-1`, ...; ports 8000+n on the node, tunnelled to `127.0.0.1:18000+n` here), sets the timer, opens one ssh tunnel, writes a session file next to the machine config (`gpu-session.json`: replicas, model, price, cap, expiry; no secrets), and waits until every replica answers (the first start downloads the weights; allow many minutes). Use `--gpus N` for fewer replicas and `--per-replica N` (default 32) for the requests one replica takes.
+- While the session is live (not expired), the rented lane is routable: jobs with `agent: "auto"` that carry the full contract and `sensitive: false` go to it first, and `agent: "rented"` jobs work. The lane **load-balances**: each request goes to the replica with the fewest requests in flight, a replica that cannot be reached is skipped for 30 seconds, and the lane's concurrency is replicas x `--per-replica`. When the session ends or expires the lane is unroutable again.
+- `status` shows replicas answering, hours used, cost against the cap and minutes left.
+- `down` stops the servers, closes the tunnel, removes the session and prints the hours and cost. **Then terminate the instance in the provider console.**
+
+## Job contract on this lane
 
 ```json
-"rentedGpu": {
-  "name": "h100-node",
-  "endpoint": "http://127.0.0.1:18000",
-  "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
-  "keyItem": { "service": "project-swarm", "account": "rented.api_key" },
-  "hourlyUsd": 24.5,
-  "maxHoursPerRun": 3,
-  "concurrency": 64,
-  "dailyUsd": 80,
-  "trusted": false
+{
+  "version": 1,
+  "contract": "docs/contracts/api.md",
+  "budget": { "maxUsd": 12 },
+  "jobs": [{
+    "id": "t-0042", "agent": "auto", "type": "build", "sensitive": false,
+    "prompt": "Add the refund field to src/orders.js as the contract says.",
+    "context": ["src/orders.js", "docs/contracts/api.md", "tests/orders.test.js"],
+    "outputs": ["src/orders.js"],
+    "acceptance": ["tests/orders.test.js passes", "refund is a number of cents, never negative"]
+  }]
 }
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `endpoint` | The server's origin. `https` required, except `http` to loopback (`127.0.0.1`, `localhost`), which is what an ssh tunnel gives you (recommended). No credentials, query or hash in the URL. |
-| `model` | The model name the server serves. A rented job's `model` must be exactly this. |
-| `keyItem` | The Keychain item holding the server's API key (default service `project-swarm`, account `rented.api_key`). The key is never in the config or a manifest. `SWARM_RENTED_API_KEY` overrides it (CI, tests). |
-| `hourlyUsd` | The node's price per hour. Required: this is what the meter bills. |
-| `maxHoursPerRun` | Hours one run may keep the node (default 4). |
-| `concurrency` | The ceiling of requests in flight. The lane is **adaptive**: it starts at 4, opens one slot per window of successes, halves on a 429, and never passes this ceiling. |
-| `dailyUsd` | The lane's day cap across runs (default `hourlyUsd x maxHoursPerRun`). |
-| `trusted` | `true` only if this is your own server and you accept your code and data going to it. A sensitive job (the default) is refused on a server that is not `trusted: true`; with `sensitive: false` a job may always use it. |
+`context` and `outputs` are the exact files; the manifest's `contract` file must be in `context`; `acceptance` is a list of tests or checks the files must satisfy (it is added to the worker's task text). A job missing any of these is not sent to the rented lane (an explicit `agent: "rented"` job without them is refused at validation with `rented-contract`). The usual checks, review and integration still run afterwards.
 
-`swarm doctor rented` checks that the block is valid and the Keychain key exists (it does not call the server; use the `curl` in step 4 and the smoke test in step 6 for that).
+## How the money is counted
 
-## Runbook: rent an 8x H100 node, serve an open model, use it, shut it down
+The cost is time, not tokens. For each run, one meter counts the hours the node was needed, from the first rented job's admission to the end of the run, at the session's hourly price (at least one minute once opened). That rental counts toward:
 
-Prices and names change; check the provider's current console and the model's vLLM recipe. Nothing here costs money until step 2.
+- the **run cap** (`--max-usd`, manifest `budget.maxUsd`), together with everything else the run spends;
+- the **lane's day cap** across all runs and projects (with a session: the session's `--max-usd`; otherwise `hourlyUsd x maxHoursPerRun` or `dailyUsd` from the config);
+- the **hours limit** (the session's hours).
 
-1. **Pick the model.** An open-weights model that fits 8 x 80 GB, for example a large mixture-of-experts coder model in FP8 (Qwen3-Coder-480B-A35B-Instruct-FP8 is one), or a smaller model that needs fewer GPUs. Read its model card for the recommended vLLM or SGLang flags. Estimate the weights size (hundreds of GB for the largest).
-2. **Rent the node** (this starts billing). From a GPU cloud (Lambda, RunPod, Vast.ai, CoreWeave and others offer 8x H100): on-demand, one 8x H100 80 GB (SXM preferred) instance, an Ubuntu image with NVIDIA drivers and Docker (most have them), at least 1 TB of NVMe disk (more for the largest models), a **dedicated ssh key** for this. Write down the instance id, the region and the hourly price, and put that price in `hourlyUsd`.
-3. **Lock it down.** Open only ssh (port 22) in the provider's firewall, ideally from your IP. Do not expose port 8000.
-4. **Start the server** (ssh in; first check the host key fingerprint against the provider's console). Generate a key and keep it for step 5: `openssl rand -hex 24`. Put it in a private env file instead of the command line, so it is not in shell history or `docker ps`: `install -m 600 /dev/null ~/vllm.env && echo "VLLM_API_KEY=<the key>" > ~/vllm.env`. Then, for example with vLLM in Docker (flags change between releases; follow the model card):
+The guard runs before each rented job starts. It **warns at 80%** of any of the three and **stops launching at the cap**: remaining jobs are held (`run-cap`, `lane-cap` or `rental-hours`) and the run pauses. Jobs already running are never killed, and the guard looks only when a rented job is about to start (and every 10 seconds, for the warning and the shared day total), so a run can pass a cap by whatever the rental costs until the run ends: stop the run yourself if you see the warning. A run with no USD cap does not start rented jobs. Two runs using the node at the same time each meter it at the full hourly price, so they count it twice: that errs toward stopping early.
 
-   ```
-   docker run -d --name vllm --gpus all --ipc=host -p 127.0.0.1:8000:8000 \
-     --env-file ~/vllm.env \
-     -v /data/hf:/root/.cache/huggingface \
-     vllm/vllm-openai:latest \
-     --model Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 \
-     --served-model-name Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 \
-     --tensor-parallel-size 8 --enable-expert-parallel --max-model-len 65536
-   ```
+**The meter does not stop the node.** Only the timer on the node (power-off) and you (terminate) do. Set a spending alert and a hard limit at the provider too.
 
-   (vLLM reads the key from `VLLM_API_KEY`.)
+## Without a session: the config block (advanced)
 
-   The first start downloads and loads the weights (many minutes). Watch `docker logs -f vllm` until it says the application started, then, on the node: `curl -s -H "Authorization: Bearer $(cut -d= -f2 ~/vllm.env)" http://127.0.0.1:8000/v1/models` lists the model. A gated model needs a Hugging Face token (`-e HF_TOKEN`) on the server only, never in a swarm repo. SGLang works the same way (`python -m sglang.launch_server --model-path ... --tp 8 --api-key ...`).
-5. **Connect.** On your Mac, open a tunnel: `ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:18000:127.0.0.1:8000 -i ~/.ssh/<that key> ubuntu@<node ip>` (leave it running; `ExitOnForwardFailure` and an unusual local port keep another program on your Mac from answering instead, and the endpoint below uses that port). Store the key in the Keychain: `security add-generic-password -s project-swarm -a rented.api_key -w` (it asks for the key, so it is not in your shell history). Add the `rentedGpu` block above (`endpoint` `http://127.0.0.1:18000`, `model` the served name, `hourlyUsd` from step 2). Run `swarm doctor rented`.
-6. **Smoke test**, cheap: a manifest with one job, `agent: "rented"`, `model` the served name, `sensitive: false`, then `swarm run smoke.json --max-usd 2`. `swarm inspect RUN` shows the `rental` (hours and dollars) beside the jobs.
-7. **Use it.** Put `agent: "rented"` on the jobs that should run there, always with a run cap (`--max-usd`, or `go --max-usd`). Watch the 80% warning. Finish the work in one sitting: the meter, the day cap and the hours limit all assume you will.
-8. **Shut it down, every time.** Stop the swarm runs; close the tunnel; `docker rm -f vllm`; then **terminate the instance in the provider's console** (a stopped instance often still bills for the reserved GPUs; terminate unless the provider says otherwise); delete any attached volume you do not need; check the billing page shows the instance gone; rotate the key (delete the Keychain item, make a new one next time).
+You can still point the lane at a server you started by hand. In `~/.config/project-swarm/config.json`:
+
+```json
+"rentedGpu": {
+  "name": "gpu-node",
+  "endpoints": ["http://127.0.0.1:18000", "http://127.0.0.1:18001"],
+  "auth": "none",
+  "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+  "hourlyUsd": 1.8,
+  "maxHoursPerRun": 3,
+  "concurrency": 64,
+  "dailyUsd": 12
+}
+```
+
+`endpoint` (one URL) or `endpoints` (up to 16, balanced as above): `https`, or `http` to loopback. `auth: "none"` is for loopback tunnels only; otherwise the key comes from the Keychain item `keyItem` (default service `project-swarm`, account `rented.api_key`) or `SWARM_RENTED_API_KEY`. Without a live session this lane is **never** chosen by automatic routing: use `agent: "rented"`, and all the rules above (non-sensitive only, contract on every job) still apply. `swarm doctor rented` checks the block.
+
+## Renting the node (you do this; it costs money)
+
+1. Pick the GPU: one or more RTX PRO 6000 Blackwell (96 GB) or similar; for the bake-off one GPU is enough. Prices change; note the hourly price for `--hourly-usd`.
+2. Rent it on-demand (Lambda, RunPod, Vast.ai, CoreWeave and others): an Ubuntu image with NVIDIA drivers and Docker, at least 200 GB of disk, a **dedicated ssh key**, and passwordless sudo for the timer's power-off. Open only ssh (port 22) in the firewall.
+3. Connect once by hand (`ssh -i <key> ubuntu@<ip>`) and compare the host key fingerprint with the provider's console; `swarm gpu` refuses unknown hosts (`BatchMode`).
+4. Run the bake-off or `swarm gpu up` (above).
+5. **Terminate the instance** when done, delete any volume you do not need, and check the billing page shows nothing running.
 
 | After every session | Done |
 | --- | --- |
 | Runs finished or paused, none still launching | |
-| Tunnel closed | |
+| `swarm gpu down` run | |
 | Instance **terminated** in the console (not just stopped) | |
 | Volumes deleted | |
 | Billing page checked, no running instance | |
-| Key rotated | |
 
 ## Troubleshooting
 
-- `rented-not-configured`: no valid `rentedGpu` block; `swarm doctor rented` prints the first error.
-- `model must be ...`: the job's `model` differs from the server's served model name.
-- `401` from the server: the Keychain key differs from the `--api-key` the server started with.
-- `connection refused`: the tunnel is down, or the server is still loading the weights.
-- `only gets jobs that set sensitive: false`: the job is sensitive (the default) and `trusted` is false.
-- Out of memory at start: lower `--max-model-len`, or use a smaller model or a quantized one.
+- `gpu-unhealthy`: no answer within 20 minutes; the model may still be downloading. `swarm gpu status`, or `ssh` in and `docker logs swarm-vllm-0`.
+- `gpu-session-exists`: run `swarm gpu status`, then `swarm gpu down`.
+- `rented-contract`: the job lacks outputs, context, the manifest `contract` in context, or `acceptance`.
+- `only gets jobs that set sensitive: false`: the job is sensitive (the default). A rented host never takes those.
+- `connection refused`: the tunnel is down (`swarm gpu status`), or the server is still loading.
+- Out of memory at start: use a smaller model, or lower `--max-model-len` (default 32768).
 - Held with `run-cap`: the run has no `--max-usd`, or the rental plus other spend reached it.
