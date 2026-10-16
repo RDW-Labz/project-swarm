@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/security-scan.test.mjs"
+      ],
+      "id": "a1f-scan",
+      "context": [
+        "tools/security-scan.mjs",
+        "docs/security-gate.md"
+      ],
+      "outputs": [
+        "tools/security-scan.mjs"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Keep the first line, plain ESM, no dependencies, injected I/O only, and every existing export name (add the new ones named here). Do not edit tests. Return the complete new tools/security-scan.mjs applying these review fixes (docs/security-gate.md in your context describes the gate). (1) Never skip a file silently. New export scanSecretsDetailed(files, { allowFingerprints, maxBytes = 1000000, previous = {}, key } = {}) returns { findings, skipped: [{ path, reason }] }; scanSecrets(files, options) keeps returning just the findings array (it calls the detailed one). Content handling: decode a Buffer as utf8; replace every NUL character with a newline before scanning (so a NUL appended to a file or placed inside a value cannot hide a secret); additionally, when the buffer looks like UTF-16 (starts with the FF FE or FE FF byte order mark, or more than 30 percent of its bytes in the first 4096 are NUL), also scan the text decoded as utf16le (a Buffer is needed for this; for a string input skip this step); a file larger than maxBytes is scanned in windows of maxBytes with a 4096 character overlap, up to 20 windows; beyond that the file is recorded in skipped with reason 'too large to scan' (the gate blocks on such files). A file is never dropped for being binary. (2) The marker 'swarm-secret-allow' only suppresses a finding when the same line (trimmed) also exists in previous[path] (the previous version of the file, a string or Buffer); on a new or changed line the marker is ignored (a worker must not be able to silence the gate). (3) Fingerprints: when options.key is given (a string) the fingerprint is the first 12 hex characters of hmac-sha256(key, matchedText) (node:crypto createHmac), else sha256 as before. (4) Bounded work per line: lines longer than 4096 characters are scanned in windows of 4096 characters with a 256 character overlap; every unbounded quantifier in a rule is bounded (for example url-password scheme part [a-z0-9+.-]{0,16}, user and password parts at most 64 and 256 characters, jwt parts {10,2048}, generic-secret value {20,256}); no rule may take quadratic time on a long line of repeated dots, dashes or letters. (5) Rules: add openai-project-key (sk- followed by proj-, svcacct- or admin- and 20 or more letters, digits, underscore, dash), github-fine-grained-token (github_pat_ followed by 22 or more of letters, digits, underscore), gitlab-token (glpat- followed by 20 or more of letters, digits, underscore, dash), npm-token (npm_ followed by 36 letters or digits), and env-secret (a line that starts with optional spaces and optional export, an upper-case name containing KEY, SECRET, TOKEN or PASSWORD, = , an unquoted value of 20 to 256 characters from [A-Za-z0-9/+_=.-] with shannonEntropy at least 3.5 and none of the words example, placeholder, your, test, dummy). (6) Find ALL matches on a line (use a global copy of each regex and matchAll), not just the first; the per-rule per-file cap of 3 and the 200 total cap stay. (7) parseSemgrep no longer returns a message property (rule messages can contain matched code): return { ruleId, path, line, severity }. parseNpmAudit and parseOsv map the severity 'moderate' to 'medium'. (8) licenseBlocked: implement a real SPDX expression parser: tokens are parentheses, AND, OR and WITH (case-insensitive) and license ids; OR is blocked only when both sides are blocked, AND when either side is blocked, WITH keeps the left side's result, parentheses group, precedence AND over OR; a bare id is blocked when it names GPL or AGPL and is not LGPL (also match 'GNU Affero General Public License' and 'GNU General Public License' words but not 'Lesser'); approved ids and allowCopyleft behave as before; an expression that cannot be parsed falls back to the old text check (never throws).\nignoreTests: tests/security-scan.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/security-deps.test.mjs"
+      ],
+      "id": "a1f-deps",
+      "context": [
+        "tools/security-deps.mjs",
+        "docs/security-gate.md"
+      ],
+      "outputs": [
+        "tools/security-deps.mjs"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Keep the first line, plain ESM, no dependencies, injected I/O only, and every existing export name (add the new ones named here). Do not edit tests. Return the complete new tools/security-deps.mjs applying these review fixes. (1) newDependencies({ before, after }) now accepts manifests anywhere: the keys of before and after are file paths (any path whose last segment is package.json, or starts with requirements and ends with .txt, or is named exactly like that in a subfolder); a dependency is identified by manifest path, ecosystem, name AND spec, so a version bump of an existing dependency counts as new; it also reads peerDependencies, overrides and resolutions of package.json (string values or nested objects: only string leaf specs under a package name key); the returned entries carry { ecosystem, name, spec, dev, file }. (2) Spec classification: classifySpec(spec) returns { kind: 'registry' } for versions, ranges, tags and '*'; { kind: 'alias', target } for npm:other@1 (target is the package name after npm:, without the version); { kind: 'workspace' } for workspace: specs; and { kind: 'nonRegistry', why } for git, git+, github:, gitlab:, bitbucket:, file:, link:, http:, https: and tarball specs and for user/repo style specs; export it. In requirements text: lines starting with - are classified too: -r and -c lines are ignored (the other file is scanned when it changes), but --index-url, --extra-index-url, -i, --find-links, -f, -e and --trusted-host lines produce a dependency { ecosystem: 'pypi', name: '(option) ' + the option, spec: the rest of the line, nonRegistry } and a line of the form 'name @ url' or any line containing :// gives nonRegistry for that name. (3) checkPackage(dep, { fetchImpl, now, policy, cache }): a dependency with nonRegistry (or spec kind nonRegistry) returns { ok: false, reasons: ['installs from a non-registry source (' + why + '): needs the owner's approval'] } without any network call; an alias is checked under its target name (the registry result is for the target, the reason text mentions the alias); a workspace spec is ok without a call. When the spec is an exact version (digits and dots only, optional leading = or v) use time[version] for the age and versions[version].license for the license (fall back to the package creation time and latest when the version is missing in the registry data and add the reason 'version X not found' when it is missing). Every fetch call passes { signal: AbortSignal.timeout(policy.fetchTimeoutMs ?? 10000) } as the second argument and a response whose text is larger than 5 MB is rejected as unreachable (use the Content-Length header when present, else the parsed JSON size is not capped but the request is). The cache option is a Map: results are stored and reused under the key ecosystem:name:spec so a bisect does not repeat registry calls. (4) PyPI: the name is normalized per PEP 503 (lower-case, runs of - _ . become -) and encoded with encodeURIComponent; a missing earliest upload date gives the reason 'unknown age'; classifiers that mention 'GNU Affero General Public License' or 'GNU General Public License' (not Lesser) are turned into a license text 'AGPL-3.0' or 'GPL-3.0'; a non-string license is treated as unknown. License strings from registries are cut to 80 characters and keep only letters, digits, spaces and the characters .()-+ . (5) checkPackages(deps, options) keeps its concurrency of 4 and order and passes the cache through.\nignoreTests: tests/security-deps.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/security-gate.test.mjs"
+      ],
+      "id": "a1f-gate",
+      "context": [
+        "tools/security-gate.mjs",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs",
+        "docs/security-gate.md"
+      ],
+      "outputs": [
+        "tools/security-gate.mjs"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Keep the first line, plain ESM, no dependencies, injected I/O only, and every existing export name (add the new ones named here). Do not edit tests. Return the complete new tools/security-gate.mjs applying these review fixes (read tools/security-scan.mjs and tools/security-deps.mjs in your context: their APIs are changing as described in this paragraph; use scanSecretsDetailed(files, { allowFingerprints, previous, key }) which returns { findings, skipped }, newDependencies({ before, after }) keyed by file path, checkPackages(deps, { fetchImpl, policy, now, cache })). (1) Secret scan: use scanSecretsDetailed with previous = a map of path to the previous bytes of each change; a file in the skipped list with reason 'too large to scan' becomes a block { check: 'secret-scan', severity: 'high', message: '<file> is too large to scan' }; the fingerprint key comes from a new optional argument fingerprintKey passed to runSecurityGate. (2) Dependency checks: pass cache (an optional Map argument named cache, default a new Map per call) to checkPackages; a license text from the check is already cleaned. (3) Vulnerabilities fail closed. Only when a dependency manifest or lockfile changed in the batch (any path whose last segment is package.json, package-lock.json, npm-shrinkwrap.json, yarn.lock, pnpm-lock.yaml, pyproject.toml, Pipfile, Pipfile.lock, go.mod, go.sum, Cargo.toml, Cargo.lock, or starts with requirements and ends with .txt): run the scanners that apply: when package-lock.json or npm-shrinkwrap.json exists in the batch or in cwd run exec(['npm','audit','--json','--registry=https://registry.npmjs.org/'], { cwd, timeoutMs: 120000 }); for each requirements text file in the batch run exec(['pip-audit','-f','json','--no-deps','--disable-pip','-r', file], { cwd, timeoutMs: 120000, env: <a minimal env object with only PATH and HOME set to os.tmpdir()> }); and exec(['osv-scanner','--format','json','-r','.'], ...) when present. A scanner whose exec rejects (not installed) is added to skipped as '<tool> not installed'. A scanner result is unusable when its stdout does not parse as JSON, or parses to an object with an error property, or exitCode is null or above 1 with no parsable vulnerabilities list (npm audit exits 1 when it finds vulnerabilities and still prints JSON: that is usable): an unusable result becomes a block { check: 'vulnerability', severity: 'high', message: 'could not verify: <tool> output unusable' }. If dependency files changed and NO scanner produced a usable result, add a block { check: 'vulnerability', severity: 'high', message: 'could not verify vulnerabilities: no scanner ran (needs a lockfile with npm, or pip-audit, or osv-scanner)' } unless policy.requireVulnerabilityScan === false (new policy key, default true; add it to DEFAULT_POLICY and normalizePolicy as a boolean). To avoid blocking a batch for old problems it did not touch: when the batch's package manifests added or changed dependencies (names known from newDependencies), only vulnerabilities whose name is one of those names block; when only a lockfile changed, every blocking-severity vulnerability blocks. (4) Code scan: runSecurityGate takes a new argument sensitive (boolean, default true). policy gains codeScan: 'auto' | 'off' (DEFAULT 'auto'; normalizePolicy accepts only those two strings). The code scan runs only when codeScan is 'auto' AND sensitive is false, or when the policy was given codeScan 'auto' explicitly together with sensitive true is NOT enough: rule: sensitive projects never run semgrep (add 'code scan skipped: sensitive project (semgrep needs the network)' to skipped) unless policy.codeScan === 'auto' and policy.codeScanSensitive === true (new boolean key, default false, accepted by normalizePolicy). The semgrep command is exec(['semgrep','--version']) then exec(['semgrep','--config','auto','--metrics=off','--json','--quiet','--', ...paths]) (note the -- before the paths). Tickets keep { title, severity, path, line } and no message. (5) lessonFor: the lesson id is 'security-' + runId + '-' + a short stable hash of the sorted job ids and the check names (first 8 hex of sha256) + '-' + the date digits so two blocked jobs of one run never collide; recordGate passes the jobs to it (change the lessonFor signature to lessonFor(gate, { runId, date, jobs }) ); blocker ids stay security-<runId>-<jobs>. (6) Messages that contain registry-controlled text (license names, package names) are cut to 120 characters and keep only characters in [A-Za-z0-9 @/._:()+,;-] (replace others with ?). (7) The returned object also carries warnings and skipped as before; add 'sensitive' to nothing else. Keep every other behaviour.\nignoreTests: tests/security-gate.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

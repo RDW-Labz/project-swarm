@@ -4421,14 +4421,30 @@ function validateQueueOptions({ batchSize = 10, maxRequeues = 2, jobs, salvage, 
 
 // The A1 security gate runs in the merge queue on every batch, after its files are written and before it can stay merged: a block rolls the batch back
 // like a failed check. The project profile's `security` block sets the policy (it can be disabled there, never by a flag).
-const securityExec = async (argv, { cwd, timeoutMs = 120000 } = {}) => {
-  try { const { stdout, stderr } = await execFileAsync(argv[0], argv.slice(1), { cwd, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 }); return { exitCode: 0, stdout, stderr }; }
+// The key that turns secret fingerprints into HMACs (so a low-entropy secret cannot be recovered from a fingerprint): random, 0600, in the project's .swarm folder.
+async function securityFingerprintKey(root) {
+  try {
+    const dir = await safeWritableDir(root, ['.swarm', 'project']);
+    const file = path.join(dir, 'security-key');
+    try { return (await fs.readFile(file, 'utf8')).trim(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const key = crypto.randomBytes(32).toString('hex');
+    await fs.writeFile(file, `${key}\n`, { flag: 'wx', mode: 0o600 }).catch(error => { if (error.code !== 'EEXIST') throw error; });
+    return (await fs.readFile(file, 'utf8')).trim();
+  } catch { return undefined; }
+}
+
+const securityExec = async (argv, { cwd, timeoutMs = 120000, env } = {}) => {
+  try { const { stdout, stderr } = await execFileAsync(argv[0], argv.slice(1), { cwd, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, ...(env ? { env } : {}) }); return { exitCode: 0, stdout, stderr }; }
   catch (error) { if (error.code === 'ENOENT') throw error; return { exitCode: typeof error.code === 'number' ? error.code : 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }; }
 };
 
 async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, conflicts, skipped, noChecks, noFlakeCheck, spawnImpl, warnings, releaseIntegrationLock, securityGate = {} }) {
-  const queue = state.mergeQueue = { state: 'running', batchSize, batches: [], integrated: [], conflicts, checkFailed: [], skipped, securityBlocked: [], securityTickets: [] };
-  const securityPolicy = securityGate.policy ?? (await projectProfile(root))?.security;
+  const queue = state.mergeQueue = { state: 'running', batchSize, batches: [], integrated: [], conflicts, checkFailed: [], skipped, securityBlocked: [], securityTickets: [], securityNotes: [] };
+  const securityProfile = await projectProfile(root);
+  const securityPolicy = securityGate.policy ?? securityProfile?.security;
+  const securitySensitive = securityProfile?.sensitive !== false;
+  const securityCache = new Map();
+  const securityKey = await securityFingerprintKey(root);
   state.integratedFiles = [];
   state.integratedNewFiles = [];
   const persist = () => jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
@@ -4482,13 +4498,17 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, co
           else await write(root, change.file, change.bytes, false, change.mode);
         });
       }
-      result = noChecks ? { checks: [], checksPassed: true } : await runChecks(root, manifest.checks ?? [], changes.map(change => change.file), changes.filter(change => change.previous === null).map(change => change.file), spawnImpl, { baseCommit: state.baseCommit, noFlakeCheck, portBase, extraEnv: swarmEnv });
-      gate = await runSecurityGate({ changes: changes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: securityPolicy, exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root });
-      if (!gate.ok) result = { ...result, checks: [...(result.checks ?? []), { name: 'security-gate', status: 'failed', blocks: gate.blocks }], checksPassed: false };
-      if (gate.tickets.length) queue.securityTickets.push(...gate.tickets.map(ticket => ({ ...ticket, jobs: batch.map(plan => plan.job) })));
+      gate = await runSecurityGate({ changes: changes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: securityPolicy, exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: securitySensitive, fingerprintKey: securityKey, cache: securityCache });
+      // The gate runs BEFORE the project checks: a blocked batch never gets to execute its own code (tests, installs, postinstall scripts).
+      if (gate.ok) {
+        result = noChecks ? { checks: [], checksPassed: true } : await runChecks(root, manifest.checks ?? [], changes.map(change => change.file), changes.filter(change => change.previous === null).map(change => change.file), spawnImpl, { baseCommit: state.baseCommit, noFlakeCheck, portBase, extraEnv: swarmEnv });
+      } else {
+        result = { checks: [{ name: 'security-gate', status: 'failed', blocks: gate.blocks }], checksPassed: false };
+      }
+      for (const note of [...(gate.skipped ?? []), ...(gate.warnings ?? [])]) if (!queue.securityNotes.includes(note)) queue.securityNotes.push(note);
     } catch (error) { await journal.rollback(); throw error; }
     const failed = result.checksPassed === false;
-    queue.batches.push({ jobs: batch.map(plan => plan.job), checks: noChecks ? 'skipped' : failed ? 'failed' : 'passed', bisected: failed && batch.length > 1 });
+    queue.batches.push({ jobs: batch.map(plan => plan.job), checks: noChecks && gate?.ok !== false ? 'skipped' : failed ? 'failed' : 'passed', security: gate ? (gate.ok ? 'passed' : 'blocked') : 'skipped', bisected: failed && batch.length > 1 });
     warnings.push(...swarmCheckWarnings(result.checks));
     // Queue mode deliberately rolls failed batches back before bisecting. Plain integrate
     // retains its existing behavior: check failures never roll back its writes.
@@ -4500,6 +4520,7 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, co
       }
       if (batch.length === 1) queue.checkFailed.push({ job: batch[0].job, checks: result.checks.filter(check => !['passed', 'skipped'].includes(check.status)).map(check => check.name) });
     } else {
+      if (gate?.tickets?.length) queue.securityTickets.push(...gate.tickets.map(ticket => ({ ...ticket, jobs: batch.map(plan => plan.job) })));
       queue.integrated.push(...batch.map(plan => plan.job));
       state.integratedFiles.push(...changes.map(change => change.file));
       state.integratedNewFiles.push(...changes.filter(change => change.previous === null).map(change => change.file));

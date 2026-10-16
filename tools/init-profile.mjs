@@ -137,7 +137,7 @@ function validateStack(stack, errors) {
   return stack.map(({ name, packageManager }) => (packageManager === undefined ? { name } : { name, packageManager }));
 }
 
-const SECURITY_KEYS = ['enabled', 'minAgeDays', 'minWeeklyDownloads', 'blockSeverities', 'allowCopyleft', 'approvedLicenses', 'allowedSecretFingerprints'];
+const SECURITY_KEYS = ['enabled', 'minAgeDays', 'minWeeklyDownloads', 'blockSeverities', 'allowCopyleft', 'approvedLicenses', 'allowedSecretFingerprints', 'requireVulnerabilityScan', 'codeScan', 'codeScanSensitive'];
 const SECURITY_SEVERITIES = ['low', 'medium', 'high', 'critical'];
 
 function validateSecurity(value, errors) {
@@ -176,6 +176,18 @@ function validateSecurity(value, errors) {
     if (Array.isArray(value.allowedSecretFingerprints) && value.allowedSecretFingerprints.length <= 200
       && value.allowedSecretFingerprints.every(entry => typeof entry === 'string' && /^[0-9a-f]{12}$/.test(entry))) out.allowedSecretFingerprints = [...value.allowedSecretFingerprints];
     else errors.push('profile.security.allowedSecretFingerprints: array of at most 200 strings of exactly 12 lower-case hex characters');
+  }
+  if (value.requireVulnerabilityScan !== undefined) {
+    if (typeof value.requireVulnerabilityScan === 'boolean') out.requireVulnerabilityScan = value.requireVulnerabilityScan;
+    else errors.push('profile.security.requireVulnerabilityScan: must be true or false');
+  }
+  if (value.codeScan !== undefined) {
+    if (value.codeScan === 'auto' || value.codeScan === 'off') out.codeScan = value.codeScan;
+    else errors.push("profile.security.codeScan: must be 'auto' or 'off'");
+  }
+  if (value.codeScanSensitive !== undefined) {
+    if (typeof value.codeScanSensitive === 'boolean') out.codeScanSensitive = value.codeScanSensitive;
+    else errors.push('profile.security.codeScanSensitive: must be true or false');
   }
   return out;
 }
