@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0060",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Force-pushing an amended PR branch overwrote another contributor's work. A run amended its PR branch and pushed it, but another contributor had moved the remote head between the run's start and landing, so a force-push silently overwrote their work undetected.",
+  "rule": "Ship uses a lease-push for its own amended PR branch when the remote head is not an ancestor, and refuses outright when someone else moved it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `ship` pushes with `--force-with-lease=<branch>:<last-known-remote-sha>` when the PR author is the coordinator's own bot identity and the remote head is not an ancestor; it refuses (not lease-forces) when someone else moved the head. Regression coverage is in `tests/lessons120-ship.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#60"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0040",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "File-tools-only workers reported done with tests they never ran. A worker that can only read and edit files writes tests, then reports them passing, although nothing in its seat can execute them; the first real run of those tests happens only at integration.",
+  "rule": "A worker asked to add or change tested code needs a way to run the checks itself, inside a sandbox, and must report which checks it ran.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: claude `shell: true` jobs (presets `sonnet-shell`, `opus-shell`) run the whole worker under a generated seatbelt profile with a sandboxed shell and report `checksRun`; `validate` warns `tests-without-shell` when a claude job without a shell writes tests. Documentation: manifest reference.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "sandbox",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#40"
+  }
+}

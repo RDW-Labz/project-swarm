@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0149",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A test step that only ever runs inside real continuous-integration was replayed on a plain local machine and simply refused to run there. The step's own guard (checking for a CI-only environment variable) correctly stopped it before anything unsafe happened, but the wasted round-trip cost real time before the mistake was even understood.",
+  "rule": "A step gated on a CI-only signal — a CI-only environment variable, an operating-system check reserved for a runner, a marker meant only for real hardware, or a secret value — is never replayed locally; it is named and skipped instead, with the reason attached.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the CI-derived check reader now skips such a step and reports why. Regression coverage is in `tests/field-lessons-batch-s.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "ci",
+    "integration",
+    "secrets",
+    "spend"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#149"
+  }
+}

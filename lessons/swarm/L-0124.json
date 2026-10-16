@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0124",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A worker that replied in plain prose instead of the requested structured answer, having produced nothing at all, was still recorded as finished successfully. A missing declared result and a missing declared output together should never read as success.",
+  "rule": "A worker with no usable result and no output actually produced is never reported as finished successfully; a plain-language refusal is still a refusal.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: that combination is now recorded as failed with a specific reason, and a plain-language refusal naming what it needs is now parsed into the same structured refusal a well-formed one would produce. Regression coverage is in `tests/field-lessons-batch-o.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#124"
+  }
+}

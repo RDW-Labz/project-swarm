@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0362",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "Rendered UI changes need preview coverage. Require or warn for preview-harness checks covering affected views when rendered UI roots change, and identify UI roots without configured harness coverage.",
+  "rule": "Rendered UI changes need preview coverage.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "review-item",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "review"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#362"
+  }
+}

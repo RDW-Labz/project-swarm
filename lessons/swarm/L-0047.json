@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0047",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A version-only dependency bump left checks running against a stale environment. A lockfile-only resync trigger missed a manifest file (`pyproject.toml`/`package.json`/`Cargo.toml`) bumped without its lockfile moving, so the installed environment silently disagreed with the code.",
+  "rule": "Any dependency/version file counts as a resync trigger, not only its lockfile.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the env-resync trigger now also fires on these three files, and `validate` warns `stale-env-risk` when a job outputs one with no `preChecks` declared to resync it. Regression coverage is in `tests/lessons120-checks.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "installer",
+    "locking",
+    "manifest",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#47"
+  }
+}

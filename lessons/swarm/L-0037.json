@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0037",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A worker's edit outside its own declared outputs vanished without a trace. A worker changed a file that was in its context but not its outputs, said so plainly in its own result, and `integrate` wrote every declared output and said nothing about the rest — part of a fix was silently lost, discoverable only by re-reading the worker's notes by hand.",
+  "rule": "A path outside a job's declared outputs is never applied, so say so loudly the moment it is known, from either the worker's own account or the actual copy it worked in.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `inspect`/ `integrate` warn `dropped write: <path> (not in outputs)` for every path a job's own result names under `changed`, and — for a non-codex job, whose workspace is a plain copy — for any file that copy shows was actually modified or newly created outside that job's outputs; the worker preamble states plainly that edits outside outputs are discarded. Documentation: verification.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration",
+    "path-safety",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#37"
+  }
+}

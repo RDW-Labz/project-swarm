@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0172",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A shared contract or a job's own prompt could name a private term and still reach a public repository, because the existing private-names scan only ever looked at the lines a change would add to a diff. A contract file and a job prompt are both read by, and can both leak into, a public repository long before any diff exists to scan.",
+  "rule": "A contract or a job prompt for a public repository passes the same private-names scan a diff already gets, before any job is ever dispatched.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: dispatching a manifest now scans the shared contract's own text and every job's own prompt text against the configured private-names list, refusing before any workspace is created when a term is found, and skipping the scan entirely once the target repository is confirmed non-public. Regression coverage is in `tests/field-lessons-batch-w.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "prompt",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#172"
+  }
+}

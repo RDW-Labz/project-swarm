@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0049",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A test timeout under 5 seconds was a timing assertion in disguise. A short hang-guard passed reliably on a fast runner and flaked on a slow one, discovered only after it went red in CI.",
+  "rule": "A test timeout is a hang guard, never a timing assertion, and belongs at 5 seconds or more.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `validate` warns `tight-test-timeout` when an added test line contains a timeout literal under that floor. Regression coverage is in `tests/lessons120-checks.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "ci",
+    "flaky-test",
+    "test",
+    "timeout"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#49"
+  }
+}

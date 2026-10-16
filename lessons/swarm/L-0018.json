@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0018",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A mutant could not be declared before the code it targets existed. A build job's generated code held the only string a useful mutant's `find` could match, so that mutant could not be written into the manifest before the run even started, and the orchestrator fell back to a hand-written mutation loop again.",
+  "rule": "Let mutants be supplied once the code they target actually exists, under the same shape and cap as declared ones.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `integrate <run-id> --mutants --mutants-file FILE` loads mutants from a JSON array or `{mutants:[...]}`, and a job field `mutantsFile` (one of that job's own outputs) is collected automatically; `--mutant-check \"<argv json>\"` supplies the check when the manifest declares none. Documentation: manifest reference and verification.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "mutation-testing",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#18"
+  }
+}

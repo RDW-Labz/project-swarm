@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.82.0
+
+- Phase 15, part 1, the lessons loop: structured lessons (`swarm lessons add|list|show|stats|check|backfill|notes`, one JSON file per lesson under `lessons/<project>/`, secrets, emails, home paths and run ids refused); all 229 numbered field lessons and the 2 queue rows are backfilled (idempotent); "Watch out for" notes (up to 3, at the end of the prompt) added to ticket jobs by `swarm go --scope`; a golden eval set (`evals/`, 8 tasks from real failures, each proven red on the start and green on the solution) with `swarm eval list|validate|manifest|score|gate` and a per-model baseline gate. Design and use: docs/lessons-loop.md and docs/plans/phase15-lessons-design.md.
+- Built through the swarm: 8 modules/tests and 8 eval tasks as worker jobs (one rerun after a truncated file and a gate block); the command glue and wiring by hand.
+
 ## 1.81.0
 
 - Phase 13, scope to tickets to swarm: `swarm scope template|check|split|approve|sync|contracts`, `swarm tickets`, `swarm change "reason"` and `swarm go --scope`. One scope file becomes a ticket ledger (`.swarm/project/tickets.json`, with an append-only log); integrity checks (every requirement covered, every ticket traced, no two parallel tickets on one file, no cycles, sizes S or M); you approve the plan once; `go --scope` runs the ready tickets in waves; change orders cancel, reopen and add tickets without losing history.

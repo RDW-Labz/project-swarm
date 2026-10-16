@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0109",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A routing decision that retired a model from the cheap tier landed only in a decision log, not in the rulebook a model reads at boot, and jobs kept quietly routing to the old, pricier choice.",
+  "rule": "A routing decision only takes effect once it lands in the document the model actually reads before acting, not only in a record meant for humans.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: validation now warns when a job asks for the cheap tier on an agent pricier than the configured cheap-tier model, unless the job states a reason the cheaper model was skipped. Regression coverage is in `tests/field-lessons-batch-m2.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#109"
+  }
+}

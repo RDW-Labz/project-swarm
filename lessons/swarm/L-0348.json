@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0348",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "A human-review hold survives green checks. A held change stops before automatic merge and includes what changed, what could break and verification evidence. A later merge needs explicit human authorization.",
+  "rule": "A human-review hold survives green checks.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "review-item",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "merge-queue",
+    "review"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#348"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0142",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A shared task brief pointed to certain files as evidence a fix had landed, and one of those paths did not actually exist in the project, discovered only once someone went looking for it by hand.",
+  "rule": "A shared brief's own file references are checked against the real project before anyone trusts them.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: validation now reads a shared brief's own file references and warns when one names a path missing from the project. Regression coverage is in `tests/field-lessons-batch-q.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#142"
+  }
+}

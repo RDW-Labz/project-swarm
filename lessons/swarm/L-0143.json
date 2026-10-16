@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0143",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "A task's own success criterion named a diagnostic field to check, and the work that followed satisfied that literal wording while still never proving the one real case the field existed to catch, caught only at review.",
+  "rule": "A success criterion naming a diagnostic field must also say which real case it needs to tell apart, and the test plan for it should ask for one test per such case, not merely proof that the field exists.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the shared task template's own test-plan section now asks for exactly that. Template change only; no code check.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "review"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#143"
+  }
+}

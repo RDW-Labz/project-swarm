@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0192",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "An output placed under a shared or test directory could still carry a private term with nothing catching it before integration. A job's declared output landed under a shared skills directory or a fixtures/tests path and carried a private name or term, the same category an existing diff-wide scan already caught elsewhere, but that scan never looked at these directories specifically.",
+  "rule": "Any output under a shared, fixtures or tests path is scanned against the same private-names list used elsewhere, before it is ever integrated.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `validate`/ `integrate` now refuse `private-name` for an output under `shared/`, `fixtures/` or `tests/` whose content matches a configured private term. Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration",
+    "path-safety"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#192"
+  }
+}

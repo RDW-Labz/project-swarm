@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0008",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Three of four new guards lacked tests. Mutation testing found those gaps even though the worker's own test supposedly proved the fix.",
+  "rule": "Add one mutant per new guard before shipping and inspect each kill.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Documentation: verification.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "mutation-testing",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#8"
+  }
+}

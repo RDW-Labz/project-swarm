@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0014",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "The first real `redcheck` run misfired twice. A test command passed as one quoted string failed with an empty error, and on a follow-up job the run's base commit already contained the feature, so the check reported green even though the old code on the default branch actually failed most of the new tests.",
+  "rule": "Pass the test command as separate argv tokens, and check the run's base against the default branch before trusting a green result.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a spawn failure now returns a hint to pass separate argv tokens; `redcheck --base <ref>` restores from an explicit ref, and an omitted `--base` gets a `suggestBase` field and a warning when the run base is not an ancestor of the default branch tip. Documentation: manifest reference.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "test",
+    "tokens"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#14"
+  }
+}

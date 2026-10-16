@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0129",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A sandboxed worker's local-network access stayed wide open to every unused local port by default, an accepted risk noted for future tightening.",
+  "rule": "A sandbox's local-network access should be narrowable to only the ports a task actually needs, without changing today's default for a task that does not ask for it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a task may now name the exact local ports its sandbox is allowed to use; naming none leaves today's broader default unchanged. Regression coverage is in `tests/field-lessons-batch-o.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "sandbox",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#129"
+  }
+}

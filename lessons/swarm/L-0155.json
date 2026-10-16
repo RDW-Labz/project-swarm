@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0155",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A batch of automated builds landed on a base that was already failing its own checks, and nothing said so until much later. , when a still-later step needed to tell a pre-existing failure from one a build had just introduced and had no easy way to do it.",
+  "rule": "A base commit's own health is verified before anything is built on top of it, and a failure discovered afterward is labelled by whether it already existed on that base.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: dispatching a batch of automated builds now first verifies the base commit's own checks (a repeat run at the same base is answered from a cached verdict, not repeated), refusing to proceed onto a failing base without an explicit, reasoned override; a later failing check is labelled pre-existing or newly introduced by re-running it against that same base. Regression coverage is in `tests/field-lessons-batch-t1.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#155"
+  }
+}

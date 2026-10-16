@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0378",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "CI checks must match shell expansion. Expand CI globs as the shell does and infer shipping head and base from the selected branch and default branch.",
+  "rule": "CI checks must match shell expansion.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "build",
+    "ci"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#378"
+  }
+}

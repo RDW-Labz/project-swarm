@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0100",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A file carrying a worker's own evidence about which mutant killed which test was refused outright over one extra, purely informational field. The shape check treated every field it did not already know about as a hard error, with no room for a worker to attach its own supporting notes.",
+  "rule": "A documentation-only field is accepted with a warning, never a reason to refuse a file whose real content is otherwise valid.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: two such fields are now accepted and carried through, and a worker's own claim about which test killed a mutant is compared against what actually failed, warning on a mismatch instead of trusting it blindly. Regression coverage is in `tests/field-lessons-batch-l.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "mutation-testing",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#100"
+  }
+}

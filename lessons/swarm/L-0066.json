@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0066",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Two of fifteen mutants had a find string that was not in the file. A cheap-tier job wrote mutants from diffs; two multi-line `find` blocks carried the wrong indentation and matched nothing, caught only because the coordinator counted each by hand.",
+  "rule": "Count every mutant's find in its target before a mutants run.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `mutants` and `integrate --mutants` refuse the whole run before any check or write, listing each `invalid-find` / `ambiguous-find` / `no-op` mutant; `mutants --dry-run` does only that. Regression coverage is in `tests/field-lessons-batch-e.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "mutation-testing",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#66"
+  }
+}

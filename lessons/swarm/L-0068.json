@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0068",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A worker ran a bare git stash in a shared worktree. An outside UI worker ran `git stash` / `git stash pop` in a worktree whose stash stack is shared with every other worktree and session; the stack happened to be empty, so nothing was lost.",
+  "rule": "Workers never use `git stash`; they use a temporary WIP commit.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: shell and codex prompts and the `env --print` block carry the rule, and a shell worker's `git` is a wrapper that refuses `stash` with a plain message. Regression coverage is in `tests/field-lessons-batch-e.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "prompt",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#68"
+  }
+}

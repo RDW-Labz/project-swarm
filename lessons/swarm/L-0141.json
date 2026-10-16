@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0141",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "deploy",
+  "what": "A full check run performed inside an already-sandboxed worker showed several failures that were purely the host's own security layer refusing a nested sandbox call, not a real problem with the change, and nothing separated those from genuine failures short of opening each one by hand.",
+  "rule": "A failure whose own output names that exact kind of nested-sandbox refusal is not a real failure and must never be counted as one.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the check runner now recognizes that specific wording in a failing check's own output and tags the result sandbox-only, excluded from the fail count. Regression coverage is in `tests/field-lessons-batch-q.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "deploy",
+    "sandbox",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#141"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0095",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A worker's required inputs sat untracked next to files it was actually given, and there was no way to say a job could delete something. A job's own directory held extra, untracked files the job needed but was never handed, and separately, a worker whose task genuinely required removing a file had no way to say so, since the standard instruction flatly forbade deletion.",
+  "rule": "A directory that holds untracked siblings to what a job was given is worth flagging, and a job that must delete something says exactly what, in the open.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: validation now warns when a context file's own directory holds untracked files never named to the job, and a job can now declare exactly which paths it may remove; only a path declared this way is ever actually deleted, and removing anything else is refused by name. Regression coverage is in `tests/wire-125.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#95"
+  }
+}

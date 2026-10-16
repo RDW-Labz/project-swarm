@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0011",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "A bare HTTP 307 hid a renamed repository. `ship` failed at PR creation with only an opaque redirect code; the git remote already pointed at the repository's new name.",
+  "rule": "Derive the repo from the git remote instead of trusting a stale flag, and explain a redirect as a possible rename.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `ship` derives `--repo` from `git remote get-url origin` when it is omitted, warns when a given `--repo` differs from origin, and appends `(repo moved? origin is OWNER/NAME)` to any GitHub CLI error containing `HTTP 301`, `302`, `307`, or `308`. Documentation: manifest reference.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "build",
+    "manifest"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#11"
+  }
+}

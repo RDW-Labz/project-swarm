@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0089",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A test suite wrote real fixture rows into a live audit log. Running the test suite left fixture organization names and fixture reasons sitting in the genuine, on-disk audit log a real release would read.",
+  "rule": "Tests never write under the real install location.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the audit log's own path is now overridable by an environment variable that every test sets to a temporary directory, with a test asserting the real log stays untouched after the suite runs. Regression coverage is in `tests/ship-125.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "installer",
+    "path-safety",
+    "release",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#89"
+  }
+}

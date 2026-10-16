@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0170",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A test that reads its own fixture from a path nobody actually commits works for whoever wrote it and fails for everyone else. A test file referenced a fixture sitting under a directory version control was told to ignore, so the fixture existed only on the machine that happened to write the test, and disappeared the moment anyone else checked the branch out fresh.",
+  "rule": "A test file's own fixture references must name a path version control will actually carry along with the test, never one it has been told to skip.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: publishing a change now scans a test file's own newly added lines for a quoted, file-like path and checks whether version control would ignore it, refusing before anything ships when it finds one (with a documented, reasoned way to excuse a specific file); review performs the same scan and warns instead of refusing. Regression coverage is in `tests/field-lessons-batch-v.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "review",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#170"
+  }
+}

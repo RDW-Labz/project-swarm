@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0039",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "scope",
+  "what": "The same directory-drift gap had two different warnings, and the general one still missed a real case. A contextGlob-specific warning was added in the runner itself because the module that owned the general context-drift check was out of scope for that job; once back in scope, the general check turned out to still miss a job's own context naming just one or two files of an obviously numbered series (e.g.",
+  "rule": "A declared prefix, or even a single context file that is plainly one of a numbered series, is already strong evidence of a series — no arbitrary floor should suppress it — and one drift check should own the whole story instead of two overlapping ones.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `contextDirectoryWarnings` now also groups by an inferred numbered-stem prefix (or a declared `contextGlob` prefix) with no minimum-file floor, alongside its original plain-extension grouping (still 3+ files, to avoid noise on ordinary source directories); both report the single `context-directory-drift` code, and the runner's separate contextGlob-only warning was removed. Documentation: manifest reference.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "scope"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#39"
+  }
+}

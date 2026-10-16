@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0135",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A verification command used to score a set of deliberate code changes turned out unable to run at all, yet every one of those changes still came back with a result that looked like a completed score.",
+  "rule": "A verification command has to prove it can pass on the unmodified code before its result means anything.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: that command now runs once, unmodified, before any deliberate change is scored; a command that still cannot pass refuses outright, naming why, and any change that comes back unscorable is now called out plainly rather than silently averaged in. Regression coverage is in `tests/field-lessons-batch-p.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#135"
+  }
+}

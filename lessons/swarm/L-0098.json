@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0098",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "A name that must never appear in a public repo had no automated guard against it. A term internal reviewers all knew to keep out of a public project's history relied entirely on every contributor remembering not to type it, with nothing to catch a slip before it was pushed.",
+  "rule": "A name that must never reach a public diff is checked by a tool, not by memory alone.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: shipping now reads an optional list of such terms and refuses, before pushing, when any line the diff actually adds contains one — naming the file and line, never the text itself — but only against a repo actually reported public; a private or internal repo, or a project with no such list, ships as before (the result records that no list was found; it is not a warning). Regression coverage is in `tests/private-names-125.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "review"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#98"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0087",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "deploy",
+  "what": "A scratch file committed into a release surfaced only a branch later. A short-lived scratch document, never meant to be tracked, rode into a commit and was noticed only once a later, stacked branch showed it as modified.",
+  "rule": "A change that adds a scratch-shaped file never enters a commit unmerged.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: pushing a reviewed change now refuses when its diff adds a file matching a small set of known scratch patterns, naming the offending path, unless an explicit, reasoned exemption names that exact file. Regression coverage is in `tests/ship-125.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "deploy",
+    "path-safety",
+    "release",
+    "review"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#87"
+  }
+}

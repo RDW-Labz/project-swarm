@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "L-0025",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "A no-shell worker was asked to reproduce a failure it could never see run. A job prompt quoted a failure from a runtime check, but the assigned worker had no shell and so could never rerun the harness/e2e/ preview suite that produced it.",
+  "rule": "Warn when a runtime-check failure lands in a no-shell worker's prompt, and suggest a shell agent or measured evidence instead.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `run` warns \"worker cannot reproduce; consider a shell agent or --evidence\" when a job prompt quotes a failure from a check whose name contains `harness`, `e2e`, `playwright`, or `preview`, or the words \"Timeout\" and \"waitFor\", and the agent has no shell. Documentation: manifest reference.",
+  "guard": {
+    "kind": "review-item",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "prompt",
+    "review",
+    "timeout",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#25"
+  }
+}

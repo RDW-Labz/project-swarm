@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0019",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "A failed job kept only \"missing output,\" not why. A worker exited non-zero, or wrote none of its declared outputs, and the run reported only `Missing output (deletions are never propagated): <file>`; the worker's own explanation — a `blocked` envelope naming what it needed, or a provider's plain \"out of credits\" line — lived only in an unread stderr log.",
+  "rule": "Keep a worker's own failure reason next to the job record, and never let a later generic message stand in for a `blocked` envelope.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the last 4 KB of stdout/stderr are saved to `agent.log` and summarized as `agentError` (exit code plus the first matching blocked/credit/quota/rate-limit/auth line, else the last stderr line), shown in `inspect`/`inspect --results`, with secrets redacted; a worker's own `blocked` envelope is reported as job status `blocked` with its summary instead. Documentation: verification.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "build",
+    "redaction",
+    "secrets",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#19"
+  }
+}

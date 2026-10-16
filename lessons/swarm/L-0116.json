@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0116",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A scouting tool's license gate was a fixed list built for source code, so a search explicitly allowed to use permissive asset licenses had every real result rejected, and an extra report section the search brief asked for was silently dropped by a fixed report layout.",
+  "rule": "The list of allowed licenses is exactly what the search brief says it is, not a fixed built-in assumption, and an extra section a brief asks for must survive into the final report.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the allowed-license list can now be replaced outright from a file or a plain list, a preset exists for common permissive asset licenses (flagging the one that requires attribution), and any extra section a report includes now renders in the final document. Regression coverage is in `tests/field-lessons-batch-n.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#116"
+  }
+}

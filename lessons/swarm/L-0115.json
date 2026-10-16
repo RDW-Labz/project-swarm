@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0115",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "A named license exception for one specific package was written down as prose for a worker to remember, and the automatic license gate rejected that same package anyway, needing a manual fix afterward.",
+  "rule": "A named exception is configuration a gate enforces, not prose a worker or a later reviewer has to remember.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a scouting tool now accepts a repeatable per-package license exception that keeps a matching pick in the results, distinctly marked, while every other pick under the same license is still rejected. Regression coverage is in `tests/field-lessons-batch-n.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "review",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#115"
+  }
+}

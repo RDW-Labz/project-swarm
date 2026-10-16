@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0023",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A dependency lockfile changed and nobody resynced the environment. An integrated run touched a lockfile, and the checks that followed ran against an environment nobody had reinstalled into, giving misleading results.",
+  "rule": "Let a manifest declare commands to run before checks whenever a lockfile changed, and warn plainly when it doesn't.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `integrate` runs an optional manifest `preChecks` (an argv array) before its checks whenever an integrated file matches a lockfile pattern (`uv.lock`, `package-lock.json`, `Cargo.lock`, `pnpm-lock.yaml`); with a changed lockfile and no `preChecks` declared, it warns \"lockfile changed, env not synced\". Documentation: manifest reference.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration",
+    "locking",
+    "manifest"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#23"
+  }
+}

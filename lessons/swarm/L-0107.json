@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0107",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Two workers sharing one machine both burned their last minutes in a sleep-and-poll loop, waiting on a full test suite each had launched in the background, and both timed out with nothing to show for it even though their real work was already finished. A shell worker told to \"run the full suite\" ran it itself, in the background, and then polled it by sleeping — exactly the kind of busy-waiting that starves a shared machine when two such workers land on it at once.",
+  "rule": "A worker runs only its own new or changed files; the full suite is the orchestrator's job, run once, after the fact.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a worker's own instructions now say so directly; integrating a timed-out job can now accept its already-finished, hash-checked outputs instead of discarding them; starting two shell jobs that share a root and both ask for a full suite now warns up front; and a timeout result now names what the transcript was last doing when time ran out. Regression coverage is in `tests/field-lessons-batch-m2.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test",
+    "timeout",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#107"
+  }
+}

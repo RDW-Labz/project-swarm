@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0036",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A mutation check ran, and reported, against a red base. One of a run's checks failed, but `integrate --mutants` still applied and checked every mutant and reported each one \"killed\" — a result that looked like passing mutation coverage but proved nothing, since a failing base kills every mutant regardless of the guard being tested.",
+  "rule": "Mutants only count against a base that is actually green.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `integrate --mutants` reports every mutant `skipped-red-base` (and `mutantsPassed: false`) whenever any check failed, instead of actually running them; `ship --require-section \"Mutation check\"` refuses outright when the integrated run's mutants came from a red base. Documentation: manifest reference.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration",
+    "manifest",
+    "mutation-testing"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#36"
+  }
+}

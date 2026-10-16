@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0062",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A test that shells out to a host binary was never checked before ship. A test file called an undocumented host system binary outside the shipped code's own control, and ship did not catch it before integration, so the test could fail mysteriously in CI even though it passed locally.",
+  "rule": "A test that shells out to a host binary needs a fake, a skip seam, or a documented allowlist; ship checks this before pushing.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `ship` refuses when a test file spawns a binary outside the allowlist (defined in the project's own `check:ci-like` script) with no fake or skip seam, and runs the check under a stripped environment to match CI conditions exactly. Regression coverage is in `tests/lessons120-ship.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "ci",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#62"
+  }
+}

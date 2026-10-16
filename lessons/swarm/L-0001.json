@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0001",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "Denied reads lost finished work. A completed output was treated as a failed job solely because reads outside its context were denied.",
+  "rule": "Preserve finished work, warn for denial-only success, and retain changed outputs on other failures.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the runner records capped warnings and `keptWorkspace`, keeps failed runs blocked from integration, and adds a context-only read reminder. Regression coverage is in `tests/lessons.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#1"
+  }
+}

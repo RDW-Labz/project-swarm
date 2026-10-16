@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-5001",
+  "project": "swarm",
+  "date": "2026-10-15",
+  "stage": "build",
+  "what": "Remote hosts (ssh/sandbox) never ran a job. defaultHostTransport.run sends {id, files, outputs} with no command, and swarm-remote-exec (tools/remote-exec.mjs) waits forever when the request has no command and returns files: []. Found on 2026-10-14 by feeding the transport's real payload to remote-exec; it only ever passed with stub transports (tests/executors-run.test.mjs). dev2 later proved reachable over real ssh.",
+  "rule": "A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "In the next phase PR: send the agent command and args in the request, run it remotely in the shipped workspace, return the declared outputs with sha256, and add a test against a real ssh host (dev2) that skips when no host is configured.",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "build",
+    "sandbox",
+    "ssh-remote",
+    "tool"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#1"
+  }
+}

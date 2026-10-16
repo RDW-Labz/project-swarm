@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0128",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "merge",
+  "what": "During a stretch when no automated task was running at all, only hand-run steps happened one after another, wasting time nothing was actively working during. The only queued work at that point belonged to a different, not-yet-started track of work, and nothing suggested starting it.",
+  "rule": "When the only queued work belongs to a not-yet-started track, its first, read-only step should start during idle stretches instead of nothing running at all.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the idle-time warning now offers a hint naming that first step, and the same hint is available as its own on-demand command. Regression coverage is in `tests/field-lessons-batch-o.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "merge"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#128"
+  }
+}

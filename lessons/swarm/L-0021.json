@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0021",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "A toolchain path had days left before macOS deleted it. A named tool path and a check's own argv binary both resolved under a temp directory that macOS silently clears after a few days unread.",
+  "rule": "Warn as soon as a resolved binary lives under a temp directory unsafe to leave unattended.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `doctor` warns when a named tool path, or a check argv binary, resolves under `/tmp` or `/private/tmp`, naming the macOS three-day cleanup and telling the operator to move the toolchain. Documentation: manifest reference.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "build",
+    "manifest",
+    "path-safety"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#21"
+  }
+}

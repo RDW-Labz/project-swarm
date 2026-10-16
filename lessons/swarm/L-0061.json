@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0061",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A platform-only CI failure hid which OS actually failed. A rollup of CI results across multiple OS/job matrix entries showed a failure without saying which platform was red, so the cause had to be rediscovered by hand instead of being named in the run report.",
+  "rule": "Name the platform when a CI failure is red on only some OS/job matrix entries, not all.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `ship` prints `platform-only failure: <os>` with the failing test ids when a CI failure lands on only a subset of the OS/job matrix. Regression coverage is in `tests/lessons120-ship.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "ci",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#61"
+  }
+}

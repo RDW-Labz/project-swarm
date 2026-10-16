@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0176",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A validator gained a second bound check on a file that already had one mutant covering it, and the new comparison went completely untested, because coverage was only ever tracked once per file, never once per line. A file-level coverage count reads as satisfied the moment any one comparison on that file has a mutant, even while a second, unrelated comparison added later has none at all.",
+  "rule": "A mutant is required for every pass-bar comparison a change adds, not just once per file that comparison happens to live in.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: mutation testing now also warns, at the line level, when a new or changed comparison operator has no mutant whose own target text actually touches that exact line, layered over the existing file-level warning rather than replacing it. Regression coverage is in `tests/field-lessons-batch-w.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "mutation-testing",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#176"
+  }
+}

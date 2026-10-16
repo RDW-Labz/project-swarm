@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "L-5002",
+  "project": "swarm",
+  "date": "2026-10-15",
+  "stage": "build",
+  "what": "On 2026-10-15 swarm update 1.62.0 to 1.65.0 did not create ~/.local/bin/swarm or the completion file. updateInstall runs inside the old process, whose already-loaded install.mjs ran, so install steps added by the new release never ran on the update that introduced them. Running node tools/install.mjs --user afterwards fixed it.",
+  "rule": "An updater must run the installer of the version it installs, in a fresh process, not the code already loaded.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "In the next phase PR: after checking out the new tag, run node <root>/tools/install.mjs --user in a child process and report its result; add a test that update from an older fixture install creates the swarm command.",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "build",
+    "installer",
+    "release",
+    "tool",
+    "updater"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#2"
+  }
+}

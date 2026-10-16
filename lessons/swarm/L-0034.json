@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0034",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "A review round's copied context missed an entire new capture kind, and the existing drift warning stayed quiet. A round's context was copied from the previous one, and a new kind of screenshot capture landed in the same directory alongside the files the context already listed; the reviewer reported the new captures as still missing.",
+  "rule": "A job that names one capture kind by directory glob should name every kind actually captured there, not just the first one noticed.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `validate` warns when a job's `contextGlob` entries for one directory cover only some of that directory's filename prefixes, naming the covered prefixes and up to 5 uncovered files; declaring one `contextGlob` entry per prefix (multiple entries already work against the same directory) closes the gap. Documentation: manifest reference.",
+  "guard": {
+    "kind": "review-item",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "review"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#34"
+  }
+}

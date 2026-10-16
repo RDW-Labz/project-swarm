@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0171",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A shell job's own scratch directory lived under the install checkout by default, which the install checkout being its own git repository could still place it inside of. A prior fix moved a shell job's scratch base under the install root instead of the OS temp directory, but \"the install root\" is itself a git checkout on a default install, so the very defensive check meant to keep scratch data outside any repository could fire on the first job a fresh install ever ran.",
+  "rule": "A scratch base must be proven outside any repository at install-check time, not only discovered the first time a job hits it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the default scratch base is now a sibling of the install checkout, never a path inside it, honoring the same override an operator could already set; a version-check command now runs the identical outside-repository assertion itself and reports the result, instead of a job only ever finding out by refusing. Regression coverage is in `tests/field-lessons-batch-w.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "installer",
+    "path-safety",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#171"
+  }
+}

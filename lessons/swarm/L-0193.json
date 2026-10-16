@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0193",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A job's declared outputs could exceed what the model could actually return, discovered only once the request itself came back truncated. An API job's own declared output files, summed, exceeded its configured output-token cap, so a run that looked valid at dispatch time was destined to come back cut off.",
+  "rule": "A job's declared outputs are sized against its own output cap before it ever dispatches, not after.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `validate` now warns and refuses `output-cap-too-small` when a job's estimated declared-output size exceeds its configured `maxOutputTokens`. Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test",
+    "tokens"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#193"
+  }
+}

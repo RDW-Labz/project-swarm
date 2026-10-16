@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0345",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "Externally validated values need an accepting rule. Cite the consumer's validation rule or an existing example before choosing a contract value. Resource validation belongs to the consuming scheduler; the shared contract template records the evidence.",
+  "rule": "Externally validated values need an accepting rule.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "build",
+    "ci"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#345"
+  }
+}

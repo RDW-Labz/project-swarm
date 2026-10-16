@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0198",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A sandboxed job's scratch directory was not reliably reachable from inside its own sandbox. A per-job scratch directory created outside the repository still was not consistently readable or writable from inside a sandboxed job, because the directory could be granted only in the form it was created with, while the job's own runtime resolved it through a different, equivalent path (for example a symlinked temp root), and an ancestor directory needed for the job's own path resolution was not granted either.",
+  "rule": "A scratch-directory grant covers every real path a sandboxed job could use to reach it, including a resolved-symlink form and the metadata reads its own ancestors need, and the job's environment names that directory consistently.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the sandbox profile now grants a per-job scratch directory in both its raw and resolved-symlink forms, plus ancestor file-read-metadata access; the job's environment exports the standard temp-directory variables pointing at it, and the directory is removed once the job finishes unless an explicit keep-temp override is set. Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "sandbox",
+    "symlink",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#198"
+  }
+}

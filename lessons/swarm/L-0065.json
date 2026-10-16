@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "L-0065",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Every worker's first harness run failed on a missing env var. Three expensive-tier outside workers each hit \"set the browsers path\" on their first harness run; the coordinator had to send the toolchain env to each one mid-run, because it lived only in task prose.",
+  "rule": "Every check, and every prompt that runs one, carries the toolchain env.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a per-root `.swarm/env.json` is applied to every setup, worker, check, redcheck and mutant check; `validate` warns `check-needs-env` for a toolchain check with no env file; `env --print` prints a paste-ready block for outside agents' prompts. Regression coverage is in `tests/field-lessons-batch-e.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "mutation-testing",
+    "path-safety",
+    "prompt",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#65"
+  }
+}

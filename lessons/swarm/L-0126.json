@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0126",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A sandbox warning kept firing on a path that the sandbox actually allowed. The warning had no idea that a shared toolchain location was specifically granted, so it repeated itself every single time regardless. Separately, there was no single place to see what a sandboxed worker's access actually looked like; it had to be pieced together by hand.",
+  "rule": "A path a sandbox actually grants is never denied; the effective access a sandbox grants should be one command away.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the warning now recognizes granted paths and stays quiet about them; a new diagnostic command prints the whole effective sandbox profile as structured output. Regression coverage is in `tests/field-lessons-batch-o.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "sandbox",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#126"
+  }
+}

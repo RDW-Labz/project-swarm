@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0356",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Design-only jobs should not be blocked by sandbox tests. Documentation-only Codex jobs read and grep without tests or installs; a sandbox test failure is not a reason to block the job.",
+  "rule": "Design-only jobs should not be blocked by sandbox tests.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "installer",
+    "sandbox",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#356"
+  }
+}

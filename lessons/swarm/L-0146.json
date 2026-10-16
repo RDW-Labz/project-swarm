@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0146",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Copies a tool itself placed into a job's own workspace were reported as if the job had written them. A batch of otherwise ordinary warnings about unexplained files buried the one that actually mattered, because every copy the tool had seeded there on the job's behalf (never touched by the job at all) triggered the very same warning as a real stray write.",
+  "rule": "A file a tool seeds into a workspace is never reported as that job's own dropped write, unless its content no longer matches what was actually seeded there, which is the one real sign something else edited it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: dropped- write detection now compares a seeded path against the content hash recorded at seed time, before ever flagging it. Regression coverage is in `tests/field-lessons-batch-s.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#146"
+  }
+}
