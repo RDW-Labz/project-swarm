@@ -50,6 +50,9 @@ export function validateUpOptions(options) {
   if (options.bestOf !== undefined && !(Number.isInteger(options.bestOf) && options.bestOf >= 1 && options.bestOf <= 8)) throw fail('gpu-option-invalid', 'bestOf must be a whole number from 1 to 8');
   if (options.maxHours !== undefined && !isPosNum(options.maxHours)) throw fail('gpu-option-invalid', 'maxHours must be above 0');
   if (options.sshPort !== undefined && !(Number.isInteger(options.sshPort) && options.sshPort >= 1 && options.sshPort <= 65535)) throw fail('gpu-option-invalid', 'sshPort must be a whole number from 1 to 65535');
+  const mode = options.mode ?? 'vm';
+  if (mode !== 'vm' && mode !== 'container') throw fail('gpu-option-invalid', "mode must be 'vm' or 'container'");
+  if (options.probePorts !== undefined && (!Array.isArray(options.probePorts) || options.probePorts.length > 8 || options.probePorts.some(port => !Number.isInteger(port) || port < 1 || port > 65535))) throw fail('gpu-option-invalid', 'probePorts must be an array of at most 8 whole ports from 1 to 65535');
   const args = options.args ?? [];
   if (!Array.isArray(args) || args.some(item => typeof item !== 'string' || !/^[A-Za-z0-9._=:/-]{1,80}$/.test(item))) throw fail('gpu-option-invalid', 'extra server arguments may only hold letters, digits and . _ = : / -');
 }
@@ -89,6 +92,46 @@ export function remoteStartScript({ model, image, gpus, maxModelLen, perReplica,
 }
 
 export const remoteStopScript = () => 'docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1 || true\nrm -f "$HOME/.swarm-vllm.env"\n';
+
+// Container mode (the node is itself a container running the pinned vLLM image): the same key handling, with vllm run directly.
+export function containerStartScript({ model, gpus, maxModelLen, perReplica, args = [], seconds, remotePortBase, apiKey }) {
+  if (typeof apiKey !== 'string' || !KEY_RE.test(apiKey)) throw fail('gpu-key-invalid', 'api key must be 48 lower-case hex characters');
+  const lines = [`setsid nohup sh -c 'sleep ${Math.ceil(seconds)}; pkill -f "vllm serve" >/dev/null 2>&1; rm -f "$HOME/.swarm-vllm.env"' >/dev/null 2>&1 </dev/null &`, 'set -e', 'pkill -f "vllm serve" >/dev/null 2>&1 || true', 'rm -f "$HOME/.swarm-vllm.env"', 'umask 077', 'cat > "$HOME/.swarm-vllm.env" <<\'SWARMKEY\'', `VLLM_API_KEY=${apiKey}`, 'SWARMKEY'];
+  for (const { index, remote } of replicaPorts(gpus, { remotePortBase })) {
+    lines.push(`CUDA_VISIBLE_DEVICES=${index} VLLM_API_KEY="$(sed -n 's/^VLLM_API_KEY=//p' "$HOME/.swarm-vllm.env")" setsid nohup vllm serve ${model} --served-model-name ${model} --host 127.0.0.1 --port ${remote} --max-model-len ${maxModelLen} --max-num-seqs ${perReplica} --gpu-memory-utilization 0.9 --enable-prefix-caching ${args.join(' ')} > "$HOME/.swarm-vllm-${index}.log" 2>&1 </dev/null &`);
+  }
+  lines.push('rm -f "$HOME/.swarm-vllm.env"');
+  return `${lines.join('\n')}\n`;
+}
+
+export const containerStopScript = () => 'pkill -f "vllm serve" >/dev/null 2>&1 || true\nrm -f "$HOME/.swarm-vllm.env"\n';
+
+// Host part of a /proc/net/tcp(6) local address: IPv4 or IPv6 words are little-endian; returns text, or null when not recognised.
+export function hostFromProcAddr(hex) {
+  if (typeof hex !== 'string' || !/^[0-9A-Fa-f]+$/.test(hex)) return null;
+  if (hex.length === 8) return [6, 4, 2, 0].map(at => parseInt(hex.slice(at, at + 2), 16)).join('.');
+  if (hex.length !== 32) return null;
+  const bytes = [];
+  for (let word = 0; word < 4; word++) for (let b = 3; b >= 0; b--) bytes.push(parseInt(hex.slice(word * 8 + b * 2, word * 8 + b * 2 + 2), 16));
+  if (bytes.every(item => item === 0)) return '::';
+  if (bytes.slice(0, 10).every(item => item === 0) && bytes[10] === 0xff && bytes[11] === 0xff) return `::ffff:${bytes.slice(12).join('.')}`;
+  if (bytes.slice(0, 15).every(item => item === 0) && bytes[15] === 1) return '::1';
+  return `ipv6:${hex}`;
+}
+
+// LISTEN sockets ({ host, port }) from the text of /proc/net/tcp and /proc/net/tcp6.
+export function listeningFromProc(text) {
+  const out = [];
+  for (const line of String(text).split('\n')) {
+    const cols = line.trim().split(/\s+/);
+    if (cols[0] === 'sl' || cols.length < 4 || cols[3] !== '0A') continue;
+    const m = /^([0-9A-Fa-f]+):([0-9A-Fa-f]+)$/.exec(cols[1]);
+    if (!m) continue;
+    const host = hostFromProcAddr(m[1]);
+    if (host !== null) out.push({ host, port: parseInt(m[2], 16) });
+  }
+  return out;
+}
 
 // The health check and status calls send the rental's key; the key is never logged.
 export function authFetch(fetchImpl, key) {
@@ -130,8 +173,8 @@ async function resolveHost({ base, target, ssh }) {
 }
 
 // The exposure detail (string) when a replica port is reachable from outside, or null. Probes every resolved address first, then the
-// node's ss listing. Throws gpu-exposure-unknown when the check cannot be made.
-async function findExposure({ base, target, shown, ports, ssh, sshArgs, probePort, lookup }) {
+// node's listing (ss -ltnH, or /proc/net/tcp in container mode, which also probes options.probePorts). Throws gpu-exposure-unknown when the check cannot be made.
+async function findExposure({ base, target, shown, ports, ssh, sshArgs, probePort, lookup, container = false, probePorts = [] }) {
   const host = await resolveHost({ base, target, ssh });
   const detail = port => `port ${port} on ${shown} is reachable from outside; the servers must listen on the node loopback only`;
   let addresses;
@@ -139,15 +182,24 @@ async function findExposure({ base, target, shown, ports, ssh, sshArgs, probePor
     addresses = lookup ? await lookup(host) : await dns.promises.lookup(host, { all: true });
   } catch { throw fail('gpu-exposure-unknown', `could not resolve ${host} to check the node's exposure`); }
   if (!Array.isArray(addresses) || !addresses.length) throw fail('gpu-exposure-unknown', `no address for ${host} to check the node's exposure`);
+  const probeList = [...ports.map(item => item.remote), ...(container ? probePorts : [])];
   for (const item of addresses) {
     const address = item?.address;
-    for (const { remote } of ports) if (await probePort(address, remote)) return detail(remote);
+    for (const port of probeList) if (await probePort(address, port)) return detail(port);
+  }
+  const listening = new Set(ports.map(item => item.remote));
+  if (container) {
+    let text;
+    try { text = String((await ssh([...sshArgs, 'cat /proc/net/tcp /proc/net/tcp6'], {}))?.stdout ?? ''); } catch { throw fail('gpu-exposure-unknown', 'could not read the node listening sockets (/proc/net/tcp)'); }
+    const sockets = listeningFromProc(text);
+    if (!sockets.length) throw fail('gpu-exposure-unknown', 'could not read the node listening sockets (/proc/net/tcp)');
+    const hit = sockets.find(item => listening.has(item.port) && !isLoopback(item.host));
+    return hit ? detail(hit.port) : null;
   }
   let out;
   try {
     out = String((await ssh([...sshArgs, 'ss -ltnH'], {}))?.stdout ?? '');
   } catch { throw fail('gpu-exposure-unknown', 'could not read the node listening sockets (ss -ltnH)'); }
-  const listening = new Set(ports.map(item => item.remote));
   for (const line of out.split('\n')) {
     if (!line.trim()) continue;
     const mentioned = ports.find(item => line.includes(`:${item.remote}`));
@@ -218,31 +270,43 @@ export async function gpuUp(options, deps) {
   const sshBase = [...sshOptions, ...SSH_HARDENING, '-o', 'ClearAllForwardings=yes', '-i', options.key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=20'];
   const sshArgs = [...sshBase, '--', options.target];
   const shown = options.target.split('@').pop();
-  const output = String((await ssh([...sshArgs, 'nvidia-smi -L; echo SUDO:$( { [ "$(id -u)" = 0 ] || sudo -n true; } >/dev/null 2>&1 && echo ok || echo no); echo DOCKER:$(docker version --format "{{.Server.Version}}" 2>/dev/null)'], {})).stdout);
+  const container = options.mode === 'container';
+  const probeCommand = container
+    ? 'nvidia-smi -L; echo VLLM:$(command -v vllm || true); echo ROOT:$(id -u)'
+    : 'nvidia-smi -L; echo SUDO:$( { [ "$(id -u)" = 0 ] || sudo -n true; } >/dev/null 2>&1 && echo ok || echo no); echo DOCKER:$(docker version --format "{{.Server.Version}}" 2>/dev/null)';
+  const output = String((await ssh([...sshArgs, probeCommand], {})).stdout);
   const count = parseGpuCount(output);
-  const dockerMajor = parseDockerMajor(output);
-  if (dockerMajor === null || dockerMajor < 28) {
-    const reported = String(output).split('\n').map(item => item.trim()).find(item => item.startsWith('DOCKER:'))?.slice('DOCKER:'.length).trim() || 'unknown';
-    throw fail('gpu-docker-old', `the node has Docker ${reported}; version 28 or newer is required (older Docker lets other hosts on the same network reach ports published on 127.0.0.1)`);
+  if (!container) {
+    const dockerMajor = parseDockerMajor(output);
+    if (dockerMajor === null || dockerMajor < 28) {
+      const reported = String(output).split('\n').map(item => item.trim()).find(item => item.startsWith('DOCKER:'))?.slice('DOCKER:'.length).trim() || 'unknown';
+      throw fail('gpu-docker-old', `the node has Docker ${reported}; version 28 or newer is required (older Docker lets other hosts on the same network reach ports published on 127.0.0.1)`);
+    }
   }
   if (count < 1) throw fail('gpu-none', 'no GPU found on the node (nvidia-smi -L listed none)');
-  const powerOff = !output.includes('SUDO:no');
-  if (!powerOff) {
+  if (container) {
+    const vllmLine = String(output).split('\n').map(item => item.trim()).find(item => item.startsWith('VLLM:'));
+    if (!(vllmLine ?? '').slice('VLLM:'.length).trim()) throw fail('gpu-no-vllm', 'the node has no vllm command; container mode needs an instance that runs the vLLM image');
+  }
+  const powerOff = container ? false : !output.includes('SUDO:no');
+  if (!container && !powerOff) {
     if (options.allowNoPowerOff !== true) throw fail('gpu-sudo', 'passwordless sudo is not available on the node, so the timer cannot power it off; fix that or pass --allow-no-poweroff (then billing continues until you terminate the instance)');
     log('warning: passwordless sudo is not available; the timer will remove the servers but cannot power the node off, so billing continues until you terminate the instance');
   }
   const gpus = Math.min(options.gpus ?? count, count, 16);
   const hours = sessionHours({ hourlyUsd: options.hourlyUsd, maxUsd: options.maxUsd, maxHours: options.maxHours });
   const perReplica = options.perReplica ?? GPU_DEFAULTS.perReplica;
-  const script = remoteStartScript({ model: options.model, image: options.image ?? GPU_DEFAULTS.image, gpus, maxModelLen: options.maxModelLen ?? GPU_DEFAULTS.maxModelLen, perReplica, args: options.args ?? [], seconds: hours * 3600, remotePortBase: GPU_DEFAULTS.remotePortBase, apiKey });
+  const script = container
+    ? containerStartScript({ model: options.model, gpus, maxModelLen: options.maxModelLen ?? GPU_DEFAULTS.maxModelLen, perReplica, args: options.args ?? [], seconds: hours * 3600, remotePortBase: GPU_DEFAULTS.remotePortBase, apiKey })
+    : remoteStartScript({ model: options.model, image: options.image ?? GPU_DEFAULTS.image, gpus, maxModelLen: options.maxModelLen ?? GPU_DEFAULTS.maxModelLen, perReplica, args: options.args ?? [], seconds: hours * 3600, remotePortBase: GPU_DEFAULTS.remotePortBase, apiKey });
   const ports = replicaPorts(gpus);
   const endpoints = ports.map(port => `http://127.0.0.1:${port.local}`);
   const startedAt = now();
-  const session = { version: 1, bestOf: options.bestOf ?? 1, target: options.target, key: options.key, apiKey, model: options.model, quant: options.quant ?? null, replicas: gpus, endpoints, perReplica, hourlyUsd: options.hourlyUsd, capUsd: options.maxUsd, maxHours: hours, startedAt: new Date(startedAt).toISOString(), expiresAt: new Date(startedAt + hours * 3600000).toISOString(), tunnelPid: null, sshOptions, routable: options.routable !== false, powerOff, state: 'starting' };
+  const session = { version: 1, bestOf: options.bestOf ?? 1, target: options.target, key: options.key, apiKey, model: options.model, quant: options.quant ?? null, replicas: gpus, endpoints, perReplica, hourlyUsd: options.hourlyUsd, capUsd: options.maxUsd, maxHours: hours, startedAt: new Date(startedAt).toISOString(), expiresAt: new Date(startedAt + hours * 3600000).toISOString(), tunnelPid: null, sshOptions, routable: options.routable !== false, powerOff, mode: container ? 'container' : 'vm', state: 'starting' };
   createSession(env, session);
 
   const exposureCheck = async () => {
-    const detail = await findExposure({ base: sshBase, target: options.target, shown, ports, ssh, sshArgs, probePort, lookup });
+    const detail = await findExposure({ base: sshBase, target: options.target, shown, ports, ssh, sshArgs, probePort, lookup, container, probePorts: options.probePorts ?? [] });
     if (detail !== null) throw Object.assign(fail('gpu-exposed', detail), { exposure: true });
   };
 
@@ -250,7 +314,7 @@ export async function gpuUp(options, deps) {
   // then rethrow with a message that says whether the stop worked and a key-less session copy on error.session.
   const afterStartFailure = async error => {
     let stopped = false;
-    try { await ssh([...sshArgs, 'bash -s'], { input: remoteStopScript() }); stopped = true; } catch { /* ignored: the timer still removes them */ }
+    try { await ssh([...sshArgs, 'bash -s'], { input: container ? containerStopScript() : remoteStopScript() }); stopped = true; } catch { /* ignored: the timer still removes them */ }
     removeSession(env);
     if (error?.exposure) {
       error.message = `${error.message}; ${stopped ? 'the servers were stopped' : `the servers could NOT be stopped from here; the timer on the node will remove them at ${session.expiresAt}; terminate the instance`}`;
@@ -284,15 +348,18 @@ export async function gpuDown(deps) {
   const { ssh, stopTunnel, env = process.env, now = Date.now } = deps;
   const session = readSessionFile(env);
   if (!session) return { stopped: false, message: 'no GPU session recorded' };
+  const container = session.mode === 'container';
   const notes = [];
   let sshOk = true;
   try {
-    await ssh([...sessionSshOptions(session), ...SSH_HARDENING, '-o', 'ClearAllForwardings=yes', '-i', session.key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=20', '--', session.target, 'bash -s'], { input: remoteStopScript() });
+    await ssh([...sessionSshOptions(session), ...SSH_HARDENING, '-o', 'ClearAllForwardings=yes', '-i', session.key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=20', '--', session.target, 'bash -s'], { input: container ? containerStopScript() : remoteStopScript() });
   } catch (error) { sshOk = false; notes.push(`could not reach the node to stop the servers (${String(error.message).slice(0, 120)}); its dead-man timer still removes them at ${session.expiresAt}`); }
   try { if (Number.isInteger(session.tunnelPid) && session.tunnelPid > 1) await stopTunnel(session.tunnelPid, session); } catch { /* already gone */ }
   removeSession(env);
   const hours = Math.max(0, (now() - Date.parse(session.startedAt)) / 3600000);
-  const reminder = 'This does NOT stop the rental: terminate the instance in the provider console now.';
+  const reminder = container
+    ? 'This does NOT stop the rental: destroy the instance (provider console or the rental helper) now.'
+    : 'This does NOT stop the rental: terminate the instance in the provider console now.';
   const message = sshOk ? `Servers stopped and the session removed. ${reminder}` : `Could not stop the servers over ssh (the timer on the node still removes them at ${session.expiresAt}). The session was removed. ${reminder}`;
   return { stopped: true, hours, costUsd: Math.round(hours * session.hourlyUsd * 100) / 100, notes, message };
 }
@@ -312,11 +379,12 @@ export async function gpuStatus(deps) {
     replicas.push({ endpoint, healthy, cache: healthy ? await fetchCacheStats(endpoint, fetchImpl) : null });
   }
   const cache = combineCacheStats(replicas.map(item => item.cache).filter(Boolean));
-  return { cacheHitRate: cache.hitRate, bestOf: session.bestOf ?? 1, active: !expired, expired, model: session.model, replicas, hours, spentUsd: Math.round(hours * session.hourlyUsd * 100) / 100, capUsd: session.capUsd, minutesLeft: Math.max(0, Math.round((expires - now()) / 60000)), hourlyUsd: session.hourlyUsd, expiresAt: session.expiresAt, billingNote: expired ? 'the node may still be billing: terminate the instance' : null };
+  return { cacheHitRate: cache.hitRate, bestOf: session.bestOf ?? 1, mode: session.mode ?? 'vm', active: !expired, expired, model: session.model, replicas, hours, spentUsd: Math.round(hours * session.hourlyUsd * 100) / 100, capUsd: session.capUsd, minutesLeft: Math.max(0, Math.round((expires - now()) / 60000)), hourlyUsd: session.hourlyUsd, expiresAt: session.expiresAt, billingNote: expired ? 'the node may still be billing: terminate the instance' : null };
 }
 
 export function formatStatus(status) {
   if (!status.active && !status.expired) return 'No GPU session. Nothing is rented by swarm; start one with swarm gpu up on a node you rented.';
   const up = status.replicas.filter(item => item.healthy).length;
-  return [`GPU session: ${status.model}`, `Replicas: ${up} of ${status.replicas.length} answering${status.bestOf > 1 ? `; best-of-${status.bestOf} on` : ''}${status.cacheHitRate === null || status.cacheHitRate === undefined ? '' : `; prefix cache hit ${Math.round(status.cacheHitRate * 100)}%`}`, `Time: ${status.hours.toFixed(2)} h used, ${status.expired ? 'EXPIRED, terminate the instance, billing may continue' : `${status.minutesLeft} min left`}`, `Cost: about $${status.spentUsd.toFixed(2)} of the $${status.capUsd.toFixed(2)} cap ($${status.hourlyUsd}/h)`].join('\n');
+  const verb = status.mode === 'container' ? 'destroy' : 'terminate';
+  return [`GPU session: ${status.model}`, `Replicas: ${up} of ${status.replicas.length} answering${status.bestOf > 1 ? `; best-of-${status.bestOf} on` : ''}${status.cacheHitRate === null || status.cacheHitRate === undefined ? '' : `; prefix cache hit ${Math.round(status.cacheHitRate * 100)}%`}`, `Time: ${status.hours.toFixed(2)} h used, ${status.expired ? `EXPIRED, ${verb} the instance, billing may continue` : `${status.minutesLeft} min left`}`, `Cost: about $${status.spentUsd.toFixed(2)} of the $${status.capUsd.toFixed(2)} cap ($${status.hourlyUsd}/h)`].join('\n');
 }

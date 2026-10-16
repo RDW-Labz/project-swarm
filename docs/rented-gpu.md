@@ -115,6 +115,21 @@ You can still point the lane at a server you started by hand. In `~/.config/proj
 
 `endpoint` (one URL) or `endpoints` (up to 16, balanced as above): `https`, or `http` to loopback. `auth: "none"` is for loopback tunnels only; otherwise the key comes from the Keychain item `keyItem` (default service `project-swarm`, account `rented.api_key`) or `SWARM_RENTED_API_KEY`. Without a live session this lane is **never** chosen by automatic routing: use `agent: "rented"`, and all the rules above (non-sensitive only, contract on every job) still apply. `swarm doctor rented` checks the block.
 
+## Container mode (Vast.ai and other container hosts)
+
+Use `swarm gpu up --mode container` for a node that IS a container already running the pinned vLLM image. Vast container instances cannot run Docker, so the docker mode cannot be used there.
+
+- The instance is created from the pinned image by digest (never a tag), with ssh access only and no mapped ports.
+- `swarm gpu up` then starts `vllm serve` inside it: one per GPU, with `CUDA_VISIBLE_DEVICES` set, bound to 127.0.0.1. The per-rental key is kept in the server's environment, never on a command line.
+- Exposure is checked as in docker mode: TCP probes from this computer, plus `--probe-ports N,N` for external ports the host maps. The node-side check reads `/proc/net/tcp` and `/proc/net/tcp6` (no `ss` or docker needed). Any listener on a server port that is not loopback fails `gpu up` and stops the servers.
+- The rental helper (`bench/gpu-bakeoff/vast.mjs`) then destroys the instance. Run gpu up as `swarm gpu up ... || node bench/gpu-bakeoff/vast.mjs destroy`.
+- A container cannot be powered off, so the timer on the node only stops the servers. Billing ends when the instance is destroyed. The helper's detached reaper does this at the deadline (it runs under `caffeinate -i` so the Mac cannot sleep), and `gpu down` tells you to do it.
+- Offers for container mode must be verified hosts with reliability of at least 99%, RTX PRO 6000 S or WS (not Max-Q), datacenter preferred, and 4 hours at their price must be at most 80% of the cap.
+  - Search: `node bench/gpu-bakeoff/vast.mjs search --mode container`
+  - Rent: `node bench/gpu-bakeoff/vast.mjs rent --mode container --offer ID --hours 4 --max-usd 15`
+- The instance id is printed first and kept in `~/.project-swarm-scratch/vast-instance.json`, so it can be destroyed in the Vast console.
+- The Vast API key lives in the Keychain (`project-swarm` / `vast.api_key`) and is read only by the helper.
+
 ## Renting the node (you do this; it costs money)
 
 1. Pick the GPU: one or more RTX PRO 6000 Blackwell (96 GB) or similar; for the bake-off one GPU is enough. Prices change; note the hourly price for `--hourly-usd`.

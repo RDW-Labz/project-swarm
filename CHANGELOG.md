@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.76.0
+
+- Container mode for rented GPUs (`swarm gpu up --mode container`, `--probe-ports`, `--ssh-port`): for nodes that are themselves a container running the pinned vLLM image (Vast.ai container instances, which cannot run Docker). `gpu up` starts `vllm serve` inside it (one per GPU, bound to 127.0.0.1, per-rental key only in the server environment); the exposure check reads `/proc/net/tcp` and `/proc/net/tcp6` instead of `ss` and also probes any ports you name; a failure stops the servers and removes the session; `gpu down` says to destroy the instance (a container cannot be powered off).
+- Rental helper `bench/gpu-bakeoff/vast.mjs` (outside the runner; swarm itself still never rents): container-mode offer filter (verified, reliability 99% or more, RTX PRO 6000 S or WS, datacenter first, 4 hours within 80% of the cap), pinned-image create body with no mapped ports, instance id logged first, detached reaper under `caffeinate -i`, destroy command. The bake-off benchmark base is pinned to v1.65.0 (`--bench-ref`) and the rented lane gets the larger output cap.
+- Fixed: `swarm gpu up --ssh-port` and root logins without sudo (Vast.ai VMs); sessions remember their ssh options so `down` and `status` reach nodes on other ports.
+
 ## 1.75.0
 
 - Rented GPU safety (finishing Phase 14e): the server image is pinned by digest (`vllm/vllm-openai@sha256:...`, vLLM v0.27.1) and tags are refused (`--image` takes only another digest); every rental gets a random 48-character API key (private env file on the node, removed by the timer and `gpu down`; kept in the 0600 session file; the lane and the bake-off send it as a Bearer header); `gpu up` fails and stops the servers if any server port answers from outside or the node lists a server port bound to anything but 127.0.0.1, so servers listen on the node's loopback only and are reached through the ssh tunnel.
