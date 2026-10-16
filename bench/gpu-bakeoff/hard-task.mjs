@@ -73,7 +73,7 @@ export function hardManifest({ model, bestOf = 1, maxUsd = 15 } = {}) {
         contract: 'TASK.md',
         acceptance: ['node --test test/planWaves.test.mjs passes 16 of 16 (the tests are hidden from you)'],
         timeoutMs: HARD_TIMEOUT_MS,
-        maxOutputTokens: 16000,
+        maxOutputTokens: process.env.SWARM_RENTED_THINKING === 'on' ? 30000 : 16000,
         ...(bestOf > 1 ? { bestOf } : {}),
       },
     ],

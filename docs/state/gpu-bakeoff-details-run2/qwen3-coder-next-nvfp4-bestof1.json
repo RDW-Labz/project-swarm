@@ -1,0 +1,102 @@
+[
+ {
+  "taskId": "bug-percentile",
+  "type": "bug-fix",
+  "pass": false,
+  "status": "failed",
+  "error": "Worker returned an invalid, duplicate, or undeclared output: \"tools/scale.mjs\" is in both files and edits",
+  "detail": "tests failed: # todo 0 # duration_ms 711.316375",
+  "durationMs": 22943,
+  "tokens": null
+ },
+ {
+  "taskId": "bug-router-failover",
+  "type": "bug-fix",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 39.503541",
+  "durationMs": 7208,
+  "tokens": 5179
+ },
+ {
+  "taskId": "new-parse-duration",
+  "type": "new-function",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "tests pass",
+  "durationMs": 13216,
+  "tokens": 3500
+ },
+ {
+  "taskId": "new-cost-summary",
+  "type": "new-function",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 39.3795",
+  "durationMs": 24269,
+  "tokens": 4574
+ },
+ {
+  "taskId": "refactor-anthropic-rates",
+  "type": "refactor",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "not refactored: \"longInput\" appears 5 times (was 3)",
+  "durationMs": 24554,
+  "tokens": 7093
+ },
+ {
+  "taskId": "refactor-spend-reserve",
+  "type": "refactor",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "tests pass",
+  "durationMs": 8279,
+  "tokens": 15818
+ },
+ {
+  "taskId": "tests-model-matches",
+  "type": "test-writing",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 39.583333",
+  "durationMs": 32570,
+  "tokens": 6779
+ },
+ {
+  "taskId": "tests-npm-script",
+  "type": "test-writing",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 33.674",
+  "durationMs": 16487,
+  "tokens": 5598
+ },
+ {
+  "taskId": "docs-anthropic-lane",
+  "type": "docs",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "missing facts: anthropic\\.api_key",
+  "durationMs": 53850,
+  "tokens": 25345
+ },
+ {
+  "taskId": "docs-host-failures",
+  "type": "docs",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "all 8 facts present",
+  "durationMs": 10810,
+  "tokens": 6645
+ }
+]

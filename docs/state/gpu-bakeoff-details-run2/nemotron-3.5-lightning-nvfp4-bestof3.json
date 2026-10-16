@@ -1,0 +1,102 @@
+[
+ {
+  "taskId": "bug-percentile",
+  "type": "bug-fix",
+  "pass": false,
+  "status": "failed",
+  "error": "best-of-failed: none of 1 candidates passed the ticket's tests",
+  "detail": "tests failed: # todo 0 # duration_ms 714.723792",
+  "durationMs": 57367,
+  "tokens": null
+ },
+ {
+  "taskId": "bug-router-failover",
+  "type": "bug-fix",
+  "pass": false,
+  "status": "failed",
+  "error": "best-of-failed: none of 2 candidates passed the ticket's tests",
+  "detail": "tests failed: # todo 0 # duration_ms 39.551542",
+  "durationMs": 16040,
+  "tokens": null
+ },
+ {
+  "taskId": "new-parse-duration",
+  "type": "new-function",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 32.202916",
+  "durationMs": 7671,
+  "tokens": 4383
+ },
+ {
+  "taskId": "new-cost-summary",
+  "type": "new-function",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 31.758166",
+  "durationMs": 14756,
+  "tokens": 7225
+ },
+ {
+  "taskId": "refactor-anthropic-rates",
+  "type": "refactor",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "not refactored: \"longInput\" appears 3 times (was 3)",
+  "durationMs": 15315,
+  "tokens": 8621
+ },
+ {
+  "taskId": "refactor-spend-reserve",
+  "type": "refactor",
+  "pass": false,
+  "status": "failed",
+  "error": "best-of-failed: none of 2 candidates passed the ticket's tests",
+  "detail": "not refactored: \"laneDefaults[lane]?.reserveUsd\" appears 2 times (was 2)",
+  "durationMs": 55184,
+  "tokens": null
+ },
+ {
+  "taskId": "tests-model-matches",
+  "type": "test-writing",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 37.366208",
+  "durationMs": 10284,
+  "tokens": 6801
+ },
+ {
+  "taskId": "tests-npm-script",
+  "type": "test-writing",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 28.011791",
+  "durationMs": 12450,
+  "tokens": 7131
+ },
+ {
+  "taskId": "docs-anthropic-lane",
+  "type": "docs",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "all 14 facts present",
+  "durationMs": 50519,
+  "tokens": 38915
+ },
+ {
+  "taskId": "docs-host-failures",
+  "type": "docs",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "missing facts: host-exit|any other code|one job",
+  "durationMs": 50592,
+  "tokens": 16090
+ }
+]

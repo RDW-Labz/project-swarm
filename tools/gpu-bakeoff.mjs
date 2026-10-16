@@ -9,6 +9,10 @@ import { SHORTLIST } from './gpu.mjs';
 
 export const LEVELS = Object.freeze([32, 64, 96, 128, 192]);
 export const MAX_MS_PER_TOKEN = 35;
+// Like a real project run: a long shared context first (rules, contract, files: what prefix caching can reuse) and a short request-specific part last.
+const SHARED_CONTEXT = Array.from({ length: 120 }, (_, n) => `Project rule ${n + 1}: keep every exported name and signature; write small pure functions; document edge cases in a comment; never read the network.`).join('\n');
+let sequence = 0;
+const messagesFor = () => [{ role: 'system', content: SHARED_CONTEXT }, { role: 'user', content: `${PROMPT}\n\n(request ${(sequence += 1)})` }];
 const PROMPT = 'Write a JavaScript function `mergeIntervals(list)` that merges overlapping [start, end] intervals and returns them sorted. Include three assert-based tests. Reply with code only.';
 const r1 = n => Math.round(n * 10) / 10;
 const r2 = n => Math.round(n * 100) / 100;
@@ -24,7 +28,7 @@ export async function measureThroughput({ endpoint, model, level, rounds = 2, ma
       const begin = now();
       requests += 1;
       try {
-        const response = await fetchImpl(`${endpoint}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, messages: [{ role: 'user', content: PROMPT }], max_tokens: maxTokens, stream: false }) });
+        const response = await fetchImpl(`${endpoint}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, messages: messagesFor(), max_tokens: maxTokens, stream: false }) });
         if (!response.ok) { errors += 1; continue; }
         const body = await response.json();
         const used = body?.usage?.completion_tokens;
@@ -56,7 +60,7 @@ export async function runUnderLoad({ endpoint, model, agents, fetchImpl = fetch 
   const loop = async () => {
     while (!stop) {
       try {
-        const response = await fetchImpl(`${endpoint}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, messages: [{ role: 'user', content: PROMPT }], max_tokens: 64, stream: false }) });
+        const response = await fetchImpl(`${endpoint}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, messages: messagesFor(), max_tokens: 64, stream: false }) });
         if (typeof response?.text === 'function') await response.text();
         if (response && response.ok === false) await pause();
       } catch { await pause(); }
