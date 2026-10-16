@@ -2,6 +2,7 @@
 // Tool-free, one-request workers. Transport injection is for tests, never manifests.
 import { randomBytes } from 'node:crypto';
 import { OPENROUTER_ENDPOINT, OPENROUTER_KEY_ENV, openRouterKeyItem, readOpenRouterKey, providerPolicy, assertRequestBody, assertBookkeepingOnly, emptyOutputsContentRefusal, fetchPricing, worstCaseUsd, ledgerPath, readLedger, spentSoFar, assertWithinCaps, dayCapUsd, appendLedger, assertCompleteChatResponse, describeIncompleteChatResponse, isEmptyLengthTruncation, defaultMaxOutputTokens, responseFinishReason, OpenRouterError } from './openrouter.mjs';
+import { BATCH_DISCOUNT } from './batch.mjs';
 import { ANTHROPIC_ENDPOINT, ANTHROPIC_VERSION, ANTHROPIC_KEY_ENV, ANTHROPIC_KEY_ITEM, readAnthropicKey, assertModelAllowed as assertAnthropicModel, ledgerPath as anthropicLedgerPath, readLedger as readAnthropicLedger, spentSoFar as anthropicSpentSoFar, appendLedger as appendAnthropicLedger, assertWithinCaps as assertAnthropicCaps, worstCaseUsd as anthropicWorstUsd, usageCostUsd as anthropicCostUsd, caps as anthropicCaps, AnthropicError } from './anthropic.mjs';
 import { loadLocalConfig, resolveConfigPath } from './local-config.mjs';
 export const API_AGENTS = ['openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic'];
@@ -342,7 +343,9 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     // Field lesson #226: a reasoning model's own default covers its thinking plus its reply.
     const limit = job.maxOutputTokens ?? (job.agent === 'openrouter' ? defaultMaxOutputTokens(job.model) : 8192);
     let anthropicUsage = null;
-    anthropicBilled = () => (anthropicUsage ? anthropicCostUsd(job.model, anthropicUsage) : null);
+    // A batch request is billed at half the standard price.
+    const priceFactor = job.batch === true ? BATCH_DISCOUNT : 1;
+    anthropicBilled = () => (anthropicUsage ? anthropicCostUsd(job.model, anthropicUsage) * priceFactor : null);
     if (job.agent === 'openai') { headers.authorization = `Bearer ${config.key}`; body = { model: job.model, instructions, input, store: false, stream: false, max_output_tokens: limit, tools: [], text: { format: { type: 'json_schema', name: 'swarm_output', strict: true, schema } } }; }
     else if (job.agent === 'gemini') { headers['x-goog-api-key'] = config.key; url += `${encodeURIComponent(job.model)}:generateContent`; body = { systemInstruction: { parts: [{ text: instructions }] }, contents: [{ role: 'user', parts: [{ text: input }] }], generationConfig: { responseMimeType: 'application/json', responseJsonSchema: schema, maxOutputTokens: limit, candidateCount: 1 } }; }
     else if (job.agent === 'openrouter') { headers.authorization = `Bearer ${config.key}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, provider: providerPolicy(job.model), usage: { include: true }, response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
@@ -418,7 +421,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       // Record spend even when the response is unusable: the provider may still have billed it.
       if (spend && job.agent === 'anthropic') {
         // Billed only when the API answered with usage; an HTTP error or a dropped connection spent nothing.
-        if (anthropicUsage) appendAnthropicLedger(spend.ledger, { ts: spend.stamp.toISOString(), jobId: job.id, model: job.model, costUsd: anthropicCostUsd(job.model, anthropicUsage), estimated: false });
+        if (anthropicUsage) appendAnthropicLedger(spend.ledger, { ts: spend.stamp.toISOString(), jobId: job.id, model: job.model, costUsd: anthropicCostUsd(job.model, anthropicUsage) * priceFactor, estimated: false });
       } else if (spend) {
         const reported = Number(result?.usage?.cost);
         appendLedger(spend.ledger, { ts: spend.stamp.toISOString(), jobId: job.id, model: job.model, costUsd: Number.isFinite(reported) && reported >= 0 ? reported : spend.worstUsd, estimated: !(Number.isFinite(reported) && reported >= 0) });
@@ -446,7 +449,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     if (credentials.some(key => retainedStrings.some(value => value.includes(key)))) fail('Provider response contained a credential; output discarded');
     // Lesson 295: Include result object as last JSON line in response.txt (via response field)
     const responseText = envelope.result ? `${envelope.summary}\n${JSON.stringify(envelope.result)}\n` : envelope.summary;
-    return { finalObject: envelope.result ?? (job.report === 'short' ? null : envelope), status: 'complete', error: null, finishReason, files: envelope.files, edits, contextInlined, response: responseText, actualModel: result.actualModel, usage: result.usage, modelUsage: null, costUsd: job.agent === 'anthropic' ? anthropicCostUsd(job.model, result.usage) : job.agent === 'openrouter' && Number.isFinite(Number(result.usage?.cost)) ? Number(result.usage.cost) : null, exitCode: null, stderr: '', ...(retriedForLength ? { retriedForLength: true } : {}), stdout: JSON.stringify({ type: 'result', provider: job.agent, status: 'complete', actualModel: result.actualModel, usage: result.usage, ...(result.provider ? { upstream: result.provider } : {}) }) + '\n' };
+    return { finalObject: envelope.result ?? (job.report === 'short' ? null : envelope), status: 'complete', error: null, finishReason, files: envelope.files, edits, contextInlined, response: responseText, actualModel: result.actualModel, usage: result.usage, modelUsage: null, costUsd: job.agent === 'anthropic' ? anthropicCostUsd(job.model, result.usage) * priceFactor : job.agent === 'openrouter' && Number.isFinite(Number(result.usage?.cost)) ? Number(result.usage.cost) : null, exitCode: null, stderr: '', ...(retriedForLength ? { retriedForLength: true } : {}), stdout: JSON.stringify({ type: 'result', provider: job.agent, status: 'complete', actualModel: result.actualModel, usage: result.usage, ...(result.provider ? { upstream: result.provider } : {}) }) + '\n' };
   } catch (error) {
     // Field lesson #285: a truncated-response error otherwise gives no sense of scale; the prompt
     // size rides along so a too-small maxOutputTokens is provable without guessing.

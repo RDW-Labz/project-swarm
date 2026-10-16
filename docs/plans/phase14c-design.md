@@ -9,7 +9,7 @@ A batch job builds exactly the same Messages API request as any Anthropic-lane j
 ## 1. The collector (`tools/batch.mjs`)
 
 ```js
-export const BATCH_LIMITS = Object.freeze({ maxRequests: 10000, maxBytes: 200 * 1024 * 1024, collectMs: 2000, pollMs: 30000, expireMs: 25 * 3600 * 1000 })
+export const BATCH_LIMITS = Object.freeze({ maxRequests: 10000, maxBytes: 200 * 1024 * 1024, collectMs: 2000, maxHoldMs: 15000, pollMs: 30000, expireMs: 25 * 3600 * 1000 })
 export const BATCH_DISCOUNT = 0.5
 export function createBatchCollector({ fetchImpl, readKey, baseUrl = 'https://api.anthropic.com', version = '2023-06-01', now = Date.now, sleep, setTimer, clearTimer, limits = {}, onEvent })
 // -> { submit(body, { id, signal }) -> Promise<Response>, cancelAll() -> Promise<void>, close(), status() -> { pending, batches: [{ id, requests, state }] } }
@@ -22,7 +22,7 @@ export function estimateBatchSavings(standardUsd, { fraction = BATCH_DISCOUNT })
 
 - `body` is a Messages API request object (`model`, `max_tokens`, `system`, `messages`, `output_config`, ...). It is validated: a plain object with a string `model`, an integer `max_tokens` and a non-empty `messages` array, serialized size under 4 MiB; otherwise reject with `Error('batch-request-invalid')`.
 - `id` (the job id) becomes the request's `custom_id`: characters outside `[A-Za-z0-9_-]` are replaced by `_`, cut to 56 characters, plus `-` and a per-collector counter so ids are unique (the whole id is at most 64 characters).
-- Requests are held for `collectMs` after the first one arrives (timer from `setTimer`), then sent together. A flush also happens at once when `maxRequests` or `maxBytes` would be exceeded by the next request: the full set is sent and the new request starts the next batch. So 25,000 requests become three batches.
+- Requests are held until `collectMs` has passed with no new request (a quiet period: the timer restarts with every request, from `setTimer`), but no request is held longer than `maxHoldMs` in all; then they are sent together. A flush also happens at once when `maxRequests` or `maxBytes` would be exceeded by the next request: the full set is sent and the new request starts the next batch. So 25,000 requests become three batches.
 - A batch is created with `POST {baseUrl}/v1/messages/batches`, headers `x-api-key: <readKey()>`, `anthropic-version`, `content-type: application/json`, body `{ "requests": [{ "custom_id": ..., "params": <body> }, ...] }`. The key comes from `readKey()` each time and appears nowhere else (not in errors, events or status).
 - If the create call answers a non-OK status, every request of that batch resolves with a `Response` carrying that status and the provider's JSON body (so rate limits, bad keys and invalid requests classify like a normal call). If the call itself throws (network), every request rejects with that error.
 - After a successful create (the answer has `id` and `processing_status`), the collector polls `GET {baseUrl}/v1/messages/batches/{id}` every `pollMs` (using `sleep`) until `processing_status` is `ended`, or until `expireMs` has passed since creation (then every unresolved request resolves as expired, see below). Poll failures are tolerated up to 5 in a row (the next poll retries); the sixth rejects every unresolved request of that batch.

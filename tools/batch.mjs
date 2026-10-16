@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-export const BATCH_LIMITS = Object.freeze({ maxRequests: 10000, maxBytes: 200 * 1024 * 1024, collectMs: 2000, pollMs: 30000, expireMs: 25 * 3600 * 1000 })
+export const BATCH_LIMITS = Object.freeze({ maxRequests: 10000, maxBytes: 200 * 1024 * 1024, collectMs: 2000, maxHoldMs: 15000, pollMs: 30000, expireMs: 25 * 3600 * 1000 })
 export const BATCH_DISCOUNT = 0.5
 const ERR_STATUS = { invalid_request_error: 400, authentication_error: 401, permission_error: 403, not_found_error: 404, rate_limit_error: 429, overloaded_error: 529 }
 const jsonResp = (status, body) => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
@@ -17,7 +17,7 @@ function toResponse(r) {
 export function createBatchCollector({ fetchImpl = globalThis.fetch, readKey, baseUrl = 'https://api.anthropic.com', version = '2023-06-01', now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), setTimer = setTimeout, clearTimer = clearTimeout, limits = {}, onEvent = () => {} } = {}) {
   const L = { ...BATCH_LIMITS, ...limits }
   const batches = new Set()
-  let pending = [], pendingBytes = 0, timer = null, seq = 0, closed = false
+  let pending = [], pendingBytes = 0, timer = null, seq = 0, closed = false, firstAt = 0
   const emit = (e) => { try { onEvent(e) } catch {} }
   const hdr = (extra = {}) => ({ 'x-api-key': readKey(), 'anthropic-version': version, ...extra })
   const finish = (it, v, isErr) => { if (it.settled) return; it.settled = true; it.signal?.removeEventListener('abort', it.onAbort); isErr ? it.reject(v) : it.resolve(v) }
@@ -50,7 +50,10 @@ export function createBatchCollector({ fetchImpl = globalThis.fetch, readKey, ba
       signal?.addEventListener('abort', it.onAbort)
       if (pending.length && (pending.length + 1 > L.maxRequests || pendingBytes + bytes > L.maxBytes)) flush()
       pending.push(it); pendingBytes += bytes
-      if (timer === null) timer = setTimer(flush, L.collectMs)
+      // The window is a quiet period: it restarts with every new request, but no request waits more than maxHoldMs in all.
+      if (pending.length === 1) firstAt = now()
+      stopTimer()
+      timer = setTimer(flush, Math.max(0, Math.min(L.collectMs, L.maxHoldMs - (now() - firstAt))))
     })
   }
   function maybeCancel(b) {

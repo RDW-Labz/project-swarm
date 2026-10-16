@@ -96,7 +96,7 @@ export function estimatePlan(manifest, { lanes = {}, calibration = {} } = {}) {
     leads: leads.map(l => ({ id: l.id, scope: l.area?.scope ?? [], maxJobs: l.area?.maxJobs ?? null })),
     jobs: { leads: leads.length, expectedChildren, maxChildren },
     lanes: rows,
-    estimate: { costUsd: point, costRange, tokens, minutes, peakConcurrency, calibrated: costRatio !== 1 || timeRatio !== 1 },
+    estimate: { costUsd: point, costRange, tokens, minutes, peakConcurrency, calibrated: costRatio !== 1 || timeRatio !== 1, ...(lanes.child?.batch && childUsd > 0 ? { batchSavingsUsd: round(childUsd * 0.5, 4) } : {}) },
     budget: { maxUsd, maxTokens },
     risks,
   };
@@ -112,6 +112,7 @@ export function formatPreview(p) {
   const e = p.estimate;
   const free = p.lanes.some(l => l.costUsd === 0 && l.jobs > 0) ? ' (subscription and unpriced lanes are not counted)' : '';
   lines.push(`Cost: about ${money(e.costUsd)} (range ${money(e.costRange[0])} to ${money(e.costRange[1])})${free}`);
+  if (e.batchSavingsUsd > 0) lines.push(`Batch: saves about ${money(e.batchSavingsUsd)} of ${money(e.costUsd)} (50% on the child jobs); results can take up to 24 hours (usually under an hour).`);
   lines.push(`Time: about ${e.minutes} min`);
   lines.push(`Peak concurrency: ${e.peakConcurrency}`);
   lines.push(`Budget: ${p.budget.maxUsd === null ? 'no USD cap' : money(p.budget.maxUsd)}, ${p.budget.maxTokens ?? 'no'} tokens`);
