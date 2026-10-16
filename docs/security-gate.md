@@ -12,7 +12,7 @@ If the gate blocks a batch, the queue rolls the batch back. The queue then bisec
 
 The profile file is read once when the queue starts. This happens before any batch writes.
 
-Plain integrate without --queue is not gated. Use the queue.
+Plain integrate without --queue runs the same gate on the planned writes before the first write. Use the queue for rollback.
 
 ## The five checks
 
@@ -76,7 +76,7 @@ Limit: yarn.lock, pnpm-lock.yaml, pyproject.toml, Pipfile, go.mod and Cargo.toml
 
 The code scan uses Semgrep, when Semgrep is installed. It runs with --metrics=off. File paths are passed after --.
 
-The code scan is skipped for sensitive projects. This is the default. It runs only if the profile sets codeScan to auto and codeScanSensitive to true.
+The code scan policy is codeScan: local (default), auto or off. Auto uses registry rules and runs only for non-sensitive projects unless codeScanSensitive is true. See Offline code scan.
 
 High and medium findings become fix tickets. A ticket carries only the rule id, path and line. Code scan findings never block.
 
@@ -131,8 +131,20 @@ If the registry cannot be reached, the package check fails closed for new depend
 ## Known limits
 
 - The gate scans only the files a batch writes. It does not scan git history.
-- Plain integrate without --queue is not gated.
+- Plain integrate without --queue runs the gate before its first write, but it has no rollback.
 - The registry checks need network access.
 - A weekly download count is only a signal. It is not proof that a package is safe.
 - yarn.lock, pnpm-lock.yaml, pyproject.toml, Pipfile, go.mod and Cargo.toml changes trigger the vulnerability requirement, but their dependencies are not parsed for the new-package check.
 - The profile file is read once when the queue starts, before any batch writes.
+
+## Every integration is gated
+
+Plain integrate (without --queue) now runs the same gate on the planned writes before the first write. Integrate has no rollback, so a block writes nothing. A block fails with security-gate-blocked and records the inbox blocker and the lesson. There is no integration path without the gate; the only switch is the profile security block.
+
+## Offline code scan
+
+The code scan runs for every project, sensitive or not. It uses pinned local rules at tools/security-rules/semgrep-local.yml: 15 rules for JavaScript, TypeScript and Python, with the sha256 pinned in the code. A changed or unreadable rules file blocks the batch. The scan runs with --metrics=off, no version check, a minimal environment and no network.
+
+## Unparsed ecosystems fail closed
+
+A change, including a deletion, to a pnpm, yarn, Go, Cargo, Python (pyproject.toml, Pipfile, poetry.lock, setup.py), PHP, Ruby or JVM manifest or lockfile blocks the batch with check unsupported-manifest and an inbox item until the gate can parse it. The owner can allow a file with allowUnparsedManifests in the profile security block, by file name or path.

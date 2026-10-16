@@ -88,6 +88,28 @@ After two `failed` or `timeout` attempts on a lane for an automatic job, the rou
 
 Jobs are sensitive by default, including when `sensitive` is omitted. Only `sensitive: false` allows OpenRouter, OpenAI, Gemini, or Lambda. Explicit OpenAI, Gemini, and Lambda jobs without it refuse with `sensitive-provider`: `Job <id>: <agent> only gets jobs that set sensitive: false`. Explicit OpenRouter jobs without `sensitive: false` refuse with `sensitive-openrouter`: `Job <id>: OpenRouter only gets jobs that set sensitive: false`. Output ownership, explicit file lists, hash-checked integration, and all existing path and secret refusals still apply. See the [manifest reference](manifest-reference.md) for job fields.
 
+## Haiku rate limits and lane concurrency
+
+Anthropic rate limits for claude-haiku-5-5 at our tier, read from the response headers of a 1-token call on 2026-10-16: 10,000 requests per minute, 10,000,000 input tokens per minute, and 2,000,000 output tokens per minute (12,000,000 tokens per minute in all).
+
+Measured Haiku task profile (the 11-task comparison): about 9.6k input and 2.7k output tokens per task, about 11.8 s per task. One agent therefore sends about 5.1 requests per minute, 49k input tokens per minute, and 13.6k output tokens per minute.
+
+Maximum agents by each limit: requests 1,960; input tokens 204; output tokens about 147 (the binding one). That gives about 147 Haiku agents at full speed and about 100 with a 70 percent margin.
+
+Anthropic estimates output tokens per minute from each request's `max_tokens` when it starts and corrects the estimate when it ends. So agents times requests per minute times `max_tokens` must stay under 2,000,000. At the default 8192 that is about 47 agents for fast 12 s tasks; at 4096 about 95; at 2048 about 190.
+
+The lane's default concurrency is 32, which is safe at the default 8192 even for fast tasks (about 66 percent of the limit). Raise it with `lanes.anthropic.concurrency` in the machine config, up to about 96, only when jobs set `maxOutputTokens` of 4096 or less. 429 answers are already backed off and retried by the lane.
+
+## Which lane gets a ticket
+
+Router rule (owner decision):
+
+- Haiku (anthropic) is the default worker lane.
+- The rented GPU lane is used by automatic routing only when at least 700 non-sensitive tickets are ready in the run, and the job carries its contract. The ready count is the number of auto jobs in the manifest. The threshold is `RENTED_MIN_READY`, overridable with `lanes.rented.minReady`.
+- Codex takes hard tickets: a job with `hard: true` goes to Codex first.
+- Sensitive jobs never go to the rented lane.
+- One failure on the rented lane escalates to Haiku, then Codex.
+
 ## The rented lane
 
 `rented` is the lane for small, fast coding models served by vLLM on a GPU node you rent, one server per GPU; requests are spread over the servers. It has no routing model of its own: it is routable only while `swarm gpu up` has a live session, and then only for jobs marked `sensitive: false` that carry their exact files, the manifest's contract file and acceptance tests; one failure sends the job to Haiku, then Codex. Its cost is by the hour. See [rented GPU](rented-gpu.md).
