@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "fix-gpu",
+      "context": [
+        "tests/gpu.test.mjs",
+        "tools/gpu.mjs",
+        "tools/gpu-bakeoff.mjs",
+        "tools/gpu-commands.mjs",
+        "tools/api-adapters.mjs",
+        "coordination/review/test-failures.txt"
+      ],
+      "outputs": [
+        "tests/gpu.test.mjs"
+      ],
+      "prompt": "Update tests/gpu.test.mjs. Owner decisions changed the code (read the module files in your context): the rented lane default is only the Qwen3.6-35B-A3B NVFP4 entry (SHORTLIST has ONE entry, label qwen3.6-35b-a3b-nvfp4; Lightning and Coder-Next are removed from it, though selectCandidates still accepts explicit model ids or unknown labels and builds { label, model, quant, args: [], env: {} } for them); thinking is ON by default for the rented lane (chat_template_kwargs { enable_thinking: false } is sent only when env.SWARM_RENTED_THINKING is the string off; when it is on or unset nothing is sent); the rented default max output tokens is 16000; GPU_DEFAULTS.perReplica is 128; the bake-off default --best-of is 1 (off). coordination/review/test-failures.txt lists the failing assertions. Return the COMPLETE updated test file (whole file), keeping every test that still holds, rewriting the failing ones to the new behaviour (do not weaken any safety assertion) and replacing assertions about the removed Lightning and Coder-Next entries with assertions that they are NOT in the SHORTLIST."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "fix-gpu-lineup",
+      "context": [
+        "tests/gpu-lineup.test.mjs",
+        "tools/gpu.mjs",
+        "tools/gpu-bakeoff.mjs",
+        "tools/gpu-commands.mjs",
+        "tools/api-adapters.mjs",
+        "coordination/review/test-failures.txt"
+      ],
+      "outputs": [
+        "tests/gpu-lineup.test.mjs"
+      ],
+      "prompt": "Update tests/gpu-lineup.test.mjs. Owner decisions changed the code (read the module files in your context): the rented lane default is only the Qwen3.6-35B-A3B NVFP4 entry (SHORTLIST has ONE entry, label qwen3.6-35b-a3b-nvfp4; Lightning and Coder-Next are removed from it, though selectCandidates still accepts explicit model ids or unknown labels and builds { label, model, quant, args: [], env: {} } for them); thinking is ON by default for the rented lane (chat_template_kwargs { enable_thinking: false } is sent only when env.SWARM_RENTED_THINKING is the string off; when it is on or unset nothing is sent); the rented default max output tokens is 16000; GPU_DEFAULTS.perReplica is 128; the bake-off default --best-of is 1 (off). coordination/review/test-failures.txt lists the failing assertions. Return the COMPLETE updated test file (whole file), keeping every test that still holds, rewriting the failing ones to the new behaviour (do not weaken any safety assertion) and replacing assertions about the removed Lightning and Coder-Next entries with assertions that they are NOT in the SHORTLIST."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "fix-gpu-startup",
+      "context": [
+        "tests/gpu-startup.test.mjs",
+        "tools/gpu.mjs",
+        "tools/gpu-bakeoff.mjs",
+        "tools/gpu-commands.mjs",
+        "tools/api-adapters.mjs",
+        "coordination/review/test-failures.txt"
+      ],
+      "outputs": [
+        "tests/gpu-startup.test.mjs"
+      ],
+      "prompt": "Update tests/gpu-startup.test.mjs. Owner decisions changed the code (read the module files in your context): the rented lane default is only the Qwen3.6-35B-A3B NVFP4 entry (SHORTLIST has ONE entry, label qwen3.6-35b-a3b-nvfp4; Lightning and Coder-Next are removed from it, though selectCandidates still accepts explicit model ids or unknown labels and builds { label, model, quant, args: [], env: {} } for them); thinking is ON by default for the rented lane (chat_template_kwargs { enable_thinking: false } is sent only when env.SWARM_RENTED_THINKING is the string off; when it is on or unset nothing is sent); the rented default max output tokens is 16000; GPU_DEFAULTS.perReplica is 128; the bake-off default --best-of is 1 (off). coordination/review/test-failures.txt lists the failing assertions. Return the COMPLETE updated test file (whole file), keeping every test that still holds, rewriting the failing ones to the new behaviour (do not weaken any safety assertion) and replacing assertions about the removed Lightning and Coder-Next entries with assertions that they are NOT in the SHORTLIST."
+    }
+  ]
+}

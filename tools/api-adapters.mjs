@@ -368,14 +368,14 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     const bestOfN = job.agent === 'rented' ? bestOfCount(job, config.bestOf) : 1;
     const headers = { 'content-type': 'application/json' }; let url = config.endpoint, body;
     // Field lesson #226: a reasoning model's own default covers its thinking plus its reply.
-    const limit = job.maxOutputTokens ?? (job.agent === 'openrouter' ? defaultMaxOutputTokens(job.model) : 8192);
+    const limit = job.maxOutputTokens ?? (job.agent === 'openrouter' ? defaultMaxOutputTokens(job.model) : job.agent === 'rented' ? 16000 : 8192);
     let anthropicUsage = null;
     // A batch request is billed at half the standard price (an unknown price stays unknown, never zero).
     const priced = standard => (job.batch === true ? batchCostUsd(standard) : standard);
     anthropicBilled = () => (anthropicUsage ? priced(anthropicCostUsd(job.model, anthropicUsage)) : null);
     if (job.agent === 'openai') { headers.authorization = `Bearer ${config.key}`; body = { model: job.model, instructions, input, store: false, stream: false, max_output_tokens: limit, tools: [], text: { format: { type: 'json_schema', name: 'swarm_output', strict: true, schema } } }; }
     else if (job.agent === 'gemini') { headers['x-goog-api-key'] = config.key; url += `${encodeURIComponent(job.model)}:generateContent`; body = { systemInstruction: { parts: [{ text: instructions }] }, contents: [{ role: 'user', parts: [{ text: input }] }], generationConfig: { responseMimeType: 'application/json', responseJsonSchema: schema, maxOutputTokens: limit, candidateCount: 1 } }; }
-    else if (job.agent === 'rented') { if (config.key) headers.authorization = `Bearer ${config.key}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, ...(bestOfN > 1 ? { n: bestOfN } : {}), ...(env.SWARM_RENTED_THINKING === 'on' ? {} : { chat_template_kwargs: { enable_thinking: false } }), response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
+    else if (job.agent === 'rented') { if (config.key) headers.authorization = `Bearer ${config.key}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, ...(bestOfN > 1 ? { n: bestOfN } : {}), ...(env.SWARM_RENTED_THINKING === 'off' ? { chat_template_kwargs: { enable_thinking: false } } : {}), response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
     else if (job.agent === 'openrouter') { headers.authorization = `Bearer ${config.key}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, provider: providerPolicy(job.model), usage: { include: true }, response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
     else if (job.agent === 'anthropic') {
       // Key goes in a header only. Thinking depth is the only control these models take, so it is

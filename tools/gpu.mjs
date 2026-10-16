@@ -11,7 +11,7 @@ import { fetchCacheStats, combineCacheStats } from './gpu-cache.mjs';
 // vLLM v0.31.0 (pinned by digest)
 export const PINNED_IMAGE = 'vllm/vllm-openai@sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3';
 
-export const GPU_DEFAULTS = Object.freeze({ image: PINNED_IMAGE, remotePortBase: 8000, localPortBase: 18000, maxModelLen: 131072, memoryUtilization: 0.93, commonArgs: Object.freeze(['--kv-cache-dtype', 'fp8', '--enable-prefix-caching', '--mamba-cache-mode', 'align', '--max-num-batched-tokens', '16384']), perReplica: 32, healthTimeoutMs: 1200000, maxHours: 4 });
+export const GPU_DEFAULTS = Object.freeze({ image: PINNED_IMAGE, remotePortBase: 8000, localPortBase: 18000, maxModelLen: 131072, memoryUtilization: 0.93, commonArgs: Object.freeze(['--kv-cache-dtype', 'fp8', '--enable-prefix-caching', '--mamba-cache-mode', 'align', '--max-num-batched-tokens', '16384']), perReplica: 128, healthTimeoutMs: 1200000, maxHours: 4 });
 
 export const SSH_HARDENING = Object.freeze(['-o', 'ForwardAgent=no', '-o', 'ForwardX11=no', '-o', 'PermitLocalCommand=no', '-o', 'StrictHostKeyChecking=yes']);
 
@@ -20,15 +20,11 @@ const IMAGE_RE = /^[a-z0-9][a-z0-9._/-]{0,100}@sha256:[0-9a-f]{64}$/;
 const TARGET_RE = /^(?:[A-Za-z0-9_][A-Za-z0-9._-]{0,31}@)?[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/;
 const KEY_RE = /^[0-9a-f]{48}$/;
 
-// The small, fast coding models worth testing (a shortlist, not a promise: ids must be checked on Hugging Face before renting). All NVFP4, text-only, no MTP; flags from docs/plans/swarm-gpu-memory-plan.md section 7. Entries marked optional run only when enough session time is left.
+// The lane default model (Qwen3.6-35B-A3B NVFP4, thinking on, at most 128 agents per GPU). Other models can still be tested with --models and an explicit model id; ids must be checked on Hugging Face before renting. Flags from docs/plans/swarm-gpu-memory-plan.md section 7.
 export const SHORTLIST = Object.freeze([
   // flashinfer_b12x MoE backend removed: it crashed with a CUDA illegal memory access on the RTX PRO 6000 under vLLM 0.31.0 during cudagraph profiling; vLLM's default MoE backend starts fine.
   // Qwen3.6: block size 128, so --prefix-match-unit 64 is set on this entry only.
   { label: 'qwen3.6-35b-a3b-nvfp4', model: 'nvidia/Qwen3.6-35B-A3B-NVFP4', quant: 'nvfp4', args: ['--quantization', 'modelopt_fp4', '--mamba-ssm-cache-dtype', 'bfloat16', '--block-size', '128', '--prefix-match-unit', '64', '--reasoning-parser', 'qwen3', '--tool-call-parser', 'qwen3_coder', '--enable-auto-tool-choice', '--language-model-only'], env: { VLLM_HAS_FLASHINFER_CUBIN: '1' } },
-  // Lightning: block size 2128 is not divisible by 64, so no --prefix-match-unit on this entry.
-  { label: 'nemotron-3.5-lightning-nvfp4', model: 'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4', quant: 'nvfp4', args: ['--mamba-ssm-cache-dtype', 'float16', '--reasoning-parser', 'nemotron_v3', '--tool-call-parser', 'qwen3_coder', '--enable-auto-tool-choice', '--async-scheduling'], env: {} },
-  // Coder-Next: compressed-tensors, no --quantization flag (vLLM detects it and rejects a conflicting one); prefix match unit 64 with block size 128.
-  { label: 'qwen3-coder-next-nvfp4', model: 'RedHatAI/Qwen3-Coder-Next-NVFP4', quant: 'nvfp4', args: ['--mamba-ssm-cache-dtype', 'bfloat16', '--block-size', '128', '--prefix-match-unit', '64', '--reasoning-parser', 'qwen3', '--tool-call-parser', 'qwen3_coder', '--enable-auto-tool-choice', '--language-model-only'], env: { VLLM_HAS_FLASHINFER_CUBIN: '1' }, optional: true },
 ]);
 
 const fail = (code, message) => Object.assign(new Error(`${code}: ${message}`), { code });

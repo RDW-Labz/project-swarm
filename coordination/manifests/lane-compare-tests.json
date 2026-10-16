@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "tests-compare",
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "context": [
+        "bench/gpu-bakeoff/compare-lanes.mjs",
+        "bench/gpu-bakeoff/hard-task.mjs"
+      ],
+      "outputs": [
+        "tests/compare-lanes.test.mjs",
+        "tests/hard-task-lanes.test.mjs"
+      ],
+      "prompt": "Write two test files (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\" in each). File 1, tests/compare-lanes.test.mjs, tests bench/gpu-bakeoff/compare-lanes.mjs (import only its named exports; importing it must not run the CLI): costPerMillionTokens({ hourlyUsd: 1.807, tokensPerSecond: 3718 }) is 0.135 rounded to 4 decimals as the module computes (compute the expected value in the test with the same formula); summarizeLane with results [{ taskId: 'a', pass: true, costUsd: 0.01, tokens: { input_tokens: 100, output_tokens: 50 }, durationMs: 2000 }, { taskId: 'b', pass: false, costUsd: 0.02, tokens: 300, durationMs: 3000 }, { taskId: 'c', pass: true, costUsd: null, tokens: { total_tokens: 70 }, durationMs: 1000 }] and hard { passedAll: true, costUsd: 0.03, tokens: 500, seconds: 4 } gives tasks 4, passed 3, passRate 0.75, costUsd 0.06, tokens 1020 (150 + 300 + 70 + 500), costPerPassingUsd 0.02, seconds 10 (2+3+1+4); a lane with no costUsd anywhere (all null or missing) gives costUsd null and costPerPassingUsd null; zero passes gives costPerPassingUsd null; hard null counts 3 tasks; qwenAtFullLoad with a temp details file (fs.mkdtempSync, an array of { pass, tokens } entries: two passing with tokens 1000 and 2000, one failing with 3000, one passing with null tokens) and hardTokens 4000, hardPassed true, passedLane omitted, hourlyUsd 3.6, tokensPerSecond 1000 gives tokens 10000, passed 4, usdPerMillionTokens 1 (3.6 / (1000 * 3600) * 1e6), costUsd 0.01 and costPerPassingUsd 0.0025; renderComparison({ lanes: [two summaries, one with costUsd null], qwen: <that result>, date: '2026-10-16' }) contains the table header words Lane and Pass rate, the text 'subscription (not reported)' for the null-cost lane, a row for Qwen3.6, and the formatted dollar figures. File 2, tests/hard-task-lanes.test.mjs, tests hardManifest from bench/gpu-bakeoff/hard-task.mjs for other lanes: hardManifest({ agent: 'anthropic', model: 'claude-haiku-5-5' }).jobs[0] has agent 'anthropic', model, sensitive true, context ['TASK.md','planWaves.mjs'], outputs ['planWaves.mjs'], timeoutMs 600000, maxOutputTokens 32000, and no contract, acceptance or bestOf properties; hardManifest({ agent: 'codex', model: 'gpt-6.1-sol' }) likewise; hardManifest({ model: 'm/x' }) (default rented) still has agent 'rented', sensitive false, contract 'TASK.md' and an acceptance list; with process.env.SWARM_RENTED_THINKING unset the rented job's maxOutputTokens is 30000 and with it set to 'off' (set and restore in a try/finally) it is 16000. Use only exports that exist; keep tests short."
+    }
+  ]
+}

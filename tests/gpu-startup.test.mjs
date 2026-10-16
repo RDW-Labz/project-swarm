@@ -136,8 +136,11 @@ test('docker mode: a dead swarm-vllm-0 container fails with gpu-server-died', as
 
 test('startup flags per model', () => {
   assert.equal(GPU_DEFAULTS.commonArgs.includes('--prefix-match-unit'), false);
-  const entry = label => SHORTLIST.find(item => item.label === label);
-  const qwen = entry('qwen3.6-35b-a3b-nvfp4').args;
+  assert.equal(GPU_DEFAULTS.perReplica, 128);
+  // The rented lane default is only the Qwen3.6-35B-A3B NVFP4 entry.
+  assert.equal(SHORTLIST.length, 1);
+  assert.equal(SHORTLIST[0].label, 'qwen3.6-35b-a3b-nvfp4');
+  const qwen = SHORTLIST[0].args;
   const at = qwen.indexOf('--prefix-match-unit');
   assert.ok(at >= 0);
   assert.equal(qwen[at + 1], '64');
@@ -145,11 +148,8 @@ test('startup flags per model', () => {
   assert.ok(quant >= 0);
   assert.equal(qwen[quant + 1], 'modelopt_fp4');
   assert.equal(qwen.includes('--moe-backend'), false);
-  assert.equal(entry('nemotron-3.5-lightning-nvfp4').args.includes('--prefix-match-unit'), false);
-  const coder = entry('qwen3-coder-next-nvfp4').args;
-  assert.equal(coder.includes('--quantization'), false);
-  assert.equal(coder.includes('--moe-backend'), false);
-  const coderAt = coder.indexOf('--prefix-match-unit');
-  assert.ok(coderAt >= 0);
-  assert.equal(coder[coderAt + 1], '64');
+  // The removed Lightning and Coder-Next entries must stay out of the shortlist.
+  const labels = SHORTLIST.map(item => item.label);
+  assert.equal(labels.includes('nemotron-3.5-lightning-nvfp4'), false);
+  assert.equal(labels.includes('qwen3-coder-next-nvfp4'), false);
 });

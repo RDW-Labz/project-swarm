@@ -149,7 +149,7 @@ async function bakeoff(flags, { out, real, deps }) {
   const candidates = selectCandidates(flags.models);
   const base = upOptions({ ...flags, model: candidates[0]?.model ?? 'x/y' }, { gpus: 1 });
   validateUpOptions(base);
-  if (!flags.yes) { out(`${planText(base, { gpus: '1' })}\nThe bake-off tests ${candidates.map(item => item.label).join(', ')}one after another on one GPU, at ${LEVELS.join(', ')} concurrent agents. The bake-off also runs the hard task (planWaves: spec and stub only, 16 hidden tests, 10 minutes per attempt) at each best-of count. one vLLM engine per GPU; all models NVFP4, text-only; best-of-N is measured under load at the largest agent count that stays under 35 ms/token. It stops starting models once the cap is spent.`); return { status: 'planned' }; }
+  if (!flags.yes) { out(`${planText(base, { gpus: '1' })}\nThe bake-off tests ${candidates.map(item => item.label).join(', ')}one after another on one GPU, at ${LEVELS.join(', ')} concurrent agents. The bake-off also runs the hard task (planWaves: spec and stub only, 16 hidden tests, 10 minutes per attempt) at each best-of count. one vLLM engine per GPU; all models NVFP4, text-only; thinking on (the lane default; SWARM_RENTED_THINKING=off turns it off); best-of is off unless --best-of 1,3 is given; best-of-N is measured under load at the largest agent count that stays under 35 ms/token. It stops starting models once the cap is spent.`); return { status: 'planned' }; }
   const root = path.resolve(flags.repo ?? deps.bakeRoot ?? '.');
   const levels = flags.levels ? flags.levels.split(',').map(Number) : LEVELS;
   if (levels.some(level => !Number.isInteger(level) || level < 1 || level > 2000)) throw Object.assign(new Error('gpu-usage: --levels must be whole numbers from 1 to 2000'), { code: 'gpu-usage' });
@@ -161,7 +161,7 @@ async function bakeoff(flags, { out, real, deps }) {
   const info = deps.baseInfo ?? bench.buildBaseRepo(root, flags['bench-ref'] ?? 'v1.65.0', path.join(tmp, 'repo'));
   const repo = path.join(tmp, 'repo');
   let apiKey;
-  const results = await guarded(deps, real, () => runBakeoff({ candidates, hourlyUsd: base.hourlyUsd, capUsd: base.maxUsd, levels, includeExtra: flags["extra-quant"] === true, bestOf: (flags['best-of'] ?? '1,3').split(',').map(Number) }, {
+  const results = await guarded(deps, real, () => runBakeoff({ candidates, hourlyUsd: base.hourlyUsd, capUsd: base.maxUsd, levels, includeExtra: flags["extra-quant"] === true, bestOf: (flags['best-of'] ?? '1').split(',').map(Number) }, {
     log: real.log,
     start: async (candidate, { remainingUsd }) => {
       let session;

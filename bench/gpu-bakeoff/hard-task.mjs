@@ -56,38 +56,53 @@ export function prepareRepo({ taskDir = TASK_DIR, dir, exec = spawnSync } = {}) 
   return dir;
 }
 
-export function hardManifest({ model, bestOf = 1, maxUsd = 15 } = {}) {
-  return {
-    version: 1,
-    concurrency: 1,
-    budget: { maxUsd },
-    jobs: [
-      {
+const HARD_PROMPT = 'Implement planWaves(tickets, opts) in planWaves.mjs exactly as TASK.md specifies (named ES module export, Node 22, no dependencies). Change only planWaves.mjs. Hidden tests grade it; read TASK.md carefully, the validation order, the path normalization and the scheduling rules.';
+
+export function hardManifest({ model, bestOf = 1, maxUsd = 15, agent = 'rented' } = {}) {
+  const maxOutputTokens = process.env.SWARM_RENTED_THINKING === 'off' ? 16000 : 30000;
+  const job = agent === 'rented'
+    ? {
         id: 'hard-planwaves',
         agent: 'rented',
         model,
         sensitive: false,
-        prompt: 'Implement planWaves(tickets, opts) in planWaves.mjs exactly as TASK.md specifies (named ES module export, Node 22, no dependencies). Change only planWaves.mjs. Hidden tests grade it; read TASK.md carefully, the validation order, the path normalization and the scheduling rules.',
+        prompt: HARD_PROMPT,
         context: ['TASK.md', 'planWaves.mjs'],
         outputs: ['planWaves.mjs'],
         contract: 'TASK.md',
         acceptance: ['node --test test/planWaves.test.mjs passes 16 of 16 (the tests are hidden from you)'],
         timeoutMs: HARD_TIMEOUT_MS,
-        maxOutputTokens: process.env.SWARM_RENTED_THINKING === 'on' ? 30000 : 16000,
+        maxOutputTokens,
         ...(bestOf > 1 ? { bestOf } : {}),
-      },
-    ],
+      }
+    : {
+        id: 'hard-planwaves',
+        agent,
+        model,
+        sensitive: true,
+        prompt: HARD_PROMPT,
+        context: ['TASK.md', 'planWaves.mjs'],
+        outputs: ['planWaves.mjs'],
+        timeoutMs: HARD_TIMEOUT_MS,
+        // only the API lanes take output limits (a CLI lane such as codex refuses them)
+        ...(['anthropic', 'openai', 'gemini', 'openrouter', 'lambda', 'ollama'].includes(agent) ? { maxOutputTokens: 32000, outputCapBytes: { total: 100000, perFile: 60000 } } : {}),
+      };
+  return {
+    version: 1,
+    concurrency: 1,
+    budget: { maxUsd },
+    jobs: [job],
   };
 }
 
-export function runHardTask({ model, bestOf = 1, runner, maxUsd = 15, taskDir = TASK_DIR, exec = spawnSync, now = Date.now, log = () => {} } = {}) {
+export function runHardTask({ model, bestOf = 1, runner, maxUsd = 15, agent = 'rented', taskDir = TASK_DIR, exec = spawnSync, now = Date.now, log = () => {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hard-task-'));
   try {
     prepareRepo({ taskDir, dir: path.join(dir, 'repo'), exec });
     const repo = path.join(dir, 'repo');
     const manifestRel = 'coordination/manifests/hard-planwaves.json';
     fs.mkdirSync(path.join(repo, 'coordination', 'manifests'), { recursive: true });
-    fs.writeFileSync(path.join(repo, manifestRel), JSON.stringify(hardManifest({ model, bestOf, maxUsd })));
+    fs.writeFileSync(path.join(repo, manifestRel), JSON.stringify(hardManifest({ model, bestOf, maxUsd, agent })));
     log(`running hard task with ${model} (bestOf ${bestOf})`);
     const started = now();
     const ran = exec(process.execPath, [runner, '--root', repo, 'run', manifestRel], { env: process.env, encoding: 'utf8', timeout: 12 * 60 * 1000 });
@@ -112,6 +127,7 @@ export function runHardTask({ model, bestOf = 1, runner, maxUsd = 15, taskDir = 
     const tokens = usage.total_tokens ?? (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
     return {
       model,
+      agent,
       bestOf,
       status: job.status,
       passed: graded.passed,
@@ -120,6 +136,7 @@ export function runHardTask({ model, bestOf = 1, runner, maxUsd = 15, taskDir = 
       seconds: Math.round(((job.durationMs ?? wallMs) / 1000) * 10) / 10,
       attempts: job.attempts?.length ?? 1,
       tokens,
+      costUsd: job.costUsd ?? null,
       bestOfInfo: job.bestOf ?? null,
       error: job.error ?? null,
     };

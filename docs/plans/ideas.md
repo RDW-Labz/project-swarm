@@ -21,7 +21,7 @@ Build order now: **14e → A1 security gate → 13**. After 13, dogfood on the p
 ## New ideas
 
 Add one line each, with the date and who had it. Do not build from this list without Braden's OK.
-- 2026-10-16 (orchestrator): best-of-N on tasks with no visible tests keeps the smallest candidate, which was wrong on the hard task; use a majority vote on normalized output, a cheap judge, or run the model's own generated tests.
+- 2026-10-16 (orchestrator, owner decision): best-of-N is OFF for now (N=1; a failure escalates to Haiku, then Codex). Fix before turning it on again: pick the candidate by tests passed (and lint), never by size; the current selector falls back to the smallest candidate when no test is visible, which was wrong on the hard task (0/16).
 - 2026-10-16 (orchestrator): retry Qwen3-Coder-Next and Nemotron Lightning with thinking on, and try Qwen3.6 with the MTP speculative decoding A/B from the memory plan.
 - 2026-10-16 (orchestrator): rerun the sweep with a higher server max-num-seqs and levels 128 to 256 on the winner to find its real agent ceiling with thinking on.
 - 2026-10-16 (orchestrator): wait for the ssh key to be active in vast.mjs rent (it took about 4 minutes after the instance was running) instead of retrying by hand.
