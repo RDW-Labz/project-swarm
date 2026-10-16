@@ -207,6 +207,12 @@ The full spec is [swarm-watch-spec.md](swarm-watch-spec.md) and the reference de
   - a **dependency view** (blocked chains highlighted) and a **requirement view** (each `R-` ID with its tickets and a done / partial / missing state, so nothing dropped from the scope hides);
   - a **change-order timeline** (what each added, cancelled or reopened) and a **ticket drawer** (scope text, acceptance criteria, files, runs, review result, PR, cost, drift flags);
   - live: it updates as tickets move, and tickets from a change order animate in.
+- **Commands tab:** a quick reference for every `swarm` command, next to the live run view.
+  - **One source:** it is generated from the CLI's own command registry (a single list of commands, each with a one-line "what it does", a one-line "when to use it", an example, a group and a cost flag), not a hand-written list, so new commands appear on their own. The same registry feeds `swarm help` and `swarm help <command>` in the terminal. A test fails if any command is missing its help text, example or group.
+  - **Each command shows:** what it does, when to use it, and an example with a **copy button** (for example `swarm lessons mine`: turns repeat lessons into proposed guard and test PRs; use weekly or after a project).
+  - **Groups:** Start (init, go, plan), Watch (watch, status, brief), Scope & tickets, Human inbox, Lessons & quality, GPU, Merge & review, Admin.
+  - **Search box** over names and text. A **pill** marks commands that cost money or need Braden's OK (`gpu up`, merge, cap changes).
+  - **Read-only:** copy buttons only; nothing runs from the dashboard.
 - **Screenshot gallery** (speed spec 3): design review is one gallery of screenshots per batch that Braden approves in one sitting; comments become fix tickets. The design system is picked once per brand (for example RDW Labz navy and lime) and every screen uses it.
 - Done when: you can follow a real 1,000+ job `swarm go` run from start to the final gate without reading logs, on desktop or phone, and the Build Plan tab shows a real scoped build (stages, tickets, requirements, change orders) live.
 
