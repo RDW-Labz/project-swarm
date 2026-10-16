@@ -5,7 +5,7 @@ import { sanitizeText } from './journal.mjs';
 
 export const DEFAULT_PROFILE_BUDGET = Object.freeze({ maxUsd: 5, maxTokens: 2000000 });
 const STATUSES = ['green', 'red', 'skipped', 'none'];
-const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck'];
+const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security'];
 const REQUIRED_KEYS = ['sensitive', 'protectedPaths', 'budget', 'baseCheck'];
 const BASE_KEYS = ['status', 'ranAt', 'head', 'checks'];
 // The pointer (profile) and the checks file decide what later runs may do and execute, so no job may rewrite them.
@@ -104,6 +104,8 @@ export function validateProfile(profile) {
   out.baseCheck = validateBaseCheck(profile.baseCheck, errors);
   const stack = profile.stack === undefined ? null : validateStack(profile.stack, errors);
   if (stack) out.stack = stack;
+  const security = profile.security === undefined ? null : validateSecurity(profile.security, errors);
+  if (security) out.security = security;
   return { profile: out, errors };
 }
 
@@ -133,6 +135,61 @@ function validateStack(stack, errors) {
     return null;
   }
   return stack.map(({ name, packageManager }) => (packageManager === undefined ? { name } : { name, packageManager }));
+}
+
+const SECURITY_KEYS = ['enabled', 'minAgeDays', 'minWeeklyDownloads', 'blockSeverities', 'allowCopyleft', 'approvedLicenses', 'allowedSecretFingerprints', 'requireVulnerabilityScan', 'codeScan', 'codeScanSensitive'];
+const SECURITY_SEVERITIES = ['low', 'medium', 'high', 'critical'];
+
+function validateSecurity(value, errors) {
+  if (!isObject(value)) {
+    errors.push('profile.security: must be an object');
+    return null;
+  }
+  for (const key of Object.keys(value)) {
+    if (!SECURITY_KEYS.includes(key)) errors.push(`profile.security.${key}: unknown key`);
+  }
+  const out = {};
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled === 'boolean') out.enabled = value.enabled;
+    else errors.push('profile.security.enabled: must be true or false');
+  }
+  for (const key of ['minAgeDays', 'minWeeklyDownloads']) {
+    if (value[key] === undefined) continue;
+    if (typeof value[key] === 'number' && Number.isFinite(value[key]) && value[key] >= 0) out[key] = value[key];
+    else errors.push(`profile.security.${key}: must be a finite number of 0 or more`);
+  }
+  if (value.blockSeverities !== undefined) {
+    if (Array.isArray(value.blockSeverities) && value.blockSeverities.length <= 4
+      && value.blockSeverities.every(entry => SECURITY_SEVERITIES.includes(entry))) out.blockSeverities = [...value.blockSeverities];
+    else errors.push('profile.security.blockSeverities: array of at most 4 of low, medium, high, critical');
+  }
+  if (value.allowCopyleft !== undefined) {
+    if (typeof value.allowCopyleft === 'boolean') out.allowCopyleft = value.allowCopyleft;
+    else errors.push('profile.security.allowCopyleft: must be true or false');
+  }
+  if (value.approvedLicenses !== undefined) {
+    if (Array.isArray(value.approvedLicenses) && value.approvedLicenses.length <= 50
+      && value.approvedLicenses.every(entry => typeof entry === 'string' && entry.length <= 80)) out.approvedLicenses = [...value.approvedLicenses];
+    else errors.push('profile.security.approvedLicenses: array of at most 50 strings of at most 80 characters');
+  }
+  if (value.allowedSecretFingerprints !== undefined) {
+    if (Array.isArray(value.allowedSecretFingerprints) && value.allowedSecretFingerprints.length <= 200
+      && value.allowedSecretFingerprints.every(entry => typeof entry === 'string' && /^[0-9a-f]{12}$/.test(entry))) out.allowedSecretFingerprints = [...value.allowedSecretFingerprints];
+    else errors.push('profile.security.allowedSecretFingerprints: array of at most 200 strings of exactly 12 lower-case hex characters');
+  }
+  if (value.requireVulnerabilityScan !== undefined) {
+    if (typeof value.requireVulnerabilityScan === 'boolean') out.requireVulnerabilityScan = value.requireVulnerabilityScan;
+    else errors.push('profile.security.requireVulnerabilityScan: must be true or false');
+  }
+  if (value.codeScan !== undefined) {
+    if (value.codeScan === 'auto' || value.codeScan === 'off') out.codeScan = value.codeScan;
+    else errors.push("profile.security.codeScan: must be 'auto' or 'off'");
+  }
+  if (value.codeScanSensitive !== undefined) {
+    if (typeof value.codeScanSensitive === 'boolean') out.codeScanSensitive = value.codeScanSensitive;
+    else errors.push('profile.security.codeScanSensitive: must be true or false');
+  }
+  return out;
 }
 
 function validateBudget(budget, errors) {

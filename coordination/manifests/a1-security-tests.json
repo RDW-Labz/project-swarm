@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "a1t-scan",
+      "context": [
+        "tools/security-scan.mjs"
+      ],
+      "outputs": [
+        "tests/security-scan.test.mjs"
+      ],
+      "prompt": "Write tests/security-scan.test.mjs for tools/security-scan.mjs. node:test and node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\". IMPORTANT: never write a complete secret-looking literal in the test file (source scanners and push protection would flag it): build every planted secret at run time from pieces, for example \"AK\" + \"IA\" + \"ABCDEFGHIJKLMNOP\", \"sk_\" + \"live_\" + \"a\".repeat(24), \"gh\" + \"p_\" + \"b\".repeat(36), \"-----BEGIN \" + \"RSA PRIVATE KEY-----\". Import only the named exports of the module (read it in your context). Keep each test short. Tests: scanSecrets finds each of these planted values (one file each, path 'src/a.js', content a line of code containing it): aws access key id, github token, stripe live key, slack token (\"xox\" + \"b-\" + \"1234567890-abcdefghij\"), google key (\"AI\" + \"za\" + 35 characters), anthropic key (\"sk-\" + \"ant-\" + 30 characters), a private key block header, a url with a password (\"postgres://user:\" + \"S3cretPass99\" + \"@db.example.com/app\"), a generic secret (const apiKey = \"...\" with a random-looking 32 character value of mixed letters and digits) and a jwt; every finding has rule, name, path, line and a 12 hex character fingerprint and NO property or text that contains the planted value (JSON.stringify(findings) must not include it, nor a 8 character slice of it); a placeholder password url (password:changeme) , a generic value containing the word example and a low-entropy value ('aaaaaaaaaaaaaaaaaaaaaaaa') are NOT reported; the marker comment swarm-secret-allow on the line suppresses a finding; an allowed fingerprint (take it from a first scan) suppresses it; a file with a NUL byte and a file larger than maxBytes are skipped; at most 3 findings per rule per file; line numbers are 1-based; shannonEntropy('aaaa') is 0 and shannonEntropy('abcd') is 2. parseNpmAudit: npm 7 shape with one high and one low vulnerability, npm 6 advisories shape, a JSON string input, garbage input returns []; blockingVulns keeps high and critical only by default and honours a custom list; parseOsv with and without database_specific severity; parsePipAudit (object and bare array shapes, severity 'high'); parseSemgrep maps ERROR to high, WARNING to medium, INFO to low and cuts a long message to 200 characters; licenseBlocked: 'GPL-3.0' and 'AGPL-3.0-only' and 'GPL-2.0-or-later' are blocked, 'LGPL-2.1' and 'MIT' are not, '(MIT OR GPL-3.0)' is not blocked, '(GPL-3.0 AND MIT)' is blocked, 'GPL-3.0' with approved ['GPL-3.0'] is not blocked, allowCopyleft true never blocks, empty or undefined license is not blocked."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "a1t-deps",
+      "context": [
+        "tools/security-deps.mjs"
+      ],
+      "outputs": [
+        "tests/security-deps.test.mjs"
+      ],
+      "prompt": "Write tests/security-deps.test.mjs for tools/security-deps.mjs. node:test and node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\". IMPORTANT: never write a complete secret-looking literal in the test file (source scanners and push protection would flag it): build every planted secret at run time from pieces, for example \"AK\" + \"IA\" + \"ABCDEFGHIJKLMNOP\", \"sk_\" + \"live_\" + \"a\".repeat(24), \"gh\" + \"p_\" + \"b\".repeat(36), \"-----BEGIN \" + \"RSA PRIVATE KEY-----\". Import only the named exports of the module (read it in your context). Keep each test short. Tests with fake fetch functions (return objects with ok, status and async json()): editDistance basics; newDependencies: a package.json before with { dependencies: { a: '1' } } and after with dependencies a and b, devDependencies c and optionalDependencies d gives exactly b, c (dev true), d as npm; unchanged or removed packages are not returned; invalid JSON counts as none; a requirements text before 'requests==2.0' and after adding 'flask>=2' , '# comment', '-r other.txt', 'git+https://x/y.git' and 'Django[argon2]==4' gives flask and django (lower-case, pypi); an invalid npm name gets invalid true. checkPackage npm: a fake registry answering 404 gives ok false with a reason that mentions 'not found'; a package created 400 days ago with 5000 weekly downloads and license 'MIT' (dist-tags.latest and versions[latest].license) is ok with ageDays 400 and license 'MIT' (use a fixed now); one created 3 days ago has the reason 'younger than 30 days'; one with 7 downloads has the downloads reason; a license given as an object { type: 'ISC' } is read; a name one edit away from 'lodash' (for example 'lodahs') that is 20 days old gets the 'looks like the popular package lodash' reason while 'lodash' itself is never flagged; a fetch that throws and a 500 answer both give ok false with 'could not verify'; an invalid dependency gets the 'not a valid package name' reason; scoped names (@scope/pkg) are requested as the registry path with %2f. checkPackage pypi: 404 not found; age from the earliest upload_time; license from info.license; classifier fallback. checkPackages returns results in input order and never runs more than 4 requests at once (count in-flight fake fetches)."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "a1t-gate",
+      "context": [
+        "tools/security-gate.mjs",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs"
+      ],
+      "outputs": [
+        "tests/security-gate.test.mjs"
+      ],
+      "prompt": "Write tests/security-gate.test.mjs for tools/security-gate.mjs. node:test and node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\". IMPORTANT: never write a complete secret-looking literal in the test file (source scanners and push protection would flag it): build every planted secret at run time from pieces, for example \"AK\" + \"IA\" + \"ABCDEFGHIJKLMNOP\", \"sk_\" + \"live_\" + \"a\".repeat(24), \"gh\" + \"p_\" + \"b\".repeat(36), \"-----BEGIN \" + \"RSA PRIVATE KEY-----\". Import only the named exports of the module (read it in your context). Keep each test short. Use fake exec and fetch functions; changes are [{ file, bytes: Buffer.from(text), previous: null or Buffer }]. Tests (the Done-when of the A1 spec): (1) a planted fake secret in a changed file blocks: gate.ok false, a block with check 'secret-scan' and severity 'critical', the message names the file and line, and JSON.stringify(gate) does not contain the planted value; (2) a made-up package: a changed package.json whose dependencies add 'definitely-not-real-pkg' with a fake registry answering 404 blocks with check 'package-check'; a real, old, popular package (fake registry data: created 500 days ago, 100000 weekly downloads, license MIT) passes; (3) a known-vulnerable dependency: when package.json and package-lock.json change and the fake exec answers 'npm audit --json' with an npm 7 style JSON that has one high vulnerability, a block with check 'vulnerability' is returned; a low-only audit does not block; (4) licence: a new dependency whose license is 'GPL-3.0' blocks with check 'license-check' unless policy.allowCopyleft is true or approvedLicenses contains it; an unknown license adds a warning and does not block; (5) a clean change (a normal source line, no manifest change) returns ok true with checked containing 'secret-scan' only, makes NO fetch calls and runs no exec for audit; (6) semgrep: when exec for 'semgrep --version' works and the semgrep JSON has a high finding the result has a ticket and ok stays true; when semgrep is missing (exec rejects) skipped contains 'semgrep not installed'; npm missing adds 'npm not installed' to skipped and does not throw; (7) policy.enabled false returns ok true immediately with skipped ['security gate disabled by policy'] and does nothing else; normalizePolicy ignores unknown keys, keeps valid values, replaces invalid numbers and arrays with defaults and only disables with enabled === false; DEFAULT_POLICY is frozen with minAgeDays 30; (8) formatBlocks gives one line per block; lessonFor never contains the secret text and lists unique check names and tags including 'security'; recordGate with blocks appends one JSON line to a temp root's .swarm/project/security-lessons.ndjson (file mode 600) and calls a fake appendEvent once with kind 'blocker', an id that starts with 'security-<runId>-' and only [A-Za-z0-9._-] characters, and text under 600 characters that does not contain the planted secret; recordGate with no blocks records nothing; recordGate never throws when appendEvent throws (returns recorded false with an error)."
+    }
+  ]
+}

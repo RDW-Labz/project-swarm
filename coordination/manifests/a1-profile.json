@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/init-profile.test.mjs",
+        "tests/phase12-cli.test.mjs"
+      ],
+      "id": "a1-profile",
+      "context": [
+        "tools/init-profile.mjs"
+      ],
+      "outputs": [
+        "tools/init-profile.mjs"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Return the complete new tools/init-profile.mjs (plain ESM; same first line, exports and signatures; change ONLY this). Add an optional `security` block to the project profile (the policy of the A1 security gate): add 'security' to PROFILE_KEYS (not to REQUIRED_KEYS); in validateProfile add const security = profile.security === undefined ? null : validateSecurity(profile.security, errors); if (security) out.security = security; and add a function validateSecurity(value, errors) that returns a normalized copy or null: value must be a plain object (else error 'profile.security: must be an object'); unknown keys are errors ('profile.security.<key>: unknown key'); allowed keys: enabled (boolean), minAgeDays (finite number >= 0), minWeeklyDownloads (finite number >= 0), blockSeverities (array of at most 4 of the strings low, medium, high, critical), allowCopyleft (boolean), approvedLicenses (array of at most 50 strings of at most 80 characters each), allowedSecretFingerprints (array of at most 200 strings that are exactly 12 lower-case hex characters); each invalid value is an error 'profile.security.<key>: <what is expected>' and is left out of the copy. Do not edit tests.\nignoreTests: tests/init-profile.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/phase12-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

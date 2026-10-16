@@ -1,81 +1,110 @@
-=== tests/gpu.test.mjs
-not ok 12 - bake-off: our own tasks decide the ranking; cost per passing task from the model's time on the node; the cap stops later models; every candidate runs
+=== tests/security-scan.test.mjs
+not ok 3 - swarm-secret-allow marker suppresses a finding
   ---
-  type: 'test'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+    + [
+    +   {
+    +     fingerprint: '218c83c46ff5',
+    +     line: 1,
+    +     name: 'GitHub token',
+not ok 5 - files with NUL bytes or above maxBytes are skipped
+  ---
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+    + [
+    +   {
+    +     fingerprint: '218c83c46ff5',
+    +     line: 2,
+    +     name: 'GitHub token',
+not ok 12 - parseSemgrep maps severities and cuts long messages to 200 characters
+  ---
+  error: "Cannot read properties of undefined (reading 'length')"
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+    TestContext.<anonymous> (file:///Users/bean/project-swarm/tests/security-scan.test.mjs:112:84)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+=== tests/security-deps.test.mjs
+not ok 3 - newDependencies skips unchanged and removed packages
+  ---
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+    + [
+    +   {
+    +     dev: false,
+    +     ecosystem: 'npm',
+    +     file: 'package.json',
+not ok 6 - newDependencies reads new pypi requirements
+  ---
   error: |-
     Expected values to be strictly deep-equal:
     + actual - expected
     
       [
-        'qwen3.6-35b-a3b-nvfp4',
-    -   'nemotron-3.5-lightning-nvfp4',
-not ok 14 - swarm gpu: without --yes it only prints the plan; flags are strict; bake-off plans one GPU and names the models
+        'flask',
+    +   'git+https://x/y.git',
+        'django'
+      ]
+=== tests/security-gate.test.mjs
+not ok 2 - made-up package blocks; real old popular package passes
   ---
-  type: 'test'
-  error: |-
-    The input did not match the regular expression /qwen3\.6-35b-a3b-nvfp4.*nemotron-3\.5-lightning-nvfp4/s. Input:
-    
-    'Plan (nothing is started yet):\n' +
-      '  node: ubuntu@203.0.113.9 (a node you already rented; swarm rents nothing)\n' +
-      '  model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8, one server per GPU (all), reached through an ssh tunnel, no key of yours on the node (a random per-rental key protects the servers)\n' +
-      '  price: $3/h; hard cap $6 => the session ends after 2.00 h, and a timer on the node removes the servers and powers it off then\n' +
-=== tests/gpu-lineup.test.mjs
-not ok 1 - shortlist has the three NVFP4 entries in order with the expected models
-  ---
-  type: 'test'
   error: |-
     Expected values to be strictly equal:
     
-    1 !== 3
+    false !== true
     
   code: 'ERR_ASSERTION'
   name: 'AssertionError'
-not ok 2 - qwen3.6 and Lightning are full runs; only Coder-Next is optional (time permitting)
+  expected: true
+  actual: false
+not ok 3 - known-vulnerable dependency blocks; low-only does not
   ---
-  type: 'test'
-  error: "Cannot read properties of undefined (reading 'optional')"
-  code: 'ERR_TEST_FAILURE'
-  name: 'TypeError'
-    TestContext.<anonymous> (file:///Users/bean/project-swarm/tests/gpu-lineup.test.mjs:24:29)
-    Test.runInAsyncScope (node:async_hooks:214:14)
-not ok 3 - every shortlist entry is NVFP4 and its label says so
+  error: |-
+    Expected values to be strictly equal:
+    
+    false !== true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+not ok 4 - copyleft license blocks unless allowed; unknown license only warns
   ---
-  type: 'test'
+  error: |-
+    Expected values to be strictly equal:
+    
+    false !== true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+not ok 6 - semgrep finding makes a ticket without blocking; missing tools are skipped
+  ---
+  error: |-
+    Expected values to be strictly equal:
+    
+    0 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 0
+=== tests/security-queue.test.mjs
+not ok 6 - a made-up dependency is blocked by package-check and a real one passes
+  ---
   error: |-
     Expected values to be strictly deep-equal:
     + actual - expected
     
-      [
-        'nvfp4',
-    -   'nvfp4',
-not ok 6 - nemotron args include the nemotron_v3 parser and async scheduling, and no moe backend override
-  ---
-  type: 'test'
-  error: "Cannot read properties of undefined (reading 'args')"
-  code: 'ERR_TEST_FAILURE'
-  name: 'TypeError'
-    TestContext.<anonymous> (file:///Users/bean/project-swarm/tests/gpu-lineup.test.mjs:47:29)
-    Test.runInAsyncScope (node:async_hooks:214:14)
-not ok 9 - selectCandidates with no argument returns all three shortlist entries
-  ---
-  type: 'test'
-  error: |-
-    Expected values to be strictly equal:
-    
-    1 !== 3
-    
-  code: 'ERR_ASSERTION'
-  name: 'AssertionError'
-not ok 10 - selectCandidates with all three labels returns them in order with args
-  ---
-  type: 'test'
-  error: |-
-=== tests/gpu-startup.test.mjs
-not ok 6 - startup flags per model
-  ---
-  type: 'test'
-  error: "Cannot read properties of undefined (reading 'args')"
-  code: 'ERR_TEST_FAILURE'
-  name: 'TypeError'
-    TestContext.<anonymous> (file:///Users/bean/project-swarm/tests/gpu-startup.test.mjs:148:53)
-    Test.runInAsyncScope (node:async_hooks:214:14)
+    + [
+    +   {
+    +     blocks: [
+    +       {
+    +         check: 'vulnerability',

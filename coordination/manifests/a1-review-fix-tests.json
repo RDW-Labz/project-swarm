@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "a1ft-security-scan",
+      "context": [
+        "tests/security-scan.test.mjs",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs",
+        "tools/security-gate.mjs",
+        "coordination/review/test-failures.txt",
+        "docs/security-gate.md"
+      ],
+      "outputs": [
+        "tests/security-scan.test.mjs"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Update tests/security-scan.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file (build planted secrets at run time from pieces). Return the COMPLETE updated test file (whole file), keeping tests that still hold, rewriting the failing ones to the new behaviour (do not weaken a safety assertion), and ADDING tests for the review fixes listed for it below. coordination/review/test-failures.txt lists the assertions that failed against the new modules (read the module files in your context for exact behaviour). Review fixes to cover for this file: scanSecretsDetailed(files, { allowFingerprints, maxBytes, previous, key }) returns { findings, skipped }; scanSecrets returns the findings only. NUL bytes become newlines so a secret followed or interrupted by NUL is still found; UTF-16 content (with a byte order mark, as a Buffer) is also scanned decoded; a file larger than maxBytes is scanned in windows (a secret placed after maxBytes is found) and only a file beyond 20 windows is listed in skipped with reason 'too large to scan'; binary files are not dropped. The marker swarm-secret-allow only suppresses a finding when the same line (trimmed) already exists in previous[path]; on a new line it is ignored. With options.key the fingerprint is an HMAC (differs from the unkeyed one and from another key, 12 hex). A 1 MB line made of 'a.' repeated and one made of 'eyJ-' repeated is scanned in under 2 seconds (use performance.now). New rules: openai project key (sk- + proj- + 30 characters), github fine-grained token (github_pat_ + 30), gitlab token (glpat- + 20), npm token (npm_ + 36 letters and digits), env-secret (an unquoted API_KEY=<32 random-looking characters> line); all matches on one line are found (two different secrets on one line give two findings; an allowlisted first match does not hide a second). parseSemgrep returns no message property. parseNpmAudit and parseOsv map moderate to medium. licenseBlocked: '(MIT OR GPL-3.0) AND GPL-3.0' is blocked, '(MIT OR GPL-3.0)' is not, 'GPL-3.0 WITH Classpath-exception-2.0' is blocked, 'LGPL-3.0-or-later' is not, 'GNU Affero General Public License v3' is blocked, 'GNU Lesser General Public License' is not, an unparsable '((' never throws."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "a1ft-security-deps",
+      "context": [
+        "tests/security-deps.test.mjs",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs",
+        "tools/security-gate.mjs",
+        "coordination/review/test-failures.txt",
+        "docs/security-gate.md"
+      ],
+      "outputs": [
+        "tests/security-deps.test.mjs"
+      ],
+      "prompt": "Update tests/security-deps.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file (build planted secrets at run time from pieces). Return the COMPLETE updated test file (whole file), keeping tests that still hold, rewriting the failing ones to the new behaviour (do not weaken a safety assertion), and ADDING tests for the review fixes listed for it below. coordination/review/test-failures.txt lists the assertions that failed against the new modules (read the module files in your context for exact behaviour). Review fixes to cover for this file: newDependencies({ before, after }) is keyed by file path: manifests in subfolders (packages/x/package.json, api/requirements.txt) are read; an entry is identified by file, ecosystem, name and spec so a version bump counts as new while unchanged and removed entries do not; peerDependencies and overrides are read; entries carry file. classifySpec returns registry for '^1.0.0', '1.2.3', 'latest' and '*', alias with target for 'npm:other@1.2.3', workspace for 'workspace:*', and nonRegistry with a why for 'github:user/repo', 'git+https://x/y.git', 'file:../x', 'https://x/y.tgz' and 'user/repo'. Requirements text: '-r other.txt' and '-c c.txt' are ignored; '--extra-index-url https://evil.example/simple' gives a dependency named '(option) --extra-index-url' with nonRegistry; 'pkg @ https://x/y.whl' is nonRegistry. checkPackage: a nonRegistry dependency is blocked with a reason that mentions 'non-registry' and makes NO fetch call; an alias is checked under its target name; a workspace spec is ok with no call; an exact version uses the age of that version (time[version]) and its license (versions[version].license), a missing version adds a reason mentioning the version; every fetch gets a second argument with a signal property (an AbortSignal); the cache Map makes a second identical check do no fetch calls; pypi names are normalized per PEP 503 (Foo_Bar becomes foo-bar in the URL), a missing upload date gives the reason 'unknown age', the AGPL classifier gives a license that licenseBlocked treats as blocked, license text is cleaned (cut to 80 characters, odd characters removed). Keep the existing checks that still hold."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "a1ft-security-gate",
+      "context": [
+        "tests/security-gate.test.mjs",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs",
+        "tools/security-gate.mjs",
+        "coordination/review/test-failures.txt",
+        "docs/security-gate.md"
+      ],
+      "outputs": [
+        "tests/security-gate.test.mjs"
+      ],
+      "prompt": "Update tests/security-gate.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file (build planted secrets at run time from pieces). Return the COMPLETE updated test file (whole file), keeping tests that still hold, rewriting the failing ones to the new behaviour (do not weaken a safety assertion), and ADDING tests for the review fixes listed for it below. coordination/review/test-failures.txt lists the assertions that failed against the new modules (read the module files in your context for exact behaviour). Review fixes to cover for this file: runSecurityGate takes sensitive (default true), fingerprintKey, cache. Secret scan: previous bytes are passed so the allow marker only works on lines that already existed; a file beyond the scan limit (a Buffer of more than 20 windows, or pass a huge string via a small maxBytes if the module exposes no way: skip that case if it cannot be built cheaply) is a block. Vulnerabilities fail closed when a dependency manifest or lockfile changed: no scanner that ran (all exec calls reject) gives a block with check 'vulnerability' and 'could not verify'; unparsable JSON from npm audit gives 'could not verify: npm output unusable'; an npm audit JSON with an error property is unusable; an npm audit answer with exit code 1 and a valid high vulnerability is usable and blocks; policy.requireVulnerabilityScan false turns the 'no scanner ran' block off; only vulnerabilities in dependencies changed by the batch block when package.json changed (a high vulnerability in an unrelated package does not), but when only package-lock.json changed every high or critical blocks; the npm audit exec argv includes --registry=https://registry.npmjs.org/ ; the pip-audit argv includes --no-deps and --disable-pip and its options carry an env object that has no secret variable from process.env (set a fake secret env var in the test process and check it is absent). Code scan: with sensitive true (default) semgrep is NOT run (no exec call with semgrep) and skipped mentions 'sensitive'; with sensitive false it runs with --metrics=off and a '--' before the file paths and a file named '--autofix' is passed after '--'; with sensitive true plus policy codeScan 'auto' and codeScanSensitive true it runs; tickets have no message property. lessonFor ids are unique for two different jobs in one run and contain no secret text; messages from registry-controlled text are cut and cleaned. normalizePolicy keeps requireVulnerabilityScan, codeScan ('auto' or 'off' only) and codeScanSensitive booleans. The cache option avoids a second registry call when the same gate input is run twice (count fetch calls)."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "a1ft-security-queue",
+      "context": [
+        "tests/security-queue.test.mjs",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs",
+        "tools/security-gate.mjs",
+        "coordination/review/test-failures.txt",
+        "docs/security-gate.md"
+      ],
+      "outputs": [
+        "tests/security-queue.test.mjs"
+      ],
+      "prompt": "Update tests/security-queue.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file (build planted secrets at run time from pieces). Return the COMPLETE updated test file (whole file), keeping tests that still hold, rewriting the failing ones to the new behaviour (do not weaken a safety assertion), and ADDING tests for the review fixes listed for it below. coordination/review/test-failures.txt lists the assertions that failed against the new modules (read the module files in your context for exact behaviour). Review fixes to cover for this file: The gate runs BEFORE the project checks now: when it blocks, the checks are not run at all (use a manifest check that writes a marker file or counts spawn calls to prove it) and the batch is still rolled back; batches[] entries record security 'blocked' or 'passed'; queue.securityNotes lists skipped scanners and warnings; securityTickets are recorded only for a batch that stays integrated; the gate is passed sensitive from the project profile (default true), so semgrep is not called for a sensitive project: use securityGate.exec as a recorder to prove it. Keep the existing tests that still hold."
+    }
+  ]
+}
