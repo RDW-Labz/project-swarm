@@ -1,0 +1,227 @@
+{
+  "version": 1,
+  "concurrency": 9,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "g3-security-gate",
+      "context": [
+        "tests/security-gate.test.mjs",
+        "tools/security-gate.mjs",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs",
+        "tools/router.mjs",
+        "coordination/review/test-failures.txt"
+      ],
+      "outputs": [
+        "tests/security-gate.test.mjs"
+      ],
+      "prompt": "Update tests/security-gate.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file. Return the COMPLETE updated test file (whole file, never edits); keep tests that still hold, rewrite failing ones to the new behaviour (never weaken a safety assertion), and ADD the listed tests. coordination/review/test-failures.txt lists assertions that fail against the new code; read the module files in your context for exact behaviour. Changes: the pinned rules hash and temp-dir isolation: the semgrep call is now made with cwd = a temp 'scan' directory (not the repo root), '--config' a temp rules.yml whose bytes equal the pinned rules, an env object with ONLY PATH, HOME (a temp home directory), SEMGREP_SEND_METRICS 'off' and SEMGREP_ENABLE_VERSION_CHECK '0' (the --version probe uses the same env), file paths relative after '--'; the temp directory is removed afterwards (check with the cwd from the recorded exec options that it no longer exists); the allowUnparsedManifests allow-list is exact: an entry without a slash matches only a file at the repository root ('go.mod' lets 'go.mod' through but NOT 'sub/dir/go.mod' or 'vendor/x/go.mod'), an entry with a slash must equal the whole path, comparison is case-insensitive; UNPARSED_MANIFESTS keys are lower-case and its set grew (check .npmrc, .yarnrc, uv.lock, bun.lock, setup.cfg, gradle-wrapper.properties, .gitmodules, podfile, pubspec.yaml, mix.exs, packages.config; update the existing exact-map assertion to these facts). ADD tests: unparsedEcosystem returns an ecosystem for 'GO.MOD', 'Cargo.TOML', 'sub/PNPM-LOCK.YAML', '.github/workflows/ci.yml', 'vendor/lib/a.js', 'x/third_party/b.js', 'App.csproj', 'a.gemspec', 'requirements/base.txt', 'requirements-dev.in', 'constraints.txt' and null for 'src/index.js' and 'requirements.txt' (parsed elsewhere); a change to 'PACKAGE.JSON' with a new dependency is still checked by the package check (case-insensitive); policy-change: a change to .project-swarm.json that alters profile.security or profile.sensitive blocks with check 'policy-change' and severity 'critical', a change that only touches another profile key does not, unparsable new bytes block, a new file with no security or sensitive value does not; install-script: adding or changing postinstall, preinstall or prepare in a package.json blocks with check 'install-script' naming the key, an unchanged script and a changed 'test' script do not; more than 200 changed text files gives the warning 'code scan covered the first 200 of N files'."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "g3-security-queue",
+      "context": [
+        "tests/security-queue.test.mjs",
+        "tools/security-gate.mjs",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs",
+        "tools/router.mjs",
+        "coordination/review/test-failures.txt"
+      ],
+      "outputs": [
+        "tests/security-queue.test.mjs"
+      ],
+      "prompt": "Update tests/security-queue.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file. Return the COMPLETE updated test file (whole file, never edits); keep tests that still hold, rewrite failing ones to the new behaviour (never weaken a safety assertion), and ADD the listed tests. coordination/review/test-failures.txt lists assertions that fail against the new code; read the module files in your context for exact behaviour. The semgrep call now runs in an isolated temp scan directory (see gate changes: cwd is not the repo root, env has only PATH, HOME, SEMGREP_SEND_METRICS and SEMGREP_ENABLE_VERSION_CHECK). Update the failing test (it asserted the repo root as cwd or an old argv). Keep the rest."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "g3-security-plain-integrate",
+      "context": [
+        "tests/security-plain-integrate.test.mjs",
+        "tools/security-gate.mjs",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs",
+        "tools/router.mjs",
+        "coordination/review/test-failures.txt"
+      ],
+      "outputs": [
+        "tests/security-plain-integrate.test.mjs"
+      ],
+      "prompt": "Update tests/security-plain-integrate.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file. Return the COMPLETE updated test file (whole file, never edits); keep tests that still hold, rewrite failing ones to the new behaviour (never weaken a safety assertion), and ADD the listed tests. coordination/review/test-failures.txt lists assertions that fail against the new code; read the module files in your context for exact behaviour. Plain integrate refuses a change to package.json, package-lock.json, npm-shrinkwrap.json or a requirements text file BEFORE any scanner runs with a message containing 'security-gate-blocked' and 'Use integrate --queue' (nothing written), unless the policy is disabled (securityGate.policy { enabled: false } or the profile): update the failing made-up-dependency test to assert exactly that (the queue test covers the registry check). ADD tests: a thrown scanner makes plain integrate fail closed with a message containing 'security-gate-error' and nothing written (inject securityGate.exec that throws a non-ENOENT error for the semgrep call and a fetchImpl that throws... the gate catches those, so instead inject securityGate.policy as a getter-free object whose codeScan is local and make readRules not injectable: skip this test if a thrown gate cannot be provoked cheaply)."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "g3-field-lessons-batch-a",
+      "context": [
+        "tests/field-lessons-batch-a.test.mjs",
+        "tools/security-gate.mjs",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs",
+        "tools/router.mjs",
+        "coordination/review/test-failures.txt"
+      ],
+      "outputs": [
+        "tests/field-lessons-batch-a.test.mjs"
+      ],
+      "prompt": "Update tests/field-lessons-batch-a.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file. Return the COMPLETE updated test file (whole file, never edits); keep tests that still hold, rewrite failing ones to the new behaviour (never weaken a safety assertion), and ADD the listed tests. coordination/review/test-failures.txt lists assertions that fail against the new code; read the module files in your context for exact behaviour. Plain integrate is gated now: a change to package.json, package-lock.json, npm-shrinkwrap.json or a requirements text file is blocked with 'security-gate-blocked ... Use integrate --queue' unless the policy is disabled. This test is about lockfiles/packaging/ship, not the gate, so pass securityGate: { policy: { enabled: false } } to the integrateRun/integrate calls in the failing tests (a documented test-only injection) and leave everything else unchanged."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "g3-field-lessons-batch-e",
+      "context": [
+        "tests/field-lessons-batch-e.test.mjs",
+        "tools/security-gate.mjs",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs",
+        "tools/router.mjs",
+        "coordination/review/test-failures.txt"
+      ],
+      "outputs": [
+        "tests/field-lessons-batch-e.test.mjs"
+      ],
+      "prompt": "Update tests/field-lessons-batch-e.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file. Return the COMPLETE updated test file (whole file, never edits); keep tests that still hold, rewrite failing ones to the new behaviour (never weaken a safety assertion), and ADD the listed tests. coordination/review/test-failures.txt lists assertions that fail against the new code; read the module files in your context for exact behaviour. Plain integrate is gated now: a change to package.json, package-lock.json, npm-shrinkwrap.json or a requirements text file is blocked with 'security-gate-blocked ... Use integrate --queue' unless the policy is disabled. This test is about lockfiles/packaging/ship, not the gate, so pass securityGate: { policy: { enabled: false } } to the integrateRun/integrate calls in the failing tests (a documented test-only injection) and leave everything else unchanged."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "g3-field-lessons-batch-f",
+      "context": [
+        "tests/field-lessons-batch-f.test.mjs",
+        "tools/security-gate.mjs",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs",
+        "tools/router.mjs",
+        "coordination/review/test-failures.txt"
+      ],
+      "outputs": [
+        "tests/field-lessons-batch-f.test.mjs"
+      ],
+      "prompt": "Update tests/field-lessons-batch-f.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file. Return the COMPLETE updated test file (whole file, never edits); keep tests that still hold, rewrite failing ones to the new behaviour (never weaken a safety assertion), and ADD the listed tests. coordination/review/test-failures.txt lists assertions that fail against the new code; read the module files in your context for exact behaviour. Plain integrate is gated now: a change to package.json, package-lock.json, npm-shrinkwrap.json or a requirements text file is blocked with 'security-gate-blocked ... Use integrate --queue' unless the policy is disabled. This test is about lockfiles/packaging/ship, not the gate, so pass securityGate: { policy: { enabled: false } } to the integrateRun/integrate calls in the failing tests (a documented test-only injection) and leave everything else unchanged."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "g3-gpu",
+      "context": [
+        "tests/gpu.test.mjs",
+        "tools/security-gate.mjs",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs",
+        "tools/router.mjs",
+        "coordination/review/test-failures.txt"
+      ],
+      "outputs": [
+        "tests/gpu.test.mjs"
+      ],
+      "prompt": "Update tests/gpu.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file. Return the COMPLETE updated test file (whole file, never edits); keep tests that still hold, rewrite failing ones to the new behaviour (never weaken a safety assertion), and ADD the listed tests. coordination/review/test-failures.txt lists assertions that fail against the new code; read the module files in your context for exact behaviour. The router now uses the rented lane for auto jobs only when at least 700 non-sensitive auto jobs without an unmet 'after' are ready (RENTED_MIN_READY; pass ready: 700 to routeJob in the failing test, and add an assertion that ready 699 does not route to rented). Keep the rest of the test."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "g3-deps",
+      "context": [
+        "tests/security-deps.test.mjs",
+        "tools/security-deps.mjs"
+      ],
+      "outputs": [
+        "tests/security-deps.test.mjs"
+      ],
+      "prompt": "Update tests/security-deps.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file. Return the COMPLETE updated test file (whole file, never edits); keep tests that still hold, rewrite failing ones to the new behaviour (never weaken a safety assertion), and ADD the listed tests. coordination/review/test-failures.txt lists assertions that fail against the new code; read the module files in your context for exact behaviour. ADD a test that newDependencies finds a new dependency in 'PACKAGE.JSON' and in 'Sub/Package.Json' (case-insensitive file names) and a new pypi dependency in 'Requirements-Dev.TXT'."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "g3-router",
+      "context": [
+        "tests/router.test.mjs",
+        "tools/router.mjs",
+        "tools/swarm.mjs"
+      ],
+      "outputs": [
+        "tests/router-ready.test.mjs"
+      ],
+      "prompt": "Write tests/router-ready.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\", second line \"import './_isolate-config.mjs';\") testing the ready count the runner passes to the router: import validateProject or the exported route helper if swarm.mjs exports one (read tools/swarm.mjs for 'readyAutoJobs', which is a module-private const; if it is not exported, test through tools/router.mjs only): routeJob with a configured rented lane, a complete non-sensitive contract job and ready 700 routes to rented, 699 does not, a sensitive job never does; also a manifest-level test through validateManifest that hard: true is accepted and hard: 'yes' is refused with code hard-invalid. Keep it short and use only exports that exist."
+    }
+  ]
+}

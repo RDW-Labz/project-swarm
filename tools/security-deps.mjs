@@ -87,9 +87,9 @@ function parseDeps(files) {
   const out = [];
   for (const [file, text] of Object.entries(files || {})) {
     if (text == null) continue;
-    const base = String(file).split(/[\\/]/).pop();
+    const base = String(file).split(/[\\/]/).pop().toLowerCase();
     if (base === 'package.json') parseNpm(String(text), file, out);
-    else if (/^requirements.*\.txt$/.test(base)) parseRequirements(String(text), file, out);
+    else if (base.startsWith('requirements') && base.endsWith('.txt')) parseRequirements(String(text), file, out);
   }
   return out;
 }

@@ -4988,7 +4988,18 @@ async function integrateRunLocked(root, id, options = {}) {
     // there is no integration path without it.
     {
       const profile = await projectProfile(root);
-      const plainGate = await runSecurityGate({ changes: writes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: securityGate.policy ?? profile?.security, exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: profile?.sensitive !== false, fingerprintKey: await securityFingerprintKey(root), cache: new Map() });
+      const plainPolicy = securityGate.policy ?? profile?.security;
+      // Plain integrate has no rollback and the dependency scanners (npm audit, pip-audit, osv-scanner) read files from disk, so a change to a dependency
+      // manifest or lockfile cannot be audited before it is written: it must go through the queue (which audits the written files and rolls back).
+      if (plainPolicy?.enabled !== false && writes.some(change => /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json)$|(^|\/)requirements[^/]*\.txt$/i.test(change.file))) {
+        fail('security-gate-blocked: a dependency manifest or lockfile changed; plain integrate cannot audit it before writing it. Nothing was written. Use integrate --queue.', 'security-gate-blocked');
+      }
+      let plainGate;
+      try {
+        plainGate = await runSecurityGate({ changes: writes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: securityGate.policy ?? profile?.security, exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: profile?.sensitive !== false, fingerprintKey: await securityFingerprintKey(root), cache: new Map() });
+      } catch (error) {
+        fail(`security-gate-error: the gate could not run (${String(error?.message ?? error).slice(0, 200)}). Nothing was written.`, 'security-gate-error');
+      }
       if (!plainGate.ok) {
         await recordGate({ root, runId: id, jobs: integratedJobs, gate: plainGate, appendEvent: (rootDir, event) => appendEvent(rootDir, event, { best: true }) });
         fail(`security-gate-blocked: nothing was written. ${formatBlocks(plainGate).slice(0, 600)}`, 'security-gate-blocked');
@@ -5436,8 +5447,8 @@ export function modelRouteChangeNoSmokeTestWarning(manifest, job) {
   return { code: 'model-route-no-smoke-test', jobId: job.id, files: changed, message: `model-route-no-smoke-test: Job ${job.id} changes ${changed.join(', ')}; declare a check named model-route-smoke (or an argv containing model-route-smoke/streaming-smoke) that sends one real streaming message through the project's own client before this route change lands` };
 }
 
-// How many auto-routed jobs this run has ready: the rented GPU lane is only for a big queue (see tools/router.mjs RENTED_MIN_READY).
-const readyAutoJobs = manifest => (manifest?.jobs ?? []).filter(job => job.agent === 'auto').length;
+// How many non-sensitive auto-routed jobs this run has ready now (no unmet `after`): the rented GPU lane is only for a big queue (see tools/router.mjs RENTED_MIN_READY).
+const readyAutoJobs = manifest => (manifest?.jobs ?? []).filter(job => job.agent === 'auto' && job.sensitive === false && !(Array.isArray(job.after) && job.after.length)).length;
 
 function pickJobRoute(job, lanes, options = {}) {
   return routeJob(job, { lanes, ...options, accepts: candidate => {

@@ -1,28 +1,16 @@
-=== tests/rented-run.test.mjs
-not ok 9 - with a live GPU session, auto-routed contract jobs spread over the replicas with no key, and a job that fails there is escalated off the rented lane
-  ---
-  error: 'route-exhausted: no cheap lane available for job job-0; Claude needs 2 real failures first or tier "expensive"'
-  code: 'route-exhausted'
-    routeJob (file:///Users/bean/project-swarm/tools/router.mjs:72:27)
-    pickJobRoute (file:///Users/bean/project-swarm/tools/swarm.mjs:5443:10)
-    file:///Users/bean/project-swarm/tools/swarm.mjs:2570:19
-    Array.map (<anonymous>)
-    runManifestMain (file:///Users/bean/project-swarm/tools/swarm.mjs:2568:38)
-    async TestContext.<anonymous> (file:///Users/bean/project-swarm/tests/rented-run.test.mjs:162:17)
-=== tests/lanes.test.mjs
-not ok 1 - defaults are complete, deeply frozen, and independently resolved
+=== tests/security-gate.test.mjs
+not ok 30 - UNPARSED_MANIFESTS maps the known unparsed manifests to their ecosystems
   ---
   error: |-
-    Expected values to be strictly deep-equal:
+    Expected values to be strictly equal:
     + actual - expected
     
-      {
-        adaptive: null,
-        backoff: {
-          baseMs: 2000,
-          maxMs: 300000,
-=== tests/security-gate.test.mjs
-not ok 21 - sensitive default true: semgrep is not run and skipped mentions sensitive
+    + undefined
+    - 'cargo'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+not ok 33 - allowUnparsedManifests lets a changed manifest through by path or by basename
   ---
   error: |-
     Expected values to be strictly equal:
@@ -33,26 +21,68 @@ not ok 21 - sensitive default true: semgrep is not run and skipped mentions sens
   name: 'AssertionError'
   expected: false
   actual: true
-not ok 27 - normalizePolicy keeps requireVulnerabilityScan, codeScan and codeScanSensitive types
-  ---
-  error: |-
-    Expected values to be strictly equal:
-    
-    'local' !== 'auto'
-    
-  code: 'ERR_ASSERTION'
-  name: 'AssertionError'
-  expected: 'auto'
-  actual: 'local'
 === tests/security-queue.test.mjs
-not ok 11 - semgrep is not called for a sensitive project by default
+not ok 11 - sensitive project runs the local pinned semgrep with metrics off
   ---
   error: |-
     The expression evaluated to a falsy value:
     
-      assert.ok(!calls.some(argv => argv[0] === 'semgrep'))
+      assert.ok(sg[2].endsWith('semgrep-local.yml'))
     
   code: 'ERR_ASSERTION'
   name: 'AssertionError'
   expected: true
   actual: false
+=== tests/security-plain-integrate.test.mjs
+not ok 5 - injected securityGate exec and fetchImpl are honoured by plain integrate for a made-up dependency
+  ---
+  error: 'security-gate-blocked security-gate-blocked: a dependency manifest or lockfile changed; plain integrate cannot audit it before writing it. Nothing was written. Use integrate --queue.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+    file:///Users/bean/project-swarm/tests/security-plain-integrate.test.mjs:42:12
+    async TestContext.<anonymous> (file:///Users/bean/project-swarm/tests/security-plain-integrate.test.mjs:106:3)
+=== tests/field-lessons-batch-a.test.mjs
+not ok 3 - L109: manifest preChecks run before checks when an integrated file is a lockfile
+  ---
+  error: '2 subtests failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: L110: integrate reports a compact failures array; --evidence appends prior failures to every job prompt
+    # Subtest: integrate reports a compact failures array for a failed check
+    ok 1 - integrate reports a compact failures array for a failed check
+      ---
+=== tests/field-lessons-batch-e.test.mjs
+not ok 2 - L159: packaging config that no check builds is flagged
+  ---
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: L160: .swarm/env.json reaches every check, mutant and worker; env --print pastes it
+    # Subtest: integrate checks see PLAYWRIGHT_BROWSERS_PATH from the root env file
+    ok 1 - integrate checks see PLAYWRIGHT_BROWSERS_PATH from the root env file
+      ---
+=== tests/field-lessons-batch-f.test.mjs
+not ok 2 - L166: shipRun wires integratedFiles into ship(), so the \#147 lock check runs on a real ship
+  ---
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: L167: .swarm/gotchas.md reaches every job prompt and env --print
+    # Subtest: loadGotchas: the root's own file wins; a linked worktree with none falls back to its main root's file; missing is null
+    ok 1 - loadGotchas: the root's own file wins; a linked worktree with none falls back to its main root's file; missing is null
+      ---
+=== tests/gpu.test.mjs
+not ok 9 - routing: a complete non-sensitive job goes to rented first; one failure escalates to Haiku, then Codex
+  ---
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'anthropic'
+    - 'rented'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
