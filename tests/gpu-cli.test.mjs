@@ -50,7 +50,7 @@ test('bakeoff with injected deps writes the report, reminds to terminate, and le
   t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
   const lines = [];
   const gpu = {
-    ssh: async argv => ({ stdout: String(argv.at(-1)).startsWith('nvidia-smi -L') ? 'GPU 0: x\nSUDO:ok' : '' }),
+    ssh: async argv => ({ stdout: String(argv.at(-1)).startsWith('nvidia-smi -L') ? 'GPU 0: x\nSUDO:ok\nDOCKER:28.0.1' : '' }),
     openTunnel: async () => ({ pid: 1 }),
     stopTunnel: async () => {},
     fetchImpl: async url => ({ ok: true, json: async () => (String(url).endsWith('/v1/models') ? { data: [{ id: 'Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8' }] } : { usage: { completion_tokens: 50 } }) }),

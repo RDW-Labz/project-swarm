@@ -21,9 +21,9 @@ function envFor(t) {
   return { ...process.env, SWARM_CONFIG: file };
 }
 const options = (extra = {}) => ({ target: 'ubuntu@203.0.113.9', key: '/home/me/.ssh/node', model: MODEL, hourlyUsd: 3, maxUsd: 6, pollMs: 1, ...extra });
-function fakes(env, { gpus = 4, now = () => 1700000000000, sudo = 'ok' } = {}) {
+function fakes(env, { gpus = 4, now = () => 1700000000000, sudo = 'ok', dockerVersion = '28.0.1' } = {}) {
   const calls = [];
-  return { calls, env, now, sleep: async () => {}, fetchImpl: async () => ({ ok: true, json: async () => ({ data: [{ id: MODEL }] }) }), ssh: async (argv, { input } = {}) => { calls.push({ argv, input }); return { stdout: String(argv.at(-1)).startsWith('nvidia-smi -L') ? Array.from({ length: gpus }, (_, n) => `GPU ${n}: NVIDIA RTX PRO 6000`).join('\n') + `\nSUDO:${sudo}` : '' }; }, probePort: async () => false, openTunnel: async ({ ports }) => { calls.push({ tunnel: ports }); return { pid: 4242 }; }, stopTunnel: async pid => { calls.push({ stopped: pid }); } };
+  return { calls, env, now, sleep: async () => {}, fetchImpl: async () => ({ ok: true, json: async () => ({ data: [{ id: MODEL }] }) }), ssh: async (argv, { input } = {}) => { calls.push({ argv, input }); return { stdout: String(argv.at(-1)).startsWith('nvidia-smi -L') ? Array.from({ length: gpus }, (_, n) => `GPU ${n}: NVIDIA RTX PRO 6000`).join('\n') + `\nSUDO:${sudo}\nDOCKER:${dockerVersion}` : '' }; }, probePort: async () => false, openTunnel: async ({ ports }) => { calls.push({ tunnel: ports }); return { pid: 4242 }; }, stopTunnel: async pid => { calls.push({ stopped: pid }); } };
 }
 
 test('gpu up: one replica per GPU, tunnel ports, expiry = what the cap pays for, nothing but commands sent, no key anywhere', async t => {

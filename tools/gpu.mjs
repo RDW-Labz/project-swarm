@@ -62,6 +62,14 @@ export function parseGpuCount(output) {
   return String(output).split('\n').filter(line => /^GPU \d+:/.test(line.trim())).length;
 }
 
+// The integer major Docker version from the DOCKER: line of the probe output, or null when missing or not an integer.
+export function parseDockerMajor(output) {
+  const line = String(output).split('\n').map(item => item.trim()).find(item => item.startsWith('DOCKER:'));
+  if (line === undefined) return null;
+  const major = line.slice('DOCKER:'.length).trim().split('.')[0];
+  return /^\d+$/.test(major) ? Number(major) : null;
+}
+
 export function replicaPorts(count, { remotePortBase = GPU_DEFAULTS.remotePortBase, localPortBase = GPU_DEFAULTS.localPortBase } = {}) {
   return Array.from({ length: count }, (_, index) => ({ index, remote: remotePortBase + index, local: localPortBase + index }));
 }
@@ -208,8 +216,13 @@ export async function gpuUp(options, deps) {
   const sshBase = [...(options.sshOptions ?? []), ...SSH_HARDENING, '-o', 'ClearAllForwardings=yes', '-i', options.key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=20'];
   const sshArgs = [...sshBase, '--', options.target];
   const shown = options.target.split('@').pop();
-  const output = String((await ssh([...sshArgs, 'nvidia-smi -L; echo SUDO:$(sudo -n true >/dev/null 2>&1 && echo ok || echo no)'], {})).stdout);
+  const output = String((await ssh([...sshArgs, 'nvidia-smi -L; echo SUDO:$(sudo -n true >/dev/null 2>&1 && echo ok || echo no); echo DOCKER:$(docker version --format "{{.Server.Version}}" 2>/dev/null)'], {})).stdout);
   const count = parseGpuCount(output);
+  const dockerMajor = parseDockerMajor(output);
+  if (dockerMajor === null || dockerMajor < 28) {
+    const reported = String(output).split('\n').map(item => item.trim()).find(item => item.startsWith('DOCKER:'))?.slice('DOCKER:'.length).trim() || 'unknown';
+    throw fail('gpu-docker-old', `the node has Docker ${reported}; version 28 or newer is required (older Docker lets other hosts on the same network reach ports published on 127.0.0.1)`);
+  }
   if (count < 1) throw fail('gpu-none', 'no GPU found on the node (nvidia-smi -L listed none)');
   const powerOff = !output.includes('SUDO:no');
   if (!powerOff) {

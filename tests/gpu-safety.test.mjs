@@ -21,7 +21,7 @@ function envFor(t) {
 
 const options = (extra = {}) => ({ target: 'ubuntu@203.0.113.9', key: '/home/me/.ssh/node', model: MODEL, hourlyUsd: 3, maxUsd: 6, pollMs: 1, ...extra });
 
-function fakes(env, { gpus = 4, now = () => 1700000000000, sudo = 'ok', ssOutput = '' } = {}) {
+function fakes(env, { gpus = 4, now = () => 1700000000000, sudo = 'ok', dockerVersion = '28.0.1', ssOutput = '' } = {}) {
   const calls = [];
   return {
     calls, env, now,
@@ -31,7 +31,7 @@ function fakes(env, { gpus = 4, now = () => 1700000000000, sudo = 'ok', ssOutput
       calls.push({ argv, input });
       const last = String(argv.at(-1));
       if (last === 'ss -ltnH') return { stdout: ssOutput };
-      return { stdout: last.startsWith('nvidia-smi -L') ? Array.from({ length: gpus }, (_, n) => `GPU ${n}: NVIDIA RTX PRO 6000`).join('\n') + `\nSUDO:${sudo}` : '' };
+      return { stdout: last.startsWith('nvidia-smi -L') ? Array.from({ length: gpus }, (_, n) => `GPU ${n}: NVIDIA RTX PRO 6000`).join('\n') + `\nSUDO:${sudo}\nDOCKER:${dockerVersion}` : '' };
     },
     probePort: async () => false,
     openTunnel: async ({ ports }) => { calls.push({ tunnel: ports }); return { pid: 4242 }; },
