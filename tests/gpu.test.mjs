@@ -197,7 +197,7 @@ test('swarm gpu: without --yes it only prints the plan; flags are strict; bake-o
   const touched = [];
   const gpu = { ssh: async () => { touched.push('ssh'); return { stdout: '' }; } };
   assert.equal((await runGpuCommand(['up', ...base, '--model', MODEL], { out: x => lines.push(x), env, gpu })).status, 'planned');
-  assert.equal((await runGpuCommand(['bakeoff', ...base, '--extra-nvfp4'], { out: x => lines.push(x), env, gpu })).status, 'planned');
+  assert.equal((await runGpuCommand(['bakeoff', ...base, '--extra-quant'], { out: x => lines.push(x), env, gpu })).status, 'planned');
   assert.deepEqual(touched, []);
   assert.match(lines.join('\n'), /nothing is started yet.*sent to the node: commands only; no files, keys or \.env.*only sensitive: false/s);
   assert.match(lines.join('\n'), /qwen3\.6-35b-a3b-fp8.*NVFP4 extras/s);

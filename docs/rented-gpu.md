@@ -27,7 +27,7 @@ Vendor numbers decide nothing here. The bake-off ranks them on our own tasks.
 
 ## Bake-off: `swarm gpu bakeoff`
 
-On **one** rented GPU, one model after another (FP8 first, `--extra-nvfp4` adds NVFP4):
+On **one** rented GPU, one model after another (FP8 first, `--extra-quant` adds NVFP4):
 
 ```
 swarm gpu bakeoff --target ubuntu@<ip> --key ~/.ssh/<key> --hourly-usd 1.8 --max-usd 12

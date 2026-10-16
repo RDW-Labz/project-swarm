@@ -10,7 +10,7 @@ import { gpuUp, gpuDown, gpuStatus, formatStatus, sessionHours, validateUpOption
 import { runBakeoff, renderBakeoff, writeBakeoffReport, measureThroughput, countEvalTasks, selectCandidates, LEVELS } from './gpu-bakeoff.mjs';
 
 const VALUE_FLAGS = new Set(['target', 'key', 'model', 'models', 'hourly-usd', 'max-usd', 'max-hours', 'gpus', 'per-replica', 'max-model-len', 'image', 'levels', 'repo']);
-const BOOLEAN_FLAGS = new Set(['yes', 'json', 'extra-nvfp4']);
+const BOOLEAN_FLAGS = new Set(['yes', 'json', 'extra-quant']);
 
 export function parseGpuFlags(args) {
   const flags = {};
@@ -61,7 +61,7 @@ export async function runGpuCommand(args, deps = {}) {
   const real = { ssh: deps.ssh ?? sshReal, openTunnel: deps.openTunnel ?? openTunnelReal, stopTunnel: deps.stopTunnel ?? stopTunnelReal, fetchImpl: deps.fetchImpl ?? fetch, env, log: message => process.stderr.write(`${message}\n`), ...(deps.gpu ?? {}) };
   if (verb === 'models') {
     out(SHORTLIST.map(item => `${item.label}\t${item.model}\t${item.quant}${item.extra ? '\t(extra run)' : ''}`).join('\n'));
-    out('Hugging Face ids are a shortlist: check each one exists before renting. FP8 runs first; NVFP4 only with --extra-nvfp4.');
+    out('Hugging Face ids are a shortlist: check each one exists before renting. FP8 runs first; NVFP4 only with --extra-quant.');
     return { status: 'ok' };
   }
   if (verb === 'status') {
@@ -90,7 +90,7 @@ async function bakeoff(flags, { out, real, deps }) {
   const candidates = selectCandidates(flags.models);
   const base = upOptions({ ...flags, model: candidates[0]?.model ?? 'x/y' }, { gpus: 1 });
   validateUpOptions(base);
-  if (!flags.yes) { out(`${planText(base, { gpus: '1' })}\nThe bake-off tests ${candidates.map(item => item.label).join(', ')}${flags['extra-nvfp4'] ? ' (and the NVFP4 extras)' : ''} one after another on one GPU, at ${LEVELS.join(', ')} concurrent agents. It stops starting models once the cap is spent.`); return { status: 'planned' }; }
+  if (!flags.yes) { out(`${planText(base, { gpus: '1' })}\nThe bake-off tests ${candidates.map(item => item.label).join(', ')}${flags["extra-quant"] ? ' (and the NVFP4 extras)' : ''} one after another on one GPU, at ${LEVELS.join(', ')} concurrent agents. It stops starting models once the cap is spent.`); return { status: 'planned' }; }
   const root = path.resolve(flags.repo ?? deps.bakeRoot ?? '.');
   const levels = flags.levels ? flags.levels.split(',').map(Number) : LEVELS;
   if (levels.some(level => !Number.isInteger(level) || level < 1 || level > 2000)) throw Object.assign(new Error('gpu-usage: --levels must be whole numbers from 1 to 2000'), { code: 'gpu-usage' });
@@ -99,7 +99,7 @@ async function bakeoff(flags, { out, real, deps }) {
   const runner = deps.runner ?? fileURLToPath(new URL('./swarm.mjs', import.meta.url));
   const info = deps.baseInfo ?? bench.buildBaseRepo(root, 'HEAD', path.join(tmp, 'repo'));
   const repo = path.join(tmp, 'repo');
-  const results = await runBakeoff({ candidates, hourlyUsd: base.hourlyUsd, capUsd: base.maxUsd, levels, includeExtra: flags['extra-nvfp4'] === true }, {
+  const results = await runBakeoff({ candidates, hourlyUsd: base.hourlyUsd, capUsd: base.maxUsd, levels, includeExtra: flags["extra-quant"] === true }, {
     log: real.log,
     start: async (candidate, { remainingUsd }) => {
       const session = await gpuUp({ ...base, model: candidate.model, quant: candidate.quant, args: candidate.args, replace: true, maxUsd: Math.max(remainingUsd, 0.01) }, real);
