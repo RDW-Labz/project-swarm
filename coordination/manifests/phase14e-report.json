@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu-bestof.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-lineup.test.mjs",
+        "tests/gpu-memory-plan.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "report-summary",
+      "context": [
+        "docs/state/gpu-bakeoff-run2.md",
+        "docs/state/gpu-bakeoff-run4.md"
+      ],
+      "outputs": [
+        "docs/state/gpu-bakeoff.md"
+      ],
+      "prompt": "Write docs/state/gpu-bakeoff.md as the consolidated bake-off report: a title, one short paragraph on setup, a summary table (columns: Model, Mode, Pass rate N=1, Pass rate N=3, Hard task N=1, Hard task N=3, Cost per passing task, Max agents under 35 ms/token, Prefix cache hit) with one row per measured configuration in the facts (Qwen3.6 thinking off, Qwen3.6 thinking on, Coder-Next thinking off, Lightning thinking off, Lightning thinking on), a section \"Winner and agents per GPU\", a section \"What went wrong and was fixed\", a section \"Findings\", a section \"Money and cleanup\", and a section \"Caveats\". Use short plain sentences and only the numbers in the facts. Facts (all measured on one rented RTX PRO 6000 S, Vast.ai container instance, datacenter host, vLLM v0.31.0 pinned image, $1.807/h; four bake-off runs; per-task details are in the details-run2, details-run3 and details-run4 folders next to this report; the raw reports are the run1 to run4 report files next to this report): RUN 1 was stopped: Qwen3.6 passed 3/10 at N=1 and 5/10 at N=3 and the hard task 5/16 then 16/16, but Nemotron failed to start (the plan's --prefix-match-unit 64 is invalid for its 2128 block size) and Coder-Next failed to start (the RedHat build is compressed-tensors, so --quantization modelopt_fp4 is rejected); both were fixed (the first run also showed that --moe-backend flashinfer_b12x crashes Qwen3.6 with a CUDA illegal memory access, so it is not used). RUN 2 (thinking off, short load prompt, sweep 32/64/96/128/192, server max-num-seqs 192): Qwen3.6 NVFP4 ms/token 13.4, 16.9, 23.4, 23.7, 29.4 and output tok/s 2392, 3781, 4095, 5407, 6535, pass rate 3/10 at N=1 and 5/10 at N=3, hard task 0/16 at N=1 (20.5 s, 5282 tokens) and 16/16 at N=3 (23.8 s, 12680 tokens), cost per passing task $0.0848; Coder-Next NVFP4 ms/token 17.2, 20.9, 23.7, 25.7, 32.5 and tok/s 1858, 3065, 4058, 4984, 5910, pass 3/10 then 4/10, hard 0 of 1 (the test file failed to load) then 7/16, cost per passing task $0.0954; Nemotron Lightning NVFP4 ms/token 12.3, 15.3, 18.5, 20.4, 24.4 and tok/s 2597, 4184, 5188, 6290, 7867, pass 0/10 then 1/10, hard 0/16 both, no passing task so no cost per pass. All three stayed under 35 ms/token at the largest tested count (192), the server limit, so their real ceiling is higher than 192. RUN 3 (thinking ON, longer shared-prefix load prompt, sweep 192/256/384, max-num-seqs 384): Qwen3.6 ms/token 42.9, 50, 100.7 with errors 0, 31, 222 and prefix cache hit 99 to 100 percent, pass 7/10 and 7/10, hard task failed (response truncated at 16000 tokens); Lightning ms/token 56.1, 80.9, 115.1 with errors 0, 100, 131, cache hit 58 percent, pass 2/10 and 2/10, hard task truncated. RUN 4 (thinking ON, hard-task limit raised to 30000 tokens, sweep 64/128/192): Qwen3.6 ms/token 24.2, 34.4, 39.7, output tok/s 2644, 3718, 4831, errors 0, 4, 0, prefix cache hit 99 to 100 percent, so the maximum under 35 ms/token is 128 agents; pass rate 7/10 at N=1 and 8/10 at N=3, cost per passing task $0.0624; hard task 16/16 at N=1 (80.2 s, 18445 tokens) and 0/16 at N=3 (128.2 s, 58647 tokens). Findings: (a) turning thinking on lifts Qwen3.6 from 3/10 to 7/10 on the lane tasks and solves the hard task, at about 3 to 4 times the tokens per task; (b) best-of-3 helped when thinking was off (3/10 to 5/10, hard 0 to 16/16) but little with thinking on (7/10 to 8/10) and it can hurt: tasks with no visible tests in the job's context give the selector nothing to test, so it keeps the smallest candidate, which on the hard task was wrong (0/16); (c) with thinking on, the practical limit was about 128 agents per GPU at under 35 ms/token with a long shared prefix (above about 192 agents the server queues and errors start; 256 gave errors, 384 many); with thinking off and short prompts 192 agents stayed at 29 ms/token; (d) prefix caching works: 99 to 100 percent hits for Qwen3.6 with a long shared prefix, 58 percent for Lightning; (e) Nemotron Lightning was the fastest per token and the cheapest per token but passed almost nothing (0 to 2 of 10), so it is not usable for tickets as configured; Coder-Next passed 3/10 to 4/10 with thinking off and was not retried with thinking. Winner: Qwen3.6-35B-A3B NVFP4 with thinking on (7 to 8 of 10 lane tasks, hard task 16/16 at N=1, about $0.062 per passing task, about 128 agents per GPU under 35 ms/token). Claude solved the hard task in about 30 s, 16/16 (Claude wrote the spec). Money: the Vast credit went from $25.00 to $20.13, so about $4.87 in total for four runs, three failed rental attempts of $0.10 and about 2.3 hours of the final instance; the $15 cap was never close; the instance was destroyed at the end and the Vast API shows zero instances. Caveats: the lane benchmark has only 10 tasks (one task is 10 percent); runs 2 to 4 changed the load prompt, thinking mode and sweep range, so numbers are comparable only within a run; cost per passing task counts the model's whole slot on the node (load, sweep, benchmarks, hard task) at the hourly price.\nignoreTests: tests/gpu-bestof.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-lineup.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-memory-plan.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "report-dogfood",
+      "context": [
+        "docs/state/dogfood.md"
+      ],
+      "outputs": [
+        "docs/state/dogfood.md"
+      ],
+      "prompt": "Return edits (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/state/dogfood.md, in the \"## Phase 14e notes\" section, add these bullets after the bullet that starts \"- Container mode: 3 module rewrites\" (use that start as the anchor; add after the whole bullet): \"- The real bake-off ran through the real swarm gpu up / bakeoff path on a rented Vast container (four runs, about $4.87 of the $25 credit, about 2.3 h; zero instances at the end). It found five real problems no unit test had: the plan's --prefix-match-unit 64 breaks Nemotron Lightning (block size 2128), the RedHat Coder-Next build is compressed-tensors (the modelopt_fp4 flag is rejected), --moe-backend flashinfer_b12x crashes Qwen3.6 on this card, a dead vLLM made gpu up wait the full 20 minutes (now fails fast), and the synthetic load prompt was too short to ever hit the prefix cache (0 percent; now 99 to 100 percent).\" and \"- Swarm share of this round: about 30 jobs (hard-task module and tests, memory-plan rewrites, startup fixes, details, docs), all complete on the first try except one re-run (a worker used edits that did not match); hand work was small: version pins, the agentsPerGpu fallback, a few test updates, the prompt and env tweaks found while the node was running.\" "
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "ideas-followups",
+      "context": [
+        "docs/plans/ideas.md"
+      ],
+      "outputs": [
+        "docs/plans/ideas.md"
+      ],
+      "prompt": "Return edits (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/plans/ideas.md, under the heading \"## New ideas\", append these lines at the end of the file (use the line \"Add one line each, with the date and who had it. Do not build from this list without Braden's OK.\" as the anchor and add the lines after it): \"- 2026-10-16 (orchestrator): best-of-N on tasks with no visible tests keeps the smallest candidate, which was wrong on the hard task; use a majority vote on normalized output, a cheap judge, or run the model's own generated tests.\" and \"- 2026-10-16 (orchestrator): retry Qwen3-Coder-Next and Nemotron Lightning with thinking on, and try Qwen3.6 with the MTP speculative decoding A/B from the memory plan.\" and \"- 2026-10-16 (orchestrator): rerun the sweep with a higher server max-num-seqs and levels 128 to 256 on the winner to find its real agent ceiling with thinking on.\" and \"- 2026-10-16 (orchestrator): wait for the ssh key to be active in vast.mjs rent (it took about 4 minutes after the instance was running) instead of retrying by hand.\" "
+    }
+  ]
+}
