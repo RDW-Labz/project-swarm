@@ -1,0 +1,102 @@
+[
+ {
+  "taskId": "bug-percentile",
+  "type": "bug-fix",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 695.311166",
+  "durationMs": 5929,
+  "tokens": 3881
+ },
+ {
+  "taskId": "bug-router-failover",
+  "type": "bug-fix",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 29.229125",
+  "durationMs": 3191,
+  "tokens": 5086
+ },
+ {
+  "taskId": "new-parse-duration",
+  "type": "new-function",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 35.886291",
+  "durationMs": 4910,
+  "tokens": 3050
+ },
+ {
+  "taskId": "new-cost-summary",
+  "type": "new-function",
+  "pass": false,
+  "status": "failed",
+  "error": "Worker must return every declared output exactly once",
+  "detail": "job failed: Worker must return every declared output exactly once",
+  "durationMs": 22424,
+  "tokens": null
+ },
+ {
+  "taskId": "refactor-anthropic-rates",
+  "type": "refactor",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 43.471125",
+  "durationMs": 14276,
+  "tokens": 7241
+ },
+ {
+  "taskId": "refactor-spend-reserve",
+  "type": "refactor",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 30.772916",
+  "durationMs": 3558,
+  "tokens": 16316
+ },
+ {
+  "taskId": "tests-model-matches",
+  "type": "test-writing",
+  "pass": false,
+  "status": "failed",
+  "error": "Worker returned an invalid, duplicate, or undeclared output: files[].path \"tests/model-matches.test.mjs\" is duplicate",
+  "detail": "job failed: Worker returned an invalid, duplicate, or undeclared output: files[].path \"tests/model-matches.test.mjs\" is duplicate",
+  "durationMs": 10466,
+  "tokens": null
+ },
+ {
+  "taskId": "tests-npm-script",
+  "type": "test-writing",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 28.972083",
+  "durationMs": 8092,
+  "tokens": 5460
+ },
+ {
+  "taskId": "docs-anthropic-lane",
+  "type": "docs",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "missing facts: \\$500 | \\$20",
+  "durationMs": 30294,
+  "tokens": 26554
+ },
+ {
+  "taskId": "docs-host-failures",
+  "type": "docs",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "missing facts: host-exit|any other code|one job",
+  "durationMs": 5374,
+  "tokens": 6940
+ }
+]

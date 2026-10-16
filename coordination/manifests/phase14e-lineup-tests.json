@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "tests-lineup",
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "context": [
+        "tests/best-of-adapter.test.mjs",
+        "tools/gpu.mjs",
+        "tools/gpu-bakeoff.mjs"
+      ],
+      "outputs": [
+        "tests/gpu-lineup.test.mjs"
+      ],
+      "prompt": "Write tests/gpu-lineup.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\", second line \"import './_isolate-config.mjs';\"). Part A (no network): import SHORTLIST, validateUpOptions, PINNED_IMAGE from ../tools/gpu.mjs and selectCandidates from ../tools/gpu-bakeoff.mjs. Tests: the SHORTLIST has exactly three entries with the labels qwen3.6-35b-a3b-fp8, qwen3-coder-next-nvfp4, nemotron-3.5-lightning-nvfp4 in that order and the models Qwen/Qwen3.6-35B-A3B-FP8, RedHatAI/Qwen3-Coder-Next-NVFP4, nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4; only the first is not marked extra; each quant matches its name (fp8, nvfp4, nvfp4); every entry's model and args pass validateUpOptions when used as { target: 'ubuntu@203.0.113.9', key: '/k', model, hourlyUsd: 2, maxUsd: 15, args } (no throw); the Qwen3.6 args include '--reasoning-parser' followed by 'qwen3'; the Nemotron args include '--reasoning-parser','nemotron_v3' and '--moe-backend','marlin'; selectCandidates() with no argument returns only the Qwen3.6 entry; selectCandidates('qwen3.6-35b-a3b-fp8,qwen3-coder-next-nvfp4,nemotron-3.5-lightning-nvfp4') returns the three in that order with their args intact. Part B (adapter): read tests/best-of-adapter.test.mjs for how it calls executeApi (from ../tools/api-adapters.mjs) with a live GPU session and a fake fetch for agent 'rented'; write two tests with the same fixture style: (1) the JSON request body sent for a rented job (no bestOf) contains chat_template_kwargs equal to { enable_thinking: false }; (2) with env.SWARM_RENTED_THINKING set to 'on' (put it in the env object you pass) the body has no chat_template_kwargs property. Use only names the files export; keep it short."
+    }
+  ]
+}

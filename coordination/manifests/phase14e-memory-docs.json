@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/kickoff.test.mjs"
+      ],
+      "id": "docs-memory-rented",
+      "context": [
+        "docs/rented-gpu.md",
+        "docs/plans/swarm-gpu-memory-plan.md"
+      ],
+      "outputs": [
+        "docs/rented-gpu.md"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/rented-gpu.md: (1) replace the whole table under the heading \"## Which models\" (header row \"| Model | Why |\" through its last row) with a table of the three NVFP4 models in this order, text-only and without MTP, using the numbers from docs/plans/swarm-gpu-memory-plan.md sections 2 to 4: | Model | Weights | Why |: Qwen3.6-35B-A3B NVFP4 (nvidia build; about 20.8 GB; full run; the fast small mixture-of-experts pick; about 80 to 120 agents per GPU expected), Nemotron 3.5 Lightning 30B-A3B NVFP4 (NVIDIA card; about 18.9 GB; full run; tiny KV cache so the most agents per GPU; its coding score is lower so it is for simple tickets if the bake-off shows it passes them), Qwen3-Coder-Next 80B-A3B NVFP4 (RedHat build; 47.5 GB; only if time is left; about 40 to 60 agents expected). (2) replace the sentence that starts \"Vendor numbers decide nothing here\" with: \"Vendor numbers decide nothing here: the bake-off ranks them on our own tasks by cost per passing task, then agents per GPU. The pinned vLLM is v0.31.0 (NVFP4 on this card needs 0.28 or newer; the FP8 Qwen3.6 build has an open slow-decode bug on it). One vLLM engine runs per GPU (no extra replicas on one GPU, no expert offload to RAM): see [the GPU memory plan](plans/swarm-gpu-memory-plan.md).\" (3) In the section \"## Bake-off: swarm gpu bakeoff\": replace the sentence that says it measures throughput with 1, 50 and 200 concurrent agents with: it sweeps 32, 64, 96, 128 and 192 concurrent agents and records ms per token, output tokens per second, errors and the prefix-cache hit rate at each; max agents per GPU is the highest count that stays under 35 ms per token for each agent; best-of-1 and best-of-3 are then measured at that count with that many agents loading the server; and replace \"FP8 first; NVFP4 only as an extra run\" style wording if present with: all models are NVFP4. (4) In the section \"## Container mode (Vast.ai and other container hosts)\" add a sentence after the sentence about offers must be verified hosts...: \"The host must also have PCIe Gen5 x16 (measured at least 45 GB/s), at least 16 vCPU, at least 64 GB of RAM, at least 200 GB of free NVMe disk.\" \nignoreTests: tests/kickoff.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "sensitive": true,
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/router.test.mjs",
+        "tests/t101-release.test.mjs",
+        "tests/update.test.mjs"
+      ],
+      "id": "docs-memory-changelog",
+      "context": [
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "CHANGELOG.md"
+      ],
+      "prompt": "Edit CHANGELOG.md in place; change nothing else. In the \"## 1.77.0\" section replace the bullet that starts \"- Bake-off lineup:\" (the whole bullet, one line) with these bullets: \"- Bake-off follows the GPU memory plan (docs/plans/swarm-gpu-memory-plan.md): the pinned vLLM image is v0.31.0 (by digest; NVFP4 on this card needs 0.28 or newer); all models are NVFP4, text-only, no MTP, started with the plan's flags (gpu-memory-utilization 0.93, fp8 KV cache, prefix caching, mamba cache align, 131072 context, per-model quantization, MoE backend, parsers and environment): Qwen3.6-35B-A3B NVFP4, Nemotron 3.5 Lightning NVFP4, and Qwen3-Coder-Next NVFP4 (RedHat build) only when at least an hour of the session is left; one vLLM engine per GPU.\" and \"- The bake-off sweeps 32, 64, 96, 128 and 192 concurrent agents (ms per token, output tokens per second, errors and prefix-cache hit rate at each), takes the highest count under 35 ms per token as the agents per GPU, measures best-of-1 and best-of-3 at that count with that many agents loading the server, and ranks by cost per passing task, then agents per GPU. The rented lane sends `chat_template_kwargs: { enable_thinking: false }` (set `SWARM_RENTED_THINKING=on` to allow thinking). Container offers must also have PCIe Gen5 x16, at least 16 vCPU, 64 GB of RAM and 200 GB of NVMe disk; `rent --offer auto` picks the best current offer (offer ids on a busy host change by the minute); `--local-port` moves the tunnel off a port that is already in use (the exposure check refused to share one). `the test scratch folders is ignored.\" \nignoreTests: tests/anthropic-lane.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/codex-envelope.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lesson-t80-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-aa-core.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ab-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ag-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ah-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-context.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-o.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-x.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/job-types.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/openrouter.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/router.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/t101-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/update.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

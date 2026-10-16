@@ -5,7 +5,7 @@ import { checkContainerOffer, rankContainerOffers, containerCreateBody } from '.
 import { PINNED_IMAGE } from '../tools/gpu.mjs';
 
 const cap = { hours: 4, maxUsd: 15 };
-const good = { id: 7, gpu_name: 'RTX PRO 6000 S', num_gpus: 1, rentable: true, verification: 'verified', reliability2: 0.995, dph_total: 1.3, hosting_type: 1 };
+const good = { id: 7, gpu_name: 'RTX PRO 6000 S', num_gpus: 1, rentable: true, verification: 'verified', reliability2: 0.995, dph_total: 1.3, hosting_type: 1, pci_gen: 5, pcie_bw: 50, cpu_cores_effective: 32, cpu_ram: 131072, disk_space: 500, disk_name: 'nvme0n1', disk_bw: 3000 };
 
 const refused = (offer, reason) => assert.throws(() => checkContainerOffer(offer, cap), error => error.message.includes('offer 7 refused') && error.message.includes(reason));
 
@@ -26,6 +26,16 @@ test('unapproved offers are refused with the reason', () => {
   refused({ ...good, dph_total: 4 }, 'over 80%');
 });
 
+test('hardware thresholds refuse offers below PCIe Gen5, 16 vCPU, 64 GB RAM, 200 GB disk and NVMe', () => {
+  refused({ ...good, pci_gen: 4 }, 'PCIe is Gen 4');
+  refused({ ...good, pcie_bw: 30 }, 'want Gen5 x16 at 45 GB/s or more');
+  refused({ ...good, cpu_cores_effective: 8 }, '8 vCPU, want 16 or more');
+  refused({ ...good, cpu_ram: 32768 }, 'RAM is 32 GB, want 64 GB or more');
+  refused({ ...good, disk_space: 100 }, '100 GB disk available, want 200 GB or more');
+  refused({ ...good, disk_name: 'sata-ssd', disk_bw: 500 }, 'disk is not NVMe');
+  assert.ok(checkContainerOffer({ ...good, disk_name: 'sata-ssd', disk_bw: 2000 }, cap).worstUsd > 0);
+});
+
 test('reliability falls back to reliability when reliability2 is absent', () => {
   const base = { ...good, reliability2: undefined };
   assert.ok(checkContainerOffer({ ...base, reliability: 0.995 }, cap).worstUsd > 0);
@@ -34,11 +44,12 @@ test('reliability falls back to reliability when reliability2 is absent', () => 
 
 test('rankContainerOffers drops failures, puts datacenter first, sorts by price, does not mutate', () => {
   const offers = [
-    { id: 1, gpu_name: 'RTX PRO 6000 S', num_gpus: 1, rentable: true, verification: 'verified', reliability2: 0.995, dph_total: 1.0, hosting_type: 0 },
-    { id: 2, gpu_name: 'RTX PRO 6000 S', num_gpus: 1, rentable: true, verification: 'verified', reliability2: 0.995, dph_total: 2.0, hosting_type: 1 },
-    { id: 3, gpu_name: 'RTX PRO 6000 S', num_gpus: 1, rentable: true, verification: 'verified', reliability2: 0.995, dph_total: 0.8, hosting_type: 0 },
-    { id: 4, gpu_name: 'RTX PRO 6000 S', num_gpus: 1, rentable: true, verification: 'verified', reliability2: 0.995, dph_total: 1.5, hosting_type: 1 },
-    { id: 5, gpu_name: 'RTX PRO 6000 S', num_gpus: 1, rentable: false, verification: 'verified', reliability2: 0.995, dph_total: 0.1, hosting_type: 1 },
+    { ...good, id: 1, dph_total: 1.0, hosting_type: 0 },
+    { ...good, id: 2, dph_total: 2.0, hosting_type: 1 },
+    { ...good, id: 3, dph_total: 0.8, hosting_type: 0 },
+    { ...good, id: 4, dph_total: 1.5, hosting_type: 1 },
+    { ...good, id: 5, rentable: false, dph_total: 0.1, hosting_type: 1 },
+    { ...good, id: 6, pci_gen: 4, dph_total: 0.2, hosting_type: 1 },
   ];
   const before = JSON.stringify(offers);
   const ranked = rankContainerOffers(offers);

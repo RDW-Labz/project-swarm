@@ -9,9 +9,9 @@ import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { gpuUp, gpuDown, gpuStatus, formatStatus, sessionHours, validateUpOptions, SHORTLIST, GPU_DEFAULTS, SSH_HARDENING, readSessionFile, removeSession, authFetch, PINNED_IMAGE } from './gpu.mjs';
 import { fetchCacheStats } from './gpu-cache.mjs';
-import { runBakeoff, renderBakeoff, writeBakeoffReport, measureThroughput, countEvalTasks, selectCandidates, LEVELS } from './gpu-bakeoff.mjs';
+import { runBakeoff, renderBakeoff, writeBakeoffReport, measureThroughput, countEvalTasks, selectCandidates, LEVELS, runUnderLoad } from './gpu-bakeoff.mjs';
 
-const VALUE_FLAGS = new Set(['target', 'key', 'model', 'models', 'hourly-usd', 'max-usd', 'max-hours', 'gpus', 'per-replica', 'max-model-len', 'image', 'levels', 'repo', 'best-of', 'ssh-port', 'bench-ref', 'mode', 'probe-ports']);
+const VALUE_FLAGS = new Set(['target', 'key', 'model', 'models', 'hourly-usd', 'max-usd', 'max-hours', 'gpus', 'per-replica', 'max-model-len', 'image', 'levels', 'repo', 'best-of', 'ssh-port', 'bench-ref', 'mode', 'probe-ports', 'local-port']);
 const BOOLEAN_FLAGS = new Set(['yes', 'json', 'extra-quant', 'allow-no-poweroff']);
 
 export function parseGpuFlags(args) {
@@ -39,7 +39,7 @@ function parseProbePorts(value) {
 const expand = file => (typeof file === 'string' && file.startsWith('~/') ? path.join(os.homedir(), file.slice(2)) : file);
 
 export function upOptions(flags, extra = {}) {
-  return { target: flags.target, key: expand(flags.key), model: flags.model, hourlyUsd: num(flags['hourly-usd']), maxUsd: num(flags['max-usd']), maxHours: num(flags['max-hours']), gpus: num(flags.gpus), perReplica: num(flags['per-replica']), maxModelLen: num(flags['max-model-len']), image: flags.image, sshPort: flags['ssh-port'] === undefined ? undefined : Number(flags['ssh-port']), mode: flags.mode, probePorts: parseProbePorts(flags['probe-ports']), allowNoPowerOff: flags['allow-no-poweroff'] === true, bestOf: flags['best-of'] === undefined || flags['best-of'].includes(',') ? undefined : Number(flags['best-of']), ...extra };
+  return { target: flags.target, key: expand(flags.key), model: flags.model, hourlyUsd: num(flags['hourly-usd']), maxUsd: num(flags['max-usd']), maxHours: num(flags['max-hours']), gpus: num(flags.gpus), perReplica: num(flags['per-replica']), maxModelLen: num(flags['max-model-len']), image: flags.image, sshPort: flags['ssh-port'] === undefined ? undefined : Number(flags['ssh-port']), mode: flags.mode, localPort: flags['local-port'] === undefined ? undefined : Number(flags['local-port']), probePorts: parseProbePorts(flags['probe-ports']), allowNoPowerOff: flags['allow-no-poweroff'] === true, bestOf: flags['best-of'] === undefined || flags['best-of'].includes(',') ? undefined : Number(flags['best-of']), ...extra };
 }
 
 export function planText(options, { gpus = options.gpus ?? 'all' } = {}) {
@@ -149,12 +149,14 @@ async function bakeoff(flags, { out, real, deps }) {
   const candidates = selectCandidates(flags.models);
   const base = upOptions({ ...flags, model: candidates[0]?.model ?? 'x/y' }, { gpus: 1 });
   validateUpOptions(base);
-  if (!flags.yes) { out(`${planText(base, { gpus: '1' })}\nThe bake-off tests ${candidates.map(item => item.label).join(', ')}${flags["extra-quant"] ? ' (and the NVFP4 extras)' : ''} one after another on one GPU, at ${LEVELS.join(', ')} concurrent agents. It stops starting models once the cap is spent.`); return { status: 'planned' }; }
+  if (!flags.yes) { out(`${planText(base, { gpus: '1' })}\nThe bake-off tests ${candidates.map(item => item.label).join(', ')}one after another on one GPU, at ${LEVELS.join(', ')} concurrent agents. The bake-off also runs the hard task (planWaves: spec and stub only, 16 hidden tests, 10 minutes per attempt) at each best-of count. one vLLM engine per GPU; all models NVFP4, text-only; best-of-N is measured under load at the largest agent count that stays under 35 ms/token. It stops starting models once the cap is spent.`); return { status: 'planned' }; }
   const root = path.resolve(flags.repo ?? deps.bakeRoot ?? '.');
   const levels = flags.levels ? flags.levels.split(',').map(Number) : LEVELS;
   if (levels.some(level => !Number.isInteger(level) || level < 1 || level > 2000)) throw Object.assign(new Error('gpu-usage: --levels must be whole numbers from 1 to 2000'), { code: 'gpu-usage' });
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-bakeoff-'));
   const bench = deps.bench ?? await import('../bench/lane-benchmark/lib.mjs');
+  const hard = deps.hardTask ?? (await import('../bench/gpu-bakeoff/hard-task.mjs'));
+  const hardTask = typeof hard === 'function' ? hard : ({ model, bestOf }) => hard.runHardTask({ model, bestOf, runner, maxUsd: base.maxUsd });
   const runner = deps.runner ?? fileURLToPath(new URL('./swarm.mjs', import.meta.url));
   const info = deps.baseInfo ?? bench.buildBaseRepo(root, flags['bench-ref'] ?? 'v1.65.0', path.join(tmp, 'repo'));
   const repo = path.join(tmp, 'repo');
@@ -164,7 +166,7 @@ async function bakeoff(flags, { out, real, deps }) {
     start: async (candidate, { remainingUsd }) => {
       let session;
       try {
-        session = await gpuUp({ ...base, model: candidate.model, quant: candidate.quant, args: candidate.args, routable: false, perReplica: Math.max(...levels, 1), maxUsd: Math.max(remainingUsd, 0.01) }, real);
+        session = await gpuUp({ ...base, model: candidate.model, quant: candidate.quant, args: candidate.args, env: candidate.env, routable: false, perReplica: Math.max(...levels, 1), maxUsd: Math.max(remainingUsd, 0.01) }, real);
       } catch (error) {
         try { await gpuDown(real); } catch { /* ignore: the original error matters */ }
         throw error;
@@ -172,11 +174,14 @@ async function bakeoff(flags, { out, real, deps }) {
       apiKey = session.apiKey;
       return { endpoint: session.endpoints[0], stop: () => gpuDown(real) };
     },
+    withLoad: (context, fn) => runUnderLoad({ ...context, fetchImpl: authFetch(real.fetchImpl, apiKey) }, fn),
     cacheStats: async ({ endpoint }) => fetchCacheStats(endpoint, authFetch(real.fetchImpl, apiKey)),
-    benchmark: async ({ model, bestOf }) => {
+    benchmark: async ({ model, bestOf, candidate }) => {
       const run = bench.runLane({ lane: 'rented', repo, runner, model, bestOf, maxUsd: base.maxUsd, baseInfo: info, log: real.log });
+      try { const dir = path.join(root, 'docs', 'state', 'gpu-bakeoff-details'); fs.mkdirSync(dir, { recursive: true }); const label = String(candidate?.label ?? model).replace(/[^A-Za-z0-9._-]/g, '_'); const details = run.results.map(item => ({ taskId: item.taskId, type: item.type, pass: item.pass, status: item.status, error: item.error, detail: String(item.detail ?? '').slice(0, 300), durationMs: item.durationMs, tokens: item.tokens })); fs.writeFileSync(path.join(dir, `${label}-bestof${bestOf}.json`), JSON.stringify(details, null, 1)); } catch { /* writing details must never fail the benchmark */ }
       return { passed: run.results.filter(item => item.pass).length, total: run.results.length };
     },
+    hardTask,
     throughput: ({ endpoint, model, level }) => measureThroughput({ endpoint, model, level, fetchImpl: authFetch(real.fetchImpl, apiKey) }),
   }));
   const text = renderBakeoff(results, { hourlyUsd: base.hourlyUsd, evalTasks: countEvalTasks(root), levels });

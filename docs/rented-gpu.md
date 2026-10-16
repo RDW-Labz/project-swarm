@@ -19,24 +19,23 @@ A lane for **small, fast coding models** (about 7B to 35B, mixture-of-experts pr
 
 `swarm gpu models` lists the shortlist (ids are a starting point; check each exists on Hugging Face before renting). FP8 is the safe path on every Blackwell card; NVFP4 only as an extra run.
 
-| Model | Why |
-| --- | --- |
-| Qwen3.6-35B-A3B (FP8) | 35B total, 3B active; strongest vendor-reported coding score of the group; Apache 2.0 |
-| Qwen3-Coder-30B-A3B-Instruct (FP8) | The coding-specialist baseline; 3B active; Apache 2.0 |
-| Devstral Small 2 (24B dense) | The dense control: no mixture-of-experts; Apache 2.0 |
-| Nemotron-3.5-Lightning-30B-A3B (NVFP4, extra run) | The NVFP4-on-Blackwell test; weaker coding scores; NVFP4 support on RTX-class (SM120) cards is not confirmed |
+| Model | Weights | Why |
+| --- | --- | --- |
+| Qwen3.6-35B-A3B NVFP4 (nvidia build) | about 20.8 GB | full run; the fast small mixture-of-experts pick; about 80 to 120 agents per GPU expected |
+| Nemotron 3.5 Lightning 30B-A3B NVFP4 (NVIDIA card) | about 18.9 GB | full run; tiny KV cache so the most agents per GPU; its coding score is lower so it is for simple tickets if the bake-off shows it passes them |
+| Qwen3-Coder-Next 80B-A3B NVFP4 (RedHat build) | 47.5 GB | only if time is left; about 40 to 60 agents expected |
 
-Vendor numbers decide nothing here. The bake-off ranks them on our own tasks.
+Vendor numbers decide nothing here: the bake-off ranks them on our own tasks by cost per passing task, then agents per GPU. The pinned vLLM is v0.31.0 (NVFP4 on this card needs 0.28 or newer; the FP8 Qwen3.6 build has an open slow-decode bug on it). One vLLM engine runs per GPU (no extra replicas on one GPU, no expert offload to RAM): see [the GPU memory plan](plans/swarm-gpu-memory-plan.md).
 
 ## Bake-off: `swarm gpu bakeoff`
 
-On **one** rented GPU, one model after another (FP8 first, `--extra-quant` adds NVFP4):
+On **one** rented GPU, one model after another (all models are NVFP4):
 
 ```
 swarm gpu bakeoff --target ubuntu@<ip> --key ~/.ssh/<key> --hourly-usd 1.8 --max-usd 12
 ```
 
-For each model it starts one server, runs our lane benchmark (10 real tasks scored by hidden tests; the lessons eval set joins once Phase 15 builds `evals/`), then measures throughput with **1, 50 and 200 concurrent agents** (`--levels` to change). It reports and writes `docs/state/gpu-bakeoff.md`:
+For each model it starts one server, runs our lane benchmark (10 real tasks scored by hidden tests; the lessons eval set joins once Phase 15 builds `evals/`), then sweeps 32, 64, 96, 128 and 192 concurrent agents and records ms per token, output tokens per second, errors and the prefix-cache hit rate at each; max agents per GPU is the highest count that stays under 35 ms per token for each agent; best-of-1 and best-of-3 are then measured at that count with that many agents loading the server. It reports and writes `docs/state/gpu-bakeoff.md`:
 
 - **pass rate** on our tasks;
 - **tokens per second**, total and per agent, at each level;
@@ -51,6 +50,8 @@ Models are ranked by pass rate, then cost per passing task. A model that fails t
 **Prefix caching.** vLLM starts with `--enable-prefix-caching`. The rented lane sends the project's shared files first and the ticket's own task last, so every agent on a project reuses the cached prefix. List shared files first in a job's `context`. The bake-off and `swarm gpu status` show vLLM's own prefix-cache hit rate; target over 70% on a project run.
 
 **Best-of-N.** On this lane only (tokens are nearly free), set `bestOf` (1 to 8) on a job, or `swarm gpu up --best-of 3` for a default. The lane asks the server for N answers in one request, runs the ticket's visible tests (the test files in the job's `context`) on each in a temporary git worktree with the answer applied, and keeps the smallest passing one. If none pass, the job fails with `best-of-failed` and escalates to Haiku, then Codex, as usual. A candidate that is not valid output is skipped. With no tests in context it picks the smallest valid one. It is never used on paid API lanes.
+
+Tasks. The 10 lane-benchmark tasks (two bug fixes, two new functions, two refactors, two test-writing tasks, two docs tasks; see bench/lane-benchmark/README.md) are scored by hidden tests, structural checks, mutants or fact checks. A hard task is added on top (bench/gpu-bakeoff/tasks/hard-planwaves): planWaves, a ticket wave planner. The model gets only TASK.md and a stub planWaves.mjs, never the tests or the solution; it is graded by running the 16 hidden tests (pass is 16 of 16), with 10 minutes per attempt. Per model and per best-of count the report records tests passed, time, attempts and tokens. Claude solved it in about 30 seconds, 16 of 16 on the first run (and Claude wrote the spec, so it had an advantage). Known issue: Qwen3.6 NVFP4 crashes with a CUDA illegal memory access under vLLM 0.31.0 on the RTX PRO 6000 when started with --moe-backend flashinfer_b12x, so that flag is not used; vLLM's default MoE backend starts and serves.
 
 ## Using the winner: `swarm gpu up|down|status`
 
@@ -124,7 +125,7 @@ Use `swarm gpu up --mode container` for a node that IS a container already runni
 - Exposure is checked as in docker mode: TCP probes from this computer, plus `--probe-ports N,N` for external ports the host maps. The node-side check reads `/proc/net/tcp` and `/proc/net/tcp6` (no `ss` or docker needed). Any listener on a server port that is not loopback fails `gpu up` and stops the servers.
 - The rental helper (`bench/gpu-bakeoff/vast.mjs`) then destroys the instance. Run gpu up as `swarm gpu up ... || node bench/gpu-bakeoff/vast.mjs destroy`.
 - A container cannot be powered off, so the timer on the node only stops the servers. Billing ends when the instance is destroyed. The helper's detached reaper does this at the deadline (it runs under `caffeinate -i` so the Mac cannot sleep), and `gpu down` tells you to do it.
-- Offers for container mode must be verified hosts with reliability of at least 99%, RTX PRO 6000 S or WS (not Max-Q), datacenter preferred, and 4 hours at their price must be at most 80% of the cap.
+- Offers for container mode must be verified hosts with reliability of at least 99%, RTX PRO 6000 S or WS (not Max-Q), datacenter preferred, and 4 hours at their price must be at most 80% of the cap. The host must also have PCIe Gen5 x16 (measured at least 45 GB/s), at least 16 vCPU, at least 64 GB of RAM, at least 200 GB of free NVMe disk.
   - Search: `node bench/gpu-bakeoff/vast.mjs search --mode container`
   - Rent: `node bench/gpu-bakeoff/vast.mjs rent --mode container --offer ID --hours 4 --max-usd 15`
 - The instance id is printed first and kept in `~/.project-swarm-scratch/vast-instance.json`, so it can be destroyed in the Vast console.

@@ -10,3 +10,6 @@ artifacts/
 /versions/
 /current
 .tmp-e2e/
+
+# test scratch folders left by the suite
+.tmp-test-*/

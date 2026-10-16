@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-container-review.test.mjs",
+        "tests/gpu-container.test.mjs",
+        "tests/gpu-docker.test.mjs",
+        "tests/gpu-hardening.test.mjs",
+        "tests/gpu-lineup.test.mjs",
+        "tests/gpu-safety.test.mjs",
+        "tests/gpu-vast.test.mjs",
+        "tests/gpu.test.mjs",
+        "tests/vast-container.test.mjs"
+      ],
+      "id": "port-gpu",
+      "context": [
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tools/gpu.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu.mjs (plain ESM; same first line, exports and signatures; change ONLY this). Add an optional option options.localPort (integer from 1024 to 65000, else fail('gpu-option-invalid', 'localPort must be a whole number from 1024 to 65000') in validateUpOptions): the first local tunnel port. In gpuUp, everywhere replicaPorts(gpus) is called to build the ports list used for the tunnel and the endpoints, pass { localPortBase: options.localPort ?? GPU_DEFAULTS.localPortBase } as the second argument (so endpoints are http://127.0.0.1:<localPort + index>). Do not edit tests.\nignoreTests: tests/adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container-review.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-docker.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-hardening.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-lineup.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-safety.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-vast.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/vast-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-container-review.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "port-commands",
+      "context": [
+        "tools/gpu-commands.mjs"
+      ],
+      "outputs": [
+        "tools/gpu-commands.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu-commands.mjs (plain ESM; same first line, exports and signatures; change ONLY this). Add a value flag --local-port (add 'local-port' to VALUE_FLAGS) and pass localPort: flags['local-port'] === undefined ? undefined : Number(flags['local-port']) in upOptions. Do not edit tests.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container-review.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}
