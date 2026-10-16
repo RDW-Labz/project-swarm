@@ -73,6 +73,61 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-15 | - | tasks-module: Implements section 3 of the design in tools/brain-tasks.mjs: think, digest, triage, dr | anthropic | claude-haiku-5-5 | pass | 28,587 | $0.01 |
 | 2026-10-15 | - | tasks-tests: Adds tests/brain-tasks.test.mjs for tools/brain-tasks.mjs, using injected fake ask func | anthropic | claude-haiku-5-5 | pass | 22,244 | $0.01 |
 | 2026-10-15 | - | review-14b: Phase 14b safety review. Highs: think ignores project sensitivity, so it can fall back t | claude | opus | pass | 64,577 | $0.56 |
+| 2026-10-16 | - | f1-rules: Adds the pinned local Semgrep rule file tools/security-rules/semgrep-local.yml with JavaSc | anthropic | claude-haiku-5-5 | pass | 5,967 | $0.00 |
+| 2026-10-16 | - | f1-router: Updated tools/router.mjs only. Added exported RENTED_MIN_READY = 700 and a ready option: | anthropic | claude-haiku-5-5 | pass | 8,014 | $0.00 |
+| 2026-10-16 | - | f1-lanes: Changed the anthropic default concurrency from 16 to 32 with one edit to tools/lanes.mjs, | anthropic | claude-haiku-5-5 | pass | 16,126 | $0.00 |
+| 2026-10-16 | - | f1-profile: Rewrote tools/init-profile.mjs with the requested changes limited to validateSecurity: c | anthropic | claude-haiku-5-5 | pass | 19,626 | $0.01 |
+| 2026-10-16 | - | f1-rules-fix: Updated only the swarm-js-exec-injection rule in tools/security-rules/semgrep-local.ym | anthropic | claude-haiku-5-5 | pass | 5,641 | $0.00 |
+| 2026-10-16 | - | f2-gate: Updated tools/security-gate.mjs for the A1 follow-up: pinned local semgrep rules with hash | anthropic | claude-haiku-5-5 | pass | 25,695 | $0.01 |
+| 2026-10-16 | - | f3-rented-run: Rewrote tests/rented-run.test.mjs only. The failing GPU-session test (test 9) no long | anthropic | claude-haiku-5-5 | pass | 51,839 | $0.01 |
+| 2026-10-16 | - | f3-lanes: Updated tests/lanes.test.mjs for the anthropic lane default concurrency change (16 to 32). | anthropic | claude-haiku-5-5 | pass | 57,817 | $0.01 |
+| 2026-10-16 | - | f3-security-gate: Updated tests/security-gate.test.mjs for the local-by-default Semgrep gate. Rewrot | anthropic | claude-haiku-5-5 | pass | 72,973 | $0.01 |
+| 2026-10-16 | - | f3-security-queue: Updated tests/security-queue.test.mjs as a full file. Rewrote the failing 'semgre | anthropic | claude-haiku-5-5 | pass | 62,326 | $0.01 |
+| 2026-10-16 | - | f3-router: Updated tests/router.test.mjs by keeping every existing test unchanged (test-failures.txt | anthropic | claude-haiku-5-5 | pass | 48,314 | $0.01 |
+| 2026-10-16 | - | f3-init-profile: Updated tests/init-profile.test.mjs as a full-file rewrite. Kept all existing tests | anthropic | claude-haiku-5-5 | pass | 52,837 | $0.01 |
+| 2026-10-16 | - | f3-plain: Adds tests/security-plain-integrate.test.mjs covering the plain integrateRun gate: planted | anthropic | claude-haiku-5-5 | pass | 21,941 | $0.00 |
+| 2026-10-16 | - | f4-lanes-doc: Adds two sections (Haiku rate limits and lane concurrency; Which lane gets a ticket) d | anthropic | claude-haiku-5-5 | pass | 7,342 | $0.00 |
+| 2026-10-16 | - | f4-gate-doc: Returned exact-text edits for docs/security-gate.md only. Fixed the two sentences sayin | anthropic | claude-haiku-5-5 | pass | 6,633 | $0.00 |
+| 2026-10-16 | - | f4-changelog: Inserted 1.80.0 directly after the changelog heading with both supplied bullets.; chec | codex | gpt-6.1-sol | pass | 15,947 | subscription |
+| 2026-10-16 | - | f4-dogfood: Added the requested A1 follow-up bullet after the last "- A1 security gate:" bullet in t | anthropic | claude-haiku-5-5 | pass | 12,873 | $0.00 |
+| 2026-10-16 | - | review-a1-followup: Partial review. Section (1), listing every write path beyond plain integrate and | claude | opus | blocked: blocked: Partial review. Section (1), listing every write pa | 46,296 | $0.42 |
+| 2026-10-16 | - | g1-rules: Returned the complete tools/security-rules/semgrep-local.yml with all existing rules uncha | anthropic | claude-haiku-5-5 | pass | 7,888 | $0.00 |
+| 2026-10-16 | - | g2-gate: Rewrote tools/security-gate.mjs with the requested changes: pinned rules hash 3ad961b2..., | anthropic | claude-haiku-5-5 | pass | 37,524 | $0.01 |
+| 2026-10-16 | - | g2-deps: Changed manifest detection in parseDeps so the last path segment is lower-cased before matc | anthropic | claude-haiku-5-5 | pass | 13,420 | $0.00 |
+| 2026-10-16 | - | g3-security-gate: Rewrote tests/security-gate.test.mjs as a complete file. Fixed the exact-map UNPAR | anthropic | claude-haiku-5-5 | pass | 63,662 | $0.02 |
+| 2026-10-16 | - | g3-security-queue: Updated tests/security-queue.test.mjs. The failing test (sensitive project runs t | anthropic | claude-haiku-5-5 | pass | 42,123 | $0.01 |
+| 2026-10-16 | - | g3-security-plain-integrate: Updated tests/security-plain-integrate.test.mjs. The made-up-dependency | anthropic | claude-haiku-5-5 | pass | 29,860 | $0.00 |
+| 2026-10-16 | - | g3-field-lessons-batch-a: Updated tests/field-lessons-batch-a.test.mjs only. The two failing L109 su | anthropic | claude-haiku-5-5 | pass | 45,667 | $0.01 |
+| 2026-10-16 | - | g3-field-lessons-batch-e: Returned the complete tests/field-lessons-batch-e.test.mjs. The only chang | anthropic | claude-haiku-5-5 | pass | 57,101 | $0.01 |
+| 2026-10-16 | - | g3-field-lessons-batch-f: Updated tests/field-lessons-batch-f.test.mjs in full. The only change is i | anthropic | claude-haiku-5-5 | pass | 41,341 | $0.01 |
+| 2026-10-16 | - | g3-gpu: Rewrote the failing rented-lane routing test in tests/gpu.test.mjs to pass ready: 700, which | anthropic | claude-haiku-5-5 | pass | 42,970 | $0.01 |
+| 2026-10-16 | - | g3-deps: Rewrote tests/security-deps.test.mjs as a full file and added one test covering newDependen | anthropic | claude-haiku-5-5 | pass | 25,541 | $0.01 |
+| 2026-10-16 | - | g3-router: Adds tests/router-ready.test.mjs covering routeJob's ready-count threshold for the rented | anthropic | claude-haiku-5-5 | pass | 12,161 | $0.00 |
+| 2026-10-16 | - | g4-doc: Rewrote docs/security-gate.md as one complete file to match the supplied code after the A1 f | anthropic | claude-haiku-5-5 | pass | 18,504 | $0.00 |
+| 2026-10-16 | - | g4-changelog: Added the supplied bullet after the last bullet in section 1.80.0.; checksRun: not run | codex | gpt-6.1-sol | pass | 15,677 | subscription |
+| 2026-10-16 | - | g4-dogfood: Added the requested Review bullet immediately after the A1 follow-up and router bullet i | anthropic | claude-haiku-5-5 | pass | 13,135 | $0.00 |
+| 2026-10-16 | - | p13-scope: Wrote tools/scope.mjs per design section 1: SCOPE_TEMPLATE, parseScope, checkScope (all l | anthropic | claude-haiku-5-5 | pass | 23,518 | $0.01 |
+| 2026-10-16 | - | p13-tickets: Wrote tools/tickets.mjs per design section 2: status and type constants, validateTicket | anthropic | claude-haiku-5-5 | pass | 30,987 | $0.01 |
+| 2026-10-16 | - | p13-integrity: Wrote tools/scope-integrity.mjs with checkTicketTree, summarizeTree and formatSummary | anthropic | claude-haiku-5-5 | pass | 22,720 | $0.01 |
+| 2026-10-16 | - | p13-change: Worker returned an invalid, duplicate, or undeclared output: edits[].find cannot be empt | anthropic | claude-haiku-5-5 | failed: Worker returned an invalid, duplicate, or undeclared output: | - | $0.00 |
+| 2026-10-16 | - | p13-day0: Wrote tools/day0.mjs with DAY0_CATALOG, day0Checklist(scope, {extra}) and checklistToTicke | anthropic | claude-haiku-5-5 | pass | 17,379 | $0.00 |
+| 2026-10-16 | - | p13-approval: Wrote tools/approval-policy.mjs per design section 7: DEFAULT_APPROVAL (frozen), valid | anthropic | claude-haiku-5-5 | pass | 14,727 | $0.00 |
+| 2026-10-16 | - | p13-ticket-manifest: Wrote tools/ticket-manifest.mjs per design section 8: ticketsToManifest and tic | anthropic | claude-haiku-5-5 | pass | 15,988 | $0.00 |
+| 2026-10-16 | - | p13-scope: Created tools/scope.mjs implementing SCOPE_TEMPLATE, parseScope, checkScope, requirementT | anthropic | claude-haiku-5-5 | pass | 22,749 | $0.01 |
+| 2026-10-16 | - | p13-tickets: Wrote tools/tickets.mjs as a new file following the design's section 2: ticket validati | anthropic | claude-haiku-5-5 | pass | 32,626 | $0.01 |
+| 2026-10-16 | - | p13-integrity: Created tools/scope-integrity.mjs implementing checkTicketTree, summarizeTree and for | anthropic | claude-haiku-5-5 | pass | 24,043 | $0.01 |
+| 2026-10-16 | - | p13-change: Created tools/change-orders.mjs implementing diffScopes, impactAnalysis, nextChangeOrder | anthropic | claude-haiku-5-5 | pass | 16,665 | $0.00 |
+| 2026-10-16 | - | p13-day0: Created tools/day0.mjs as a new file with the DAY0_CATALOG, day0Checklist and checklistToT | anthropic | claude-haiku-5-5 | pass | 18,702 | $0.00 |
+| 2026-10-16 | - | p13-approval: Created tools/approval-policy.mjs as a new file per design section 7: DEFAULT_APPROVAL | anthropic | claude-haiku-5-5 | pass | 14,391 | $0.00 |
+| 2026-10-16 | - | p13-ticket-manifest: Adds tools/ticket-manifest.mjs implementing section 8: ticketsToManifest (ready | anthropic | claude-haiku-5-5 | pass | 16,492 | $0.00 |
+| 2026-10-16 | - | p13-contracts: Anthropic response truncated: stop_reason max_tokens | anthropic | claude-haiku-5-5 | failed: Anthropic response truncated: stop_reason max_tokens | - | $0.02 |
+| 2026-10-16 | - | p13t-scope: Provider transport failed; check endpoint, connectivity, and redirect policy | anthropic | claude-haiku-5-5 | failed: Provider transport failed; check endpoint, connectivity, and | - | $0.09 reserved |
+| 2026-10-16 | - | p13t-tickets: Adds tests/tickets.test.mjs with 19 node:test cases for tools/tickets.mjs, covering va | anthropic | claude-haiku-5-5 | pass | 26,476 | $0.01 |
+| 2026-10-16 | - | p13t-integrity: Wrote tests/scope-integrity.test.mjs with 16 node:test cases against tools/scope-int | anthropic | claude-haiku-5-5 | pass | 33,933 | $0.01 |
+| 2026-10-16 | - | p13t-change: Adds tests/change-orders.test.mjs with 19 node:test cases for diffScopes, impactAnalysi | anthropic | claude-haiku-5-5 | pass | 21,586 | $0.01 |
+| 2026-10-16 | - | p13t-day0: Wrote tests/day0.test.mjs with 15 node:test cases for tools/day0.mjs (day0Checklist and c | anthropic | claude-haiku-5-5 | pass | 29,199 | $0.01 |
+| 2026-10-16 | - | p13t-approval: Provider transport failed; check endpoint, connectivity, and redirect policy | anthropic | claude-haiku-5-5 | failed: Provider transport failed; check endpoint, connectivity, and | - | $0.09 reserved |
+| 2026-10-16 | - | p13t-ticket-manifest: Wrote tests/ticket-manifest.test.mjs with 15 node:test cases for ticketsToMani | anthropic | claude-haiku-5-5 | pass | 27,213 | $0.01 |
 
 ## Daily summary
 
@@ -82,3 +137,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-15 | anthropic | 23 | 18 | 5 | 548,350 | $0.28 |
 | 2026-10-15 | claude | 8 | 8 | 0 | 171,365 | $3.75 |
 | 2026-10-15 | codex | 4 | 4 | 0 | 154,596 | subscription |
+| 2026-10-16 | anthropic | 52 | 48 | 4 | 1,336,255 | $0.48 (incl. estimates) |
+| 2026-10-16 | claude | 1 | 0 | 1 | 46,296 | $0.42 |
+| 2026-10-16 | codex | 2 | 2 | 0 | 31,624 | subscription |

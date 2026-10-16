@@ -163,6 +163,7 @@ function layout(brief, doneN, runN, openN, width) {
   const section = (title, rows) => (rows.length ? [title, ...rows] : [`${title} none`]);
   const out = ['Project Swarm brief', line(`Goal: ${brief.goal ?? 'none'}`)];
   if (brief.doneWhen) out.push(line(`Done when: ${brief.doneWhen}`));
+  if (brief.tickets) out.push(line(`Tickets: ${brief.tickets.percentDone}% done of ${brief.tickets.total} (${Object.entries(brief.tickets.byStatus ?? {}).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ')})`));
   out.push(...section('Done:', brief.done.slice(0, doneN).map(text => line(`  - ${text}`))));
   out.push(...section('Running:', brief.running.slice(0, runN).map(run => {
     const reasons = Array.isArray(run.pause?.reasons) ? ` [${run.pause.reasons.map(String).join(', ')}]` : '';
