@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { runSecurityGate, normalizePolicy, DEFAULT_POLICY, formatBlocks, lessonFor, recordGate } from '../tools/security-gate.mjs';
+import { runSecurityGate, normalizePolicy, DEFAULT_POLICY, formatBlocks, lessonFor, recordGate, SEMGREP_RULES_SHA256, SEMGREP_RULES_PATH, UNPARSED_MANIFESTS } from '../tools/security-gate.mjs';
 import { scanSecretsDetailed } from '../tools/security-scan.mjs';
 
 const NOW = Date.parse('2025-01-01T00:00:00Z');
@@ -205,12 +207,12 @@ test('clean source change runs only secret-scan with no audit or fetch', async (
   assert.equal(calls.some((c) => c.includes('audit')), false);
 });
 
-test('sensitive default true: semgrep is not run and skipped mentions sensitive', async () => {
+test('sensitive default true: codeScan auto is downgraded to local and never sends the auto config', async () => {
   const calls = [];
   const exec = async (argv) => { calls.push(argv); throw new Error('missing'); };
   const gate = await runSecurityGate({ changes: [{ file: 'src/index.js', bytes: Buffer.from('export const n = 1;\n'), previous: null }], policy: { codeScan: 'auto' }, exec, fetchImpl: noFetch, now: () => NOW });
-  assert.equal(calls.some((a) => a[0] === 'semgrep'), false);
-  assert.ok(gate.skipped.some((s) => s.includes('sensitive')));
+  assert.equal(calls.some((a) => a.includes('auto')), false);
+  assert.ok(gate.warnings.includes('code scan: auto needs the network, using the pinned local rules'));
 });
 
 test('sensitive false: semgrep runs with --metrics=off and -- before a file named --autofix', async () => {
@@ -226,6 +228,30 @@ test('sensitive false: semgrep runs with --metrics=off and -- before a file name
   const dd = argv0.indexOf('--');
   assert.ok(dd >= 0);
   assert.ok(argv0.indexOf('--autofix') > dd);
+});
+
+test('semgrep runs with an env that turns off metrics and version checks', async () => {
+  let env0 = null;
+  const exec = async (argv, opts) => {
+    if (argv[0] === 'semgrep' && argv[1] === '--version') return { stdout: '1.0.0' };
+    if (argv[0] === 'semgrep') { env0 = opts.env; return { stdout: JSON.stringify({ results: [] }) }; }
+    throw new Error('missing');
+  };
+  await runSecurityGate({ changes: [{ file: 'src/index.js', bytes: Buffer.from('export const n = 1;\n'), previous: null }], exec, fetchImpl: noFetch, now: () => NOW });
+  assert.equal(env0.SEMGREP_SEND_METRICS, 'off');
+  assert.equal(env0.SEMGREP_ENABLE_VERSION_CHECK, '0');
+});
+
+test('pinned rules with other bytes block with code-scan', async () => {
+  const gate = await runSecurityGate({ changes: [{ file: 'src/index.js', bytes: Buffer.from('export const n = 1;\n'), previous: null }], readRules: async () => Buffer.from('rules changed'), exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.equal(gate.ok, false);
+  assert.ok(gate.blocks.some((b) => b.check === 'code-scan'));
+});
+
+test('unreadable pinned rules block with code-scan', async () => {
+  const gate = await runSecurityGate({ changes: [{ file: 'src/index.js', bytes: Buffer.from('export const n = 1;\n'), previous: null }], readRules: async () => { throw new Error('gone'); }, exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.equal(gate.ok, false);
+  assert.ok(gate.blocks.some((b) => b.check === 'code-scan'));
 });
 
 test('sensitive true with codeScan auto and codeScanSensitive true runs semgrep', async () => {
@@ -258,6 +284,58 @@ test('semgrep finding makes a ticket without blocking; tickets have no message; 
   assert.ok(noNpm.skipped.includes('npm not installed'));
 });
 
+test('pinned semgrep rules file hashes to SEMGREP_RULES_SHA256', () => {
+  const digest = createHash('sha256').update(readFileSync(SEMGREP_RULES_PATH)).digest('hex');
+  assert.equal(digest, SEMGREP_RULES_SHA256);
+});
+
+test('every rule id in the pinned semgrep rules starts with swarm-', () => {
+  const text = readFileSync(SEMGREP_RULES_PATH, 'utf8');
+  const ids = [...text.matchAll(/^\s*-?\s*id:\s*['"]?([^'"\s]+)/gm)].map((m) => m[1]);
+  assert.ok(ids.length > 0);
+  for (const id of ids) assert.ok(id.startsWith('swarm-'), id);
+});
+
+test('UNPARSED_MANIFESTS maps the known unparsed manifests to their ecosystems', () => {
+  const expected = { 'pnpm-lock.yaml': 'pnpm', 'yarn.lock': 'yarn', 'go.mod': 'go', 'go.sum': 'go', 'Cargo.toml': 'cargo', 'Cargo.lock': 'cargo', 'pyproject.toml': 'python', 'Pipfile': 'python' };
+  for (const [file, eco] of Object.entries(expected)) assert.equal(UNPARSED_MANIFESTS[file], eco);
+});
+
+test('a changed unparsed manifest blocks and names the file and its ecosystem', async () => {
+  const gate = await runSecurityGate({ changes: [{ file: 'go.mod', bytes: Buffer.from('module x\n'), previous: Buffer.from('module y\n') }], exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  const b = gate.blocks.find((x) => x.check === 'unsupported-manifest');
+  assert.ok(b);
+  assert.ok(b.message.includes('go.mod'));
+  assert.ok(b.message.includes('go dependencies'));
+});
+
+test('changed pnpm-lock.yaml and a deleted sub/Cargo.lock both block as unsupported-manifest', async () => {
+  const pnpm = await runSecurityGate({ changes: [{ file: 'pnpm-lock.yaml', bytes: Buffer.from('lock\n'), previous: Buffer.from('old\n') }], exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  const bp = pnpm.blocks.find((x) => x.check === 'unsupported-manifest');
+  assert.ok(bp);
+  assert.ok(bp.message.includes('pnpm-lock.yaml'));
+  assert.ok(bp.message.includes('pnpm'));
+  const cargo = await runSecurityGate({ changes: [{ file: 'sub/Cargo.lock', bytes: null, previous: Buffer.from('x') }], exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  const bc = cargo.blocks.find((x) => x.check === 'unsupported-manifest');
+  assert.ok(bc);
+  assert.ok(bc.message.includes('sub/Cargo.lock'));
+  assert.ok(bc.message.includes('cargo'));
+});
+
+test('allowUnparsedManifests lets a changed manifest through by path or by basename', async () => {
+  const change = [{ file: 'sub/Cargo.lock', bytes: Buffer.from('a'), previous: Buffer.from('b') }];
+  const byPath = await runSecurityGate({ changes: change, policy: { allowUnparsedManifests: ['sub/Cargo.lock'] }, exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.equal(byPath.blocks.some((b) => b.check === 'unsupported-manifest'), false);
+  const byName = await runSecurityGate({ changes: change, policy: { allowUnparsedManifests: ['Cargo.lock'] }, exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.equal(byName.blocks.some((b) => b.check === 'unsupported-manifest'), false);
+});
+
+test('an unrelated change does not add the unsupported-manifest check', async () => {
+  const gate = await runSecurityGate({ changes: [{ file: 'src/index.js', bytes: Buffer.from('export const n = 1;\n'), previous: null }], exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.equal(gate.blocks.some((b) => b.check === 'unsupported-manifest'), false);
+  assert.equal(gate.checked.includes('unsupported-manifest'), false);
+});
+
 test('disabled policy returns immediately and does nothing else', async () => {
   let calls = 0;
   const spy = async () => { calls++; throw new Error('should not run'); };
@@ -280,7 +358,7 @@ test('normalizePolicy keeps valid values and ignores the rest', () => {
 
 test('normalizePolicy keeps requireVulnerabilityScan, codeScan and codeScanSensitive types', () => {
   const bad = normalizePolicy({ codeScan: 'always', requireVulnerabilityScan: 'no', codeScanSensitive: 'yes' });
-  assert.equal(bad.codeScan, 'auto');
+  assert.equal(bad.codeScan, 'local');
   assert.equal(bad.requireVulnerabilityScan, DEFAULT_POLICY.requireVulnerabilityScan);
   assert.equal(bad.codeScanSensitive, false);
   const good = normalizePolicy({ codeScan: 'off', requireVulnerabilityScan: false, codeScanSensitive: true });
@@ -289,9 +367,15 @@ test('normalizePolicy keeps requireVulnerabilityScan, codeScan and codeScanSensi
   assert.equal(good.codeScanSensitive, true);
 });
 
-test('DEFAULT_POLICY is frozen with minAgeDays 30', () => {
+test('normalizePolicy accepts allowUnparsedManifests as an array of strings', () => {
+  assert.deepEqual(normalizePolicy({ allowUnparsedManifests: ['sub/Cargo.lock'] }).allowUnparsedManifests, ['sub/Cargo.lock']);
+  assert.deepEqual(normalizePolicy({ allowUnparsedManifests: 'go.mod' }).allowUnparsedManifests, []);
+});
+
+test('DEFAULT_POLICY is frozen with minAgeDays 30 and codeScan local', () => {
   assert.equal(Object.isFrozen(DEFAULT_POLICY), true);
   assert.equal(DEFAULT_POLICY.minAgeDays, 30);
+  assert.equal(DEFAULT_POLICY.codeScan, 'local');
 });
 
 test('formatBlocks and lessonFor give one line per block and leak nothing', () => {

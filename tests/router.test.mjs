@@ -10,6 +10,9 @@ const job = { id: 'route-job', agent: 'auto', sensitive: false, outputs: ['src/a
 const bookkeeping = { ...job, outputs: ['CHANGELOG.md'] };
 const lanes = { ...Object.fromEntries(ROUTE_ORDER.map(agent => [agent, { model: `${agent}-model` }])), hermes: { model: 'hermes-model' } };
 const paused = () => ({ state: 'paused' });
+// A job carrying the full rented contract (outputs, context, contract in context, acceptance tests).
+const contracted = { ...job, sensitive: false, outputs: ['src/a.js'], context: ['src/a.js', 'docs/contract.md'], contract: 'docs/contract.md', acceptance: ['tests/a.test.mjs'] };
+const rentedLanes = { ...lanes, rented: { model: 'rented-model' } };
 
 test('route orders are frozen, cheapest first, and leave Hermes out', () => {
   assert.deepEqual(CHEAP_ORDER, ['anthropic', 'cursor', 'codex', 'openrouter']);
@@ -168,4 +171,61 @@ test('isBookkeepingJob refuses traversal, absolute paths, non-strings and holes'
   for (const bad of [['../../x/CHANGELOG.md'], ['/etc/CHANGELOG.md'], ['C:/x/CHANGELOG.md'], ['a/../CHANGELOG.md'], [['CHANGELOG.md']], [null], [''], [], 'CHANGELOG.md', undefined, new Array(2)]) {
     assert.equal(isBookkeepingJob(bad), false, JSON.stringify(bad));
   }
+});
+
+test('rented lane is not chosen below the default threshold of 700 ready jobs', () => {
+  assert.deepEqual(routeJob(contracted, { lanes: rentedLanes, ready: 699 }), { agent: 'anthropic', model: 'anthropic-model', reason: 'cheapest healthy lane' });
+});
+
+test('rented lane is chosen at exactly 700 ready jobs for a complete non-sensitive contract job', () => {
+  assert.deepEqual(routeJob(contracted, { lanes: rentedLanes, ready: 700 }), { agent: 'rented', model: 'rented-model', reason: 'cheapest healthy lane' });
+});
+
+test('rented lane is not chosen when ready is omitted', () => {
+  assert.equal(routeJob(contracted, { lanes: rentedLanes }).agent, 'anthropic');
+});
+
+test('rented lane needs a complete contract job', () => {
+  const { acceptance, ...noAcceptance } = contracted;
+  assert.equal(routeJob(noAcceptance, { lanes: rentedLanes, ready: 1000 }).agent, 'anthropic');
+  assert.equal(routeJob({ ...contracted, contract: 'docs/other.md' }, { lanes: rentedLanes, ready: 1000 }).agent, 'anthropic');
+});
+
+test('lanes.rented.minReady overrides the default threshold', () => {
+  const lowered = { ...rentedLanes, rented: { model: 'rented-model', minReady: 5 } };
+  assert.equal(routeJob(contracted, { lanes: lowered, ready: 5 }).agent, 'rented');
+  assert.equal(routeJob(contracted, { lanes: lowered, ready: 4 }).agent, 'anthropic');
+  const raised = { ...rentedLanes, rented: { model: 'rented-model', minReady: 2000 } };
+  assert.equal(routeJob(contracted, { lanes: raised, ready: 700 }).agent, 'anthropic');
+});
+
+test('a sensitive job is never routed to the rented lane at any ready count', () => {
+  for (const ready of [0, 699, 700, 100000]) {
+    const picked = routeJob({ ...contracted, sensitive: true }, { lanes: rentedLanes, ready });
+    assert.notEqual(picked.agent, 'rented');
+  }
+  assert.notEqual(routeJob({ ...contracted, sensitive: true, typeRoute: ['rented'] }, { lanes: rentedLanes, ready: 100000 }).agent, 'rented');
+});
+
+test('a hard job goes to codex first when codex is configured', () => {
+  const hard = { ...contracted, hard: true };
+  assert.deepEqual(routeJob(hard, { lanes: rentedLanes, ready: 700 }), { agent: 'codex', model: 'codex-model', reason: 'hard ticket: codex first' });
+  assert.deepEqual(routeJob(hard, { lanes }), { agent: 'codex', model: 'codex-model', reason: 'hard ticket: codex first' });
+});
+
+test('a hard job falls back to the next lane after 2 failures on codex', () => {
+  const hard = { ...contracted, hard: true };
+  assert.deepEqual(routeJob(hard, { lanes, failures: { codex: 1 } }), { agent: 'codex', model: 'codex-model', reason: 'hard ticket: codex first' });
+  assert.deepEqual(routeJob(hard, { lanes, failures: { codex: 2 } }), { agent: 'anthropic', model: 'anthropic-model', reason: 'fallback after 2 failures on codex' });
+});
+
+test('a hard job with tier expensive keeps the claude-only rule', () => {
+  const hard = { ...contracted, hard: true, tier: 'expensive' };
+  assert.deepEqual(routeJob(hard, { lanes }), { agent: 'claude', model: 'claude-model', reason: 'tier expensive' });
+  assert.throws(() => routeJob(hard, { lanes: { hermes: lanes.hermes } }), { code: 'route-exhausted' });
+});
+
+test('a job without hard is unchanged and goes to anthropic first', () => {
+  assert.deepEqual(routeJob(contracted, { lanes }), { agent: 'anthropic', model: 'anthropic-model', reason: 'cheapest healthy lane' });
+  assert.deepEqual(routeJob({ ...contracted, hard: false }, { lanes }), { agent: 'anthropic', model: 'anthropic-model', reason: 'cheapest healthy lane' });
 });

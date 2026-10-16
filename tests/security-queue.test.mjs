@@ -195,14 +195,47 @@ test('queue securityNotes lists scanners that were skipped as not installed', as
   assert.ok(result.mergeQueue.securityNotes.some(n => String(n).includes('npm not installed')));
 });
 
-test('semgrep is not called for a sensitive project by default', async t => {
+test('sensitive project runs the local pinned semgrep with metrics off', async t => {
   const root = await fixture(t);
   const run = await runManifest(root, manifest([job(0)]), { fetchImpl: worker({ 0: 'clean\n' }) });
   assert.equal(run.status, 'complete', run.error);
   const calls = [];
   const result = await integrateRun(root, run.id, { queue: true, noChecks: true, securityGate: { exec: recorder(calls) } });
   assert.deepEqual(result.mergeQueue.securityBlocked, []);
-  assert.ok(!calls.some(argv => argv[0] === 'semgrep'));
+  const sg = calls.find(argv => argv[0] === 'semgrep' && argv[1] === '--config');
+  assert.ok(sg, 'expected a local semgrep --config call');
+  assert.ok(sg[2].endsWith('semgrep-local.yml'));
+  assert.ok(sg.includes('--metrics=off'));
+  assert.ok(!sg.includes('auto'));
+});
+
+test('a job writing go.mod is blocked by the queue as unsupported-manifest', async t => {
+  const root = await fixture(t);
+  const run = await runManifest(root, manifest([job(0, { outputs: ['go.mod'], prompt: 'Add go.mod.' })]), { fetchImpl: async () => reply([{ path: 'go.mod', content: 'module example.invalid/x\n' }]) });
+  assert.equal(run.status, 'complete', run.error);
+  const calls = [];
+  const result = await integrateRun(root, run.id, { queue: true, noChecks: true, securityGate: { exec: recorder(calls) } });
+  assert.deepEqual(result.mergeQueue.checkFailed, [{ job: 'job-0', checks: ['security-gate'] }]);
+  assert.equal(result.mergeQueue.securityBlocked.length, 1);
+  assert.ok(result.mergeQueue.securityBlocked[0].blocks.some(b => b.check === 'unsupported-manifest'));
+  const journal = await readJournal(root, { kinds: ['blocker'] });
+  const items = (Array.isArray(journal) ? journal : journal.items).filter(i => i.id.startsWith('security-'));
+  assert.ok(items.length > 0);
+  assert.ok(items.every(i => i.text.length < 600));
+});
+
+test('a go.mod change is allowed when the profile security block lists go.mod in allowUnparsedManifests', async t => {
+  const root = await fixture(t);
+  const profile = { version: 1, profile: { sensitive: false, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none', ranAt: null, head: null, checks: [] }, security: { allowUnparsedManifests: ['go.mod'] } } };
+  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify(profile, null, 2) + '\n');
+  await commit(root, 'profile');
+  const text = 'module example.invalid/x\n';
+  const run = await runManifest(root, manifest([job(0, { outputs: ['go.mod'], prompt: 'Add go.mod.' })]), { fetchImpl: async () => reply([{ path: 'go.mod', content: text }]) });
+  assert.equal(run.status, 'complete', run.error);
+  const calls = [];
+  const result = await integrateRun(root, run.id, { queue: true, noChecks: true, securityGate: { exec: recorder(calls) } });
+  assert.deepEqual(result.mergeQueue.securityBlocked, []);
+  assert.equal(await read(root, 'go.mod'), text);
 });
 
 test('security tickets are recorded only for a batch that stays integrated', async t => {

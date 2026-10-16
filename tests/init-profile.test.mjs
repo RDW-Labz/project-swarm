@@ -86,13 +86,58 @@ test('validateProfile rejects every invalid field', () => {
   for (const [name, bad] of Object.entries(cases)) assert.ok(validateProfile(bad).errors.length > 0, name);
 });
 
+test('profile security codeScan accepts local, auto and off and rejects cloud', () => {
+  for (const mode of ['local', 'auto', 'off']) {
+    const { profile: out, errors } = validateProfile(profile({ security: { codeScan: mode } }));
+    assert.deepEqual(errors, [], mode);
+    assert.equal(out.security.codeScan, mode);
+  }
+  const { profile: out, errors } = validateProfile(profile({ security: { codeScan: 'cloud' } }));
+  assert.ok(errors.some(e => e.startsWith('profile.security.codeScan')));
+  assert.equal('codeScan' in out.security, false);
+});
+
+test('profile security allowUnparsedManifests accepts an array of strings', () => {
+  const list = ['pnpm-lock.yaml', 'go.sum'];
+  const { profile: out, errors } = validateProfile(profile({ security: { allowUnparsedManifests: list } }));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(out.security.allowUnparsedManifests, list);
+  const edge = validateProfile(profile({ security: { allowUnparsedManifests: Array.from({ length: 50 }, (_, i) => `m${i}.lock`) } }));
+  assert.deepEqual(edge.errors, []);
+  const longest = validateProfile(profile({ security: { allowUnparsedManifests: ['x'.repeat(200)] } }));
+  assert.deepEqual(longest.errors, []);
+});
+
+test('profile security allowUnparsedManifests rejects a non-array, too many entries and a long entry', () => {
+  const cases = {
+    notArray: 'Cargo.lock',
+    tooMany: Array.from({ length: 51 }, (_, i) => `m${i}.lock`),
+    tooLong: ['x'.repeat(201)],
+  };
+  for (const [name, bad] of Object.entries(cases)) {
+    const { errors } = validateProfile(profile({ security: { allowUnparsedManifests: bad } }));
+    assert.ok(errors.some(e => e.startsWith('profile.security.allowUnparsedManifests')), name);
+  }
+});
+
+test('invalid security values are left out of the normalized copy', () => {
+  const { profile: out, errors } = validateProfile(profile({
+    security: { enabled: true, codeScan: 'cloud', allowUnparsedManifests: 'Cargo.lock' },
+  }));
+  assert.ok(errors.length > 0);
+  assert.equal(out.security.enabled, true);
+  assert.equal('codeScan' in out.security, false);
+  assert.equal('allowUnparsedManifests' in out.security, false);
+});
+
 test('validateProfile cuts and sanitizes baseCheck tails', () => {
-  const tail = 'a'.repeat(900) + ' TOKEN=abcdef123456';
+  const planted = ['abcdef', '123456'].join('');
+  const tail = 'a'.repeat(900) + ' TOKEN=' + planted;
   const { profile: out, errors } = validateProfile(withBase({ checks: [{ name: 'test', ok: false, exitCode: 1, tail }] }));
   assert.deepEqual(errors, []);
   const got = out.baseCheck.checks[0].tail;
   assert.ok(got.length <= 500);
-  assert.ok(!got.includes('abcdef123456'));
+  assert.ok(!got.includes(planted));
 });
 
 test('protectedPathHit matches folders, files and case differences', () => {
