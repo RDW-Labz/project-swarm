@@ -11,7 +11,7 @@ import { gpuUp, gpuDown, gpuStatus, formatStatus, sessionHours, validateUpOption
 import { fetchCacheStats } from './gpu-cache.mjs';
 import { runBakeoff, renderBakeoff, writeBakeoffReport, measureThroughput, countEvalTasks, selectCandidates, LEVELS } from './gpu-bakeoff.mjs';
 
-const VALUE_FLAGS = new Set(['target', 'key', 'model', 'models', 'hourly-usd', 'max-usd', 'max-hours', 'gpus', 'per-replica', 'max-model-len', 'image', 'levels', 'repo', 'best-of']);
+const VALUE_FLAGS = new Set(['target', 'key', 'model', 'models', 'hourly-usd', 'max-usd', 'max-hours', 'gpus', 'per-replica', 'max-model-len', 'image', 'levels', 'repo', 'best-of', 'ssh-port', 'bench-ref']);
 const BOOLEAN_FLAGS = new Set(['yes', 'json', 'extra-quant', 'allow-no-poweroff']);
 
 export function parseGpuFlags(args) {
@@ -31,12 +31,12 @@ const num = value => (value === undefined ? undefined : Number(value));
 const expand = file => (typeof file === 'string' && file.startsWith('~/') ? path.join(os.homedir(), file.slice(2)) : file);
 
 export function upOptions(flags, extra = {}) {
-  return { target: flags.target, key: expand(flags.key), model: flags.model, hourlyUsd: num(flags['hourly-usd']), maxUsd: num(flags['max-usd']), maxHours: num(flags['max-hours']), gpus: num(flags.gpus), perReplica: num(flags['per-replica']), maxModelLen: num(flags['max-model-len']), image: flags.image, allowNoPowerOff: flags['allow-no-poweroff'] === true, bestOf: flags['best-of'] === undefined || flags['best-of'].includes(',') ? undefined : Number(flags['best-of']), ...extra };
+  return { target: flags.target, key: expand(flags.key), model: flags.model, hourlyUsd: num(flags['hourly-usd']), maxUsd: num(flags['max-usd']), maxHours: num(flags['max-hours']), gpus: num(flags.gpus), perReplica: num(flags['per-replica']), maxModelLen: num(flags['max-model-len']), image: flags.image, sshPort: flags['ssh-port'] === undefined ? undefined : Number(flags['ssh-port']), allowNoPowerOff: flags['allow-no-poweroff'] === true, bestOf: flags['best-of'] === undefined || flags['best-of'].includes(',') ? undefined : Number(flags['best-of']), ...extra };
 }
 
 export function planText(options, { gpus = options.gpus ?? 'all' } = {}) {
   const hours = sessionHours(options);
-  return `Plan (nothing is started yet):\n  node: ${options.target} (a node you already rented; swarm rents nothing)\n  model: ${options.model}, one server per GPU (${gpus}), reached through an ssh tunnel, no key of yours on the node (a random per-rental key protects the servers)\n  price: $${options.hourlyUsd}/h; hard cap $${options.maxUsd} => the session ends after ${hours.toFixed(2)} h, and a timer on the node removes the servers and powers it off then\n  sent to the node: commands only; nothing of yours (no file, key or .env); a random per-rental key is written for the servers\n  jobs: only sensitive: false, each with exact files, a contract file and acceptance tests; one failure goes to Haiku, then Codex\n  billing: the dollar cap ends the session, but billing continues until YOU terminate the instance; the timer powers the node off only if passwordless sudo works (checked at start)\n  access: the servers listen on the node loopback only, need a random per-rental API key, and gpu up fails if any server port is reachable from outside\nAdd --yes to go.`;
+  return `Plan (nothing is started yet):\n  node: ${options.target}${options.sshPort === undefined ? '' : ` port ${options.sshPort}`} (a node you already rented; swarm rents nothing)\n  model: ${options.model}, one server per GPU (${gpus}), reached through an ssh tunnel, no key of yours on the node (a random per-rental key protects the servers)\n  price: $${options.hourlyUsd}/h; hard cap $${options.maxUsd} => the session ends after ${hours.toFixed(2)} h, and a timer on the node removes the servers and powers it off then\n  sent to the node: commands only; nothing of yours (no file, key or .env); a random per-rental key is written for the servers\n  jobs: only sensitive: false, each with exact files, a contract file and acceptance tests; one failure goes to Haiku, then Codex\n  billing: the dollar cap ends the session, but billing continues until YOU terminate the instance; the timer powers the node off only if passwordless sudo works (checked at start)\n  access: the servers listen on the node loopback only, need a random per-rental API key, and gpu up fails if any server port is reachable from outside\nAdd --yes to go.`;
 }
 
 function sshReal(argv, { input } = {}) {
@@ -126,7 +126,7 @@ async function bakeoff(flags, { out, real, deps }) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-bakeoff-'));
   const bench = deps.bench ?? await import('../bench/lane-benchmark/lib.mjs');
   const runner = deps.runner ?? fileURLToPath(new URL('./swarm.mjs', import.meta.url));
-  const info = deps.baseInfo ?? bench.buildBaseRepo(root, 'HEAD', path.join(tmp, 'repo'));
+  const info = deps.baseInfo ?? bench.buildBaseRepo(root, flags['bench-ref'] ?? 'v1.65.0', path.join(tmp, 'repo'));
   const repo = path.join(tmp, 'repo');
   let apiKey;
   const results = await runBakeoff({ candidates, hourlyUsd: base.hourlyUsd, capUsd: base.maxUsd, levels, includeExtra: flags["extra-quant"] === true, bestOf: (flags['best-of'] ?? '1,3').split(',').map(Number) }, {

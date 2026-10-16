@@ -148,7 +148,7 @@ export function runLane({ lane, repo, runner, maxUsd = 0.5, baseInfo, model, bes
   fs.mkdirSync(path.join(repo, 'coordination/manifests'), { recursive: true });
   // A single-request API worker may return at most 15 KB per file unless the job raises its cap, so
   // a large output (tools/spend.mjs, 23 KB) gets a higher cap for those lanes only.
-  if (['anthropic', 'openrouter'].includes(spec.agent)) {
+  if (['anthropic', 'openrouter', 'rented'].includes(spec.agent)) {
     for (const job of manifest.jobs) {
       const biggest = Math.max(...job.outputs.map(file => (fs.existsSync(path.join(repo, file)) ? fs.statSync(path.join(repo, file)).size : 0)));
       if (biggest > 12000) job.outputCapBytes = { total: 100000, perFile: 60000 };

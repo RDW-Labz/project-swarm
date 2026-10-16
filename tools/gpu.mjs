@@ -49,6 +49,7 @@ export function validateUpOptions(options) {
   for (const [name, value] of [['gpus', options.gpus], ['perReplica', options.perReplica], ['maxModelLen', options.maxModelLen]]) if (value !== undefined && !isPosInt(value)) throw fail('gpu-option-invalid', `${name} must be a positive whole number`);
   if (options.bestOf !== undefined && !(Number.isInteger(options.bestOf) && options.bestOf >= 1 && options.bestOf <= 8)) throw fail('gpu-option-invalid', 'bestOf must be a whole number from 1 to 8');
   if (options.maxHours !== undefined && !isPosNum(options.maxHours)) throw fail('gpu-option-invalid', 'maxHours must be above 0');
+  if (options.sshPort !== undefined && !(Number.isInteger(options.sshPort) && options.sshPort >= 1 && options.sshPort <= 65535)) throw fail('gpu-option-invalid', 'sshPort must be a whole number from 1 to 65535');
   const args = options.args ?? [];
   if (!Array.isArray(args) || args.some(item => typeof item !== 'string' || !/^[A-Za-z0-9._=:/-]{1,80}$/.test(item))) throw fail('gpu-option-invalid', 'extra server arguments may only hold letters, digits and . _ = : / -');
 }
@@ -79,7 +80,7 @@ export function remoteStartScript({ model, image, gpus, maxModelLen, perReplica,
   if (typeof apiKey !== 'string' || !KEY_RE.test(apiKey)) throw fail('gpu-key-invalid', 'api key must be 48 lower-case hex characters');
   // The timer is on the node itself, so it still fires if this computer sleeps or loses the link, and even if a later step fails.
   // Powering off is best effort (it needs passwordless sudo); the owner still has to terminate the instance, which is what stops the billing.
-  const lines = [`setsid nohup sh -c 'sleep ${Math.ceil(seconds)}; docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1; rm -f "$HOME/.swarm-vllm.env"; sudo -n shutdown -h now >/dev/null 2>&1' >/dev/null 2>&1 </dev/null &`, 'set -e', 'docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1 || true', 'rm -f "$HOME/.swarm-vllm.env"', 'umask 077', 'cat > "$HOME/.swarm-vllm.env" <<\'SWARMKEY\'', `VLLM_API_KEY=${apiKey}`, 'SWARMKEY'];
+  const lines = [`setsid nohup sh -c 'sleep ${Math.ceil(seconds)}; docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1; rm -f "$HOME/.swarm-vllm.env"; { sudo -n shutdown -h now || shutdown -h now; } >/dev/null 2>&1' >/dev/null 2>&1 </dev/null &`, 'set -e', 'docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1 || true', 'rm -f "$HOME/.swarm-vllm.env"', 'umask 077', 'cat > "$HOME/.swarm-vllm.env" <<\'SWARMKEY\'', `VLLM_API_KEY=${apiKey}`, 'SWARMKEY'];
   for (const { index, remote } of replicaPorts(gpus, { remotePortBase })) {
     lines.push(`docker run -d --name swarm-vllm-${index} --gpus device=${index} --ipc=host --env-file "$HOME/.swarm-vllm.env" -p 127.0.0.1:${remote}:8000 -v "$HOME/.cache/huggingface:/root/.cache/huggingface" ${image} --model ${model} --served-model-name ${model} --max-model-len ${maxModelLen} --max-num-seqs ${perReplica} --gpu-memory-utilization 0.9 --enable-prefix-caching ${args.join(' ')} >/dev/null`.replace(/ +$/, ''));
   }
@@ -213,10 +214,11 @@ export async function gpuUp(options, deps) {
   if (readSessionFile(env)) throw fail('gpu-session-exists', 'a GPU session is already recorded; run swarm gpu status, or swarm gpu down first');
   const apiKey = randomKey ? randomKey() : randomBytes(24).toString('hex');
   if (typeof apiKey !== 'string' || !KEY_RE.test(apiKey)) throw fail('gpu-key-invalid', 'the generated API key must be 48 lower-case hex characters');
-  const sshBase = [...(options.sshOptions ?? []), ...SSH_HARDENING, '-o', 'ClearAllForwardings=yes', '-i', options.key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=20'];
+  const sshOptions = options.sshPort !== undefined ? ['-p', String(options.sshPort), ...(options.sshOptions ?? [])] : [...(options.sshOptions ?? [])];
+  const sshBase = [...sshOptions, ...SSH_HARDENING, '-o', 'ClearAllForwardings=yes', '-i', options.key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=20'];
   const sshArgs = [...sshBase, '--', options.target];
   const shown = options.target.split('@').pop();
-  const output = String((await ssh([...sshArgs, 'nvidia-smi -L; echo SUDO:$(sudo -n true >/dev/null 2>&1 && echo ok || echo no); echo DOCKER:$(docker version --format "{{.Server.Version}}" 2>/dev/null)'], {})).stdout);
+  const output = String((await ssh([...sshArgs, 'nvidia-smi -L; echo SUDO:$( { [ "$(id -u)" = 0 ] || sudo -n true; } >/dev/null 2>&1 && echo ok || echo no); echo DOCKER:$(docker version --format "{{.Server.Version}}" 2>/dev/null)'], {})).stdout);
   const count = parseGpuCount(output);
   const dockerMajor = parseDockerMajor(output);
   if (dockerMajor === null || dockerMajor < 28) {
@@ -236,7 +238,7 @@ export async function gpuUp(options, deps) {
   const ports = replicaPorts(gpus);
   const endpoints = ports.map(port => `http://127.0.0.1:${port.local}`);
   const startedAt = now();
-  const session = { version: 1, bestOf: options.bestOf ?? 1, target: options.target, key: options.key, apiKey, model: options.model, quant: options.quant ?? null, replicas: gpus, endpoints, perReplica, hourlyUsd: options.hourlyUsd, capUsd: options.maxUsd, maxHours: hours, startedAt: new Date(startedAt).toISOString(), expiresAt: new Date(startedAt + hours * 3600000).toISOString(), tunnelPid: null, routable: options.routable !== false, powerOff, state: 'starting' };
+  const session = { version: 1, bestOf: options.bestOf ?? 1, target: options.target, key: options.key, apiKey, model: options.model, quant: options.quant ?? null, replicas: gpus, endpoints, perReplica, hourlyUsd: options.hourlyUsd, capUsd: options.maxUsd, maxHours: hours, startedAt: new Date(startedAt).toISOString(), expiresAt: new Date(startedAt + hours * 3600000).toISOString(), tunnelPid: null, sshOptions, routable: options.routable !== false, powerOff, state: 'starting' };
   createSession(env, session);
 
   const exposureCheck = async () => {
@@ -263,7 +265,7 @@ export async function gpuUp(options, deps) {
     await ssh([...sshArgs, 'bash -s'], { input: script });
     log(`started ${gpus} replica(s) of ${options.model}; dead-man timer set for ${hours.toFixed(2)} h`);
     await exposureCheck();
-    const tunnel = await openTunnel({ target: options.target, key: options.key, ports, sshOptions: options.sshOptions });
+    const tunnel = await openTunnel({ target: options.target, key: options.key, ports, sshOptions });
     session.tunnelPid = tunnel?.pid ?? null;
     writeSession(env, session);
     await waitHealthy(endpoints, options.model, { fetchImpl: authFetch(fetchImpl, apiKey), sleep, now, timeoutMs: options.healthTimeoutMs ?? GPU_DEFAULTS.healthTimeoutMs, pollMs: options.pollMs });
@@ -276,6 +278,8 @@ export async function gpuUp(options, deps) {
   return session;
 }
 
+const sessionSshOptions = session => (Array.isArray(session?.sshOptions) && session.sshOptions.every(item => typeof item === 'string') ? session.sshOptions : []);
+
 export async function gpuDown(deps) {
   const { ssh, stopTunnel, env = process.env, now = Date.now } = deps;
   const session = readSessionFile(env);
@@ -283,7 +287,7 @@ export async function gpuDown(deps) {
   const notes = [];
   let sshOk = true;
   try {
-    await ssh([...SSH_HARDENING, '-o', 'ClearAllForwardings=yes', '-i', session.key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=20', '--', session.target, 'bash -s'], { input: remoteStopScript() });
+    await ssh([...sessionSshOptions(session), ...SSH_HARDENING, '-o', 'ClearAllForwardings=yes', '-i', session.key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=20', '--', session.target, 'bash -s'], { input: remoteStopScript() });
   } catch (error) { sshOk = false; notes.push(`could not reach the node to stop the servers (${String(error.message).slice(0, 120)}); its dead-man timer still removes them at ${session.expiresAt}`); }
   try { if (Number.isInteger(session.tunnelPid) && session.tunnelPid > 1) await stopTunnel(session.tunnelPid, session); } catch { /* already gone */ }
   removeSession(env);

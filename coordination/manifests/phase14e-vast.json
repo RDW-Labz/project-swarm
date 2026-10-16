@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-docker.test.mjs",
+        "tests/gpu-hardening.test.mjs",
+        "tests/gpu-safety.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "vast-gpu",
+      "context": [
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tools/gpu.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu.mjs (plain ESM; same first line, same exports and signatures; change nothing except the following). Support nodes that give ssh on a non-standard port and a root login (Vast.ai virtual machines). (1) New validated option options.sshPort (integer 1 to 65535; invalid values throw fail('gpu-option-invalid', 'sshPort must be a whole number from 1 to 65535')): gpuUp prepends '-p', String(port) to the ssh option list it already builds from options.sshOptions (put it into options.sshOptions-equivalent array so that the SAME array is passed to openTunnel as sshOptions and stored in the session as sshOptions). (2) The session file stores sshOptions (array of strings, default []). gpuDown and gpuStatus (and any other later ssh call) must put session.sshOptions (when it is an array of strings) in front of their ssh arguments, exactly like gpuUp does, so a node on another port can be stopped. (3) Root without sudo: change the first ssh command so the sudo part is 'echo SUDO:$( { [ \"$(id -u)\" = 0 ] || sudo -n true; } >/dev/null 2>&1 && echo ok || echo no)', and change the dead-man timer's power-off command from 'sudo -n shutdown -h now' to '{ sudo -n shutdown -h now || shutdown -h now; }' (inside the same sh -c string; keep the quoting valid, the string is inside single quotes already so use only double quotes or none). (4) The ssh target host used for the probe still comes from ssh -G; make the -G call also include the same sshOptions (so -p applies). Do not edit tests.\nignoreTests: tests/adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-docker.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-hardening.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-safety.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "vast-gpu-commands",
+      "context": [
+        "tools/gpu-commands.mjs",
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tools/gpu-commands.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu-commands.mjs (plain ESM; same first line, exports and signatures; change nothing except this). Add a value flag --ssh-port (add 'ssh-port' to VALUE_FLAGS) and pass sshPort: flags['ssh-port'] === undefined ? undefined : Number(flags['ssh-port']) in upOptions. In the bake-off, pass the same sshPort to every gpuUp call (the base options already come from upOptions(flags, ...), so check the start callback keeps it). Add '--ssh-port N' to the plan text's node line as: 'node: <target>[ port N]'. Do not edit tests.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}
