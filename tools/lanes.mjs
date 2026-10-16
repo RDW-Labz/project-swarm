@@ -151,7 +151,7 @@ export async function withLaneStore(fn, { dir = lanesDir(), now = Date.now, isAl
           if (error instanceof SyntaxError) owner = {};
           else if (error.code !== 'ENOENT') throw error;
         }
-        if ((owner?.host === host && Number.isInteger(owner.pid) && owner.pid > 0 && !isAlive(owner.pid)) || (!owner && new Date(now()).getTime() - stat.mtimeMs > 60000)) {
+        if ((owner?.host === host && Number.isInteger(owner.pid) && owner.pid > 0 && !isAlive(owner.pid)) || (!owner && Date.now() - stat.mtimeMs > 60000)) {
           const cleanup = path.join(lock, 'cleanup');
           try { await fs.mkdir(cleanup); } catch (error) {
             if (!['EEXIST', 'ENOENT'].includes(error.code)) throw error;
