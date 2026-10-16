@@ -84,8 +84,8 @@ export function hardManifest({ model, bestOf = 1, maxUsd = 15, agent = 'rented' 
         context: ['TASK.md', 'planWaves.mjs'],
         outputs: ['planWaves.mjs'],
         timeoutMs: HARD_TIMEOUT_MS,
-        maxOutputTokens: 32000,
-        outputCapBytes: { total: 100000, perFile: 60000 },
+        // only the API lanes take output limits (a CLI lane such as codex refuses them)
+        ...(['anthropic', 'openai', 'gemini', 'openrouter', 'lambda', 'ollama'].includes(agent) ? { maxOutputTokens: 32000, outputCapBytes: { total: 100000, perFile: 60000 } } : {}),
       };
   return {
     version: 1,
