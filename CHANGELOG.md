@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.84.0
+
+- Phase 15, lessons mine: `swarm lessons mine [--min N] [--include-guarded] [--write] [--json]` clusters lessons whose guard is still only proposed and writes one proposal per cluster (scope rule, lint, test template, contract test, router rule, review item or prompt rule) under `proposals/`, naming the lessons it comes from; deterministic, never overwrites, never merges. First proposal: `proposals/ci.md`. Design: docs/plans/phase15-lessons-design.md section 8.
+
 ## 1.83.0
 
 - Worker output: a file returned both whole (`files`) and as `edits` is normalized to the whole file instead of failing the job.

@@ -169,3 +169,25 @@ test('lessons from the installed swarm are loaded for notes', async () => {
   const lessons = await loadLessonsForNotes(root, install);
   assert.equal(lessons.length, 1);
 });
+
+test('lessons mine prints clusters without writing, then writes proposals once and never overwrites', async () => {
+  const root = await project();
+  for (let i = 0; i < 3; i += 1) {
+    const r = await runLessonsCommand(root, 'lessons', ['add', '--stage', 'build', '--what', `A lane retried blindly ${i}.`, '--rule', `Retries need evidence ${i}.`, '--tag', 'retries', '--caught-by', 'missed']);
+    assert.equal(r.exitCode, 0, r.stdout);
+  }
+  const dry = await runLessonsCommand(root, 'lessons', ['mine']);
+  assert.match(dry.stdout, /retries: 3 lessons/);
+  await assert.rejects(fs.access(path.join(root, 'proposals')));
+  const written = await runLessonsCommand(root, 'lessons', ['mine', '--write']);
+  assert.match(written.stdout, /1 proposal\(s\) written/);
+  const file = path.join(root, 'proposals', 'retries.md');
+  const first = await fs.readFile(file, 'utf8');
+  assert.match(first, /Proposed guard: test-template/);
+  assert.match(first, /Not merged automatically/);
+  await fs.writeFile(file, `${first}\nhand edit\n`);
+  const again = await runLessonsCommand(root, 'lessons', ['mine', '--write']);
+  assert.match(again.stdout, /already existed/);
+  assert.match(await fs.readFile(file, 'utf8'), /hand edit/);
+  assert.equal((await runLessonsCommand(root, 'lessons', ['mine', '--min', '1'])).exitCode, 1);
+});
