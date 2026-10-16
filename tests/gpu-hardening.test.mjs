@@ -64,7 +64,7 @@ test('no passwordless sudo: refused before anything starts, unless allowNoPowerO
   assert.equal(normal.powerOff, true);
 });
 
-test('session file is mode 0600 and up; a failed start leaves starting, and down removes it', async t => {
+test('session file is mode 0600 and up; a failed start stops the servers and removes the session', async t => {
   const env = envFor(t);
   await gpuUp(options(), fakes(env));
   assert.equal(fs.statSync(gpuSessionPath(env)).mode & 0o777, 0o600);
@@ -74,10 +74,7 @@ test('session file is mode 0600 and up; a failed start leaves starting, and down
   const working = broken.ssh;
   broken.ssh = async (argv, opts) => { if (opts?.input !== undefined) throw new Error('start failed'); return working(argv, opts); };
   await assert.rejects(gpuUp(options(), broken));
-  assert.equal(readSessionFile(env2).state, 'starting');
-  broken.ssh = working;
-  await gpuDown(broken);
-  assert.equal(readSessionFile(env2), null);
+  assert.equal(readSessionFile(env2), null, 'nothing is left routable or recorded after a failed start');
 });
 
 test('a second up is refused even with replace', async t => {

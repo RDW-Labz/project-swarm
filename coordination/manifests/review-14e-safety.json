@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "id": "review-14e-safety",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "secret handling and exposure checks on a rented node",
+      "type": "review",
+      "outputs": [],
+      "timeoutMs": 1800000,
+      "context": [
+        "tools/gpu.mjs",
+        "tools/gpu-commands.mjs",
+        "tools/rented.mjs",
+        "coordination/review/phase14e-safety.diff"
+      ],
+      "prompt": "Safety review of the last Phase 14e changes (coordination/review/phase14e-safety.diff, with the full files for context): (a) the vLLM image is pinned by digest and tags are refused; (b) each rental gets a random 48-hex API key written to a mode-600 env file on the node (heredoc inside the script sent on ssh stdin), kept in the 0600 session file, sent as a Bearer header by the lane, health wait, status and bake-off; (c) `gpu up` fails and stops the servers if a server port is reachable from outside (TCP probe from the Mac, and `ss -ltnH` on the node). The owner's requirements: vLLM binds 127.0.0.1 only and is reached via the ssh tunnel; random key per rental; fail gpu up if the port is reachable from outside; no key or .env of the owner copied to the node. Check with evidence (file and line): where the key could leak (logs, errors, state, ledger, saved responses, ps/docker inspect on the node, shell history, the heredoc and its terminator, the `docker run` line, the timer), whether the env file permissions and removal are right (umask, timer, down, failed start), whether the key check regexes and the script quoting allow injection, whether the exposure checks can be fooled or give false negatives (IPv6, docker published ports on 0.0.0.0 via the default bridge, `ss` columns, host as a name that resolves to several addresses, probe before the container is up, a firewall that blocks the probe but the port is open), what happens to the servers and session after gpu-exposed, the digest pin (regex, --image), the new `auth: session` config path (loopback only, key validation, adapter credential-leak check includes the key). Rank high, medium, low; for each: where, how it fails, smallest fix. End with a final single line of JSON: {\"status\":\"complete\",\"summary\":\"...\",\"findings\":{\"high\":N,\"medium\":N,\"low\":N}}."
+    }
+  ]
+}

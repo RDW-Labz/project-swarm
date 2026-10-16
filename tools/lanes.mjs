@@ -52,7 +52,7 @@ export function resolveLanes({ config = {}, manifest = {}, env = process.env } =
   // The rented lane's ceiling and starting point come from the machine config's rentedGpu block.
   // A running GPU session (swarm gpu up) lays its replicas and model over that block and makes the lane routable; without one the lane never is.
   const { raw: rentedRaw, session: gpuSession } = effectiveRentedRaw(config.rentedGpu, env);
-  const rented = rentedRaw === undefined ? null : validateRentedConfig(rentedRaw).config;
+  const rented = rentedRaw === undefined ? null : validateRentedConfig(rentedRaw, { allowSession: Boolean(gpuSession) }).config;
   if (rented) { lanes.rented.concurrency = rented.concurrency; lanes.rented.adaptive = { ...rented.adaptive }; }
   // routable only for a live session that is not a bake-off's (a bake-off session carries routable: false and uses explicit rented jobs)
   const routableSession = Boolean(rented && gpuSession && gpuSession.routable !== false);

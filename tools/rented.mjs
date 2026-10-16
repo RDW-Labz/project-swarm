@@ -6,7 +6,7 @@ import { loadLocalConfig, resolveConfigPath } from './local-config.mjs';
 
 export const RENTED_DEFAULTS = Object.freeze({ maxHoursPerRun: 4, concurrency: 32, minBillableMinutes: 1, warnAt: 0.8, keyItem: Object.freeze({ service: 'project-swarm', account: 'rented.api_key' }) });
 
-const KEYS = new Set(['name', 'endpoint', 'endpoints', 'auth', 'model', 'keyItem', 'hourlyUsd', 'maxHoursPerRun', 'concurrency', 'dailyUsd', 'trusted', 'bestOf']);
+const KEYS = new Set(['name', 'endpoint', 'endpoints', 'auth', 'model', 'keyItem', 'hourlyUsd', 'maxHoursPerRun', 'concurrency', 'dailyUsd', 'trusted', 'bestOf', 'sessionKey']);
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/;
 const NAME_RE = /^[A-Za-z0-9 ._-]{1,40}$/;
 const LOOPBACK = new Set(['127.0.0.1', '[::1]', 'localhost']);
@@ -15,10 +15,12 @@ const r2 = (n) => Math.round(n * 100) / 100;
 const r4 = (n) => Math.round(n * 10000) / 10000;
 const plainText = (s) => typeof s === 'string' && s.length > 0 && s.length <= 80 && !/[\u0000-\u001f\u007f]/.test(s);
 
-export function validateRentedConfig(raw) {
+export function validateRentedConfig(raw, { allowSession = false } = {}) {
   const errors = [];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { config: null, errors: ['rentedGpu: must be an object'] };
   for (const k of Object.keys(raw)) if (!KEYS.has(k)) errors.push(`rentedGpu.${k}: unknown key`);
+  // A session key lives only in the 0600 session file; the machine config may not hold one.
+  if (!allowSession && (raw.auth === 'session' || raw.sessionKey !== undefined)) errors.push('rentedGpu.auth session and sessionKey are set only by a running GPU session, never in the config');
 
   // One endpoint, or a list (one vLLM replica per GPU, reached through ssh tunnels); jobs are spread across them.
   const given = raw.endpoints === undefined ? [raw.endpoint] : raw.endpoints;
@@ -38,8 +40,9 @@ export function validateRentedConfig(raw) {
     }
   }
   const auth = raw.auth ?? 'key';
-  if (!['key', 'none'].includes(auth)) errors.push('rentedGpu.auth: must be "key" or "none"');
-  else if (auth === 'none' && origins.some(origin => !LOOPBACK.has(new URL(origin).hostname))) errors.push('rentedGpu.auth none: only for loopback endpoints (an ssh tunnel)');
+  if (!['key', 'none', 'session'].includes(auth)) errors.push('rentedGpu.auth: must be "key", "none" or "session"');
+  else if (auth !== 'key' && origins.some(origin => !LOOPBACK.has(new URL(origin).hostname))) errors.push('rentedGpu.auth none or session: only for loopback endpoints (an ssh tunnel)');
+  if (auth === 'session' && !/^[0-9a-f]{48}$/.test(raw.sessionKey ?? '')) errors.push('rentedGpu.sessionKey: auth session needs the 48-character key of the running GPU session');
   const origin = origins[0] ?? null;
 
   if (typeof raw.model !== 'string' || !MODEL_RE.test(raw.model)) errors.push('rentedGpu.model: invalid model id');
@@ -83,6 +86,7 @@ export function validateRentedConfig(raw) {
       concurrency,
       dailyUsd,
       auth,
+      sessionKey: auth === 'session' ? raw.sessionKey : null,
       bestOf,
       endpoints: origins,
       chatUrls: origins.map(item => `${item}/v1/chat/completions`),
@@ -187,6 +191,8 @@ export function readGpuSession(env = process.env, { now = Date.now } = {}) {
     if (!session || !Array.isArray(session.endpoints) || !session.endpoints.length || typeof session.model !== 'string') return null;
     // A missing or unreadable expiry counts as expired: a session must always have an end.
     if (typeof session.expiresAt !== 'string' || !(Date.parse(session.expiresAt) > now())) return null;
+    // A session that is still starting (or failed to) is not usable; sessions from before this field existed count as up.
+    if (session.state !== undefined && session.state !== 'up') return null;
     return session;
   } catch { return null; }
 }
@@ -197,7 +203,9 @@ export function effectiveRentedRaw(raw, env = process.env, { now = Date.now } = 
   const session = readGpuSession(env, { now });
   if (!session) return { raw, session: null };
   const hours = Number.isFinite(session.maxHours) ? session.maxHours : RENTED_DEFAULTS.maxHoursPerRun;
-  const merged = { ...(raw ?? {}), endpoints: session.endpoints, auth: 'none', model: session.model, hourlyUsd: session.hourlyUsd, maxHoursPerRun: raw?.maxHoursPerRun === undefined ? hours : Math.min(raw.maxHoursPerRun, hours), concurrency: Math.min(2048, session.endpoints.length * (session.perReplica ?? 32)) };
+  // A session made by this version carries a random per-rental API key; an older one has none.
+  const sessionAuth = typeof session.apiKey === 'string' ? { auth: 'session', sessionKey: session.apiKey } : { auth: 'none' };
+  const merged = { ...(raw ?? {}), endpoints: session.endpoints, ...sessionAuth, model: session.model, hourlyUsd: session.hourlyUsd, maxHoursPerRun: raw?.maxHoursPerRun === undefined ? hours : Math.min(raw.maxHoursPerRun, hours), concurrency: Math.min(2048, session.endpoints.length * (session.perReplica ?? 32)) };
   delete merged.endpoint; delete merged.dailyUsd;
   if (Number.isInteger(session.bestOf)) merged.bestOf = session.bestOf;
   if (Number.isFinite(session.capUsd)) merged.dailyUsd = session.capUsd;
@@ -210,7 +218,7 @@ export function loadRentedConfig(env = process.env) {
   try { raw = loadLocalConfig({ env }).rentedGpu; } catch { raw = undefined; }
   const { raw: effective } = effectiveRentedRaw(raw, env);
   if (effective === undefined) return { config: null, errors: [] };
-  return validateRentedConfig(effective);
+  return validateRentedConfig(effective, { allowSession: effective !== raw });
 }
 
 // --- load balancing across replicas ---------------------------------------------------------------------------------

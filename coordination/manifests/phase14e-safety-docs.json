@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/kickoff.test.mjs"
+      ],
+      "id": "docs-rented-safety",
+      "context": [
+        "docs/rented-gpu.md"
+      ],
+      "outputs": [
+        "docs/rented-gpu.md"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/rented-gpu.md: (1) replace the bullet that starts \"- No key and no file ever goes to the node.\" (the whole bullet, one line) with: \"- No file and no key of yours ever goes to the node. swarm gpu up sends commands only (never scp, never a .env). The servers listen on the node's loopback only (docker publishes 127.0.0.1:800n) and are reached through an ssh tunnel. Each rental gets its own random 48-character API key, written to a private env file on the node (mode 600, removed by the timer and by gpu down) and kept in the session file next to your machine config (mode 600); it is not a key of yours and it dies with the rental. A model that needs a Hugging Face token is not supported by gpu up; use a public model.\" ; (2) directly after that bullet add the bullet \"- gpu up fails, and stops the servers, if any server port is reachable from outside: it tries to connect to every server port from this computer and reads the node's listening sockets (ss -ltn); anything bound to 0.0.0.0, * or [::] on a server port is refused.\" ; (3) directly after that, add the bullet \"- The server image is pinned by digest (vllm/vllm-openai@sha256:..., vLLM v0.27.1); tags such as latest are refused, and --image accepts only another digest. To move to a newer vLLM, look up the new digest (a registry manifest request) and change PINNED_IMAGE in tools/gpu.mjs in a reviewed change.\" ; (4) in the section \"## Without a session: the config block (advanced)\" nothing changes. Use the anchor \"- No key and no file ever goes to the node.\" for (1) and add (2) and (3) as new lines right after it.\nignoreTests: tests/kickoff.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "sensitive": true,
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/router.test.mjs",
+        "tests/t101-release.test.mjs",
+        "tests/update.test.mjs"
+      ],
+      "id": "docs-changelog-safety",
+      "context": [
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "CHANGELOG.md"
+      ],
+      "prompt": "Edit CHANGELOG.md in place; change nothing else. Insert a new section directly after the line \"# Changelog\" (and a blank line) titled \"## 1.75.0\" with these bullets: \"- Rented GPU safety (finishing Phase 14e): the server image is pinned by digest (`vllm/vllm-openai@sha256:...`, vLLM v0.27.1) and tags are refused (`--image` takes only another digest); every rental gets a random 48-character API key (private env file on the node, removed by the timer and `gpu down`; kept in the 0600 session file; the lane and the bake-off send it as a Bearer header); `gpu up` fails and stops the servers if any server port answers from outside or the node lists a server port bound to anything but 127.0.0.1, so servers listen on the node's loopback only and are reached through the ssh tunnel.\" and \"- A regression test (mutation-checked) covers the fix that lets a lead's child manifest list uncovered tests in ignoreTests, so docs-only `swarm go` goals work.\" Keep the \"## 1.74.0\" section below untouched.\nignoreTests: tests/anthropic-lane.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/codex-envelope.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lesson-t80-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-aa-core.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ab-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ag-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ah-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-context.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-o.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-x.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/job-types.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/openrouter.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/router.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/t101-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/update.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "docs-dogfood-safety",
+      "context": [
+        "docs/state/dogfood.md"
+      ],
+      "outputs": [
+        "docs/state/dogfood.md"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/state/dogfood.md, in the \"## Phase 14e notes\" section, add after the bullet that starts \"- Total for 14e:\" (use that start text as the anchor; add after the whole bullet) this bullet: \"- Safety items (image digest, per-rental key, outside-port check, version 1.75.0): 3 swarm jobs (2 file rewrites and 1 test file, all complete first try, about $0.02) plus 1 docs-edit set; the orchestrator wired the session key into the config and adapter (about 20 lines) and fixed 4 existing test expectations. The uncovered-tests regression test was checked by turning the fix off (it fails) and on (it passes).\""
+    }
+  ]
+}

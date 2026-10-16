@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { gpuUp, gpuDown, gpuStatus, formatStatus, validateUpOptions, remoteStartScript, sessionHours, parseGpuCount, readSessionFile } from '../tools/gpu.mjs';
+import { PINNED_IMAGE, gpuUp, gpuDown, gpuStatus, formatStatus, validateUpOptions, remoteStartScript, sessionHours, parseGpuCount, readSessionFile } from '../tools/gpu.mjs';
 import { runBakeoff, measureThroughput, agentsPerGpu, renderBakeoff, selectCandidates } from '../tools/gpu-bakeoff.mjs';
 import { createBalancer, balancedFetch, loadRentedConfig, readGpuSession } from '../tools/rented.mjs';
 import { routeJob, rentedContractProblem } from '../tools/router.mjs';
@@ -23,7 +23,7 @@ function envFor(t) {
 const options = (extra = {}) => ({ target: 'ubuntu@203.0.113.9', key: '/home/me/.ssh/node', model: MODEL, hourlyUsd: 3, maxUsd: 6, pollMs: 1, ...extra });
 function fakes(env, { gpus = 4, now = () => 1700000000000, sudo = 'ok' } = {}) {
   const calls = [];
-  return { calls, env, now, sleep: async () => {}, fetchImpl: async () => ({ ok: true, json: async () => ({ data: [{ id: MODEL }] }) }), ssh: async (argv, { input } = {}) => { calls.push({ argv, input }); return { stdout: String(argv.at(-1)).startsWith('nvidia-smi -L') ? Array.from({ length: gpus }, (_, n) => `GPU ${n}: NVIDIA RTX PRO 6000`).join('\n') + `\nSUDO:${sudo}` : '' }; }, openTunnel: async ({ ports }) => { calls.push({ tunnel: ports }); return { pid: 4242 }; }, stopTunnel: async pid => { calls.push({ stopped: pid }); } };
+  return { calls, env, now, sleep: async () => {}, fetchImpl: async () => ({ ok: true, json: async () => ({ data: [{ id: MODEL }] }) }), ssh: async (argv, { input } = {}) => { calls.push({ argv, input }); return { stdout: String(argv.at(-1)).startsWith('nvidia-smi -L') ? Array.from({ length: gpus }, (_, n) => `GPU ${n}: NVIDIA RTX PRO 6000`).join('\n') + `\nSUDO:${sudo}` : '' }; }, probePort: async () => false, openTunnel: async ({ ports }) => { calls.push({ tunnel: ports }); return { pid: 4242 }; }, stopTunnel: async pid => { calls.push({ stopped: pid }); } };
 }
 
 test('gpu up: one replica per GPU, tunnel ports, expiry = what the cap pays for, nothing but commands sent, no key anywhere', async t => {
@@ -35,9 +35,12 @@ test('gpu up: one replica per GPU, tunnel ports, expiry = what the cap pays for,
   assert.equal(Date.parse(session.expiresAt) - Date.parse(session.startedAt), 2 * 3600000);
   const script = deps.calls.find(call => call.input)?.input;
   assert.equal([...script.matchAll(/docker run -d/g)].length, 4);
-  for (const n of [0, 1, 2, 3]) assert.match(script, new RegExp(`--name swarm-vllm-${n} --gpus device=${n} --ipc=host -p 127\\.0\\.0\\.1:${8000 + n}:8000`));
+  for (const n of [0, 1, 2, 3]) assert.match(script, new RegExp(`--name swarm-vllm-${n} --gpus device=${n} --ipc=host --env-file "\\$HOME/\\.swarm-vllm\\.env" -p 127\\.0\\.0\\.1:${8000 + n}:8000`));
   assert.match(script, /sleep 7200;.*docker rm -f.*shutdown -h now/);
-  assert.doesNotMatch(script, /api-key|API_KEY|\.env|scp|HF_TOKEN/i);
+  assert.match(script, /VLLM_API_KEY=[0-9a-f]{48}\n/, 'a random per-rental key reaches the node through the env file, never a command line');
+  assert.doesNotMatch(script, /--api-key|scp|HF_TOKEN|\.env\b(?!")/i);
+  assert.equal([...script.matchAll(/--env-file/g)].length, 4);
+  assert.match(session.apiKey, /^[0-9a-f]{48}$/);
   assert.equal(deps.calls.filter(call => call.argv?.includes('scp')).length, 0);
   assert.deepEqual(readSessionFile(env), session);
   assert.equal(JSON.stringify(session).includes('BEGIN'), false);
@@ -56,15 +59,16 @@ test('hours: the owner limit and the dollar cap, whichever is shorter', () => {
   assert.equal(sessionHours({ hourlyUsd: 3, maxUsd: 6 }), 2);
   assert.equal(sessionHours({ hourlyUsd: 3, maxUsd: 60, maxHours: 1.5 }), 1.5);
   assert.equal(parseGpuCount('GPU 0: A\nGPU 1: B\nnoise'), 2);
-  assert.match(remoteStartScript({ model: MODEL, image: 'vllm/vllm-openai:latest', gpus: 1, maxModelLen: 1000, perReplica: 4, args: ['--quantization', 'fp8'], seconds: 60.2, remotePortBase: 8000 }), /^setsid nohup sh -c 'sleep 61;.*\nset -e\n.*--quantization fp8/s);
+  assert.match(remoteStartScript({ apiKey: 'a'.repeat(48), model: MODEL, image: PINNED_IMAGE, gpus: 1, maxModelLen: 1000, perReplica: 4, args: ['--quantization', 'fp8'], seconds: 60.2, remotePortBase: 8000 }), /^setsid nohup sh -c 'sleep 61;.*\nset -e\n.*--quantization fp8/s);
 });
 
-test('an unhealthy replica fails the up with the session still recorded (so down and the timer can clean it)', async t => {
+test('an unhealthy replica fails the up, stops the servers and removes the session', async t => {
   const env = envFor(t), deps = fakes(env, { gpus: 1 });
   let clock = 1700000000000;
   deps.now = () => clock; deps.sleep = async () => { clock += 600000; }; deps.fetchImpl = async () => { throw new Error('down'); };
   await assert.rejects(gpuUp(options({ healthTimeoutMs: 900000 }), deps), /gpu-unhealthy/);
-  assert.ok(readSessionFile(env));
+  assert.equal(readSessionFile(env), null);
+  assert.ok(deps.calls.some(call => call.input?.includes('docker rm -f') && !call.input.includes('docker run')), 'the stop script was sent');
 });
 
 test('status and down: cost so far, expiry, the terminate-the-instance reminder; the session file is gone after down', async t => {
@@ -96,7 +100,8 @@ test('a live session lays its replicas over the rented config: no key, loopback 
   assert.equal(resolveLanes({ config: {}, env }).rented.model, null, 'without a session the lane is never routable');
   await gpuUp(options({ gpus: 3, perReplica: 16, now: undefined }), { ...fakes(env, { gpus: 3, now: () => Date.now() }) });
   const { config } = loadRentedConfig(env);
-  assert.equal(config.auth, 'none');
+  assert.equal(config.auth, 'session');
+  assert.match(config.sessionKey, /^[0-9a-f]{48}$/);
   assert.equal(config.endpoints.length, 3);
   assert.equal(config.concurrency, 48);
   assert.equal(config.model, MODEL);
@@ -199,7 +204,7 @@ test('swarm gpu: without --yes it only prints the plan; flags are strict; bake-o
   assert.equal((await runGpuCommand(['up', ...base, '--model', MODEL], { out: x => lines.push(x), env, gpu })).status, 'planned');
   assert.equal((await runGpuCommand(['bakeoff', ...base, '--extra-quant'], { out: x => lines.push(x), env, gpu })).status, 'planned');
   assert.deepEqual(touched, []);
-  assert.match(lines.join('\n'), /nothing is started yet.*sent to the node: commands only; no files, keys or \.env.*only sensitive: false/s);
+  assert.match(lines.join('\n'), /nothing is started yet.*sent to the node: commands only; nothing of yours.*only sensitive: false/s);
   assert.match(lines.join('\n'), /qwen3\.6-35b-a3b-fp8.*NVFP4 extras/s);
   assert.throws(() => parseGpuFlags(['--nope']), /gpu-usage/);
   assert.throws(() => parseGpuFlags(['--target']), /needs a value/);

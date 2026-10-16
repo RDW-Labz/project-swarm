@@ -188,3 +188,10 @@ test('RENTED_DEFAULTS values and frozen', () => {
   });
   assert.throws(() => { RENTED_DEFAULTS.warnAt = 1; }, TypeError);
 });
+
+test('a session key can never sit in the machine config; only a running session may supply one', () => {
+  const key = 'a1'.repeat(24);
+  bad({ auth: 'session', sessionKey: key }, 'auth session');
+  bad({ sessionKey: key }, 'auth session');
+  assert.deepEqual(validateRentedConfig({ ...base(), endpoint: 'http://127.0.0.1:18000', auth: 'session', sessionKey: key }, { allowSession: true }).errors, []);
+});

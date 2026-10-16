@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.75.0
+
+- Rented GPU safety (finishing Phase 14e): the server image is pinned by digest (`vllm/vllm-openai@sha256:...`, vLLM v0.27.1) and tags are refused (`--image` takes only another digest); every rental gets a random 48-character API key (private env file on the node, removed by the timer and `gpu down`; kept in the 0600 session file; the lane and the bake-off send it as a Bearer header); `gpu up` fails and stops the servers if any server port answers from outside or the node lists a server port bound to anything but 127.0.0.1, so servers listen on the node's loopback only and are reached through the ssh tunnel.
+- A regression test (mutation-checked) covers the fix that lets a lead's child manifest list uncovered tests in ignoreTests, so docs-only `swarm go` goals work.
+
 ## 1.74.0
 
 - Rented GPU lane (Phase 14d): `agent: "rented"` runs jobs on an OpenAI-compatible server you start yourself in the cloud (vLLM or SGLang on a GPU node). Config in the machine config (`rentedGpu`: endpoint, model, Keychain key item, `hourlyUsd`, `maxHoursPerRun`, `concurrency`, `dailyUsd`, `trusted`). The lane is adaptive (starts at 4, up to the ceiling). Spend: the rental is billed by the hour, not the token. One meter per run counts the time the node was needed and adds it to the run cap and to the lane's day cap across runs (a machine-wide spend entry); the guard warns at 80% and stops launching at a cap or at `maxHoursPerRun` (running jobs are never killed); a run with no USD cap does not start rented jobs. Only jobs marked `sensitive: false` ever go to a rented host. Automatic routing picks the lane only while `swarm gpu up` has a live session. **Swarm never rents or starts anything**; the runbook for renting a node, connecting and shutting it down is in [rented GPU](docs/rented-gpu.md). Twelve adapters now.

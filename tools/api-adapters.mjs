@@ -46,6 +46,7 @@ export function apiConfiguration(agent, env = process.env, { readKey = readOpenR
     const { config: rented } = loadRentedConfig(env);
     if (!rented) return { endpoint: 'https://rented.invalid/v1/chat/completions', key: null, keyName: 'rentedGpu config (machine config) and Keychain project-swarm/rented.api_key', selfHosted: true, configured: false };
     // A running GPU session (or auth: none) has no key: the servers listen only on the node's loopback and are reached through the ssh tunnel.
+    if (rented.auth === 'session') return { endpoint: rented.chatUrl, endpoints: rented.chatUrls, key: rented.sessionKey, keyName: 'the running GPU session key', selfHosted: true, configured: true, model: rented.model, bestOf: rented.bestOf };
     if (rented.auth === 'none') return { endpoint: rented.chatUrl, endpoints: rented.chatUrls, key: null, keyName: 'none (ssh tunnel to a loopback server)', selfHosted: true, configured: true, model: rented.model, bestOf: rented.bestOf };
     key = readRentedKey(env, rented.keyItem);
     return { endpoint: rented.chatUrl, endpoints: rented.chatUrls, key: key || null, keyName: `Keychain ${rented.keyItem.service}/${rented.keyItem.account}`, selfHosted: true, configured: Boolean(key), model: rented.model, bestOf: rented.bestOf };
