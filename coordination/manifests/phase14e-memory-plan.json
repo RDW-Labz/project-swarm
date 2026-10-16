@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-container-review.test.mjs",
+        "tests/gpu-container.test.mjs",
+        "tests/gpu-docker.test.mjs",
+        "tests/gpu-hardening.test.mjs",
+        "tests/gpu-lineup.test.mjs",
+        "tests/gpu-safety.test.mjs",
+        "tests/gpu-vast.test.mjs",
+        "tests/gpu.test.mjs",
+        "tests/vast-container.test.mjs"
+      ],
+      "id": "mem-gpu",
+      "context": [
+        "tools/gpu.mjs",
+        "docs/plans/swarm-gpu-memory-plan.md"
+      ],
+      "outputs": [
+        "tools/gpu.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu.mjs (plain ESM; same first line, exports and signatures unless named here; change ONLY what follows; compact). Implements docs/plans/swarm-gpu-memory-plan.md section 7 for the server side. (1) PINNED_IMAGE = 'vllm/vllm-openai@sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3' (vLLM v0.31.0; update the comment that says v0.27.1). (2) GPU_DEFAULTS: maxModelLen becomes 131072; add memoryUtilization: 0.93 and commonArgs: Object.freeze(['--kv-cache-dtype','fp8','--enable-prefix-caching','--mamba-cache-mode','align','--prefix-match-unit','64','--max-num-batched-tokens','16384']). (3) Both remoteStartScript (docker mode) and containerStartScript (container mode): replace the hardcoded '--gpu-memory-utilization 0.9 --enable-prefix-caching' with '--gpu-memory-utilization ' + GPU_DEFAULTS.memoryUtilization + ' ' + GPU_DEFAULTS.commonArgs.join(' ') (the per-model args still follow). Both accept a new optional parameter env (an object of NAME: value strings, default {}): validate every entry (name /^[A-Z][A-Z0-9_]{0,60}$/, value /^[A-Za-z0-9._-]{1,40}$/, at most 8 entries) else throw fail('gpu-env-invalid', ...); in container mode each launch line gets the assignments right after CUDA_VISIBLE_DEVICES=<index> (NAME=value NAME2=value2 ...), in docker mode each docker run gets '-e NAME=value' after --ipc=host's --env-file option. (4) gpuUp passes options.env to the scripts; validateUpOptions validates options.env the same way (gpu-env-invalid, as an object, at most 8 entries) . (5) Replace the whole SHORTLIST (and its comment, which should say: all NVFP4, text-only, no MTP, flags from docs/plans/swarm-gpu-memory-plan.md section 7; entries marked optional run only when enough session time is left) with three entries, each { label, model, quant: 'nvfp4', args: [...], env: {...} } plus optional: true on the third: (a) label 'qwen3.6-35b-a3b-nvfp4', model 'nvidia/Qwen3.6-35B-A3B-NVFP4', args ['--quantization','modelopt_fp4','--moe-backend','flashinfer_b12x','--mamba-ssm-cache-dtype','bfloat16','--block-size','128','--reasoning-parser','qwen3','--tool-call-parser','qwen3_coder','--enable-auto-tool-choice','--language-model-only'], env { VLLM_HAS_FLASHINFER_CUBIN: '1' }; (b) label 'nemotron-3.5-lightning-nvfp4', model 'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4', args ['--mamba-ssm-cache-dtype','float16','--reasoning-parser','nemotron_v3','--tool-call-parser','qwen3_coder','--enable-auto-tool-choice','--async-scheduling'], env {}; (c) label 'qwen3-coder-next-nvfp4', model 'RedHatAI/Qwen3-Coder-Next-NVFP4', the same args and env as (a), optional: true. Keep everything else (container mode, exposure checks, key handling, session handling) exactly as it is. Do not edit tests.\nignoreTests: tests/adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container-review.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-docker.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-hardening.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-lineup.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-safety.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-vast.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/vast-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu-bestof.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-lineup.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "mem-bakeoff",
+      "context": [
+        "tools/gpu-bakeoff.mjs",
+        "tools/gpu.mjs",
+        "docs/plans/swarm-gpu-memory-plan.md"
+      ],
+      "outputs": [
+        "tools/gpu-bakeoff.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu-bakeoff.mjs (plain ESM; same first line; keep the existing exports and add the new ones named here; compact). Implements docs/plans/swarm-gpu-memory-plan.md section 7 items 4 to 7. (1) LEVELS = Object.freeze([32, 64, 96, 128, 192]); export MAX_MS_PER_TOKEN = 35. (2) measureThroughput results also carry msPerToken = tokPerSecPerAgent > 0 ? round to 1 decimal of 1000 / tokPerSecPerAgent : null. (3) agentsPerGpu(levels, { maxErrorRate = 0.05, maxMsPerToken = MAX_MS_PER_TOKEN } = {}): the highest level whose errorRate <= maxErrorRate and whose msPerToken is a number <= maxMsPerToken; 0 when none. (4) New exported async runUnderLoad({ endpoint, model, agents, fetchImpl = fetch }, fn): starts 'agents' background loops that each keep sending POST endpoint + '/v1/chat/completions' (same body style as measureThroughput, max_tokens 64) one request after another (errors are ignored; a short pause of 10 ms after an error), awaits fn(), then sets a stop flag, awaits all loops, and returns fn's result (also stops the loops if fn throws). agents <= 0 just runs fn. (5) runBakeoff({ candidates, hourlyUsd, capUsd, levels = LEVELS, bestOf = [1, 3], minRemainingHours = 1 }, deps) with deps start, benchmark, throughput, cacheStats, withLoad (optional), now, log: per candidate: (a) skip (record { error: 'skipped: ...' }) when spent >= capUsd as today, or when candidate.optional === true and the time left is below minRemainingHours, where time left = (capUsd - spent) / hourlyUsd hours; (b) start the server; (c) concurrency sweep: for each level call throughput and then cacheStats({ endpoint }); store each level result with cacheHitRate (hitRate or null) added; (d) chosenAgents = agentsPerGpu(measured) or, when 0, the smallest level; (e) pass rate at best-of-N under load: counts = unique sorted [1, ...bestOf]; for each n run benchmark({ endpoint, model, candidate, bestOf: n }) inside (deps.withLoad ?? ((context, fn) => fn()))({ endpoint, model, agents: chosenAgents }, () => benchmark(...)) ; byBestOf entries { n, passed, total, passRate }; the main pass rate/passed/total are the n=1 entry; (f) result fields: label, model, quant, passed, total, passRate, byBestOf, levels, agentsPerGpu (the sweep result; 0 allowed), chosenAgents, cacheHitRate (the last level's), minutes, costUsd (hours since the candidate started times hourlyUsd, 4 decimals), costPerPassUsd (costUsd / passed at n=1, or null when 0 passed); always stop the server in finally and keep the error handling as today. Remove the NVFP4 extra filtering: every candidate runs (the includeExtra option is accepted and ignored). (6) rankResults: failed/skipped candidates last; otherwise ascending costPerPassUsd (null counts as Infinity), ties by higher agentsPerGpu. (7) renderBakeoff({ ranked, spentUsd }, { hourlyUsd, gpu, date, evalTasks, levels }): a summary table with columns Rank | Model | Quant | Cost per passing task | Pass rate N=1 | Pass rate N=3 (at the chosen agent count; the best-of counts other than 1 listed as N=<n>: passed/total) | Max agents (under 35 ms/token) | Chosen agents | Prefix cache hit | Time, cost; and for every successful model a second table titled with the model label with one row per tested level: Agents | ms/token | output tok/s | tok/s per agent | errors | prefix cache hit. Failed or skipped rows show the reason in the Model-row's second cell. Keep the explanatory paragraph but update it: agents per GPU is the highest tested count with under 5% errors and at most 35 ms per token for each agent; best-of-N is measured with background load at the chosen count; ranking is cost per passing task, then agents per GPU. (8) selectCandidates(spec): with no spec return all SHORTLIST entries (copies, including optional, args and env); with a spec resolve labels or model ids against SHORTLIST (copy including args and env) and build { label, model, quant: /nvfp4/i.test(item) ? 'nvfp4' : 'fp8', args: [], env: {} } for unknown ids. Do not edit tests.\nignoreTests: tests/gpu-bestof.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-lineup.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-container-review.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "mem-commands",
+      "context": [
+        "tools/gpu-commands.mjs",
+        "tools/gpu-bakeoff.mjs"
+      ],
+      "outputs": [
+        "tools/gpu-commands.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu-commands.mjs (plain ESM; same first line, exports and signatures; change ONLY this). (1) Import runUnderLoad (a new export of ./gpu-bakeoff.mjs). (2) In the bake-off: pass env: candidate.env to the gpuUp call (alongside args), pass withLoad: (context, fn) => runUnderLoad({ ...context, fetchImpl: authFetch(real.fetchImpl, currentKey) }, fn) to runBakeoff's deps (currentKey is the per-rental key variable already kept from each start), keep cacheStats and benchmark as they are. (3) The bake-off plan text and the default levels come from LEVELS (now 32, 64, 96, 128, 192); the --levels validation limit stays 1 to 2000. (4) The plan text for the bake-off must say: 'one vLLM engine per GPU; all models NVFP4, text-only; best-of-N is measured under load at the largest agent count that stays under 35 ms/token'. Remove the sentence about NVFP4 extras and '--extra-quant' from that text (the flag stays accepted but does nothing). Do not edit tests.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container-review.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/vast-container.test.mjs",
+        "tests/vast-rental.test.mjs"
+      ],
+      "id": "mem-vast",
+      "context": [
+        "bench/gpu-bakeoff/vast.mjs",
+        "docs/plans/swarm-gpu-memory-plan.md"
+      ],
+      "outputs": [
+        "bench/gpu-bakeoff/vast.mjs"
+      ],
+      "prompt": "Return the complete new bench/gpu-bakeoff/vast.mjs (plain ESM; same first line, exports and behaviour; change ONLY this). Extend checkContainerOffer(offer, { hours, maxUsd }) with the host requirements from docs/plans/swarm-gpu-memory-plan.md section 5, each adding a reason to the refusal list when it fails (a missing field counts as failing and the reason says 'unknown'): PCIe Gen5 x16: Number(offer.pci_gen) >= 5 and Number(offer.pcie_bw) >= 45 (measured GB/s; Gen5 x16 is about 50 to 54, Gen4 x16 about 26); at least 16 vCPU: Number(offer.cpu_cores_effective) >= 16; at least 64 GB RAM: Number(offer.cpu_ram) >= 65536 (it is in MB); at least 200 GB of disk available: Number(offer.disk_space) >= 200; NVMe: /nvme/i.test(offer.disk_name ?? '') or Number(offer.disk_bw) >= 1500 (MB/s). All the existing rules stay. The 'search --mode container' output lines also show pci gen and bandwidth, vCPUs, RAM in GB and disk GB. In rent --offer auto, the bundles query body and the candidate loop stay as they are (the client-side checks decide). Do not edit tests.\nignoreTests: tests/vast-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/vast-rental.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

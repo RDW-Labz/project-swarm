@@ -11,7 +11,7 @@ import { gpuUp, gpuDown, gpuStatus, formatStatus, sessionHours, validateUpOption
 import { fetchCacheStats } from './gpu-cache.mjs';
 import { runBakeoff, renderBakeoff, writeBakeoffReport, measureThroughput, countEvalTasks, selectCandidates, LEVELS } from './gpu-bakeoff.mjs';
 
-const VALUE_FLAGS = new Set(['target', 'key', 'model', 'models', 'hourly-usd', 'max-usd', 'max-hours', 'gpus', 'per-replica', 'max-model-len', 'image', 'levels', 'repo', 'best-of', 'ssh-port', 'bench-ref', 'mode', 'probe-ports']);
+const VALUE_FLAGS = new Set(['target', 'key', 'model', 'models', 'hourly-usd', 'max-usd', 'max-hours', 'gpus', 'per-replica', 'max-model-len', 'image', 'levels', 'repo', 'best-of', 'ssh-port', 'bench-ref', 'mode', 'probe-ports', 'local-port']);
 const BOOLEAN_FLAGS = new Set(['yes', 'json', 'extra-quant', 'allow-no-poweroff']);
 
 export function parseGpuFlags(args) {
@@ -39,7 +39,7 @@ function parseProbePorts(value) {
 const expand = file => (typeof file === 'string' && file.startsWith('~/') ? path.join(os.homedir(), file.slice(2)) : file);
 
 export function upOptions(flags, extra = {}) {
-  return { target: flags.target, key: expand(flags.key), model: flags.model, hourlyUsd: num(flags['hourly-usd']), maxUsd: num(flags['max-usd']), maxHours: num(flags['max-hours']), gpus: num(flags.gpus), perReplica: num(flags['per-replica']), maxModelLen: num(flags['max-model-len']), image: flags.image, sshPort: flags['ssh-port'] === undefined ? undefined : Number(flags['ssh-port']), mode: flags.mode, probePorts: parseProbePorts(flags['probe-ports']), allowNoPowerOff: flags['allow-no-poweroff'] === true, bestOf: flags['best-of'] === undefined || flags['best-of'].includes(',') ? undefined : Number(flags['best-of']), ...extra };
+  return { target: flags.target, key: expand(flags.key), model: flags.model, hourlyUsd: num(flags['hourly-usd']), maxUsd: num(flags['max-usd']), maxHours: num(flags['max-hours']), gpus: num(flags.gpus), perReplica: num(flags['per-replica']), maxModelLen: num(flags['max-model-len']), image: flags.image, sshPort: flags['ssh-port'] === undefined ? undefined : Number(flags['ssh-port']), mode: flags.mode, localPort: flags['local-port'] === undefined ? undefined : Number(flags['local-port']), probePorts: parseProbePorts(flags['probe-ports']), allowNoPowerOff: flags['allow-no-poweroff'] === true, bestOf: flags['best-of'] === undefined || flags['best-of'].includes(',') ? undefined : Number(flags['best-of']), ...extra };
 }
 
 export function planText(options, { gpus = options.gpus ?? 'all' } = {}) {

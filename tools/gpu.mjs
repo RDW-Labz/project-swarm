@@ -49,6 +49,7 @@ export function validateUpOptions(options) {
   if (options.bestOf !== undefined && !(Number.isInteger(options.bestOf) && options.bestOf >= 1 && options.bestOf <= 8)) throw fail('gpu-option-invalid', 'bestOf must be a whole number from 1 to 8');
   if (options.maxHours !== undefined && !isPosNum(options.maxHours)) throw fail('gpu-option-invalid', 'maxHours must be above 0');
   if (options.sshPort !== undefined && !(Number.isInteger(options.sshPort) && options.sshPort >= 1 && options.sshPort <= 65535)) throw fail('gpu-option-invalid', 'sshPort must be a whole number from 1 to 65535');
+  if (options.localPort !== undefined && !(Number.isInteger(options.localPort) && options.localPort >= 1024 && options.localPort <= 65000)) throw fail('gpu-option-invalid', 'localPort must be a whole number from 1024 to 65000');
   const mode = options.mode ?? 'vm';
   if (mode !== 'vm' && mode !== 'container') throw fail('gpu-option-invalid', "mode must be 'vm' or 'container'");
   if (options.probePorts !== undefined && (!Array.isArray(options.probePorts) || options.probePorts.length > 8 || options.probePorts.some(port => !Number.isInteger(port) || port < 1 || port > 65535))) throw fail('gpu-option-invalid', 'probePorts must be an array of at most 8 whole ports from 1 to 65535');
@@ -300,7 +301,7 @@ export async function gpuUp(options, deps) {
   const script = container
     ? containerStartScript({ model: options.model, gpus, maxModelLen: options.maxModelLen ?? GPU_DEFAULTS.maxModelLen, perReplica, args: options.args ?? [], seconds: hours * 3600, remotePortBase: GPU_DEFAULTS.remotePortBase, apiKey })
     : remoteStartScript({ model: options.model, image: options.image ?? GPU_DEFAULTS.image, gpus, maxModelLen: options.maxModelLen ?? GPU_DEFAULTS.maxModelLen, perReplica, args: options.args ?? [], seconds: hours * 3600, remotePortBase: GPU_DEFAULTS.remotePortBase, apiKey });
-  const ports = replicaPorts(gpus);
+  const ports = replicaPorts(gpus, { localPortBase: options.localPort ?? GPU_DEFAULTS.localPortBase });
   const endpoints = ports.map(port => `http://127.0.0.1:${port.local}`);
   const startedAt = now();
   const session = { version: 1, bestOf: options.bestOf ?? 1, target: options.target, key: options.key, apiKey, model: options.model, quant: options.quant ?? null, replicas: gpus, endpoints, perReplica, hourlyUsd: options.hourlyUsd, capUsd: options.maxUsd, maxHours: hours, startedAt: new Date(startedAt).toISOString(), expiresAt: new Date(startedAt + hours * 3600000).toISOString(), tunnelPid: null, sshOptions, routable: options.routable !== false, powerOff, mode: container ? 'container' : 'vm', state: 'starting' };

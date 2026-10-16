@@ -93,12 +93,12 @@ export const createBody = ({ disk = 150, label = 'swarm-bakeoff' } = {}) => ({ i
 export const deadlineAt = (now, hours) => new Date(now + hours * 3600000).toISOString();
 
 export async function findOffer(client, id) {
-  const body = await client.call('POST', '/bundles/', { num_gpus: { eq: 1 }, gpu_ram: { gte: 90000 }, rentable: { eq: true }, type: 'ondemand', limit: 500 });
+  const body = await client.call('POST', '/bundles/', { gpu_name: { in: ['RTX PRO 6000 S', 'RTX PRO 6000 WS', 'RTX PRO 6000 Max-Q'] }, num_gpus: { eq: 1 }, rentable: { eq: true }, type: 'ondemand', limit: 300 });
   return (body?.offers ?? []).find(item => item.id === id) ?? null;
 }
 
 export async function searchContainerOffers(client) {
-  const body = await client.call('POST', '/bundles/', { num_gpus: { eq: 1 }, gpu_ram: { gte: 90000 }, rentable: { eq: true }, type: 'ondemand', limit: 500 });
+  const body = await client.call('POST', '/bundles/', { gpu_name: { in: ['RTX PRO 6000 S', 'RTX PRO 6000 WS', 'RTX PRO 6000 Max-Q'] }, num_gpus: { eq: 1 }, rentable: { eq: true }, type: 'ondemand', limit: 300 });
   return body?.offers ?? [];
 }
 
@@ -189,16 +189,37 @@ async function main(args) {
     const mode = flag(args, 'mode') ?? 'vm';
     if (mode !== 'vm' && mode !== 'container') throw new Error(usage);
     const container = mode === 'container';
-    const id = Number(flag(args, 'offer')), hours = Number(flag(args, 'hours') ?? 4), maxUsd = Number(flag(args, 'max-usd') ?? 15), disk = Number(flag(args, 'disk') ?? (container ? 200 : 150));
+    const auto = container && flag(args, 'offer') === 'auto';
+    let id = auto ? 0 : Number(flag(args, 'offer'));
+    const hours = Number(flag(args, 'hours') ?? 4), maxUsd = Number(flag(args, 'max-usd') ?? 15), disk = Number(flag(args, 'disk') ?? (container ? 200 : 150));
     const waitMin = Number(flag(args, 'wait-min') ?? 10);
-    if (!Number.isInteger(id) || !(hours > 0 && hours <= 4) || !(maxUsd > 0 && maxUsd <= 15) || !Number.isInteger(waitMin) || waitMin < 1 || waitMin > 25) throw new Error(usage);
+    if ((!auto && !Number.isInteger(id)) || !(hours > 0 && hours <= 4) || !(maxUsd > 0 && maxUsd <= 15) || !Number.isInteger(waitMin) || waitMin < 1 || waitMin > 25) throw new Error(usage);
     const prior = readState();
     if (prior?.instanceId && !prior.destroyedAt) throw new Error(`a rental is already recorded (instance ${prior.instanceId}); destroy it first with: node bench/gpu-bakeoff/vast.mjs destroy --id ${prior.instanceId}`);
-    const offer = await findOffer(client, id);
-    const { worstUsd } = container ? checkContainerOffer(offer, { hours, maxUsd }) : checkOffer(offer, { hours, maxUsd });
-    log(`offer ${id}: ${offer.gpu_name} $${offer.dph_total.toFixed(3)}/h, ${hours} h worst case $${worstUsd.toFixed(2)} (cap $${maxUsd})`);
+    // Offer ids on a busy host change from one minute to the next, so 'auto' picks the best current offer and tries the next one when
+    // a PUT finds it already taken (an unrented offer costs nothing).
     const label = `swarm-bakeoff-${Date.now()}`;
-    const created = await client.call('PUT', `/asks/${id}/`, container ? containerCreateBody({ disk, label }) : createBody({ disk, label }));
+    let offer, worstUsd, created;
+    if (auto) {
+      const body = await client.call('POST', '/bundles/', { gpu_name: { in: ['RTX PRO 6000 S', 'RTX PRO 6000 WS'] }, num_gpus: { eq: 1 }, rentable: { eq: true }, type: 'ondemand', limit: 300 });
+      const ranked = rankContainerOffers(body?.offers ?? []).slice(0, 6);
+      if (!ranked.length) throw new Error('no container offer passes the filter right now');
+      let lastError;
+      for (const candidate of ranked) {
+        try {
+          ({ worstUsd } = checkContainerOffer(candidate, { hours, maxUsd }));
+          created = await client.call('PUT', `/asks/${candidate.id}/`, containerCreateBody({ disk, label }));
+          offer = candidate; id = candidate.id;
+          break;
+        } catch (error) { lastError = error; log(`offer ${candidate.id} not rentable (${String(error.message).slice(0, 100)}); trying the next`); }
+      }
+      if (!offer) throw lastError ?? new Error('no offer could be rented');
+    } else {
+      offer = await findOffer(client, id);
+      ({ worstUsd } = container ? checkContainerOffer(offer, { hours, maxUsd }) : checkOffer(offer, { hours, maxUsd }));
+      created = await client.call('PUT', `/asks/${id}/`, container ? containerCreateBody({ disk, label }) : createBody({ disk, label }));
+    }
+    log(`offer ${id}: ${offer.gpu_name} ${offer.dph_total.toFixed(3)}/h, ${hours} h worst case ${worstUsd.toFixed(2)} (cap ${maxUsd})`);
     const instanceId = created?.new_contract;
     if (!instanceId) throw new Error(`Vast did not return an instance id: ${JSON.stringify(created).slice(0, 200)}`);
     process.stdout.write(`INSTANCE_ID=${instanceId}  (destroy in the Vast console if anything goes wrong)\n`);
