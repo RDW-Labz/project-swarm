@@ -44,6 +44,12 @@ Passing sub-batches stay applied. A single job whose checks fail is rolled back 
 
 Rollback after failed checks is intentional in queue mode. Plain integration never rolls back because a check failed. Queue rollback restores the batch's declared writes; it is not a general rollback of arbitrary check side effects.
 
+## Security gate
+
+Every batch also goes through the security gate (secret scan, new-package check, known vulnerabilities, code scan, licence check) after its files are written. A block fails the batch like a failed check: it is rolled back, bisected, and recorded in `checkFailed` as `security-gate`, and listed in `securityBlocked` with an inbox blocker and a sanitized lesson. `--no-checks` does not skip the security gate.
+
+See [the security gate](security-gate.md) for the details and the profile security policy.
+
 ## Crash safety
 
 Before writing a batch, including each bisected sub-batch, integration atomically saves `.swarm/integration-journal.json` with the previous bytes and modes of every file it will write or delete. The journal remains through queue checks and is removed after success or rollback. Plain integration removes its journal after successful writes and keeps its existing behavior of retaining writes when checks fail.

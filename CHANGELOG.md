@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.79.0
+
+- Security gate on every merge-queue batch (A1): after a batch's files are written and before it can stay merged, `integrate --queue` runs a secret scan (built-in rules; a finding has only a fingerprint, never the secret), a new-dependency check (must exist on npm or PyPI, be at least 30 days old, have real downloads, not look like a popular name; fails closed when the registry is unreachable), known-vulnerability checks (npm audit, pip-audit, osv-scanner; high and critical block; only when a manifest or lockfile changed), a Semgrep code scan when installed (findings become fix tickets, never a block) and a licence check (GPL and AGPL block unless the owner allows). A block rolls the batch back and bisects it like a failed check (`security-gate` in `checkFailed`, `securityBlocked` in the summary), opens an inbox blocker with no secret text and writes a sanitized lesson to `.swarm/project/security-lessons.ndjson`. The policy is the optional `security` block of the project profile; it can only be disabled there, never by a flag, and it also runs with `--no-checks`. See [security gate](docs/security-gate.md).
+
 ## 1.78.0
 
 - Rented lane defaults (owner decision after the bake-off): Qwen3.6-35B-A3B NVFP4 only (Lightning and Coder-Next leave the shortlist), thinking ON by default (`SWARM_RENTED_THINKING=off` turns it off; the default output limit for the lane is 16000 tokens), 128 agents per GPU (`--per-replica` default 128), best-of-N off by default (`--best-of` default 1; a failed job escalates to Haiku, then Codex).
