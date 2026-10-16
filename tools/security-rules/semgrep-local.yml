@@ -140,3 +140,59 @@ rules:
       - pattern: hashlib.sha1(...)
     metadata:
       category: security
+  - id: swarm-js-spawn-shell
+    message: Child process spawned with shell enabled.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: '$CP.spawn(..., {..., shell: true, ...})'
+      - pattern: 'spawn(..., {..., shell: true, ...})'
+      - pattern: '$CP.spawnSync(..., {..., shell: true, ...})'
+      - pattern: 'spawnSync(..., {..., shell: true, ...})'
+      - pattern: '$CP.exec(..., {..., shell: true, ...})'
+      - pattern: 'exec(..., {..., shell: true, ...})'
+      - pattern: '$CP.execSync(..., {..., shell: true, ...})'
+      - pattern: 'execSync(..., {..., shell: true, ...})'
+    metadata:
+      category: security
+  - id: swarm-js-settimeout-string
+    message: Timer called with a string argument evaluates code.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: "setTimeout('...', ...)"
+      - pattern: 'setTimeout("...", ...)'
+      - pattern: 'setTimeout($A + $B, ...)'
+      - pattern: "setInterval('...', ...)"
+      - pattern: 'setInterval("...", ...)'
+      - pattern: 'setInterval($A + $B, ...)'
+    metadata:
+      category: security
+  - id: swarm-py-eval-exec
+    message: eval or exec called with a non-literal argument.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: exec($X)
+      - pattern-not: eval("...")
+      - pattern-not: eval('...')
+      - pattern-not: exec("...")
+      - pattern-not: exec('...')
+    metadata:
+      category: security
+  - id: swarm-py-os-system
+    message: Shell command run with a non-literal argument.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: os.system($X)
+          - pattern: os.popen($X)
+      - pattern-not: os.system("...")
+      - pattern-not: os.system('...')
+      - pattern-not: os.popen("...")
+      - pattern-not: os.popen('...')
+    metadata:
+      category: security
