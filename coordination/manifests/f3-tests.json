@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "concurrency": 7,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "f3-rented-run",
+      "context": [
+        "tests/rented-run.test.mjs",
+        "tools/security-gate.mjs",
+        "tools/router.mjs",
+        "tools/lanes.mjs",
+        "tools/init-profile.mjs",
+        "coordination/review/test-failures.txt"
+      ],
+      "outputs": [
+        "tests/rented-run.test.mjs"
+      ],
+      "prompt": "Update tests/rented-run.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file (build planted secrets at run time). Return the COMPLETE updated test file (whole file, never edits), keeping tests that still hold, rewriting failing ones to the new behaviour (never weaken a safety assertion) and ADDING the tests listed. coordination/review/test-failures.txt lists assertions that failed against the new code; read the module files in your context for exact behaviour. Changes and tests for this file: Owner router decision: the rented lane is used by auto routing only when at least 700 auto jobs are ready (RENTED_MIN_READY in tools/router.mjs; the ready count is the number of auto jobs in the manifest). The test that routes auto jobs to the rented lane with a live session must now use 700 or more auto jobs OR set lanes.rented.minReady (a manifest lanes override is validated: if overrides are not allowed for minReady, instead make the test create 700 cheap auto jobs only if that is fast; otherwise assert that with 4 auto jobs the rented lane is NOT used and the jobs go to the next lane, and keep the explicit agent rented tests as they are)."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "f3-lanes",
+      "context": [
+        "tests/lanes.test.mjs",
+        "tools/security-gate.mjs",
+        "tools/router.mjs",
+        "tools/lanes.mjs",
+        "tools/init-profile.mjs",
+        "coordination/review/test-failures.txt"
+      ],
+      "outputs": [
+        "tests/lanes.test.mjs"
+      ],
+      "prompt": "Update tests/lanes.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file (build planted secrets at run time). Return the COMPLETE updated test file (whole file, never edits), keeping tests that still hold, rewriting failing ones to the new behaviour (never weaken a safety assertion) and ADDING the tests listed. coordination/review/test-failures.txt lists assertions that failed against the new code; read the module files in your context for exact behaviour. Changes and tests for this file: The anthropic lane's default concurrency is 32 now (was 16)."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "f3-security-gate",
+      "context": [
+        "tests/security-gate.test.mjs",
+        "tools/security-gate.mjs",
+        "tools/router.mjs",
+        "tools/lanes.mjs",
+        "tools/init-profile.mjs",
+        "coordination/review/test-failures.txt",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs"
+      ],
+      "outputs": [
+        "tests/security-gate.test.mjs"
+      ],
+      "prompt": "Update tests/security-gate.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file (build planted secrets at run time). Return the COMPLETE updated test file (whole file, never edits), keeping tests that still hold, rewriting failing ones to the new behaviour (never weaken a safety assertion) and ADDING the tests listed. coordination/review/test-failures.txt lists assertions that failed against the new code; read the module files in your context for exact behaviour. Changes and tests for this file: Code scan default is now 'local': the pinned rules file tools/security-rules/semgrep-local.yml with its sha256 pinned in SEMGREP_RULES_SHA256 (export of the gate; also SEMGREP_RULES_PATH and an injectable readRules argument); it runs for sensitive projects too, with exec called as semgrep --config <rules path> --metrics=off --disable-version-check --json --quiet -- <paths> and an env object (PATH, HOME, SEMGREP_SEND_METRICS off, SEMGREP_ENABLE_VERSION_CHECK 0); a hash mismatch (readRules returning other bytes) or unreadable rules is a block with check 'code-scan'; semgrep missing adds 'semgrep not installed' to skipped; codeScan 'auto' on a sensitive project is downgraded to local with the warning 'code scan: auto needs the network, using the pinned local rules' unless codeScanSensitive true; 'off' skips with 'code scan disabled by policy'; normalizePolicy accepts local, auto, off only (default local) and allowUnparsedManifests (array of strings). ADD tests: the pinned rules file hashes to SEMGREP_RULES_SHA256 (read the real file with node:fs and node:crypto), every rule id in it starts with swarm-; UNPARSED_MANIFESTS maps pnpm-lock.yaml, yarn.lock, go.mod, go.sum, Cargo.toml, Cargo.lock, pyproject.toml and Pipfile to ecosystems; a change to go.mod or pnpm-lock.yaml or sub/Cargo.lock (also a deletion: bytes null) blocks with check 'unsupported-manifest' and a message naming the file and the ecosystem; policy.allowUnparsedManifests containing the path or the basename lets it through; an unrelated change does not add that check."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "f3-security-queue",
+      "context": [
+        "tests/security-queue.test.mjs",
+        "tools/security-gate.mjs",
+        "tools/router.mjs",
+        "tools/lanes.mjs",
+        "tools/init-profile.mjs",
+        "coordination/review/test-failures.txt",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs"
+      ],
+      "outputs": [
+        "tests/security-queue.test.mjs"
+      ],
+      "prompt": "Update tests/security-queue.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file (build planted secrets at run time). Return the COMPLETE updated test file (whole file, never edits), keeping tests that still hold, rewriting failing ones to the new behaviour (never weaken a safety assertion) and ADDING the tests listed. coordination/review/test-failures.txt lists assertions that failed against the new code; read the module files in your context for exact behaviour. Changes and tests for this file: Same code-scan change as in the gate: sensitive projects now run the LOCAL pinned semgrep (so a recording exec sees a semgrep call with --metrics=off and the local rules path even for the default sensitive profile); update the test that asserted semgrep is not called for a sensitive project. ADD queue tests: a job writing go.mod (fixture needs nothing else) is blocked by the queue with check 'unsupported-manifest' (checkFailed lists security-gate, securityBlocked has the block, an inbox blocker event exists with an id starting 'security-' and text under 600 characters) and is allowed when the profile security block lists go.mod in allowUnparsedManifests."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "f3-router",
+      "context": [
+        "tests/router.test.mjs",
+        "tools/security-gate.mjs",
+        "tools/router.mjs",
+        "tools/lanes.mjs",
+        "tools/init-profile.mjs",
+        "coordination/review/test-failures.txt"
+      ],
+      "outputs": [
+        "tests/router.test.mjs"
+      ],
+      "prompt": "Update tests/router.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file (build planted secrets at run time). Return the COMPLETE updated test file (whole file, never edits), keeping tests that still hold, rewriting failing ones to the new behaviour (never weaken a safety assertion) and ADDING the tests listed. coordination/review/test-failures.txt lists assertions that failed against the new code; read the module files in your context for exact behaviour. Changes and tests for this file: ADD tests for the owner's router decision: RENTED_MIN_READY is 700; with a configured rented lane (lanes.rented.model set), a complete non-sensitive contract job and ready 699 the route is NOT rented (it is anthropic), with ready 700 it IS rented, with ready omitted it is not rented; lanes.rented.minReady overrides the threshold; a sensitive job is never rented at any ready count; a job with hard: true goes to codex first (reason 'hard ticket: codex first') when codex is configured, and falls back to the next lane after 2 failures on codex; a hard job with tier expensive keeps the claude-only rule; a job without hard is unchanged (anthropic first)."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "f3-init-profile",
+      "context": [
+        "tests/init-profile.test.mjs",
+        "tools/security-gate.mjs",
+        "tools/router.mjs",
+        "tools/lanes.mjs",
+        "tools/init-profile.mjs",
+        "coordination/review/test-failures.txt"
+      ],
+      "outputs": [
+        "tests/init-profile.test.mjs"
+      ],
+      "prompt": "Update tests/init-profile.test.mjs. IMPORTANT: never write a complete secret-looking literal in a test file (build planted secrets at run time). Return the COMPLETE updated test file (whole file, never edits), keeping tests that still hold, rewriting failing ones to the new behaviour (never weaken a safety assertion) and ADDING the tests listed. coordination/review/test-failures.txt lists assertions that failed against the new code; read the module files in your context for exact behaviour. Changes and tests for this file: ADD tests: the profile security block accepts codeScan 'local', 'auto' and 'off' and rejects 'cloud'; allowUnparsedManifests accepts an array of strings (at most 50 entries, each at most 200 characters) and rejects a non-array, too many entries and a long entry with errors that start 'profile.security.allowUnparsedManifests'; invalid values are left out of the normalized copy."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "f3-plain",
+      "context": [
+        "tests/security-queue.test.mjs",
+        "tools/security-gate.mjs",
+        "docs/security-gate.md"
+      ],
+      "outputs": [
+        "tests/security-plain-integrate.test.mjs"
+      ],
+      "prompt": "Write tests/security-plain-integrate.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\", second line \"import './_isolate-config.mjs';\"). IMPORTANT: never write a complete secret-looking literal in a test file (build planted secrets at run time).  Copy the imports, fixture, job, manifest, worker and helper functions from tests/security-queue.test.mjs (read it). Tests for PLAIN integrate (integrateRun without queue: true; it has no rollback, so the gate must run BEFORE any write): (1) a job whose output contains a planted github token (built at run time) makes integrateRun reject with an error whose code or message contains 'security-gate-blocked', the output file still has its base content (nothing written), the message does not contain the token, a journal blocker event exists (readJournal from ../tools/journal.mjs) with an id starting 'security-<runId>-', and .swarm/project/security-lessons.ndjson has one line with no token; (2) a clean job integrates normally with plain integrateRun (the file has the proposed content) and no blocker is recorded; (3) a plain integrate of a job writing go.mod is blocked with 'unsupported-manifest' (message contains it) and nothing is written; (4) a profile with security.enabled false lets the planted-secret job through plain integrate; (5) securityGate.exec and securityGate.fetchImpl injected options are honoured by plain integrate (a package.json job adding a made-up dependency with a fake registry answering 404 is blocked with 'package-check'); (6) integrateRun with --jobs (jobs: ['job-0']) is gated too. Use only names that exist; keep each test short."
+    }
+  ]
+}

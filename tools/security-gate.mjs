@@ -2,13 +2,18 @@
 import * as scan from './security-scan.mjs';
 import * as deps from './security-deps.mjs';
 import {appendFile,mkdir} from 'node:fs/promises';
-import {existsSync} from 'node:fs';
+import {existsSync,readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
-import os from 'node:os';
+import os,{tmpdir} from 'node:os';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 
-export const DEFAULT_POLICY=Object.freeze({enabled:true,minAgeDays:30,minWeeklyDownloads:100,blockSeverities:['high','critical'],allowCopyleft:false,approvedLicenses:[],allowedSecretFingerprints:[],requireVulnerabilityScan:true,codeScan:'auto',codeScanSensitive:false});
-const ARR=['blockSeverities','approvedLicenses','allowedSecretFingerprints'];
+export const SEMGREP_RULES_SHA256='b1e4324cb8ff7cac8c087b8c97956d503b5da6830e59ce9267ed066fe800d437';
+export const SEMGREP_RULES_PATH=fileURLToPath(new URL('./security-rules/semgrep-local.yml',import.meta.url));
+export const UNPARSED_MANIFESTS=Object.freeze({'pnpm-lock.yaml':'pnpm','pnpm-workspace.yaml':'pnpm','yarn.lock':'yarn','.yarnrc.yml':'yarn','go.mod':'go','go.sum':'go','go.work':'go','Cargo.toml':'cargo','Cargo.lock':'cargo','pyproject.toml':'python','Pipfile':'python','Pipfile.lock':'python','poetry.lock':'python','setup.py':'python','composer.json':'php','composer.lock':'php','Gemfile':'ruby','Gemfile.lock':'ruby','pom.xml':'jvm','build.gradle':'jvm','build.gradle.kts':'jvm'});
+
+export const DEFAULT_POLICY=Object.freeze({enabled:true,minAgeDays:30,minWeeklyDownloads:100,blockSeverities:['high','critical'],allowCopyleft:false,approvedLicenses:[],allowedSecretFingerprints:[],allowUnparsedManifests:[],requireVulnerabilityScan:true,codeScan:'local',codeScanSensitive:false});
+const ARR=['blockSeverities','approvedLicenses','allowedSecretFingerprints','allowUnparsedManifests'];
 const NUM=['minAgeDays','minWeeklyDownloads'];
 const BOOL=['allowCopyleft','requireVulnerabilityScan','codeScanSensitive'];
 
@@ -20,7 +25,7 @@ if(r.enabled===false)p.enabled=false;
 for(const k of NUM)if(Number.isFinite(r[k])&&r[k]>=0)p[k]=r[k];
 for(const k of BOOL)if(typeof r[k]==='boolean')p[k]=r[k];
 for(const k of ARR)if(Array.isArray(r[k])&&r[k].every(x=>typeof x==='string'))p[k]=[...r[k]];
-if(r.codeScan==='auto'||r.codeScan==='off')p.codeScan=r.codeScan;
+if(r.codeScan==='auto'||r.codeScan==='off'||r.codeScan==='local')p.codeScan=r.codeScan;
 return p;
 }
 
@@ -47,7 +52,7 @@ return true;
 }
 const safeParse=(fn,s,warnings)=>{try{return (typeof fn==='function'?fn(s):[])||[];}catch{warnings.push('could not parse scanner output');return [];}};
 
-export async function runSecurityGate({changes=[],policy,exec,fetchImpl,now=Date.now,cwd,fingerprintKey,sensitive=true,cache=new Map(),fileExists}={}){
+export async function runSecurityGate({changes=[],policy,exec,fetchImpl,now=Date.now,cwd,fingerprintKey,sensitive=true,cache=new Map(),fileExists,readRules=()=>readFileSync(SEMGREP_RULES_PATH)}={}){
 const pol=normalizePolicy(policy);
 if(pol.enabled===false)return{ok:true,blocks:[],tickets:[],warnings:[],skipped:['security gate disabled by policy'],checked:[]};
 const blocks=[],tickets=[],warnings=[],skipped=[],checked=[];
@@ -102,13 +107,30 @@ const scoped=newNames&&newNames.size>0?all.filter(v=>newNames.has(v.name)):all;
 for(const v of scan.blockingVulns(scoped,pol.blockSeverities)||[])blocks.push({check:'vulnerability',severity:clean(v.severity),message:`${clean(v.name)} has a ${clean(v.severity)} vulnerability`});
 }
 
+const unparsed=changes.filter(c=>Object.hasOwn(UNPARSED_MANIFESTS,base(c.file)));
+if(unparsed.length)checked.push('unsupported-manifest');
+for(const c of unparsed){const b=base(c.file);if(pol.allowUnparsedManifests.includes(c.file)||pol.allowUnparsedManifests.includes(b))continue;blocks.push({check:'unsupported-manifest',severity:'high',message:`${c.file} changed: ${UNPARSED_MANIFESTS[b]} dependencies are not parsed yet; the owner must review it`});}
+
 const textPaths=live.filter(c=>isText(c.bytes)).map(c=>c.file).slice(0,200);
-if(pol.codeScan==='auto'&&textPaths.length){
-if(sensitive&&pol.codeScanSensitive!==true)skipped.push('code scan skipped: sensitive project (semgrep needs the network)');
+const takeSemgrep=s=>{for(const f of safeParse(scan.parseSemgrep,s.stdout,warnings)){const sev=String(f.severity).toLowerCase();if(sev==='high'||sev==='medium')tickets.push({title:`${f.ruleId} in ${f.path}:${f.line}`,severity:sev,path:f.path,line:f.line});}};
+if(pol.codeScan==='off')skipped.push('code scan disabled by policy');
+else if(textPaths.length){
+let mode=pol.codeScan;
+if(mode==='auto'&&sensitive&&pol.codeScanSensitive!==true){mode='local';warnings.push('code scan: auto needs the network, using the pinned local rules');}
+if(mode==='local'){
+let rulesOk=false;
+try{rulesOk=createHash('sha256').update(await readRules()).digest('hex')===SEMGREP_RULES_SHA256;}catch{rulesOk=false;}
+if(!rulesOk){checked.push('code-scan');blocks.push({check:'code-scan',severity:'high',message:'pinned semgrep rules changed or unreadable (hash mismatch)'});}
+else if(await run(['semgrep','--version'],'semgrep',{timeoutMs:30000})){
+checked.push('code-scan');
+const s=await run(['semgrep','--config',SEMGREP_RULES_PATH,'--metrics=off','--disable-version-check','--json','--quiet','--',...textPaths],'semgrep',{timeoutMs:180000,env:{PATH:process.env.PATH,HOME:tmpdir(),SEMGREP_SEND_METRICS:'off',SEMGREP_ENABLE_VERSION_CHECK:'0'}});
+if(s)takeSemgrep(s);
+}
+}
 else if(await run(['semgrep','--version'],'semgrep',{timeoutMs:30000})){
 checked.push('code-scan');
 const s=await run(['semgrep','--config','auto','--metrics=off','--json','--quiet','--',...textPaths],'semgrep',{timeoutMs:180000});
-if(s)for(const f of safeParse(scan.parseSemgrep,s.stdout,warnings)){const sev=String(f.severity).toLowerCase();if(sev==='high'||sev==='medium')tickets.push({title:`${f.ruleId} in ${f.path}:${f.line}`,severity:sev,path:f.path,line:f.line});}
+if(s)takeSemgrep(s);
 }
 }
 

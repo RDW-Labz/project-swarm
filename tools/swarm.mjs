@@ -1450,9 +1450,10 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     // Unknown command/provider fields cannot create an execution path.
     if (job.type === 'lead') validateLeadArea(job);
     else if (job.area !== undefined) fail(`lead-area-invalid: Job ${job.id}: area requires type lead`, 'lead-area-invalid');
-    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext', 'batch', 'contract', 'acceptance', 'bestOf'];
+    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext', 'batch', 'contract', 'acceptance', 'bestOf', 'hard'];
     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
     if (job.batch !== undefined && typeof job.batch !== 'boolean') fail(`Job ${job.id}: batch must be true or false`, 'batch-invalid');
+    if (job.hard !== undefined && typeof job.hard !== 'boolean') fail(`Job ${job.id}: hard must be true or false`, 'hard-invalid');
     if (job.bestOf !== undefined && (!Number.isInteger(job.bestOf) || job.bestOf < 1 || job.bestOf > 8 || !['rented', 'auto'].includes(job.agent))) fail(`Job ${job.id}: bestOf must be a whole number from 1 to 8, and only for the rented lane`, 'bestof-invalid');
     if (job.contract !== undefined && (typeof job.contract !== 'string' || !job.contract.trim() || job.contract.length > 200 || !Array.isArray(job.context) || !job.context.includes(job.contract))) fail(`Job ${job.id}: contract must name a file that is also in context`, 'contract-invalid');
     if (job.acceptance !== undefined && (!Array.isArray(job.acceptance) || job.acceptance.length > 20 || job.acceptance.some(item => typeof item !== 'string' || !item.trim() || item.length > 300))) fail(`Job ${job.id}: acceptance must be a list of at most 20 non-empty strings of at most 300 characters`, 'acceptance-invalid');
@@ -2566,7 +2567,7 @@ async function runManifestMain(root, manifest, options = {}) {
   const runLanes = resolveLanes({ config: loadLocalConfig({ env }), manifest, env });
   const dispatchJobs = manifest.jobs.map(job => {
     if (job.agent !== 'auto') return job;
-    const route = pickJobRoute(job, runLanes, { contract: manifest.contract });
+    const route = pickJobRoute(job, runLanes, { contract: manifest.contract, ready: readyAutoJobs(manifest) });
     return { ...job, agent: route.agent, model: route.model };
   });
   const scopeWarnings = manifest.jobs.map(narrowOutputScopeWarning).filter(Boolean);
@@ -2993,7 +2994,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
       const failures = record.routeFailures ??= {};
       try {
         if (original.agent === 'auto') {
-          record.route = pickJobRoute(original, lanes, { health: routeHealth(await today()), failures, contract: manifest.contract });
+          record.route = pickJobRoute(original, lanes, { health: routeHealth(await today()), failures, contract: manifest.contract, ready: readyAutoJobs(manifest) });
           job = { ...job, agent: record.route.agent, model: record.route.model };
           // The API lanes carry the short report inside their envelope (`result`); the "finish with one JSON line" instruction is for CLI lanes and makes small models drop the files.
           if (API_AGENTS.includes(job.agent) && job.report === 'short' && job.prompt.endsWith(`\n\n${REPORT_PROMPT_LINE}`)) job = { ...job, prompt: job.prompt.slice(0, -REPORT_PROMPT_LINE.length - 2) };
@@ -3414,7 +3415,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
           } else { record.status = 'failed'; record.error = `rate-limited: ${result.error ?? job.agent}`; }
         } else if (!result.reportInvalid && original.agent === 'auto' && !['blocked', 'cancelled'].includes(result.status) && (outcome.kind === 'quota-exhausted' || ['failed', 'timeout'].includes(result.status))) {
           if (['failed', 'timeout'].includes(result.status)) failures[job.agent] = (failures[job.agent] ?? 0) + 1;
-          try { pickJobRoute(original, lanes, { health: agent => scheduler.health(agent), failures, contract: manifest.contract }); retry = true; }
+          try { pickJobRoute(original, lanes, { health: agent => scheduler.health(agent), failures, contract: manifest.contract, ready: readyAutoJobs(manifest) }); retry = true; }
           catch (error) { record.status = 'failed'; record.error = error.message; }
         }
         if (outcome.kind === 'quota-exhausted' && !retry) { record.heldReason = 'quota'; record.heldUntil = scheduler.health(job.agent).until; }
@@ -5435,6 +5436,9 @@ export function modelRouteChangeNoSmokeTestWarning(manifest, job) {
   return { code: 'model-route-no-smoke-test', jobId: job.id, files: changed, message: `model-route-no-smoke-test: Job ${job.id} changes ${changed.join(', ')}; declare a check named model-route-smoke (or an argv containing model-route-smoke/streaming-smoke) that sends one real streaming message through the project's own client before this route change lands` };
 }
 
+// How many auto-routed jobs this run has ready: the rented GPU lane is only for a big queue (see tools/router.mjs RENTED_MIN_READY).
+const readyAutoJobs = manifest => (manifest?.jobs ?? []).filter(job => job.agent === 'auto').length;
+
 function pickJobRoute(job, lanes, options = {}) {
   return routeJob(job, { lanes, ...options, accepts: candidate => {
     if (candidate.after && isWorktreeWriter(candidate)) return false;
@@ -5460,7 +5464,7 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   // and child manifests of leads come through here too. A profile that cannot be read fails closed.
   await enforceProtectedPaths(root, manifest.jobs, { resources: manifest.resources ?? [] });
   const resolvedLanes = resolveLanes({ config: loadLocalConfig({ env, home }), manifest, env });
-  const routes = manifest.jobs.filter(job => job.agent === 'auto').map(job => ({ jobId: job.id, ...pickJobRoute(job, resolvedLanes, { contract: manifest.contract }) }));
+  const routes = manifest.jobs.filter(job => job.agent === 'auto').map(job => ({ jobId: job.id, ...pickJobRoute(job, resolvedLanes, { contract: manifest.contract, ready: readyAutoJobs(manifest) }) }));
   if (routes.length) {
     const byId = new Map(routes.map(route => [route.jobId, route]));
     manifest = { ...manifest, jobs: manifest.jobs.map(job => byId.has(job.id) ? { ...job, agent: byId.get(job.id).agent, model: byId.get(job.id).model } : job) };

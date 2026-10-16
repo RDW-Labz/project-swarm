@@ -6,20 +6,20 @@
 Project Swarm brief
 Goal: none
 Done:
-  - run 1792118789990-4470d174 integrated, 2 files
-  - run 1792118502158-73f4b6e7 integrated, 3 files
-  - run 1792118419929-49e19b0d integrated, 1 files
-  - run 1792118128685-988c5b50 integrated, 2 files
-  - run 1792117536054-546fccd6 integrated, 3 files
-  - run 1792117477157-2b3d320c integrated, 2 files
-  - run 1792117292419-757c7830 integrated, 4 files
-  - run 1792115875477-5b17059e integrated, 1 files
+  - run 1792161741823-2f60cbb1 integrated, 1 files
+  - run 1792161702272-9e84d4e5 integrated, 1 files
+  - run 1792161444223-75fcdb13 integrated, 4 files
+  - run 1792160103024-07f23848 integrated, 2 files
+  - run 1792159921385-8c734a09 integrated, 4 files
+  - run 1792159771413-bb776afa integrated, 1 files
+  - run 1792159568112-c869a2c0 integrated, 3 files
+  - run 1792159144167-13037eda integrated, 4 files
 Running: none
 Needs the owner: none
 Next 3 actions:
-  1. swarm integrate 1792118564076-75870466 --queue
-  2. swarm "describe the goal in one sentence"
-  3. swarm status
+  1. swarm integrate 1792159197407-9cc5e2ee --queue
+  2. swarm inspect 1792159799519-c971d313 --results
+  3. swarm "describe the goal in one sentence"
 Rules:
   - Route cheapest first: Haiku (anthropic), Cursor, Codex; Claude only after two failures; Hermes only for research; OpenRouter only for non-sensitive bookkeeping.
   - Never merge to main, deploy, raise a spend cap or add a paid service without the owner's explicit OK.
