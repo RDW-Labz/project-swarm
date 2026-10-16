@@ -12,7 +12,7 @@ test('PINNED_IMAGE is pinned to the v0.31.0 digest', () => {
 });
 
 test('both start scripts carry the 0.93 memory flags and not the old 0.9 value', () => {
-  const required = ['--gpu-memory-utilization 0.93', '--kv-cache-dtype fp8', '--enable-prefix-caching', '--mamba-cache-mode align', '--prefix-match-unit 64', '--max-num-batched-tokens 16384'];
+  const required = ['--gpu-memory-utilization 0.93', '--kv-cache-dtype fp8', '--enable-prefix-caching', '--mamba-cache-mode align', '--max-num-batched-tokens 16384'];
   const scripts = [remoteStartScript({ ...base, image: PINNED_IMAGE }), containerStartScript(base)];
   for (const script of scripts) {
     for (const flag of required) assert.ok(script.includes(flag), flag);

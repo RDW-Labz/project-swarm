@@ -11,7 +11,7 @@ import { fetchCacheStats, combineCacheStats } from './gpu-cache.mjs';
 // vLLM v0.31.0 (pinned by digest)
 export const PINNED_IMAGE = 'vllm/vllm-openai@sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3';
 
-export const GPU_DEFAULTS = Object.freeze({ image: PINNED_IMAGE, remotePortBase: 8000, localPortBase: 18000, maxModelLen: 131072, memoryUtilization: 0.93, commonArgs: Object.freeze(['--kv-cache-dtype', 'fp8', '--enable-prefix-caching', '--mamba-cache-mode', 'align', '--prefix-match-unit', '64', '--max-num-batched-tokens', '16384']), perReplica: 32, healthTimeoutMs: 1200000, maxHours: 4 });
+export const GPU_DEFAULTS = Object.freeze({ image: PINNED_IMAGE, remotePortBase: 8000, localPortBase: 18000, maxModelLen: 131072, memoryUtilization: 0.93, commonArgs: Object.freeze(['--kv-cache-dtype', 'fp8', '--enable-prefix-caching', '--mamba-cache-mode', 'align', '--max-num-batched-tokens', '16384']), perReplica: 32, healthTimeoutMs: 1200000, maxHours: 4 });
 
 export const SSH_HARDENING = Object.freeze(['-o', 'ForwardAgent=no', '-o', 'ForwardX11=no', '-o', 'PermitLocalCommand=no', '-o', 'StrictHostKeyChecking=yes']);
 
@@ -23,9 +23,12 @@ const KEY_RE = /^[0-9a-f]{48}$/;
 // The small, fast coding models worth testing (a shortlist, not a promise: ids must be checked on Hugging Face before renting). All NVFP4, text-only, no MTP; flags from docs/plans/swarm-gpu-memory-plan.md section 7. Entries marked optional run only when enough session time is left.
 export const SHORTLIST = Object.freeze([
   // flashinfer_b12x MoE backend removed: it crashed with a CUDA illegal memory access on the RTX PRO 6000 under vLLM 0.31.0 during cudagraph profiling; vLLM's default MoE backend starts fine.
-  { label: 'qwen3.6-35b-a3b-nvfp4', model: 'nvidia/Qwen3.6-35B-A3B-NVFP4', quant: 'nvfp4', args: ['--quantization', 'modelopt_fp4', '--mamba-ssm-cache-dtype', 'bfloat16', '--block-size', '128', '--reasoning-parser', 'qwen3', '--tool-call-parser', 'qwen3_coder', '--enable-auto-tool-choice', '--language-model-only'], env: { VLLM_HAS_FLASHINFER_CUBIN: '1' } },
+  // Qwen3.6: block size 128, so --prefix-match-unit 64 is set on this entry only.
+  { label: 'qwen3.6-35b-a3b-nvfp4', model: 'nvidia/Qwen3.6-35B-A3B-NVFP4', quant: 'nvfp4', args: ['--quantization', 'modelopt_fp4', '--mamba-ssm-cache-dtype', 'bfloat16', '--block-size', '128', '--prefix-match-unit', '64', '--reasoning-parser', 'qwen3', '--tool-call-parser', 'qwen3_coder', '--enable-auto-tool-choice', '--language-model-only'], env: { VLLM_HAS_FLASHINFER_CUBIN: '1' } },
+  // Lightning: block size 2128 is not divisible by 64, so no --prefix-match-unit on this entry.
   { label: 'nemotron-3.5-lightning-nvfp4', model: 'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4', quant: 'nvfp4', args: ['--mamba-ssm-cache-dtype', 'float16', '--reasoning-parser', 'nemotron_v3', '--tool-call-parser', 'qwen3_coder', '--enable-auto-tool-choice', '--async-scheduling'], env: {} },
-  { label: 'qwen3-coder-next-nvfp4', model: 'RedHatAI/Qwen3-Coder-Next-NVFP4', quant: 'nvfp4', args: ['--quantization', 'modelopt_fp4', '--moe-backend', 'flashinfer_b12x', '--mamba-ssm-cache-dtype', 'bfloat16', '--block-size', '128', '--reasoning-parser', 'qwen3', '--tool-call-parser', 'qwen3_coder', '--enable-auto-tool-choice', '--language-model-only'], env: { VLLM_HAS_FLASHINFER_CUBIN: '1' }, optional: true },
+  // Coder-Next: compressed-tensors, no --quantization flag (vLLM detects it and rejects a conflicting one); prefix match unit 64 with block size 128.
+  { label: 'qwen3-coder-next-nvfp4', model: 'RedHatAI/Qwen3-Coder-Next-NVFP4', quant: 'nvfp4', args: ['--mamba-ssm-cache-dtype', 'bfloat16', '--block-size', '128', '--prefix-match-unit', '64', '--reasoning-parser', 'qwen3', '--tool-call-parser', 'qwen3_coder', '--enable-auto-tool-choice', '--language-model-only'], env: { VLLM_HAS_FLASHINFER_CUBIN: '1' }, optional: true },
 ]);
 
 const fail = (code, message) => Object.assign(new Error(`${code}: ${message}`), { code });
@@ -258,7 +261,9 @@ export function readSessionFile(env) {
 // A copy of the session without the API key (what errors carry).
 const keyless = session => { const copy = { ...session }; delete copy.apiKey; return copy; };
 
-async function waitHealthy(endpoints, model, { fetchImpl, sleep, now, timeoutMs, pollMs = 5000 }) {
+// Polls /v1/models until every endpoint lists the model. After each failed round, alive() (optional) may report that the server died:
+// it returns false, or { alive: false, detail }, and the wait stops at once with gpu-server-died.
+async function waitHealthy(endpoints, model, { fetchImpl, sleep, now, timeoutMs, pollMs = 5000, alive }) {
   const deadline = now() + timeoutMs;
   const pending = new Set(endpoints);
   while (pending.size) {
@@ -272,6 +277,14 @@ async function waitHealthy(endpoints, model, { fetchImpl, sleep, now, timeoutMs,
       } catch { /* still starting, or not JSON yet */ }
     }
     if (!pending.size) return;
+    if (alive) {
+      const state = await alive();
+      const isAlive = typeof state === 'boolean' ? state : state?.alive !== false;
+      if (!isAlive) {
+        const detail = typeof state === 'object' && state?.detail ? ` (last log lines: ${state.detail})` : '';
+        throw fail('gpu-server-died', `the vLLM server exited during startup${detail}`);
+      }
+    }
     if (now() >= deadline) throw fail('gpu-unhealthy', `no answer from ${[...pending].join(', ')} within ${Math.round(timeoutMs / 60000)} minutes (the model may still be downloading; run swarm gpu status)`);
     await sleep(pollMs);
   }
@@ -328,6 +341,19 @@ export async function gpuUp(options, deps) {
     if (detail !== null) throw Object.assign(fail('gpu-exposed', detail), { exposure: true });
   };
 
+  // Container mode checks the vLLM processes; VM mode checks the first replica container. One ssh call per poll round; an ssh failure counts as alive (unknown).
+  const aliveCheck = async () => {
+    const command = container
+      ? 'pgrep -f "[v]llm serve" >/dev/null 2>&1 && echo ALIVE || { echo DEAD; tail -n 15 "$HOME/.swarm-vllm-0.log" 2>/dev/null; }'
+      : 'docker ps -q --filter name=swarm-vllm-0 | grep -q . && echo ALIVE || { echo DEAD; docker logs --tail 15 swarm-vllm-0 2>&1; }';
+    let out;
+    try { out = String((await ssh([...sshArgs, command], {}))?.stdout ?? ''); } catch { return { alive: true, detail: '' }; }
+    // Only an explicit DEAD marker counts as dead; an empty or odd answer means unknown, which counts as alive.
+    if (!out.trimStart().startsWith('DEAD')) return { alive: true, detail: '' };
+    const detail = out.split('\n').slice(1).map(line => line.trimEnd().slice(0, 200)).filter(line => line.length > 0).slice(0, 15).join(' | ');
+    return { alive: false, detail };
+  };
+
   // Any failure after the session file exists: stop the servers over ssh (ignoring errors, but noting success), stop the tunnel when one is recorded,
   // remove the session file, then rethrow with a message that says whether the stop worked and a key-less session copy on error.session.
   const afterStartFailure = async error => {
@@ -353,7 +379,7 @@ export async function gpuUp(options, deps) {
     const tunnel = await openTunnel({ target: options.target, key: options.key, ports, sshOptions });
     session.tunnelPid = tunnel?.pid ?? null;
     writeSession(env, session);
-    await waitHealthy(endpoints, options.model, { fetchImpl: authFetch(fetchImpl, apiKey), sleep, now, timeoutMs: options.healthTimeoutMs ?? GPU_DEFAULTS.healthTimeoutMs, pollMs: options.pollMs });
+    await waitHealthy(endpoints, options.model, { fetchImpl: authFetch(fetchImpl, apiKey), sleep, now, timeoutMs: options.healthTimeoutMs ?? GPU_DEFAULTS.healthTimeoutMs, pollMs: options.pollMs, alive: aliveCheck });
     for (const endpoint of endpoints) {
       let refused = false;
       try { const response = await fetchImpl(`${endpoint}/v1/models`); refused = response.status === 401 || response.status === 403; } catch { refused = false; }
