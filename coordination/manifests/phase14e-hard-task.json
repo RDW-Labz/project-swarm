@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "hard-module",
+      "context": [
+        "bench/gpu-bakeoff/tasks/hard-planwaves/README.md",
+        "bench/lane-benchmark/lib.mjs"
+      ],
+      "outputs": [
+        "bench/gpu-bakeoff/hard-task.mjs"
+      ],
+      "prompt": "Write bench/gpu-bakeoff/hard-task.mjs (plain ESM for Node 22, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\"). It runs the bake-off's hard task: bench/gpu-bakeoff/tasks/hard-planwaves (read README.md in your context: the model gets TASK.md and the stub planWaves.mjs only, never test/ or solution/; grading is node --test test/planWaves.test.mjs in a folder holding the model's planWaves.mjs and the hidden test; pass means 16 of 16; 10 minutes per attempt). Exports: (1) TASK_DIR = the folder tasks/hard-planwaves next to this file (use import.meta.url), HARD_TIMEOUT_MS = 600000. (2) parseTapSummary(text): from node --test output return { passed, total } using the lines '# pass N' and '# tests M' (both integers; return { passed: 0, total: 0 } when missing). (3) gradeSolution({ file, taskDir = TASK_DIR, exec = spawnSync, timeoutMs = 120000 }): make a temp directory (fs.mkdtempSync under os.tmpdir()), copy taskDir/test/planWaves.test.mjs to <tmp>/test/planWaves.test.mjs and the given file (a path to a candidate planWaves.mjs) to <tmp>/planWaves.mjs, run exec(process.execPath, ['--test', 'test/planWaves.test.mjs'], { cwd: tmp, encoding: 'utf8', timeout: timeoutMs }), and return { ...parseTapSummary(stdout + stderr), passedAll: passed === total && total > 0 }; always remove the temp directory in a finally. A missing or unreadable file returns { passed: 0, total: 0, passedAll: false, error: 'no solution file' }. (4) prepareRepo({ taskDir = TASK_DIR, dir, exec = spawnSync }): create dir (mkdirSync recursive), copy ONLY TASK.md and planWaves.mjs (the stub) from taskDir into it (never the test or solution folders), write .gitignore with '.swarm/' and 'coordination/manifests/' lines, then git init -q -b main, git add -A and a commit with user.name Bench and user.email bench@example.invalid (use exec with the git argv forms: ['git', ['-C', dir, ...]]). (5) hardManifest({ model, bestOf = 1, maxUsd = 15 }): returns { version: 1, concurrency: 1, budget: { maxUsd }, jobs: [ { id: 'hard-planwaves', agent: 'rented', model, sensitive: false, prompt: 'Implement planWaves(tickets, opts) in planWaves.mjs exactly as TASK.md specifies (named ES module export, Node 22, no dependencies). Change only planWaves.mjs. Hidden tests grade it; read TASK.md carefully, the validation order, the path normalization and the scheduling rules.', context: ['TASK.md', 'planWaves.mjs'], outputs: ['planWaves.mjs'], contract: 'TASK.md', acceptance: ['node --test test/planWaves.test.mjs passes 16 of 16 (the tests are hidden from you)'], timeoutMs: HARD_TIMEOUT_MS, maxOutputTokens: 16000, ...(bestOf > 1 ? { bestOf } : {}) } ] }. (6) runHardTask({ model, bestOf = 1, runner, maxUsd = 15, taskDir = TASK_DIR, exec = spawnSync, now = Date.now, log = () => {} }): prepareRepo into a fresh temp directory, write the manifest to <dir>/coordination/manifests/hard-planwaves.json (mkdir recursive), run exec(process.execPath, [runner, '--root', dir, 'run', 'coordination/manifests/hard-planwaves.json'], { env: process.env, encoding: 'utf8', timeout: 12 * 60 * 1000 }), parse the LAST non-empty line of stdout (or stderr when stdout is empty) as JSON state; if it does not parse or has no jobs throw an Error that starts with 'hard task run failed: ' and includes the first 300 characters. Take the job record state.jobs[0]; the output file is path.join(dir, job.workspace, 'planWaves.mjs'); grade it with gradeSolution (a missing file yields passed 0). Return { model, bestOf, status: job.status, passed, total (use 16 when total is 0), passedAll, seconds: round((job.durationMs ?? wallMs) / 1000, 1), attempts: job.attempts?.length ?? 1, tokens: job.usage?.total_tokens ?? (job.usage?.input_tokens ?? 0) + (job.usage?.output_tokens ?? 0), bestOfInfo: job.bestOf ?? null, error: job.error ?? null }; remove the temp directory in a finally. Keep it compact; do not edit tests."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu-bestof.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-lineup.test.mjs",
+        "tests/gpu-memory-plan.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "hard-bakeoff",
+      "context": [
+        "tools/gpu-bakeoff.mjs"
+      ],
+      "outputs": [
+        "tools/gpu-bakeoff.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu-bakeoff.mjs (plain ESM; same first line, exports and signatures; change ONLY this). Add the hard task to runBakeoff: deps may include hardTask({ endpoint, model, candidate, bestOf }) returning { passed, total, passedAll, seconds, attempts, tokens, status, error }. In the best-of loop, right after benchmark for each count n, inside the same withLoad block (so it runs under the same background load), call deps.hardTask when it is given (a thrown error becomes { passed: 0, total: 16, passedAll: false, seconds: null, attempts: 0, tokens: 0, status: 'error', error: message }); store it on that count's byBestOf entry as hard. In renderBakeoff, after each successful model's per-level table add a table titled 'Hard task (planWaves), <label>' with columns Best-of | Tests passed | Time | Attempts | Tokens | Status, one row per byBestOf entry that has hard (N=<n>, '<passed>/<total>', '<seconds> s', attempts, tokens, status or error); add one sentence under the summary explaining that the hard task gives the model only the spec and a stub, grades with 16 hidden tests, allows 10 minutes per attempt, and that Claude solved it in about 30 s with 16/16. Do not edit tests.\nignoreTests: tests/gpu-bestof.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-lineup.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-memory-plan.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-container-review.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "hard-commands",
+      "context": [
+        "tools/gpu-commands.mjs"
+      ],
+      "outputs": [
+        "tools/gpu-commands.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu-commands.mjs (plain ESM; same first line, exports and signatures; change ONLY this). In bakeoff(): import the hard task lazily like the lane benchmark: const hard = deps.hardTask ?? (await import('../bench/gpu-bakeoff/hard-task.mjs')); and pass hardTask: ({ model, bestOf }) => hard.runHardTask({ model, bestOf, runner, maxUsd: base.maxUsd }) to runBakeoff's deps (when deps.hardTask is an object with runHardTask use that; when it is a function use it directly: support both). The plan text for the bake-off adds: 'also runs the hard task (planWaves: spec and stub only, 16 hidden tests, 10 minutes per attempt) at each best-of count'. Do not edit tests.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container-review.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-container-review.test.mjs",
+        "tests/gpu-container.test.mjs",
+        "tests/gpu-docker.test.mjs",
+        "tests/gpu-hardening.test.mjs",
+        "tests/gpu-lineup.test.mjs",
+        "tests/gpu-memory-plan.test.mjs",
+        "tests/gpu-safety.test.mjs",
+        "tests/gpu-vast.test.mjs",
+        "tests/gpu.test.mjs",
+        "tests/vast-container.test.mjs"
+      ],
+      "id": "hard-shortlist",
+      "context": [
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tools/gpu.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu.mjs (plain ESM; same first line, exports and signatures; change ONLY this). In SHORTLIST, in the args of the entry labelled qwen3.6-35b-a3b-nvfp4 remove the two items '--moe-backend' and 'flashinfer_b12x' (that backend crashed with a CUDA illegal memory access on the RTX PRO 6000 under vLLM 0.31.0 during cudagraph profiling; vLLM's default MoE backend starts fine). Add a one-line comment above the entry saying so. Do not change anything else. Do not edit tests.\nignoreTests: tests/adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container-review.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-docker.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-hardening.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-lineup.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-memory-plan.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-safety.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-vast.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/vast-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

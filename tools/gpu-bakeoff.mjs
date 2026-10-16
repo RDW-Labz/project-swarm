@@ -76,11 +76,16 @@ export function rankResults(results) {
   });
 }
 
+async function hardTaskSafely(hardTask, context) {
+  try { return await hardTask(context); } catch (error) { return { passed: 0, total: 16, passedAll: false, seconds: null, attempts: 0, tokens: 0, status: 'error', error: String(error?.message ?? error).slice(0, 200) }; }
+}
+
 // candidates: [{ label, model, quant, args, env, optional }]; deps:
 //   start(candidate, { remainingUsd }) -> { endpoint, stop() }   one replica on one GPU, healthy when it returns
 //   throughput({ endpoint, model, level }) -> measureThroughput result
 //   cacheStats({ endpoint }) -> { hitRate } | null   vLLM prefix-cache hit rate after the run
 //   benchmark({ endpoint, model, candidate, bestOf }) -> { passed, total }   our own tasks (lane benchmark + evals)
+//   hardTask({ endpoint, model, candidate, bestOf }) optional -> { passed, total, passedAll, seconds, attempts, tokens, status, error }   the hard task, run under the same load
 //   withLoad(context, fn) optional: runs fn under background load (runUnderLoad)
 export async function runBakeoff({ candidates, hourlyUsd, capUsd, levels = LEVELS, bestOf = [1, 3], minRemainingHours = 1 }, deps) {
   const { start, benchmark, throughput, cacheStats = async () => null, withLoad = (context, fn) => fn(), now = Date.now, log = () => {} } = deps;
@@ -109,8 +114,12 @@ export async function runBakeoff({ candidates, hourlyUsd, capUsd, levels = LEVEL
       const counts = [...new Set([1, ...bestOf])].sort((a, b) => a - b);
       const byBestOf = [];
       for (const n of counts) {
-        const run = await withLoad({ endpoint, model, agents: chosenAgents }, () => benchmark({ endpoint, model, candidate, bestOf: n }));
-        byBestOf.push({ n, passed: run.passed, total: run.total, passRate: run.total ? run.passed / run.total : 0 });
+        const { run, hard } = await withLoad({ endpoint, model, agents: chosenAgents }, async () => {
+          const benchRun = await benchmark({ endpoint, model, candidate, bestOf: n });
+          const hardRun = deps.hardTask ? await hardTaskSafely(deps.hardTask, { endpoint, model, candidate, bestOf: n }) : undefined;
+          return { run: benchRun, hard: hardRun };
+        });
+        byBestOf.push({ n, passed: run.passed, total: run.total, passRate: run.total ? run.passed / run.total : 0, ...(hard ? { hard } : {}) });
       }
       const bench = byBestOf[0];
       const hours = (now() - began) / 3600000;
@@ -127,6 +136,11 @@ export async function runBakeoff({ candidates, hourlyUsd, capUsd, levels = LEVEL
   return { ranked: rankResults(results), spentUsd: r2(spent) };
 }
 
+const hardLines = item => {
+  const entries = (item.byBestOf ?? []).filter(entry => entry.hard);
+  if (!entries.length) return [];
+  return ['', `### Hard task (planWaves), ${item.label}`, '', '| Best-of | Tests passed | Time | Attempts | Tokens | Status |', '| --- | --- | --- | --- | --- | --- |', ...entries.map(entry => { const hard = entry.hard; const time = hard.seconds === null || hard.seconds === undefined ? 'n/a' : `${hard.seconds} s`; const status = hard.error ? `${hard.status}: ${hard.error}` : hard.status; return `| N=${entry.n} | ${hard.passed}/${hard.total} | ${time} | ${hard.attempts} | ${hard.tokens} | ${status} |`; })];
+};
 const usd = value => (value === null || value === undefined ? 'n/a' : `$${value.toFixed(value < 1 ? 4 : 2)}`);
 const pct = value => (value === null || value === undefined ? 'n/a' : `${Math.round(value * 100)}%`);
 const row = cells => `| ${cells.join(' | ')} |`;
@@ -144,10 +158,11 @@ export function renderBakeoff({ ranked, spentUsd }, { hourlyUsd, gpu = 'one GPU'
     '| Agents | ms/token | output tok/s | tok/s per agent | errors | prefix cache hit |',
     '| --- | --- | --- | --- | --- | --- |',
     ...item.levels.map(entry => `| ${entry.level} | ${entry.msPerToken ?? 'n/a'} | ${entry.tokPerSec} | ${entry.tokPerSecPerAgent} | ${entry.errors} | ${pct(entry.cacheHitRate)} |`),
+    ...hardLines(item),
   ].join('\n'));
   const header = row(['Rank', 'Model', 'Quant', 'Cost per passing task', 'Pass rate N=1', 'Pass rate N=3', 'Max agents (under 35 ms/token)', 'Chosen agents', 'Prefix cache hit', 'Time, cost']);
   const separator = row(Array(10).fill('---'));
-  return `# GPU bake-off\n\nRun ${date} on ${gpu} at $${hourlyUsd}/h. Models are ranked on OUR tasks (the lane benchmark${evalTasks ? ` plus ${evalTasks} eval-set tasks` : '; the lessons eval set does not exist yet (Phase 15), so it is not included'}), not vendor SWE-bench numbers. FP8 first.\n\n${header}\n${separator}\n${summary.join('\n')}\n\n${details.join('\n\n')}\n\nAgents per GPU is the highest tested agent count with under 5% errors and at most ${MAX_MS_PER_TOKEN} ms per token for each agent (tested counts: ${levels.join(', ')}). Best-of-N asks the server for N answers per task and keeps the smallest passing one; it is measured with background load at the chosen agent count. Ranking is cost per passing task, then agents per GPU. Prefix cache hit is vLLM's own counter after the run. Cost per passing task is the model's whole slot on the node at the hourly price, divided by tasks passed. Total spent on the node during the bake-off: ${usd(spentUsd)}.\n`;
+  return `# GPU bake-off\n\nRun ${date} on ${gpu} at $${hourlyUsd}/h. Models are ranked on OUR tasks (the lane benchmark${evalTasks ? ` plus ${evalTasks} eval-set tasks` : '; the lessons eval set does not exist yet (Phase 15), so it is not included'}), not vendor SWE-bench numbers. FP8 first.\n\n${header}\n${separator}\n${summary.join('\n')}\n\nThe hard task (planWaves) gives the model only the spec and a stub, grades it with 16 hidden tests, and allows 10 minutes per attempt; Claude solved it in about 30 s with 16/16.\n\n${details.join('\n\n')}\n\nAgents per GPU is the highest tested agent count with under 5% errors and at most ${MAX_MS_PER_TOKEN} ms per token for each agent (tested counts: ${levels.join(', ')}). Best-of-N asks the server for N answers per task and keeps the smallest passing one; it is measured with background load at the chosen agent count. Ranking is cost per passing task, then agents per GPU. Prefix cache hit is vLLM's own counter after the run. Cost per passing task is the model's whole slot on the node at the hourly price, divided by tasks passed. Total spent on the node during the bake-off: ${usd(spentUsd)}.\n`;
 }
 
 export function writeBakeoffReport(root, text) {

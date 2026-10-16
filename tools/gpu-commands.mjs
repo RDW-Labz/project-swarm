@@ -149,12 +149,14 @@ async function bakeoff(flags, { out, real, deps }) {
   const candidates = selectCandidates(flags.models);
   const base = upOptions({ ...flags, model: candidates[0]?.model ?? 'x/y' }, { gpus: 1 });
   validateUpOptions(base);
-  if (!flags.yes) { out(`${planText(base, { gpus: '1' })}\nThe bake-off tests ${candidates.map(item => item.label).join(', ')}one after another on one GPU, at ${LEVELS.join(', ')} concurrent agents. one vLLM engine per GPU; all models NVFP4, text-only; best-of-N is measured under load at the largest agent count that stays under 35 ms/token. It stops starting models once the cap is spent.`); return { status: 'planned' }; }
+  if (!flags.yes) { out(`${planText(base, { gpus: '1' })}\nThe bake-off tests ${candidates.map(item => item.label).join(', ')}one after another on one GPU, at ${LEVELS.join(', ')} concurrent agents. The bake-off also runs the hard task (planWaves: spec and stub only, 16 hidden tests, 10 minutes per attempt) at each best-of count. one vLLM engine per GPU; all models NVFP4, text-only; best-of-N is measured under load at the largest agent count that stays under 35 ms/token. It stops starting models once the cap is spent.`); return { status: 'planned' }; }
   const root = path.resolve(flags.repo ?? deps.bakeRoot ?? '.');
   const levels = flags.levels ? flags.levels.split(',').map(Number) : LEVELS;
   if (levels.some(level => !Number.isInteger(level) || level < 1 || level > 2000)) throw Object.assign(new Error('gpu-usage: --levels must be whole numbers from 1 to 2000'), { code: 'gpu-usage' });
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-bakeoff-'));
   const bench = deps.bench ?? await import('../bench/lane-benchmark/lib.mjs');
+  const hard = deps.hardTask ?? (await import('../bench/gpu-bakeoff/hard-task.mjs'));
+  const hardTask = typeof hard === 'function' ? hard : ({ model, bestOf }) => hard.runHardTask({ model, bestOf, runner, maxUsd: base.maxUsd });
   const runner = deps.runner ?? fileURLToPath(new URL('./swarm.mjs', import.meta.url));
   const info = deps.baseInfo ?? bench.buildBaseRepo(root, flags['bench-ref'] ?? 'v1.65.0', path.join(tmp, 'repo'));
   const repo = path.join(tmp, 'repo');
@@ -178,6 +180,7 @@ async function bakeoff(flags, { out, real, deps }) {
       const run = bench.runLane({ lane: 'rented', repo, runner, model, bestOf, maxUsd: base.maxUsd, baseInfo: info, log: real.log });
       return { passed: run.results.filter(item => item.pass).length, total: run.results.length };
     },
+    hardTask,
     throughput: ({ endpoint, model, level }) => measureThroughput({ endpoint, model, level, fetchImpl: authFetch(real.fetchImpl, apiKey) }),
   }));
   const text = renderBakeoff(results, { hourlyUsd: base.hourlyUsd, evalTasks: countEvalTasks(root), levels });
