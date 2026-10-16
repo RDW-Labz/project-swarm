@@ -20,12 +20,11 @@ const TARGET_RE = /^(?:[A-Za-z0-9_][A-Za-z0-9._-]{0,31}@)?[A-Za-z0-9][A-Za-z0-9.
 const KEY_RE = /^[0-9a-f]{48}$/;
 
 // The small, fast coding models worth testing (a shortlist, not a promise: ids must be checked on Hugging Face before renting).
-// FP8 is tried first on every candidate; `nvfp4` entries are extra runs.
+// FP8 is tried first; entries marked extra (NVFP4 builds) run only with --extra-quant.
 export const SHORTLIST = Object.freeze([
-  { label: 'qwen3.6-35b-a3b-fp8', model: 'Qwen/Qwen3.6-35B-A3B-FP8', quant: 'fp8', args: [] },
-  { label: 'qwen3-coder-30b-a3b-fp8', model: 'Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8', quant: 'fp8', args: [] },
-  { label: 'devstral-small-2-fp8', model: 'mistralai/Devstral-Small-2-24B-Instruct-2512', quant: 'fp8', args: ['--quantization', 'fp8'] },
-  { label: 'nemotron-3.5-lightning-nvfp4', model: 'nvidia/Nemotron-3.5-Lightning-30B-A3B-NVFP4', quant: 'nvfp4', args: [], extra: true },
+  { label: 'qwen3.6-35b-a3b-fp8', model: 'Qwen/Qwen3.6-35B-A3B-FP8', quant: 'fp8', args: ['--reasoning-parser', 'qwen3'] },
+  { label: 'qwen3-coder-next-nvfp4', model: 'RedHatAI/Qwen3-Coder-Next-NVFP4', quant: 'nvfp4', args: ['--enable-auto-tool-choice', '--tool-call-parser', 'qwen3_coder'], extra: true },
+  { label: 'nemotron-3.5-lightning-nvfp4', model: 'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4', quant: 'nvfp4', args: ['--moe-backend', 'marlin', '--kv-cache-dtype', 'fp8', '--reasoning-parser', 'nemotron_v3', '--enable-auto-tool-choice', '--tool-call-parser', 'qwen3_coder'], extra: true },
 ]);
 
 const fail = (code, message) => Object.assign(new Error(`${code}: ${message}`), { code });

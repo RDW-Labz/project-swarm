@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.77.0
+
+- Bake-off lineup: Qwen3.6-35B-A3B FP8 (qwen3 reasoning parser), Qwen3-Coder-Next 80B-A3B NVFP4 (RedHatAI build) and Nemotron-3.5-Lightning-30B-A3B NVFP4 (marlin MoE backend, fp8 KV cache, nemotron_v3 reasoning parser); Devstral and the 30B Qwen coder are dropped; the NVFP4 entries run only with `--extra-quant`. The rented lane now sends `chat_template_kwargs: { enable_thinking: false }` (a bounded tool-free worker job must not spend its output tokens on reasoning; set `SWARM_RENTED_THINKING=on` to allow it).
+
 ## 1.76.0
 
 - Container mode for rented GPUs (`swarm gpu up --mode container`, `--probe-ports`, `--ssh-port`): for nodes that are themselves a container running the pinned vLLM image (Vast.ai container instances, which cannot run Docker). `gpu up` starts `vllm serve` inside it (one per GPU, bound to 127.0.0.1, per-rental key only in the server environment); the exposure check reads `/proc/net/tcp` and `/proc/net/tcp6` instead of `ss` and also probes any ports you name; a failure stops the servers and removes the session; `gpu down` says to destroy the instance (a container cannot be powered off).

@@ -21,12 +21,11 @@ A lane for **small, fast coding models** (about 7B to 35B, mixture-of-experts pr
 
 | Model | Why |
 | --- | --- |
-| Qwen3.6-35B-A3B (FP8) | 35B total, 3B active; strongest vendor-reported coding score of the group; Apache 2.0 |
-| Qwen3-Coder-30B-A3B-Instruct (FP8) | The coding-specialist baseline; 3B active; Apache 2.0 |
-| Devstral Small 2 (24B dense) | The dense control: no mixture-of-experts; Apache 2.0 |
-| Nemotron-3.5-Lightning-30B-A3B (NVFP4, extra run) | The NVFP4-on-Blackwell test; weaker coding scores; NVFP4 support on RTX-class (SM120) cards is not confirmed |
+| Qwen3.6-35B-A3B (FP8) | 35B total, 3B active; the fast small mixture-of-experts pick; Apache 2.0; started with the qwen3 reasoning parser, worker requests run with thinking off |
+| Qwen3-Coder-Next 80B-A3B (NVFP4, RedHatAI build) | the larger coding model; about 45 GB of weights in NVFP4 leaves KV-cache room on a 96 GB card; NVFP4 runs only with --extra-quant and is skipped if it does not load on the card |
+| Nemotron-3.5-Lightning-30B-A3B (NVFP4) | short extra run; hybrid Mamba/mixture-of-experts; marlin MoE backend and fp8 KV cache; runs only with --extra-quant |
 
-Vendor numbers decide nothing here. The bake-off ranks them on our own tasks.
+Vendor numbers decide nothing here: the bake-off ranks them on our own tasks by cost per passing task and agents per GPU. The pinned vLLM (v0.27.1) is checked against each model card before a run.
 
 ## Bake-off: `swarm gpu bakeoff`
 

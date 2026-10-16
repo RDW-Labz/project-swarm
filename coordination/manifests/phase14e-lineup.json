@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-container-review.test.mjs",
+        "tests/gpu-container.test.mjs",
+        "tests/gpu-docker.test.mjs",
+        "tests/gpu-hardening.test.mjs",
+        "tests/gpu-safety.test.mjs",
+        "tests/gpu-vast.test.mjs",
+        "tests/gpu.test.mjs",
+        "tests/vast-container.test.mjs"
+      ],
+      "id": "lineup-gpu",
+      "context": [
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tools/gpu.mjs"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In tools/gpu.mjs replace the whole SHORTLIST array (from the line \"export const SHORTLIST = Object.freeze([\" through its closing \"]);\") with exactly this (keep the comment lines above it, but change the sentence about NVFP4 so it says: FP8 is tried first; entries marked extra (NVFP4 builds) run only with --extra-quant): export const SHORTLIST = Object.freeze([\n  { label: 'qwen3.6-35b-a3b-fp8', model: 'Qwen/Qwen3.6-35B-A3B-FP8', quant: 'fp8', args: ['--reasoning-parser', 'qwen3'] },\n  { label: 'qwen3-coder-next-nvfp4', model: 'RedHatAI/Qwen3-Coder-Next-NVFP4', quant: 'nvfp4', args: ['--enable-auto-tool-choice', '--tool-call-parser', 'qwen3_coder'], extra: true },\n  { label: 'nemotron-3.5-lightning-nvfp4', model: 'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4', quant: 'nvfp4', args: ['--moe-backend', 'marlin', '--kv-cache-dtype', 'fp8', '--reasoning-parser', 'nemotron_v3', '--enable-auto-tool-choice', '--tool-call-parser', 'qwen3_coder'], extra: true },\n]);\nignoreTests: tests/adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container-review.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-docker.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-hardening.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-safety.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-vast.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/vast-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/anthropic-lane.test.mjs",
+        "tests/best-of-adapter.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-y-adapters.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/multi-edit.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/reports-run.test.mjs",
+        "tests/worker-skills.test.mjs"
+      ],
+      "id": "lineup-adapter",
+      "context": [
+        "tools/api-adapters.mjs"
+      ],
+      "outputs": [
+        "tools/api-adapters.mjs"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In tools/api-adapters.mjs, in the request body built for job.agent === 'rented' (the line that starts with \"else if (job.agent === 'rented')\" and builds body = { model: job.model, messages: ..., stream: false, max_tokens: limit, ...(bestOfN > 1 ? { n: bestOfN } : {}), response_format: ... }), add the property ...(env.SWARM_RENTED_THINKING === 'on' ? {} : { chat_template_kwargs: { enable_thinking: false } }) directly after the best-of spread, so worker jobs on the rented lane run with the model's thinking mode off unless SWARM_RENTED_THINKING=on is set (a bounded tool-free task must not spend its output tokens on reasoning). Use the text \"...(bestOfN > 1 ? { n: bestOfN } : {}),\" as the anchor and add the new property after it.\nignoreTests: tests/adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/anthropic-lane.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/best-of-adapter.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-aa-core.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-n.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-o.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-x.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-y-adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/kickoff.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/lanes-run.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/multi-edit.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/openrouter.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/reports-run.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/worker-skills.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/kickoff.test.mjs"
+      ],
+      "id": "lineup-docs",
+      "context": [
+        "docs/rented-gpu.md"
+      ],
+      "outputs": [
+        "docs/rented-gpu.md"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/rented-gpu.md replace the whole table under the heading \"## Which models\" (the header row \"| Model | Why |\" through its last row) with this table: | Model | Why |\n| --- | --- |\n| Qwen3.6-35B-A3B (FP8) | 35B total, 3B active; the fast small mixture-of-experts pick; Apache 2.0; started with the qwen3 reasoning parser, worker requests run with thinking off |\n| Qwen3-Coder-Next 80B-A3B (NVFP4, RedHatAI build) | the larger coding model; about 45 GB of weights in NVFP4 leaves KV-cache room on a 96 GB card; NVFP4 runs only with --extra-quant and is skipped if it does not load on the card |\n| Nemotron-3.5-Lightning-30B-A3B (NVFP4) | short extra run; hybrid Mamba/mixture-of-experts; marlin MoE backend and fp8 KV cache; runs only with --extra-quant |\n. Also replace the sentence that starts \"Vendor numbers decide nothing here.\" with: \"Vendor numbers decide nothing here: the bake-off ranks them on our own tasks by cost per passing task and agents per GPU. The pinned vLLM (v0.27.1) is checked against each model card before a run.\" \nignoreTests: tests/kickoff.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}
