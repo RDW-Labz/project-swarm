@@ -6,7 +6,7 @@ import { loadLocalConfig, resolveConfigPath } from './local-config.mjs';
 
 export const RENTED_DEFAULTS = Object.freeze({ maxHoursPerRun: 4, concurrency: 32, minBillableMinutes: 1, warnAt: 0.8, keyItem: Object.freeze({ service: 'project-swarm', account: 'rented.api_key' }) });
 
-const KEYS = new Set(['name', 'endpoint', 'endpoints', 'auth', 'model', 'keyItem', 'hourlyUsd', 'maxHoursPerRun', 'concurrency', 'dailyUsd', 'trusted']);
+const KEYS = new Set(['name', 'endpoint', 'endpoints', 'auth', 'model', 'keyItem', 'hourlyUsd', 'maxHoursPerRun', 'concurrency', 'dailyUsd', 'trusted', 'bestOf']);
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/;
 const NAME_RE = /^[A-Za-z0-9 ._-]{1,40}$/;
 const LOOPBACK = new Set(['127.0.0.1', '[::1]', 'localhost']);
@@ -57,6 +57,9 @@ export function validateRentedConfig(raw) {
   if (dailyUsd === undefined) dailyUsd = isNum(hourlyUsd) && isNum(maxHoursPerRun) ? r2(hourlyUsd * maxHoursPerRun) : undefined;
   if (!(isNum(dailyUsd) && dailyUsd > 0)) errors.push('rentedGpu.dailyUsd: must be a number above 0');
 
+  const bestOf = raw.bestOf ?? 1;
+  if (!(Number.isInteger(bestOf) && bestOf >= 1 && bestOf <= 8)) errors.push('rentedGpu.bestOf: must be a whole number from 1 to 8');
+
   // Rented hosts only ever run jobs marked sensitive:false; there is no way to trust one.
   if (raw.trusted !== undefined && raw.trusted !== false) errors.push('rentedGpu.trusted: not supported; rented hosts only run jobs marked sensitive: false');
 
@@ -80,6 +83,7 @@ export function validateRentedConfig(raw) {
       concurrency,
       dailyUsd,
       auth,
+      bestOf,
       endpoints: origins,
       chatUrls: origins.map(item => `${item}/v1/chat/completions`),
       chatUrl: `${origin}/v1/chat/completions`,
@@ -181,7 +185,8 @@ export function readGpuSession(env = process.env, { now = Date.now } = {}) {
   try {
     const session = JSON.parse(fs.readFileSync(gpuSessionPath(env), 'utf8'));
     if (!session || !Array.isArray(session.endpoints) || !session.endpoints.length || typeof session.model !== 'string') return null;
-    if (typeof session.expiresAt === 'string' && Date.parse(session.expiresAt) <= now()) return null;
+    // A missing or unreadable expiry counts as expired: a session must always have an end.
+    if (typeof session.expiresAt !== 'string' || !(Date.parse(session.expiresAt) > now())) return null;
     return session;
   } catch { return null; }
 }
@@ -194,6 +199,7 @@ export function effectiveRentedRaw(raw, env = process.env, { now = Date.now } = 
   const hours = Number.isFinite(session.maxHours) ? session.maxHours : RENTED_DEFAULTS.maxHoursPerRun;
   const merged = { ...(raw ?? {}), endpoints: session.endpoints, auth: 'none', model: session.model, hourlyUsd: session.hourlyUsd, maxHoursPerRun: raw?.maxHoursPerRun === undefined ? hours : Math.min(raw.maxHoursPerRun, hours), concurrency: Math.min(2048, session.endpoints.length * (session.perReplica ?? 32)) };
   delete merged.endpoint; delete merged.dailyUsd;
+  if (Number.isInteger(session.bestOf)) merged.bestOf = session.bestOf;
   if (Number.isFinite(session.capUsd)) merged.dailyUsd = session.capUsd;
   return { raw: merged, session };
 }
@@ -217,7 +223,7 @@ export function createBalancer(urls, { now = Date.now, cooldownMs = 30000 } = {}
     acquire(tried = new Set()) {
       const open = state.filter(item => !tried.has(item.url));
       const healthy = open.filter(item => item.badUntil <= now());
-      const pool = healthy.length ? healthy : open.sort((a, b) => a.badUntil - b.badUntil).slice(0, 1);
+      const pool = healthy.length ? healthy : open;
       if (!pool.length) return null;
       const least = Math.min(...pool.map(item => item.inflight));
       const tied = pool.filter(item => item.inflight === least);
@@ -248,9 +254,13 @@ export async function balancedFetch(urls, fetchImpl, init, options = {}) {
       slot.release(response.status < 500);
       return response;
     } catch (error) {
+      // A local abort (the job's own timeout) says nothing about the replica; only connection failures move on to another one (a
+      // request that was already sent is not repeated: the GPU would do the work twice).
+      if (init?.signal?.aborted) { slot.release(true); throw error; }
       slot.release(false);
       last = error;
-      if (init?.signal?.aborted) throw error;
+      const code = error?.cause?.code ?? error?.code;
+      if (code !== undefined && !['ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT'].includes(code)) throw error;
     }
   }
   throw last ?? new Error('no replica available');

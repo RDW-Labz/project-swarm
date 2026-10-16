@@ -54,7 +54,9 @@ export function resolveLanes({ config = {}, manifest = {}, env = process.env } =
   const { raw: rentedRaw, session: gpuSession } = effectiveRentedRaw(config.rentedGpu, env);
   const rented = rentedRaw === undefined ? null : validateRentedConfig(rentedRaw).config;
   if (rented) { lanes.rented.concurrency = rented.concurrency; lanes.rented.adaptive = { ...rented.adaptive }; }
-  if (rented && gpuSession) lanes.rented.model = rented.model;
+  // routable only for a live session that is not a bake-off's (a bake-off session carries routable: false and uses explicit rented jobs)
+  const routableSession = Boolean(rented && gpuSession && gpuSession.routable !== false);
+  if (routableSession) lanes.rented.model = rented.model;
   for (const source of [config.lanes, manifest.lanes]) {
     if (source === undefined) continue;
     if (!object(source)) throw invalid('lanes', 'value', 'must be an object');
@@ -77,6 +79,8 @@ export function resolveLanes({ config = {}, manifest = {}, env = process.env } =
   // adaptive: true (or a partial object) is filled in from the lane's concurrency once every override is applied.
   // Overrides in a manifest or the lanes config can lower the rented lane, never lift it past the ceiling rentedGpu names.
   if (rented) { lanes.rented.concurrency = Math.min(lanes.rented.concurrency, rented.concurrency); if (lanes.rented.adaptive && typeof lanes.rented.adaptive === 'object') lanes.rented.adaptive.start = Math.min(lanes.rented.adaptive.start ?? 4, lanes.rented.concurrency); }
+  // No override may make the rented lane routable without a live session.
+  if (!routableSession) lanes.rented.model = null;
   for (const agent of LANE_AGENTS) {
     const adaptive = lanes[agent].adaptive;
     if (object(adaptive) && Object.keys(adaptive).every(key => ['start', 'min'].includes(key))) lanes[agent].adaptive = { min: adaptive.min ?? 1, start: adaptive.start ?? Math.max(adaptive.min ?? 1, Math.min(8, lanes[agent].concurrency)) };

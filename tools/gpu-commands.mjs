@@ -2,15 +2,17 @@
 // CLI glue for `swarm gpu models|up|down|status|bakeoff`. Swarm never rents a node: these commands only talk to one the owner already
 // rented. `up` and `bakeoff` print what they would do and stop unless --yes is given.
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { gpuUp, gpuDown, gpuStatus, formatStatus, sessionHours, validateUpOptions, SHORTLIST, GPU_DEFAULTS, readSessionFile, removeSession } from './gpu.mjs';
+import { gpuUp, gpuDown, gpuStatus, formatStatus, sessionHours, validateUpOptions, SHORTLIST, GPU_DEFAULTS, SSH_HARDENING, readSessionFile, removeSession } from './gpu.mjs';
+import { fetchCacheStats } from './gpu-cache.mjs';
 import { runBakeoff, renderBakeoff, writeBakeoffReport, measureThroughput, countEvalTasks, selectCandidates, LEVELS } from './gpu-bakeoff.mjs';
 
-const VALUE_FLAGS = new Set(['target', 'key', 'model', 'models', 'hourly-usd', 'max-usd', 'max-hours', 'gpus', 'per-replica', 'max-model-len', 'image', 'levels', 'repo']);
-const BOOLEAN_FLAGS = new Set(['yes', 'json', 'extra-quant']);
+const VALUE_FLAGS = new Set(['target', 'key', 'model', 'models', 'hourly-usd', 'max-usd', 'max-hours', 'gpus', 'per-replica', 'max-model-len', 'image', 'levels', 'repo', 'best-of']);
+const BOOLEAN_FLAGS = new Set(['yes', 'json', 'extra-quant', 'allow-no-poweroff']);
 
 export function parseGpuFlags(args) {
   const flags = {};
@@ -29,12 +31,12 @@ const num = value => (value === undefined ? undefined : Number(value));
 const expand = file => (typeof file === 'string' && file.startsWith('~/') ? path.join(os.homedir(), file.slice(2)) : file);
 
 export function upOptions(flags, extra = {}) {
-  return { target: flags.target, key: expand(flags.key), model: flags.model, hourlyUsd: num(flags['hourly-usd']), maxUsd: num(flags['max-usd']), maxHours: num(flags['max-hours']), gpus: num(flags.gpus), perReplica: num(flags['per-replica']), maxModelLen: num(flags['max-model-len']), image: flags.image, ...extra };
+  return { target: flags.target, key: expand(flags.key), model: flags.model, hourlyUsd: num(flags['hourly-usd']), maxUsd: num(flags['max-usd']), maxHours: num(flags['max-hours']), gpus: num(flags.gpus), perReplica: num(flags['per-replica']), maxModelLen: num(flags['max-model-len']), image: flags.image, allowNoPowerOff: flags['allow-no-poweroff'] === true, bestOf: flags['best-of'] === undefined || flags['best-of'].includes(',') ? undefined : Number(flags['best-of']), ...extra };
 }
 
 export function planText(options, { gpus = options.gpus ?? 'all' } = {}) {
   const hours = sessionHours(options);
-  return `Plan (nothing is started yet):\n  node: ${options.target} (a node you already rented; swarm rents nothing)\n  model: ${options.model}, one server per GPU (${gpus}), reached through an ssh tunnel, no key on the node\n  price: $${options.hourlyUsd}/h; hard cap $${options.maxUsd} => the session ends after ${hours.toFixed(2)} h, and a timer on the node removes the servers and powers it off then\n  sent to the node: commands only; no files, keys or .env\n  jobs: only sensitive: false, each with exact files, a contract file and acceptance tests; one failure goes to Haiku, then Codex\nAdd --yes to go.`;
+  return `Plan (nothing is started yet):\n  node: ${options.target} (a node you already rented; swarm rents nothing)\n  model: ${options.model}, one server per GPU (${gpus}), reached through an ssh tunnel, no key on the node\n  price: $${options.hourlyUsd}/h; hard cap $${options.maxUsd} => the session ends after ${hours.toFixed(2)} h, and a timer on the node removes the servers and powers it off then\n  sent to the node: commands only; no files, keys or .env\n  jobs: only sensitive: false, each with exact files, a contract file and acceptance tests; one failure goes to Haiku, then Codex\n  billing: the dollar cap ends the session, but billing continues until YOU terminate the instance; the timer powers the node off only if passwordless sudo works (checked at start)\nAdd --yes to go.`;
 }
 
 function sshReal(argv, { input } = {}) {
@@ -44,14 +46,40 @@ function sshReal(argv, { input } = {}) {
   });
 }
 
-function openTunnelReal({ target, key, ports, sshOptions = [] }) {
-  const forwards = ports.flatMap(port => ['-L', `127.0.0.1:${port.local}:127.0.0.1:${port.remote}`]);
-  const child = spawn('ssh', [...sshOptions, '-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=15', '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-i', key, ...forwards, '--', target], { detached: true, stdio: 'ignore' });
-  child.unref();
-  return Promise.resolve({ pid: child.pid, stop: () => { try { process.kill(child.pid); } catch { /* gone */ } } });
+// Resolves true when something already accepts connections on 127.0.0.1:port (the port is busy).
+function portBusy(port) {
+  return new Promise(resolve => {
+    const socket = net.connect({ host: '127.0.0.1', port });
+    const done = busy => { socket.destroy(); resolve(busy); };
+    socket.setTimeout(300);
+    socket.once('connect', () => done(true));
+    socket.once('error', () => done(false));
+    socket.once('timeout', () => done(false));
+  });
 }
 
-const stopTunnelReal = pid => { try { process.kill(pid); } catch { /* gone */ } };
+async function openTunnelReal({ target, key, ports, sshOptions = [] }) {
+  for (const port of ports) {
+    if (await portBusy(port.local)) throw Object.assign(new Error(`gpu-port-busy: 127.0.0.1:${port.local} is already in use; close what uses it (a leftover tunnel? swarm gpu down) and retry`), { code: 'gpu-port-busy' });
+  }
+  const forwards = ports.flatMap(port => ['-L', `127.0.0.1:${port.local}:127.0.0.1:${port.remote}`]);
+  const child = spawn('ssh', [...sshOptions, ...SSH_HARDENING, '-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=15', '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-i', key, ...forwards, '--', target], { detached: true, stdio: 'ignore' });
+  child.unref();
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  if (child.exitCode !== null) throw Object.assign(new Error('gpu-tunnel-failed: the ssh tunnel exited at once (check the key, the host key and that the ports are free)'), { code: 'gpu-tunnel-failed' });
+  return { pid: child.pid, stop: () => { try { process.kill(child.pid); } catch { /* gone */ } } };
+}
+
+// Kills the tunnel only if the pid is a real ssh process for this session's target (guards against pid reuse).
+async function stopTunnelReal(pid, session) {
+  if (!Number.isInteger(pid) || pid <= 1) return;
+  const target = session?.target;
+  if (typeof target !== 'string' || !target) return;
+  try {
+    const command = await new Promise((resolve, reject) => execFile('ps', ['-p', String(pid), '-o', 'command='], (error, stdout) => (error ? reject(error) : resolve(String(stdout)))));
+    if (command.includes('ssh') && command.includes(target)) process.kill(pid);
+  } catch { /* gone */ }
+}
 
 export async function runGpuCommand(args, deps = {}) {
   const out = deps.out ?? (text => process.stdout.write(`${text}\n`));
@@ -87,6 +115,7 @@ export async function runGpuCommand(args, deps = {}) {
 }
 
 async function bakeoff(flags, { out, real, deps }) {
+  if (readSessionFile(real.env)) throw Object.assign(new Error('gpu-session-exists: a GPU session is live; run swarm gpu down before a bake-off (the bake-off uses its own session and must not replace yours)'), { code: 'gpu-session-exists' });
   const candidates = selectCandidates(flags.models);
   const base = upOptions({ ...flags, model: candidates[0]?.model ?? 'x/y' }, { gpus: 1 });
   validateUpOptions(base);
@@ -99,14 +128,21 @@ async function bakeoff(flags, { out, real, deps }) {
   const runner = deps.runner ?? fileURLToPath(new URL('./swarm.mjs', import.meta.url));
   const info = deps.baseInfo ?? bench.buildBaseRepo(root, 'HEAD', path.join(tmp, 'repo'));
   const repo = path.join(tmp, 'repo');
-  const results = await runBakeoff({ candidates, hourlyUsd: base.hourlyUsd, capUsd: base.maxUsd, levels, includeExtra: flags["extra-quant"] === true }, {
+  const results = await runBakeoff({ candidates, hourlyUsd: base.hourlyUsd, capUsd: base.maxUsd, levels, includeExtra: flags["extra-quant"] === true, bestOf: (flags['best-of'] ?? '1,3').split(',').map(Number) }, {
     log: real.log,
     start: async (candidate, { remainingUsd }) => {
-      const session = await gpuUp({ ...base, model: candidate.model, quant: candidate.quant, args: candidate.args, replace: true, maxUsd: Math.max(remainingUsd, 0.01) }, real);
+      let session;
+      try {
+        session = await gpuUp({ ...base, model: candidate.model, quant: candidate.quant, args: candidate.args, routable: false, perReplica: Math.max(...levels, 1), maxUsd: Math.max(remainingUsd, 0.01) }, real);
+      } catch (error) {
+        try { await gpuDown(real); } catch { /* ignore: the original error matters */ }
+        throw error;
+      }
       return { endpoint: session.endpoints[0], stop: () => gpuDown(real) };
     },
-    benchmark: async ({ model }) => {
-      const run = bench.runLane({ lane: 'rented', repo, runner, model, maxUsd: base.maxUsd, baseInfo: info, log: real.log });
+    cacheStats: async ({ endpoint }) => fetchCacheStats(endpoint, real.fetchImpl),
+    benchmark: async ({ model, bestOf }) => {
+      const run = bench.runLane({ lane: 'rented', repo, runner, model, bestOf, maxUsd: base.maxUsd, baseInfo: info, log: real.log });
       return { passed: run.results.filter(item => item.pass).length, total: run.results.length };
     },
     throughput: ({ endpoint, model, level }) => measureThroughput({ endpoint, model, level, fetchImpl: real.fetchImpl }),

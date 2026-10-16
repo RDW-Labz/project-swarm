@@ -21,9 +21,9 @@ function envFor(t) {
   return { ...process.env, SWARM_CONFIG: file };
 }
 const options = (extra = {}) => ({ target: 'ubuntu@203.0.113.9', key: '/home/me/.ssh/node', model: MODEL, hourlyUsd: 3, maxUsd: 6, pollMs: 1, ...extra });
-function fakes(env, { gpus = 4, now = () => 1700000000000 } = {}) {
+function fakes(env, { gpus = 4, now = () => 1700000000000, sudo = 'ok' } = {}) {
   const calls = [];
-  return { calls, env, now, sleep: async () => {}, fetchImpl: async () => ({ ok: true }), ssh: async (argv, { input } = {}) => { calls.push({ argv, input }); return { stdout: argv.at(-1) === 'nvidia-smi -L' ? Array.from({ length: gpus }, (_, n) => `GPU ${n}: NVIDIA RTX PRO 6000`).join('\n') : '' }; }, openTunnel: async ({ ports }) => { calls.push({ tunnel: ports }); return { pid: 4242 }; }, stopTunnel: async pid => { calls.push({ stopped: pid }); } };
+  return { calls, env, now, sleep: async () => {}, fetchImpl: async () => ({ ok: true, json: async () => ({ data: [{ id: MODEL }] }) }), ssh: async (argv, { input } = {}) => { calls.push({ argv, input }); return { stdout: String(argv.at(-1)).startsWith('nvidia-smi -L') ? Array.from({ length: gpus }, (_, n) => `GPU ${n}: NVIDIA RTX PRO 6000`).join('\n') + `\nSUDO:${sudo}` : '' }; }, openTunnel: async ({ ports }) => { calls.push({ tunnel: ports }); return { pid: 4242 }; }, stopTunnel: async pid => { calls.push({ stopped: pid }); } };
 }
 
 test('gpu up: one replica per GPU, tunnel ports, expiry = what the cap pays for, nothing but commands sent, no key anywhere', async t => {
@@ -56,7 +56,7 @@ test('hours: the owner limit and the dollar cap, whichever is shorter', () => {
   assert.equal(sessionHours({ hourlyUsd: 3, maxUsd: 6 }), 2);
   assert.equal(sessionHours({ hourlyUsd: 3, maxUsd: 60, maxHours: 1.5 }), 1.5);
   assert.equal(parseGpuCount('GPU 0: A\nGPU 1: B\nnoise'), 2);
-  assert.match(remoteStartScript({ model: MODEL, image: 'vllm/vllm-openai:latest', gpus: 1, maxModelLen: 1000, perReplica: 4, args: ['--quantization', 'fp8'], seconds: 60.2, remotePortBase: 8000 }), /--quantization fp8.*\n.*sleep 61;/);
+  assert.match(remoteStartScript({ model: MODEL, image: 'vllm/vllm-openai:latest', gpus: 1, maxModelLen: 1000, perReplica: 4, args: ['--quantization', 'fp8'], seconds: 60.2, remotePortBase: 8000 }), /^setsid nohup sh -c 'sleep 61;.*\nset -e\n.*--quantization fp8/s);
 });
 
 test('an unhealthy replica fails the up with the session still recorded (so down and the timer can clean it)', async t => {
@@ -163,7 +163,7 @@ test('bake-off: our own tasks decide the ranking; cost per passing task from the
     benchmark: async ({ endpoint }) => { clock += 12 * 60000; return { passed: passes[endpoint.slice(7)] ?? 1, total: 10 }; },
     throughput: async ({ level }) => { clock += 60000; return { level, errorRate: 0, tokPerSec: level * 40, tokPerSecPerAgent: 40 }; },
   };
-  const { ranked, spentUsd } = await runBakeoff({ candidates, hourlyUsd: 6, capUsd: 100 }, deps);
+  const { ranked, spentUsd } = await runBakeoff({ candidates, hourlyUsd: 6, capUsd: 100, bestOf: [1] }, deps);
   assert.deepEqual(started, ['a', 'b', 'c'], 'the NVFP4 candidate needs includeExtra');
   assert.deepEqual(stopped, ['a', 'b', 'c']);
   assert.deepEqual(ranked.map(item => item.label), ['a', 'c', 'b'], 'ties on pass rate break on cost per passing task, then order');
@@ -174,11 +174,11 @@ test('bake-off: our own tasks decide the ranking; cost per passing task from the
   assert.equal(first.agentsPerGpu, 200);
   assert.equal(spentUsd, 6.3);
   clock = 0; started.length = 0;
-  const capped = await runBakeoff({ candidates, hourlyUsd: 6, capUsd: 2.5, includeExtra: true }, deps);
+  const capped = await runBakeoff({ candidates, hourlyUsd: 6, capUsd: 2.5, includeExtra: true, bestOf: [1] }, deps);
   assert.deepEqual(started, ['a', 'b']);
   assert.ok(capped.ranked.filter(item => item.error).every(item => /cap/.test(item.error)) && capped.ranked.filter(item => item.error).length === 2);
   const text = renderBakeoff({ ranked, spentUsd }, { hourlyUsd: 6, date: '2026-10-16' });
-  assert.match(text, /\| 1 \| a \| fp8 \| 8\/10 \(80%\) \| 40 \/ 2000 \/ 8000 \|/);
+  assert.match(text, /\| 1 \| a \| fp8 \| 8\/10 \(80%\) \| n\/a \| n\/a \| 40 \/ 2000 \/ 8000 \|/);
   assert.match(text, /lessons eval set does not exist yet/);
   assert.deepEqual(selectCandidates('qwen3-coder-30b-a3b-fp8,foo/Bar-NVFP4').map(item => item.quant), ['fp8', 'nvfp4']);
   assert.equal(selectCandidates().some(item => item.quant === 'nvfp4'), false, 'the default list is FP8 only');
@@ -186,7 +186,7 @@ test('bake-off: our own tasks decide the ranking; cost per passing task from the
 
 test('a failing model is recorded, not fatal, and its server is still stopped', async () => {
   const stopped = [];
-  const { ranked } = await runBakeoff({ candidates: [{ label: 'a', model: 'o/a', quant: 'fp8' }, { label: 'b', model: 'o/b', quant: 'fp8' }], hourlyUsd: 1, capUsd: 100 }, { now: () => 0, start: async c => ({ endpoint: c.label, stop: async () => { stopped.push(c.label); } }), benchmark: async ({ endpoint }) => { if (endpoint === 'a') throw new Error('out of memory'); return { passed: 1, total: 2 }; }, throughput: async ({ level }) => ({ level, errorRate: 0, tokPerSec: 1, tokPerSecPerAgent: 1 }) });
+  const { ranked } = await runBakeoff({ candidates: [{ label: 'a', model: 'o/a', quant: 'fp8' }, { label: 'b', model: 'o/b', quant: 'fp8' }], hourlyUsd: 1, capUsd: 100, bestOf: [1] }, { now: () => 0, start: async c => ({ endpoint: c.label, stop: async () => { stopped.push(c.label); } }), benchmark: async ({ endpoint }) => { if (endpoint === 'a') throw new Error('out of memory'); return { passed: 1, total: 2 }; }, throughput: async ({ level }) => ({ level, errorRate: 0, tokPerSec: 1, tokPerSecPerAgent: 1 }) });
   assert.equal(ranked[0].label, 'b'); assert.match(ranked[1].error, /out of memory/);
   assert.deepEqual(stopped.sort(), ['a', 'b']);
 });

@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "fix-gpu",
+      "context": [
+        "tools/gpu.mjs",
+        "tools/rented.mjs"
+      ],
+      "outputs": [
+        "tools/gpu.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu.mjs (plain ESM, same first line, same exports and signatures as now; add the new exports named below). Apply exactly these review fixes, change nothing else, keep the code compact. (1) Export SSH_HARDENING = Object.freeze(['-o','ForwardAgent=no','-o','ForwardX11=no','-o','PermitLocalCommand=no','-o','StrictHostKeyChecking=yes']) and put its entries plus '-o','ClearAllForwardings=yes' into the ssh argument list gpuUp builds (before -i) and into gpuDown's ssh argument list. (2) remoteStartScript: the dead-man timer line (the setsid nohup sh -c 'sleep ...' line) must be the FIRST line of the script, before 'set -e' and before any docker command, so a failed start never leaves servers without a timer. (3) gpuUp: right after the GPU count and sudo check and BEFORE the start script is sent, write the session file (all the fields it has now plus state: 'starting') using exclusive creation (fs.writeFileSync with flag 'wx' and mode 0o600, so a second up fails with the existing gpu-session-exists error); after the replicas answer, rewrite it with state: 'up' (atomic temp file and rename, mode 0o600 as writeSession does now). If the start script, tunnel or health wait throws, leave the session file in place (so gpuDown can clean up) and set error.session. Remove the options.replace behaviour (a session that exists always throws gpu-session-exists). (4) Sudo check: run one ssh command 'nvidia-smi -L; echo SUDO:$(sudo -n true >/dev/null 2>&1 && echo ok || echo no)' instead of plain nvidia-smi -L; count GPUs from the GPU lines as now; if the output contains 'SUDO:no' throw fail('gpu-sudo', 'passwordless sudo is not available on the node, so the timer cannot power it off; fix that or pass --allow-no-poweroff (then billing continues until you terminate the instance)') unless options.allowNoPowerOff === true, in which case call log with a warning and store powerOff: false in the session (powerOff: true otherwise). (5) Cap the GPU count at 16: gpus = Math.min(options.gpus ?? count, count, 16). (6) IMAGE_RE must also allow a digest form such as 'vllm/vllm-openai@sha256:' followed by 64 hex characters (a tag is optional then). (7) waitHealthy: a replica counts as healthy only when GET {endpoint}/v1/models returns ok and its JSON body (response.json()) has a data array containing an entry whose id equals the session model; if the body cannot be parsed or lacks the model it is not healthy yet; pass the model into waitHealthy. (8) New option options.routable (default true) is stored in the session as routable (boolean). (9) gpuDown: only call stopTunnel when session.tunnelPid is an integer greater than 1, and call it as stopTunnel(session.tunnelPid, session); when the ssh stop fails the returned message must start with 'Could not stop the servers over ssh (the timer on the node still removes them at <expiresAt>). The session was removed.' and still end with the terminate-the-instance reminder; when it succeeded keep the current message. (10) gpuStatus: spentUsd = hours * hourlyUsd (not capped at maxHours), add billingNote: when expired, 'the node may still be billing: terminate the instance'; formatStatus prints that note on the Time line when expired (replace the current EXPIRED text with: EXPIRED, terminate the instance, billing may continue). Current tests may need these changes; do not edit tests.\nignoreTests: tests/adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "fix-gpu-commands",
+      "context": [
+        "tools/gpu-commands.mjs",
+        "tools/gpu.mjs",
+        "tools/gpu-bakeoff.mjs"
+      ],
+      "outputs": [
+        "tools/gpu-commands.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu-commands.mjs (plain ESM, same first line, same exports and signatures; keep everything not named here). Apply exactly these review fixes: (1) Import SSH_HARDENING from ./gpu.mjs (a new export: a frozen array of ssh -o options). openTunnelReal must put ...SSH_HARDENING in its ssh arguments, and before spawning must check each local port (ports[].local) is free by trying net.connect to 127.0.0.1:port with a 300 ms timeout: if any connection succeeds throw an Error with code 'gpu-port-busy' and message 'gpu-port-busy: 127.0.0.1:<port> is already in use; close what uses it (a leftover tunnel? swarm gpu down) and retry'. After spawning, wait 1500 ms, and if the child has exited (child.exitCode !== null) throw an Error with code 'gpu-tunnel-failed' and message 'gpu-tunnel-failed: the ssh tunnel exited at once (check the key, the host key and that the ports are free)'. (2) stopTunnelReal(pid, session): do nothing unless pid is an integer greater than 1; run execFile('ps', ['-p', String(pid), '-o', 'command=']) and kill the process only if the printed command contains 'ssh' and contains session.target; swallow errors. runGpuCommand passes real.stopTunnel unchanged (it already receives (pid, session) from gpuDown). (3) planText: add this line before 'Add --yes to go.': '  billing: the dollar cap ends the session, but billing continues until YOU terminate the instance; the timer powers the node off only if passwordless sudo works (checked at start)'. (4) New boolean flag --allow-no-poweroff: add 'allow-no-poweroff' to BOOLEAN_FLAGS and pass allowNoPowerOff: flags['allow-no-poweroff'] === true in upOptions. (5) bakeoff(): first, if readSessionFile(real.env) returns a session, throw an Error with code 'gpu-session-exists' and message 'gpu-session-exists: a GPU session is live; run swarm gpu down before a bake-off (the bake-off uses its own session and must not replace yours)'. Then in its start callback: call gpuUp with routable: false and perReplica: Math.max(...levels, 1) (the replica must not queue the highest tested level) added to the options, wrapped in try/catch: on error call await gpuDown(real) (ignore its own errors) and rethrow the original error. Remove the replace: true option. stop stays () => gpuDown(real). Do not edit tests.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

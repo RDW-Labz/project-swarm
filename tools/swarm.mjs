@@ -34,6 +34,7 @@ import { MODEL_RATES } from './rates.mjs';
 import { collectInbox } from './inbox.mjs';
 import { runGpuCommand } from './gpu-commands.mjs';
 import { parseUncovered, ignoreUncovered } from './uncovered-tests.mjs';
+import { createTestChecker } from './best-of.mjs';
 import { runBrainCommand, createProjectBrain, triageRun, preflightManifest, brainStats, brainSettings } from './brain-commands.mjs';
 import { readBacklog, nextStartable, markStarted as markBacklogStarted } from './backlog.mjs';
 import { pendingNotifications, macNotify } from './notify.mjs';
@@ -1448,9 +1449,10 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     // Unknown command/provider fields cannot create an execution path.
     if (job.type === 'lead') validateLeadArea(job);
     else if (job.area !== undefined) fail(`lead-area-invalid: Job ${job.id}: area requires type lead`, 'lead-area-invalid');
-    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext', 'batch', 'contract', 'acceptance'];
+    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext', 'batch', 'contract', 'acceptance', 'bestOf'];
     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
     if (job.batch !== undefined && typeof job.batch !== 'boolean') fail(`Job ${job.id}: batch must be true or false`, 'batch-invalid');
+    if (job.bestOf !== undefined && (!Number.isInteger(job.bestOf) || job.bestOf < 1 || job.bestOf > 8 || !['rented', 'auto'].includes(job.agent))) fail(`Job ${job.id}: bestOf must be a whole number from 1 to 8, and only for the rented lane`, 'bestof-invalid');
     if (job.contract !== undefined && (typeof job.contract !== 'string' || !job.contract.trim() || job.contract.length > 200 || !Array.isArray(job.context) || !job.context.includes(job.contract))) fail(`Job ${job.id}: contract must name a file that is also in context`, 'contract-invalid');
     if (job.acceptance !== undefined && (!Array.isArray(job.acceptance) || job.acceptance.length > 20 || job.acceptance.some(item => typeof item !== 'string' || !item.trim() || item.length > 300))) fail(`Job ${job.id}: acceptance must be a list of at most 20 non-empty strings of at most 300 characters`, 'acceptance-invalid');
     if (job.cacheContext !== undefined) {
@@ -3210,7 +3212,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
               const providerMessage=extraCliMessage(job,context);
               await write(root,`${directory}/${job.id}/message.txt`,providerMessage,true);
               result=await execute(job,workspaceRoot,providerMessage,{spawnImpl,signal,cancelled,killImpl,onOutput:tracker.onOutput});
-            } else result=await executeApi(apiJob, context, { fetchImpl: async (...args) => { if (args[0] !== OPENROUTER_MODELS_URL) adapterStarted = true; if (batched && args[0] === ANTHROPIC_ENDPOINT) return batchCollector.submit(JSON.parse(args[1].body), { id: job.id, signal: args[1].signal, onSent: sent => { record.batchId = sent.batchId; record.batchCustomId = sent.customId; queueSave().catch(() => {}); } }); if (batched && args[0] !== OPENROUTER_MODELS_URL) fail('batch-endpoint-mismatch: a batch job would have been sent as an ordinary request', 'batch-endpoint-mismatch'); return (fetchImpl ?? fetch)(...args); }, env, signal, cancelled, skillsBlock: skillsBlockText, onFinishReason: async finishReason => { record.finishReason = finishReason; await queueSave(); } });
+            } else result=await executeApi(apiJob, context, { fetchImpl: async (...args) => { if (args[0] !== OPENROUTER_MODELS_URL) adapterStarted = true; if (batched && args[0] === ANTHROPIC_ENDPOINT) return batchCollector.submit(JSON.parse(args[1].body), { id: job.id, signal: args[1].signal, onSent: sent => { record.batchId = sent.batchId; record.batchCustomId = sent.customId; queueSave().catch(() => {}); } }); if (batched && args[0] !== OPENROUTER_MODELS_URL) fail('batch-endpoint-mismatch: a batch job would have been sent as an ordinary request', 'batch-endpoint-mismatch'); return (fetchImpl ?? fetch)(...args); }, env, signal, cancelled, skillsBlock: skillsBlockText, bestOfCheck: apiJob.agent === 'rented' && apiJob.bestOf !== 1 ? createTestChecker({ root }) : null, onFinishReason: async finishReason => { record.finishReason = finishReason; await queueSave(); } });
             attemptResult = result;
             await applyEnvelope();
           }

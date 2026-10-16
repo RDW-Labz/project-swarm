@@ -50,10 +50,12 @@ export function rankResults(results) {
 
 // candidates: [{ label, model, quant, args, extra }]; deps:
 //   start(candidate) -> { endpoint, stop() }   one replica on one GPU, healthy when it returns
-//   benchmark({ endpoint, model, candidate }) -> { passed, total, tasks? }   our own tasks (lane benchmark + evals)
+//   benchmark({ endpoint, model, candidate, bestOf }) -> { passed, total, tasks? }   (run once per best-of count)
+//   cacheStats({ endpoint }) -> { hitRate } | null   vLLM prefix-cache hit rate after the run
+//   our own tasks (lane benchmark + evals)
 //   throughput({ endpoint, model, level }) -> measureThroughput result
-export async function runBakeoff({ candidates, hourlyUsd, capUsd, levels = LEVELS, includeExtra = false }, deps) {
-  const { start, benchmark, throughput, now = Date.now, log = () => {} } = deps;
+export async function runBakeoff({ candidates, hourlyUsd, capUsd, levels = LEVELS, includeExtra = false, bestOf = [1, 3] }, deps) {
+  const { start, benchmark, throughput, cacheStats = async () => null, now = Date.now, log = () => {} } = deps;
   const ordered = [...candidates.filter(item => item.quant !== 'nvfp4' && !item.extra), ...(includeExtra ? candidates.filter(item => item.quant === 'nvfp4' || item.extra) : [])];
   const results = [];
   let spent = 0;
@@ -64,12 +66,17 @@ export async function runBakeoff({ candidates, hourlyUsd, capUsd, levels = LEVEL
     try {
       replica = await start(candidate, { remainingUsd: capUsd - spent });
       log(`${candidate.label}: server up, running our tasks`);
-      const bench = await benchmark({ endpoint: replica.endpoint, model: candidate.model, candidate });
+      // Best-of-N: the same tasks at N=1 and at N=3 (default) show what picking the best of N copies is worth. Ranking uses N=1.
+      const counts = [...new Set([1, ...bestOf])].sort((a, b) => a - b);
+      const byBestOf = [];
+      for (const n of counts) { const run = await benchmark({ endpoint: replica.endpoint, model: candidate.model, candidate, bestOf: n }); byBestOf.push({ n, passed: run.passed, total: run.total, passRate: run.total ? run.passed / run.total : 0 }); }
+      const bench = byBestOf[0];
       const measured = [];
       for (const level of levels) { log(`${candidate.label}: ${level} agents`); measured.push(await throughput({ endpoint: replica.endpoint, model: candidate.model, level })); }
+      const cache = await cacheStats({ endpoint: replica.endpoint });
       const hours = (now() - began) / 3600000;
       const costUsd = r4(hours * hourlyUsd);
-      results.push({ label: candidate.label, model: candidate.model, quant: candidate.quant, passed: bench.passed, total: bench.total, passRate: bench.total ? bench.passed / bench.total : 0, levels: measured, agentsPerGpu: agentsPerGpu(measured), minutes: r2(hours * 60), costUsd, costPerPassUsd: bench.passed > 0 ? r4(costUsd / bench.passed) : null });
+      results.push({ byBestOf, cacheHitRate: cache?.hitRate ?? null, label: candidate.label, model: candidate.model, quant: candidate.quant, passed: bench.passed, total: bench.total, passRate: bench.total ? bench.passed / bench.total : 0, levels: measured, agentsPerGpu: agentsPerGpu(measured), minutes: r2(hours * 60), costUsd, costPerPassUsd: bench.passed > 0 ? r4(costUsd / bench.passed) : null });
       spent += costUsd;
     } catch (error) {
       spent += ((now() - began) / 3600000) * hourlyUsd;
@@ -85,17 +92,17 @@ const usd = value => (value === null || value === undefined ? 'n/a' : `$${value.
 
 export function renderBakeoff({ ranked, spentUsd }, { hourlyUsd, gpu = 'one GPU', date = new Date().toISOString().slice(0, 10), evalTasks = 0, levels = LEVELS } = {}) {
   const rows = ranked.map((item, n) => (item.error
-    ? `| ${n + 1} | ${item.label} | ${item.quant ?? ''} | failed: ${item.error} | | | | | |`
-    : `| ${n + 1} | ${item.label} | ${item.quant} | ${item.passed}/${item.total} (${Math.round(item.passRate * 100)}%) | ${item.levels.map(entry => entry.tokPerSec).join(' / ')} | ${item.levels.map(entry => entry.tokPerSecPerAgent).join(' / ')} | ${item.agentsPerGpu} | ${usd(item.costPerPassUsd)} | ${item.minutes} min, ${usd(item.costUsd)} |`));
+    ? `| ${n + 1} | ${item.label} | ${item.quant ?? ''} | failed: ${item.error} | | | | | | | |`
+    : `| ${n + 1} | ${item.label} | ${item.quant} | ${item.passed}/${item.total} (${Math.round(item.passRate * 100)}%) | ${(item.byBestOf ?? []).filter(entry => entry.n > 1).map(entry => `N=${entry.n}: ${entry.passed}/${entry.total}`).join(', ') || 'n/a'} | ${item.cacheHitRate === null || item.cacheHitRate === undefined ? 'n/a' : `${Math.round(item.cacheHitRate * 100)}%`} | ${item.levels.map(entry => entry.tokPerSec).join(' / ')} | ${item.levels.map(entry => entry.tokPerSecPerAgent).join(' / ')} | ${item.agentsPerGpu} | ${usd(item.costPerPassUsd)} | ${item.minutes} min, ${usd(item.costUsd)} |`));
   return `# GPU bake-off
 
 Run ${date} on ${gpu} at $${hourlyUsd}/h. Models are ranked on OUR tasks (the lane benchmark${evalTasks ? ` plus ${evalTasks} eval-set tasks` : '; the lessons eval set does not exist yet (Phase 15), so it is not included'}), not vendor SWE-bench numbers. FP8 first; NVFP4 only as an extra run.
 
-| Rank | Model | Quant | Pass rate | Total tok/s at ${levels.join(' / ')} agents | tok/s per agent | Agents per GPU | Cost per passing task | Time, cost |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Rank | Model | Quant | Pass rate (N=1) | Best-of-N pass rate | Prefix cache hit | Total tok/s at ${levels.join(' / ')} agents | tok/s per agent | Agents per GPU | Cost per passing task | Time, cost |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 ${rows.join('\n')}
 
-Agents per GPU is the highest tested level with under 5% errors and at least 10 tokens/s for each agent. Cost per passing task is the model's whole slot on the node (load, our tasks, throughput) at the hourly price, divided by tasks passed. Total spent on the node during the bake-off: ${usd(spentUsd)}.
+Best-of-N asks the server for N answers per task, runs the task's visible tests on each, and keeps the smallest passing one (hidden tests then score it). Prefix cache hit is vLLM's own counter after the run (the project's shared files are sent first so agents reuse them). Agents per GPU is the highest tested level with under 5% errors and at least 10 tokens/s for each agent. Cost per passing task is the model's whole slot on the node (load, our tasks, throughput) at the hourly price, divided by tasks passed. Total spent on the node during the bake-off: ${usd(spentUsd)}.
 `;
 }
 

@@ -129,7 +129,7 @@ function tokensOf(job) {
 }
 
 // Runs one lane's ten jobs with the given runner and returns the results (nothing is merged).
-export function runLane({ lane, repo, runner, maxUsd = 0.5, baseInfo, model, log = () => {} }) {
+export function runLane({ lane, repo, runner, maxUsd = 0.5, baseInfo, model, bestOf = 1, log = () => {} }) {
   const base = LANES[lane];
   if (!base) throw new Error(`unknown lane ${lane}`);
   const spec = model ? { ...base, model } : base;
@@ -140,7 +140,7 @@ export function runLane({ lane, repo, runner, maxUsd = 0.5, baseInfo, model, log
       id: task.id, agent: spec.agent, model: spec.model, ...(spec.paid && spec.agent === 'anthropic' ? { sensitive: true } : {}), ...(spec.sensitive === false ? { sensitive: false } : {}),
       prompt: task.prompt, context: spec.agent === 'rented' ? [...task.context, RENTED_CONTRACT_FILE] : task.context, outputs: task.outputs, timeoutMs: 900000,
       // The rented lane takes only jobs with their exact files, a contract file and acceptance tests.
-      ...(spec.agent === 'rented' ? { contract: RENTED_CONTRACT_FILE, acceptance: ['the repo tests that already exist keep passing', 'the behaviour the task prompt states (checked by hidden tests after the run)'] } : {}),
+      ...(spec.agent === 'rented' && bestOf > 1 ? { bestOf } : {}), ...(spec.agent === 'rented' ? { contract: RENTED_CONTRACT_FILE, acceptance: ['the repo tests that already exist keep passing', 'the behaviour the task prompt states (checked by hidden tests after the run)'] } : {}),
     })),
   };
   if (spec.agent === 'rented') fs.writeFileSync(path.join(repo, RENTED_CONTRACT_FILE), 'Change only the declared output files. Keep every exported name and signature. The existing tests must keep passing.\n');

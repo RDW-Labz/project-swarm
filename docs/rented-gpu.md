@@ -39,8 +39,15 @@ For each model it starts one server, runs our lane benchmark (10 real tasks scor
 - **tokens per second**, total and per agent, at each level;
 - **agents per GPU**: the highest tested level with under 5% errors and at least 10 tokens/s each;
 - **cost per passing task**: the model's whole slot on the node (load, our tasks, throughput) at the hourly price, divided by tasks passed.
+- **best-of-N gain**: the same tasks at N=1 and N=3 (`--best-of 1,3` is the default; `--best-of 1` skips it), and the prefix cache hit rate after the run;
 
 Models are ranked by pass rate, then cost per passing task. A model that fails to start or crashes is recorded, not fatal; no new model starts once the cap is spent. After the run, terminate the instance.
+
+## Faster and cheaper on our own GPUs
+
+**Prefix caching.** vLLM starts with `--enable-prefix-caching`. The rented lane sends the project's shared files first and the ticket's own task last, so every agent on a project reuses the cached prefix. List shared files first in a job's `context`. The bake-off and `swarm gpu status` show vLLM's own prefix-cache hit rate; target over 70% on a project run.
+
+**Best-of-N.** On this lane only (tokens are nearly free), set `bestOf` (1 to 8) on a job, or `swarm gpu up --best-of 3` for a default. The lane asks the server for N answers in one request, runs the ticket's visible tests (the test files in the job's `context`) on each in a temporary git worktree with the answer applied, and keeps the smallest passing one. If none pass, the job fails with `best-of-failed` and escalates to Haiku, then Codex, as usual. A candidate that is not valid output is skipped. With no tests in context it picks the smallest valid one. It is never used on paid API lanes.
 
 ## Using the winner: `swarm gpu up|down|status`
 

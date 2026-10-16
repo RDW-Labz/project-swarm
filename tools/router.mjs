@@ -9,6 +9,8 @@ const NON_SENSITIVE_ONLY = Object.freeze(['openrouter', 'openai', 'gemini', 'lam
 // The rented GPU lane (small fast models, one replica per GPU) takes a job only when a GPU session is running (its model is set), the job is
 // not sensitive and it carries the full contract. One failure there sends the job to Haiku, then Codex.
 export const RENTED_ESCALATION = Object.freeze(['rented', 'anthropic', 'codex']);
+const RENTED_FIRST = Object.freeze(['rented']);
+const RENTED_AFTER = Object.freeze(['anthropic', 'codex']);
 const failureLimit = agent => (agent === 'rented' ? 1 : 2);
 // `contract` is the manifest's shared contract file (a job-level one is lifted to the manifest); the job must have it in context.
 export function rentedContractProblem(job, contract = job?.contract) {
@@ -42,7 +44,7 @@ export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), fa
   const configured = agent => typeof lanes[agent]?.model === 'string';
   const accepted = agent => accepts({ ...job, agent, model: laneModel(job, agent, lanes) }) !== false;
   const useRented = configured('rented') && job.sensitive === false && rentedContractProblem(job, contract ?? job.contract) === null;
-  const order = [...new Set([...(useRented ? RENTED_ESCALATION : []), ...(Array.isArray(job.typeRoute) ? job.typeRoute : []).filter(agent => agent !== 'claude'), ...CHEAP_ORDER])];
+  const order = [...new Set([...(useRented ? RENTED_FIRST : []), ...(Array.isArray(job.typeRoute) ? job.typeRoute : []).filter(agent => agent !== 'claude'), ...(useRented ? RENTED_AFTER : []), ...CHEAP_ORDER])];
   let reason = 'cheapest healthy lane';
   let candidates;
   if (job.tier === 'expensive') {
