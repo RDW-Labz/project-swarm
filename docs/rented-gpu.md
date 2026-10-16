@@ -12,7 +12,9 @@ The cost is time, not tokens. For each run, one meter counts the hours the node 
 - the **lane's day cap** across all runs and projects (default one run's maximum, `hourlyUsd x maxHoursPerRun`; raise or lower with `dailyUsd` in the config, or `spend.lanes.rented.dailyUsd`);
 - the **hours limit** `maxHoursPerRun`.
 
-The guard runs before each rented job starts. It **warns at 80%** of any of the three (a line in the run's warnings) and **stops launching at the cap**: remaining jobs are held (`run-cap`, `lane-cap` or `rental-hours`) and the run pauses. Jobs already running are never killed, so a run can pass a cap by the cost of one job's duration. A run with no USD cap does not start rented jobs. After `rental-hours`, `swarm resume` refuses: start a new run (and shut the server down).
+The guard runs before each rented job starts. It **warns at 80%** of any of the three (a line in the run's warnings) and **stops launching at the cap**: remaining jobs are held (`run-cap`, `lane-cap` or `rental-hours`) and the run pauses. Jobs already running are never killed, and the guard looks only when a rented job is about to start (and every 10 seconds, for the warning and the shared day total), so a run can pass a cap by whatever the rental costs until the run ends: stop the run yourself if you see the warning. A run with no USD cap does not start rented jobs. After `rental-hours`, `swarm resume` refuses: start a new run (and shut the server down).
+
+Two runs using the node at the same time each meter it at the full hourly price, so they count it twice: that errs toward stopping early.
 
 **The meter does not stop the server.** The node bills until you terminate it. Set a spending alert and a hard limit at the provider too.
 
@@ -23,7 +25,7 @@ In `~/.config/project-swarm/config.json`:
 ```json
 "rentedGpu": {
   "name": "h100-node",
-  "endpoint": "http://127.0.0.1:8000",
+  "endpoint": "http://127.0.0.1:18000",
   "model": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
   "keyItem": { "service": "project-swarm", "account": "rented.api_key" },
   "hourlyUsd": 24.5,
@@ -45,7 +47,7 @@ In `~/.config/project-swarm/config.json`:
 | `dailyUsd` | The lane's day cap across runs (default `hourlyUsd x maxHoursPerRun`). |
 | `trusted` | `true` only if this is your own server and you accept your code and data going to it. A sensitive job (the default) is refused on a server that is not `trusted: true`; with `sensitive: false` a job may always use it. |
 
-`swarm doctor rented` checks that the block is valid and the Keychain key exists.
+`swarm doctor rented` checks that the block is valid and the Keychain key exists (it does not call the server; use the `curl` in step 4 and the smoke test in step 6 for that).
 
 ## Runbook: rent an 8x H100 node, serve an open model, use it, shut it down
 
@@ -54,21 +56,22 @@ Prices and names change; check the provider's current console and the model's vL
 1. **Pick the model.** An open-weights model that fits 8 x 80 GB, for example a large mixture-of-experts coder model in FP8 (Qwen3-Coder-480B-A35B-Instruct-FP8 is one), or a smaller model that needs fewer GPUs. Read its model card for the recommended vLLM or SGLang flags. Estimate the weights size (hundreds of GB for the largest).
 2. **Rent the node** (this starts billing). From a GPU cloud (Lambda, RunPod, Vast.ai, CoreWeave and others offer 8x H100): on-demand, one 8x H100 80 GB (SXM preferred) instance, an Ubuntu image with NVIDIA drivers and Docker (most have them), at least 1 TB of NVMe disk (more for the largest models), a **dedicated ssh key** for this. Write down the instance id, the region and the hourly price, and put that price in `hourlyUsd`.
 3. **Lock it down.** Open only ssh (port 22) in the provider's firewall, ideally from your IP. Do not expose port 8000.
-4. **Start the server** (ssh in). Generate a key and keep it for step 5: `openssl rand -hex 24`. Then, for example with vLLM in Docker (flags change between releases; follow the model card):
+4. **Start the server** (ssh in; first check the host key fingerprint against the provider's console). Generate a key and keep it for step 5: `openssl rand -hex 24`. Put it in a private env file instead of the command line, so it is not in shell history or `docker ps`: `install -m 600 /dev/null ~/vllm.env && echo "VLLM_API_KEY=<the key>" > ~/vllm.env`. Then, for example with vLLM in Docker (flags change between releases; follow the model card):
 
    ```
-   export RENTED_KEY=<the key you generated>
    docker run -d --name vllm --gpus all --ipc=host -p 127.0.0.1:8000:8000 \
+     --env-file ~/vllm.env \
      -v /data/hf:/root/.cache/huggingface \
      vllm/vllm-openai:latest \
      --model Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 \
      --served-model-name Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 \
-     --tensor-parallel-size 8 --enable-expert-parallel --max-model-len 65536 \
-     --api-key "$RENTED_KEY"
+     --tensor-parallel-size 8 --enable-expert-parallel --max-model-len 65536
    ```
 
-   The first start downloads and loads the weights (many minutes). Watch `docker logs -f vllm` until it says the application started, then, on the node: `curl -s -H "Authorization: Bearer $RENTED_KEY" http://127.0.0.1:8000/v1/models` lists the model. A gated model needs a Hugging Face token (`-e HF_TOKEN`) on the server only, never in a swarm repo. SGLang works the same way (`python -m sglang.launch_server --model-path ... --tp 8 --api-key ...`).
-5. **Connect.** On your Mac, open a tunnel: `ssh -N -L 8000:127.0.0.1:8000 -i ~/.ssh/<that key> ubuntu@<node ip>` (leave it running). Store the key in the Keychain: `security add-generic-password -s project-swarm -a rented.api_key -w` (it asks for the key, so it is not in your shell history). Add the `rentedGpu` block above (`endpoint` `http://127.0.0.1:8000`, `model` the served name, `hourlyUsd` from step 2). Run `swarm doctor rented`.
+   (vLLM reads the key from `VLLM_API_KEY`.)
+
+   The first start downloads and loads the weights (many minutes). Watch `docker logs -f vllm` until it says the application started, then, on the node: `curl -s -H "Authorization: Bearer $(cut -d= -f2 ~/vllm.env)" http://127.0.0.1:8000/v1/models` lists the model. A gated model needs a Hugging Face token (`-e HF_TOKEN`) on the server only, never in a swarm repo. SGLang works the same way (`python -m sglang.launch_server --model-path ... --tp 8 --api-key ...`).
+5. **Connect.** On your Mac, open a tunnel: `ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:18000:127.0.0.1:8000 -i ~/.ssh/<that key> ubuntu@<node ip>` (leave it running; `ExitOnForwardFailure` and an unusual local port keep another program on your Mac from answering instead, and the endpoint below uses that port). Store the key in the Keychain: `security add-generic-password -s project-swarm -a rented.api_key -w` (it asks for the key, so it is not in your shell history). Add the `rentedGpu` block above (`endpoint` `http://127.0.0.1:18000`, `model` the served name, `hourlyUsd` from step 2). Run `swarm doctor rented`.
 6. **Smoke test**, cheap: a manifest with one job, `agent: "rented"`, `model` the served name, `sensitive: false`, then `swarm run smoke.json --max-usd 2`. `swarm inspect RUN` shows the `rental` (hours and dollars) beside the jobs.
 7. **Use it.** Put `agent: "rented"` on the jobs that should run there, always with a run cap (`--max-usd`, or `go --max-usd`). Watch the 80% warning. Finish the work in one sitting: the meter, the day cap and the hours limit all assume you will.
 8. **Shut it down, every time.** Stop the swarm runs; close the tunnel; `docker rm -f vllm`; then **terminate the instance in the provider's console** (a stopped instance often still bills for the reserved GPUs; terminate unless the provider says otherwise); delete any attached volume you do not need; check the billing page shows the instance gone; rotate the key (delete the Keychain item, make a new one next time).

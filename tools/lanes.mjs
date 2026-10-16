@@ -72,6 +72,8 @@ export function resolveLanes({ config = {}, manifest = {} } = {}) {
     }
   }
   // adaptive: true (or a partial object) is filled in from the lane's concurrency once every override is applied.
+  // Overrides in a manifest or the lanes config can lower the rented lane, never lift it past the ceiling rentedGpu names.
+  if (rented) { lanes.rented.concurrency = Math.min(lanes.rented.concurrency, rented.concurrency); if (lanes.rented.adaptive && typeof lanes.rented.adaptive === 'object') lanes.rented.adaptive.start = Math.min(lanes.rented.adaptive.start ?? 4, lanes.rented.concurrency); }
   for (const agent of LANE_AGENTS) {
     const adaptive = lanes[agent].adaptive;
     if (object(adaptive) && Object.keys(adaptive).every(key => ['start', 'min'].includes(key))) lanes[agent].adaptive = { min: adaptive.min ?? 1, start: adaptive.start ?? Math.max(adaptive.min ?? 1, Math.min(8, lanes[agent].concurrency)) };

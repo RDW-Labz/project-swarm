@@ -124,3 +124,27 @@ test('doctor rented reports configured only with a config block and a key', asyn
   const none = await fixture(t, null);
   assert.equal((await doctor({ agent: 'rented', env: none.env })).configured, false);
 });
+
+test('review fixes: the rental is split into one store entry per UTC day, so a run over midnight counts on both days', async t => {
+  const f = await fixture(t), clock = { t: Date.UTC(2030, 0, 1, 23, 50, 0) }, s = server(clock, 20);
+  const state = await runManifest(f.root, { version: 1, concurrency: 1, budget: { maxUsd: 1000 }, jobs: [job(0), job(1)] }, { ...options(f, s.fetchImpl, clock), id: 'midnight' });
+  assert.equal(state.status, 'complete');
+  const store = JSON.parse(await fs.readFile(path.join(f.env.SWARM_SPEND_DIR, 'daily.json'), 'utf8'));
+  const entries = Object.entries(store.entries).filter(([, entry]) => entry.jobId === 'rental');
+  const byDay = Object.fromEntries(entries.map(([key, entry]) => [key.split('/').pop(), entry.usd]));
+  assert.deepEqual(Object.keys(byDay).sort(), ['2030-01-01', '2030-01-02']);
+  assert.ok(byDay['2030-01-01'] > 0 && byDay['2030-01-02'] > 0);
+  assert.ok(Math.abs(byDay['2030-01-01'] + byDay['2030-01-02'] - state.rental.usd) < 0.05, `${JSON.stringify(byDay)} vs ${state.rental.usd}`);
+});
+
+test('review fixes: ask never uses the rented lane; manifest lane overrides cannot lift it past the config ceiling', async t => {
+  const { resolveLanes } = await import('../tools/lanes.mjs');
+  const lanes = resolveLanes({ config: { rentedGpu: rentedGpu({ concurrency: 8 }) }, manifest: { lanes: { rented: { concurrency: 100 } } } });
+  assert.equal(lanes.rented.concurrency, 8);
+  assert.ok(lanes.rented.adaptive.start <= 8);
+  assert.equal(resolveLanes({ config: { rentedGpu: rentedGpu({ concurrency: 8 }) }, manifest: { lanes: { rented: { concurrency: 3 } } } }).rented.concurrency, 3);
+  const f = await fixture(t);
+  const { spawnSync } = await import('node:child_process');
+  const result = spawnSync(process.execPath, ['tools/swarm.mjs', '--root', f.root, 'ask', '--model', MODEL, '--agent', 'rented', 'hello'], { encoding: 'utf8', env: { ...process.env, ...f.env } });
+  assert.notEqual(result.status, 0);
+});

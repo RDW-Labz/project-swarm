@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "id": "review-14d",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "a new paid lane billed by time: spend caps, secrets, sensitive-data routing",
+      "type": "review",
+      "prompt": "Safety review of Phase 14d (the rented-gpu lane: agent \"rented\", an OpenAI-compatible server the owner rents and starts; swarm never rents anything). Files: tools/rented.mjs (config validation, rental meter, rentalDecision, trusted rule, key reader), docs/plans/phase14d-design.md (the rules), docs/rented-gpu.md (the runbook), coordination/review/phase14d.diff (changes to lanes.mjs, spend.mjs, api-adapters.mjs, swarm.mjs, completion.mjs). Check with evidence: (1) spend: the hourly meter counted toward run and day caps; can a run overshoot beyond one job's duration, can the meter be bypassed (a run whose rented jobs start before the meter opens, resume with a fresh meter, an `auto` or `lead` job routed to rented, concurrent runs sharing the day cap through the spend-store entry, entry day/clock issues, accrueSpend never lowering, the 5 s accrual throttle, a crash that leaves no final accrual), a run with no USD cap, the 80% warning dedupe; does anything count the rental twice or lose it in rollups, runTotals, resume, ledger; (2) secrets: the API key (Keychain/env), where it could leak (errors, state, logs, ledger, headers in saved responses, the credential leak check), the endpoint URL rules (SSRF, credentials in URL, redirects, http to non-loopback), model name handling; (3) sensitive routing: `trusted: true` semantics, whether a sensitive job (default) can reach the rented server by any path (auto routing, typeRoute, lead children manifests, merge jobs, validate vs run vs go, a job with sensitive undefined, job-type presets), and non-sensitive-only lists elsewhere that now need rented; (4) adaptive concurrency and lane config from rentedGpu (ceiling, validation, interaction with manifest lanes overrides); (5) the runbook: anything unsafe or misleading (firewall, key handling, terminate vs stop, ssh tunnel). Report findings ranked high/medium/low with file and line.",
+      "context": [
+        "docs/plans/phase14d-design.md",
+        "docs/rented-gpu.md",
+        "tools/rented.mjs",
+        "coordination/review/phase14d.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 1800000
+    }
+  ]
+}

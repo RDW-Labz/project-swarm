@@ -293,7 +293,7 @@ function extract(agent, body) {
   }
   if (agent === 'lambda' || agent === 'rented') {
     const choice = body.choices?.[0];
-    if (body.choices?.length !== 1 || choice?.finish_reason !== 'stop' || choice.message?.tool_calls?.length || choice.message?.refusal || typeof choice.message?.content !== 'string') fail('Lambda response incomplete, refused, truncated, or unexpected');
+    if (body.choices?.length !== 1 || choice?.finish_reason !== 'stop' || choice.message?.tool_calls?.length || choice.message?.refusal || typeof choice.message?.content !== 'string') fail(`${agent === 'rented' ? 'Rented server' : 'Lambda'} response incomplete, refused, truncated, or unexpected`);
     return { text: choice.message.content, actualModel: modelName(body.model), usage: numericUsage(body.usage) };
   }
   if (body.done !== true || body.done_reason === 'length' || body.error || typeof body.message?.content !== 'string' || body.message?.tool_calls?.length) fail('Ollama response incomplete or unexpected');

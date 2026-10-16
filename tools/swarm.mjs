@@ -2710,12 +2710,18 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
   const rentalView = rentalMeter ? { usd: () => rentalPrior.usd + rentalMeter.usd(), hours: () => rentalPrior.hours + rentalMeter.hours() } : null;
   const rentalKey = `${crypto.createHash('sha256').update(root).digest('hex').slice(0, 12)}/${id}/rental`;
   const rentalWarned = new Set();
-  let lastAccrual = -Infinity;
+  let lastAccrual = -Infinity, accruedTotal = 0, rentalTicker = null;
+  const dayBases = new Map();
+  const utcToday = () => new Date(now()).toISOString().slice(0, 10);
+  // One store entry per UTC day, each holding only what was accrued that day, so the day total is right across midnight and resumes.
   const accrueRental = async (force = false) => {
     if (!rentalView || (!force && !rentalMeter.isOpen())) return;
     if (!force && performance.now() - lastAccrual < 5000) return;
     lastAccrual = performance.now();
-    await accrueSpend({ dir: spendDirectory, key: rentalKey, lane: 'rented', runId: id, root, jobId: 'rental', usd: rentalView.usd(), now }).catch(() => {});
+    const day = utcToday(), total = rentalView.usd();
+    if (!dayBases.has(day)) dayBases.set(day, accruedTotal);
+    accruedTotal = Math.max(accruedTotal, total);
+    await accrueSpend({ dir: spendDirectory, key: `${rentalKey}/${day}`, lane: 'rented', runId: id, root, jobId: 'rental', usd: Math.max(0, total - dayBases.get(day)), now }).catch(() => {});
   };
   const reservedRunTotals = () => {
     const totals = runTotals(state);
@@ -2728,17 +2734,30 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
     }
     return totals;
   };
-  const rentalGate = async () => {
-    rentalMeter.open();
-    await accrueRental();
+  // Checked at every rented launch and every 10 s while the node is in use: the warning must not wait for the next launch.
+  const evaluateRental = async () => {
     const runUsd = reservedRunTotals().usd - rentalView.usd();
-    const laneTodayUsd = await withSpendStore(store => (laneDayTotals(store, { day: new Date(now()).toISOString().slice(0, 10) }).rented?.usd ?? 0) - (store.entries[rentalKey]?.usd ?? 0), { dir: spendDirectory, now });
-    const { decision, warning } = rentalDecision({ meter: rentalView, config: rentedConfig, budget: state.budget, runUsd, laneTodayUsd, warnAt: RENTED_DEFAULTS.warnAt });
-    if (warning) {
-      const level = Math.floor(Number(/(\d+)%/.exec(warning)?.[1] ?? 0) / 10);
-      if (!rentalWarned.has(level)) { rentalWarned.add(level); manifestWarnings.push(warning); }
+    const own = `${rentalKey}/${utcToday()}`;
+    const laneTodayUsd = await withSpendStore(store => (laneDayTotals(store, { day: utcToday() }).rented?.usd ?? 0) - (store.entries[own]?.usd ?? 0), { dir: spendDirectory, now });
+    const result = rentalDecision({ meter: rentalView, config: rentedConfig, budget: state.budget, runUsd, laneTodayUsd, warnAt: RENTED_DEFAULTS.warnAt });
+    if (result.warning) {
+      const label = /% of the (run cap|lane day cap|hours limit)/.exec(result.warning)?.[1] ?? 'cap';
+      const band = Math.floor(Number(/(\d+)%/.exec(result.warning)?.[1] ?? 0) / 10);
+      const mark = `${label}:${band}`;
+      if (!rentalWarned.has(mark)) { rentalWarned.add(mark); manifestWarnings.push(result.warning); }
     }
-    return decision;
+    return result.decision;
+  };
+  const rentalGate = async () => {
+    if (!rentalMeter) return { reason: 'run-cap', message: 'spend-cap: the rented lane is not configured (rentedGpu)', spent: 0, cap: null };
+    rentalMeter.open();
+    rentalTicker ??= setInterval(() => { accrueRental(true).then(evaluateRental).catch(() => {}); }, 10000);
+    await accrueRental();
+    return evaluateRental();
+  };
+  const stopRental = async () => {
+    if (rentalTicker) { clearInterval(rentalTicker); rentalTicker = null; }
+    if (rentalMeter) { rentalMeter.close(); await accrueRental(true); }
   };
   const routeHealth = totals => agent => capDecision({ budget: { ...state.budget, maxUsd: null, maxTokens: null }, run: {}, laneToday: totals, agent }) ? { state: 'paused' } : scheduler.health(agent);
   if (!state.worktreesBase && worktreeConfig.worktreesOutsideRoot !== false && manifest.jobs.some(usesWorktree)) state.worktreesBase = await worktreesBaseFor(root, worktreeConfig, { env });
@@ -3455,14 +3474,14 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
     }
     await Promise.all(workers);
     batchCollector?.close();
-    if (rentalMeter) { rentalMeter.close(); await accrueRental(true); }
+    await stopRental();
     activity.stop();
     await activity.settle();
     state.status = state.jobs.some(job=>job.cleanupError) ? 'failed' : state.jobs.every(job => job.status === 'complete') ? 'complete' : state.jobs.some(job => job.status === 'cancelled') ? 'cancelled' : 'failed';
   } catch (error) {
     cleanup.abort();
     await batchCollector?.cancelAll().catch(() => {});
-    if (rentalMeter) { rentalMeter.close(); await accrueRental(true); }
+    await stopRental();
     activity.stop();
     await Promise.allSettled(workers);
     // Workers and throttled writes are drained before publishing terminal failure.
@@ -5930,7 +5949,8 @@ export function resolveAskRoute(options = {}, config = {}) {
     agent ??= 'claude';
     if (!validPair({ agent, model })) invalid();
   }
-  if (agent === 'claude' || API_AGENTS.includes(agent)) return { agent, model };
+  // `ask` never goes to the rented lane: it has no run, no run cap and no meter there.
+  if (agent === 'claude' || (API_AGENTS.includes(agent) && agent !== 'rented')) return { agent, model };
   const unconfigured = () => fail(`ask-agent-fallback-unconfigured: no unique supported fallback for ${agent}/${model}; select --tier and configure tiers.<tier>.fallback with agent and model`, 'ask-agent-fallback-unconfigured');
   // Field lesson #417: a read-only ask starts when the named model is available, fallback or
   // not. With no read-only fallback configured (no matching tier, or a tier without `fallback`),
@@ -5949,7 +5969,7 @@ export function resolveAskRoute(options = {}, config = {}) {
   const configured = config.tiers[tier];
   const fallback = configured.fallback;
   if (fallback === undefined) return direct(tier);
-  if (!validPair(fallback) || Object.keys(fallback).some(key => !['agent', 'model'].includes(key)) || (fallback.agent !== 'claude' && !API_AGENTS.includes(fallback.agent))) unconfigured();
+  if (!validPair(fallback) || Object.keys(fallback).some(key => !['agent', 'model'].includes(key)) || (fallback.agent !== 'claude' && (!API_AGENTS.includes(fallback.agent) || fallback.agent === 'rented'))) unconfigured();
   const route = { tier, requestedAgent: agent, requestedModel: model, agent: fallback.agent, model: fallback.model };
   const warning = `ask-agent-fallback: ${agent}/${model} -> ${fallback.agent}/${fallback.model} (tier ${tier}); using configured read-only fallback`;
   return { agent: fallback.agent, model: fallback.model, route, warning };
