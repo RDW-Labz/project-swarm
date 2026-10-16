@@ -188,7 +188,9 @@ test('cancel removes scratch dir but keeps failed-job dirs', async t => {
     platform: 'darwin', env, id,
     onState: s => {
       const writer = s.jobs.find(j => j.id === 'writer');
-      if (!cancelTriggered && writer?.status === 'failed') { cancelTriggered = true; cancelRun(root, id).catch(() => {}); }
+      const slow = s.jobs.find(j => j.id === 'slow');
+      // Cancel only once the slow job is really running in its worktree: under load it may not have started yet when the writer fails.
+      if (!cancelTriggered && writer?.status === 'failed' && slow?.status === 'running' && slow.worktreePath) { cancelTriggered = true; cancelRun(root, id).catch(() => {}); }
     },
     spawnImpl: (command, args, options) => {
       const isWriter = options.cwd.endsWith(path.sep + 'writer');
