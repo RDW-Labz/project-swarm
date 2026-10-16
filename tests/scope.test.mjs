@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseScope, checkScope, requirementText, scopeHash, SCOPE_TEMPLATE } from '../tools/scope.mjs';
+import { parseScope, checkScope, requirementText, scopeHash, SCOPE_TEMPLATE, isSensitiveText } from '../tools/scope.mjs';
 
 const SCOPE = [
 '# Scope: Parts Request App',
@@ -179,4 +179,43 @@ test('SCOPE_TEMPLATE parses without errors', () => {
   assert.deepEqual(s.errors, []);
   assert.equal(s.requirements.length, 1);
   assert.equal(checkScope(s).findings.filter(f => f.code === 'parse').length, 0);
+});
+
+test('isSensitiveText matches a short word like PII case-insensitively', () => {
+  const scope = { sensitive: ['PII'] };
+  assert.equal(isSensitiveText(scope, 'Stores pii data'), true);
+  assert.equal(isSensitiveText(scope, 'Contains PII.'), true);
+});
+
+test('isSensitiveText matches a whole phrase', () => {
+  const scope = { sensitive: ['customer data'] };
+  assert.equal(isSensitiveText(scope, 'The Customer Data is stored'), true);
+});
+
+test('isSensitiveText matches a separate word of a multi-word entry when it is at least 3 characters', () => {
+  assert.equal(isSensitiveText({ sensitive: ['customer records'] }, 'records only'), true);
+  assert.equal(isSensitiveText({ sensitive: ['ab cd'] }, 'ab only'), false);
+});
+
+test('isSensitiveText does not match a partial word', () => {
+  assert.equal(isSensitiveText({ sensitive: ['payments'] }, 'prepayments are due'), false);
+});
+
+test('isSensitiveText does not throw on special characters in entries', () => {
+  const scope = { sensitive: ['C++ (beta)', 'a.b*'] };
+  assert.equal(isSensitiveText(scope, 'C++ (beta) notes'), true);
+  assert.equal(isSensitiveText(scope, 'axb'), false);
+});
+
+test('isSensitiveText returns false for empty entries and empty lists', () => {
+  assert.equal(isSensitiveText({ sensitive: [''] }, 'anything'), false);
+  assert.equal(isSensitiveText({ sensitive: ['   '] }, 'anything'), false);
+  assert.equal(isSensitiveText({ sensitive: [] }, 'anything'), false);
+});
+
+test('isSensitiveText returns false for non-string text', () => {
+  const scope = { sensitive: ['PII'] };
+  assert.equal(isSensitiveText(scope, null), false);
+  assert.equal(isSensitiveText(scope, undefined), false);
+  assert.equal(isSensitiveText(scope, 123), false);
 });

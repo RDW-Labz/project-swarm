@@ -115,6 +115,57 @@ test('impactAnalysis asks for tickets for added and uncovered changed requiremen
   assert.ok(Math.abs(impact.estimate.usd - 0.006) < 1e-9);
 });
 
+test('impactAnalysis resets transitive dependents of a reopened chain of three tickets', () => {
+  const diff = diffScopes(base, edit((s) => { reqOf(s, 'R-001').text = 'A signed-in user can create a parts request quickly.'; }));
+  const tickets = [
+    { id: 'T-A', status: 'done', scopeRefs: ['R-001'] },
+    { id: 'T-B', status: 'ready', scopeRefs: ['R-002'], deps: ['T-A'] },
+    { id: 'T-C', status: 'running', scopeRefs: ['R-003'], deps: ['T-B'] },
+    { id: 'T-D', status: 'todo', scopeRefs: ['R-004'], deps: ['T-A'] },
+    { id: 'T-E', status: 'cancelled', scopeRefs: ['R-004'], deps: ['T-A'] },
+  ];
+  const impact = impactAnalysis({ diff, tickets });
+  assert.deepEqual(impact.reopen, ['T-A']);
+  assert.deepEqual(impact.dependentsReset, ['T-B', 'T-C']);
+  assert.equal(impact.estimate.dependentsReset, 2);
+});
+
+test('applyChangeOrder moves a reopened chain and its dependents back to todo and records them', () => {
+  const diff = diffScopes(base, edit((s) => { reqOf(s, 'R-001').text = 'A signed-in user can create a parts request quickly.'; }));
+  const tickets = [
+    { id: 'T-A', status: 'done', scopeRefs: ['R-001'] },
+    { id: 'T-B', status: 'ready', scopeRefs: ['R-002'], deps: ['T-A'] },
+    { id: 'T-C', status: 'running', scopeRefs: ['R-003'], deps: ['T-B'] },
+    { id: 'T-D', status: 'todo', scopeRefs: ['R-004'], deps: ['T-A'] },
+    { id: 'T-E', status: 'cancelled', scopeRefs: ['R-004'], deps: ['T-A'] },
+  ];
+  const impact = impactAnalysis({ diff, tickets });
+  const l = { version: 1, scope: null, tickets, changeOrders: [], approved: null, createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z' };
+  const next = applyChangeOrder(l, { impact, diff, reason: 'Reword R-001', by: 'owner', now: '2025-01-03T00:00:00.000Z' });
+  const status = (id) => next.tickets.find((t) => t.id === id).status;
+  assert.equal(status('T-A'), 'todo');
+  assert.equal(status('T-B'), 'todo');
+  assert.equal(status('T-C'), 'todo');
+  assert.equal(status('T-D'), 'todo');
+  assert.equal(status('T-E'), 'cancelled');
+  assert.deepEqual(next.changeOrders[0].dependentsReset, ['T-B', 'T-C']);
+  assert.equal(next.changeOrders[0].impact.dependentsReset, 2);
+  assert.equal(next.tickets.length, tickets.length);
+});
+
+test('applyChangeOrder records retagged refs as ticket and removed', () => {
+  const diff = diffScopes(base, edit((s) => dropReq(s, 'R-004')));
+  const tickets = [
+    { id: 'T-0002', status: 'ready', scopeRefs: ['R-001', 'R-004'] },
+    { id: 'T-0004', status: 'todo', scopeRefs: ['R-004', 'R-002'] },
+  ];
+  const impact = impactAnalysis({ diff, tickets });
+  const l = { version: 1, scope: null, tickets, changeOrders: [], approved: null, createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z' };
+  const next = applyChangeOrder(l, { impact, diff, reason: 'Drop CSV', by: 'owner', now: '2025-01-04T00:00:00.000Z' });
+  assert.deepEqual(next.changeOrders[0].retagged, [{ ticket: 'T-0002', removed: ['R-004'] }, { ticket: 'T-0004', removed: ['R-004'] }]);
+  assert.deepEqual(next.changeOrders[0].dependentsReset, []);
+});
+
 test('nextChangeOrderId starts at CO-001 and increments', () => {
   assert.equal(nextChangeOrderId({ changeOrders: [] }), 'CO-001');
   assert.equal(nextChangeOrderId({ changeOrders: [{ id: 'CO-001' }] }), 'CO-002');

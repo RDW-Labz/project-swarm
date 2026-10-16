@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import * as scopeModule from './scope.mjs';
 const TYPE_MAP={build:'build',migration:'build',contract:'build',test:'test',docs:'docs'};
 const RULE='Work only on the files you own; report the ticket id.';
 
@@ -7,6 +8,26 @@ function byIdMap(list){return new Map(list.map(t=>[t.id,t]));}
 function depsDone(t,byId){return (t.dependsOn||[]).every(d=>byId.get(d)?.status==='done');}
 
 function reqLookup(scope){const m=new Map();for(const r of scope?.requirements||[])m.set(r.id,r);return m;}
+
+function isSensitiveText(scope,text){
+  if(typeof scopeModule.isSensitiveText==='function')return scopeModule.isSensitiveText(scope,text);
+  const low=String(text).toLowerCase();
+  return (scope?.sensitive||[]).some(s=>{const k=String(s).trim().toLowerCase();return k!==''&&low.includes(k);});
+}
+
+function sensitiveText(t,reqs){
+  const parts=[t.title,t.epic,...(t.acceptance||[]),...(t.files||[])];
+  for(const id of t.scopeRefs||[]){
+    const r=reqs.get(id);
+    if(r)parts.push(r.text,...(r.acceptance||[]));
+  }
+  return parts.filter(x=>x!=null).join('\n');
+}
+
+function isSensitiveJob(t,scope,reqs){
+  if(!scope)return !!t.sensitive;
+  return !!t.sensitive||isSensitiveText(scope,sensitiveText(t,reqs));
+}
 
 function promptFor(t,reqs){
   const lines=['Ticket '+t.id+': '+t.title];
@@ -22,6 +43,11 @@ function promptFor(t,reqs){
 
 export function ticketsToManifest(tickets,opts={}){
   const {ledger,scope,ready=true,contract,maxJobs}=opts;
+  if(maxJobs!==undefined&&!(Number.isSafeInteger(maxJobs)&&maxJobs>0)){
+    const e=new Error('maxJobs must be a positive safe integer');
+    e.code='ticket-max-jobs';
+    throw e;
+  }
   const warnings=[],skipped=[];
   const byId=byIdMap([...(ledger?.tickets||[]),...tickets]);
   let list=ready?tickets.filter(t=>(t.status==='todo'||t.status==='ready')&&depsDone(t,byId)):tickets.slice();
@@ -43,7 +69,7 @@ export function ticketsToManifest(tickets,opts={}){
     }
     const context=[...new Set([...(t.context||[]),...(t.contracts||[])])];
     if(contract&&!context.includes(contract))context.push(contract);
-    const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:!!t.sensitive,prompt:promptFor(t,reqs),context,outputs,acceptance:t.acceptance||[],timeoutMs:600000};
+    const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:isSensitiveJob(t,scope,reqs),prompt:promptFor(t,reqs),context,outputs,acceptance:t.acceptance||[],timeoutMs:600000};
     const deps=(t.dependsOn||[]).filter(d=>inSet.has(d));
     if(deps.length)job.after=deps;
     if(t.risk==='high')job.hard=true;
@@ -61,7 +87,7 @@ export function ticketOutcome(state,ledger){
   const moves=[];
   for(const [id,s] of entries){
     if(!known.has(id))continue;
-    const st=typeof s==='string'?s:s?.state;
+    const st=typeof s==='string'?s:(s?.status??s?.state);
     const error=s?.error;
     if(st==='complete')moves.push({id,to:'review',note:'run complete'});
     else if(st==='failed'||st==='timeout')moves.push({id,to:'blocked',note:String(error||st)});

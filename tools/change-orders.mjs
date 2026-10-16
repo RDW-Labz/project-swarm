@@ -31,10 +31,43 @@ export function impactAnalysis({ diff, tickets = [] } = {}) {
     else if (hitRemoved.length) retag.push({ ticket: t.id, remove: hitRemoved });
     if ((t.status === 'done' || t.status === 'review') && r.some((x) => changed.has(x))) reopen.push(t.id);
   }
+  // Transitive dependents of reopened tickets that are not todo and not cancelled.
+  const children = new Map();
+  for (const t of live) {
+    for (const d of t.deps ?? []) {
+      if (!children.has(d)) children.set(d, []);
+      children.get(d).push(t.id);
+    }
+  }
+  const statusOf = new Map(live.map((t) => [t.id, t.status]));
+  const seen = new Set(reopen);
+  const queue = [...reopen];
+  const dependentsReset = [];
+  while (queue.length) {
+    const id = queue.shift();
+    for (const c of children.get(id) ?? []) {
+      if (seen.has(c)) continue;
+      seen.add(c);
+      queue.push(c);
+      if (statusOf.get(c) !== 'todo') dependentsReset.push(c);
+    }
+  }
   const covered = new Set(live.flatMap(refs));
   const needTickets = uniq([...(diff?.added ?? []), ...(diff?.changed ?? []).filter((id) => !covered.has(id))]);
   const affected = uniq([...cancel, ...reopen, ...retag.map((x) => x.ticket)]);
-  return { cancel, reopen, retag, needTickets, affected, estimate: { newTickets: needTickets.length, usd: needTickets.length * USD_PER_TICKET } };
+  return {
+    cancel,
+    reopen,
+    retag,
+    needTickets,
+    affected,
+    dependentsReset,
+    estimate: {
+      newTickets: needTickets.length,
+      usd: needTickets.length * USD_PER_TICKET,
+      dependentsReset: dependentsReset.length,
+    },
+  };
 }
 
 export function nextChangeOrderId(ledger) {
@@ -48,6 +81,7 @@ export function applyChangeOrder(ledger, { impact, diff, reason, by, now, scope 
   const at = now ?? new Date().toISOString();
   const cancelSet = new Set(impact.cancel ?? []);
   const reopenSet = new Set(impact.reopen ?? []);
+  const dependentsSet = new Set(impact.dependentsReset ?? []);
   const retagMap = new Map((impact.retag ?? []).map((x) => [x.ticket, new Set(x.remove ?? [])]));
   const tickets = (ledger.tickets ?? []).map((t) => {
     if (cancelSet.has(t.id)) return { ...t, status: 'cancelled' };
@@ -56,7 +90,7 @@ export function applyChangeOrder(ledger, { impact, diff, reason, by, now, scope 
       const rm = retagMap.get(t.id);
       next = { ...next, scopeRefs: (next.scopeRefs ?? []).filter((r) => !rm.has(r)) };
     }
-    if (reopenSet.has(t.id)) next = { ...next, status: 'todo' };
+    if (reopenSet.has(t.id) || dependentsSet.has(t.id)) next = { ...next, status: 'todo' };
     return next;
   });
   const diffCounts = {
@@ -70,6 +104,7 @@ export function applyChangeOrder(ledger, { impact, diff, reason, by, now, scope 
     cancel: impact.cancel?.length ?? 0,
     reopen: impact.reopen?.length ?? 0,
     retag: impact.retag?.length ?? 0,
+    dependentsReset: impact.dependentsReset?.length ?? 0,
     needTickets: impact.needTickets?.length ?? 0,
     affected: impact.affected?.length ?? 0,
     estimate: impact.estimate ?? null,
@@ -83,6 +118,8 @@ export function applyChangeOrder(ledger, { impact, diff, reason, by, now, scope 
     impact: impactCounts,
     cancelled: [...cancelSet],
     reopened: [...reopenSet],
+    dependentsReset: [...dependentsSet],
+    retagged: (impact.retag ?? []).map((x) => ({ ticket: x.ticket, removed: [...(x.remove ?? [])] })),
   };
   return {
     ...ledger,

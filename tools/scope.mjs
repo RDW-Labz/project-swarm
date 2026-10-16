@@ -122,3 +122,22 @@ export function scopeHash(markdown) {
   const norm = String(markdown ?? '').replace(/\r\n?/g, '\n').split('\n').map(l => l.replace(/[ \t]+$/, '')).join('\n');
   return createHash('sha256').update(norm, 'utf8').digest('hex');
 }
+
+const escapeRegExp = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+export function isSensitiveText(scope, text) {
+  if (typeof text !== 'string' || !Array.isArray(scope?.sensitive)) return false;
+  for (const entry of scope.sensitive) {
+    if (typeof entry !== 'string') continue;
+    const phrase = entry.trim();
+    if (!phrase) continue;
+    const words = phrase.split(/\s+/);
+    const candidates = [phrase];
+    if (words.length > 1) for (const w of words) if (w.length >= 3) candidates.push(w);
+    for (const c of candidates) {
+      const body = c.split(/\s+/).map(escapeRegExp).join('\\s+');
+      if (new RegExp('(?<![\\p{L}\\p{N}_])' + body + '(?![\\p{L}\\p{N}_])', 'iu').test(text)) return true;
+    }
+  }
+  return false;
+}

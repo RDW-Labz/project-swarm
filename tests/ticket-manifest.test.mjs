@@ -152,6 +152,17 @@ test('maxJobs caps the jobs and warns about the rest', () => {
   assert.ok(r.warnings.some(w => w.includes('over maxJobs')));
 });
 
+test('maxJobs must be a positive safe integer', () => {
+  for (const v of [0, -1, 1.5, NaN]) {
+    assert.throws(() => ticketsToManifest([ticket()], { scope, maxJobs: v }), e => e.code === 'ticket-max-jobs');
+  }
+});
+
+test('a ticket marked not sensitive becomes sensitive when its requirement names a sensitive entry', () => {
+  const { manifest } = ticketsToManifest([ticket({ scopeRefs: ['R-002'], sensitive: false })], { scope });
+  assert.equal(manifest.jobs[0].sensitive, true);
+});
+
 test('ready false includes tickets in any status', () => {
   const tickets = [ticket({ id: 'T-0001' }), ticket({ id: 'T-0002', status: 'running' })];
   const { manifest } = ticketsToManifest(tickets, { scope, ready: false });

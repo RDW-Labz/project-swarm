@@ -27,6 +27,15 @@ test('absolute and parent-relative file paths are refused', () => {
   assert.equal(T.validateTicket(ticket('T-0001', { files: ['src/../../x.mjs'] })).ok, false);
 });
 
+test('badPath refuses empty, doubled, dot, reserved and secret paths', () => {
+  const bad = ['', 'src//a.mjs', 'src/./a.mjs', '.git/config', '.swarm/project/tickets.json', '.github-hooks-free/x.mjs', '.env', 'config/.ENV', '.project-swarm.json', 'deep/.Project-Swarm.JSON'];
+  for (const p of bad) assert.equal(T.validateTicket(ticket('T-0001', { files: [p] })).ok, false, p);
+});
+
+test('ordinary paths still validate under badPath', () => {
+  for (const p of ['src/env.mjs', 'docs/.github/x.md', 'src/a.mjs']) assert.equal(T.validateTicket(ticket('T-0001', { files: [p] })).ok, true, p);
+});
+
 test('a human ticket needs steps', () => {
   assert.equal(T.validateTicket(ticket('T-0001', { type: 'human', scopeRefs: [] })).ok, false);
   const ok = T.validateTicket(ticket('T-0002', { type: 'human', scopeRefs: [], acceptance: [], steps: ['Create the account'] }));
@@ -155,4 +164,42 @@ test('approveLedger records approval without mutating the input', () => {
   assert.equal(T.isApproved(approved), true);
   assert.equal(approved.approved.scopeHash, 'abc');
   assert.equal(T.isApproved(ledger), false);
+});
+
+test('approval survives a status change', () => {
+  const approved = T.approveLedger(T.createLedger({ scope, tickets: [ticket('T-0001')], now: 0 }), { by: 'owner', now: 0 });
+  const moved = { ...approved, tickets: approved.tickets.map(t => ({ ...t, status: 'ready' })) };
+  assert.equal(T.isApproved(moved), true);
+});
+
+test('a changed acceptance line makes approval lapse', () => {
+  const approved = T.approveLedger(T.createLedger({ scope, tickets: [ticket('T-0001')], now: 0 }), { by: 'owner', now: 0 });
+  const changed = { ...approved, tickets: approved.tickets.map(t => ({ ...t, acceptance: ['it works differently'] })) };
+  assert.equal(T.isApproved(changed), false);
+});
+
+test('an added ticket makes approval lapse', () => {
+  const approved = T.approveLedger(T.createLedger({ scope, tickets: [ticket('T-0001')], now: 0 }), { by: 'owner', now: 0 });
+  const added = { ...approved, tickets: [...approved.tickets, ticket('T-0002')] };
+  assert.equal(T.isApproved(added), false);
+});
+
+test('a changed scope hash makes approval lapse', () => {
+  const approved = T.approveLedger(T.createLedger({ scope, tickets: [ticket('T-0001')], now: 0 }), { by: 'owner', now: 0 });
+  const rescoped = { ...approved, scope: { ...approved.scope, hash: 'xyz' } };
+  assert.equal(T.isApproved(rescoped), false);
+});
+
+test('an approval from an older version without ticketsHash is not approved', () => {
+  const approved = T.approveLedger(T.createLedger({ scope, tickets: [ticket('T-0001')], now: 0 }), { by: 'owner', now: 0 });
+  const old = { ...approved, approved: { at: approved.approved.at, by: 'owner', scopeHash: 'abc' } };
+  assert.equal(T.isApproved(old), false);
+});
+
+test('ticketSetHash is stable across key order and ignores status', () => {
+  const a = [ticket('T-0001'), ticket('T-0002')];
+  const b = [...a].reverse().map(t => Object.fromEntries(Object.entries(t).reverse()));
+  assert.equal(T.ticketSetHash(a), T.ticketSetHash(b));
+  assert.equal(T.ticketSetHash([ticket('T-0001')]), T.ticketSetHash([ticket('T-0001', { status: 'done', notes: 'x' })]));
+  assert.match(T.ticketSetHash(a), /^[0-9a-f]{64}$/);
 });

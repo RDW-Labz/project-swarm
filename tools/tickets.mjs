@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import fs from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import path from 'node:path';
 import { safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 
@@ -9,6 +9,9 @@ export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'co
 const RISKS = ['low', 'medium', 'high'];
 const SIZES = ['S', 'M'];
 const NEEDS_ACCEPTANCE = ['build', 'test', 'migration'];
+const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps'];
+const RESERVED_FIRST = ['.git', '.swarm', '.github-hooks-free'];
+const SECRET_NAMES = ['.project-swarm.json', '.env'];
 const MOVES = {
   todo: ['ready', 'blocked', 'cancelled'],
   ready: ['running', 'blocked', 'cancelled'],
@@ -23,7 +26,26 @@ const fail = (code, message) => Object.assign(new Error(message), { code });
 const isStrArr = v => Array.isArray(v) && v.every(s => typeof s === 'string');
 const none = v => v === undefined || v === null;
 const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-const badPath = p => p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.includes('\\') || p.split('/').includes('..');
+const canon = v => {
+  if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']';
+  if (v && typeof v === 'object') return '{' + Object.keys(v).filter(k => v[k] !== undefined).sort().map(k => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}';
+  return JSON.stringify(v);
+};
+const badPath = p => {
+  const segs = p.split('/');
+  return p === '' ||
+    p.startsWith('/') ||
+    /^[A-Za-z]:/.test(p) ||
+    p.includes('\\') ||
+    segs.some(s => s === '' || s === '.' || s === '..') ||
+    RESERVED_FIRST.includes(segs[0]) ||
+    segs.some(s => SECRET_NAMES.includes(s.toLowerCase()));
+};
+
+export function ticketSetHash(tickets) {
+  const picked = [...tickets].sort(byId).map(t => Object.fromEntries(HASH_FIELDS.map(k => [k, t[k]])));
+  return createHash('sha256').update(canon(picked)).digest('hex');
+}
 
 export function validateTicket(t) {
   const errors = [];
@@ -220,9 +242,21 @@ export function renderBuildPlan(ledger, scope) {
 }
 
 export function approveLedger(ledger, { by = 'owner', now = Date.now() } = {}) {
-  return { ...ledger, approved: { at: new Date(now).toISOString(), by, scopeHash: ledger?.scope?.hash ?? null } };
+  return {
+    ...ledger,
+    approved: {
+      at: new Date(now).toISOString(),
+      by,
+      scopeHash: ledger?.scope?.hash ?? null,
+      ticketsHash: ticketSetHash(ledger?.tickets ?? []),
+    },
+  };
 }
 
 export function isApproved(ledger) {
-  return Boolean(ledger?.approved?.at);
+  const a = ledger?.approved;
+  return Boolean(a?.at) &&
+    a.scopeHash === (ledger?.scope?.hash ?? null) &&
+    typeof a.ticketsHash === 'string' &&
+    a.ticketsHash === ticketSetHash(ledger?.tickets ?? []);
 }

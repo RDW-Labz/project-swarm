@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.81.0
+
+- Phase 13, scope to tickets to swarm: `swarm scope template|check|split|approve|sync|contracts`, `swarm tickets`, `swarm change "reason"` and `swarm go --scope`. One scope file becomes a ticket ledger (`.swarm/project/tickets.json`, with an append-only log); integrity checks (every requirement covered, every ticket traced, no two parallel tickets on one file, no cycles, sizes S or M); you approve the plan once; `go --scope` runs the ready tickets in waves; change orders cancel, reopen and add tickets without losing history.
+- Contracts first: an OpenAPI 3 file generates types, validators, a client, a mock API with seed data and contract tests (they run against the mock and the real API).
+- Day 0 checklist of outside services (payments, domain, email, app stores, ...) as human tickets; profile `approval` block (human approvals, change-order limit, budget); `swarm brief` shows ticket progress. Design and details: docs/scope.md and docs/plans/phase13-design.md.
+- A Claude Opus review (18 findings) was fixed before release: a merge clears the approval; the approval covers the ticket set and the scope hash; go --scope refuses a missing or changed scope file and takes a lock; sensitive detection reads requirement text and short words; writes never follow a symlink at the target; hostile OpenAPI names are rejected before any code is generated; split files are size and shape checked; change orders reset dependents of reopened tickets.
+- Built through the swarm: the nine modules and their tests were worker jobs; the command glue, wiring and review fixes were hand work (see docs/state/dogfood.md).
+
 ## 1.80.0
 
 - A1 follow-up: every integration is gated (plain `integrate` runs the gate on the planned writes before the first write, so there is no bypass; a block writes nothing and fails with `security-gate-blocked`); the code scan runs offline for every project, sensitive or not, with pinned local Semgrep rules (`tools/security-rules/semgrep-local.yml`, 15 rules, sha256 pinned in the code), metrics off, no network (`codeScan`: `local` default, `auto`, `off`); a change to a pnpm, yarn, Go, Cargo, Python, PHP, Ruby or JVM manifest or lockfile blocks the batch (`unsupported-manifest`) with an inbox item until the owner allows it (`allowUnparsedManifests`).
