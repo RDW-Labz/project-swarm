@@ -7,7 +7,8 @@ import { isBookkeepingJob } from './openrouter.mjs';
 const NON_SENSITIVE_ONLY = Object.freeze(['openrouter', 'openai', 'gemini', 'lambda', 'rented']);
 
 // The rented GPU lane (small fast models, one replica per GPU) takes a job only when a GPU session is running (its model is set), the job is
-// not sensitive and it carries the full contract. One failure there sends the job to Haiku, then Codex.
+// not sensitive, the run has enough ready auto jobs and the job carries the full contract. One failure there sends the job to Haiku, then Codex.
+export const RENTED_MIN_READY = 700;
 export const RENTED_ESCALATION = Object.freeze(['rented', 'anthropic', 'codex']);
 const RENTED_FIRST = Object.freeze(['rented']);
 const RENTED_AFTER = Object.freeze(['anthropic', 'codex']);
@@ -34,7 +35,7 @@ export const ROUTE_ORDER = Object.freeze([...CHEAP_ORDER, 'claude']);
 const ANTHROPIC_MID_MODEL = 'claude-sonnet-5-5';
 const laneModel = (job, agent, lanes) => (agent === 'anthropic' && job.tier === 'mid' ? ANTHROPIC_MID_MODEL : lanes[agent].model);
 
-export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), failures = {}, accepts = () => true, contract } = {}) {
+export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), failures = {}, accepts = () => true, contract, ready = 0 } = {}) {
   if (job?.agent !== 'auto') {
     const error = new Error('route-invalid: job.agent must be auto');
     error.code = 'route-invalid';
@@ -43,9 +44,11 @@ export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), fa
 
   const configured = agent => typeof lanes[agent]?.model === 'string';
   const accepted = agent => accepts({ ...job, agent, model: laneModel(job, agent, lanes) }) !== false;
-  const useRented = configured('rented') && job.sensitive === false && rentedContractProblem(job, contract ?? job.contract) === null;
-  const order = [...new Set([...(useRented ? RENTED_FIRST : []), ...(Array.isArray(job.typeRoute) ? job.typeRoute : []).filter(agent => agent !== 'claude'), ...(useRented ? RENTED_AFTER : []), ...CHEAP_ORDER])];
-  let reason = 'cheapest healthy lane';
+  const minReady = Number.isFinite(lanes.rented?.minReady) ? lanes.rented.minReady : RENTED_MIN_READY;
+  const useRented = configured('rented') && job.sensitive === false && ready >= minReady && rentedContractProblem(job, contract ?? job.contract) === null;
+  const hardCodex = job.hard === true && job.tier !== 'expensive' && configured('codex') && accepted('codex');
+  const order = [...new Set([...(hardCodex ? ['codex'] : []), ...(useRented ? RENTED_FIRST : []), ...(Array.isArray(job.typeRoute) ? job.typeRoute : []).filter(agent => agent !== 'claude'), ...(useRented ? RENTED_AFTER : []), ...CHEAP_ORDER])];
+  let reason = hardCodex ? 'hard ticket: codex first' : 'cheapest healthy lane';
   let candidates;
   if (job.tier === 'expensive') {
     reason = 'tier expensive';

@@ -35,7 +35,7 @@ import { collectInbox } from './inbox.mjs';
 import { runGpuCommand } from './gpu-commands.mjs';
 import { parseUncovered, ignoreUncovered } from './uncovered-tests.mjs';
 import { createTestChecker } from './best-of.mjs';
-import { runSecurityGate, recordGate } from './security-gate.mjs';
+import { runSecurityGate, recordGate, formatBlocks } from './security-gate.mjs';
 import { runBrainCommand, createProjectBrain, triageRun, preflightManifest, brainStats, brainSettings } from './brain-commands.mjs';
 import { readBacklog, nextStartable, markStarted as markBacklogStarted } from './backlog.mjs';
 import { pendingNotifications, macNotify } from './notify.mjs';
@@ -4982,6 +4982,19 @@ async function integrateRunLocked(root, id, options = {}) {
       if (resultShapeWarnings.length) state.resultShapeWarnings = resultShapeWarnings;
       const result = await applyQueuePlans(root, id, state, manifest, queuePlans, { batchSize, conflicts: queueConflicts, skipped: queueSkipped, noChecks, noFlakeCheck, spawnImpl, releaseIntegrationLock, securityGate, warnings: [...designWarnings, ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)] });
       return { ...result, ...(children.length ? { children } : {}) };
+    }
+    // Plain integrate has no rollback, so the security gate (same policy, same checks as the queue's) runs on the planned writes BEFORE the first one:
+    // there is no integration path without it.
+    {
+      const profile = await projectProfile(root);
+      const plainGate = await runSecurityGate({ changes: writes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: securityGate.policy ?? profile?.security, exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: profile?.sensitive !== false, fingerprintKey: await securityFingerprintKey(root), cache: new Map() });
+      if (!plainGate.ok) {
+        await recordGate({ root, runId: id, jobs: integratedJobs, gate: plainGate, appendEvent: (rootDir, event) => appendEvent(rootDir, event, { best: true }) });
+        fail(`security-gate-blocked: nothing was written. ${formatBlocks(plainGate).slice(0, 600)}`, 'security-gate-blocked');
+      }
+      const plainNotes = [...(plainGate.skipped ?? []), ...(plainGate.warnings ?? [])];
+      if (plainNotes.length) state.securityNotes = plainNotes;
+      if (plainGate.tickets?.length) state.securityTickets = plainGate.tickets;
     }
     // Every path, output, base hash, and mutants source has passed before the first project write.
     const journal = await startIntegrationJournal(root, id, 'integrate', integratedJobs, writes, releaseIntegrationLock);

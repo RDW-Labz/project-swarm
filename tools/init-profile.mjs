@@ -137,7 +137,7 @@ function validateStack(stack, errors) {
   return stack.map(({ name, packageManager }) => (packageManager === undefined ? { name } : { name, packageManager }));
 }
 
-const SECURITY_KEYS = ['enabled', 'minAgeDays', 'minWeeklyDownloads', 'blockSeverities', 'allowCopyleft', 'approvedLicenses', 'allowedSecretFingerprints', 'requireVulnerabilityScan', 'codeScan', 'codeScanSensitive'];
+const SECURITY_KEYS = ['enabled', 'minAgeDays', 'minWeeklyDownloads', 'blockSeverities', 'allowCopyleft', 'approvedLicenses', 'allowedSecretFingerprints', 'requireVulnerabilityScan', 'codeScan', 'codeScanSensitive', 'allowUnparsedManifests'];
 const SECURITY_SEVERITIES = ['low', 'medium', 'high', 'critical'];
 
 function validateSecurity(value, errors) {
@@ -182,12 +182,17 @@ function validateSecurity(value, errors) {
     else errors.push('profile.security.requireVulnerabilityScan: must be true or false');
   }
   if (value.codeScan !== undefined) {
-    if (value.codeScan === 'auto' || value.codeScan === 'off') out.codeScan = value.codeScan;
-    else errors.push("profile.security.codeScan: must be 'auto' or 'off'");
+    if (value.codeScan === 'local' || value.codeScan === 'auto' || value.codeScan === 'off') out.codeScan = value.codeScan;
+    else errors.push("profile.security.codeScan: must be 'local', 'auto' or 'off'");
   }
   if (value.codeScanSensitive !== undefined) {
     if (typeof value.codeScanSensitive === 'boolean') out.codeScanSensitive = value.codeScanSensitive;
     else errors.push('profile.security.codeScanSensitive: must be true or false');
+  }
+  if (value.allowUnparsedManifests !== undefined) {
+    if (Array.isArray(value.allowUnparsedManifests) && value.allowUnparsedManifests.length <= 50
+      && value.allowUnparsedManifests.every(entry => typeof entry === 'string' && entry.length <= 200)) out.allowUnparsedManifests = [...value.allowUnparsedManifests];
+    else errors.push('profile.security.allowUnparsedManifests: array of at most 50 strings of at most 200 characters');
   }
   return out;
 }
