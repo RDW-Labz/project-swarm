@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "id": "review-a1",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "a security gate that scans files for secrets, calls registries and blocks merges: secrets handling and bypass risk",
+      "type": "review",
+      "outputs": [],
+      "timeoutMs": 1800000,
+      "context": [
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs",
+        "tools/security-gate.mjs",
+        "docs/security-gate.md",
+        "coordination/review/a1.diff"
+      ],
+      "prompt": "Safety and correctness review of the A1 security gate (docs/security-gate.md; spec: docs/plans/swarm-more-upgrades-spec.md section A1): tools/security-scan.mjs (secret rules, audit/osv/semgrep parsers, licence check), tools/security-deps.mjs (new-dependency diff, registry checks), tools/security-gate.mjs (orchestration, recordGate: journal blocker and lessons line), and the queue wiring and profile block in coordination/review/a1.diff. Owner rules: nothing secret in lessons, logs, tickets or the inbox; the gate runs on every merge-queue batch; it blocks on a planted fake secret, a made-up package and a known-vulnerable dependency; it can only be disabled in the project profile. Check with evidence (file:line): (1) SECRETS: any path where the matched text, a line of the file, a prefix of the secret, a package version string with a token, or an error message with file content can reach a finding, a block message, a journal event, the lessons file, the queue state (state.json), the summary or a log (fingerprint = first 12 hex of sha256: is it brute-forceable for low-entropy secrets? is that acceptable?); regexes: catastrophic backtracking (ReDoS) on hostile files, false negatives for common secrets, per-file and total caps hiding real findings (a hostile batch could bury a real secret behind 3 junk findings per rule? the cap is per rule per file), binary or huge files skipped as a bypass, files whose bytes are not valid UTF-8, the swarm-secret-allow marker as a bypass (an attacker or a worker can add it to its own line: should workers be able to suppress findings?), allowedSecretFingerprints; (2) BYPASS: can a job avoid the gate (deleted files, renamed files, file in a path excluded, a package.json in a subfolder or a different manifest like yarn.lock/pnpm-lock/pyproject/Pipfile/go.mod/Cargo.toml, dependencies added by a lockfile only, npm audit run only when package-lock changes, a workspace root, scripts in package.json postinstall, git URL or file: or tarball dependencies skipping the registry check, aliases like npm:other-package@1, scoped names, uppercase names), is the policy read from the profile before the batch can influence it (a batch that rewrites .project-swarm.json to disable the gate: is that file protected/checked? the gate reads the profile from disk at queue start: is it read before the writes?), plain (non-queue) integrate not gated, requeue/merge jobs gated?; (3) REGISTRY CHECKS: SSRF or request smuggling from package names (encoding), registry response trust (a malicious or spoofed answer, huge responses, redirects, time.created manipulation), fail closed behaviour and timeouts (does fetch have a timeout so a hung registry stalls the queue?), concurrency, rate limits, the npm audit/pip-audit/osv-scanner/semgrep subprocess calls: argument injection from file names (a changed file named like an option for semgrep), cwd, timeouts, output size caps, running npm audit executes nothing from the repo? (npm audit does not run scripts but check), semgrep --config auto sends code or metrics to semgrep.dev: what does it send and is that acceptable for sensitive projects (it should not run, or run with --metrics off and a local config, on sensitive projects without the owner knowing); (4) CORRECTNESS: licence logic (OR/AND/WITH, LGPL, SPDX forms like GPL-3.0-only, deprecated names, unknown), version-change vs new dependency (an existing dependency bumped to a malicious version is not checked), dev vs prod dependencies, the batch rollback and bisect interplay (every attempt re-runs registry calls: cost/time), securityTickets and recordGate duplicates, error handling that swallows failures and returns ok (a thrown scanner = pass?). Rank high, medium, low; for each: where, how it fails, smallest fix. End with a final single line of JSON: {\"status\":\"complete\",\"summary\":\"...\",\"findings\":{\"high\":N,\"medium\":N,\"low\":N}}."
+    }
+  ]
+}
