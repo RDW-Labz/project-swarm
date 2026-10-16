@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PINNED_IMAGE, gpuUp, gpuDown, gpuStatus, formatStatus, validateUpOptions, remoteStartScript, sessionHours, parseGpuCount, readSessionFile } from '../tools/gpu.mjs';
-import { runBakeoff, measureThroughput, agentsPerGpu, renderBakeoff, selectCandidates } from '../tools/gpu-bakeoff.mjs';
+import { runBakeoff, measureThroughput, agentsPerGpu, renderBakeoff, selectCandidates, LEVELS } from '../tools/gpu-bakeoff.mjs';
 import { createBalancer, balancedFetch, loadRentedConfig, readGpuSession } from '../tools/rented.mjs';
 import { routeJob, rentedContractProblem } from '../tools/router.mjs';
 import { resolveLanes } from '../tools/lanes.mjs';
@@ -153,11 +153,13 @@ test('measureThroughput counts the server\'s tokens and errors; agentsPerGpu pic
   assert.equal(result.requests, 8); assert.equal(result.tokens, 800); assert.equal(result.errors, 0);
   const failing = await measureThroughput({ endpoint: 'http://x', model: 'm', level: 2, rounds: 1, fetchImpl: async () => ({ ok: false }), now: () => 0 });
   assert.equal(failing.errorRate, 1);
-  assert.equal(agentsPerGpu([{ level: 1, errorRate: 0, tokPerSecPerAgent: 90 }, { level: 50, errorRate: 0.01, tokPerSecPerAgent: 25 }, { level: 200, errorRate: 0.2, tokPerSecPerAgent: 4 }]), 50);
-  assert.equal(agentsPerGpu([{ level: 1, errorRate: 0.5, tokPerSecPerAgent: 1 }]), 0);
+  assert.deepEqual(LEVELS, [32, 64, 96, 128, 192]);
+  assert.equal(agentsPerGpu([{ level: 32, errorRate: 0, msPerToken: 25 }, { level: 64, errorRate: 0.01, msPerToken: 33 }, { level: 96, errorRate: 0.2, msPerToken: 50 }]), 64);
+  assert.equal(agentsPerGpu([{ level: 32, errorRate: 0.5, msPerToken: 20 }]), 0);
+  assert.equal(agentsPerGpu([{ level: 32, errorRate: 0, msPerToken: 40 }]), 0, 'over 35 ms per token is not healthy');
 });
 
-test('bake-off: our own tasks decide the ranking; cost per passing task from the model\'s time on the node; the cap stops later models; NVFP4 only as an extra', async () => {
+test('bake-off: our own tasks decide the ranking; cost per passing task from the model\'s time on the node; the cap stops later models; every candidate runs', async () => {
   let clock = 0;
   const started = [], stopped = [];
   const passes = { a: 8, b: 6, c: 8 };
@@ -169,24 +171,25 @@ test('bake-off: our own tasks decide the ranking; cost per passing task from the
     throughput: async ({ level }) => { clock += 60000; return { level, errorRate: 0, tokPerSec: level * 40, tokPerSecPerAgent: 40 }; },
   };
   const { ranked, spentUsd } = await runBakeoff({ candidates, hourlyUsd: 6, capUsd: 100, bestOf: [1] }, deps);
-  assert.deepEqual(started, ['a', 'b', 'c'], 'the NVFP4 candidate needs includeExtra');
-  assert.deepEqual(stopped, ['a', 'b', 'c']);
-  assert.deepEqual(ranked.map(item => item.label), ['a', 'c', 'b'], 'ties on pass rate break on cost per passing task, then order');
+  assert.deepEqual(started, ['a', 'b', 'c', 'x'], 'every candidate runs, NVFP4 included');
+  assert.deepEqual(stopped, ['a', 'b', 'c', 'x']);
+  assert.deepEqual(ranked.map(item => item.label), ['a', 'c', 'b', 'x'], 'ties on pass rate break on cost per passing task, then order');
   const first = ranked[0];
-  assert.equal(first.minutes, 21);
-  assert.equal(first.costUsd, 2.1, '21 minutes at $6/h');
-  assert.equal(first.costPerPassUsd, 0.2625);
-  assert.equal(first.agentsPerGpu, 200);
-  assert.equal(spentUsd, 6.3);
+  assert.equal(first.minutes, 23, '6 min start, 5 levels at 1 min, 12 min benchmark');
+  assert.equal(first.costUsd, 2.3, '23 minutes at $6/h');
+  assert.equal(first.costPerPassUsd, 0.2875);
+  assert.equal(first.agentsPerGpu, 192);
+  assert.equal(spentUsd, 9.2);
   clock = 0; started.length = 0;
-  const capped = await runBakeoff({ candidates, hourlyUsd: 6, capUsd: 2.5, includeExtra: true, bestOf: [1] }, deps);
+  const capped = await runBakeoff({ candidates, hourlyUsd: 6, capUsd: 2.5, bestOf: [1] }, deps);
   assert.deepEqual(started, ['a', 'b']);
   assert.ok(capped.ranked.filter(item => item.error).every(item => /cap/.test(item.error)) && capped.ranked.filter(item => item.error).length === 2);
   const text = renderBakeoff({ ranked, spentUsd }, { hourlyUsd: 6, date: '2026-10-16' });
-  assert.match(text, /\| 1 \| a \| fp8 \| 8\/10 \(80%\) \| n\/a \| n\/a \| 40 \/ 2000 \/ 8000 \|/);
+  assert.match(text, /\| 1 \| a \| fp8 \| \$0\.2875 \| 8\/10 \(80%\) \| n\/a \| 192 \| 192 \| n\/a \| 23 min, \$2\.30 \|/);
   assert.match(text, /lessons eval set does not exist yet/);
   assert.deepEqual(selectCandidates('qwen3-coder-30b-a3b-fp8,foo/Bar-NVFP4').map(item => item.quant), ['fp8', 'nvfp4']);
-  assert.equal(selectCandidates().some(item => item.quant === 'nvfp4'), false, 'the default list is FP8 only');
+  assert.deepEqual(selectCandidates().map(item => item.label), ['qwen3.6-35b-a3b-nvfp4', 'nemotron-3.5-lightning-nvfp4', 'qwen3-coder-next-nvfp4']);
+  assert.equal(selectCandidates().every(item => item.quant === 'nvfp4'), true, 'the default list is the three NVFP4 entries');
 });
 
 test('a failing model is recorded, not fatal, and its server is still stopped', async () => {
@@ -202,10 +205,10 @@ test('swarm gpu: without --yes it only prints the plan; flags are strict; bake-o
   const touched = [];
   const gpu = { ssh: async () => { touched.push('ssh'); return { stdout: '' }; } };
   assert.equal((await runGpuCommand(['up', ...base, '--model', MODEL], { out: x => lines.push(x), env, gpu })).status, 'planned');
-  assert.equal((await runGpuCommand(['bakeoff', ...base, '--extra-quant'], { out: x => lines.push(x), env, gpu })).status, 'planned');
+  assert.equal((await runGpuCommand(['bakeoff', ...base], { out: x => lines.push(x), env, gpu })).status, 'planned');
   assert.deepEqual(touched, []);
   assert.match(lines.join('\n'), /nothing is started yet.*sent to the node: commands only; nothing of yours.*only sensitive: false/s);
-  assert.match(lines.join('\n'), /qwen3\.6-35b-a3b-fp8.*NVFP4 extras/s);
+  assert.match(lines.join('\n'), /qwen3\.6-35b-a3b-nvfp4.*nemotron-3\.5-lightning-nvfp4/s);
   assert.throws(() => parseGpuFlags(['--nope']), /gpu-usage/);
   assert.throws(() => parseGpuFlags(['--target']), /needs a value/);
   await assert.rejects(runGpuCommand(['up', ...base], { out: () => {}, env }), /gpu-model-invalid/);

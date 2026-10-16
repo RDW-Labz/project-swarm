@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // `swarm gpu bakeoff` (Phase 14e): ranks candidate small coding models on ONE rented GPU using our own tasks (the lane benchmark, and
-// the eval set under evals/ once Phase 15 builds it), never vendor SWE-bench numbers. Per model it reports pass rate, tokens per second
-// at 1, 50 and 200 concurrent agents, agents per GPU, and cost per passing task. FP8 first; NVFP4 candidates only as extra runs.
+// the eval set under evals/ once Phase 15 builds it), never vendor SWE-bench numbers. Per model it reports pass rate (N=1 and best-of-N under load),
+// tokens per second and ms per token at each agent count, agents per GPU, and cost per passing task.
 // Everything that touches the network, ssh or the benchmark is injected, so tests run with fakes.
 import fs from 'node:fs';
 import path from 'node:path';
 import { SHORTLIST } from './gpu.mjs';
 
-export const LEVELS = Object.freeze([1, 50, 200]);
+export const LEVELS = Object.freeze([32, 64, 96, 128, 192]);
+export const MAX_MS_PER_TOKEN = 35;
 const PROMPT = 'Write a JavaScript function `mergeIntervals(list)` that merges overlapping [start, end] intervals and returns them sorted. Include three assert-based tests. Reply with code only.';
+const r1 = n => Math.round(n * 10) / 10;
 const r2 = n => Math.round(n * 100) / 100;
 const r4 = n => Math.round(n * 10000) / 10000;
 
@@ -34,53 +36,90 @@ export async function measureThroughput({ endpoint, model, level, rounds = 2, ma
   }));
   const seconds = Math.max((now() - started) / 1000, 0.001);
   latencies.sort((a, b) => a - b);
-  return { level, requests, errors, errorRate: requests ? errors / requests : 0, tokens, seconds: r2(seconds), tokPerSec: r2(tokens / seconds), tokPerSecPerAgent: r2(tokens / seconds / level), p95Ms: latencies.length ? latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))] : null };
+  const perAgent = r2(tokens / seconds / level);
+  return { level, requests, errors, errorRate: requests ? errors / requests : 0, tokens, seconds: r2(seconds), tokPerSec: r2(tokens / seconds), tokPerSecPerAgent: perAgent, msPerToken: perAgent > 0 ? r1(1000 / perAgent) : null, p95Ms: latencies.length ? latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))] : null };
 }
 
-// The most agents one GPU serves well: the highest level with under 5% errors and at least 10 tokens/s for each agent.
-export function agentsPerGpu(levels, { maxErrorRate = 0.05, minPerAgent = 10 } = {}) {
-  const good = levels.filter(item => item.errorRate <= maxErrorRate && item.tokPerSecPerAgent >= minPerAgent);
+// The most agents one GPU serves well: the highest level with errors at or under maxErrorRate and msPerToken at or under maxMsPerToken.
+export function agentsPerGpu(levels, { maxErrorRate = 0.05, maxMsPerToken = MAX_MS_PER_TOKEN } = {}) {
+  // ms per token comes from the level itself, or from its per-agent speed when only that was recorded
+  const ms = item => (typeof item.msPerToken === 'number' ? item.msPerToken : item.tokPerSecPerAgent > 0 ? 1000 / item.tokPerSecPerAgent : null);
+  const good = levels.filter(item => item.errorRate <= maxErrorRate && ms(item) !== null && ms(item) <= maxMsPerToken);
   return good.length ? Math.max(...good.map(item => item.level)) : 0;
 }
 
-export function rankResults(results) {
-  const key = item => (item.error ? [-1, Infinity] : [item.passRate, item.costPerPassUsd ?? Infinity]);
-  return [...results].sort((a, b) => { const [pa, ca] = key(a), [pb, cb] = key(b); return pb - pa || ca - cb; });
+// Starts `agents` background loops that keep sending chat requests until fn settles. Errors are ignored, with a 10 ms pause after each.
+export async function runUnderLoad({ endpoint, model, agents, fetchImpl = fetch }, fn) {
+  if (!(agents > 0)) return fn();
+  let stop = false;
+  const pause = () => new Promise(resolve => setTimeout(resolve, 10));
+  const loop = async () => {
+    while (!stop) {
+      try {
+        const response = await fetchImpl(`${endpoint}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, messages: [{ role: 'user', content: PROMPT }], max_tokens: 64, stream: false }) });
+        if (typeof response?.text === 'function') await response.text();
+        if (response && response.ok === false) await pause();
+      } catch { await pause(); }
+    }
+  };
+  const loops = Array.from({ length: agents }, () => loop());
+  try { return await fn(); } finally { stop = true; await Promise.all(loops); }
 }
 
-// candidates: [{ label, model, quant, args, extra }]; deps:
-//   start(candidate) -> { endpoint, stop() }   one replica on one GPU, healthy when it returns
-//   benchmark({ endpoint, model, candidate, bestOf }) -> { passed, total, tasks? }   (run once per best-of count)
-//   cacheStats({ endpoint }) -> { hitRate } | null   vLLM prefix-cache hit rate after the run
-//   our own tasks (lane benchmark + evals)
+export function rankResults(results) {
+  const cost = item => item.costPerPassUsd ?? Infinity;
+  return [...results].sort((a, b) => {
+    if (!!a.error !== !!b.error) return a.error ? 1 : -1;
+    if (a.error) return 0;
+    if (cost(a) !== cost(b)) return cost(a) < cost(b) ? -1 : 1;
+    return (b.agentsPerGpu ?? 0) - (a.agentsPerGpu ?? 0);
+  });
+}
+
+// candidates: [{ label, model, quant, args, env, optional }]; deps:
+//   start(candidate, { remainingUsd }) -> { endpoint, stop() }   one replica on one GPU, healthy when it returns
 //   throughput({ endpoint, model, level }) -> measureThroughput result
-export async function runBakeoff({ candidates, hourlyUsd, capUsd, levels = LEVELS, includeExtra = false, bestOf = [1, 3] }, deps) {
-  const { start, benchmark, throughput, cacheStats = async () => null, now = Date.now, log = () => {} } = deps;
-  const ordered = [...candidates.filter(item => item.quant !== 'nvfp4' && !item.extra), ...(includeExtra ? candidates.filter(item => item.quant === 'nvfp4' || item.extra) : [])];
+//   cacheStats({ endpoint }) -> { hitRate } | null   vLLM prefix-cache hit rate after the run
+//   benchmark({ endpoint, model, candidate, bestOf }) -> { passed, total }   our own tasks (lane benchmark + evals)
+//   withLoad(context, fn) optional: runs fn under background load (runUnderLoad)
+export async function runBakeoff({ candidates, hourlyUsd, capUsd, levels = LEVELS, bestOf = [1, 3], minRemainingHours = 1 }, deps) {
+  const { start, benchmark, throughput, cacheStats = async () => null, withLoad = (context, fn) => fn(), now = Date.now, log = () => {} } = deps;
   const results = [];
   let spent = 0;
-  for (const candidate of ordered) {
-    if (spent >= capUsd) { results.push({ label: candidate.label, model: candidate.model, quant: candidate.quant, error: `skipped: the session cap of $${capUsd} was reached` }); continue; }
+  for (const candidate of candidates) {
+    const base = { label: candidate.label, model: candidate.model, quant: candidate.quant };
+    if (spent >= capUsd) { results.push({ ...base, error: `skipped: the session cap of $${capUsd} was reached` }); continue; }
+    if (candidate.optional === true && (capUsd - spent) / hourlyUsd < minRemainingHours) { results.push({ ...base, error: `skipped: optional candidate, under ${minRemainingHours} h of the cap left` }); continue; }
     const began = now();
     let replica = null;
     try {
       replica = await start(candidate, { remainingUsd: capUsd - spent });
-      log(`${candidate.label}: server up, running our tasks`);
-      // Best-of-N: the same tasks at N=1 and at N=3 (default) show what picking the best of N copies is worth. Ranking uses N=1.
+      const endpoint = replica.endpoint;
+      const model = candidate.model;
+      log(`${candidate.label}: server up, sweeping agent counts`);
+      const measured = [];
+      for (const level of levels) {
+        log(`${candidate.label}: ${level} agents`);
+        const result = await throughput({ endpoint, model, level });
+        const cache = await cacheStats({ endpoint });
+        measured.push({ ...result, cacheHitRate: cache?.hitRate ?? null });
+      }
+      const chosenAgents = agentsPerGpu(measured) || Math.min(...levels);
+      // Best-of-N at the chosen agent count, under background load. N=1 is the ranking pass rate.
       const counts = [...new Set([1, ...bestOf])].sort((a, b) => a - b);
       const byBestOf = [];
-      for (const n of counts) { const run = await benchmark({ endpoint: replica.endpoint, model: candidate.model, candidate, bestOf: n }); byBestOf.push({ n, passed: run.passed, total: run.total, passRate: run.total ? run.passed / run.total : 0 }); }
+      for (const n of counts) {
+        const run = await withLoad({ endpoint, model, agents: chosenAgents }, () => benchmark({ endpoint, model, candidate, bestOf: n }));
+        byBestOf.push({ n, passed: run.passed, total: run.total, passRate: run.total ? run.passed / run.total : 0 });
+      }
       const bench = byBestOf[0];
-      const measured = [];
-      for (const level of levels) { log(`${candidate.label}: ${level} agents`); measured.push(await throughput({ endpoint: replica.endpoint, model: candidate.model, level })); }
-      const cache = await cacheStats({ endpoint: replica.endpoint });
       const hours = (now() - began) / 3600000;
       const costUsd = r4(hours * hourlyUsd);
-      results.push({ byBestOf, cacheHitRate: cache?.hitRate ?? null, label: candidate.label, model: candidate.model, quant: candidate.quant, passed: bench.passed, total: bench.total, passRate: bench.total ? bench.passed / bench.total : 0, levels: measured, agentsPerGpu: agentsPerGpu(measured), minutes: r2(hours * 60), costUsd, costPerPassUsd: bench.passed > 0 ? r4(costUsd / bench.passed) : null });
+      results.push({ ...base, passed: bench.passed, total: bench.total, passRate: bench.passRate, byBestOf, levels: measured, agentsPerGpu: agentsPerGpu(measured), chosenAgents, cacheHitRate: measured.length ? measured[measured.length - 1].cacheHitRate : null, minutes: r2(hours * 60), costUsd, costPerPassUsd: bench.passed > 0 ? r4(costUsd / bench.passed) : null });
       spent += costUsd;
     } catch (error) {
       spent += ((now() - began) / 3600000) * hourlyUsd;
-      results.push({ label: candidate.label, model: candidate.model, quant: candidate.quant, error: String(error.message ?? error).slice(0, 200) });
+      results.push({ ...base, error: String(error?.message ?? error).slice(0, 200) });
     } finally {
       try { await replica?.stop(); } catch { /* the node's dead-man timer still removes it */ }
     }
@@ -89,21 +128,26 @@ export async function runBakeoff({ candidates, hourlyUsd, capUsd, levels = LEVEL
 }
 
 const usd = value => (value === null || value === undefined ? 'n/a' : `$${value.toFixed(value < 1 ? 4 : 2)}`);
+const pct = value => (value === null || value === undefined ? 'n/a' : `${Math.round(value * 100)}%`);
+const row = cells => `| ${cells.join(' | ')} |`;
 
 export function renderBakeoff({ ranked, spentUsd }, { hourlyUsd, gpu = 'one GPU', date = new Date().toISOString().slice(0, 10), evalTasks = 0, levels = LEVELS } = {}) {
-  const rows = ranked.map((item, n) => (item.error
-    ? `| ${n + 1} | ${item.label} | ${item.quant ?? ''} | failed: ${item.error} | | | | | | | |`
-    : `| ${n + 1} | ${item.label} | ${item.quant} | ${item.passed}/${item.total} (${Math.round(item.passRate * 100)}%) | ${(item.byBestOf ?? []).filter(entry => entry.n > 1).map(entry => `N=${entry.n}: ${entry.passed}/${entry.total}`).join(', ') || 'n/a'} | ${item.cacheHitRate === null || item.cacheHitRate === undefined ? 'n/a' : `${Math.round(item.cacheHitRate * 100)}%`} | ${item.levels.map(entry => entry.tokPerSec).join(' / ')} | ${item.levels.map(entry => entry.tokPerSecPerAgent).join(' / ')} | ${item.agentsPerGpu} | ${usd(item.costPerPassUsd)} | ${item.minutes} min, ${usd(item.costUsd)} |`));
-  return `# GPU bake-off
-
-Run ${date} on ${gpu} at $${hourlyUsd}/h. Models are ranked on OUR tasks (the lane benchmark${evalTasks ? ` plus ${evalTasks} eval-set tasks` : '; the lessons eval set does not exist yet (Phase 15), so it is not included'}), not vendor SWE-bench numbers. FP8 first; NVFP4 only as an extra run.
-
-| Rank | Model | Quant | Pass rate (N=1) | Best-of-N pass rate | Prefix cache hit | Total tok/s at ${levels.join(' / ')} agents | tok/s per agent | Agents per GPU | Cost per passing task | Time, cost |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-${rows.join('\n')}
-
-Best-of-N asks the server for N answers per task, runs the task's visible tests on each, and keeps the smallest passing one (hidden tests then score it). Prefix cache hit is vLLM's own counter after the run (the project's shared files are sent first so agents reuse them). Agents per GPU is the highest tested level with under 5% errors and at least 10 tokens/s for each agent. Cost per passing task is the model's whole slot on the node (load, our tasks, throughput) at the hourly price, divided by tasks passed. Total spent on the node during the bake-off: ${usd(spentUsd)}.
-`;
+  const summary = ranked.map((item, index) => {
+    const rank = index + 1;
+    if (item.error) return row([rank, item.label, `failed: ${item.error}`, '', '', '', '', '', '', '']);
+    const parts = (item.byBestOf ?? []).filter(entry => entry.n > 1).map(entry => (entry.n === 3 ? `${entry.passed}/${entry.total}` : `N=${entry.n}: ${entry.passed}/${entry.total}`));
+    return row([rank, item.label, item.quant, usd(item.costPerPassUsd), `${item.passed}/${item.total} (${pct(item.passRate)})`, parts.join(', ') || 'n/a', item.agentsPerGpu, item.chosenAgents ?? 'n/a', pct(item.cacheHitRate), `${item.minutes} min, ${usd(item.costUsd)}`]);
+  });
+  const details = ranked.filter(item => !item.error).map(item => [
+    `## ${item.label}`,
+    '',
+    '| Agents | ms/token | output tok/s | tok/s per agent | errors | prefix cache hit |',
+    '| --- | --- | --- | --- | --- | --- |',
+    ...item.levels.map(entry => `| ${entry.level} | ${entry.msPerToken ?? 'n/a'} | ${entry.tokPerSec} | ${entry.tokPerSecPerAgent} | ${entry.errors} | ${pct(entry.cacheHitRate)} |`),
+  ].join('\n'));
+  const header = row(['Rank', 'Model', 'Quant', 'Cost per passing task', 'Pass rate N=1', 'Pass rate N=3', 'Max agents (under 35 ms/token)', 'Chosen agents', 'Prefix cache hit', 'Time, cost']);
+  const separator = row(Array(10).fill('---'));
+  return `# GPU bake-off\n\nRun ${date} on ${gpu} at $${hourlyUsd}/h. Models are ranked on OUR tasks (the lane benchmark${evalTasks ? ` plus ${evalTasks} eval-set tasks` : '; the lessons eval set does not exist yet (Phase 15), so it is not included'}), not vendor SWE-bench numbers. FP8 first.\n\n${header}\n${separator}\n${summary.join('\n')}\n\n${details.join('\n\n')}\n\nAgents per GPU is the highest tested agent count with under 5% errors and at most ${MAX_MS_PER_TOKEN} ms per token for each agent (tested counts: ${levels.join(', ')}). Best-of-N asks the server for N answers per task and keeps the smallest passing one; it is measured with background load at the chosen agent count. Ranking is cost per passing task, then agents per GPU. Prefix cache hit is vLLM's own counter after the run. Cost per passing task is the model's whole slot on the node at the hourly price, divided by tasks passed. Total spent on the node during the bake-off: ${usd(spentUsd)}.\n`;
 }
 
 export function writeBakeoffReport(root, text) {
@@ -118,9 +162,9 @@ export function countEvalTasks(root) {
 }
 
 export function selectCandidates(spec) {
-  if (!spec) return SHORTLIST.filter(item => !item.extra).map(item => ({ ...item }));
+  if (!spec) return SHORTLIST.map(item => ({ ...item, args: [...(item.args ?? [])], env: { ...(item.env ?? {}) } }));
   return String(spec).split(',').map(item => item.trim()).filter(Boolean).map(item => {
     const known = SHORTLIST.find(entry => entry.label === item || entry.model === item);
-    return known ? { ...known } : { label: item.split('/').pop().toLowerCase(), model: item, quant: /nvfp4/i.test(item) ? 'nvfp4' : 'fp8', args: [] };
+    return known ? { ...known, args: [...(known.args ?? [])], env: { ...(known.env ?? {}) } } : { label: item.split('/').pop().toLowerCase(), model: item, quant: /nvfp4/i.test(item) ? 'nvfp4' : 'fp8', args: [], env: {} };
   });
 }

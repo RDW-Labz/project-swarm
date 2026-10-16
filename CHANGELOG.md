@@ -2,7 +2,8 @@
 
 ## 1.77.0
 
-- Bake-off lineup: Qwen3.6-35B-A3B FP8 (qwen3 reasoning parser), Qwen3-Coder-Next 80B-A3B NVFP4 (RedHatAI build) and Nemotron-3.5-Lightning-30B-A3B NVFP4 (marlin MoE backend, fp8 KV cache, nemotron_v3 reasoning parser); Devstral and the 30B Qwen coder are dropped; the NVFP4 entries run only with `--extra-quant`. The rented lane now sends `chat_template_kwargs: { enable_thinking: false }` (a bounded tool-free worker job must not spend its output tokens on reasoning; set `SWARM_RENTED_THINKING=on` to allow it).
+- Bake-off follows the GPU memory plan (docs/plans/swarm-gpu-memory-plan.md): the pinned vLLM image is v0.31.0 (by digest; NVFP4 on this card needs 0.28 or newer); all models are NVFP4, text-only, no MTP, started with the plan's flags (gpu-memory-utilization 0.93, fp8 KV cache, prefix caching, mamba cache align, 131072 context, per-model quantization, MoE backend, parsers and environment): Qwen3.6-35B-A3B NVFP4, Nemotron 3.5 Lightning NVFP4, and Qwen3-Coder-Next NVFP4 (RedHat build) only when at least an hour of the session is left; one vLLM engine per GPU.
+- The bake-off sweeps 32, 64, 96, 128 and 192 concurrent agents (ms per token, output tokens per second, errors and prefix-cache hit rate at each), takes the highest count under 35 ms per token as the agents per GPU, measures best-of-1 and best-of-3 at that count with that many agents loading the server, and ranks by cost per passing task, then agents per GPU. The rented lane sends `chat_template_kwargs: { enable_thinking: false }` (set `SWARM_RENTED_THINKING=on` to allow thinking). Container offers must also have PCIe Gen5 x16, at least 16 vCPU, 64 GB of RAM and 200 GB of NVMe disk; `rent --offer auto` picks the best current offer (offer ids on a busy host change by the minute); `--local-port` moves the tunnel off a port that is already in use (the exposure check refused to share one). `the test scratch folders is ignored.
 
 ## 1.76.0
 

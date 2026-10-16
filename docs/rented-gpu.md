@@ -19,23 +19,23 @@ A lane for **small, fast coding models** (about 7B to 35B, mixture-of-experts pr
 
 `swarm gpu models` lists the shortlist (ids are a starting point; check each exists on Hugging Face before renting). FP8 is the safe path on every Blackwell card; NVFP4 only as an extra run.
 
-| Model | Why |
-| --- | --- |
-| Qwen3.6-35B-A3B (FP8) | 35B total, 3B active; the fast small mixture-of-experts pick; Apache 2.0; started with the qwen3 reasoning parser, worker requests run with thinking off |
-| Qwen3-Coder-Next 80B-A3B (NVFP4, RedHatAI build) | the larger coding model; about 45 GB of weights in NVFP4 leaves KV-cache room on a 96 GB card; NVFP4 runs only with --extra-quant and is skipped if it does not load on the card |
-| Nemotron-3.5-Lightning-30B-A3B (NVFP4) | short extra run; hybrid Mamba/mixture-of-experts; marlin MoE backend and fp8 KV cache; runs only with --extra-quant |
+| Model | Weights | Why |
+| --- | --- | --- |
+| Qwen3.6-35B-A3B NVFP4 (nvidia build) | about 20.8 GB | full run; the fast small mixture-of-experts pick; about 80 to 120 agents per GPU expected |
+| Nemotron 3.5 Lightning 30B-A3B NVFP4 (NVIDIA card) | about 18.9 GB | full run; tiny KV cache so the most agents per GPU; its coding score is lower so it is for simple tickets if the bake-off shows it passes them |
+| Qwen3-Coder-Next 80B-A3B NVFP4 (RedHat build) | 47.5 GB | only if time is left; about 40 to 60 agents expected |
 
-Vendor numbers decide nothing here: the bake-off ranks them on our own tasks by cost per passing task and agents per GPU. The pinned vLLM (v0.27.1) is checked against each model card before a run.
+Vendor numbers decide nothing here: the bake-off ranks them on our own tasks by cost per passing task, then agents per GPU. The pinned vLLM is v0.31.0 (NVFP4 on this card needs 0.28 or newer; the FP8 Qwen3.6 build has an open slow-decode bug on it). One vLLM engine runs per GPU (no extra replicas on one GPU, no expert offload to RAM): see [the GPU memory plan](plans/swarm-gpu-memory-plan.md).
 
 ## Bake-off: `swarm gpu bakeoff`
 
-On **one** rented GPU, one model after another (FP8 first, `--extra-quant` adds NVFP4):
+On **one** rented GPU, one model after another (all models are NVFP4):
 
 ```
 swarm gpu bakeoff --target ubuntu@<ip> --key ~/.ssh/<key> --hourly-usd 1.8 --max-usd 12
 ```
 
-For each model it starts one server, runs our lane benchmark (10 real tasks scored by hidden tests; the lessons eval set joins once Phase 15 builds `evals/`), then measures throughput with **1, 50 and 200 concurrent agents** (`--levels` to change). It reports and writes `docs/state/gpu-bakeoff.md`:
+For each model it starts one server, runs our lane benchmark (10 real tasks scored by hidden tests; the lessons eval set joins once Phase 15 builds `evals/`), then sweeps 32, 64, 96, 128 and 192 concurrent agents and records ms per token, output tokens per second, errors and the prefix-cache hit rate at each; max agents per GPU is the highest count that stays under 35 ms per token for each agent; best-of-1 and best-of-3 are then measured at that count with that many agents loading the server. It reports and writes `docs/state/gpu-bakeoff.md`:
 
 - **pass rate** on our tasks;
 - **tokens per second**, total and per agent, at each level;
@@ -123,7 +123,7 @@ Use `swarm gpu up --mode container` for a node that IS a container already runni
 - Exposure is checked as in docker mode: TCP probes from this computer, plus `--probe-ports N,N` for external ports the host maps. The node-side check reads `/proc/net/tcp` and `/proc/net/tcp6` (no `ss` or docker needed). Any listener on a server port that is not loopback fails `gpu up` and stops the servers.
 - The rental helper (`bench/gpu-bakeoff/vast.mjs`) then destroys the instance. Run gpu up as `swarm gpu up ... || node bench/gpu-bakeoff/vast.mjs destroy`.
 - A container cannot be powered off, so the timer on the node only stops the servers. Billing ends when the instance is destroyed. The helper's detached reaper does this at the deadline (it runs under `caffeinate -i` so the Mac cannot sleep), and `gpu down` tells you to do it.
-- Offers for container mode must be verified hosts with reliability of at least 99%, RTX PRO 6000 S or WS (not Max-Q), datacenter preferred, and 4 hours at their price must be at most 80% of the cap.
+- Offers for container mode must be verified hosts with reliability of at least 99%, RTX PRO 6000 S or WS (not Max-Q), datacenter preferred, and 4 hours at their price must be at most 80% of the cap. The host must also have PCIe Gen5 x16 (measured at least 45 GB/s), at least 16 vCPU, at least 64 GB of RAM, at least 200 GB of free NVMe disk.
   - Search: `node bench/gpu-bakeoff/vast.mjs search --mode container`
   - Rent: `node bench/gpu-bakeoff/vast.mjs rent --mode container --offer ID --hours 4 --max-usd 15`
 - The instance id is printed first and kept in `~/.project-swarm-scratch/vast-instance.json`, so it can be destroyed in the Vast console.

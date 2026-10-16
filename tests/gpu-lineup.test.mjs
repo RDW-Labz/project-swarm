@@ -5,31 +5,29 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { SHORTLIST, validateUpOptions } from '../tools/gpu.mjs';
-import { selectCandidates } from '../tools/gpu-bakeoff.mjs';
+import { SHORTLIST, validateUpOptions, PINNED_IMAGE, GPU_DEFAULTS } from '../tools/gpu.mjs';
+import { selectCandidates, LEVELS } from '../tools/gpu-bakeoff.mjs';
 import { executeApi } from '../tools/api-adapters.mjs';
 import { gpuSessionPath } from '../tools/rented.mjs';
 
-const LABELS = ['qwen3.6-35b-a3b-fp8', 'qwen3-coder-next-nvfp4', 'nemotron-3.5-lightning-nvfp4'];
-const MODELS = ['Qwen/Qwen3.6-35B-A3B-FP8', 'RedHatAI/Qwen3-Coder-Next-NVFP4', 'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4'];
+const LABELS = ['qwen3.6-35b-a3b-nvfp4', 'nemotron-3.5-lightning-nvfp4', 'qwen3-coder-next-nvfp4'];
+const MODELS = ['nvidia/Qwen3.6-35B-A3B-NVFP4', 'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4', 'RedHatAI/Qwen3-Coder-Next-NVFP4'];
 
-test('shortlist has the three entries in order with the expected models', () => {
+test('shortlist has the three NVFP4 entries in order with the expected models', () => {
   assert.equal(SHORTLIST.length, 3);
   assert.deepEqual(SHORTLIST.map(item => item.label), LABELS);
   assert.deepEqual(SHORTLIST.map(item => item.model), MODELS);
 });
 
-test('only the first shortlist entry is not marked extra', () => {
-  assert.equal(SHORTLIST[0].extra, undefined);
-  assert.equal(SHORTLIST[1].extra, true);
-  assert.equal(SHORTLIST[2].extra, true);
+test('qwen3.6 and Lightning are full runs; only Coder-Next is optional (time permitting)', () => {
+  assert.equal(SHORTLIST[0].optional, undefined);
+  assert.equal(SHORTLIST[1].optional, undefined);
+  assert.equal(SHORTLIST[2].optional, true);
 });
 
-test('each shortlist quant matches its name', () => {
-  assert.deepEqual(SHORTLIST.map(item => item.quant), ['fp8', 'nvfp4', 'nvfp4']);
-  assert.match(SHORTLIST[0].label, /fp8$/);
-  assert.match(SHORTLIST[1].label, /nvfp4$/);
-  assert.match(SHORTLIST[2].label, /nvfp4$/);
+test('every shortlist entry is NVFP4 and its label says so', () => {
+  assert.deepEqual(SHORTLIST.map(item => item.quant), ['nvfp4', 'nvfp4', 'nvfp4']);
+  for (const item of SHORTLIST) assert.match(item.label, /nvfp4$/);
 });
 
 test('every shortlist entry passes validateUpOptions', () => {
@@ -45,20 +43,28 @@ test('qwen3.6 args include the qwen3 reasoning parser', () => {
   assert.equal(args[i + 1], 'qwen3');
 });
 
-test('nemotron args include the nemotron_v3 parser and marlin moe backend', () => {
-  const args = SHORTLIST[2].args;
+test('nemotron args include the nemotron_v3 parser and async scheduling, and no moe backend override', () => {
+  const args = SHORTLIST[1].args;
   const i = args.indexOf('--reasoning-parser');
   assert.notEqual(i, -1);
   assert.equal(args[i + 1], 'nemotron_v3');
-  const j = args.indexOf('--moe-backend');
-  assert.notEqual(j, -1);
-  assert.equal(args[j + 1], 'marlin');
+  assert.notEqual(args.indexOf('--async-scheduling'), -1);
+  assert.equal(args.indexOf('--moe-backend'), -1);
 });
 
-test('selectCandidates with no argument returns only the qwen3.6 entry', () => {
+test('the pinned image is vLLM v0.31.0 by digest and the memory utilization is 0.93', () => {
+  assert.match(PINNED_IMAGE, /^vllm\/vllm-openai@sha256:[0-9a-f]{64}$/);
+  assert.equal(GPU_DEFAULTS.memoryUtilization, 0.93);
+});
+
+test('the agent levels are 32, 64, 96, 128 and 192', () => {
+  assert.deepEqual([...LEVELS], [32, 64, 96, 128, 192]);
+});
+
+test('selectCandidates with no argument returns all three shortlist entries', () => {
   const picked = selectCandidates();
-  assert.equal(picked.length, 1);
-  assert.equal(picked[0].label, LABELS[0]);
+  assert.equal(picked.length, 3);
+  assert.deepEqual(picked.map(item => item.label), LABELS);
 });
 
 test('selectCandidates with all three labels returns them in order with args', () => {

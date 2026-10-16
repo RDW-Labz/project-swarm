@@ -8,9 +8,10 @@ import { randomBytes } from 'node:crypto';
 import { gpuSessionPath } from './rented.mjs';
 import { fetchCacheStats, combineCacheStats } from './gpu-cache.mjs';
 
-export const PINNED_IMAGE = 'vllm/vllm-openai@sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967';
+// vLLM v0.31.0 (pinned by digest)
+export const PINNED_IMAGE = 'vllm/vllm-openai@sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3';
 
-export const GPU_DEFAULTS = Object.freeze({ image: PINNED_IMAGE, remotePortBase: 8000, localPortBase: 18000, maxModelLen: 32768, perReplica: 32, healthTimeoutMs: 1200000, maxHours: 4 });
+export const GPU_DEFAULTS = Object.freeze({ image: PINNED_IMAGE, remotePortBase: 8000, localPortBase: 18000, maxModelLen: 131072, memoryUtilization: 0.93, commonArgs: Object.freeze(['--kv-cache-dtype', 'fp8', '--enable-prefix-caching', '--mamba-cache-mode', 'align', '--prefix-match-unit', '64', '--max-num-batched-tokens', '16384']), perReplica: 32, healthTimeoutMs: 1200000, maxHours: 4 });
 
 export const SSH_HARDENING = Object.freeze(['-o', 'ForwardAgent=no', '-o', 'ForwardX11=no', '-o', 'PermitLocalCommand=no', '-o', 'StrictHostKeyChecking=yes']);
 
@@ -19,17 +20,28 @@ const IMAGE_RE = /^[a-z0-9][a-z0-9._/-]{0,100}@sha256:[0-9a-f]{64}$/;
 const TARGET_RE = /^(?:[A-Za-z0-9_][A-Za-z0-9._-]{0,31}@)?[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/;
 const KEY_RE = /^[0-9a-f]{48}$/;
 
-// The small, fast coding models worth testing (a shortlist, not a promise: ids must be checked on Hugging Face before renting).
-// FP8 is tried first; entries marked extra (NVFP4 builds) run only with --extra-quant.
+// The small, fast coding models worth testing (a shortlist, not a promise: ids must be checked on Hugging Face before renting). All NVFP4, text-only, no MTP; flags from docs/plans/swarm-gpu-memory-plan.md section 7. Entries marked optional run only when enough session time is left.
 export const SHORTLIST = Object.freeze([
-  { label: 'qwen3.6-35b-a3b-fp8', model: 'Qwen/Qwen3.6-35B-A3B-FP8', quant: 'fp8', args: ['--reasoning-parser', 'qwen3'] },
-  { label: 'qwen3-coder-next-nvfp4', model: 'RedHatAI/Qwen3-Coder-Next-NVFP4', quant: 'nvfp4', args: ['--enable-auto-tool-choice', '--tool-call-parser', 'qwen3_coder'], extra: true },
-  { label: 'nemotron-3.5-lightning-nvfp4', model: 'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4', quant: 'nvfp4', args: ['--moe-backend', 'marlin', '--kv-cache-dtype', 'fp8', '--reasoning-parser', 'nemotron_v3', '--enable-auto-tool-choice', '--tool-call-parser', 'qwen3_coder'], extra: true },
+  { label: 'qwen3.6-35b-a3b-nvfp4', model: 'nvidia/Qwen3.6-35B-A3B-NVFP4', quant: 'nvfp4', args: ['--quantization', 'modelopt_fp4', '--moe-backend', 'flashinfer_b12x', '--mamba-ssm-cache-dtype', 'bfloat16', '--block-size', '128', '--reasoning-parser', 'qwen3', '--tool-call-parser', 'qwen3_coder', '--enable-auto-tool-choice', '--language-model-only'], env: { VLLM_HAS_FLASHINFER_CUBIN: '1' } },
+  { label: 'nemotron-3.5-lightning-nvfp4', model: 'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4', quant: 'nvfp4', args: ['--mamba-ssm-cache-dtype', 'float16', '--reasoning-parser', 'nemotron_v3', '--tool-call-parser', 'qwen3_coder', '--enable-auto-tool-choice', '--async-scheduling'], env: {} },
+  { label: 'qwen3-coder-next-nvfp4', model: 'RedHatAI/Qwen3-Coder-Next-NVFP4', quant: 'nvfp4', args: ['--quantization', 'modelopt_fp4', '--moe-backend', 'flashinfer_b12x', '--mamba-ssm-cache-dtype', 'bfloat16', '--block-size', '128', '--reasoning-parser', 'qwen3', '--tool-call-parser', 'qwen3_coder', '--enable-auto-tool-choice', '--language-model-only'], env: { VLLM_HAS_FLASHINFER_CUBIN: '1' }, optional: true },
 ]);
 
 const fail = (code, message) => Object.assign(new Error(`${code}: ${message}`), { code });
 const isPosInt = value => Number.isInteger(value) && value > 0;
 const isPosNum = value => typeof value === 'number' && Number.isFinite(value) && value > 0;
+
+// Validates the optional NAME: value env object (at most 8 entries); returns it, or {} when absent.
+export function validateEnvOptions(env) {
+  if (env === undefined) return {};
+  if (env === null || typeof env !== 'object' || Array.isArray(env)) throw fail('gpu-env-invalid', 'env must be an object of NAME: value strings');
+  const entries = Object.entries(env);
+  if (entries.length > 8) throw fail('gpu-env-invalid', 'env may hold at most 8 entries');
+  for (const [name, value] of entries) {
+    if (!/^[A-Z][A-Z0-9_]{0,60}$/.test(name) || typeof value !== 'string' || !/^[A-Za-z0-9._-]{1,40}$/.test(value)) throw fail('gpu-env-invalid', 'env names must match ^[A-Z][A-Z0-9_]{0,60}$ and values must match ^[A-Za-z0-9._-]{1,40}$');
+  }
+  return env;
+}
 
 export function validateSshTarget(target) {
   if (typeof target !== 'string' || !TARGET_RE.test(target) || target.startsWith('-')) throw fail('gpu-target-invalid', 'target must be [user@]host (letters, digits, dots, dashes)');
@@ -57,6 +69,7 @@ export function validateUpOptions(options) {
   if (!Array.isArray(args) || args.some(item => typeof item !== 'string' || !/^[A-Za-z0-9._=:/-]{1,80}$/.test(item))) throw fail('gpu-option-invalid', 'extra server arguments may only hold letters, digits and . _ = : / -');
   const reserved = item => ['--host', '--port', '--api-key'].some(flag => item === flag || item.startsWith(`${flag}=`));
   if (args.some(reserved)) throw fail('gpu-option-invalid', 'server args may not set --host, --port or --api-key');
+  validateEnvOptions(options.env);
 }
 
 // Hours the session may run: the owner's limit, and never more than the dollar cap pays for.
@@ -81,13 +94,14 @@ export function replicaPorts(count, { remotePortBase = GPU_DEFAULTS.remotePortBa
 }
 
 // The shell script run on the node (sent on stdin to `bash -s`): the dead-man timer first, then the key file, then one container per GPU.
-export function remoteStartScript({ model, image, gpus, maxModelLen, perReplica, args = [], seconds, remotePortBase, apiKey }) {
+export function remoteStartScript({ model, image, gpus, maxModelLen, perReplica, args = [], seconds, remotePortBase, apiKey, env = {} }) {
   if (typeof apiKey !== 'string' || !KEY_RE.test(apiKey)) throw fail('gpu-key-invalid', 'api key must be 48 lower-case hex characters');
+  const envFlags = Object.entries(validateEnvOptions(env)).map(([name, value]) => ` -e ${name}=${value}`).join('');
   // The timer is on the node itself, so it still fires if this computer sleeps or loses the link, and even if a later step fails.
   // Powering off is best effort (it needs passwordless sudo); the owner still has to terminate the instance, which is what stops the billing.
   const lines = [`setsid nohup sh -c 'sleep ${Math.ceil(seconds)}; docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1; rm -f "$HOME/.swarm-vllm.env"; { sudo -n shutdown -h now || shutdown -h now; } >/dev/null 2>&1' >/dev/null 2>&1 </dev/null &`, 'set -e', 'docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1 || true', 'rm -f "$HOME/.swarm-vllm.env"', 'umask 077', 'cat > "$HOME/.swarm-vllm.env" <<\'SWARMKEY\'', `VLLM_API_KEY=${apiKey}`, 'SWARMKEY'];
   for (const { index, remote } of replicaPorts(gpus, { remotePortBase })) {
-    lines.push(`docker run -d --name swarm-vllm-${index} --gpus device=${index} --ipc=host --env-file "$HOME/.swarm-vllm.env" -p 127.0.0.1:${remote}:8000 -v "$HOME/.cache/huggingface:/root/.cache/huggingface" ${image} --model ${model} --served-model-name ${model} --max-model-len ${maxModelLen} --max-num-seqs ${perReplica} --gpu-memory-utilization 0.9 --enable-prefix-caching ${args.join(' ')} >/dev/null`.replace(/ +$/, ''));
+    lines.push(`docker run -d --name swarm-vllm-${index} --gpus device=${index} --ipc=host --env-file "$HOME/.swarm-vllm.env"${envFlags} -p 127.0.0.1:${remote}:8000 -v "$HOME/.cache/huggingface:/root/.cache/huggingface" ${image} --model ${model} --served-model-name ${model} --max-model-len ${maxModelLen} --max-num-seqs ${perReplica} --gpu-memory-utilization ${GPU_DEFAULTS.memoryUtilization} ${GPU_DEFAULTS.commonArgs.join(' ')} ${args.join(' ')} >/dev/null`.replace(/ +$/, ''));
   }
   lines.push('rm -f "$HOME/.swarm-vllm.env"');
   return `${lines.join('\n')}\n`;
@@ -96,11 +110,12 @@ export function remoteStartScript({ model, image, gpus, maxModelLen, perReplica,
 export const remoteStopScript = () => 'docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1 || true\nrm -f "$HOME/.swarm-vllm.env"\n';
 
 // Container mode (the node is itself a container running the pinned vLLM image): the key is read once in the foreground, then vllm runs directly.
-export function containerStartScript({ model, gpus, maxModelLen, perReplica, args = [], seconds, remotePortBase, apiKey }) {
+export function containerStartScript({ model, gpus, maxModelLen, perReplica, args = [], seconds, remotePortBase, apiKey, env = {} }) {
   if (typeof apiKey !== 'string' || !KEY_RE.test(apiKey)) throw fail('gpu-key-invalid', 'api key must be 48 lower-case hex characters');
+  const envPrefix = Object.entries(validateEnvOptions(env)).map(([name, value]) => `${name}=${value} `).join('');
   const lines = [`setsid nohup sh -c 'sleep ${Math.ceil(seconds)}; pkill -f "[v]llm serve" >/dev/null 2>&1; rm -f "$HOME/.swarm-vllm.env" "$HOME"/.swarm-vllm-*.log' >/dev/null 2>&1 </dev/null &`, 'set -e', 'pkill -f "[v]llm serve" >/dev/null 2>&1 || true', 'rm -f "$HOME/.swarm-vllm.env"', 'umask 077', 'cat > "$HOME/.swarm-vllm.env" <<\'SWARMKEY\'', `VLLM_API_KEY=${apiKey}`, 'SWARMKEY', `export VLLM_API_KEY="$(sed -n 's/^VLLM_API_KEY=//p' "$HOME/.swarm-vllm.env")"`, `[ -n "$VLLM_API_KEY" ] || { echo "no key" >&2; exit 1; }`];
   for (const { index, remote } of replicaPorts(gpus, { remotePortBase })) {
-    lines.push(`CUDA_VISIBLE_DEVICES=${index} setsid nohup vllm serve ${model} --served-model-name ${model} --host 127.0.0.1 --port ${remote} --max-model-len ${maxModelLen} --max-num-seqs ${perReplica} --gpu-memory-utilization 0.9 --enable-prefix-caching ${args.join(' ')} > "$HOME/.swarm-vllm-${index}.log" 2>&1 </dev/null &`);
+    lines.push(`CUDA_VISIBLE_DEVICES=${index} ${envPrefix}setsid nohup vllm serve ${model} --served-model-name ${model} --host 127.0.0.1 --port ${remote} --max-model-len ${maxModelLen} --max-num-seqs ${perReplica} --gpu-memory-utilization ${GPU_DEFAULTS.memoryUtilization} ${GPU_DEFAULTS.commonArgs.join(' ')} ${args.join(' ')} > "$HOME/.swarm-vllm-${index}.log" 2>&1 </dev/null &`);
   }
   lines.push('rm -f "$HOME/.swarm-vllm.env"', 'unset VLLM_API_KEY');
   return `${lines.join('\n')}\n`;
@@ -299,8 +314,8 @@ export async function gpuUp(options, deps) {
   const hours = sessionHours({ hourlyUsd: options.hourlyUsd, maxUsd: options.maxUsd, maxHours: options.maxHours });
   const perReplica = options.perReplica ?? GPU_DEFAULTS.perReplica;
   const script = container
-    ? containerStartScript({ model: options.model, gpus, maxModelLen: options.maxModelLen ?? GPU_DEFAULTS.maxModelLen, perReplica, args: options.args ?? [], seconds: hours * 3600, remotePortBase: GPU_DEFAULTS.remotePortBase, apiKey })
-    : remoteStartScript({ model: options.model, image: options.image ?? GPU_DEFAULTS.image, gpus, maxModelLen: options.maxModelLen ?? GPU_DEFAULTS.maxModelLen, perReplica, args: options.args ?? [], seconds: hours * 3600, remotePortBase: GPU_DEFAULTS.remotePortBase, apiKey });
+    ? containerStartScript({ model: options.model, gpus, maxModelLen: options.maxModelLen ?? GPU_DEFAULTS.maxModelLen, perReplica, args: options.args ?? [], env: options.env ?? {}, seconds: hours * 3600, remotePortBase: GPU_DEFAULTS.remotePortBase, apiKey })
+    : remoteStartScript({ model: options.model, image: options.image ?? GPU_DEFAULTS.image, gpus, maxModelLen: options.maxModelLen ?? GPU_DEFAULTS.maxModelLen, perReplica, args: options.args ?? [], env: options.env ?? {}, seconds: hours * 3600, remotePortBase: GPU_DEFAULTS.remotePortBase, apiKey });
   const ports = replicaPorts(gpus, { localPortBase: options.localPort ?? GPU_DEFAULTS.localPortBase });
   const endpoints = ports.map(port => `http://127.0.0.1:${port.local}`);
   const startedAt = now();

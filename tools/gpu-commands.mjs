@@ -9,7 +9,7 @@ import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { gpuUp, gpuDown, gpuStatus, formatStatus, sessionHours, validateUpOptions, SHORTLIST, GPU_DEFAULTS, SSH_HARDENING, readSessionFile, removeSession, authFetch, PINNED_IMAGE } from './gpu.mjs';
 import { fetchCacheStats } from './gpu-cache.mjs';
-import { runBakeoff, renderBakeoff, writeBakeoffReport, measureThroughput, countEvalTasks, selectCandidates, LEVELS } from './gpu-bakeoff.mjs';
+import { runBakeoff, renderBakeoff, writeBakeoffReport, measureThroughput, countEvalTasks, selectCandidates, LEVELS, runUnderLoad } from './gpu-bakeoff.mjs';
 
 const VALUE_FLAGS = new Set(['target', 'key', 'model', 'models', 'hourly-usd', 'max-usd', 'max-hours', 'gpus', 'per-replica', 'max-model-len', 'image', 'levels', 'repo', 'best-of', 'ssh-port', 'bench-ref', 'mode', 'probe-ports', 'local-port']);
 const BOOLEAN_FLAGS = new Set(['yes', 'json', 'extra-quant', 'allow-no-poweroff']);
@@ -149,7 +149,7 @@ async function bakeoff(flags, { out, real, deps }) {
   const candidates = selectCandidates(flags.models);
   const base = upOptions({ ...flags, model: candidates[0]?.model ?? 'x/y' }, { gpus: 1 });
   validateUpOptions(base);
-  if (!flags.yes) { out(`${planText(base, { gpus: '1' })}\nThe bake-off tests ${candidates.map(item => item.label).join(', ')}${flags["extra-quant"] ? ' (and the NVFP4 extras)' : ''} one after another on one GPU, at ${LEVELS.join(', ')} concurrent agents. It stops starting models once the cap is spent.`); return { status: 'planned' }; }
+  if (!flags.yes) { out(`${planText(base, { gpus: '1' })}\nThe bake-off tests ${candidates.map(item => item.label).join(', ')}one after another on one GPU, at ${LEVELS.join(', ')} concurrent agents. one vLLM engine per GPU; all models NVFP4, text-only; best-of-N is measured under load at the largest agent count that stays under 35 ms/token. It stops starting models once the cap is spent.`); return { status: 'planned' }; }
   const root = path.resolve(flags.repo ?? deps.bakeRoot ?? '.');
   const levels = flags.levels ? flags.levels.split(',').map(Number) : LEVELS;
   if (levels.some(level => !Number.isInteger(level) || level < 1 || level > 2000)) throw Object.assign(new Error('gpu-usage: --levels must be whole numbers from 1 to 2000'), { code: 'gpu-usage' });
@@ -164,7 +164,7 @@ async function bakeoff(flags, { out, real, deps }) {
     start: async (candidate, { remainingUsd }) => {
       let session;
       try {
-        session = await gpuUp({ ...base, model: candidate.model, quant: candidate.quant, args: candidate.args, routable: false, perReplica: Math.max(...levels, 1), maxUsd: Math.max(remainingUsd, 0.01) }, real);
+        session = await gpuUp({ ...base, model: candidate.model, quant: candidate.quant, args: candidate.args, env: candidate.env, routable: false, perReplica: Math.max(...levels, 1), maxUsd: Math.max(remainingUsd, 0.01) }, real);
       } catch (error) {
         try { await gpuDown(real); } catch { /* ignore: the original error matters */ }
         throw error;
@@ -172,6 +172,7 @@ async function bakeoff(flags, { out, real, deps }) {
       apiKey = session.apiKey;
       return { endpoint: session.endpoints[0], stop: () => gpuDown(real) };
     },
+    withLoad: (context, fn) => runUnderLoad({ ...context, fetchImpl: authFetch(real.fetchImpl, apiKey) }, fn),
     cacheStats: async ({ endpoint }) => fetchCacheStats(endpoint, authFetch(real.fetchImpl, apiKey)),
     benchmark: async ({ model, bestOf }) => {
       const run = bench.runLane({ lane: 'rented', repo, runner, model, bestOf, maxUsd: base.maxUsd, baseInfo: info, log: real.log });

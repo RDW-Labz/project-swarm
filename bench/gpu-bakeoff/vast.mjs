@@ -63,6 +63,11 @@ export function checkContainerOffer(offer, { hours, maxUsd }) {
   if (offer.verification !== 'verified') problems.push(`host is ${offer.verification ?? 'unverified'}, want verified`);
   const reliability = offer.reliability2 ?? offer.reliability;
   if (!(reliability >= 0.99)) problems.push(`reliability ${reliability} is below 0.99`);
+  if (!(Number(offer.pci_gen) >= 5 && Number(offer.pcie_bw) >= 45)) problems.push(`PCIe is Gen ${offer.pci_gen ?? 'unknown'} at ${offer.pcie_bw ?? 'unknown'} GB/s, want Gen5 x16 at 45 GB/s or more`);
+  if (!(Number(offer.cpu_cores_effective) >= 16)) problems.push(`${offer.cpu_cores_effective ?? 'unknown'} vCPU, want 16 or more`);
+  if (!(Number(offer.cpu_ram) >= 65536)) problems.push(`RAM is ${offer.cpu_ram == null ? 'unknown' : (Number(offer.cpu_ram) / 1024).toFixed(0)} GB, want 64 GB or more`);
+  if (!(Number(offer.disk_space) >= 200)) problems.push(`${offer.disk_space ?? 'unknown'} GB disk available, want 200 GB or more`);
+  if (!(/nvme/i.test(offer.disk_name ?? '') || Number(offer.disk_bw) >= 1500)) problems.push(`disk is not NVMe (${offer.disk_name ?? 'unknown'}, ${offer.disk_bw ?? 'unknown'} MB/s), want NVMe or 1500 MB/s or more`);
   const worst = Number(offer.dph_total) * hours + Number(offer.inet_down_cost ?? 0) * 100;
   if (!(worst <= maxUsd * 0.8)) problems.push(`worst case for ${hours} h incl. about 100 GB of downloads is $${worst.toFixed(2)}, over 80% of the $${maxUsd} cap`);
   if (problems.length) throw new Error(`offer ${offer.id} refused: ${problems.join('; ')}`);

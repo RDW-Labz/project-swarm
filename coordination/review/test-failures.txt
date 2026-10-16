@@ -1,0 +1,136 @@
+=== tests/gpu.test.mjs
+  ---
+  type: 'test'
+  error: |-
+    Expected values to be strictly equal:
+    
+    0 !== 50
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+not ok 12 - bake-off: our own tasks decide the ranking; cost per passing task from the model's time on the node; the cap stops later models; NVFP4 only as an extra
+  ---
+  type: 'test'
+  error: |-
+    the NVFP4 candidate needs includeExtra
+    + actual - expected
+    
+      [
+        'a',
+        'b',
+not ok 14 - swarm gpu: without --yes it only prints the plan; flags are strict; bake-off plans one GPU and names the models
+  ---
+  type: 'test'
+  error: |-
+    The input did not match the regular expression /qwen3\.6-35b-a3b-fp8.*NVFP4 extras/s. Input:
+    
+    'Plan (nothing is started yet):\n' +
+      '  node: ubuntu@203.0.113.9 (a node you already rented; swarm rents nothing)\n' +
+      '  model: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8, one server per GPU (all), reached through an ssh tunnel, no key of yours on the node (a random per-rental key protects the servers)\n' +
+      '  price: $3/h; hard cap $6 => the session ends after 2.00 h, and a timer on the node removes the servers and powers it off then\n' +
+=== tests/gpu-bestof.test.mjs
+not ok 4 - cacheStats is called once per model with its endpoint; cacheHitRate is stored, or null without cacheStats
+  ---
+  type: 'test'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        {
+          endpoint: 'a'
+not ok 5 - renderBakeoff shows the N=3 pass count and cache hit, or n/a for both when absent
+  ---
+  type: 'test'
+  error: |-
+    The input did not match the regular expression /N=3: 8\/10/. Input:
+    
+    '# GPU bake-off\n' +
+      '\n' +
+      '\n' +
+=== tests/gpu-lineup.test.mjs
+not ok 1 - shortlist has the three entries in order with the expected models
+  ---
+  type: 'test'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+    +   'qwen3.6-35b-a3b-nvfp4',
+    +   'nemotron-3.5-lightning-nvfp4',
+not ok 2 - only the first shortlist entry is not marked extra
+  ---
+  type: 'test'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + undefined
+    - true
+    
+not ok 3 - each shortlist quant matches its name
+  ---
+  type: 'test'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+    -   'fp8',
+        'nvfp4',
+not ok 6 - nemotron args include the nemotron_v3 parser and marlin moe backend
+  ---
+  type: 'test'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'qwen3'
+    - 'nemotron_v3'
+    
+not ok 7 - selectCandidates with no argument returns only the qwen3.6 entry
+  ---
+  type: 'test'
+  error: |-
+    Expected values to be strictly equal:
+    
+    3 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+not ok 8 - selectCandidates with all three labels returns them in order with args
+  ---
+  type: 'test'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    ... Skipped lines
+    
+      [
+    +   [],
+=== tests/vast-container.test.mjs
+not ok 1 - a good offer passes with worstUsd 5.2, S and WS names both
+  ---
+  type: 'test'
+  code: 'ERR_TEST_FAILURE'
+    checkContainerOffer (file:///Users/bean/project-swarm/bench/gpu-bakeoff/vast.mjs:73:30)
+    TestContext.<anonymous> (file:///Users/bean/project-swarm/tests/vast-container.test.mjs:13:22)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+not ok 3 - reliability falls back to reliability when reliability2 is absent
+  ---
+  type: 'test'
+  code: 'ERR_TEST_FAILURE'
+    checkContainerOffer (file:///Users/bean/project-swarm/bench/gpu-bakeoff/vast.mjs:73:30)
+    TestContext.<anonymous> (file:///Users/bean/project-swarm/tests/vast-container.test.mjs:31:13)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+not ok 4 - rankContainerOffers drops failures, puts datacenter first, sorts by price, does not mutate
+  ---
+  type: 'test'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+    + []
+    - [
+    -   4,

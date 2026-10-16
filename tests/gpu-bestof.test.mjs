@@ -2,7 +2,7 @@
 import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runBakeoff, renderBakeoff } from '../tools/gpu-bakeoff.mjs';
+import { runBakeoff, renderBakeoff, LEVELS } from '../tools/gpu-bakeoff.mjs';
 
 const candidates = [{ label: 'a', model: 'o/a', quant: 'fp8' }];
 
@@ -48,12 +48,29 @@ test('bestOf [3] alone still runs N=1 first', async () => {
   assert.equal(ranked[0].passed, 5);
 });
 
-test('cacheStats is called once per model with its endpoint; cacheHitRate is stored, or null without cacheStats', async () => {
+test('sweeps the five agent levels in order and picks the highest passing level', async () => {
+  const seenLevels = [];
+  const { deps } = fakeDeps({
+    throughput: async ({ level }) => {
+      seenLevels.push(level);
+      return { level, errorRate: 0, tokPerSec: 10, tokPerSecPerAgent: 10, msPerToken: 20 };
+    },
+  });
+  const { ranked } = await runBakeoff({ candidates, hourlyUsd: 1, capUsd: 100, bestOf: [1] }, deps);
+  assert.deepEqual(LEVELS, [32, 64, 96, 128, 192]);
+  assert.deepEqual(seenLevels, [32, 64, 96, 128, 192]);
+  assert.equal(ranked[0].agentsPerGpu, 192);
+  assert.equal(ranked[0].chosenAgents, 192);
+});
+
+test('cacheStats is called once per level per model with its endpoint; cacheHitRate is stored, or null without cacheStats', async () => {
   const seen = [];
   const { deps } = fakeDeps({ cacheStats: async o => { seen.push(o); return { hitRate: 0.82 }; } });
   const two = [...candidates, { label: 'b', model: 'o/b', quant: 'fp8' }];
   const { ranked } = await runBakeoff({ candidates: two, hourlyUsd: 1, capUsd: 100 }, deps);
-  assert.deepEqual(seen, [{ endpoint: 'a' }, { endpoint: 'b' }]);
+  assert.equal(seen.length, LEVELS.length * 2);
+  assert.deepEqual([...new Set(seen.map(o => o.endpoint))], ['a', 'b']);
+  assert.equal(seen.filter(o => o.endpoint === 'a').length, LEVELS.length);
   assert.equal(ranked.find(i => i.label === 'a').cacheHitRate, 0.82);
   const none = await runBakeoff({ candidates, hourlyUsd: 1, capUsd: 100 }, fakeDeps().deps);
   assert.equal(none.ranked[0].cacheHitRate, null);
@@ -67,10 +84,10 @@ test('renderBakeoff shows the N=3 pass count and cache hit, or n/a for both when
     agentsPerGpu: 1, costPerPassUsd: 0.5, costUsd: 1, minutes: 30,
   };
   const text = renderBakeoff({ ranked: [item], spentUsd: 1 }, { hourlyUsd: 1, date: '2026-01-01' });
-  assert.match(text, /N=3: 8\/10/);
+  assert.match(text, /\| 8\/10 \|/);
   assert.match(text, /\| 82% \|/);
   const { cacheHitRate, ...noCache } = item;
   const bare = renderBakeoff({ ranked: [{ ...noCache, byBestOf: [item.byBestOf[0]] }], spentUsd: 1 }, { hourlyUsd: 1, date: '2026-01-01' });
   assert.match(bare, /\| n\/a \| n\/a \|/);
-  assert.doesNotMatch(bare, /N=3/);
+  assert.doesNotMatch(bare, /\| 8\/10 \|/);
 });
