@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "tests-container-gpu",
+      "context": [
+        "tests/gpu-vast.test.mjs",
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tests/gpu-container.test.mjs"
+      ],
+      "prompt": "Write tests/gpu-container.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\", second line \"import './_isolate-config.mjs';\"). Copy envFor, options and the fakes helper and MODEL from tests/gpu-vast.test.mjs (read it and tools/gpu.mjs). In these tests the fake ssh must answer by command text: a call whose last argument starts with 'nvidia-smi -L' returns 'GPU 0: NVIDIA RTX PRO 6000\\nVLLM:/usr/local/bin/vllm\\nROOT:0' (or with an empty VLLM: line when a test asks); a call whose last argument is 'cat /proc/net/tcp /proc/net/tcp6' returns a configurable text (default: a header line plus one LISTEN row for 127.0.0.1:8000, i.e. '   0: 0100007F:1F40 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 1 1 0000000000000000 100 0 0 10 0' ); every other call returns an empty stdout. Because tools/gpu.mjs may run other commands, build the fake to answer 'ss -ltnH' with an empty stdout as well. Tests: (1) listeningFromProc and hostFromProcAddr: 0100007F:1F40 is { host '127.0.0.1', port 8000 }; 00000000:1F40 is host '0.0.0.0'; the IPv6 all-zero host is '::', 00000000000000000000000001000000 is '::1', 0000000000000000FFFF00000100007F is '::ffff:127.0.0.1'; only rows with state 0A are returned (a row with state 01 is skipped); header lines are skipped. (2) containerStartScript({ model: MODEL, gpus: 2, maxModelLen: 4096, perReplica: 8, args: ['--quantization', 'fp8'], seconds: 120.4, remotePortBase: 8000, apiKey: 'a'.repeat(48) }): its first line starts with setsid nohup sh -c 'sleep 121; pkill -f \"vllm serve\"; set -e comes second; there are exactly two 'vllm serve' launch lines with CUDA_VISIBLE_DEVICES=0 and =1, --host 127.0.0.1, --port 8000 and 8001, --enable-prefix-caching and --quantization fp8; the key appears only in the here-document line VLLM_API_KEY=<key> (count occurrences of the 48 'a' string in the whole script: exactly 1) and never after '--api-key'; the last line removes the env file; no 'docker' text anywhere; a bad key throws /gpu-key-invalid/. containerStopScript contains pkill and rm -f. (3) gpuUp(options({ mode: 'container' }), deps) succeeds with one GPU: the start script sent over ssh (the call with input) is the container script (contains 'vllm serve', no 'docker'), no ssh command contains 'docker version' or 'sudo', the session has mode 'container' and powerOff false, and the exposure check ran 'cat /proc/net/tcp /proc/net/tcp6'. (4) A node without vllm (empty VLLM: line) makes gpuUp reject with /gpu-no-vllm/ before any start script is sent and leaves no session. (5) /proc listing with 0.0.0.0:8000 LISTEN (00000000:1F40) makes gpuUp reject with /gpu-exposed/, a stop script (call with input containing 'pkill') is sent, and no session remains; with [::]-style row (32 zero hex digits:1F40 in tcp6 text) the same; a row on 0.0.0.0:22 (00000000:0016) is fine. If the /proc command throws, gpuUp rejects with /gpu-exposure-unknown/. (6) options.probePorts [31337]: probePort (fake in fakes) is called with port 31337 for the resolved address; when it returns true for 31337 gpuUp rejects with /gpu-exposed/. (7) gpuDown for a container session sends the container stop script (input contains 'pkill', not 'docker') and the result message contains 'destroy the instance'; for a vm session (mode absent) the message still contains 'terminate the instance'. (8) mode 'weird' is rejected by validateUpOptions with /gpu-option-invalid/; probePorts with 70000 or 9 entries is rejected too. Use only names the files export; keep tests short."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "tests-container-vast",
+      "context": [
+        "tests/vast-rental.test.mjs",
+        "bench/gpu-bakeoff/vast.mjs"
+      ],
+      "outputs": [
+        "tests/vast-container.test.mjs"
+      ],
+      "prompt": "Write tests/vast-container.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\"). Import checkContainerOffer, rankContainerOffers, containerCreateBody from ../bench/gpu-bakeoff/vast.mjs and PINNED_IMAGE from ../tools/gpu.mjs (read vast.mjs for exact behaviour). Tests: (1) a good offer { id: 7, gpu_name: 'RTX PRO 6000 S', num_gpus: 1, rentable: true, verification: 'verified', reliability2: 0.995, dph_total: 1.3, hosting_type: 1 } passes checkContainerOffer with hours 4 and maxUsd 15 and returns worstUsd 5.2; the name 'RTX PRO 6000 WS' passes too. (2) It is refused (message contains 'offer 7 refused' and the reason) for: 'RTX PRO 6000 Max-Q'; 'RTX PRO 5000'; num_gpus 2; rentable false; verification 'unverified' and 'deverified'; reliability2 0.98; (when reliability2 is absent) reliability 0.98 refused and 0.995 accepted; a price of 4 per hour for 4 hours (over 80% of the cap). (3) rankContainerOffers drops offers that fail, puts hosting_type 1 before 0 even when the datacenter one is dearer, and sorts by price within each group, and does not mutate its input. (4) containerCreateBody() equals { image: PINNED_IMAGE, disk: 200, runtype: 'ssh_direct', label: 'swarm-bakeoff' }, has no vm, env or ports keys, and the image matches /@sha256:[0-9a-f]{64}$/ and contains no ':latest'; containerCreateBody({ disk: 120, label: 'x' }) uses them. Keep it short."
+    }
+  ]
+}

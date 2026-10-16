@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "tests-container-review",
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "context": [
+        "tests/gpu-container.test.mjs",
+        "tools/gpu.mjs",
+        "tools/gpu-commands.mjs"
+      ],
+      "outputs": [
+        "tests/gpu-container-review.test.mjs"
+      ],
+      "prompt": "Write tests/gpu-container-review.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\", second line \"import './_isolate-config.mjs';\"). Copy envFor, options, fakes, MODEL and helpers from tests/gpu-container.test.mjs (read it, tools/gpu.mjs and tools/gpu-commands.mjs; its fake fetch answers 401 without an authorization header and 200 with one; probePort is faked false). Tests for review fixes: (1) A server that answers WITHOUT the key: set deps.fetchImpl to return { ok: true, status: 200, json: async () => ({ data: [{ id: MODEL }] }) } for every request regardless of headers; gpuUp (container mode and vm mode) rejects with /gpu-no-auth/, a stop script (call with input) was sent after the start script, the session file is gone, and deps.stopTunnel was called with the tunnel pid returned by openTunnel (make the fake openTunnel return { pid: 777 } and record stopTunnel calls). A server that returns 401 for the unauthenticated probe passes. (2) In container mode every gpuUp failure message ends with 'Destroy the instance now (node bench/gpu-bakeoff/vast.mjs destroy).' (use the exposed-listener case, 0.0.0.0:8000 in the /proc text, to trigger it) while in vm mode it does not contain 'Destroy the instance'. (3) validateUpOptions refuses args containing '--host', '--port', '--api-key', '--port=9' and '--host=0.0.0.0' with /gpu-option-invalid/ and accepts ['--quantization','fp8']. (4) containerStopScript contains 'pgrep', the pattern '[v]llm serve' and removes the swarm vllm log files (the log file glob in the home directory), and its last non-empty line is the negated pgrep check that makes the command fail when a server survives; the container timer line (first line of containerStartScript) contains '[v]llm serve' and the log file removal and does not contain the text 'pkill -f \"vllm serve\"'. (5) The container node exposure command is exactly 'cat /proc/net/tcp; cat /proc/net/tcp6 2>/dev/null; true' (find the ssh call whose last argument starts with 'cat /proc/net/tcp'), and an empty reply from it still rejects with /gpu-exposure-unknown/. (6) Signal handling in runGpuCommand(['up', ...flags, '--yes', '--mode', 'container'], { out, env, gpu: <fakes-like deps>, signalTarget, exit }) where signalTarget = { once(name, fn) {record}, off(name, fn) {record} } and exit = code => record: while the command runs handlers for SIGINT and SIGTERM are registered, and after it finishes they are removed (off called for both). Then run again but capture the SIGINT handler during the run (register inside once; make the fake openTunnel await a promise so the command is still running when you call the handler); calling it runs the stop (a call with input containing 'pkill' is made), prints an 'interrupted' message to stderr (capture with a fake: temporarily replace process.stderr.write and restore it in a finally) and calls exit(130). Keep tests short; use only names the files export."
+    }
+  ]
+}

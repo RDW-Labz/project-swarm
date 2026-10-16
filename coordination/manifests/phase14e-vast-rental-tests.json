@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "tests-vast",
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "context": [
+        "bench/gpu-bakeoff/vast.mjs"
+      ],
+      "outputs": [
+        "tests/vast-rental.test.mjs"
+      ],
+      "prompt": "Write tests/vast-rental.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\"). It imports from ../bench/gpu-bakeoff/vast.mjs (read it for exact behaviour; import only the named exports: API, VM_IMAGE, readKey, createClient, checkOffer, createBody, deadlineAt, findOffer, getInstance, destroyInstance, waitRunning, writeState, readState, reap). Importing the module must not run anything. Use fake fetch functions returning objects with ok, status and async text() (JSON strings), a fake exec for readKey, a fake wait that does not sleep, and temp files (os.tmpdir + mkdtempSync) for writeState/readState. Tests: (1) readKey returns the trimmed fake exec output and passes ('security', ['find-generic-password','-s','project-swarm','-a','vast.api_key','-w'], ...); an empty output throws. (2) createClient.call sends Authorization 'Bearer <key>' and JSON content type, parses JSON, and on a non-ok response throws an error whose message contains the method, path and status but NOT the key. (3) checkOffer accepts { id: 1, gpu_name: 'RTX PRO 6000 Max-Q', num_gpus: 1, vms_enabled: true, rentable: true, verification: 'verified', dph_total: 2.211 } for hours 4 and maxUsd 15 and returns worstUsd 8.844; refuses (throws, message contains the reason) a non-RTX-PRO-6000 gpu, num_gpus 2, vms_enabled false, rentable false, verification 'unverified', a price of 3.6 per hour for 4 hours with cap 15 (over 80%), and a null offer. (4) createBody() has image VM_IMAGE, runtype 'ssh_direct', vm true, disk 150 and label 'swarm-bakeoff'; deadlineAt(0, 4) is '1970-01-01T04:00:00.000Z'. (5) findOffer posts to API + '/bundles/' and returns the offer with the given id or null. (6) destroyInstance calls DELETE on /instances/ID/ and retries after a failure (fail twice then succeed returns true; fail always throws after the retry count). (7) waitRunning returns when actual_status is 'running' and ssh_host and ssh_port exist, keeps waiting while 'loading', and throws on timeout (use a fake now that advances). (8) reap: with a fake now already past the deadline it calls destroy once and returns 'destroyed'; while before the deadline it waits (the fake wait advances the clock) and then destroys at the deadline; if the injected state function returns { destroyedAt: 'x' } it returns 'gone' without calling the API; an API that errors on every call while waiting does not end the wait early (it still destroys at the deadline). Keep each test short."
+    }
+  ]
+}

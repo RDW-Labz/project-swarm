@@ -53,7 +53,8 @@ test('bakeoff with injected deps writes the report, reminds to terminate, and le
     ssh: async argv => ({ stdout: String(argv.at(-1)).startsWith('nvidia-smi -L') ? 'GPU 0: x\nSUDO:ok\nDOCKER:28.0.1' : '' }),
     openTunnel: async () => ({ pid: 1 }),
     stopTunnel: async () => {},
-    fetchImpl: async url => ({ ok: true, json: async () => (String(url).endsWith('/v1/models') ? { data: [{ id: 'Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8' }] } : { usage: { completion_tokens: 50 } }) }),
+    probePort: async () => false,
+    fetchImpl: async (url, init) => (init?.headers?.authorization ? { ok: true, status: 200, json: async () => (String(url).endsWith('/v1/models') ? { data: [{ id: 'Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8' }] } : { usage: { completion_tokens: 50 } }) } : { ok: false, status: 401, json: async () => ({}) }),
     log: () => {},
   };
   const bench = { buildBaseRepo: () => ({ head: 'h' }), runLane: () => ({ results: [{ pass: true }, { pass: false }] }) };
