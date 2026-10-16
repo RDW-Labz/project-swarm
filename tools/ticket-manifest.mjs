@@ -76,7 +76,10 @@ export function ticketsToManifest(tickets,opts={}){
     }
     const context=[...new Set([...(t.context||[]),...(t.contracts||[])])];
     if(contract&&!context.includes(contract))context.push(contract);
+    // The contract files are shared by every ticket of a project: ask the Anthropic lane to cache them as the shared prefix.
+    const shared=[...new Set([...(t.contracts||[]),...(contract?[contract]:[])])].filter(p=>context.includes(p)).sort().slice(0,10);
     const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:isSensitiveJob(t,scope,reqs),prompt:promptFor(t,reqs,lessons),context,outputs,acceptance:t.acceptance||[],timeoutMs:600000};
+    if(shared.length)job.cacheContext=shared;
     const deps=(t.dependsOn||[]).filter(d=>inSet.has(d));
     if(deps.length)job.after=deps;
     if(t.risk==='high')job.hard=true;

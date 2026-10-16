@@ -168,6 +168,16 @@ export function validateEnvelope(value, outputs) {
   if (!Array.isArray(value.files)) fail('Invalid structured output envelope: files must be an array');
   if (usesEdits && !Array.isArray(value.edits)) fail(`Invalid structured output envelope: edits must be an array, not ${typeof value.edits === 'string' ? 'a string' : typeof value.edits}`);
   if (hasResult && (!object(value.result))) fail('Invalid structured output envelope: result must be an object');
+  // A path a worker lists both whole (files) and as edits: the whole file wins and the edits for it are dropped, noted in
+  // value.normalized (not enumerable, so the envelope keys stay the same). Anything else still fails below.
+  const wholePaths = new Set(value.files.map(file => file?.path).filter(path => typeof path === 'string' && outputs.includes(path)));
+  // Only well-formed edits are dropped; a malformed one stays and fails the checks below.
+  const droppable = edit => wholePaths.has(edit?.path) && exact(edit, ['path', 'find', 'replace']) && typeof edit.find === 'string' && edit.find !== '' && typeof edit.replace === 'string';
+  if (Array.isArray(value.edits) && value.edits.some(droppable)) {
+    const dropped = [...new Set(value.edits.filter(droppable).map(edit => edit.path))];
+    value.edits = value.edits.filter(edit => !droppable(edit));
+    Object.defineProperty(value, 'normalized', { value: dropped.map(path => `edits-dropped-for-whole-file:${path}`), enumerable: false });
+  }
   const seen = new Set();
   const editPaths = new Set();
   let editCount = 0;
@@ -210,6 +220,14 @@ export function validateEnvelope(value, outputs) {
 // Row #185: applies one worker-proposed find/replace to a file's current content. A `find` that
 // does not occur, or occurs more than once, is refused by name (`edit-no-match`/
 // `edit-multiple-match`) rather than guessing — the coordinator, not the model, must be sure.
+const ANTHROPIC_DEFAULT_MAX_TOKENS = 4096;
+const ANTHROPIC_RETRY_MAX_TOKENS = 16000;
+const sumUsage = (a, b) => {
+  const out = { ...(b ?? {}) };
+  for (const key of Object.keys(a ?? {})) if (Number.isFinite(a[key])) out[key] = (Number.isFinite(out[key]) ? out[key] : 0) + a[key];
+  return out;
+};
+
 export function applyEdit(content, find, replace) {
   const text = content ?? '';
   const first = text.indexOf(find);
@@ -368,11 +386,11 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     const bestOfN = job.agent === 'rented' ? bestOfCount(job, config.bestOf) : 1;
     const headers = { 'content-type': 'application/json' }; let url = config.endpoint, body;
     // Field lesson #226: a reasoning model's own default covers its thinking plus its reply.
-    const limit = job.maxOutputTokens ?? (job.agent === 'openrouter' ? defaultMaxOutputTokens(job.model) : job.agent === 'rented' ? 16000 : 8192);
-    let anthropicUsage = null;
+    const limit = job.maxOutputTokens ?? (job.agent === 'openrouter' ? defaultMaxOutputTokens(job.model) : job.agent === 'rented' ? 16000 : job.agent === 'anthropic' ? ANTHROPIC_DEFAULT_MAX_TOKENS : 8192);
+    let anthropicUsage = null, firstCallUsage = null;
     // A batch request is billed at half the standard price (an unknown price stays unknown, never zero).
     const priced = standard => (job.batch === true ? batchCostUsd(standard) : standard);
-    anthropicBilled = () => (anthropicUsage ? priced(anthropicCostUsd(job.model, anthropicUsage)) : null);
+    anthropicBilled = () => (anthropicUsage || firstCallUsage ? priced(anthropicCostUsd(job.model, sumUsage(firstCallUsage, anthropicUsage))) : null);
     if (job.agent === 'openai') { headers.authorization = `Bearer ${config.key}`; body = { model: job.model, instructions, input, store: false, stream: false, max_output_tokens: limit, tools: [], text: { format: { type: 'json_schema', name: 'swarm_output', strict: true, schema } } }; }
     else if (job.agent === 'gemini') { headers['x-goog-api-key'] = config.key; url += `${encodeURIComponent(job.model)}:generateContent`; body = { systemInstruction: { parts: [{ text: instructions }] }, contents: [{ role: 'user', parts: [{ text: input }] }], generationConfig: { responseMimeType: 'application/json', responseJsonSchema: schema, maxOutputTokens: limit, candidateCount: 1 } }; }
     else if (job.agent === 'rented') { if (config.key) headers.authorization = `Bearer ${config.key}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, ...(bestOfN > 1 ? { n: bestOfN } : {}), ...(env.SWARM_RENTED_THINKING === 'off' ? { chat_template_kwargs: { enable_thinking: false } } : {}), response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
@@ -451,6 +469,28 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
         await recordFinishReason(bodyJson);
         retriedForLength = true;
       }
+      // A truncated Anthropic answer gets one retry at double the limit (never above the retry ceiling), re-checked against the
+      // job's own caps with the first call's cost counted, so a short default limit costs at most one extra small request.
+      if (job.agent === 'anthropic' && job.batch !== true && job.maxOutputTokens === undefined && bodyJson?.stop_reason === 'max_tokens' && limit * 2 <= ANTHROPIC_RETRY_MAX_TOKENS) {
+        const firstUsage = bodyJson.usage ?? null;
+        const doubledLimit = limit * 2;
+        const firstCost = firstUsage ? anthropicCostUsd(job.model, firstUsage) : 0;
+        const cachedChars = (Array.isArray(job.cacheContext) ? cappedContext.filter(file => job.cacheContext.includes(file.path)) : []).reduce((sum, file) => sum + String(file.content).length, 0);
+        const worstUsd = anthropicWorstUsd(job.model, { inputChars: instructions.length + input.length + Math.ceil(cachedChars * 0.25), maxTokens: doubledLimit });
+        const day = spend.stamp.toISOString().slice(0, 10);
+        const used = anthropicSpentSoFar(readAnthropicLedger(spend.ledger), { jobId: job.id, day });
+        const extra = Number.isFinite(firstCost) ? firstCost : 0;
+        assertAnthropicCaps({ worstUsd, spent: { job: used.job + extra, today: used.today + extra, total: used.total + extra }, limits: anthropicCaps(env) });
+        // The first call is billed already: write it now, so a crash during the retry cannot lose it and other jobs see it.
+        if (firstUsage) { appendAnthropicLedger(spend.ledger, { ts: spend.stamp.toISOString(), jobId: job.id, model: job.model, costUsd: firstCost, estimated: false, kind: 'length-retry-first' }); firstCallUsage = firstUsage; }
+        anthropicUsage = null;
+        body.max_tokens = doubledLimit;
+        response = await sendRequest();
+        bodyJson = await readJson(response);
+        anthropicUsage = bodyJson?.usage ?? null;
+        await recordFinishReason(bodyJson);
+        retriedForLength = true;
+      }
       result = extract(job.agent, bodyJson, bestOfN);
     }
     finally {
@@ -497,7 +537,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     if (credentials.some(key => retainedStrings.some(value => value.includes(key)))) fail('Provider response contained a credential; output discarded');
     // Lesson 295: Include result object as last JSON line in response.txt (via response field)
     const responseText = envelope.result ? `${envelope.summary}\n${JSON.stringify(envelope.result)}\n` : envelope.summary;
-    return { ...(bestOfInfo ? { bestOf: bestOfInfo } : {}), finalObject: envelope.result ?? (job.report === 'short' ? null : envelope), status: 'complete', error: null, finishReason, files: envelope.files, edits, contextInlined, response: responseText, actualModel: result.actualModel, usage: result.usage, modelUsage: null, costUsd: job.agent === 'anthropic' ? priced(anthropicCostUsd(job.model, result.usage)) : job.agent === 'openrouter' && Number.isFinite(Number(result.usage?.cost)) ? Number(result.usage.cost) : null, exitCode: null, stderr: '', ...(retriedForLength ? { retriedForLength: true } : {}), stdout: JSON.stringify({ type: 'result', provider: job.agent, status: 'complete', actualModel: result.actualModel, usage: result.usage, ...(result.provider ? { upstream: result.provider } : {}) }) + '\n' };
+    return { ...(bestOfInfo ? { bestOf: bestOfInfo } : {}), finalObject: envelope.result ?? (job.report === 'short' ? null : envelope), status: 'complete', error: null, finishReason, files: envelope.files, edits, contextInlined, response: responseText, actualModel: result.actualModel, usage: result.usage, modelUsage: null, costUsd: job.agent === 'anthropic' ? priced(anthropicCostUsd(job.model, firstCallUsage ? sumUsage(firstCallUsage, anthropicUsage) : result.usage)) : job.agent === 'openrouter' && Number.isFinite(Number(result.usage?.cost)) ? Number(result.usage.cost) : null, exitCode: null, stderr: '', ...(retriedForLength ? { retriedForLength: true } : {}), stdout: JSON.stringify({ type: 'result', provider: job.agent, status: 'complete', actualModel: result.actualModel, usage: result.usage, ...(result.provider ? { upstream: result.provider } : {}) }) + '\n' };
   } catch (error) {
     // Field lesson #285: a truncated-response error otherwise gives no sense of scale; the prompt
     // size rides along so a too-small maxOutputTokens is provable without guessing.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.83.0
+
+- Worker output: a file returned both whole (`files`) and as `edits` is normalized to the whole file instead of failing the job.
+- Anthropic lane (owner decision): default concurrency 64 (adaptive limit still on) and default `max_tokens` 4096; an answer cut off at the limit is retried once at double, re-checked against the job's spend caps with the first call counted and billed. Ticket jobs mark their contract files as the cached shared prefix (`cacheContext`). See docs/lanes.md.
+
 ## 1.82.0
 
 - Phase 15, part 1, the lessons loop: structured lessons (`swarm lessons add|list|show|stats|check|backfill|notes`, one JSON file per lesson under `lessons/<project>/`, secrets, emails, home paths and run ids refused); all 229 numbered field lessons and the 2 queue rows are backfilled (idempotent); "Watch out for" notes (up to 3, at the end of the prompt) added to ticket jobs by `swarm go --scope`; a golden eval set (`evals/`, 8 tasks from real failures, each proven red on the start and green on the solution) with `swarm eval list|validate|manifest|score|gate` and a per-model baseline gate. Design and use: docs/lessons-loop.md and docs/plans/phase15-lessons-design.md.

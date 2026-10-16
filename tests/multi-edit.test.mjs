@@ -14,11 +14,15 @@ const exec = promisify(execFile);
 const edit = (file, find, replace) => ({ path: file, find, replace });
 const env = { SWARM_CONFIG: process.env.SWARM_CONFIG };
 
-test('several edits to one path are valid; a path in both files and edits is not', () => {
+test('several edits to one path are valid; a path in both files and edits keeps the whole file and drops its edits', () => {
   const outputs = ['a.txt', 'b.txt'];
   const ok = validateEnvelope({ summary: 's', files: [{ path: 'b.txt', content: 'B' }], edits: [edit('a.txt', 'x', 'y'), edit('a.txt', 'y', 'z')] }, outputs);
   assert.equal(ok.edits.length, 2);
-  assert.throws(() => validateEnvelope({ summary: 's', files: [{ path: 'a.txt', content: 'A' }], edits: [edit('a.txt', 'x', 'y'), edit('b.txt', 'q', 'r')] }, outputs), /"a\.txt" is in both files and edits/);
+  const both = validateEnvelope({ summary: 's', files: [{ path: 'a.txt', content: 'A' }], edits: [edit('a.txt', 'x', 'y'), edit('b.txt', 'q', 'r')] }, outputs);
+  assert.deepEqual(both.edits.map(e => e.path), ['b.txt']);
+  assert.deepEqual(both.normalized, ['edits-dropped-for-whole-file:a.txt']);
+  assert.throws(() => validateEnvelope({ summary: 's', files: [{ path: 'a.txt', content: 'A' }], edits: [edit('a.txt', '', 'y'), edit('b.txt', 'q', 'r')] }, outputs), /find cannot be empty/);
+  assert.throws(() => validateEnvelope({ summary: 's', files: [{ path: 'a.txt', content: 'A' }], edits: [{ path: 'a.txt', find: 'x', replace: 'y', extra: 1 }, edit('b.txt', 'q', 'r')] }, outputs), /unexpected/);
   assert.throws(() => validateEnvelope({ summary: 's', files: [], edits: [edit('a.txt', 'x', 'y')] }, outputs), /every declared output exactly once/);
   assert.throws(() => validateEnvelope({ summary: 's', files: [], edits: [edit('c.txt', 'x', 'y')] }, outputs), /not in declared outputs/);
   assert.throws(() => validateEnvelope({ summary: 's', files: [], edits: [edit('a.txt', '', 'y'), edit('b.txt', 'q', 'r')] }, outputs), /find cannot be empty/);

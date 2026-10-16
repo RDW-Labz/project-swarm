@@ -98,7 +98,11 @@ Maximum agents by each limit: requests 1,960; input tokens 204; output tokens ab
 
 Anthropic estimates output tokens per minute from each request's `max_tokens` when it starts and corrects the estimate when it ends. So agents times requests per minute times `max_tokens` must stay under 2,000,000. At the default 8192 that is about 47 agents for fast 12 s tasks; at 4096 about 95; at 2048 about 190.
 
-The lane's default concurrency is 32, which is safe at the default 8192 even for fast tasks (about 66 percent of the limit). Raise it with `lanes.anthropic.concurrency` in the machine config, up to about 96, only when jobs set `maxOutputTokens` of 4096 or less. 429 answers are already backed off and retried by the lane.
+The lane's default concurrency is 64 and its default `max_tokens` is 4096 (owner decision): 64 agents times about 5.1 requests per minute times 4096 is about 1.34 million of the 2 million output tokens per minute (67 percent). A job that needs more sets `maxOutputTokens`; an answer cut off at the limit is retried once at double (8192, never above 16000), checked against the job's own spend caps with the first call counted and billed. Adaptive concurrency stays on, so 429 answers still shrink the lane and it grows back. Raise the lane with `lanes.anthropic.concurrency` in the machine config only while agents times 5.1 times `max_tokens` stays under 2,000,000 (at 4096 that is about 95 agents).
+
+Prompt caching: ticket jobs from `swarm go --scope` list their contract files in `cacheContext`, so the contract is sent as a cached shared block first and each ticket's own text last; cached reads are billed at the cache-read rate. Caching only starts above the model's minimum size, so small contracts are sent plain.
+
+A worker that returns the same file both whole (`files`) and as `edits` no longer fails the job: the whole file wins and the edits for it are dropped.
 
 ## Which lane gets a ticket
 
