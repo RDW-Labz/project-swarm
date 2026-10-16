@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "tests-gpu-hardening",
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "context": [
+        "tests/gpu.test.mjs",
+        "tools/gpu.mjs",
+        "tools/gpu-commands.mjs"
+      ],
+      "outputs": [
+        "tests/gpu-hardening.test.mjs"
+      ],
+      "prompt": "Write tests/gpu-hardening.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\", second line \"import './_isolate-config.mjs';\"). Copy the envFor, options and fakes helpers and the MODEL constant from tests/gpu.test.mjs (read it; fakes returns an object with calls, ssh, openTunnel, stopTunnel, fetchImpl, sleep, now, env; its ssh answers nvidia-smi commands with GPU lines plus \"SUDO:ok\", and its fetchImpl lists MODEL under /v1/models). Read tools/gpu.mjs for the exact behaviour. Write these tests: (1) every ssh call gpuUp makes has all of SSH_HARDENING (import it from ../tools/gpu.mjs) in its argv, plus ClearAllForwardings=yes, and '--' before the target. (2) The start script sent on stdin has the dead-man timer ('setsid nohup sh -c') BEFORE 'set -e' and before the first 'docker run'. (3) With fakes(env, { sudo: 'no' }) gpuUp rejects with /gpu-sudo/ and no start script was sent and no session file exists (readSessionFile(env) is null); with options({ allowNoPowerOff: true }) it succeeds and the session has powerOff false; normally the session has powerOff true. (4) The session file written by a successful gpuUp has mode 0600 (fs.statSync(path).mode & 0o777; use gpuSessionPath from ../tools/rented.mjs) and state 'up'; a start script that throws (make fakes ssh throw for the 'bash -s' call) leaves a session with state 'starting' and gpuUp rejects; then gpuDown(deps) with a working ssh removes it. (5) A second gpuUp while a session exists rejects with /gpu-session-exists/ even if options.replace is true. (6) Health requires the model: a fetchImpl whose /v1/models lists a different model id never becomes healthy (use the clock-advancing sleep trick from the unhealthy test in tests/gpu.test.mjs and expect /gpu-unhealthy/). (7) gpuDown calls stopTunnel with (pid, session) only when tunnelPid is an integer above 1: write a session file by hand (JSON, via gpuSessionPath) with tunnelPid -1 and with 1 and with 4242 and check which call stopTunnel; and when ssh throws, the result message starts with 'Could not stop the servers over ssh' and still contains 'terminate the instance', and the session file is removed. (8) gpuStatus after expiry: active false, expired true, spentUsd not capped at maxHours (set the clock far past expiry), and formatStatus contains 'terminate the instance'. (9) options.routable false is stored in the session (routable false). (10) validateUpOptions accepts image 'vllm/vllm-openai@sha256:' + 64 hex chars and still rejects 'x;y'. (11) With fakes(env, { gpus: 40 }) gpuUp starts at most 16 replicas. Use only names the files export. Keep each test short."
+    }
+  ]
+}

@@ -7,10 +7,12 @@ import { defaultMaxOutputTokens } from './openrouter.mjs';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LANE_AGENTS } from './lanes.mjs';
+import { validateRentedConfig } from './rented.mjs';
 
 export const LANE_DAILY_DEFAULTS = Object.freeze({ openrouter: Object.freeze({ dailyUsd: 5 }), anthropic: Object.freeze({ dailyUsd: 20 }) });
-export const PAID_LANES = Object.freeze(['openrouter', 'openai', 'gemini', 'lambda', 'anthropic']);
-export const LANE_RESERVE_DEFAULTS = Object.freeze({ openrouter: 0.5, openai: 0.5, gemini: 0.5, lambda: 0.5, anthropic: 0.5 });
+export const PAID_LANES = Object.freeze(['openrouter', 'openai', 'gemini', 'lambda', 'anthropic', 'rented']);
+// A rented server costs by the hour (see tools/rented.mjs), not by the request, so a rented job reserves nothing of its own.
+export const LANE_RESERVE_DEFAULTS = Object.freeze({ openrouter: 0.5, openai: 0.5, gemini: 0.5, lambda: 0.5, anthropic: 0.5, rented: 0 });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 function invalid(key, reason, code = 'budget-invalid') {
   return Object.assign(new Error(`${code}: ${key} ${reason}`), { code });
@@ -27,6 +29,9 @@ function fields(value, allowed, prefix) {
 }
 export function resolveBudget({ config = {}, manifest = {}, cli = {}, raises = [] } = {}) {
   const budget = { maxUsd: null, maxTokens: null, lanes: Object.fromEntries(LANE_AGENTS.map(agent => [agent, { dailyUsd: null, dailyTokens: null, ...LANE_DAILY_DEFAULTS[agent], ...(PAID_LANES.includes(agent) ? { reserveUsd: LANE_RESERVE_DEFAULTS[agent] } : {}) }])) };
+  // A rented server's day cap defaults to one run's maximum rental (hourlyUsd x maxHoursPerRun) unless the config sets it.
+  const rentedDefault = config.rentedGpu ? validateRentedConfig(config.rentedGpu).config?.dailyUsd : undefined;
+  if (rentedDefault > 0) budget.lanes.rented.dailyUsd = rentedDefault;
   if (config.spend !== undefined) fields(config.spend, ['lanes', 'rates'], 'spend');
   validateRates(config.spend?.rates);
   if (manifest.budget !== undefined) fields(manifest.budget, ['maxUsd', 'maxTokens', 'lanes'], 'budget');
@@ -201,6 +206,15 @@ export async function settleSpend({ dir, key, usd, tokens, kind, flagged, now = 
     if (store.entries[key]) Object.assign(store.entries[key], { usd, tokens, kind, flagged });
   }, { dir, now });
 }
+// One running entry for something that costs by the hour: created on first call, raised afterwards, never lowered, no cap check
+// (the rental guard decides before each launch; the money is already being spent).
+export async function accrueSpend({ dir, key, lane, runId, root, jobId, usd, now = Date.now, isAlive }) {
+  return withSpendStore(store => {
+    const current = store.entries[key];
+    if (current) { if (usd > (current.usd ?? 0)) current.usd = usd; return; }
+    store.entries[key] = { day: utcDay(now), lane, runId, root, jobId, usd, tokens: 0, kind: 'estimated', pid: process.pid, host: os.hostname(), at: new Date(now()).toISOString(), flagged: false };
+  }, { dir, now, isAlive });
+}
 export async function releaseSpend({ dir, key }) {
   return withSpendStore(store => { delete store.entries[key]; }, { dir });
 }
@@ -221,7 +235,7 @@ export function jobSpend(record) {
   return { usd: spendNumber(record?.costUsd), tokens: spendNumber(record?.usage?.total_tokens) };
 }
 export function runTotals(state) {
-  const totals = { usd: 0, tokens: 0, unknownUsd: [] };
+  const totals = { usd: Number.isFinite(state.rental?.usd) ? state.rental.usd : 0, tokens: 0, unknownUsd: [] };
   for (const record of state.jobs ?? []) {
     const { usd, tokens } = jobSpend(record);
     totals.usd += usd ?? 0;

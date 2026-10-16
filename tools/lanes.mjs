@@ -3,10 +3,11 @@ import crypto from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
+import { validateRentedConfig, effectiveRentedRaw } from './rented.mjs';
 import path from 'node:path';
 
 export const LANE_AGENTS = Object.freeze([
-  'hermes', 'cursor', 'codex', 'claude', 'qwen', 'openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic',
+  'hermes', 'cursor', 'codex', 'claude', 'qwen', 'openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic', 'rented',
 ]);
 export const LANE_DEFAULTS = Object.freeze(Object.fromEntries(LANE_AGENTS.map(agent => [agent, Object.freeze({
   concurrency: ({ hermes: 1, cursor: 8, codex: 6, claude: 4, openrouter: 64, anthropic: 16 })[agent] ?? 32,
@@ -16,7 +17,7 @@ export const LANE_DEFAULTS = Object.freeze(Object.fromEntries(LANE_AGENTS.map(ag
   maxPauseMs: 900000,
   model: null,
   // null, or { start, min }: the lane begins at `start` requests in flight and finds its own limit (see report()).
-  adaptive: null,
+  adaptive: agent === 'rented' ? Object.freeze({ min: 1, start: 4 }) : null,
 })])));
 
 function invalid(agent, field, reason) {
@@ -46,8 +47,16 @@ function validate(agent, lane) {
   }
 }
 
-export function resolveLanes({ config = {}, manifest = {} } = {}) {
-  const lanes = Object.fromEntries(LANE_AGENTS.map(agent => [agent, { ...LANE_DEFAULTS[agent], backoff: { ...LANE_DEFAULTS[agent].backoff } }]));
+export function resolveLanes({ config = {}, manifest = {}, env = process.env } = {}) {
+  const lanes = Object.fromEntries(LANE_AGENTS.map(agent => [agent, { ...LANE_DEFAULTS[agent], backoff: { ...LANE_DEFAULTS[agent].backoff }, ...(LANE_DEFAULTS[agent].adaptive ? { adaptive: { ...LANE_DEFAULTS[agent].adaptive } } : {}) }]));
+  // The rented lane's ceiling and starting point come from the machine config's rentedGpu block.
+  // A running GPU session (swarm gpu up) lays its replicas and model over that block and makes the lane routable; without one the lane never is.
+  const { raw: rentedRaw, session: gpuSession } = effectiveRentedRaw(config.rentedGpu, env);
+  const rented = rentedRaw === undefined ? null : validateRentedConfig(rentedRaw).config;
+  if (rented) { lanes.rented.concurrency = rented.concurrency; lanes.rented.adaptive = { ...rented.adaptive }; }
+  // routable only for a live session that is not a bake-off's (a bake-off session carries routable: false and uses explicit rented jobs)
+  const routableSession = Boolean(rented && gpuSession && gpuSession.routable !== false);
+  if (routableSession) lanes.rented.model = rented.model;
   for (const source of [config.lanes, manifest.lanes]) {
     if (source === undefined) continue;
     if (!object(source)) throw invalid('lanes', 'value', 'must be an object');
@@ -68,6 +77,10 @@ export function resolveLanes({ config = {}, manifest = {} } = {}) {
     }
   }
   // adaptive: true (or a partial object) is filled in from the lane's concurrency once every override is applied.
+  // Overrides in a manifest or the lanes config can lower the rented lane, never lift it past the ceiling rentedGpu names.
+  if (rented) { lanes.rented.concurrency = Math.min(lanes.rented.concurrency, rented.concurrency); if (lanes.rented.adaptive && typeof lanes.rented.adaptive === 'object') lanes.rented.adaptive.start = Math.min(lanes.rented.adaptive.start ?? 4, lanes.rented.concurrency); }
+  // No override may make the rented lane routable without a live session.
+  if (!routableSession) lanes.rented.model = null;
   for (const agent of LANE_AGENTS) {
     const adaptive = lanes[agent].adaptive;
     if (object(adaptive) && Object.keys(adaptive).every(key => ['start', 'min'].includes(key))) lanes[agent].adaptive = { min: adaptive.min ?? 1, start: adaptive.start ?? Math.max(adaptive.min ?? 1, Math.min(8, lanes[agent].concurrency)) };

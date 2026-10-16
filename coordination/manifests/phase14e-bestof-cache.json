@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "best-of-module",
+      "outputs": [
+        "tools/best-of.mjs"
+      ],
+      "context": [],
+      "prompt": "Module spec for tools/best-of.mjs (plain ESM, Node 20+, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\"). Best-of-N for the rented GPU lane: N candidate answers are generated, the ticket's tests run on each, and the best passing one is kept. Exports: (1) BEST_OF_MAX = 8. (2) bestOfCount(job, defaultCount): returns an integer from 1 to 8: job.bestOf if it is an integer, else defaultCount if an integer, else 1; clamped to 1..8; always 1 when job.agent is not 'rented'. (3) candidateSize(envelope): total characters of every files[].content plus every edits[].replace in the envelope (envelope.files and envelope.edits may be missing: treat as empty). (4) async selectBest(candidates, check, { concurrency = 3 } = {}): candidates is an array of { envelope, text }; check(candidate, index) is async and returns { ok: true|false|null, detail?: string } (null = unknown, for example no tests exist); run the checks with at most 'concurrency' running at once (a check that throws counts as { ok: false, detail: its message }); returns { chosen: index or null, results: [{ index, ok, detail, size }] } in candidate order, where size = candidateSize(envelope). Rule: prefer candidates with ok === true and pick the smallest size (ties: the lowest index); if none is true but some are null, pick the smallest size among the null ones; if every candidate is false (or there are no candidates) chosen is null. (5) isTestFile(path): true for a path with a segment 'test' or 'tests' or '__tests__' or a file name containing '.test.' or '.spec.' or '_test.' or starting with 'test_'. (6) createTestChecker({ root, exec, fsImpl, timeoutMs = 120000 }): returns async function check({ job, envelope }) that: takes the tests = job.context filtered by isTestFile; if there are none returns { ok: null, detail: 'no tests in context' }; otherwise makes a temp directory (fsImpl.mkdtemp under os.tmpdir(), default node:fs/promises), runs exec(['git','-C',root,'worktree','add','--detach',tmp,'HEAD']), copies each job.context file that exists under root over the matching path in tmp (so uncommitted versions are used), applies the envelope: for each files[] entry writes content at its path (the path must be relative with no '..' segment and not absolute, otherwise return { ok: false, detail: 'unsafe path' }), for each edits[] entry replaces the first occurrence of edit.find with edit.replace in that file in tmp (if the file or the text is missing return { ok: false, detail: 'edit does not apply' }); then runs exec(['node','--test',...tests],{ cwd: tmp, timeoutMs }) which resolves { exitCode, stdout, stderr } (or rejects on timeout, which means ok false, detail 'timeout'); ok is exitCode === 0 and detail the last 300 characters of stderr+stdout. Always (in a finally) run exec(['git','-C',root,'worktree','remove','--force',tmp]) and remove the temp directory, ignoring errors. exec(argv, options) is injected: argv[0] is the program; the default uses child_process.execFile with a promise and never throws on a non-zero exit (it resolves the exit code)."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "gpu-cache-module",
+      "outputs": [
+        "tools/gpu-cache.mjs"
+      ],
+      "context": [],
+      "prompt": "Module spec for tools/gpu-cache.mjs (plain ESM, Node 20+, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\"). Reads vLLM's prefix-cache statistics from its Prometheus /metrics text. Exports: (1) parseCacheStats(text): returns { hits, queries, hitRate } where the numbers come from lines of the form NAME{labels} VALUE or NAME VALUE (ignore lines starting with #): hits = the sum of values of metrics named vllm:prefix_cache_hits_total (also accept vllm:gpu_prefix_cache_hits_total), queries = the sum of vllm:prefix_cache_queries_total (also vllm:gpu_prefix_cache_queries_total); hitRate = hits / queries (0 when queries is 0) rounded to 4 decimals; if neither counter exists but a gauge vllm:gpu_prefix_cache_hit_rate (or vllm:prefix_cache_hit_rate) exists, hitRate is that value (a fraction from 0 to 1, rounded to 4 decimals) and hits and queries are null; if nothing matches return { hits: null, queries: null, hitRate: null }. Values may be integers, floats or exponent forms like 1.2e+03. (2) async fetchCacheStats(endpoint, fetchImpl = fetch): GET endpoint + '/metrics' and returns parseCacheStats of the text; returns { hits: null, queries: null, hitRate: null } when the request fails or the response is not ok. (3) combineCacheStats(list): given an array of stats objects, returns { hits, queries, hitRate } summing hits and queries over the entries that have numbers and computing the combined hitRate from the sums; when no entry has numbers but some have a hitRate, returns the average of those hit rates (4 decimals) with hits and queries null; when nothing is known all three are null."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "best-of-tests",
+      "outputs": [
+        "tests/best-of.test.mjs"
+      ],
+      "context": [],
+      "prompt": "Write tests/best-of.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\"). Cover bestOfCount, candidateSize, isTestFile, selectBest (smallest passing wins, ties lowest index, unknown picks smallest, all-false gives null, a throwing check counts as false, concurrency limit respected) and createTestChecker with a fake exec that records its calls (no tests in context gives ok null; a passing run gives ok true and the worktree is removed afterwards; exit code 1 gives ok false; a path with .. gives ok false; an edit whose find text is missing gives ok false; a rejecting exec gives ok false with timeout detail). Use a fake exec: when argv[1] is \"-C\" and argv includes \"worktree\" and \"add\", create the directory argv[argv.indexOf(\"add\")+2]... actually the worktree path is the argument after \"--detach\"; create it with fs.mkdirSync so the checker can write files into it; when argv[0] is \"node\" return { exitCode: 0, stdout: \"\", stderr: \"\" } (or 1 when told to). Test the module described below, importing it by path; use only the exports named in the spec. Use fakes for exec, fsImpl-free temp directories made with fs.mkdtempSync, and fetch; no network, no real git unless stated. About 10 focused tests.\n\nModule spec for tools/best-of.mjs (plain ESM, Node 20+, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\"). Best-of-N for the rented GPU lane: N candidate answers are generated, the ticket's tests run on each, and the best passing one is kept. Exports: (1) BEST_OF_MAX = 8. (2) bestOfCount(job, defaultCount): returns an integer from 1 to 8: job.bestOf if it is an integer, else defaultCount if an integer, else 1; clamped to 1..8; always 1 when job.agent is not 'rented'. (3) candidateSize(envelope): total characters of every files[].content plus every edits[].replace in the envelope (envelope.files and envelope.edits may be missing: treat as empty). (4) async selectBest(candidates, check, { concurrency = 3 } = {}): candidates is an array of { envelope, text }; check(candidate, index) is async and returns { ok: true|false|null, detail?: string } (null = unknown, for example no tests exist); run the checks with at most 'concurrency' running at once (a check that throws counts as { ok: false, detail: its message }); returns { chosen: index or null, results: [{ index, ok, detail, size }] } in candidate order, where size = candidateSize(envelope). Rule: prefer candidates with ok === true and pick the smallest size (ties: the lowest index); if none is true but some are null, pick the smallest size among the null ones; if every candidate is false (or there are no candidates) chosen is null. (5) isTestFile(path): true for a path with a segment 'test' or 'tests' or '__tests__' or a file name containing '.test.' or '.spec.' or '_test.' or starting with 'test_'. (6) createTestChecker({ root, exec, fsImpl, timeoutMs = 120000 }): returns async function check({ job, envelope }) that: takes the tests = job.context filtered by isTestFile; if there are none returns { ok: null, detail: 'no tests in context' }; otherwise makes a temp directory (fsImpl.mkdtemp under os.tmpdir(), default node:fs/promises), runs exec(['git','-C',root,'worktree','add','--detach',tmp,'HEAD']), copies each job.context file that exists under root over the matching path in tmp (so uncommitted versions are used), applies the envelope: for each files[] entry writes content at its path (the path must be relative with no '..' segment and not absolute, otherwise return { ok: false, detail: 'unsafe path' }), for each edits[] entry replaces the first occurrence of edit.find with edit.replace in that file in tmp (if the file or the text is missing return { ok: false, detail: 'edit does not apply' }); then runs exec(['node','--test',...tests],{ cwd: tmp, timeoutMs }) which resolves { exitCode, stdout, stderr } (or rejects on timeout, which means ok false, detail 'timeout'); ok is exitCode === 0 and detail the last 300 characters of stderr+stdout. Always (in a finally) run exec(['git','-C',root,'worktree','remove','--force',tmp]) and remove the temp directory, ignoring errors. exec(argv, options) is injected: argv[0] is the program; the default uses child_process.execFile with a promise and never throws on a non-zero exit (it resolves the exit code)."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "gpu-cache-tests",
+      "outputs": [
+        "tests/gpu-cache.test.mjs"
+      ],
+      "context": [],
+      "prompt": "Write tests/gpu-cache.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\"). Cover parseCacheStats with a counters sample (with and without labels, with comment lines, exponent values, summing two labelled series), a gauge-only sample, an empty text, fetchCacheStats with a fake fetch (ok text, not ok, throwing) and combineCacheStats (sums, averaging gauge-only entries, nothing known). Test the module described below, importing it by path; use only the exports named in the spec. Use fakes for exec, fsImpl-free temp directories made with fs.mkdtempSync, and fetch; no network, no real git unless stated. About 10 focused tests.\n\nModule spec for tools/gpu-cache.mjs (plain ESM, Node 20+, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\"). Reads vLLM's prefix-cache statistics from its Prometheus /metrics text. Exports: (1) parseCacheStats(text): returns { hits, queries, hitRate } where the numbers come from lines of the form NAME{labels} VALUE or NAME VALUE (ignore lines starting with #): hits = the sum of values of metrics named vllm:prefix_cache_hits_total (also accept vllm:gpu_prefix_cache_hits_total), queries = the sum of vllm:prefix_cache_queries_total (also vllm:gpu_prefix_cache_queries_total); hitRate = hits / queries (0 when queries is 0) rounded to 4 decimals; if neither counter exists but a gauge vllm:gpu_prefix_cache_hit_rate (or vllm:prefix_cache_hit_rate) exists, hitRate is that value (a fraction from 0 to 1, rounded to 4 decimals) and hits and queries are null; if nothing matches return { hits: null, queries: null, hitRate: null }. Values may be integers, floats or exponent forms like 1.2e+03. (2) async fetchCacheStats(endpoint, fetchImpl = fetch): GET endpoint + '/metrics' and returns parseCacheStats of the text; returns { hits: null, queries: null, hitRate: null } when the request fails or the response is not ok. (3) combineCacheStats(list): given an array of stats objects, returns { hits, queries, hitRate } summing hits and queries over the entries that have numbers and computing the combined hitRate from the sums; when no entry has numbers but some have a hitRate, returns the average of those hit rates (4 decimals) with hits and queries null; when nothing is known all three are null."
+    }
+  ]
+}

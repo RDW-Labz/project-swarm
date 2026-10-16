@@ -170,6 +170,24 @@ Use dev2's model (the Strata API, reached the way `dev2chat` does: an ssh tunnel
 - **Saving is measured:** every call records the tokens it kept away from the orchestrator (the input it digested or the reasoning it replaced, estimated) and the paid tokens it used, in the usage ledger, and the dogfood scoreboard gets an "orchestrator tokens saved" column.
 - Done when: on the Phase 17 scale test, triage and digest keep orchestrator reads of failures under 20 lines per failed job, and the scoreboard shows a measured drop in orchestrator tokens for the same work.
 
+## Phase 14c — Batch mode
+
+Anthropic Message Batches only, at half price. Opt-in per run (`--batch`), per job type (`review`, `docs`, `test`) in the manifest or machine config, or per job. Same run, lane and machine-wide caps and reservations; sensitive rules unchanged; `swarm plan` shows the estimated saving. Built; see [batch](../batch.md) and `phase14c-design.md`.
+
+## Phase 14d — Rented GPU lane
+
+`agent: "rented"`: any OpenAI-compatible endpoint (vLLM or SGLang) we spin up in the cloud. Config: endpoint URL, model, Keychain key, hourly cost, max hours per run, max concurrency (adaptive). The spend guard counts the hourly cost toward the run and day caps, warns at 80% and stops launching at the cap; only jobs marked `sensitive: false` ever go to a rented host (`trusted` is gone). Includes a runbook for renting a node, connecting and shutting it down (revised in 14e for small models). **Nothing is rented by the build;** the 2-hour live test needs the owner's separate approval before Phase 17. Built; see [rented GPU](../rented-gpu.md) and `phase14d-design.md`.
+
+## Phase 14e — Small-model GPU swarm
+
+- Rented GPUs run SMALL fast coding models (about 7B to 35B, mixture-of-experts preferred; shortlist Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B, Devstral Small 2, Nemotron-3.5-Lightning as an NVFP4 extra) as the main worker lane. dev2's Qwen stays the free reviewer and brain.
+- `swarm gpu up|down|status` starts one vLLM replica per GPU over ssh. It sends commands only: no files, keys or .env. Servers stay on the node's loopback behind an ssh tunnel. The lane load-balances across replicas (least in flight; an unhealthy replica is skipped for 30 s).
+- `swarm gpu bakeoff` ranks candidates on one GPU using our own tasks (the lane benchmark now, the lessons eval set once Phase 15 builds it). It reports pass rate, tokens per second at 1, 50 and 200 concurrent agents, agents per GPU and cost per passing task. FP8 runs first; NVFP4 runs only as an extra. Results go to docs/state/gpu-bakeoff.md.
+- Every job on this lane carries exact files, the manifest contract and acceptance tests. One failure escalates to Haiku, then Codex.
+- Safety before any rental: a hard dollar cap per session (the session lasts at most cap divided by hourly price); a timer on the node that removes the servers and powers it off; rented hosts take only sensitive: false jobs; nothing is copied to the node.
+- Done when: the bake-off ran once on one rented GPU with Braden's approval, and docs/state/gpu-bakeoff.md names the winner.
+- Status: built, nothing rented; see [rented GPU](../rented-gpu.md).
+
 ## Phase 15 — Quality at scale
 
 - **Verify every write:** each write job is followed by checks (tests or lint on the files it touched), then a cheap review job. Failures go back to the worker once with the reviewer's notes.
@@ -236,6 +254,6 @@ Done when: the starter kit and scope interview exist, and the Phase 17 medium-ap
 
 ## Suggested order
 
-10 → 10b → 10c → 11 → 12 → 14 → 14b → 13 → 15 → 16 (use swarm-watch-spec.md) → 17 → 18 (scope interview right after 13; starter kit is its own project and can start any time)
+10 → 10b → 10c → 11 → 12 → 14 → 14b → 14c → 14d → 14e → 13 → 15 → 16 (use swarm-watch-spec.md) → 17 → 18 (scope interview right after 13; starter kit is its own project and can start any time)
 
 (The CLI comes first. Failover and the inbox (10b, 10c) come next because they fix the biggest day-to-day stalls; see the addendum. The plan preview follows because it makes every later run safer and easier to use. Throughput comes before the planner and quality work, so those can be tested at real scale.)

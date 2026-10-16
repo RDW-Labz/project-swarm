@@ -9,14 +9,14 @@ The Anthropic lane can send jobs that do not need to finish fast to the Message 
 | One run | `swarm run MANIFEST --batch`, `swarm go "GOAL" --batch`, `swarm plan "GOAL" --batch` |
 | A manifest | `"batch": true` (every eligible job) or `"batch": { "types": ["review", "docs", "test"] }` |
 | One job | `"batch": true` or `"batch": false` on the job |
-| The machine | `"batch": { "enabled": true, "types": ["review", "docs", "test"] }` in `~/.config/project-swarm/config.json` (`enabled` with no `types` means every eligible job) |
+| The machine, per project | `"batch": { "enabled": true, "projects": ["/path/to/project"], "types": ["review", "docs", "test"] }` in `~/.config/project-swarm/config.json`. `enabled` applies only to the project folders listed in `projects` (`types` empty means every eligible job); a project that is not listed never batches by default, so a sensitive project such as BinGo stays off until you add it. `--batch` and a manifest's own `batch` still work anywhere |
 
 The job wins over the flag, the flag over the manifest, the manifest over the config. A job is eligible when it runs on the Anthropic lane and is not a lead.
 
 ## What does not change
 
 - **Caps and reservations.** A batch job is an ordinary Anthropic-lane job: the run cap, the lane day cap and the machine-wide caps ($500 total, $20 a day, $5 a job) all apply. The reservation and the pre-request check use the **standard** price, so a cap is never looser than without batch; the cost that is recorded (run totals, the Anthropic ledger, `rollup`) is the half price actually billed.
-- **Sensitive rules.** Unchanged: the job goes to the same lane it would have gone to, just later. Two cautions: a job with `privateData` is never batched, and Anthropic may keep Message Batches results for a different period than ordinary requests (check their current data-retention terms before batching a sensitive project).
+- **Sensitive rules.** Batch is allowed on sensitive projects under the same rules as the Anthropic lane (never secrets; a job with `privateData` is never batched), but it is **opt-in per project and off by default** (see `batch.projects` above). Keep it off for BinGo: **batch results stay on Anthropic's servers for up to 29 days**, longer than an ordinary request, so only batch a sensitive project when you accept that.
 - **Results.** The reply, files, usage and errors come back through the normal path. A batch request that fails, is canceled or expires fails that job; a retry goes through batch again unless the job sets `"batch": false`.
 - **Ledger.** Because a batch request can spend for up to a day before its answer comes back, its worst case is written to the Anthropic ledger when it is sent (so the next job's cap check sees it) and settled to the real half price when the answer arrives. If no answer ever arrives (cancelled, expired, the run was killed) the worst case stays as spent: the caps err on the side of counting.
 

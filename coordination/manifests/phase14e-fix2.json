@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "tests-go-ignoretests",
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "context": [
+        "tests/leads-run.test.mjs",
+        "tools/uncovered-tests.mjs"
+      ],
+      "outputs": [
+        "tests/go-ignoretests.test.mjs"
+      ],
+      "prompt": "Write tests/go-ignoretests.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\", second line \"import './_isolate-config.mjs';\"), copying the fixture, lead, worker, workers and reply helpers and the imports you need from tests/leads-run.test.mjs (read it for the exact pattern). Scenario: in the fixture repo, add a tracked file docs/notes.md and a tracked test file tests/notes.test.mjs whose text mentions \"docs/notes.md\", and commit them (the fixture's git commit step must run after you write them). A lead (type lead) plans one child worker whose outputs are [\"docs/notes.md\"] and whose scope is docs/. Test 1: runManifest with that lead completes (state.jobs[0].status is \"complete\" and state.jobs[0].childRun is set) instead of failing with \"Uncovered test references\"; read the child run state with readState and assert its worker job has \"tests/notes.test.mjs\" in ignoreTests of the saved manifest or that its prompt contains the line \"ignoreTests: tests/notes.test.mjs\". Test 2: validateProject-style refusal still applies to a manifest a person writes: runManifest on a plain manifest with one worker whose outputs are [\"docs/notes.md\"] (no ignoreTests, not a lead) rejects, or returns a failed state, with an error matching /Uncovered test references/. Keep it about 60 lines. Use only names exported by the files you read."
+    }
+  ]
+}

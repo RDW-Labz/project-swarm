@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "id": "review-14e",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "a paid lane billed by time and a command that runs on a rented node: spend caps, secrets, sensitive-data routing, remote command execution",
+      "type": "review",
+      "outputs": [],
+      "timeoutMs": 1800000,
+      "context": [
+        "tools/gpu.mjs",
+        "tools/gpu-bakeoff.mjs",
+        "tools/gpu-commands.mjs",
+        "docs/rented-gpu.md",
+        "coordination/review/phase14e.diff"
+      ],
+      "prompt": "Safety review of Phase 14d+14e (not merged yet): the rented-gpu lane now runs SMALL coding models, one vLLM replica per GPU, started by `swarm gpu up` over ssh on a node the OWNER rented (swarm never rents). Files: tools/gpu.mjs (session, remote scripts, up/down/status), tools/gpu-bakeoff.mjs (bake-off and throughput), tools/gpu-commands.mjs (CLI, ssh and tunnel), docs/rented-gpu.md (the rules and runbook), coordination/review/phase14e.diff (changes to rented.mjs, router.mjs, lanes.mjs, api-adapters.mjs, uncovered-tests.mjs). The owner's requirements before any rental: auto-destroy timer, hard $ cap per session, rented hosts get sensitive:false jobs ONLY, no keys or .env copied to them, and swarm must stop and ask before renting. Check with evidence (file and line): (1) remote command safety: every value interpolated into the script sent to the node (model id, image, args, ports, seconds, target, key path) is validated against shell injection, ssh option injection (target or key starting with a dash, ProxyCommand), and the `--` handling; can anything a manifest or model output influences reach these commands; (2) secrets: nothing but commands goes to the node (no scp, no env, no key material, no Hugging Face token); the session file holds no secret and is mode 0600; servers bind to the node loopback only and the tunnel binds 127.0.0.1 only; auth none is refused for non-loopback endpoints; what an attacker on the Mac (another local user or process on the tunnel ports) or on the node could do; (3) sensitive routing: can a sensitive job (the default, undefined sensitive, a lead child, merge job, `ask`, auto routing, typeRoute, escalation) reach a rented server by any path; the router change (rented first for complete jobs only when the lane has a model, which only a live unexpired session gives); trusted is refused; (4) spend: the session cap math (hours = min(maxHours, cap/hourly)), the dead-man timer (sleep seconds, survives ssh disconnect, runs even when the Mac is asleep; what if sudo needs a password), expiry reads (an expired session makes the lane unroutable; a running run past expiry), the rental meter with auto-routed jobs, bake-off cost accounting (model slot time, cap checked between models only: can one model overshoot the cap, what bounds it), concurrency of bake-off with a live session of the same name; (5) correctness: balancer (in-flight accounting on abort/throw, a 5xx response marks a replica bad, retries only on transport error and whether a retried POST can double-bill or double-write), gpuDown when ssh fails (the timer still fires), `gpu up --replace`, session overwrite races, status after expiry; (6) the contract rule and escalation limits (rented failure limit 1, failures counting, `claude` fallback only after others). Rank findings high, medium, low; for each: where, how it fails, the smallest fix. End with a final single line of JSON: {\"status\":\"complete\",\"summary\":\"...\",\"findings\":{\"high\":N,\"medium\":N,\"low\":N}}."
+    }
+  ]
+}

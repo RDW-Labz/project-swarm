@@ -14,10 +14,13 @@ export const LANES = {
   'anthropic-sonnet': { agent: 'anthropic', model: 'claude-sonnet-5-5', concurrency: 6, paid: true },
   openrouter: { agent: 'openrouter', model: 'openai/gpt-oss-20b', concurrency: 6, paid: true, sensitive: false },
   claude: { agent: 'claude', model: 'sonnet', concurrency: 3, paid: false },
+  // A model on a rented GPU (swarm gpu up / bakeoff); the model name comes from the running GPU session, so runLane takes it as `model`.
+  rented: { agent: 'rented', model: null, concurrency: 8, paid: true, sensitive: false },
 };
 // Cheapest first: the order the router tries lanes.
-export const LANE_ORDER = ['hermes', 'cursor', 'codex', 'anthropic-haiku', 'anthropic-sonnet', 'openrouter', 'claude'];
+export const LANE_ORDER = ['hermes', 'cursor', 'codex', 'anthropic-haiku', 'anthropic-sonnet', 'openrouter', 'rented', 'claude'];
 
+const RENTED_CONTRACT_FILE = 'BENCH-CONTRACT.md';
 const run = (command, args, options = {}) => spawnSync(command, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...options });
 const sh = (command, args, options) => {
   const result = run(command, args, options);
@@ -126,16 +129,21 @@ function tokensOf(job) {
 }
 
 // Runs one lane's ten jobs with the given runner and returns the results (nothing is merged).
-export function runLane({ lane, repo, runner, maxUsd = 0.5, baseInfo, log = () => {} }) {
-  const spec = LANES[lane];
-  if (!spec) throw new Error(`unknown lane ${lane}`);
+export function runLane({ lane, repo, runner, maxUsd = 0.5, baseInfo, model, bestOf = 1, log = () => {} }) {
+  const base = LANES[lane];
+  if (!base) throw new Error(`unknown lane ${lane}`);
+  const spec = model ? { ...base, model } : base;
+  if (!spec.model) throw new Error(`lane ${lane} needs a model`);
   const manifest = {
     version: 1, concurrency: spec.concurrency, budget: { maxUsd },
     jobs: TASKS.map(task => ({
       id: task.id, agent: spec.agent, model: spec.model, ...(spec.paid && spec.agent === 'anthropic' ? { sensitive: true } : {}), ...(spec.sensitive === false ? { sensitive: false } : {}),
-      prompt: task.prompt, context: task.context, outputs: task.outputs, timeoutMs: 900000,
+      prompt: task.prompt, context: spec.agent === 'rented' ? [...task.context, RENTED_CONTRACT_FILE] : task.context, outputs: task.outputs, timeoutMs: 900000,
+      // The rented lane takes only jobs with their exact files, a contract file and acceptance tests.
+      ...(spec.agent === 'rented' && bestOf > 1 ? { bestOf } : {}), ...(spec.agent === 'rented' ? { contract: RENTED_CONTRACT_FILE, acceptance: ['the repo tests that already exist keep passing', 'the behaviour the task prompt states (checked by hidden tests after the run)'] } : {}),
     })),
   };
+  if (spec.agent === 'rented') fs.writeFileSync(path.join(repo, RENTED_CONTRACT_FILE), 'Change only the declared output files. Keep every exported name and signature. The existing tests must keep passing.\n');
   const manifestRel = `coordination/manifests/bench-${lane}.json`;
   fs.mkdirSync(path.join(repo, 'coordination/manifests'), { recursive: true });
   // A single-request API worker may return at most 15 KB per file unless the job raises its cap, so
