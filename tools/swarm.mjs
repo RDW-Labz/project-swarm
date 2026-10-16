@@ -35,6 +35,7 @@ import { collectInbox } from './inbox.mjs';
 import { runGpuCommand } from './gpu-commands.mjs';
 import { parseUncovered, ignoreUncovered } from './uncovered-tests.mjs';
 import { createTestChecker } from './best-of.mjs';
+import { runSecurityGate, recordGate } from './security-gate.mjs';
 import { runBrainCommand, createProjectBrain, triageRun, preflightManifest, brainStats, brainSettings } from './brain-commands.mjs';
 import { readBacklog, nextStartable, markStarted as markBacklogStarted } from './backlog.mjs';
 import { pendingNotifications, macNotify } from './notify.mjs';
@@ -4418,8 +4419,16 @@ function validateQueueOptions({ batchSize = 10, maxRequeues = 2, jobs, salvage, 
   if (!Number.isInteger(maxRequeues) || maxRequeues < 0 || maxRequeues > 5) fail('queue-requeues-invalid: maxRequeues must be an integer 0-5', 'queue-requeues-invalid');
 }
 
-async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, conflicts, skipped, noChecks, noFlakeCheck, spawnImpl, warnings, releaseIntegrationLock }) {
-  const queue = state.mergeQueue = { state: 'running', batchSize, batches: [], integrated: [], conflicts, checkFailed: [], skipped };
+// The A1 security gate runs in the merge queue on every batch, after its files are written and before it can stay merged: a block rolls the batch back
+// like a failed check. The project profile's `security` block sets the policy (it can be disabled there, never by a flag).
+const securityExec = async (argv, { cwd, timeoutMs = 120000 } = {}) => {
+  try { const { stdout, stderr } = await execFileAsync(argv[0], argv.slice(1), { cwd, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 }); return { exitCode: 0, stdout, stderr }; }
+  catch (error) { if (error.code === 'ENOENT') throw error; return { exitCode: typeof error.code === 'number' ? error.code : 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }; }
+};
+
+async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, conflicts, skipped, noChecks, noFlakeCheck, spawnImpl, warnings, releaseIntegrationLock, securityGate = {} }) {
+  const queue = state.mergeQueue = { state: 'running', batchSize, batches: [], integrated: [], conflicts, checkFailed: [], skipped, securityBlocked: [], securityTickets: [] };
+  const securityPolicy = securityGate.policy ?? (await projectProfile(root))?.security;
   state.integratedFiles = [];
   state.integratedNewFiles = [];
   const persist = () => jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
@@ -4460,6 +4469,7 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, co
     const changes = batch.flatMap(plan => plan.writes);
     const journal = await startIntegrationJournal(root, id, 'queue-batch', batch.map(plan => plan.job), changes, releaseIntegrationLock);
     let result;
+    let gate = null;
     try {
       for (const change of changes) {
         // Recheck immediately before a write: preChecks or another writer may have moved it.
@@ -4473,6 +4483,9 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, co
         });
       }
       result = noChecks ? { checks: [], checksPassed: true } : await runChecks(root, manifest.checks ?? [], changes.map(change => change.file), changes.filter(change => change.previous === null).map(change => change.file), spawnImpl, { baseCommit: state.baseCommit, noFlakeCheck, portBase, extraEnv: swarmEnv });
+      gate = await runSecurityGate({ changes: changes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: securityPolicy, exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root });
+      if (!gate.ok) result = { ...result, checks: [...(result.checks ?? []), { name: 'security-gate', status: 'failed', blocks: gate.blocks }], checksPassed: false };
+      if (gate.tickets.length) queue.securityTickets.push(...gate.tickets.map(ticket => ({ ...ticket, jobs: batch.map(plan => plan.job) })));
     } catch (error) { await journal.rollback(); throw error; }
     const failed = result.checksPassed === false;
     queue.batches.push({ jobs: batch.map(plan => plan.job), checks: noChecks ? 'skipped' : failed ? 'failed' : 'passed', bisected: failed && batch.length > 1 });
@@ -4481,6 +4494,10 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, co
     // retains its existing behavior: check failures never roll back its writes.
     if (failed) {
       await journal.rollback();
+      if (batch.length === 1 && gate && !gate.ok) {
+        queue.securityBlocked.push({ job: batch[0].job, blocks: gate.blocks });
+        await recordGate({ root, runId: id, jobs: [batch[0].job], gate, appendEvent: (rootDir, event) => appendEvent(rootDir, event, { best: true }) });
+      }
       if (batch.length === 1) queue.checkFailed.push({ job: batch[0].job, checks: result.checks.filter(check => !['passed', 'skipped'].includes(check.status)).map(check => check.name) });
     } else {
       queue.integrated.push(...batch.map(plan => plan.job));
@@ -4507,7 +4524,7 @@ export async function integrateQueue(root, id, { batchSize = 10, maxRequeues = 2
   validateQueueOptions({ ...options, batchSize, maxRequeues });
   root = await fs.realpath(root);
   const original = JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true));
-  const summary = { status: 'integrated', runs: [], integrated: [], requeued: [], merged: [], checkFailed: [], flagged: [], skipped: [] };
+  const summary = { status: 'integrated', runs: [], integrated: [], requeued: [], merged: [], checkFailed: [], flagged: [], skipped: [], securityBlocked: [], securityTickets: [] };
   const requeues = new Map();
   const childManifest = jobs => ({ ...original, jobs });
   const runChild = async jobs => {
@@ -4523,6 +4540,8 @@ export async function integrateQueue(root, id, { batchSize = 10, maxRequeues = 2
     const q = result.mergeQueue;
     for (const job of q.integrated) summary.integrated.push({ job, run, attempt });
     for (const failure of q.checkFailed) summary.checkFailed.push({ job: failure.job, run, checks: failure.checks });
+    for (const blocked of q.securityBlocked ?? []) summary.securityBlocked.push({ ...blocked, run });
+    summary.securityTickets.push(...(q.securityTickets ?? []));
     if (kind === 'original') summary.skipped = q.skipped;
     if (kind === 'merge') {
       if (q.conflicts.length) summary.flagged.push({ job: mergeOriginal, reason: 'merge-conflict' });
@@ -4667,7 +4686,7 @@ export async function integrateRun(root, id, options = {}) {
 }
 
 async function integrateRunLocked(root, id, options = {}) {
-  const { releaseIntegrationLock, noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, salvage = false, acceptDeviation = false, acceptResultShape = false, acceptDropped = false, salvageDropped = false, jobs = undefined, privateNamesFile = undefined, queue = false, batchSize = 10 } = options;
+  const { releaseIntegrationLock, securityGate = {}, noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, salvage = false, acceptDeviation = false, acceptResultShape = false, acceptDropped = false, salvageDropped = false, jobs = undefined, privateNamesFile = undefined, queue = false, batchSize = 10 } = options;
   if (queue) validateQueueOptions({ batchSize, jobs, salvage, mutants: mutants || mutantsFile !== undefined || mutantCheck !== undefined });
   root = await fs.realpath(root);
   // Field lesson #202: a job's own timed-out worker declares nothing missing — it simply never got
@@ -4940,7 +4959,7 @@ async function integrateRunLocked(root, id, options = {}) {
     if (queue) {
       if (acceptedDeviations.length) state.acceptedDeviations = acceptedDeviations;
       if (resultShapeWarnings.length) state.resultShapeWarnings = resultShapeWarnings;
-      const result = await applyQueuePlans(root, id, state, manifest, queuePlans, { batchSize, conflicts: queueConflicts, skipped: queueSkipped, noChecks, noFlakeCheck, spawnImpl, releaseIntegrationLock, warnings: [...designWarnings, ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)] });
+      const result = await applyQueuePlans(root, id, state, manifest, queuePlans, { batchSize, conflicts: queueConflicts, skipped: queueSkipped, noChecks, noFlakeCheck, spawnImpl, releaseIntegrationLock, securityGate, warnings: [...designWarnings, ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)] });
       return { ...result, ...(children.length ? { children } : {}) };
     }
     // Every path, output, base hash, and mutants source has passed before the first project write.
