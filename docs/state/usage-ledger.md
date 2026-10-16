@@ -66,12 +66,19 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-15 | - | map-tests: Adds tests/repo-map.test.mjs for tools/repo-map.mjs (section 2 of the design). It covers | anthropic | claude-haiku-5-5 | pass | 30,087 | $0.01 |
 | 2026-10-15 | - | review-12: complete | claude | opus | pass | 16,779 | $0.53 |
 | 2026-10-15 | - | review-14: complete | claude | opus | pass | 17,924 | $0.47 |
+| 2026-10-15 | - | link-module: Implements section 1 of phase14b-design as tools/brain-link.mjs: openBrainLink with inj | anthropic | claude-haiku-5-5 | pass | 23,083 | $0.01 |
+| 2026-10-15 | - | link-tests: Wrote tests/brain-link.test.mjs for tools/brain-link.mjs (section 1 of the design) using | anthropic | claude-haiku-5-5 | pass | 21,980 | $0.01 |
+| 2026-10-15 | - | brain-module: Creates tools/brain.mjs implementing section 2 of the design: a bounded queue (concurr | anthropic | claude-haiku-5-5 | pass | 20,129 | $0.01 |
+| 2026-10-15 | - | brain-tests: Adds tests/brain.test.mjs for tools/brain.mjs as specified in section 2 of docs/plans/p | anthropic | claude-haiku-5-5 | pass | 23,811 | $0.01 |
+| 2026-10-15 | - | tasks-module: Implements section 3 of the design in tools/brain-tasks.mjs: think, digest, triage, dr | anthropic | claude-haiku-5-5 | pass | 28,587 | $0.01 |
+| 2026-10-15 | - | tasks-tests: Adds tests/brain-tasks.test.mjs for tools/brain-tasks.mjs, using injected fake ask func | anthropic | claude-haiku-5-5 | pass | 22,244 | $0.01 |
+| 2026-10-15 | - | review-14b: Phase 14b safety review. Highs: think ignores project sensitivity, so it can fall back t | claude | opus | pass | 64,577 | $0.56 |
 
 ## Daily summary
 
 | date | tier | calls | pass | fail/blocked | tokens | rough cost |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-10-14 | codex | 34 | 29 | 5 | 2,887,673 | subscription |
-| 2026-10-15 | anthropic | 17 | 12 | 5 | 408,516 | $0.22 |
-| 2026-10-15 | claude | 7 | 7 | 0 | 106,788 | $3.19 |
+| 2026-10-15 | anthropic | 23 | 18 | 5 | 548,350 | $0.28 |
+| 2026-10-15 | claude | 8 | 8 | 0 | 171,365 | $3.75 |
 | 2026-10-15 | codex | 4 | 4 | 0 | 154,596 | subscription |

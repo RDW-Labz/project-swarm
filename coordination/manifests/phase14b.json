@@ -1,0 +1,123 @@
+{
+  "version": 1,
+  "concurrency": 6,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "id": "link-module",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase14b-design.md specifies. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`. Import sanitizeText from tools/journal.mjs (do not rewrite it). Write only your declared output file; do not edit any other file. Keep code compact: short functions, no long comments. Your file: tools/brain-link.mjs only: section 1 of the design.",
+      "context": [
+        "docs/plans/phase14b-design.md",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tools/brain-link.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    },
+    {
+      "id": "link-tests",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase14b-design.md specifies. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`. Import sanitizeText from tools/journal.mjs (do not rewrite it). Write only your declared output file; do not edit any other file. Keep code compact: short functions, no long comments. Tests use node:test and node:assert/strict, start with `import './_isolate-config.mjs';`, use injected fakes only (no ssh, no network, no real timers longer than 200 ms), cover every rule in the design for the module including each refusal and limit, and stay under 450 lines. The module is written by someone else from the same design, so import it by the exported names only. Your file: tests/brain-link.test.mjs only, for tools/brain-link.mjs (section 1): fake spawn (an object with kill/on/once), fake execFile for the key, fake fetch for /health and chat; the key never appears in any error or status.",
+      "context": [
+        "docs/plans/phase14b-design.md",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tests/brain-link.test.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    },
+    {
+      "id": "brain-module",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase14b-design.md specifies. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`. Import sanitizeText from tools/journal.mjs (do not rewrite it). Write only your declared output file; do not edit any other file. Keep code compact: short functions, no long comments. Your file: tools/brain.mjs only: section 2 of the design.",
+      "context": [
+        "docs/plans/phase14b-design.md",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tools/brain.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    },
+    {
+      "id": "brain-tests",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase14b-design.md specifies. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`. Import sanitizeText from tools/journal.mjs (do not rewrite it). Write only your declared output file; do not edit any other file. Keep code compact: short functions, no long comments. Tests use node:test and node:assert/strict, start with `import './_isolate-config.mjs';`, use injected fakes only (no ssh, no network, no real timers longer than 200 ms), cover every rule in the design for the module including each refusal and limit, and stay under 450 lines. The module is written by someone else from the same design, so import it by the exported names only. Your file: tests/brain.test.mjs only, for tools/brain.mjs (section 2): queue concurrency 1 and 2, maxQueued, timeout, local first, fallback only when not sensitive, sensitive never falls back, sanitizing, ledger events and summarizeBrainLedger, close.",
+      "context": [
+        "docs/plans/phase14b-design.md",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tests/brain.test.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    },
+    {
+      "id": "tasks-module",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase14b-design.md specifies. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`. Import sanitizeText from tools/journal.mjs (do not rewrite it). Write only your declared output file; do not edit any other file. Keep code compact: short functions, no long comments. Your file: tools/brain-tasks.mjs only: section 3 of the design.",
+      "context": [
+        "docs/plans/phase14b-design.md",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tools/brain-tasks.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    },
+    {
+      "id": "tasks-tests",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase14b-design.md specifies. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`. Import sanitizeText from tools/journal.mjs (do not rewrite it). Write only your declared output file; do not edit any other file. Keep code compact: short functions, no long comments. Tests use node:test and node:assert/strict, start with `import './_isolate-config.mjs';`, use injected fakes only (no ssh, no network, no real timers longer than 200 ms), cover every rule in the design for the module including each refusal and limit, and stay under 450 lines. The module is written by someone else from the same design, so import it by the exported names only. Your file: tests/brain-tasks.test.mjs only, for tools/brain-tasks.mjs (section 3): think rounds and JSON tolerance, digest prefilter and 15-line cap, triage strictness (bad JSON gives needs-human, attempts >= 2 never retry), draftThenPolish with and without a polisher, preflight limits.",
+      "context": [
+        "docs/plans/phase14b-design.md",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tests/brain-tasks.test.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    }
+  ]
+}
