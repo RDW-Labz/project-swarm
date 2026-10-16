@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.73.0
+
+- Batch mode (Phase 14c): the Anthropic lane can send jobs that do not need to finish fast to the Message Batches API at half price. Opt-in with `--batch` on `run`, `go` and `plan`, a manifest `batch` (true, or `{ types }`), a job's own `batch`, or the machine config `batch`. The run, lane and machine-wide caps and reservations are unchanged (the reservation uses the standard price; the recorded cost is the half price billed), sensitive rules are unchanged, lead jobs are never batched, a batch job holds no lane slot while it waits, and cancelling the run cancels its batches. `swarm plan` shows the estimated saving. See [batch](docs/batch.md).
+- A Claude Opus review found 4 high and 8 medium issues, all fixed: a batch request's worst case is reserved in the Anthropic ledger when it is sent and settled when the answer arrives (so many batch jobs cannot overshoot the machine-wide day, job or total caps), an unknown price stays unknown instead of becoming $0, the results URL is fetched (with the key) only from the API's own host and ids are URL-encoded, request bodies are dropped from memory once sent, a batch is cancelled when it expires locally, the batch id and request id are saved on the job, `--batch` is kept on resume, whether a job is batched is decided once, a batch job that would have been sent as an ordinary request fails instead, `privateData` jobs are never batched, and the manifest `batch` field is validated.
+
 ## 1.72.0
 
 - Local brain (Phase 14b). dev2's model, reached like `dev2chat` (ssh tunnel, key read over ssh and kept in memory), as a free helper for the runner: `swarm think "QUESTION"` (proposer and critic, top 3 with reasons), `swarm digest <file|run-id|->` (15 lines or fewer), `swarm draft docs|pr|plan "BRIEF"` (local draft, Haiku polish for projects that are not sensitive), and `swarm brain status|stats|test`. Autopilot triages failed jobs before retrying (`needs-human` becomes a blocker; only the verdict is used), and `swarm run` pre-flights jobs for Claude or Opus (warnings only). Workers never touch it. See [local brain](docs/local-brain.md).

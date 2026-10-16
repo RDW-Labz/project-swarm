@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "batch-module",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase14c-design.md specifies. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`. Write only your declared output file; do not edit any other file. Keep code compact. Your file: tools/batch.mjs only: section 1 of the design.",
+      "context": [
+        "docs/plans/phase14c-design.md"
+      ],
+      "outputs": [
+        "tools/batch.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    },
+    {
+      "id": "batch-tests",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase14c-design.md specifies. Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`. Write only your declared output file; do not edit any other file. Keep code compact. Your file: tests/batch.test.mjs only, for tools/batch.mjs, importing it by exported names only (someone else writes it from the same design). Use node:test and node:assert/strict, start with `import \"./_isolate-config.mjs\";`, use injected fakes only (a fake fetch that plays the batches API: create, poll with in_progress then ended, results_url JSON lines; a fake sleep and timers so no real waiting over 100 ms), keep the file under 450 lines. Cover every rule: collection window and flush, size and count splits into several batches, custom_id sanitizing and uniqueness, each result type mapped to the right Response, create failure statuses, network failure, poll tolerance of 5 failures, expiry, abort before and after sending, cancel when all aborted, cancelAll, close, status, onEvent never carrying the key or bodies, request validation, batchEligible truth table, batchCostUsd and estimateBatchSavings.",
+      "context": [
+        "docs/plans/phase14c-design.md"
+      ],
+      "outputs": [
+        "tests/batch.test.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    }
+  ]
+}

@@ -26,6 +26,7 @@ import { summarizeMap, mapIsFresh, readRepoMap } from './repo-map.mjs';
 import { protectedViolations, protectedPathHit, formatBaseCheck, validateProfile } from './init-profile.mjs';
 import { resolveCliHosts, sshInvocation, sshEnv, remoteExec, cliHostFailure } from './cli-host.mjs';
 import { isHumanJob, validateHumanJob, liftHumanJobs, addGroup, readStore as readHumanStore, humanGroupReady, updateGroup as updateHumanGroup } from './human-jobs.mjs';
+import { createBatchCollector, batchEligible, BATCH_LIMITS } from './batch.mjs';
 import { runInboxCommand, inboxDeps } from './inbox-commands.mjs';
 import readline from 'node:readline';
 import { extractPlanFlags, buildGoalPlan, approveRun, loadApprovedPlan, recordRun, formatPreview, savePlan, markPlanRun, estimatePlan, readCalibration } from './plan-commands.mjs';
@@ -45,7 +46,7 @@ import { checkSwarmCommand } from './swarm-bin.mjs';
 import { autoInit, GOAL_BUDGET, isGoalArgument, manifestForGoal, goGoal, goalRunId, topLevelFolders, trackedFiles, worktreeDirty, createGoBranch } from './goal.mjs';
 import { SCALE_DEFAULT_CONCURRENCY, SCALE_DEFAULT_JOBS, prepareScaleRepo, scaleStub } from './scale.mjs';
 import { routeJob } from './router.mjs';
-import { anthropicPrice, assertOpusTier as assertAnthropicModel } from './anthropic.mjs';
+import { anthropicPrice, assertOpusTier as assertAnthropicModel, readAnthropicKey, ANTHROPIC_ENDPOINT } from './anthropic.mjs';
 import { resolveBudget, runTotals, jobSpend, spendDir, withSpendStore, laneDayTotals, estimateReservation, reserveSpend, settleSpend, releaseSpend, finalCost, PAID_LANES, capDecision, ledgerRows, mergeLedger, validateIdleItems, runIdleMenu } from './spend.mjs';
 import { JOB_TYPES, applyJobType, jobTypeOutputViolations } from './job-types.mjs';
 import { validateLeadArea, validateParentLeads, validateChildManifest, leadPromptBlock, leadRollup } from './leads.mjs';
@@ -1191,9 +1192,14 @@ function normalizeManifestMetadata(manifest) {
 export function validateManifest(manifest, { outputJobIds = null } = {}) {
   normalizeManifestMetadata(manifest);
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.jobs) || !manifest.jobs.length || manifest.jobs.length > 5000) fail('Manifest requires version: 1 and 1–5000 jobs');
-  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract', 'preChecks', 'skillsDir', 'allowEmptyContext', 'resources', 'lanes', 'report', 'budget', 'idle', 'ledger', 'hosts'].includes(key)) fail(`Unknown manifest field: ${key}`);
+  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract', 'preChecks', 'skillsDir', 'allowEmptyContext', 'resources', 'lanes', 'batch', 'report', 'budget', 'idle', 'ledger', 'hosts'].includes(key)) fail(`Unknown manifest field: ${key}`);
   resolveBudget({ manifest });
   if (manifest.hosts !== undefined) resolveHosts(manifest.hosts);
+  if (manifest.batch !== undefined && manifest.batch !== true && manifest.batch !== false) {
+    const own = manifest.batch;
+    const shape = own && typeof own === 'object' && !Array.isArray(own) && Object.keys(own).every(key => key === 'types') && Array.isArray(own.types) && own.types.length <= 20 && own.types.every(type => typeof type === 'string' && Object.hasOwn(JOB_TYPES, type));
+    if (!shape) fail('batch must be true, false or { types: [job types] }', 'batch-invalid');
+  }
   if (manifest.idle !== undefined) validateRunIdle(manifest.idle);
   if (manifest.ledger !== undefined) {
     if (!manifest.ledger || typeof manifest.ledger !== 'object' || Array.isArray(manifest.ledger)) fail('ledger must be an object');
@@ -1439,8 +1445,9 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     // Unknown command/provider fields cannot create an execution path.
     if (job.type === 'lead') validateLeadArea(job);
     else if (job.area !== undefined) fail(`lead-area-invalid: Job ${job.id}: area requires type lead`, 'lead-area-invalid');
-    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext'];
+    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext', 'batch'];
     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
+    if (job.batch !== undefined && typeof job.batch !== 'boolean') fail(`Job ${job.id}: batch must be true or false`, 'batch-invalid');
     if (job.cacheContext !== undefined) {
       if (!Array.isArray(job.cacheContext) || !job.cacheContext.length || job.cacheContext.length > 10 || job.cacheContext.some(file => typeof file !== 'string' || !(job.context ?? []).includes(file)) || new Set(job.cacheContext).size !== job.cacheContext.length) fail(`Job ${job.id}: cacheContext must be 1-10 unique paths that are also in context`, 'cache-context-invalid');
       if (!['anthropic', 'auto'].includes(job.agent)) fail(`Job ${job.id}: cacheContext is for the anthropic lane (agent anthropic or auto)`, 'cache-context-invalid');
@@ -2542,7 +2549,7 @@ export async function runManifest(root, manifest, options = {}) {
 }
 
 async function runManifestMain(root, manifest, options = {}) {
-  const { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks, checkBase = false, acceptRedBase = false, reason, baseChecks = {}, sync = false, acceptCoveredRedBase = true, jobs = null, maxUsd, maxTokens, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), resumeState = null, parentRun, leadJob, hostTransport = null, heartbeatMs = null } = options;
+  const { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks, checkBase = false, acceptRedBase = false, reason, baseChecks = {}, sync = false, acceptCoveredRedBase = true, jobs = null, maxUsd, maxTokens, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), resumeState = null, parentRun, leadJob, hostTransport = null, heartbeatMs = null, batch: batchFlag = false, batchLimits } = options;
   root = await fs.realpath(root);
   validateManifest(manifest);
   const appliedTypes = await applyManifestJobTypes(root, manifest, { env });
@@ -2631,13 +2638,13 @@ async function runManifestMain(root, manifest, options = {}) {
   }
   await registerLiveRun({ runId: id, root, outputs: declaredOutputs, dir: liveDirOpt });
   try {
-    return await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept, acceptedRedBaseInfo, pendingBaseChecks, sync, scopeWarnings, jobTypeWarnings: appliedTypes.warnings.filter(warning => manifest.jobs.some(job => job.id === warning.jobId)), liveDir: liveDirOpt, maxUsd, maxTokens, now, sleep, resumeState, parentRun, leadJob, hostTransport, heartbeatMs, childOptions: options });
+    return await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept, acceptedRedBaseInfo, pendingBaseChecks, sync, scopeWarnings, jobTypeWarnings: appliedTypes.warnings.filter(warning => manifest.jobs.some(job => job.id === warning.jobId)), liveDir: liveDirOpt, maxUsd, maxTokens, now, sleep, resumeState, parentRun, leadJob, hostTransport, heartbeatMs, batchFlag, batchLimits, childOptions: options });
   } finally {
     await unregisterLiveRun(id, { dir: liveDirOpt });
   }
 }
 
-async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept = null, acceptedRedBaseInfo = null, pendingBaseChecks = null, sync = false, scopeWarnings = [], jobTypeWarnings = [], liveDir, maxUsd, maxTokens, now = Date.now, sleep, resumeState = null, parentRun, leadJob, hostTransport = null, heartbeatMs = null, childOptions }) {
+async function runManifestBody(root, manifest, { batchFlag = false, batchLimits, spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept = null, acceptedRedBaseInfo = null, pendingBaseChecks = null, sync = false, scopeWarnings = [], jobTypeWarnings = [], liveDir, maxUsd, maxTokens, now = Date.now, sleep, resumeState = null, parentRun, leadJob, hostTransport = null, heartbeatMs = null, childOptions }) {
   const cleanup = new AbortController();
   signal = signal ? AbortSignal.any([signal, cleanup.signal]) : cleanup.signal;
   let workers = [];
@@ -2645,7 +2652,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   await safePath(root, `${directory}/state.json`, { internal: true, parents: true });
   const claim = await safePath(root, `${directory}/claim`, { internal: true });
   if (!resumeState) await fs.writeFile(claim, '', { flag: 'wx' });
-  const state = resumeState ?? { version: 1, id, root, concurrency: manifest.concurrency??2, peakConcurrency: 0, status: 'running', startedAt: new Date(now()).toISOString(), jobs: [], ...(redBaseAutoAccept ? { redBaseAutoAccept } : {}), ...(acceptedRedBaseInfo ? { acceptRedBase: true, acceptRedBaseReason: acceptedRedBaseInfo.reason, baseCheckFailures: acceptedRedBaseInfo.failures } : {}), ...(pendingBaseChecks ? { pendingBaseChecks } : {}) };
+  const state = resumeState ?? { version: 1, id, root, ...(batchFlag ? { batchFlag: true } : {}), concurrency: manifest.concurrency??2, peakConcurrency: 0, status: 'running', startedAt: new Date(now()).toISOString(), jobs: [], ...(redBaseAutoAccept ? { redBaseAutoAccept } : {}), ...(acceptedRedBaseInfo ? { acceptRedBase: true, acceptRedBaseReason: acceptedRedBaseInfo.reason, baseCheckFailures: acceptedRedBaseInfo.failures } : {}), ...(pendingBaseChecks ? { pendingBaseChecks } : {}) };
   if (parentRun !== undefined) { state.parentRun = parentRun; state.leadJob = leadJob; }
   const childClaims = new Map();
   const worktreeConfig = loadLocalConfig({ env });
@@ -2669,6 +2676,9 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
   if (configuredHosts && heartbeatMs) for (const host of configuredHosts) host.heartbeatMs = heartbeatMs;
   const hostTransportUsed = configuredHosts ? (hostTransport ?? defaultHostTransport({ spawnImpl })) : null;
   const hostHooks = { save: () => Promise.resolve() };
+  let batchCollector = null;
+  // Whether a job goes to a batch is decided once, before it takes (or skips) a slot, and read again where the request is sent.
+  const batchDecisions = new Map();
   const hostPool = configuredHosts ? createHostPool({
     hosts: configuredHosts,
     ping: host => hostTransportUsed.ping(host),
@@ -2950,7 +2960,11 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
         if (!waitPoll) waitPoll = setInterval(() => {
           checkWaiters().catch(() => { for (const controller of waitingJobs.keys()) controller.abort(); });
         }, 50);
-        try { release = await scheduler.acquire(job.agent, { signal: AbortSignal.any([signal, waiting.signal]) }); }
+        // A batch job runs nothing here while it waits (hours, possibly): it does not hold a lane or global slot, or a run could never gather
+        // more than a lane's worth of requests into one batch. Its spend is still reserved and capped in the admission step below.
+        const heldInBatch = batchEligible(job, batchPolicyFor(manifest, batchFlag, env));
+        batchDecisions.set(job.id, heldInBatch);
+        try { release = heldInBatch ? async () => {} : await scheduler.acquire(job.agent, { signal: AbortSignal.any([signal, waiting.signal]) }); }
         finally {
           waitingJobs.delete(waiting);
           if (!waitingJobs.size) { clearInterval(waitPoll); waitPoll = null; }
@@ -3122,6 +3136,15 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
           else if (job.agent === 'claude' && job.shell === true) result = await executeClaudeShellJob(root, directory, job, workspaceRoot, [...dependencyFiles, ...resourcePayload], message, { snapshotFiles, baseCommit: state.baseCommit, spawnImpl, signal, cancelled, killImpl, env, onOutput: tracker.onOutput, workerKey, shellHooks, portBase, swarmEnv, checks: manifest.checks ?? [], skillsSourceDir, sync, worktreePath: state.worktreesBase || record.worktreePath ? resolveWorktree(state, record) : undefined, onWorktreePath: async worktreePath => { record.worktreePath = worktreePath; await queueSave(); } });
           else if (job.agent === 'claude') result = await execute(job, workspaceRoot, message, { spawnImpl, signal, cancelled, killImpl, onOutput: tracker.onOutput });
           else {
+            // Batch jobs send the same request as any Anthropic job, later and at half price: the run's collector gathers them.
+            const batched = batchDecisions.get(job.id) === true;
+            let apiJob = job;
+            if (batched) {
+              batchCollector ??= createBatchCollector({ fetchImpl: (...args) => (fetchImpl ?? fetch)(...args), readKey: () => readAnthropicKey(env), ...(batchLimits ? { limits: batchLimits } : {}) });
+              // The request may wait up to a day, so the job's own timeout does not apply to it; caps still use the standard price.
+              apiJob = { ...job, batch: true, timeoutMs: BATCH_LIMITS.expireMs };
+              record.batch = true;
+            }
             const context = [];
             for (const file of new Set([...job.context, ...job.outputs, ...dependencyContext])) {
               const bytes = await bytesAt(workspaceRoot, file);
@@ -3131,7 +3154,7 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
               const providerMessage=extraCliMessage(job,context);
               await write(root,`${directory}/${job.id}/message.txt`,providerMessage,true);
               result=await execute(job,workspaceRoot,providerMessage,{spawnImpl,signal,cancelled,killImpl,onOutput:tracker.onOutput});
-            } else result=await executeApi(job, context, { fetchImpl: async (...args) => { if (args[0] !== OPENROUTER_MODELS_URL) adapterStarted = true; return (fetchImpl ?? fetch)(...args); }, env, signal, cancelled, skillsBlock: skillsBlockText, onFinishReason: async finishReason => { record.finishReason = finishReason; await queueSave(); } });
+            } else result=await executeApi(apiJob, context, { fetchImpl: async (...args) => { if (args[0] !== OPENROUTER_MODELS_URL) adapterStarted = true; if (batched && args[0] === ANTHROPIC_ENDPOINT) return batchCollector.submit(JSON.parse(args[1].body), { id: job.id, signal: args[1].signal, onSent: sent => { record.batchId = sent.batchId; record.batchCustomId = sent.customId; queueSave().catch(() => {}); } }); if (batched && args[0] !== OPENROUTER_MODELS_URL) fail('batch-endpoint-mismatch: a batch job would have been sent as an ordinary request', 'batch-endpoint-mismatch'); return (fetchImpl ?? fetch)(...args); }, env, signal, cancelled, skillsBlock: skillsBlockText, onFinishReason: async finishReason => { record.finishReason = finishReason; await queueSave(); } });
             attemptResult = result;
             await applyEnvelope();
           }
@@ -3399,11 +3422,13 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
       if (remaining > 0) await woken;
     }
     await Promise.all(workers);
+    batchCollector?.close();
     activity.stop();
     await activity.settle();
     state.status = state.jobs.some(job=>job.cleanupError) ? 'failed' : state.jobs.every(job => job.status === 'complete') ? 'complete' : state.jobs.some(job => job.status === 'cancelled') ? 'cancelled' : 'failed';
   } catch (error) {
     cleanup.abort();
+    await batchCollector?.cancelAll().catch(() => {});
     activity.stop();
     await Promise.allSettled(workers);
     // Workers and throttled writes are drained before publishing terminal failure.
@@ -3542,7 +3567,7 @@ export async function resumeRun(root, id, { raises = [], reason, wait = false, n
   }
   state.budgetRaises = budgetRaises;
   state.budget = budget;
-  return runManifest(root, manifest, { ...runOptions, jobs: null, id, now, sleep, resumeState: state });
+  return runManifest(root, manifest, { ...runOptions, ...(state.batchFlag ? { batch: true } : {}), jobs: null, id, now, sleep, resumeState: state });
 }
 
 // State written before this field existed carries no telemetry; report null instead of
@@ -6712,7 +6737,7 @@ export function agentsToCheck(manifest) {
 
 // Shared by the `run` command and `go`'s run stage: validate, confirm every used agent is
 // configured, then run to completion, announcing the run id via onRunning as soon as it exists.
-export async function runManifestChecked(root, manifest, onRunning, { checkBase = false, acceptRedBase = false, reason, id, sync = false, acceptCoveredRedBase = true, jobs = null, maxUsd, maxTokens } = {}) {
+export async function runManifestChecked(root, manifest, onRunning, { checkBase = false, acceptRedBase = false, reason, id, sync = false, acceptCoveredRedBase = true, jobs = null, maxUsd, maxTokens, batch = false } = {}) {
   const selectedManifest = selectRunManifest(manifest, jobs);
   await validateProject(root, selectedManifest);
   for (const agent of agentsToCheck(selectedManifest)) { const check = await doctor({ agent }); if (check.configured === false) fail(`${agent} is not configured; run doctor ${agent}`); }
@@ -6726,11 +6751,12 @@ const GO_FLAGS_WITH_VALUE = new Set(['--commit-message', '--repo', '--pr', '--re
 
 // Pure CLI-flag parsing for `go`, kept separate from go() execution so it is directly testable.
 export function parseGoFlags(flags) {
-  let commitMessage, repo, payloadPath, mergeMethod, timeoutMs, tagTimeoutMs, noFlakeCheck, mutants = false, leads, maxJobs, concurrency, maxUsd, maxTokens;
+  let commitMessage, repo, payloadPath, mergeMethod, timeoutMs, tagTimeoutMs, noFlakeCheck, mutants = false, batch = false, leads, maxJobs, concurrency, maxUsd, maxTokens;
   const requireSections = [], exemptions = [];
   for (let index = 0; index < flags.length; index++) {
     const flag = flags[index];
     if (flag === '--mutants') { mutants = true; continue; }
+    if (flag === '--batch') { batch = true; continue; }
     if (flag === '--no-flake-check') { noFlakeCheck = true; continue; }
     if (!GO_FLAGS_WITH_VALUE.has(flag)) fail(`Unknown flag: ${flag}`);
     const value = flags[++index];
@@ -6766,7 +6792,7 @@ export function parseGoFlags(flags) {
     }
   }
   if (repo && !payloadPath) fail('go requires --pr with --repo');
-  return { commitMessage, repo, payloadPath, requireSections, mergeMethod, timeoutMs, mutants, ...(tagTimeoutMs !== undefined ? { tagTimeoutMs } : {}), ...(noFlakeCheck ? { noFlakeCheck } : {}), ...(exemptions.length ? { exemptions } : {}), ...(leads !== undefined ? { leads } : {}), ...(maxJobs !== undefined ? { maxJobs } : {}), ...(concurrency !== undefined ? { concurrency } : {}), ...(maxUsd !== undefined ? { maxUsd } : {}), ...(maxTokens !== undefined ? { maxTokens } : {}) };
+  return { commitMessage, repo, payloadPath, requireSections, mergeMethod, timeoutMs, mutants, ...(batch ? { batch } : {}), ...(tagTimeoutMs !== undefined ? { tagTimeoutMs } : {}), ...(noFlakeCheck ? { noFlakeCheck } : {}), ...(exemptions.length ? { exemptions } : {}), ...(leads !== undefined ? { leads } : {}), ...(maxJobs !== undefined ? { maxJobs } : {}), ...(concurrency !== undefined ? { concurrency } : {}), ...(maxUsd !== undefined ? { maxUsd } : {}), ...(maxTokens !== undefined ? { maxTokens } : {}) };
 }
 
 // Run through current/, this file's realpath is a snapshot under <install>/versions/<v>/, which
@@ -6923,6 +6949,17 @@ async function existingManifestFile(root, argument) {
   try { return (await fs.stat(path.resolve(root, argument))).isFile(); } catch { return false; }
 }
 
+// Which jobs may go to the Message Batches API: --batch (all eligible), the manifest's `batch` (true or { types }), or the
+// machine config's `batch` ({ enabled, types }); a job's own batch true/false is applied by batchEligible.
+function batchPolicyFor(manifest, flag, env) {
+  let config = {};
+  try { config = loadLocalConfig({ env }).batch ?? {}; } catch { config = {}; }
+  const own = manifest?.batch;
+  const types = Array.isArray(own?.types) ? own.types : own === undefined && config.enabled === true && Array.isArray(config.types) ? config.types : [];
+  const all = flag === true || own === true || (own === undefined && config.enabled === true && !(Array.isArray(config.types) && config.types.length));
+  return { all, types };
+}
+
 // The profile for the protected-path gate: null when the project has none, an error when it exists but is not valid
 // (a broken profile must never quietly switch the protection off).
 async function enforceProtectedPaths(root, jobs, { resources = [] } = {}) {
@@ -6992,7 +7029,7 @@ async function refreshMapQuietly(root) {
 
 // Everything the plan preview needs to know about this machine's lanes: where lead and child jobs would go,
 // how many run at once there, and the per-million-token price (null for subscription or local lanes).
-async function planLaneInfo(manifest) {
+async function planLaneInfo(manifest, { batch = false } = {}) {
   const config = loadLocalConfig({ env: process.env });
   const lanes = resolveLanes({ config, manifest });
   const describe = type => {
@@ -7006,12 +7043,15 @@ async function planLaneInfo(manifest) {
       return { agent: route.agent, model: route.model, concurrency: lanes[route.agent]?.concurrency ?? 1, price: rate ? { inPerM: rate.in, outPerM: rate.out } : null, metered };
     } catch { return { agent: 'unknown', model: null, concurrency: 1, price: null }; }
   };
-  return { lead: describe('lead'), child: describe('build'), runConcurrency: manifest.concurrency ?? 1 };
+  const child = describe('build');
+  // Batch applies to the children when they go to the Anthropic lane and the policy (--batch, manifest, config) allows it.
+  if (batchEligible({ agent: child.agent, type: 'build' }, batchPolicyFor(manifest, batch, process.env))) child.batch = true;
+  return { lead: describe('lead'), child, runConcurrency: manifest.concurrency ?? 1 };
 }
 
 async function planDeps(root) {
   return {
-    folders: topLevelFolders, files: trackedFiles, manifestForGoal, laneInfo: planLaneInfo, defaults: GOAL_BUDGET,
+    folders: topLevelFolders, files: trackedFiles, manifestForGoal, laneInfo: (manifest, options) => planLaneInfo(manifest, options), defaults: GOAL_BUDGET,
     head: async dir => (await execFileAsync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).then(out => out.stdout.trim(), () => null)),
   };
 }
@@ -7238,7 +7278,7 @@ async function mainInner() {
   // `swarm "goal sentence"` is shorthand for `swarm go "goal sentence"`. Only one argument with
   // whitespace counts, so a mistyped one-word command never starts a paid run.
   if(!args[0].startsWith('-')&&/\s/.test(args[0])&&isGoalArgument(args[0]))args.unshift('go');
-  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
@@ -7737,7 +7777,7 @@ async function mainInner() {
   // Field lesson #253: `run`'s own base-check gate; --accept-red-base always needs --reason.
   // Field lesson #277: `run`'s own spend-cap override reuses this same --reason flag rather than
   // inventing a second one; --over-cap always needs --reason too.
-  let acceptRedBaseFlag=false,redBaseReason,overCapFlag=false,ignoreProviderLimitFlag=false,syncFlag=false,runJobs,maxUsd,maxTokens,waitQuota=false;
+  let acceptRedBaseFlag=false,redBaseReason,overCapFlag=false,ignoreProviderLimitFlag=false,syncFlag=false,runJobs,maxUsd,maxTokens,waitQuota=false,batchRunFlag=false;
   let raises=[],resumeReason,resumeWait=false;
   if(command==='resume'){
     const flags=rest.splice(0,rest.length);
@@ -7753,6 +7793,7 @@ async function mainInner() {
     for(let index=0;index<flags.length;index++){
       if(command==='run'&&['--max-usd','--max-tokens'].includes(flags[index])){const key=flags[index]==='--max-usd'?'maxUsd':'maxTokens';const value=Number(flags[++index]);resolveBudget({cli:{[key]:value}});if(key==='maxUsd')maxUsd=value;else maxTokens=value;continue;}
       if(command==='run'&&flags[index]==='--wait-quota'){waitQuota=true;continue;}
+      if(command==='run'&&flags[index]==='--batch'){batchRunFlag=true;continue;}
       if(flags[index]==='--evidence'){evidenceFlag=flags[++index];if(!evidenceFlag)fail('--evidence requires a value');continue;}
       if(command==='run'&&flags[index]==='--sync'){if(syncFlag)fail('Duplicate flag: --sync');syncFlag=true;continue;}
       if(command==='run'&&flags[index]==='--jobs'){
@@ -7875,7 +7916,7 @@ async function mainInner() {
         }catch{/* the brain being down is not a reason to stop a run */}finally{await brain.close();}
       }
       try{
-        result=await runManifestChecked(root,manifest,state=>process.stdout.write(`${JSON.stringify({id:state.id,status:'running'})}\n`),{checkBase:true,acceptRedBase:acceptRedBaseFlag,reason:redBaseReason,sync:syncFlag,jobs:runJobs,maxUsd,maxTokens});
+        result=await runManifestChecked(root,manifest,state=>process.stdout.write(`${JSON.stringify({id:state.id,status:'running'})}\n`),{checkBase:true,acceptRedBase:acceptRedBaseFlag,reason:redBaseReason,sync:syncFlag,jobs:runJobs,maxUsd,maxTokens,batch:batchRunFlag});
         if(waitQuota) for(let n=0;n<24&&quotaOnlyPause(result);n++) result=await resumeRun(root,result.id,{wait:true});
       }catch(error){
         if(!error.lessonError)throw error;
@@ -7910,7 +7951,7 @@ async function mainInner() {
     if(planned&&!planError){
       // The preview shown for a saved plan is recomputed, never read from the file; the owner's own caps can only tighten the saved ones.
       const calibration=await readCalibration(root);
-      plan={...planned,preview:withProfileRisks(estimatePlan(planned.manifest,{lanes:await planLaneInfo(planned.manifest),calibration}),profile),appliedCostRatio:calibration.costRatio,appliedTimeRatio:calibration.timeRatio};
+      plan={...planned,preview:withProfileRisks(estimatePlan(planned.manifest,{lanes:await planLaneInfo(planned.manifest,{batch:planned.flags.batch===true}),calibration}),profile),appliedCostRatio:calibration.costRatio,appliedTimeRatio:calibration.timeRatio};
       const tighter=(cli,saved)=>[cli,saved].filter(value=>typeof value==='number'&&Number.isFinite(value)&&value>0).reduce((min,value)=>Math.min(min,value),Infinity);
       const saved={...Object.fromEntries(Object.entries(planned.flags).filter(([,value])=>value!==undefined))};
       goFlags={...goFlags,...saved};
@@ -7950,7 +7991,7 @@ async function mainInner() {
           if(committed.status!=='committed')throw Error(`init commit failed: ${committed.reason}`);
         }
       },
-      run: async (goRoot,manifest,options)=>{const state=await runManifestChecked(goRoot,manifest,undefined,{id:options.id,maxUsd:options.maxUsd,maxTokens:options.maxTokens});return {id:state.id};},
+      run: async (goRoot,manifest,options)=>{const state=await runManifestChecked(goRoot,manifest,undefined,{id:options.id,maxUsd:options.maxUsd,maxTokens:options.maxTokens,batch:Boolean(goFlags?.batch)});return {id:state.id};},
       wait: async (goRoot,id)=>{const waited=await waitRun(goRoot,id);if(waited.status==='paused')waited.pause=(await readState(goRoot,id)).pause;return waited;},
       integrate: async (goRoot,id)=>{
         // A worker that also returns files it was not asked to write has those files dropped (never applied). go goes on without them and says so.

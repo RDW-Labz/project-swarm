@@ -40,10 +40,10 @@ or another agent with file and command access. The worker adapter does not
 need to match the orchestrator. Paste this into your agent at project start:
 
 ```text
-Use Project Swarm 1.72.0 for this project. Read docs/kickoff.md in the toolkit
+Use Project Swarm 1.73.0 for this project. Read docs/kickoff.md in the toolkit
 and perform its kickoff workflow. Ask me up front which model providers may
 receive project code and what spend ceiling applies; wait before model calls.
-Install from tag v1.72.0 in ~/.project-swarm, run tools/install.mjs --user,
+Install from tag v1.73.0 in ~/.project-swarm, run tools/install.mjs --user,
 link this project, run doctor, validate and run the read-only and writing smoke
 jobs, inspect and integrate the reviewed writing output. Read the installed
 SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
@@ -308,6 +308,7 @@ Integration reports the parsed keys, source and a bounded text excerpt for skill
 - `init [--check] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--no-base-check] [--no-map]` and `map [--json]` — `init` links the project and writes its profile: stack, sensitivity, protected paths no job may write, a default budget, and the project's own checks run once so existing failures are recorded (not blamed on workers). It also builds the repo map (`map` refreshes it): exports, imports, external packages and test-to-source links, refreshed incrementally. `init --check` is a read-only health check. See [init](docs/init.md).
 - **Throughput:** thousands of API jobs on one Mac (2,000 in about 6 seconds, 1,000 requests in flight at once), adaptive lanes (`"adaptive": true`) and prompt caching for shared context (`cacheContext`). See [throughput](docs/throughput.md).
 - `think "QUESTION"`, `digest <file|run-id|->`, `draft docs|pr|plan "BRIEF"`, `brain status|stats|test` — the local brain: dev2's model as a free helper that cuts orchestrator and paid-model use (top-3 answers, 15-line digests, drafts, failure triage in autopilot, pre-flight before Claude/Opus jobs). Runner-side only; sensitive projects never fall back to a paid model. See [local brain](docs/local-brain.md).
+- **Batch mode:** `--batch` (or `batch` in a manifest, a job or the machine config) sends Anthropic-lane jobs that can wait to the Message Batches API at half price; same caps, reservations and sensitive rules; `swarm plan` shows the saving. See [batch](docs/batch.md).
 - `inbox [--json] [--all]`, `done ID`, `decision "TEXT" --choice C [--option O]... [--id ID]`, `decide ID CHOICE`, `backlog [add "GOAL" [--paths a/,b/] [--max-usd N] | remove ID]` — never wait on a human: a `type: "human"` manifest job holds back only the jobs that depend on it, `swarm inbox` lists what waits on you (most-blocking first) with the command to close each item, and autopilot starts the held jobs once you are done and the next backlog goal while everything else waits. See [failover](docs/failover.md).
 - `scout --model M --brief FILE "goal"` — prior-art research for one large task; `--brief` may be any readable path, including outside the project root; validates license claims and writes a report for review.
 - `sweep --model M --brief FILE --goals FILE [--max-usd N]` — prior-art research across several areas with a dispatch spending threshold; review findings before adoption.

@@ -30,10 +30,10 @@ export async function buildGoalPlan(root, goal, flags, deps) {
   for (const key of ['maxJobs', 'concurrency']) if (options[key] === undefined) delete options[key];
   const manifest = deps.manifestForGoal(goal, options);
   const calibration = await readCalibration(root);
-  const preview = estimatePlan(manifest, { lanes: await deps.laneInfo(manifest), calibration, now: deps.now });
+  const preview = estimatePlan(manifest, { lanes: await deps.laneInfo(manifest, { batch: flags.batch === true }), calibration, now: deps.now });
   const now = deps.now ?? Date.now;
   const head = await deps.head(root);
-  const planFlags = { leads: options.leads, maxJobs: flags.maxJobs, concurrency: flags.concurrency, maxUsd: options.maxUsd, maxTokens: options.maxTokens };
+  const planFlags = { leads: options.leads, maxJobs: flags.maxJobs, concurrency: flags.concurrency, maxUsd: options.maxUsd, maxTokens: options.maxTokens, ...(flags.batch === true ? { batch: true } : {}) };
   return {
     id: newPlanId(now), goal, createdAt: new Date(now()).toISOString(), head, hash: planHash({ manifest, goal, flags: planFlags, head }),
     flags: planFlags,

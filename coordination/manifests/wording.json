@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "checks": [
+    {
+      "name": "package-check",
+      "argv": [
+        "node",
+        "tools/check-package.mjs"
+      ]
+    }
+  ],
+  "jobs": [
+    {
+      "id": "docs-only-wording",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "cheap",
+      "prompt": "TASK (patch release 1.55.1). A docs-only Codex/Cursor job (all outputs .md, or docs/*.json) currently gets prompt text that a worker read as \"do not edit\": DESIGN_ONLY_LINE says \"read and grep only\" and the base prompt's \"Run relevant project tests.\" is replaced by \"Read and grep only.\". Fix the wording in tools/codex-adapter.mjs only:\n- DESIGN_ONLY_LINE becomes exactly: 'Docs-only job: edit your declared outputs; do not run tests or installs. A test failure in your sandbox is never a reason to block.\\n'\n- The base replacement becomes 'Edit your declared outputs; do not run tests.' instead of 'Read and grep only.'\n- In the two design-only checksLine strings replace 'this design-only job' with 'this docs-only job'.\n- Keep isDesignOnlyCodexJob, the design-only-blocked-on-test warning code and everything else unchanged.\nTests: in tests/field-lessons-batch-ag-runtime.test.mjs test 'L356 design-only briefs and blocked-test results are explicit', add assertions that a docs-only codexMessage contains 'edit your declared outputs' and does not contain 'grep only' (case-insensitive). Update any other test that pins the old strings.\nDocs: docs/manifest-reference.md line quoting the old DESIGN_ONLY_LINE: quote the new one.\nRelease: bump 1.55.0 -> 1.55.1 in package.json, package-lock.json (both fields), README.md pins and the version-pinning release tests in your outputs (both literal 1.55.0 and regex-escaped 1\\.55\\.0 forms; only the pins). CHANGELOG.md: new top `## 1.55.1` with one bullet: docs-only Codex and Cursor jobs are now told to edit their declared outputs (the old \"read and grep only\" wording made a worker refuse to edit). Keep older sections.\nRun `node --import ./tests/_isolate-config.mjs --test tests/field-lessons-batch-ag-runtime.test.mjs tests/codex-adapter.test.mjs tests/field-lessons-batch-ab-release.test.mjs tests/field-lessons-batch-ag-release.test.mjs tests/field-lessons-batch-x.test.mjs tests/field-lessons-batch-ah-release.test.mjs tests/t101-release.test.mjs tests/field-lesson-t80-cli.test.mjs` (nested sandbox-exec tests may fail with Operation not permitted; name them) and `node tools/check-package.mjs`.",
+      "context": [
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "CHANGELOG.md",
+        "README.md",
+        "docs/manifest-reference.md",
+        "package-lock.json",
+        "package.json",
+        "tests/codex-adapter.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/t101-release.test.mjs",
+        "tools/codex-adapter.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/claude-shell.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/cursor-adapter.test.mjs",
+        "tests/cursor-claims.test.mjs",
+        "tests/field-lesson-t81-adapters.test.mjs",
+        "tests/field-lessons-batch-a.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-c.test.mjs",
+        "tests/field-lessons-batch-d.test.mjs",
+        "tests/field-lessons-batch-e.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-g.test.mjs",
+        "tests/field-lessons-batch-h.test.mjs",
+        "tests/field-lessons-batch-j.test.mjs",
+        "tests/field-lessons-batch-l.test.mjs",
+        "tests/field-lessons-batch-m2.test.mjs",
+        "tests/field-lessons-batch-m3.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-q.test.mjs",
+        "tests/field-lessons-batch-r.test.mjs",
+        "tests/field-lessons-batch-t1.test.mjs",
+        "tests/field-lessons-batch-t2.test.mjs",
+        "tests/field-lessons-batch-w.test.mjs",
+        "tests/field-lessons-batch-y.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/lessons.test.mjs",
+        "tests/lessons115.test.mjs",
+        "tests/lessons116.test.mjs",
+        "tests/lessons120-mutants.test.mjs",
+        "tests/lessons120-ship.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/ports.test.mjs",
+        "tests/reports-run.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/shell-loopback.test.mjs",
+        "tests/shell-scratch.test.mjs",
+        "tests/shell-setup.test.mjs",
+        "tests/ship-125.test.mjs",
+        "tests/t86-worktree-relocation.test.mjs",
+        "tests/update.test.mjs",
+        "tests/wire-125.test.mjs",
+        "tests/worker-skills.test.mjs"
+      ]
+    }
+  ]
+}
