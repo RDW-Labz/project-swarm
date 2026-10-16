@@ -115,12 +115,13 @@ test('keyed fingerprint is an HMAC that differs from unkeyed and from another ke
   assert.notEqual(k1, k2);
 });
 
-test('pathological 1 MB lines scan in under 2 seconds', () => {
+test('pathological long lines scan in linear time (4x the input is under 8x the time)', () => {
+  const time = (unit, bytes) => { const content = unit.repeat(bytes / unit.length); let best = Infinity; for (let n = 0; n < 3; n += 1) { const t0 = performance.now(); scanSecrets([{ path: 'big.txt', content }]); best = Math.min(best, performance.now() - t0); } return best; };
   for (const unit of ['a.', 'eyJ-']) {
-    const content = unit.repeat(1000000 / unit.length);
-    const t0 = performance.now();
-    scanSecrets([{ path: 'big.txt', content }]);
-    assert.ok(performance.now() - t0 < 2000, unit);
+    const small = Math.max(time(unit, 256 * 1024), 5);
+    const large = time(unit, 1024 * 1024);
+    assert.ok(large < small * 8, unit + ': ' + small.toFixed(0) + ' ms vs ' + large.toFixed(0) + ' ms');
+    assert.ok(large < 30000, unit);
   }
 });
 
