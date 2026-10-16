@@ -4,7 +4,6 @@
 
 - Rented GPU safety (finishing Phase 14e): the server image is pinned by digest (`vllm/vllm-openai@sha256:...`, vLLM v0.27.1) and tags are refused (`--image` takes only another digest); every rental gets a random 48-character API key (private env file on the node, removed by the timer and `gpu down`; kept in the 0600 session file; the lane and the bake-off send it as a Bearer header); `gpu up` fails and stops the servers if any server port answers from outside or the node lists a server port bound to anything but 127.0.0.1, so servers listen on the node's loopback only and are reached through the ssh tunnel.
 - A regression test (mutation-checked) covers the fix that lets a lead's child manifest list uncovered tests in ignoreTests, so docs-only `swarm go` goals work.
-
 - Spend and lane lock files: the age of an ownerless lock is judged against the real clock, not an injected one (a test clock far in the future made a fresh lock look stale and let concurrent writers delete each other's lock). A second Claude Opus review of the new rental safety code found 0 high and 4 medium issues, all fixed: the key is never printed or carried by errors, a failed or exposed start stops the servers and removes the session (and a starting session is never routable), the node-side check treats any non-loopback listener as exposure and fails closed, the outside probe resolves the real host and runs again after the servers answer, and the machine config can no longer hold a session key.
 
 ## 1.74.0
