@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "tests-gpu-safety",
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "context": [
+        "tests/gpu.test.mjs",
+        "tools/gpu.mjs",
+        "tools/rented.mjs"
+      ],
+      "outputs": [
+        "tests/gpu-safety.test.mjs"
+      ],
+      "prompt": "Write tests/gpu-safety.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\", second line \"import './_isolate-config.mjs';\"). Copy the envFor, options and fakes helpers and the MODEL constant from tests/gpu.test.mjs (read it and tools/gpu.mjs; fakes now includes probePort: async () => false; its ssh answers nvidia-smi commands with GPU lines plus SUDO:ok and everything else with an empty stdout; give fakes's ssh an optional ssOutput setting so that a call whose last argument is 'ss -ltnH' returns it as stdout). Tests: (1) the default image is PINNED_IMAGE, it matches /@sha256:[0-9a-f]{64}$/ and appears in every docker run line of the start script; validateUpOptions refuses image 'vllm/vllm-openai:latest' and 'vllm/vllm-openai:v0.27.1' and 'vllm/vllm-openai' with /gpu-image-invalid/ and accepts 'vllm/vllm-openai@sha256:' plus 64 hex characters. (2) Key per rental: with deps.randomKey returning 'ab'.repeat(24) the session apiKey is that key, the start script contains the line VLLM_API_KEY=<key> exactly once and no '--api-key' text, and every request the health wait makes (record headers from the fetchImpl in fakes) carries authorization 'Bearer <key>'; a randomKey returning a short string makes gpuUp reject with /gpu-key-invalid/ before anything is sent over ssh (no calls recorded except possibly none); without deps.randomKey two gpuUp runs in two fresh envs produce two different 48-hex keys. (3) The key never appears in messages: pass a log function collecting messages; after a successful gpuUp and after a failing one (health never ok, advance the clock with sleep like the unhealthy test in tests/gpu.test.mjs) neither the collected log lines nor the thrown error message contain the key; gpuStatus sends the key as a Bearer header too (record headers). (4) probePort is called with the host part of the target ('203.0.113.9' for 'ubuntu@203.0.113.9') for each replica node port (8000 and 8001 with two GPUs); when it resolves true for 8001 gpuUp rejects with /gpu-exposed/, an ssh call whose stdin script contains 'docker rm -f' was made after the start (the stop), error.session is set and the session file still exists; when it resolves false for all, gpuUp succeeds. (5) Node-side check: ss output \"LISTEN 0 4096 127.0.0.1:8000 0.0.0.0:*\" is fine; \"LISTEN 0 4096 0.0.0.0:8001 0.0.0.0:*\" or \"LISTEN 0 4096 *:8001 *:*\" or \"LISTEN 0 4096 [::]:8001 [::]:*\" makes gpuUp reject with /gpu-exposed/; \"LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\" is fine. (6) Config: a session written by gpuUp makes loadRentedConfig(env).config.auth 'session' with sessionKey equal to the session's apiKey; a hand-written session file without apiKey (copy a real one and delete apiKey, via gpuSessionPath from ../tools/rented.mjs) gives auth 'none'; validateRentedConfig({ endpoint: 'http://127.0.0.1:18000', model: MODEL, hourlyUsd: 3, auth: 'session' }) has an error mentioning sessionKey. Use only names the files export; keep each test short."
+    }
+  ]
+}

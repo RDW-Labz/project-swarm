@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-hardening.test.mjs",
+        "tests/gpu-safety.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "docker-check-gpu",
+      "context": [
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tools/gpu.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu.mjs (plain ESM; same first line, same exports and signatures; change nothing except this). Add a Docker version check to gpuUp. The first ssh command (currently 'nvidia-smi -L; echo SUDO:$(sudo -n true >/dev/null 2>&1 && echo ok || echo no)') gets one more part appended: '; echo DOCKER:$(docker version --format \"{{.Server.Version}}\" 2>/dev/null)' (the output then has a line 'DOCKER:<version>' after the SUDO line). Parse that line: the major version is the integer before the first dot. If the DOCKER line is missing, empty, or the major is not an integer or is below 28, throw fail('gpu-docker-old', 'the node has Docker <version or unknown>; version 28 or newer is required (older Docker lets other hosts on the same network reach ports published on 127.0.0.1)') BEFORE the session file is created and before the start script is sent (so nothing is left behind). Export a helper parseDockerMajor(output) that returns the integer major or null, for tests. Everything else stays exactly as it is.\nignoreTests: tests/adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-hardening.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-safety.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "docker-check-tests",
+      "context": [
+        "tests/gpu-safety.test.mjs",
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tests/gpu-docker.test.mjs"
+      ],
+      "prompt": "Write tests/gpu-docker.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\", second line \"import './_isolate-config.mjs';\"). Copy the envFor, options and fakes helpers and MODEL from tests/gpu-safety.test.mjs (fakes accepts a dockerVersion option, default '28.0.1', which its ssh prints as a DOCKER:<version> line after the SUDO line). Tests: (1) parseDockerMajor('GPU 0: x\\nSUDO:ok\\nDOCKER:28.0.1') is 28; 'DOCKER:27.5.1' is 27; 'DOCKER:' is null; no DOCKER line is null; 'DOCKER:abc' is null; 'DOCKER:29.1.0\\n' is 29. (2) gpuUp with dockerVersion '27.5.1' rejects with /gpu-docker-old/, no start script was sent (no recorded call has input), and no session file exists (readSessionFile(env) is null); same for dockerVersion '' (unknown) and for 'weird'. (3) dockerVersion '28.0.0' and '29.2.1' succeed. Use only names the files export."
+    }
+  ]
+}

@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { gpuUp, gpuDown, gpuStatus, formatStatus, sessionHours, validateUpOptions, SHORTLIST, GPU_DEFAULTS, SSH_HARDENING, readSessionFile, removeSession } from './gpu.mjs';
+import { gpuUp, gpuDown, gpuStatus, formatStatus, sessionHours, validateUpOptions, SHORTLIST, GPU_DEFAULTS, SSH_HARDENING, readSessionFile, removeSession, authFetch, PINNED_IMAGE } from './gpu.mjs';
 import { fetchCacheStats } from './gpu-cache.mjs';
 import { runBakeoff, renderBakeoff, writeBakeoffReport, measureThroughput, countEvalTasks, selectCandidates, LEVELS } from './gpu-bakeoff.mjs';
 
@@ -36,7 +36,7 @@ export function upOptions(flags, extra = {}) {
 
 export function planText(options, { gpus = options.gpus ?? 'all' } = {}) {
   const hours = sessionHours(options);
-  return `Plan (nothing is started yet):\n  node: ${options.target} (a node you already rented; swarm rents nothing)\n  model: ${options.model}, one server per GPU (${gpus}), reached through an ssh tunnel, no key on the node\n  price: $${options.hourlyUsd}/h; hard cap $${options.maxUsd} => the session ends after ${hours.toFixed(2)} h, and a timer on the node removes the servers and powers it off then\n  sent to the node: commands only; no files, keys or .env\n  jobs: only sensitive: false, each with exact files, a contract file and acceptance tests; one failure goes to Haiku, then Codex\n  billing: the dollar cap ends the session, but billing continues until YOU terminate the instance; the timer powers the node off only if passwordless sudo works (checked at start)\nAdd --yes to go.`;
+  return `Plan (nothing is started yet):\n  node: ${options.target} (a node you already rented; swarm rents nothing)\n  model: ${options.model}, one server per GPU (${gpus}), reached through an ssh tunnel, no key of yours on the node (a random per-rental key protects the servers)\n  price: $${options.hourlyUsd}/h; hard cap $${options.maxUsd} => the session ends after ${hours.toFixed(2)} h, and a timer on the node removes the servers and powers it off then\n  sent to the node: commands only; nothing of yours (no file, key or .env); a random per-rental key is written for the servers\n  jobs: only sensitive: false, each with exact files, a contract file and acceptance tests; one failure goes to Haiku, then Codex\n  billing: the dollar cap ends the session, but billing continues until YOU terminate the instance; the timer powers the node off only if passwordless sudo works (checked at start)\n  access: the servers listen on the node loopback only, need a random per-rental API key, and gpu up fails if any server port is reachable from outside\nAdd --yes to go.`;
 }
 
 function sshReal(argv, { input } = {}) {
@@ -86,20 +86,20 @@ export async function runGpuCommand(args, deps = {}) {
   const env = deps.env ?? process.env;
   const [verb, ...rest] = args;
   const flags = parseGpuFlags(rest);
-  const real = { ssh: deps.ssh ?? sshReal, openTunnel: deps.openTunnel ?? openTunnelReal, stopTunnel: deps.stopTunnel ?? stopTunnelReal, fetchImpl: deps.fetchImpl ?? fetch, env, log: message => process.stderr.write(`${message}\n`), ...(deps.gpu ?? {}) };
+  const real = { ssh: deps.ssh ?? sshReal, openTunnel: deps.openTunnel ?? openTunnelReal, stopTunnel: deps.stopTunnel ?? stopTunnelReal, fetchImpl: deps.fetchImpl ?? fetch, probePort: deps.probePort ?? undefined, randomKey: deps.randomKey ?? undefined, env, log: message => process.stderr.write(`${message}\n`), ...(deps.gpu ?? {}) };
   if (verb === 'models') {
     out(SHORTLIST.map(item => `${item.label}\t${item.model}\t${item.quant}${item.extra ? '\t(extra run)' : ''}`).join('\n'));
-    out('Hugging Face ids are a shortlist: check each one exists before renting. FP8 runs first; NVFP4 only with --extra-quant.');
+    out('Hugging Face ids are a shortlist: check each one exists before renting. FP8 runs first; NVFP4 only with --extra-quant.' + ' Server image: ' + PINNED_IMAGE + ' (pinned by digest; --image takes only another digest).');
     return { status: 'ok' };
   }
   if (verb === 'status') {
     const status = await gpuStatus(real);
-    out(flags.json ? JSON.stringify(status) : formatStatus(status));
+    out(flags.json ? JSON.stringify({ ...status, apiKey: undefined }) : formatStatus(status));
     return status;
   }
   if (verb === 'down') {
     const result = await gpuDown(real);
-    out(flags.json ? JSON.stringify(result) : `${result.message}${result.stopped ? ` Used ${result.hours.toFixed(2)} h, about $${result.costUsd.toFixed(2)}.` : ''}${(result.notes ?? []).map(note => `\n${note}`).join('')}`);
+    out(flags.json ? JSON.stringify({ ...result, apiKey: undefined }) : `${result.message}${result.stopped ? ` Used ${result.hours.toFixed(2)} h, about $${result.costUsd.toFixed(2)}.` : ''}${(result.notes ?? []).map(note => `\n${note}`).join('')}`);
     return result;
   }
   if (verb === 'up') {
@@ -107,7 +107,7 @@ export async function runGpuCommand(args, deps = {}) {
     validateUpOptions(options);
     if (!flags.yes) { out(planText(options)); return { status: 'planned' }; }
     const session = await gpuUp(options, real);
-    out(flags.json ? JSON.stringify(session) : `GPU session up: ${session.replicas} replica(s) of ${session.model}. Expires ${session.expiresAt}. Run jobs with agent "rented" (or auto), then swarm gpu down and terminate the instance.`);
+    out(flags.json ? JSON.stringify({ ...session, apiKey: undefined }) : `GPU session up: ${session.replicas} replica(s) of ${session.model}. Expires ${session.expiresAt}. Run jobs with agent "rented" (or auto), then swarm gpu down and terminate the instance.`);
     return session;
   }
   if (verb === 'bakeoff') return bakeoff(flags, { out, real, deps });
@@ -128,6 +128,7 @@ async function bakeoff(flags, { out, real, deps }) {
   const runner = deps.runner ?? fileURLToPath(new URL('./swarm.mjs', import.meta.url));
   const info = deps.baseInfo ?? bench.buildBaseRepo(root, 'HEAD', path.join(tmp, 'repo'));
   const repo = path.join(tmp, 'repo');
+  let apiKey;
   const results = await runBakeoff({ candidates, hourlyUsd: base.hourlyUsd, capUsd: base.maxUsd, levels, includeExtra: flags["extra-quant"] === true, bestOf: (flags['best-of'] ?? '1,3').split(',').map(Number) }, {
     log: real.log,
     start: async (candidate, { remainingUsd }) => {
@@ -138,14 +139,15 @@ async function bakeoff(flags, { out, real, deps }) {
         try { await gpuDown(real); } catch { /* ignore: the original error matters */ }
         throw error;
       }
+      apiKey = session.apiKey;
       return { endpoint: session.endpoints[0], stop: () => gpuDown(real) };
     },
-    cacheStats: async ({ endpoint }) => fetchCacheStats(endpoint, real.fetchImpl),
+    cacheStats: async ({ endpoint }) => fetchCacheStats(endpoint, authFetch(real.fetchImpl, apiKey)),
     benchmark: async ({ model, bestOf }) => {
       const run = bench.runLane({ lane: 'rented', repo, runner, model, bestOf, maxUsd: base.maxUsd, baseInfo: info, log: real.log });
       return { passed: run.results.filter(item => item.pass).length, total: run.results.length };
     },
-    throughput: ({ endpoint, model, level }) => measureThroughput({ endpoint, model, level, fetchImpl: real.fetchImpl }),
+    throughput: ({ endpoint, model, level }) => measureThroughput({ endpoint, model, level, fetchImpl: authFetch(real.fetchImpl, apiKey) }),
   });
   const text = renderBakeoff(results, { hourlyUsd: base.hourlyUsd, evalTasks: countEvalTasks(root), levels });
   const file = writeBakeoffReport(root, text);

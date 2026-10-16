@@ -312,3 +312,13 @@ test('idle commands commit on isolated branches, fail, time out, sanitize env an
   assert.equal(history.length, 3);
   assert.deepEqual(history[0].results, results);
 });
+
+test('a fake clock far from the real one never makes a fresh lock look stale (30 concurrent writers all finish)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'spend-clock-'));
+  try {
+    const now = () => Date.UTC(2030, 0, 1);
+    let done = 0;
+    await Promise.all(Array.from({ length: 30 }, () => withSpendStore(async () => { done += 1; }, { dir, now, timeoutMs: 20000 })));
+    assert.equal(done, 30);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});

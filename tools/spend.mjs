@@ -106,7 +106,7 @@ export async function withSpendStore(fn, { dir = spendDir(), now = Date.now, isA
           if (error instanceof SyntaxError) owner = {}; // An invalid owner is held until timeout.
           else if (error.code !== 'ENOENT') throw error;
         }
-        if ((owner?.host === host && Number.isInteger(owner.pid) && owner.pid > 0 && !isAlive(owner.pid)) || (!owner && new Date(now()).getTime() - stat.mtimeMs > 60000)) {
+        if ((owner?.host === host && Number.isInteger(owner.pid) && owner.pid > 0 && !isAlive(owner.pid)) || (!owner && Date.now() - stat.mtimeMs > 60000)) {
           // Claim stale cleanup before removing it, so concurrent cleaners cannot
           // remove the replacement lock acquired by another caller.
           const cleanup = path.join(lock, 'cleanup');
