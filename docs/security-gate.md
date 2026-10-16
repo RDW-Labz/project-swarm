@@ -1,20 +1,30 @@
 # Security gate
 
-The security gate checks every batch before it can stay merged. It runs in the merge queue.
+The security gate checks every batch before it can stay merged. It runs in the merge queue and for plain integrate.
 
 ## What it is and where it runs
 
-The gate runs on every batch in the merge queue. It runs before the project checks. So a blocked batch never runs its own code. Its tests, installs and postinstall scripts do not run. The gate also runs with --no-checks.
+The gate runs on every batch in the merge queue. It runs before the project checks, so a blocked batch never runs its own code. Its tests, installs and postinstall scripts do not run. The gate also runs with --no-checks.
+
+Plain integrate (without --queue) runs the same gate on the planned writes before the first write. Integrate has no rollback, so a block writes nothing.
 
 Each batch records whether security passed or blocked.
 
-If the gate blocks a batch, the queue rolls the batch back. The queue then bisects the batch, the same way it handles a failed check.
+If the gate blocks a batch in the queue, the queue rolls the batch back. The queue then bisects the batch, the same way it handles a failed check.
+
+If the gate throws, it fails closed with security-gate-error and nothing is written.
 
 The profile file is read once when the queue starts. This happens before any batch writes.
 
-Plain integrate without --queue runs the same gate on the planned writes before the first write. Use the queue for rollback.
+## Every integration is gated
 
-## The five checks
+Every integration runs the gate. Plain integrate runs it on the planned writes before the first write.
+
+Because the dependency scanners read files from disk and plain integrate has no rollback, a change to a dependency manifest or lockfile is refused by plain integrate with the message "Use integrate --queue". The queue audits the written files and rolls back on a block. Dependency manifests and lockfiles are package.json, package-lock.json, npm-shrinkwrap.json and requirements text files.
+
+A block fails with security-gate-blocked and records the inbox blocker and the lesson. There is no integration path without the gate. The only switch is the security block in the profile.
+
+## The checks
 
 ### 1. Secret scan
 
@@ -29,7 +39,7 @@ Files are read with care, so a secret cannot hide:
 - Big files are scanned in windows. Only a file beyond 20 windows is blocked as too large to scan.
 - Scan work per line is bounded.
 
-Findings never contain the secret. A finding shows the rule, the path, the line and a 12 character fingerprint. The fingerprint is an HMAC with a random per-project key. The key is stored in .swarm/project/security-key with mode 600. So a low-entropy secret cannot be recovered from a fingerprint.
+Findings never contain the secret. A finding shows the rule, the path, the line and a 12 character fingerprint. The fingerprint is an HMAC with a random per-project key stored in .swarm/project/security-key with mode 600. A low-entropy secret cannot be recovered from a fingerprint.
 
 The scan stops after 200 findings. It keeps at most 3 findings per rule in each file.
 
@@ -37,7 +47,7 @@ The swarm-secret-allow marker only works on a line that already existed in the p
 
 ### 2. Package check
 
-The package check looks for new dependencies. It reads manifests in any folder. These are package.json, including peerDependencies and overrides, and requirements text files. A version bump counts as new.
+The package check looks for new dependencies. It reads manifests in any folder. These are package.json, including peerDependencies and overrides, and requirements text files. File names are compared case-insensitively, so PACKAGE.JSON and Requirements.TXT are checked on macOS and Windows too. A version bump counts as new.
 
 Every new dependency must:
 
@@ -48,7 +58,7 @@ Every new dependency must:
 
 This catches made-up names and look-alike names.
 
-These specs are blocked as non-registry. Owner approval is needed. They are git, GitHub, GitLab, file, link, tarball and URL specs, and extra index URLs.
+These specs are blocked as non-registry and need owner approval: git, GitHub, GitLab, file, link, tarball and URL specs, and extra index URLs.
 
 An npm alias is checked under its target name. Workspace specs pass.
 
@@ -70,19 +80,29 @@ The check fails closed. If a dependency manifest or lockfile changed and no scan
 
 With changed manifests, only the vulnerabilities of the changed dependencies block. With only a lockfile change, every high or critical vulnerability blocks.
 
-Limit: yarn.lock, pnpm-lock.yaml, pyproject.toml, Pipfile, go.mod and Cargo.toml changes trigger the vulnerability requirement. Their dependencies are not parsed for the new-package check.
+Limit: yarn.lock, pnpm-lock.yaml, pyproject.toml, Pipfile, go.mod, go.sum and Cargo.toml changes trigger the vulnerability requirement. Their dependencies are not parsed for the new-package check.
 
 ### 4. Code scan
 
-The code scan uses Semgrep, when Semgrep is installed. It runs with --metrics=off. File paths are passed after --.
-
-The code scan policy is codeScan: local (default), auto or off. Auto uses registry rules and runs only for non-sensitive projects unless codeScanSensitive is true. See Offline code scan.
+The code scan policy is codeScan: local (default), auto or off. See Offline code scan for the default local mode. Auto uses registry rules through Semgrep and runs only for non-sensitive projects unless codeScanSensitive is true.
 
 High and medium findings become fix tickets. A ticket carries only the rule id, path and line. Code scan findings never block.
 
 Tickets are recorded only for a batch that stays merged.
 
-### 5. Licence check
+### 5. Install scripts
+
+The install-script check reads package.json. If a lifecycle script changes, the batch is blocked and the owner must review it. The checked scripts are preinstall, install, postinstall, prepare, prepublish, prepublishOnly, prepack, postpack, preuninstall, uninstall and postuninstall.
+
+### 6. Policy change
+
+A batch that changes the security policy or sensitivity in .project-swarm.json is blocked. The owner makes that change by hand.
+
+### 7. Unsupported manifests
+
+See Unparsed ecosystems fail closed below.
+
+### 8. Licence check
 
 The licence check uses a real SPDX expression parser. It supports OR, AND, WITH and parentheses.
 
@@ -109,8 +129,9 @@ The policy lives in the optional security block in .project-swarm.json under pro
 - allowCopyleft: false
 - approvedLicenses: empty
 - allowedSecretFingerprints: empty
+- allowUnparsedManifests: empty
 - requireVulnerabilityScan: true
-- codeScan: auto
+- codeScan: local
 - codeScanSensitive: false
 
 The gate can only be turned off in this file. No flag can turn it off.
@@ -122,6 +143,27 @@ There are two ways to allow a secret finding:
 - Put the marker swarm-secret-allow on a line that already existed in the previous version of the file.
 - Add the fingerprint to allowedSecretFingerprints in the policy.
 
+## Offline code scan
+
+The default code scan is local. It runs for every project, sensitive or not. It uses 19 pinned rules for JavaScript, TypeScript and Python in tools/security-rules/semgrep-local.yml, with the sha256 pinned in the code.
+
+The rules file is read once. It is then copied into a fresh temp scan folder with a private HOME, so a repo-written .semgrepignore or semgrep settings cannot change the scan. A changed or unreadable rules file blocks the batch.
+
+The scan runs with --metrics=off, no version check, a minimal environment with no tokens, and no network.
+
+## Unparsed ecosystems fail closed
+
+A change, including a deletion, to these files blocks the batch with check unsupported-manifest and an inbox item until the gate can parse them:
+
+- pnpm, yarn, Go, Cargo, Python (pyproject.toml, Pipfile, poetry.lock, uv.lock, setup.py, setup.cfg, environment.yml), PHP, Ruby, JVM, Swift, CocoaPods, Dart, Elixir and .NET manifests and lockfiles;
+- .npmrc, .yarnrc, .pnpmfile.cjs, bun and uv locks;
+- gradle wrapper and lockfile files, .gitmodules and CI workflows under .github/workflows;
+- vendored folders (vendor, third_party);
+- .csproj, .fsproj, .vbproj and .gemspec files;
+- requirements files inside a requirements folder or ending in .in, and constraints files.
+
+The owner can allow a file with allowUnparsedManifests in the profile security block. Entries match the exact path. A bare file name only matches a file at the repository root.
+
 ## Missing tools and network failures
 
 If a tool is missing, the gate skips that tool and adds a note. This applies to npm, pip-audit, osv-scanner and semgrep.
@@ -131,20 +173,11 @@ If the registry cannot be reached, the package check fails closed for new depend
 ## Known limits
 
 - The gate scans only the files a batch writes. It does not scan git history.
-- Plain integrate without --queue runs the gate before its first write, but it has no rollback.
+- The registry checks, npm audit and osv-scanner send dependency names over the network, even for sensitive projects.
+- Only the first 200 changed text files are code-scanned. A warning says so when more files changed.
+- The Semgrep rules are a small starter set of 19 rules. They are not a full scanner.
+- Plain integrate without --queue has no rollback.
 - The registry checks need network access.
 - A weekly download count is only a signal. It is not proof that a package is safe.
-- yarn.lock, pnpm-lock.yaml, pyproject.toml, Pipfile, go.mod and Cargo.toml changes trigger the vulnerability requirement, but their dependencies are not parsed for the new-package check.
+- yarn.lock, pnpm-lock.yaml, pyproject.toml, Pipfile, go.mod, go.sum and Cargo.toml changes trigger the vulnerability requirement, but their dependencies are not parsed for the new-package check.
 - The profile file is read once when the queue starts, before any batch writes.
-
-## Every integration is gated
-
-Plain integrate (without --queue) now runs the same gate on the planned writes before the first write. Integrate has no rollback, so a block writes nothing. A block fails with security-gate-blocked and records the inbox blocker and the lesson. There is no integration path without the gate; the only switch is the profile security block.
-
-## Offline code scan
-
-The code scan runs for every project, sensitive or not. It uses pinned local rules at tools/security-rules/semgrep-local.yml: 15 rules for JavaScript, TypeScript and Python, with the sha256 pinned in the code. A changed or unreadable rules file blocks the batch. The scan runs with --metrics=off, no version check, a minimal environment and no network.
-
-## Unparsed ecosystems fail closed
-
-A change, including a deletion, to a pnpm, yarn, Go, Cargo, Python (pyproject.toml, Pipfile, poetry.lock, setup.py), PHP, Ruby or JVM manifest or lockfile blocks the batch with check unsupported-manifest and an inbox item until the gate can parse it. The owner can allow a file with allowUnparsedManifests in the profile security block, by file name or path.

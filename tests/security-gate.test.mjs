@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { runSecurityGate, normalizePolicy, DEFAULT_POLICY, formatBlocks, lessonFor, recordGate, SEMGREP_RULES_SHA256, SEMGREP_RULES_PATH, UNPARSED_MANIFESTS } from '../tools/security-gate.mjs';
+import { runSecurityGate, normalizePolicy, DEFAULT_POLICY, formatBlocks, lessonFor, recordGate, unparsedEcosystem, SEMGREP_RULES_SHA256, SEMGREP_RULES_PATH, UNPARSED_MANIFESTS } from '../tools/security-gate.mjs';
 import { scanSecretsDetailed } from '../tools/security-scan.mjs';
 
 const NOW = Date.parse('2025-01-01T00:00:00Z');
@@ -19,6 +19,7 @@ const registry = (m, downloads = 100000) => async (url) => (new URL(url).hostnam
 const pkg = (deps) => Buffer.from(JSON.stringify({ dependencies: deps }));
 const auditOnly = (handler) => async (argv, opts) => { if (argv[0] === 'npm' && argv[1] === 'audit') return handler(argv, opts); throw new Error('missing'); };
 const LOCK = [{ file: 'package-lock.json', bytes: Buffer.from('{}'), previous: Buffer.from('{}') }];
+const SAFE_ENV_KEYS = ['HOME', 'PATH', 'SEMGREP_ENABLE_VERSION_CHECK', 'SEMGREP_SEND_METRICS'];
 
 test('planted secret blocks without leaking the value', async () => {
   const bytes = Buffer.from('// config\nconst key = ' + AWS + ';\n');
@@ -242,6 +243,36 @@ test('semgrep runs with an env that turns off metrics and version checks', async
   assert.equal(env0.SEMGREP_ENABLE_VERSION_CHECK, '0');
 });
 
+test('semgrep scan runs in a temp scan dir with the pinned rules copy, an isolated env, and removes the dir afterwards', async () => {
+  let scanCwd = null;
+  let scanEnv = null;
+  let probeEnv = null;
+  let configBytes = null;
+  let scanArgv = null;
+  const exec = async (argv, opts) => {
+    if (argv[0] === 'semgrep' && argv[1] === '--version') { probeEnv = opts.env; return { stdout: '1.0.0' }; }
+    if (argv[0] === 'semgrep') {
+      scanArgv = argv;
+      scanCwd = opts.cwd;
+      scanEnv = opts.env;
+      const i = argv.indexOf('--config');
+      configBytes = readFileSync(argv[i + 1]);
+      return { stdout: JSON.stringify({ results: [] }) };
+    }
+    throw new Error('missing');
+  };
+  const gate = await runSecurityGate({ changes: [{ file: 'src/index.js', bytes: Buffer.from('export const n = 1;\n'), previous: null }], exec, fetchImpl: noFetch, now: () => NOW });
+  assert.equal(gate.ok, true);
+  assert.ok(scanCwd);
+  assert.notEqual(path.resolve(scanCwd), path.resolve(process.cwd()));
+  assert.deepEqual(configBytes, readFileSync(SEMGREP_RULES_PATH));
+  assert.deepEqual(Object.keys(scanEnv).sort(), SAFE_ENV_KEYS);
+  assert.deepEqual(Object.keys(probeEnv).sort(), SAFE_ENV_KEYS);
+  assert.notEqual(scanEnv.HOME, os.homedir());
+  assert.equal(scanArgv[scanArgv.indexOf('--') + 1], 'src/index.js');
+  await assert.rejects(stat(scanCwd), { code: 'ENOENT' });
+});
+
 test('pinned rules with other bytes block with code-scan', async () => {
   const gate = await runSecurityGate({ changes: [{ file: 'src/index.js', bytes: Buffer.from('export const n = 1;\n'), previous: null }], readRules: async () => Buffer.from('rules changed'), exec: noExec, fetchImpl: noFetch, now: () => NOW });
   assert.equal(gate.ok, false);
@@ -284,6 +315,13 @@ test('semgrep finding makes a ticket without blocking; tickets have no message; 
   assert.ok(noNpm.skipped.includes('npm not installed'));
 });
 
+test('more than 200 changed text files gives the coverage warning', async () => {
+  const changes = [];
+  for (let i = 0; i < 201; i++) changes.push({ file: `src/f${i}.js`, bytes: Buffer.from('x = 1\n'), previous: null });
+  const gate = await runSecurityGate({ changes, exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.ok(gate.warnings.includes('code scan covered the first 200 of 201 files'));
+});
+
 test('pinned semgrep rules file hashes to SEMGREP_RULES_SHA256', () => {
   const digest = createHash('sha256').update(readFileSync(SEMGREP_RULES_PATH)).digest('hex');
   assert.equal(digest, SEMGREP_RULES_SHA256);
@@ -296,9 +334,38 @@ test('every rule id in the pinned semgrep rules starts with swarm-', () => {
   for (const id of ids) assert.ok(id.startsWith('swarm-'), id);
 });
 
-test('UNPARSED_MANIFESTS maps the known unparsed manifests to their ecosystems', () => {
-  const expected = { 'pnpm-lock.yaml': 'pnpm', 'yarn.lock': 'yarn', 'go.mod': 'go', 'go.sum': 'go', 'Cargo.toml': 'cargo', 'Cargo.lock': 'cargo', 'pyproject.toml': 'python', 'Pipfile': 'python' };
-  for (const [file, eco] of Object.entries(expected)) assert.equal(UNPARSED_MANIFESTS[file], eco);
+test('UNPARSED_MANIFESTS is exactly the known map with lower-case keys', () => {
+  const expected = {
+    'pnpm-lock.yaml': 'pnpm', 'pnpm-workspace.yaml': 'pnpm', 'yarn.lock': 'yarn', '.yarnrc.yml': 'yarn',
+    'go.mod': 'go', 'go.sum': 'go', 'go.work': 'go',
+    'cargo.toml': 'cargo', 'cargo.lock': 'cargo',
+    'pyproject.toml': 'python', 'pipfile': 'python', 'pipfile.lock': 'python', 'poetry.lock': 'python', 'setup.py': 'python', 'uv.lock': 'python', 'setup.cfg': 'python',
+    'composer.json': 'php', 'composer.lock': 'php',
+    'gemfile': 'ruby', 'gemfile.lock': 'ruby',
+    'pom.xml': 'jvm', 'build.gradle': 'jvm', 'build.gradle.kts': 'jvm', 'gradle-wrapper.properties': 'jvm', 'gradle.lockfile': 'jvm', 'settings.gradle': 'jvm', 'settings.gradle.kts': 'jvm',
+    '.npmrc': 'node', '.yarnrc': 'node', '.pnpmfile.cjs': 'node',
+    'bun.lock': 'bun', 'bun.lockb': 'bun',
+    'environment.yml': 'conda',
+    'package.swift': 'swift',
+    'podfile': 'cocoapods', 'podfile.lock': 'cocoapods',
+    'pubspec.yaml': 'dart', 'pubspec.lock': 'dart',
+    'mix.exs': 'elixir', 'mix.lock': 'elixir',
+    'packages.config': 'dotnet',
+    '.gitmodules': 'git submodules',
+  };
+  assert.deepEqual({ ...UNPARSED_MANIFESTS }, expected);
+  assert.deepEqual(Object.keys(UNPARSED_MANIFESTS).filter((k) => k !== k.toLowerCase()), []);
+});
+
+test('unparsedEcosystem names the ecosystem for the listed paths and null for the rest', () => {
+  const yes = {
+    'GO.MOD': 'go', 'Cargo.TOML': 'cargo', 'sub/PNPM-LOCK.YAML': 'pnpm', '.github/workflows/ci.yml': 'ci workflow',
+    'vendor/lib/a.js': 'vendored code', 'x/third_party/b.js': 'vendored code', 'App.csproj': 'dotnet', 'a.gemspec': 'ruby',
+    'requirements/base.txt': 'python', 'requirements-dev.in': 'python', 'constraints.txt': 'python',
+  };
+  for (const [file, eco] of Object.entries(yes)) assert.equal(unparsedEcosystem(file), eco, file);
+  assert.equal(unparsedEcosystem('src/index.js'), null);
+  assert.equal(unparsedEcosystem('requirements.txt'), null);
 });
 
 test('a changed unparsed manifest blocks and names the file and its ecosystem', async () => {
@@ -322,12 +389,23 @@ test('changed pnpm-lock.yaml and a deleted sub/Cargo.lock both block as unsuppor
   assert.ok(bc.message.includes('cargo'));
 });
 
-test('allowUnparsedManifests lets a changed manifest through by path or by basename', async () => {
-  const change = [{ file: 'sub/Cargo.lock', bytes: Buffer.from('a'), previous: Buffer.from('b') }];
-  const byPath = await runSecurityGate({ changes: change, policy: { allowUnparsedManifests: ['sub/Cargo.lock'] }, exec: noExec, fetchImpl: noFetch, now: () => NOW });
-  assert.equal(byPath.blocks.some((b) => b.check === 'unsupported-manifest'), false);
-  const byName = await runSecurityGate({ changes: change, policy: { allowUnparsedManifests: ['Cargo.lock'] }, exec: noExec, fetchImpl: noFetch, now: () => NOW });
-  assert.equal(byName.blocks.some((b) => b.check === 'unsupported-manifest'), false);
+test('allowUnparsedManifests: an entry without a slash lets only a repository-root file through', async () => {
+  const mk = (file) => [{ file, bytes: Buffer.from('a'), previous: Buffer.from('b') }];
+  const allowed = await runSecurityGate({ changes: mk('go.mod'), policy: { allowUnparsedManifests: ['go.mod'] }, exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.equal(allowed.blocks.some((b) => b.check === 'unsupported-manifest'), false);
+  for (const file of ['sub/dir/go.mod', 'vendor/x/go.mod']) {
+    const g = await runSecurityGate({ changes: mk(file), policy: { allowUnparsedManifests: ['go.mod'] }, exec: noExec, fetchImpl: noFetch, now: () => NOW });
+    assert.equal(g.blocks.some((b) => b.check === 'unsupported-manifest'), true, file);
+  }
+});
+
+test('allowUnparsedManifests: an entry with a slash must equal the whole path, case-insensitively', async () => {
+  const mk = (file) => [{ file, bytes: Buffer.from('a'), previous: Buffer.from('b') }];
+  const blocked = (file, list) => runSecurityGate({ changes: mk(file), policy: { allowUnparsedManifests: list }, exec: noExec, fetchImpl: noFetch, now: () => NOW })
+    .then((g) => g.blocks.some((b) => b.check === 'unsupported-manifest'));
+  assert.equal(await blocked('sub/cargo.lock', ['Sub/CARGO.lock']), false);
+  assert.equal(await blocked('other/sub/Cargo.lock', ['sub/Cargo.lock']), true);
+  assert.equal(await blocked('sub/Cargo.lock', ['Cargo.lock']), true);
 });
 
 test('an unrelated change does not add the unsupported-manifest check', async () => {
@@ -336,12 +414,72 @@ test('an unrelated change does not add the unsupported-manifest check', async ()
   assert.equal(gate.checked.includes('unsupported-manifest'), false);
 });
 
-test('disabled policy returns immediately and does nothing else', async () => {
-  let calls = 0;
-  const spy = async () => { calls++; throw new Error('should not run'); };
-  const gate = await runSecurityGate({ changes: [{ file: 'a.js', bytes: Buffer.from(AWS), previous: null }], policy: { enabled: false }, exec: spy, fetchImpl: spy, now: () => NOW });
-  assert.deepEqual(gate, { ok: true, blocks: [], tickets: [], warnings: [], skipped: ['security gate disabled by policy'], checked: [] });
-  assert.equal(calls, 0);
+test('a changed PACKAGE.JSON with a new dependency is still checked by the package check', async () => {
+  const change = [{ file: 'PACKAGE.JSON', bytes: pkg({ 'definitely-not-real-pkg': '^1.0.0' }), previous: pkg({}) }];
+  const gate = await runSecurityGate({ changes: change, policy: { requireVulnerabilityScan: false }, exec: noExec, fetchImpl: async () => jsonRes({}, 404), now: () => NOW });
+  assert.equal(gate.ok, false);
+  assert.ok(gate.blocks.some((b) => b.check === 'package-check'));
+});
+
+test('policy-change: changing profile.security or profile.sensitive blocks as critical', async () => {
+  const prev = Buffer.from(JSON.stringify({ profile: { security: 'low' } }));
+  const next = Buffer.from(JSON.stringify({ profile: { security: 'high' } }));
+  const gate = await runSecurityGate({ changes: [{ file: '.project-swarm.json', bytes: next, previous: prev }], exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  const b = gate.blocks.find((x) => x.check === 'policy-change');
+  assert.ok(b);
+  assert.equal(b.severity, 'critical');
+  const prevS = Buffer.from(JSON.stringify({ profile: { sensitive: false } }));
+  const nextS = Buffer.from(JSON.stringify({ profile: { sensitive: true } }));
+  const gateS = await runSecurityGate({ changes: [{ file: '.project-swarm.json', bytes: nextS, previous: prevS }], exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.ok(gateS.blocks.some((x) => x.check === 'policy-change'));
+});
+
+test('policy-change: changing only another profile key does not block', async () => {
+  const prev = Buffer.from(JSON.stringify({ profile: { name: 'a', security: 'low' } }));
+  const next = Buffer.from(JSON.stringify({ profile: { name: 'b', security: 'low' } }));
+  const gate = await runSecurityGate({ changes: [{ file: '.project-swarm.json', bytes: next, previous: prev }], exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.equal(gate.blocks.some((b) => b.check === 'policy-change'), false);
+});
+
+test('policy-change: unparsable new bytes block', async () => {
+  const prev = Buffer.from(JSON.stringify({ profile: { security: 'low' } }));
+  const gate = await runSecurityGate({ changes: [{ file: '.project-swarm.json', bytes: Buffer.from('{not json'), previous: prev }], exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.ok(gate.blocks.some((b) => b.check === 'policy-change' && b.severity === 'critical'));
+});
+
+test('policy-change: a new file with no security or sensitive value does not block', async () => {
+  const next = Buffer.from(JSON.stringify({ profile: { name: 'x' } }));
+  const gate = await runSecurityGate({ changes: [{ file: '.project-swarm.json', bytes: next, previous: null }], exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.equal(gate.blocks.some((b) => b.check === 'policy-change'), false);
+});
+
+test('install-script: adding postinstall blocks and names the key', async () => {
+  const prev = Buffer.from(JSON.stringify({ scripts: { test: 'x' } }));
+  const next = Buffer.from(JSON.stringify({ scripts: { test: 'x', postinstall: 'node evil.js' } }));
+  const gate = await runSecurityGate({ changes: [{ file: 'package.json', bytes: next, previous: prev }], policy: { requireVulnerabilityScan: false }, exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  const b = gate.blocks.find((x) => x.check === 'install-script');
+  assert.ok(b);
+  assert.ok(b.message.includes('postinstall'));
+});
+
+test('install-script: changing preinstall or adding prepare blocks and names the key', async () => {
+  const pre = await runSecurityGate({ changes: [{ file: 'package.json', bytes: Buffer.from(JSON.stringify({ scripts: { preinstall: 'b' } })), previous: Buffer.from(JSON.stringify({ scripts: { preinstall: 'a' } })) }], policy: { requireVulnerabilityScan: false }, exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.ok(pre.blocks.some((b) => b.check === 'install-script' && b.message.includes('preinstall')));
+  const prep = await runSecurityGate({ changes: [{ file: 'package.json', bytes: Buffer.from(JSON.stringify({ scripts: { prepare: 'make' } })), previous: Buffer.from(JSON.stringify({ scripts: {} })) }], policy: { requireVulnerabilityScan: false }, exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.ok(prep.blocks.some((b) => b.check === 'install-script' && b.message.includes('prepare')));
+});
+
+test('install-script: an unchanged lifecycle script and a changed test script do not block', async () => {
+  const same = Buffer.from(JSON.stringify({ scripts: { postinstall: 'node a.js' } }));
+  const unchanged = await runSecurityGate({ changes: [{ file: 'package.json', bytes: same, previous: same }], policy: { requireVulnerabilityScan: false }, exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.equal(unchanged.blocks.some((b) => b.check === 'install-script'), false);
+  const testChanged = await runSecurityGate({ changes: [{ file: 'package.json', bytes: Buffer.from(JSON.stringify({ scripts: { test: 'node t.js' } })), previous: Buffer.from(JSON.stringify({ scripts: { test: 'node old.js' } })) }], policy: { requireVulnerabilityScan: false }, exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.equal(testChanged.blocks.some((b) => b.check === 'install-script'), false);
+});
+
+test('an unchanged manifest-less change does not add a vulnerability check', async () => {
+  const gate = await runSecurityGate({ changes: [{ file: 'src/index.js', bytes: Buffer.from('export const n = 1;\n'), previous: null }], exec: noExec, fetchImpl: noFetch, now: () => NOW });
+  assert.equal(gate.checked.includes('vulnerability'), false);
 });
 
 test('normalizePolicy keeps valid values and ignores the rest', () => {
@@ -376,6 +514,14 @@ test('DEFAULT_POLICY is frozen with minAgeDays 30 and codeScan local', () => {
   assert.equal(Object.isFrozen(DEFAULT_POLICY), true);
   assert.equal(DEFAULT_POLICY.minAgeDays, 30);
   assert.equal(DEFAULT_POLICY.codeScan, 'local');
+});
+
+test('disabled policy returns immediately and does nothing else', async () => {
+  let calls = 0;
+  const spy = async () => { calls++; throw new Error('should not run'); };
+  const gate = await runSecurityGate({ changes: [{ file: 'a.js', bytes: Buffer.from(AWS), previous: null }], policy: { enabled: false }, exec: spy, fetchImpl: spy, now: () => NOW });
+  assert.deepEqual(gate, { ok: true, blocks: [], tickets: [], warnings: [], skipped: ['security gate disabled by policy'], checked: [] });
+  assert.equal(calls, 0);
 });
 
 test('formatBlocks and lessonFor give one line per block and leak nothing', () => {

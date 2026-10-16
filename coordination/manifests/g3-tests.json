@@ -215,13 +215,12 @@
       "id": "g3-router",
       "context": [
         "tests/router.test.mjs",
-        "tools/router.mjs",
-        "tools/swarm.mjs"
+        "tools/router.mjs"
       ],
       "outputs": [
         "tests/router-ready.test.mjs"
       ],
-      "prompt": "Write tests/router-ready.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\", second line \"import './_isolate-config.mjs';\") testing the ready count the runner passes to the router: import validateProject or the exported route helper if swarm.mjs exports one (read tools/swarm.mjs for 'readyAutoJobs', which is a module-private const; if it is not exported, test through tools/router.mjs only): routeJob with a configured rented lane, a complete non-sensitive contract job and ready 700 routes to rented, 699 does not, a sensitive job never does; also a manifest-level test through validateManifest that hard: true is accepted and hard: 'yes' is refused with code hard-invalid. Keep it short and use only exports that exist."
+      "prompt": "Write tests/router-ready.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\", second line \"import './_isolate-config.mjs';\") testing the ready count the runner passes to the router: test through tools/router.mjs (routeJob) and validateManifest from ../tools/swarm.mjs: routeJob with a configured rented lane, a complete non-sensitive contract job and ready 700 routes to rented, 699 does not, a sensitive job never does; also a manifest-level test through validateManifest that hard: true is accepted and hard: 'yes' is refused with code hard-invalid. Keep it short and use only exports that exist."
     }
   ]
 }

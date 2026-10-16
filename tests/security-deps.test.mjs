@@ -69,6 +69,20 @@ test('newDependencies reads subfolder manifests and tags entries with file', () 
   ]);
 });
 
+test('newDependencies matches manifest and requirements file names case-insensitively', () => {
+  const after = {
+    'PACKAGE.JSON': JSON.stringify({ dependencies: { up: '1' } }),
+    'Sub/Package.Json': JSON.stringify({ dependencies: { sub: '1' } }),
+    'Requirements-Dev.TXT': 'pytest==8.0\n',
+  };
+  const got = newDependencies({ before: {}, after }).map(d => ({ file: d.file, ecosystem: d.ecosystem, name: d.name }));
+  assert.deepEqual(got, [
+    { file: 'PACKAGE.JSON', ecosystem: 'npm', name: 'up' },
+    { file: 'Sub/Package.Json', ecosystem: 'npm', name: 'sub' },
+    { file: 'Requirements-Dev.TXT', ecosystem: 'pypi', name: 'pytest' },
+  ]);
+});
+
 test('same name in another file counts as new', () => {
   const before = { 'a/package.json': JSON.stringify({ dependencies: { x: '1' } }) };
   const after = {

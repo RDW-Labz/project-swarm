@@ -92,7 +92,7 @@ test('a project profile with security disabled lets the planted secret through p
   assert.equal(await read(root, 'out/0.txt'), text);
 });
 
-test('injected securityGate exec and fetchImpl are honoured by plain integrate for a made-up dependency', async t => {
+test('plain integrate refuses a made-up dependency change before any scanner runs and writes nothing', async t => {
   const root = await fixture(t);
   await fs.writeFile(path.join(root, 'package.json'), '{}\n');
   await commit(root, 'package');
@@ -103,7 +103,7 @@ test('injected securityGate exec and fetchImpl are honoured by plain integrate f
     fetchImpl: async () => new Response('not found', { status: 404 }),
     exec: async argv => ({ exitCode: 0, stdout: argv[0] === 'osv-scanner' ? '{"results":[]}' : '', stderr: '' }),
   };
-  await rejectsWith(integrateRun(root, run.id, { noChecks: true, securityGate }), 'package-check');
+  await rejectsWith(integrateRun(root, run.id, { noChecks: true, securityGate }), 'Use integrate --queue');
   assert.equal(await read(root, 'package.json'), '{}\n');
 });
 

@@ -170,7 +170,7 @@ describe('L159: packaging config that no check builds is flagged', () => {
     const job = plainJob({ context: ['input.txt'], outputs: ['pyproject.toml'] });
     const fake = (_c, _a, options) => spawn(process.execPath, ['-e', `require('fs').writeFileSync('pyproject.toml',${JSON.stringify(hatchAfter)});console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'ok'}))`], options);
     const state = await runManifest(root, { version: 1, jobs: [job] }, { spawnImpl: fake });
-    const integrated = await integrateRun(root, state.id);
+    const integrated = await integrateRun(root, state.id, { securityGate: { policy: { enabled: false } } });
     assert.ok(integrated.warnings?.some(w => w.startsWith('packaging-change-without-build-check: pyproject.toml: [tool.hatch.build.targets.wheel.force-include]')), JSON.stringify(integrated.warnings));
     const payloadPath = path.join(root, 'pr.json');
     await fs.writeFile(payloadPath, JSON.stringify({ title: 't', head: 'b', base: 'main', body: 'x' }));

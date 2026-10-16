@@ -40,8 +40,9 @@ const writeProfile = async (root, sensitive) => {
   await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify(profile, null, 2) + '\n');
   await commit(root, 'profile');
 };
-const recorder = (calls, semgrep = { results: [] }) => async argv => {
+const recorder = (calls, semgrep = { results: [] }) => async (argv, opts = {}) => {
   calls.push(argv);
+  argv.opts = opts;
   if (argv[0] === 'osv-scanner') return { exitCode: 0, stdout: '{"results":[]}', stderr: '' };
   if (argv[0] === 'semgrep' && argv[1] === '--config') return { exitCode: 0, stdout: JSON.stringify(semgrep), stderr: '' };
   return { exitCode: 0, stdout: '', stderr: '' };
@@ -204,9 +205,13 @@ test('sensitive project runs the local pinned semgrep with metrics off', async t
   assert.deepEqual(result.mergeQueue.securityBlocked, []);
   const sg = calls.find(argv => argv[0] === 'semgrep' && argv[1] === '--config');
   assert.ok(sg, 'expected a local semgrep --config call');
-  assert.ok(sg[2].endsWith('semgrep-local.yml'));
+  assert.ok(sg[2].endsWith('rules.yml'), 'expected the isolated temp rules file');
+  assert.ok(!sg[2].includes('security-rules'), 'must not use the repo rules path');
   assert.ok(sg.includes('--metrics=off'));
   assert.ok(!sg.includes('auto'));
+  assert.notEqual(sg.opts.cwd, root, 'semgrep must not run from the repo root');
+  assert.deepEqual(Object.keys(sg.opts.env).sort(), ['HOME', 'PATH', 'SEMGREP_ENABLE_VERSION_CHECK', 'SEMGREP_SEND_METRICS']);
+  assert.equal(sg.opts.env.SEMGREP_SEND_METRICS, 'off');
 });
 
 test('a job writing go.mod is blocked by the queue as unsupported-manifest', async t => {
