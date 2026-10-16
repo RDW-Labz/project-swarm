@@ -55,6 +55,8 @@ export function validateUpOptions(options) {
   if (options.probePorts !== undefined && (!Array.isArray(options.probePorts) || options.probePorts.length > 8 || options.probePorts.some(port => !Number.isInteger(port) || port < 1 || port > 65535))) throw fail('gpu-option-invalid', 'probePorts must be an array of at most 8 whole ports from 1 to 65535');
   const args = options.args ?? [];
   if (!Array.isArray(args) || args.some(item => typeof item !== 'string' || !/^[A-Za-z0-9._=:/-]{1,80}$/.test(item))) throw fail('gpu-option-invalid', 'extra server arguments may only hold letters, digits and . _ = : / -');
+  const reserved = item => ['--host', '--port', '--api-key'].some(flag => item === flag || item.startsWith(`${flag}=`));
+  if (args.some(reserved)) throw fail('gpu-option-invalid', 'server args may not set --host, --port or --api-key');
 }
 
 // Hours the session may run: the owner's limit, and never more than the dollar cap pays for.
@@ -93,18 +95,18 @@ export function remoteStartScript({ model, image, gpus, maxModelLen, perReplica,
 
 export const remoteStopScript = () => 'docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1 || true\nrm -f "$HOME/.swarm-vllm.env"\n';
 
-// Container mode (the node is itself a container running the pinned vLLM image): the same key handling, with vllm run directly.
+// Container mode (the node is itself a container running the pinned vLLM image): the key is read once in the foreground, then vllm runs directly.
 export function containerStartScript({ model, gpus, maxModelLen, perReplica, args = [], seconds, remotePortBase, apiKey }) {
   if (typeof apiKey !== 'string' || !KEY_RE.test(apiKey)) throw fail('gpu-key-invalid', 'api key must be 48 lower-case hex characters');
-  const lines = [`setsid nohup sh -c 'sleep ${Math.ceil(seconds)}; pkill -f "vllm serve" >/dev/null 2>&1; rm -f "$HOME/.swarm-vllm.env"' >/dev/null 2>&1 </dev/null &`, 'set -e', 'pkill -f "vllm serve" >/dev/null 2>&1 || true', 'rm -f "$HOME/.swarm-vllm.env"', 'umask 077', 'cat > "$HOME/.swarm-vllm.env" <<\'SWARMKEY\'', `VLLM_API_KEY=${apiKey}`, 'SWARMKEY'];
+  const lines = [`setsid nohup sh -c 'sleep ${Math.ceil(seconds)}; pkill -f "[v]llm serve" >/dev/null 2>&1; rm -f "$HOME/.swarm-vllm.env" "$HOME"/.swarm-vllm-*.log' >/dev/null 2>&1 </dev/null &`, 'set -e', 'pkill -f "[v]llm serve" >/dev/null 2>&1 || true', 'rm -f "$HOME/.swarm-vllm.env"', 'umask 077', 'cat > "$HOME/.swarm-vllm.env" <<\'SWARMKEY\'', `VLLM_API_KEY=${apiKey}`, 'SWARMKEY', `export VLLM_API_KEY="$(sed -n 's/^VLLM_API_KEY=//p' "$HOME/.swarm-vllm.env")"`, `[ -n "$VLLM_API_KEY" ] || { echo "no key" >&2; exit 1; }`];
   for (const { index, remote } of replicaPorts(gpus, { remotePortBase })) {
-    lines.push(`CUDA_VISIBLE_DEVICES=${index} VLLM_API_KEY="$(sed -n 's/^VLLM_API_KEY=//p' "$HOME/.swarm-vllm.env")" setsid nohup vllm serve ${model} --served-model-name ${model} --host 127.0.0.1 --port ${remote} --max-model-len ${maxModelLen} --max-num-seqs ${perReplica} --gpu-memory-utilization 0.9 --enable-prefix-caching ${args.join(' ')} > "$HOME/.swarm-vllm-${index}.log" 2>&1 </dev/null &`);
+    lines.push(`CUDA_VISIBLE_DEVICES=${index} setsid nohup vllm serve ${model} --served-model-name ${model} --host 127.0.0.1 --port ${remote} --max-model-len ${maxModelLen} --max-num-seqs ${perReplica} --gpu-memory-utilization 0.9 --enable-prefix-caching ${args.join(' ')} > "$HOME/.swarm-vllm-${index}.log" 2>&1 </dev/null &`);
   }
-  lines.push('rm -f "$HOME/.swarm-vllm.env"');
+  lines.push('rm -f "$HOME/.swarm-vllm.env"', 'unset VLLM_API_KEY');
   return `${lines.join('\n')}\n`;
 }
 
-export const containerStopScript = () => 'pkill -f "vllm serve" >/dev/null 2>&1 || true\nrm -f "$HOME/.swarm-vllm.env"\n';
+export const containerStopScript = () => ['pkill -f "[v]llm serve" >/dev/null 2>&1 || true', 'sleep 2', 'if pgrep -f "[v]llm serve" >/dev/null 2>&1; then pkill -9 -f "[v]llm serve" >/dev/null 2>&1; sleep 1; fi', 'rm -f "$HOME/.swarm-vllm.env" "$HOME"/.swarm-vllm-*.log', '! pgrep -f "[v]llm serve" >/dev/null 2>&1'].join('\n') + '\n';
 
 // Host part of a /proc/net/tcp(6) local address: IPv4 or IPv6 words are little-endian; returns text, or null when not recognised.
 export function hostFromProcAddr(hex) {
@@ -190,7 +192,7 @@ async function findExposure({ base, target, shown, ports, ssh, sshArgs, probePor
   const listening = new Set(ports.map(item => item.remote));
   if (container) {
     let text;
-    try { text = String((await ssh([...sshArgs, 'cat /proc/net/tcp /proc/net/tcp6'], {}))?.stdout ?? ''); } catch { throw fail('gpu-exposure-unknown', 'could not read the node listening sockets (/proc/net/tcp)'); }
+    try { text = String((await ssh([...sshArgs, 'cat /proc/net/tcp; cat /proc/net/tcp6 2>/dev/null; true'], {}))?.stdout ?? ''); } catch { throw fail('gpu-exposure-unknown', 'could not read the node listening sockets (/proc/net/tcp)'); }
     const sockets = listeningFromProc(text);
     if (!sockets.length) throw fail('gpu-exposure-unknown', 'could not read the node listening sockets (/proc/net/tcp)');
     const hit = sockets.find(item => listening.has(item.port) && !isLoopback(item.host));
@@ -262,7 +264,7 @@ async function waitHealthy(endpoints, model, { fetchImpl, sleep, now, timeoutMs,
 // ssh(argv, { input }) -> { stdout }; openTunnel({ target, key, ports }) -> { pid, stop() }. Both injected so tests need no network.
 export async function gpuUp(options, deps) {
   validateUpOptions(options);
-  const { ssh, openTunnel, fetchImpl = fetch, sleep = sleepReal, now = Date.now, env = process.env, log = () => {}, probePort = probeTcp, randomKey, lookup } = deps;
+  const { ssh, openTunnel, stopTunnel, fetchImpl = fetch, sleep = sleepReal, now = Date.now, env = process.env, log = () => {}, probePort = probeTcp, randomKey, lookup } = deps;
   if (readSessionFile(env)) throw fail('gpu-session-exists', 'a GPU session is already recorded; run swarm gpu status, or swarm gpu down first');
   const apiKey = randomKey ? randomKey() : randomBytes(24).toString('hex');
   if (typeof apiKey !== 'string' || !KEY_RE.test(apiKey)) throw fail('gpu-key-invalid', 'the generated API key must be 48 lower-case hex characters');
@@ -310,17 +312,20 @@ export async function gpuUp(options, deps) {
     if (detail !== null) throw Object.assign(fail('gpu-exposed', detail), { exposure: true });
   };
 
-  // Any failure after the session file exists: stop the servers over ssh (ignoring errors, but noting success), remove the session file,
-  // then rethrow with a message that says whether the stop worked and a key-less session copy on error.session.
+  // Any failure after the session file exists: stop the servers over ssh (ignoring errors, but noting success), stop the tunnel when one is recorded,
+  // remove the session file, then rethrow with a message that says whether the stop worked and a key-less session copy on error.session.
   const afterStartFailure = async error => {
     let stopped = false;
     try { await ssh([...sshArgs, 'bash -s'], { input: container ? containerStopScript() : remoteStopScript() }); stopped = true; } catch { /* ignored: the timer still removes them */ }
+    if (Number.isInteger(session.tunnelPid) && session.tunnelPid > 1 && stopTunnel) { try { await stopTunnel(session.tunnelPid, session); } catch { /* already gone */ } }
     removeSession(env);
+    const verb = container ? 'destroy' : 'terminate';
     if (error?.exposure) {
-      error.message = `${error.message}; ${stopped ? 'the servers were stopped' : `the servers could NOT be stopped from here; the timer on the node will remove them at ${session.expiresAt}; terminate the instance`}`;
+      error.message = `${error.message}; ${stopped ? 'the servers were stopped' : `the servers could NOT be stopped from here; the timer on the node will remove them at ${session.expiresAt}; ${verb} the instance`}`;
     } else {
       error.message = `${error.message} ${stopped ? '(the servers were stopped)' : '(could not stop the servers from here; the timer on the node still fires)'}`;
     }
+    if (container) error.message = `${error.message} Destroy the instance now (node bench/gpu-bakeoff/vast.mjs destroy).`;
     error.session = keyless(session);
     return error;
   };
@@ -333,6 +338,11 @@ export async function gpuUp(options, deps) {
     session.tunnelPid = tunnel?.pid ?? null;
     writeSession(env, session);
     await waitHealthy(endpoints, options.model, { fetchImpl: authFetch(fetchImpl, apiKey), sleep, now, timeoutMs: options.healthTimeoutMs ?? GPU_DEFAULTS.healthTimeoutMs, pollMs: options.pollMs });
+    for (const endpoint of endpoints) {
+      let refused = false;
+      try { const response = await fetchImpl(`${endpoint}/v1/models`); refused = response.status === 401 || response.status === 403; } catch { refused = false; }
+      if (!refused) throw fail('gpu-no-auth', `the server at ${endpoint} answers without the API key`);
+    }
     await exposureCheck();
   } catch (error) {
     throw await afterStartFailure(error);
@@ -379,7 +389,8 @@ export async function gpuStatus(deps) {
     replicas.push({ endpoint, healthy, cache: healthy ? await fetchCacheStats(endpoint, fetchImpl) : null });
   }
   const cache = combineCacheStats(replicas.map(item => item.cache).filter(Boolean));
-  return { cacheHitRate: cache.hitRate, bestOf: session.bestOf ?? 1, mode: session.mode ?? 'vm', active: !expired, expired, model: session.model, replicas, hours, spentUsd: Math.round(hours * session.hourlyUsd * 100) / 100, capUsd: session.capUsd, minutesLeft: Math.max(0, Math.round((expires - now()) / 60000)), hourlyUsd: session.hourlyUsd, expiresAt: session.expiresAt, billingNote: expired ? 'the node may still be billing: terminate the instance' : null };
+  const verb = session.mode === 'container' ? 'destroy' : 'terminate';
+  return { cacheHitRate: cache.hitRate, bestOf: session.bestOf ?? 1, mode: session.mode ?? 'vm', active: !expired, expired, model: session.model, replicas, hours, spentUsd: Math.round(hours * session.hourlyUsd * 100) / 100, capUsd: session.capUsd, minutesLeft: Math.max(0, Math.round((expires - now()) / 60000)), hourlyUsd: session.hourlyUsd, expiresAt: session.expiresAt, billingNote: expired ? `the node may still be billing: ${verb} the instance` : null };
 }
 
 export function formatStatus(status) {

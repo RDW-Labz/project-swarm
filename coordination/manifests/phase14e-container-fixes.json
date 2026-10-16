@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-container.test.mjs",
+        "tests/gpu-docker.test.mjs",
+        "tests/gpu-hardening.test.mjs",
+        "tests/gpu-safety.test.mjs",
+        "tests/gpu-vast.test.mjs",
+        "tests/gpu.test.mjs",
+        "tests/vast-container.test.mjs"
+      ],
+      "id": "rv-gpu",
+      "context": [
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tools/gpu.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu.mjs (plain ESM; same first line, exports and signatures; change ONLY what follows; compact). Review fixes for container mode. (1) containerStartScript: read the key ONCE in the foreground before the replica lines with two lines: export VLLM_API_KEY=\"$(sed -n 's/^VLLM_API_KEY=//p' \"$HOME/.swarm-vllm.env\")\" and a guard line: [ -n \"$VLLM_API_KEY\" ] || { echo \"no key\" >&2; exit 1; } ; each replica line then no longer reads the key (it starts CUDA_VISIBLE_DEVICES=<index> setsid nohup vllm serve ...); after the replica lines: rm -f \"$HOME/.swarm-vllm.env\" and then unset VLLM_API_KEY. (2) Every pkill pattern in the container timer, container start script and containerStopScript must be \"[v]llm serve\" (in double quotes; the bracket stops the pattern from matching the command line that contains it) instead of \"vllm serve\". containerStopScript becomes these lines: pkill -f \"[v]llm serve\" >/dev/null 2>&1 || true / sleep 2 / if pgrep -f \"[v]llm serve\" >/dev/null 2>&1; then pkill -9 -f \"[v]llm serve\" >/dev/null 2>&1; sleep 1; fi / rm -f \"$HOME/.swarm-vllm.env\" \"$HOME\"/.swarm-vllm-*.log / ! pgrep -f \"[v]llm serve\" >/dev/null 2>&1 (the last line makes the ssh command fail when a server is still running). The container timer's sh -c command also removes \"$HOME\"/.swarm-vllm-*.log after the pkill (inside the single-quoted sh -c string use only double quotes). (3) In gpuUp, after the replicas pass waitHealthy (both modes) and before the second exposure check: for each endpoint call the UNAUTHENTICATED fetchImpl (the raw deps fetchImpl, not authFetch) on endpoint + '/v1/models'; the server must answer with HTTP 401 or 403, else throw fail('gpu-no-auth', 'the server at <endpoint> answers without the API key; the servers were stopped') inside the same try so the normal failure handling (stop servers, remove session, stop the tunnel) runs. A fetch that throws counts as a failure of the check (also gpu-no-auth). (4) afterStartFailure additionally stops the tunnel when the session has a tunnelPid that is an integer above 1 (call deps.stopTunnel(pid, session) if given, ignore errors); in container mode every error message produced by afterStartFailure ends with ' Destroy the instance now (node bench/gpu-bakeoff/vast.mjs destroy).' (5) Container-mode node exposure command: change 'cat /proc/net/tcp /proc/net/tcp6' to 'cat /proc/net/tcp; cat /proc/net/tcp6 2>/dev/null; true' (hosts with IPv6 off still work; an empty or unparsable tcp listing still fails closed as before). (6) validateUpOptions: options.args may not contain '--host', '--port', '--api-key' or any item starting with one of them followed by '=' ; throw fail('gpu-option-invalid', 'server args may not set --host, --port or --api-key'). (7) Wording: in container mode (session or options mode 'container') every success or status text that says to terminate the instance says to destroy it instead (formatStatus, gpuDown messages already do; check the rest). Do not edit tests.\nignoreTests: tests/adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-docker.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-hardening.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-safety.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-vast.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/vast-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "rv-commands",
+      "context": [
+        "tools/gpu-commands.mjs",
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tools/gpu-commands.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu-commands.mjs (plain ESM; same first line, exports and signatures; change ONLY this). (1) In runGpuCommand for 'up', and in bakeoff(): while the command is running install process.once handlers for SIGINT and SIGTERM that run gpuDown(real) (ignore its errors), print 'interrupted: servers stopped; destroy the instance if you rented one (node bench/gpu-bakeoff/vast.mjs destroy)' to stderr and then process.exit(130); remove the handlers (process.off) when the command finishes or throws. Make this injectable for tests: use deps.signalTarget ?? process (an object with once/off) and deps.exit ?? process.exit. (2) planText in container mode: the line that says the timer powers things off must not appear; the access line stays. Do not edit tests.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/vast-container.test.mjs",
+        "tests/vast-rental.test.mjs"
+      ],
+      "id": "rv-vast",
+      "context": [
+        "bench/gpu-bakeoff/vast.mjs"
+      ],
+      "outputs": [
+        "bench/gpu-bakeoff/vast.mjs"
+      ],
+      "prompt": "Return the complete new bench/gpu-bakeoff/vast.mjs (plain ESM; same first line, exports and behaviour; change ONLY what follows; keep it compact). Review fixes. (1) destroyInstance(client, id, { retries, wait }): a DELETE whose JSON has success === false counts as a failure; after a successful-looking DELETE poll getInstance(client, id) (up to 12 times, 5 s apart via wait) until it returns null or an object whose actual_status is not 'running'/'loading'/'created', treating a thrown 404-style error as gone; only then return true; throw when it never goes away. (2) reap(): at the deadline retry destroyInstance with a 30 s pause between rounds for up to 60 minutes (log each failed round), and only return 'destroyed' after a verified destroy; it exits early only when state() has instanceId === id AND destroyedAt; each loop writes heartbeatAt (ISO) into the state file when state().instanceId === id (use an injectable writeState dependency defaulting to the module function). (3) The state file: rent refuses to start when readState() has an instanceId with no destroyedAt (error 'a rental is already recorded (instance N); destroy it first with: node bench/gpu-bakeoff/vast.mjs destroy --id N'); the destroy command writes destroyedAt only when the recorded instanceId equals the destroyed id AND the destroy was verified. (4) rent order after the create PUT returns: print INSTANCE_ID immediately; start the reaper next (and check it is alive: wait 2 s, and if reaper.exitCode !== null destroy the instance and fail); only then writeState (include label and heartbeat fields); wrap everything after the create in try/catch that destroys the instance and rethrows; install process.once SIGINT and SIGTERM handlers right after the create that destroy the instance (verified destroy), print where it is, and exit 130, removed when rent finishes; give each rental a unique label 'swarm-bakeoff-' + Date.now() (containerCreateBody and createBody take label as today); add an 'error' listener on the reaper child that logs. (5) checkContainerOffer and checkOffer worst-case: add (offer.inet_down_cost ?? 0) * 100 (about 100 GB of downloads) to worstUsd; the returned worstUsd includes it and the 80% rule applies to the total. (6) status: when the API call fails show actual_status 'unknown' (only a successful call with no record is 'gone'). (7) --wait-min must be an integer from 1 to 25 else throw usage error. (8) rent prints PUBLIC_IP=<instance.public_ipaddr> (when present) after SSH_PORT in container mode. Do not edit tests.\nignoreTests: tests/vast-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/vast-rental.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

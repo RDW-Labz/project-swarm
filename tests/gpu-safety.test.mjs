@@ -26,7 +26,7 @@ function fakes(env, { gpus = 4, now = () => 1700000000000, sudo = 'ok', dockerVe
   return {
     calls, env, now,
     sleep: async () => {},
-    fetchImpl: async () => ({ ok: true, json: async () => ({ data: [{ id: MODEL }] }) }),
+    fetchImpl: async (url, init) => (init?.headers?.authorization ? { ok: true, status: 200, json: async () => ({ data: [{ id: MODEL }] }) } : { ok: false, status: 401, json: async () => ({}) }),
     ssh: async (argv, { input } = {}) => {
       calls.push({ argv, input });
       const last = String(argv.at(-1));
@@ -55,7 +55,7 @@ test('each rental gets its own key: the start script carries it once, health che
   const env = envFor(t), deps = fakes(env, { gpus: 1 });
   const seen = [];
   deps.randomKey = () => KEY;
-  deps.fetchImpl = async (url, init) => { seen.push(init?.headers?.authorization); return { ok: true, json: async () => ({ data: [{ id: MODEL }] }) }; };
+  deps.fetchImpl = async (url, init) => { seen.push(init?.headers?.authorization); return init?.headers?.authorization ? { ok: true, status: 200, json: async () => ({ data: [{ id: MODEL }] }) } : { ok: false, status: 401 }; };
   const session = await gpuUp(options(), deps);
   assert.equal(session.apiKey, KEY);
   const script = deps.calls.find(call => call.input)?.input;
@@ -63,7 +63,8 @@ test('each rental gets its own key: the start script carries it once, health che
   assert.equal(script.split('VLLM_API_KEY=').length - 1, 1);
   assert.doesNotMatch(script, /--api-key/);
   assert.ok(seen.length > 0);
-  for (const value of seen) assert.equal(value, `Bearer ${KEY}`);
+  assert.ok(seen.includes(undefined), 'one unauthenticated probe must be refused (401)');
+  for (const value of seen.filter(item => item !== undefined)) assert.equal(value, `Bearer ${KEY}`);
   const shortDeps = fakes(envFor(t), { gpus: 1 });
   shortDeps.randomKey = () => 'abc';
   await assert.rejects(gpuUp(options(), shortDeps), /gpu-key-invalid/);

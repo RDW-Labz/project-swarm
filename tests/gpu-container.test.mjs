@@ -28,12 +28,12 @@ function fakes(env, { gpus = 1, vllm = '/usr/local/bin/vllm', proc = PROC_DEFAUL
     calls, env,
     now: () => 1700000000000,
     sleep: async () => {},
-    fetchImpl: async () => ({ ok: true, json: async () => ({ data: [{ id: MODEL }] }) }),
+    fetchImpl: async (url, init) => (init?.headers?.authorization ? { ok: true, status: 200, json: async () => ({ data: [{ id: MODEL }] }) } : { ok: false, status: 401, json: async () => ({}) }),
     ssh: async (argv, { input } = {}) => {
       calls.push({ argv, input });
       const last = String(argv.at(-1));
       if (last === 'ss -ltnH') return { stdout: '' };
-      if (last === 'cat /proc/net/tcp /proc/net/tcp6') {
+      if (last.startsWith('cat /proc/net/tcp')) {
         if (procThrows) throw new Error('ssh failed');
         return { stdout: proc };
       }
@@ -67,7 +67,7 @@ test('containerStartScript builds the timer, key handling and one vllm serve per
   const apiKey = 'a'.repeat(48);
   const script = containerStartScript({ model: MODEL, gpus: 2, maxModelLen: 4096, perReplica: 8, args: ['--quantization', 'fp8'], seconds: 120.4, remotePortBase: 8000, apiKey });
   const lines = script.split('\n');
-  assert.ok(lines[0].startsWith('setsid nohup sh -c \'sleep 121; pkill -f "vllm serve"'), lines[0]);
+  assert.ok(lines[0].startsWith('setsid nohup sh -c \'sleep 121; pkill -f "[v]llm serve"'), lines[0]);
   assert.equal(lines[1], 'set -e');
   const launches = lines.filter(line => line.startsWith('CUDA_VISIBLE_DEVICES='));
   assert.equal(launches.length, 2);
@@ -83,7 +83,12 @@ test('containerStartScript builds the timer, key handling and one vllm serve per
   assert.equal(script.split(apiKey).length - 1, 1);
   assert.ok(lines.includes(`VLLM_API_KEY=${apiKey}`));
   assert.equal(script.includes('--api-key'), false);
-  assert.equal(lines.filter(line => line.trim()).at(-1), 'rm -f "$HOME/.swarm-vllm.env"');
+  const body = lines.filter(line => line.trim());
+  assert.equal(body.at(-1), 'unset VLLM_API_KEY');
+  assert.equal(body.at(-2), 'rm -f "$HOME/.swarm-vllm.env"');
+  const exportAt = lines.findIndex(line => line.startsWith('export VLLM_API_KEY='));
+  assert.ok(exportAt > 0 && exportAt < lines.findIndex(line => line.startsWith('CUDA_VISIBLE_DEVICES=')), 'the key is read once, before the servers start');
+  assert.ok(launches.every(line => !line.includes('VLLM_API_KEY')), 'no per-server key substitution (it raced the env-file removal)');
   assert.equal(script.includes('docker'), false);
   assert.throws(() => containerStartScript({ model: MODEL, gpus: 1, maxModelLen: 4096, perReplica: 8, seconds: 60, remotePortBase: 8000, apiKey: 'xyz' }), /gpu-key-invalid/);
 });
@@ -108,7 +113,7 @@ test('gpuUp in container mode sends the container script and checks /proc', asyn
   }
   assert.equal(session.mode, 'container');
   assert.equal(session.powerOff, false);
-  assert.ok(sshCalls(deps).some(call => call.argv.at(-1) === 'cat /proc/net/tcp /proc/net/tcp6'));
+  assert.ok(sshCalls(deps).some(call => String(call.argv.at(-1)).startsWith('cat /proc/net/tcp')));
   const stored = readSessionFile(env);
   assert.equal(stored.mode, 'container');
   assert.equal(stored.powerOff, false);

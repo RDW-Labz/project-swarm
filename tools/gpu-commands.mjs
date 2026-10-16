@@ -44,7 +44,7 @@ export function upOptions(flags, extra = {}) {
 
 export function planText(options, { gpus = options.gpus ?? 'all' } = {}) {
   const hours = sessionHours(options);
-  return `Plan (nothing is started yet):\n  node: ${options.target}${options.sshPort === undefined ? '' : ` port ${options.sshPort}`} (${options.mode === 'container' ? 'a container instance already running the pinned vLLM image (swarm gpu up starts vllm serve inside it; no docker needed)' : 'a node you already rented; swarm rents nothing'})\n  model: ${options.model}, one server per GPU (${gpus}), reached through an ssh tunnel, no key of yours on the node (a random per-rental key protects the servers)\n  price: $${options.hourlyUsd}/h; hard cap $${options.maxUsd} => the session ends after ${hours.toFixed(2)} h, and a timer on the node removes the servers and powers it off then\n  sent to the node: commands only; nothing of yours (no file, key or .env); a random per-rental key is written for the servers\n  jobs: only sensitive: false, each with exact files, a contract file and acceptance tests; one failure goes to Haiku, then Codex\n  ${options.mode === 'container' ? "billing: the dollar cap and the timer end the servers, but billing continues until the instance is DESTROYED (the rental helper's reaper does that at the deadline); nothing here can power a container off" : "billing: the dollar cap ends the session, but billing continues until YOU terminate the instance; the timer powers the node off only if passwordless sudo works (checked at start)"}\n  access: the servers listen on the node loopback only, need a random per-rental API key, and gpu up fails if any server port is reachable from outside\nAdd --yes to go.`;
+  return `Plan (nothing is started yet):\n  node: ${options.target}${options.sshPort === undefined ? '' : ` port ${options.sshPort}`} (${options.mode === 'container' ? 'a container instance already running the pinned vLLM image (swarm gpu up starts vllm serve inside it; no docker needed)' : 'a node you already rented; swarm rents nothing'})\n  model: ${options.model}, one server per GPU (${gpus}), reached through an ssh tunnel, no key of yours on the node (a random per-rental key protects the servers)\n  price: $${options.hourlyUsd}/h; hard cap $${options.maxUsd} => the session ends after ${hours.toFixed(2)} h${options.mode === 'container' ? '' : ', and a timer on the node removes the servers and powers it off then'}\n  sent to the node: commands only; nothing of yours (no file, key or .env); a random per-rental key is written for the servers\n  jobs: only sensitive: false, each with exact files, a contract file and acceptance tests; one failure goes to Haiku, then Codex\n  ${options.mode === 'container' ? "billing: the dollar cap and the timer end the servers, but billing continues until the instance is DESTROYED (the rental helper's reaper does that at the deadline); nothing here can power a container off" : "billing: the dollar cap ends the session, but billing continues until YOU terminate the instance; the timer powers the node off only if passwordless sudo works (checked at start)"}\n  access: the servers listen on the node loopback only, need a random per-rental API key, and gpu up fails if any server port is reachable from outside\nAdd --yes to go.`;
 }
 
 function sshReal(argv, { input } = {}) {
@@ -89,6 +89,28 @@ async function stopTunnelReal(pid, session) {
   } catch { /* gone */ }
 }
 
+const INTERRUPT_MESSAGE = 'interrupted: servers stopped; destroy the instance if you rented one (node bench/gpu-bakeoff/vast.mjs destroy)';
+
+// Runs work() with SIGINT/SIGTERM handlers that stop the servers (gpuDown, errors ignored), print a notice to stderr and exit 130.
+// The handlers are removed when work() finishes or throws.
+async function guarded(deps, real, work) {
+  const target = deps.signalTarget ?? process;
+  const exit = deps.exit ?? process.exit;
+  const signals = ['SIGINT', 'SIGTERM'];
+  const onSignal = () => {
+    Promise.resolve().then(() => gpuDown(real)).catch(() => {}).then(() => {
+      process.stderr.write(`${INTERRUPT_MESSAGE}\n`);
+      exit(130);
+    });
+  };
+  for (const signal of signals) target.once(signal, onSignal);
+  try {
+    return await work();
+  } finally {
+    for (const signal of signals) target.off(signal, onSignal);
+  }
+}
+
 export async function runGpuCommand(args, deps = {}) {
   const out = deps.out ?? (text => process.stdout.write(`${text}\n`));
   const env = deps.env ?? process.env;
@@ -114,7 +136,7 @@ export async function runGpuCommand(args, deps = {}) {
     const options = upOptions(flags);
     validateUpOptions(options);
     if (!flags.yes) { out(planText(options)); return { status: 'planned' }; }
-    const session = await gpuUp(options, real);
+    const session = await guarded(deps, real, () => gpuUp(options, real));
     out(flags.json ? JSON.stringify({ ...session, apiKey: undefined }) : `GPU session up: ${session.replicas} replica(s) of ${session.model}. Expires ${session.expiresAt}. Run jobs with agent "rented" (or auto), then swarm gpu down and terminate the instance.`);
     return session;
   }
@@ -137,7 +159,7 @@ async function bakeoff(flags, { out, real, deps }) {
   const info = deps.baseInfo ?? bench.buildBaseRepo(root, flags['bench-ref'] ?? 'v1.65.0', path.join(tmp, 'repo'));
   const repo = path.join(tmp, 'repo');
   let apiKey;
-  const results = await runBakeoff({ candidates, hourlyUsd: base.hourlyUsd, capUsd: base.maxUsd, levels, includeExtra: flags["extra-quant"] === true, bestOf: (flags['best-of'] ?? '1,3').split(',').map(Number) }, {
+  const results = await guarded(deps, real, () => runBakeoff({ candidates, hourlyUsd: base.hourlyUsd, capUsd: base.maxUsd, levels, includeExtra: flags["extra-quant"] === true, bestOf: (flags['best-of'] ?? '1,3').split(',').map(Number) }, {
     log: real.log,
     start: async (candidate, { remainingUsd }) => {
       let session;
@@ -156,7 +178,7 @@ async function bakeoff(flags, { out, real, deps }) {
       return { passed: run.results.filter(item => item.pass).length, total: run.results.length };
     },
     throughput: ({ endpoint, model, level }) => measureThroughput({ endpoint, model, level, fetchImpl: authFetch(real.fetchImpl, apiKey) }),
-  });
+  }));
   const text = renderBakeoff(results, { hourlyUsd: base.hourlyUsd, evalTasks: countEvalTasks(root), levels });
   const file = writeBakeoffReport(root, text);
   out(`${text}\nWritten to ${file}. Terminate the instance in the provider console now.`);
