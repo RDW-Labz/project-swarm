@@ -1,6 +1,6 @@
 # Providers and setup
 
-Project Swarm supports eleven adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
+Project Swarm supports twelve adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
 
 ## Choose the execution style
 

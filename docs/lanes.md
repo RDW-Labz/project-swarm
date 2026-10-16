@@ -88,6 +88,10 @@ After two `failed` or `timeout` attempts on a lane for an automatic job, the rou
 
 Jobs are sensitive by default, including when `sensitive` is omitted. Only `sensitive: false` allows OpenRouter, OpenAI, Gemini, or Lambda. Explicit OpenAI, Gemini, and Lambda jobs without it refuse with `sensitive-provider`: `Job <id>: <agent> only gets jobs that set sensitive: false`. Explicit OpenRouter jobs without `sensitive: false` refuse with `sensitive-openrouter`: `Job <id>: OpenRouter only gets jobs that set sensitive: false`. Output ownership, explicit file lists, hash-checked integration, and all existing path and secret refusals still apply. See the [manifest reference](manifest-reference.md) for job fields.
 
+## The rented lane
+
+`rented` is the lane for an OpenAI-compatible server you rent and start yourself. It has no routing model and is never picked automatically; its endpoint, model, price and limits come from the machine config's `rentedGpu` block, and its cost is by the hour. See [rented GPU](rented-gpu.md).
+
 ## Adaptive lanes
 
 `"adaptive": true` (or `{ "start": 4, "min": 2 }`) on a lane lets it find its own limit instead of trusting `concurrency`, which stays the ceiling. The lane starts at `start` requests in flight (default 8, at most the ceiling). Every window of clean successes (as many as the current limit) opens one more slot; a 429 halves the limit, never below `min` (default 1). The provider's `retry-after` still pauses the lane as before. Other failures leave the limit alone. The limit is per run (the machine-wide file still counts the slots every run holds), and `swarm status` shows it as `limit` in the lane's health. Off by default.

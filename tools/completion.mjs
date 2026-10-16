@@ -4,7 +4,7 @@ import path from 'node:path';
 
 const command = (name, summary, args = 'none', flags = '') => ({ name, summary, args, flags: flags.split(' ').filter(Boolean) });
 
-export const PROVIDERS = ['claude', 'codex', 'cursor', 'hermes', 'qwen', 'openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'all'];
+export const PROVIDERS = ['claude', 'codex', 'cursor', 'hermes', 'qwen', 'openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'rented', 'all'];
 
 export const COMMANDS = [
   command('doctor', 'Check provider readiness.', 'provider', '--probe-local'),

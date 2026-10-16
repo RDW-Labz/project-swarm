@@ -170,6 +170,14 @@ Use dev2's model (the Strata API, reached the way `dev2chat` does: an ssh tunnel
 - **Saving is measured:** every call records the tokens it kept away from the orchestrator (the input it digested or the reasoning it replaced, estimated) and the paid tokens it used, in the usage ledger, and the dogfood scoreboard gets an "orchestrator tokens saved" column.
 - Done when: on the Phase 17 scale test, triage and digest keep orchestrator reads of failures under 20 lines per failed job, and the scoreboard shows a measured drop in orchestrator tokens for the same work.
 
+## Phase 14c — Batch mode
+
+Anthropic Message Batches only, at half price. Opt-in per run (`--batch`), per job type (`review`, `docs`, `test`) in the manifest or machine config, or per job. Same run, lane and machine-wide caps and reservations; sensitive rules unchanged; `swarm plan` shows the estimated saving. Built; see [batch](../batch.md) and `phase14c-design.md`.
+
+## Phase 14d — Rented GPU lane
+
+`agent: "rented"`: any OpenAI-compatible endpoint (vLLM or SGLang) we spin up in the cloud. Config: endpoint URL, model, Keychain key, hourly cost, max hours per run, max concurrency (adaptive). The spend guard counts the hourly cost toward the run and day caps, warns at 80% and stops launching at the cap; trusted for sensitive jobs only when marked `trusted: true`. Includes a runbook for renting one 8x H100 node, starting vLLM with an open model, connecting and shutting it down. **Nothing is rented by the build;** the 2-hour live test needs the owner's separate approval before Phase 17. Built; see [rented GPU](../rented-gpu.md) and `phase14d-design.md`.
+
 ## Phase 15 — Quality at scale
 
 - **Verify every write:** each write job is followed by checks (tests or lint on the files it touched), then a cheap review job. Failures go back to the worker once with the reviewer's notes.
@@ -236,6 +244,6 @@ Done when: the starter kit and scope interview exist, and the Phase 17 medium-ap
 
 ## Suggested order
 
-10 → 10b → 10c → 11 → 12 → 14 → 14b → 13 → 15 → 16 (use swarm-watch-spec.md) → 17 → 18 (scope interview right after 13; starter kit is its own project and can start any time)
+10 → 10b → 10c → 11 → 12 → 14 → 14b → 14c → 14d → 14e → 13 → 15 → 16 (use swarm-watch-spec.md) → 17 → 18 (scope interview right after 13; starter kit is its own project and can start any time)
 
 (The CLI comes first. Failover and the inbox (10b, 10c) come next because they fix the biggest day-to-day stalls; see the addendum. The plan preview follows because it makes every later run safer and easier to use. Throughput comes before the planner and quality work, so those can be tested at real scale.)

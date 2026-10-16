@@ -3,9 +3,10 @@
 import { randomBytes } from 'node:crypto';
 import { OPENROUTER_ENDPOINT, OPENROUTER_KEY_ENV, openRouterKeyItem, readOpenRouterKey, providerPolicy, assertRequestBody, assertBookkeepingOnly, emptyOutputsContentRefusal, fetchPricing, worstCaseUsd, ledgerPath, readLedger, spentSoFar, assertWithinCaps, dayCapUsd, appendLedger, assertCompleteChatResponse, describeIncompleteChatResponse, isEmptyLengthTruncation, defaultMaxOutputTokens, responseFinishReason, OpenRouterError } from './openrouter.mjs';
 import { batchCostUsd } from './batch.mjs';
+import { loadRentedConfig, readRentedKey } from './rented.mjs';
 import { ANTHROPIC_ENDPOINT, ANTHROPIC_VERSION, ANTHROPIC_KEY_ENV, ANTHROPIC_KEY_ITEM, readAnthropicKey, assertModelAllowed as assertAnthropicModel, ledgerPath as anthropicLedgerPath, readLedger as readAnthropicLedger, spentSoFar as anthropicSpentSoFar, appendLedger as appendAnthropicLedger, assertWithinCaps as assertAnthropicCaps, worstCaseUsd as anthropicWorstUsd, usageCostUsd as anthropicCostUsd, caps as anthropicCaps, AnthropicError } from './anthropic.mjs';
 import { loadLocalConfig, resolveConfigPath } from './local-config.mjs';
-export const API_AGENTS = ['openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic'];
+export const API_AGENTS = ['openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic', 'rented'];
 const MAX_RESPONSE = 16 * 1024 * 1024;
 const MAX_EDITS = 200;
 // The same rule is given to every tool-free worker (API lanes and Hermes/Qwen), so each one knows it may
@@ -35,6 +36,13 @@ export function apiConfiguration(agent, env = process.env, { readKey = readOpenR
     endpoint = `${url.origin}/api/chat`;
     keyName = 'OLLAMA_API_KEY'; key = env[keyName];
     if (key && url.protocol !== 'https:' && !loopback) fail('Credentials require HTTPS');
+  }
+  if (agent === 'rented') {
+    // The rented server named in the machine config (rentedGpu): its URL and model come from there, its key from the Keychain.
+    const { config: rented } = loadRentedConfig(env);
+    if (!rented) return { endpoint: 'https://rented.invalid/v1/chat/completions', key: null, keyName: 'rentedGpu config (machine config) and Keychain project-swarm/rented.api_key', selfHosted: true, configured: false };
+    key = readRentedKey(env, rented.keyItem);
+    return { endpoint: rented.chatUrl, key: key || null, keyName: `Keychain ${rented.keyItem.service}/${rented.keyItem.account}`, selfHosted: true, configured: Boolean(key), model: rented.model };
   }
   if (agent === 'lambda') {
     // Hosted Lambda Inference by default; SWARM_LAMBDA_URL selects an operator-owned OpenAI-compatible origin.
@@ -283,7 +291,7 @@ function extract(agent, body) {
     const choice = body.choices[0];
     return { text: choice.message.content, actualModel: modelName(body.model), usage: numericUsage(body.usage), provider: typeof body.provider === 'string' && /^[A-Za-z0-9 ._-]{1,60}$/.test(body.provider) ? body.provider : null };
   }
-  if (agent === 'lambda') {
+  if (agent === 'lambda' || agent === 'rented') {
     const choice = body.choices?.[0];
     if (body.choices?.length !== 1 || choice?.finish_reason !== 'stop' || choice.message?.tool_calls?.length || choice.message?.refusal || typeof choice.message?.content !== 'string') fail('Lambda response incomplete, refused, truncated, or unexpected');
     return { text: choice.message.content, actualModel: modelName(body.model), usage: numericUsage(body.usage) };
@@ -348,6 +356,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     anthropicBilled = () => (anthropicUsage ? priced(anthropicCostUsd(job.model, anthropicUsage)) : null);
     if (job.agent === 'openai') { headers.authorization = `Bearer ${config.key}`; body = { model: job.model, instructions, input, store: false, stream: false, max_output_tokens: limit, tools: [], text: { format: { type: 'json_schema', name: 'swarm_output', strict: true, schema } } }; }
     else if (job.agent === 'gemini') { headers['x-goog-api-key'] = config.key; url += `${encodeURIComponent(job.model)}:generateContent`; body = { systemInstruction: { parts: [{ text: instructions }] }, contents: [{ role: 'user', parts: [{ text: input }] }], generationConfig: { responseMimeType: 'application/json', responseJsonSchema: schema, maxOutputTokens: limit, candidateCount: 1 } }; }
+    else if (job.agent === 'rented') { headers.authorization = `Bearer ${config.key}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
     else if (job.agent === 'openrouter') { headers.authorization = `Bearer ${config.key}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, provider: providerPolicy(job.model), usage: { include: true }, response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
     else if (job.agent === 'anthropic') {
       // Key goes in a header only. Thinking depth is the only control these models take, so it is
@@ -386,7 +395,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       if (job.batch === true) appendAnthropicLedger(ledger, { ts: stamp.toISOString(), jobId: job.id, model: job.model, costUsd: worstUsd, estimated: true, kind: 'batch-reservation' });
       spend = { ledger, worstUsd, stamp };
     }
-    const credentials = [...['OPENAI_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OLLAMA_API_KEY', 'LAMBDA_API_KEY', OPENROUTER_KEY_ENV, ANTHROPIC_KEY_ENV].map(key => env[key]), job.agent === 'openrouter' || job.agent === 'anthropic' ? config.key : null].filter(value => typeof value === 'string' && value.length > 0);
+    const credentials = [...['OPENAI_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OLLAMA_API_KEY', 'LAMBDA_API_KEY', OPENROUTER_KEY_ENV, ANTHROPIC_KEY_ENV, 'SWARM_RENTED_API_KEY'].map(key => env[key]), ['openrouter', 'anthropic', 'rented'].includes(job.agent) ? config.key : null].filter(value => typeof value === 'string' && value.length > 0);
     const recordFinishReason = async bodyJson => {
       const next = responseFinishReason(bodyJson);
       // Metadata is retained before content validation, so apply the same credential guard here.

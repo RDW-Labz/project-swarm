@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.74.0
+
+- Rented GPU lane (Phase 14d): `agent: "rented"` runs jobs on an OpenAI-compatible server you start yourself in the cloud (vLLM or SGLang on a GPU node). Config in the machine config (`rentedGpu`: endpoint, model, Keychain key item, `hourlyUsd`, `maxHoursPerRun`, `concurrency`, `dailyUsd`, `trusted`). The lane is adaptive (starts at 4, up to the ceiling). Spend: the rental is billed by the hour, not the token. One meter per run counts the time the node was needed and adds it to the run cap and to the lane's day cap across runs (a machine-wide spend entry); the guard warns at 80% and stops launching at a cap or at `maxHoursPerRun` (running jobs are never killed); a run with no USD cap does not start rented jobs. A sensitive job is accepted only on a server marked `trusted: true`. Never chosen by automatic routing. **Swarm never rents or starts anything**; the runbook for renting an 8x H100 node, serving an open model, connecting and shutting it down is in [rented GPU](docs/rented-gpu.md). Twelve adapters now.
+
 ## 1.73.0
 
 - Batch mode (Phase 14c): the Anthropic lane can send jobs that do not need to finish fast to the Message Batches API at half price. Opt-in with `--batch` on `run`, `go` and `plan`, a manifest `batch` (true, or `{ types }`), a job's own `batch`, or the machine config `batch`. The run, lane and machine-wide caps and reservations are unchanged (the reservation uses the standard price; the recorded cost is the half price billed), sensitive rules are unchanged, lead jobs are never batched, a batch job holds no lane slot while it waits, and cancelling the run cancels its batches. `swarm plan` shows the estimated saving. See [batch](docs/batch.md).

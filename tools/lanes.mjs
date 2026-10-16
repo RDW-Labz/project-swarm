@@ -3,10 +3,11 @@ import crypto from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
+import { validateRentedConfig } from './rented.mjs';
 import path from 'node:path';
 
 export const LANE_AGENTS = Object.freeze([
-  'hermes', 'cursor', 'codex', 'claude', 'qwen', 'openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic',
+  'hermes', 'cursor', 'codex', 'claude', 'qwen', 'openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic', 'rented',
 ]);
 export const LANE_DEFAULTS = Object.freeze(Object.fromEntries(LANE_AGENTS.map(agent => [agent, Object.freeze({
   concurrency: ({ hermes: 1, cursor: 8, codex: 6, claude: 4, openrouter: 64, anthropic: 16 })[agent] ?? 32,
@@ -16,7 +17,7 @@ export const LANE_DEFAULTS = Object.freeze(Object.fromEntries(LANE_AGENTS.map(ag
   maxPauseMs: 900000,
   model: null,
   // null, or { start, min }: the lane begins at `start` requests in flight and finds its own limit (see report()).
-  adaptive: null,
+  adaptive: agent === 'rented' ? Object.freeze({ min: 1, start: 4 }) : null,
 })])));
 
 function invalid(agent, field, reason) {
@@ -47,7 +48,10 @@ function validate(agent, lane) {
 }
 
 export function resolveLanes({ config = {}, manifest = {} } = {}) {
-  const lanes = Object.fromEntries(LANE_AGENTS.map(agent => [agent, { ...LANE_DEFAULTS[agent], backoff: { ...LANE_DEFAULTS[agent].backoff } }]));
+  const lanes = Object.fromEntries(LANE_AGENTS.map(agent => [agent, { ...LANE_DEFAULTS[agent], backoff: { ...LANE_DEFAULTS[agent].backoff }, ...(LANE_DEFAULTS[agent].adaptive ? { adaptive: { ...LANE_DEFAULTS[agent].adaptive } } : {}) }]));
+  // The rented lane's ceiling and starting point come from the machine config's rentedGpu block.
+  const rented = config.rentedGpu === undefined ? null : validateRentedConfig(config.rentedGpu).config;
+  if (rented) { lanes.rented.concurrency = rented.concurrency; lanes.rented.adaptive = { ...rented.adaptive }; }
   for (const source of [config.lanes, manifest.lanes]) {
     if (source === undefined) continue;
     if (!object(source)) throw invalid('lanes', 'value', 'must be an object');
