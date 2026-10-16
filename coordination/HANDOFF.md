@@ -17,7 +17,7 @@ Done:
 Running: none
 Needs the owner: none
 Next 3 actions:
-  1. swarm inspect 1792163273580-98d37688 --results
+  1. swarm inspect 1792163870603-d5451318 --results
   2. swarm "describe the goal in one sentence"
   3. swarm status
 Rules:

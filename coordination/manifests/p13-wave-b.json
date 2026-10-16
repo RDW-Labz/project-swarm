@@ -6,26 +6,6 @@
   },
   "jobs": [
     {
-      "type": "build",
-      "agent": "anthropic",
-      "model": "claude-haiku-5-5",
-      "sensitive": true,
-      "maxOutputTokens": 32000,
-      "outputCapBytes": {
-        "total": 100000,
-        "perFile": 60000
-      },
-      "ignoreTests": [],
-      "id": "p13-contracts",
-      "context": [
-        "docs/plans/phase13-design.md"
-      ],
-      "outputs": [
-        "tools/contracts.mjs"
-      ],
-      "prompt": "IMPORTANT: this is a NEW file: return it in files (one entry with the whole content), never in edits. Write tools/contracts.mjs exactly as docs/plans/phase13-design.md section 6 (contracts first, generate do not write) specifies: plain ESM for Node 22, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\", exports validateOpenApi, generateTypes, generateValidators, generateClient, generateSeed, generateMockServer, generateContractTests, contractFiles. The generated validators, client, mock server and contract tests are returned as TEXT of ES modules that run on Node 22 with no dependencies (the generated code must work when written to disk and imported). Keep the generator code compact (a shared helper that resolves local $ref and walks a schema is enough)."
-    },
-    {
       "type": "test",
       "agent": "anthropic",
       "model": "claude-haiku-5-5",
@@ -179,6 +159,26 @@
         "tests/ticket-manifest.test.mjs"
       ],
       "prompt": "Write tests/ticket-manifest.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\"; add \"import './_isolate-config.mjs';\" as the second line only when the test touches the file system under a project root). Test tools/ticket-manifest.mjs against docs/plans/phase13-design.md section 8 (read both in your context; use only the exports that exist in the module, and where module and design differ trust the module's behaviour but never weaken a rule of the design). IMPORTANT: return the whole file in files, never edits. Build the scope text inline in the test as a template literal following the design format with a stage list S1 and S2, requirements R-001 to R-004 each with acceptance lines (one requirement mentions Stripe payments, one mentions an email provider). Cover ticketsToManifest (ready tickets only, the job fields, hard for high risk, after for deps inside the manifest, folder outputs skipped with a warning, design tickets skipped, human tickets emitted as human jobs, context includes contracts without duplicates, the manifest passes validateManifest from ../tools/swarm.mjs for a plain build ticket with files and context that exist (use a temp dir only if validateManifest needs files; otherwise just call it) ) and ticketOutcome. Keep each test short; about 12 to 20 tests."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13-contracts-schema",
+      "context": [
+        "docs/plans/phase13-design.md"
+      ],
+      "outputs": [
+        "tools/contracts-schema.mjs"
+      ],
+      "prompt": "IMPORTANT: this is a NEW file: return it in files (one entry with the whole content), never in edits. Write tools/contracts-schema.mjs: exports validateOpenApi, generateTypes, generateValidators, generateSeed, resolveRef, operationsOf, schemaNames as described in section 6. Plain ESM for Node 22, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\", compact code. Read docs/plans/phase13-design.md section 6 in your context. The generated modules (returned as TEXT) must run on Node 22 with no dependencies when written to disk and imported."
     }
   ]
 }

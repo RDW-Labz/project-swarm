@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13-contracts-gen",
+      "context": [
+        "docs/plans/phase13-design.md",
+        "tools/contracts-schema.mjs"
+      ],
+      "outputs": [
+        "tools/contracts-gen.mjs"
+      ],
+      "prompt": "IMPORTANT: this is a NEW file: return it in files (one entry with the whole content), never in edits. Write tools/contracts-gen.mjs: it imports resolveRef, operationsOf, schemaNames, generateValidators, generateSeed and generateTypes from ./contracts-schema.mjs and exports generateClient, generateMockServer, generateContractTests and contractFiles as described in section 6. Plain ESM for Node 22, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\", compact code. Read docs/plans/phase13-design.md section 6 in your context. The generated modules (returned as TEXT) must run on Node 22 with no dependencies when written to disk and imported."
+    }
+  ]
+}
