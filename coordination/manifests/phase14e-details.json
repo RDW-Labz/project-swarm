@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-container-review.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "details-commands",
+      "context": [
+        "tools/gpu-commands.mjs"
+      ],
+      "outputs": [
+        "tools/gpu-commands.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu-commands.mjs (plain ESM; same first line, exports and signatures; change ONLY this). In bakeoff(), in the benchmark dependency (the one that calls bench.runLane), after the run write the per-task details to a JSON file: directory path.join(root, 'docs', 'state', 'gpu-bakeoff-details') (mkdirSync recursive), file name candidate-label-based: use the dependency's received candidate (benchmark is called with { model, bestOf, candidate }; take candidate?.label ?? model with every character outside [A-Za-z0-9._-] replaced by '_') then '-bestof' plus bestOf plus '.json'; content JSON.stringify(run.results.map(item => ({ taskId: item.taskId, type: item.type, pass: item.pass, status: item.status, error: item.error, detail: String(item.detail ?? '').slice(0, 300), durationMs: item.durationMs, tokens: item.tokens })), null, 1). Keep returning { passed, total } as now. Writing must never fail the benchmark: wrap it in try/catch and ignore errors. Do not edit tests.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container-review.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

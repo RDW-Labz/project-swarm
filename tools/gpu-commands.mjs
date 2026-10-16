@@ -176,8 +176,9 @@ async function bakeoff(flags, { out, real, deps }) {
     },
     withLoad: (context, fn) => runUnderLoad({ ...context, fetchImpl: authFetch(real.fetchImpl, apiKey) }, fn),
     cacheStats: async ({ endpoint }) => fetchCacheStats(endpoint, authFetch(real.fetchImpl, apiKey)),
-    benchmark: async ({ model, bestOf }) => {
+    benchmark: async ({ model, bestOf, candidate }) => {
       const run = bench.runLane({ lane: 'rented', repo, runner, model, bestOf, maxUsd: base.maxUsd, baseInfo: info, log: real.log });
+      try { const dir = path.join(root, 'docs', 'state', 'gpu-bakeoff-details'); fs.mkdirSync(dir, { recursive: true }); const label = String(candidate?.label ?? model).replace(/[^A-Za-z0-9._-]/g, '_'); const details = run.results.map(item => ({ taskId: item.taskId, type: item.type, pass: item.pass, status: item.status, error: item.error, detail: String(item.detail ?? '').slice(0, 300), durationMs: item.durationMs, tokens: item.tokens })); fs.writeFileSync(path.join(dir, `${label}-bestof${bestOf}.json`), JSON.stringify(details, null, 1)); } catch { /* writing details must never fail the benchmark */ }
       return { passed: run.results.filter(item => item.pass).length, total: run.results.length };
     },
     hardTask,
