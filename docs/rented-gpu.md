@@ -53,6 +53,15 @@ Models are ranked by pass rate, then cost per passing task. A model that fails t
 
 Tasks. The 10 lane-benchmark tasks (two bug fixes, two new functions, two refactors, two test-writing tasks, two docs tasks; see bench/lane-benchmark/README.md) are scored by hidden tests, structural checks, mutants or fact checks. A hard task is added on top (bench/gpu-bakeoff/tasks/hard-planwaves): planWaves, a ticket wave planner. The model gets only TASK.md and a stub planWaves.mjs, never the tests or the solution; it is graded by running the 16 hidden tests (pass is 16 of 16), with 10 minutes per attempt. Per model and per best-of count the report records tests passed, time, attempts and tokens. Claude solved it in about 30 seconds, 16 of 16 on the first run (and Claude wrote the spec, so it had an advantage). Known issue: Qwen3.6 NVFP4 crashes with a CUDA illegal memory access under vLLM 0.31.0 on the RTX PRO 6000 when started with --moe-backend flashinfer_b12x, so that flag is not used; vLLM's default MoE backend starts and serves.
 
+## Defaults and when to use the lane
+
+- The lane default is Qwen3.6-35B-A3B NVFP4 with thinking on. Set SWARM_RENTED_THINKING=off to turn thinking off.
+- At most 128 agents per GPU (the default --per-replica).
+- Best-of-N is off (N=1). A failed job escalates to Haiku, then Codex.
+- Lightning and Coder-Next are not part of the lane. They can still be tested with --models.
+
+Router decision (from the 11-task comparison): Haiku passed 11/11 at $0.0023 per passing task (11 tasks cost $0.0253, 135k tokens, 131 s; an earlier run passed 10/11). Codex passed 11/11 on the subscription (no dollars reported, 172k tokens, 446 s). Qwen3.6-35B-A3B NVFP4 on the rented GPU passed 8/11 (7/10 lane tasks plus the hard task, thinking on, best-of off) and costs $0.0026 per passing task only when the GPU is kept 100 percent busy at 128 agents: about 14k tokens per task, 3718 output tokens per second, so about 960 tasks and about 700 passing tasks per hour for $1.807, that is $0.135 per million tokens. At lower load the price per passing task rises in proportion: 50 percent busy is about $0.0052, more than twice Haiku. A failed Qwen task escalates to Haiku, so each failure adds about $0.0023 on top: at 27 percent failures the effective cost per ticket is about $0.0026 plus 0.27 times $0.0023. Break-even with Haiku needs about 90 percent GPU utilization and still gives a lower pass rate. Decision rule for the router: use Haiku by default; use the rented GPU only for a large queue (about 700 or more tickets ready at once, enough to keep 128 agents busy for most of an hour), for work where escalation to Haiku on failure is acceptable, and never for sensitive jobs; Codex stays the free lane for hard tickets. See [the lane comparison](state/lane-comparison.md).
+
 ## Using the winner: `swarm gpu up|down|status`
 
 ```

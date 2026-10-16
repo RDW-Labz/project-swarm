@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.78.0
+
+- Rented lane defaults (owner decision after the bake-off): Qwen3.6-35B-A3B NVFP4 only (Lightning and Coder-Next leave the shortlist), thinking ON by default (`SWARM_RENTED_THINKING=off` turns it off; the default output limit for the lane is 16000 tokens), 128 agents per GPU (`--per-replica` default 128), best-of-N off by default (`--best-of` default 1; a failed job escalates to Haiku, then Codex).
+- Lane comparison (`bench/gpu-bakeoff/compare-lanes.mjs`, `docs/state/lane-comparison.md`): the same 11 tasks (the 10 lane tasks and the hard task) on Haiku (11/11, about $0.0023 per passing task), Codex (11/11, subscription) and the rented Qwen3.6 (8/11, about $0.0026 per passing task only at full 128-agent load): Haiku is the default and the GPU lane pays only for a large, busy queue. The hard task runs on any lane (`runHardTask` takes an agent); CLI lanes get no output limits.
+
 ## 1.77.0
 
 - Bake-off follows the GPU memory plan (docs/plans/swarm-gpu-memory-plan.md): the pinned vLLM image is v0.31.0 (by digest; NVFP4 on this card needs 0.28 or newer); all models are NVFP4, text-only, no MTP, started with the plan's flags (gpu-memory-utilization 0.93, fp8 KV cache, prefix caching, mamba cache align, 131072 context, per-model quantization, MoE backend, parsers and environment): Qwen3.6-35B-A3B NVFP4, Nemotron 3.5 Lightning NVFP4, and Qwen3-Coder-Next NVFP4 (RedHat build) only when at least an hour of the session is left; one vLLM engine per GPU.
