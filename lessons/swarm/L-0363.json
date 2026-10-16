@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0363",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Absent output tests are pending, not red. Treat a base check as pending when every named test path is an absent declared job output, and refuse only on real failures.",
+  "rule": "Absent output tests are pending, not red.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "path-safety",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#363"
+  }
+}

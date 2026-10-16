@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0371",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "deploy",
+  "what": "Version bumps include active assertions. Discover tests that assert the previous active version, include them in outputs or explicit ignores, and require the full suite for release checks.",
+  "rule": "Version bumps include active assertions.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "deploy",
+    "release"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#371"
+  }
+}

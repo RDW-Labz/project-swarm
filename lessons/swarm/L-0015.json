@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "L-0015",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A sandboxed checker found its own missing environment variable. A worker running in a detached, sandboxed worktree saw its test runner fail with `EPERM` on `package.json` and had to find the right environment variable itself before it could report a real result; a weaker worker could easily have reported that setup failure as a red suite (13 minutes, 262k tokens spent working around it).",
+  "rule": "Name the required test environment explicitly instead of relying on a worker to rediscover it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: manifest job field `testEnv` (codex jobs only) sets the child process environment and tells the worker what is already set; `doctor codex` adds a `sandbox probe` check that surfaces the same kind of sandbox denial up front. Documentation: orchestration.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "sandbox",
+    "test",
+    "tokens",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#15"
+  }
+}

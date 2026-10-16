@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0094",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A gate that moved a result also quietly dropped what was known about it. A licensing gate relocated a result to a rejected list but kept only its name and link, discarding every other fact — license evidence, version pin, compatible ranges — that had already been verified about it.",
+  "rule": "A gate may move a result, but it must never drop the facts already gathered about it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a rejected result now keeps every field the original result carried, plus which gate moved it and why. Regression coverage is in `tests/wire-125.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#94"
+  }
+}

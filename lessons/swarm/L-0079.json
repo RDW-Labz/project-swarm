@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0079",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A missing toolchain gave a check failure with no program or path named. A local check step spawned a bare tool name from a shell whose session did not have the dedicated toolchains directory on its path, and every such check failed with a bare, generic status and no indication of what was missing or where it looked.",
+  "rule": "Reuse the one resolver that already checks a dedicated toolchains directory before the system path for any check's own command, not only the one binary that previously had this treatment, and name every location tried when nothing is found.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: local check execution resolves a bare command through that shared resolver before ever spawning it; one that cannot be resolved anywhere refuses only that check, naming the command and every path tried, instead of a bare, uninformative failure. Regression coverage is in `tests/field-lessons-batch-h.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#79"
+  }
+}

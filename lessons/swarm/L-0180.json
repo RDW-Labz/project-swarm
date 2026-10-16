@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0180",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "merge",
+  "what": "Squashing a branch by hand onto a base that had since moved risked bringing someone else's already-merged changes into the index. Resetting a branch's history onto whatever a base reference currently points at, instead of the shared point where the branch actually diverged, can silently stage far more than the branch itself ever changed.",
+  "rule": "A squash always resets to the shared point of divergence, never a base reference that may have moved since, and refuses the moment anything unexpected ends up staged.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a new command resets a branch's index to its own point of divergence from the base and refuses, undoing itself first, whenever the newly staged files include one the branch never touched there; it only stages and prints the file list, never committing on its own. Regression coverage is in `tests/field-lessons-batch-w.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "merge",
+    "merge-queue"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#180"
+  }
+}

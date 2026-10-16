@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0075",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A worker hand-reverted a mutant and wiped its own unrelated edit to the same file. A mid-tier worker, undoing a mutant by hand, ran a plain revert command on the mutated file and lost uncommitted work of its own sitting in that same file; recovery needed a full re-run of the check suite and every mutant to confirm nothing else had been lost.",
+  "rule": "Workers never hand-revert a mutant; the tool that applies one also restores it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the guard that already refused a shared-stack stash command now also refuses a plain revert of any path that still has uncommitted changes, naming the fix in its own refusal message; job instructions for any worker with shell access now say to run mutants only through the tool, never by hand. Regression coverage is in `tests/field-lessons-batch-g.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "mutation-testing",
+    "path-safety",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#75"
+  }
+}

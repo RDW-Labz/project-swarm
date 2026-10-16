@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0131",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A log reader's own tests fed it fixture events directly, so its mutation-testing score looked strong even though nothing in the real system actually produced most of the event names it read.",
+  "rule": "A reader of logged events needs at least one test fed by a real producer's own output.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a shared contract now names every event a producer writes and a reader reads, and validation warns when a listed reader has no matching producer anywhere in the batch. Regression coverage is in `tests/field-lessons-batch-p.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#131"
+  }
+}

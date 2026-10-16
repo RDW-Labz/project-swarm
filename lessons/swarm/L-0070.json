@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0070",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "merge",
+  "what": "Two parallel branches' outputs collided on one shared file. Two open branches, being built in parallel worktrees of the same repository, each listed one shared registry file among their outputs; when the two came together, a hand union-merge of their two independent versions of that file broke its own syntax.",
+  "rule": "A coordinator should see a shared output file before it happens, not after, and never as a hard block, since a genuinely shared file (a registry, an index) is sometimes integrated one branch at a time on purpose.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `validate` warns `shared-output-across-open-jobs` when the manifest being validated declares an output file that an already-open run elsewhere in the same repository also lists, naming the other run and suggesting a per-job fragment file, combined in a later step, instead. Regression coverage is in `tests/field-lessons-batch-f.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "merge",
+    "merge-queue"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#70"
+  }
+}

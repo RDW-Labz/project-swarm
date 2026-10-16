@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0122",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "An empty reference file was sent to a worker as if it were real input. A platform difference in a text-processing tool silently produced a zero-byte file, and it was handed to a worker anyway; the worker reported back blocked only after it had already spent effort reading everything else.",
+  "rule": "An empty context file is a mistake, never real input.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: an empty (0-byte or whitespace-only) reference file now refuses up front, naming the file, before any worker starts. Regression coverage is in `tests/field-lessons-batch-o.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#122"
+  }
+}

@@ -25,3 +25,17 @@ Add one line each, with the date and who had it. Do not build from this list wit
 - 2026-10-16 (orchestrator): retry Qwen3-Coder-Next and Nemotron Lightning with thinking on, and try Qwen3.6 with the MTP speculative decoding A/B from the memory plan.
 - 2026-10-16 (orchestrator): rerun the sweep with a higher server max-num-seqs and levels 128 to 256 on the winner to find its real agent ceiling with thinking on.
 - 2026-10-16 (orchestrator): wait for the ssh key to be active in vast.mjs rent (it took about 4 minutes after the instance was running) instead of retrying by hand.
+
+## Second Haiku lane on Bedrock or Vertex (parked, needs the owner's OK before any account or spend)
+
+Why: the first-party Haiku 5.5 limit (10,000 requests, 10M input and 2M output tokens per minute, about 147 agents at our task profile, about 100 with margin) is the ceiling for the default lane. A second account on another platform has its own quota, so it would add agents, not replace them.
+
+What is known (checked 2026-10-16): Haiku 5.5 is reported available on Amazon Bedrock (model id `anthropic.claude-haiku-5-5`, regional and global inference profiles, 1M context). Bedrock tracks quotas as requests and tokens per minute per route (on-demand, cross-region, global cross-region); newer Haiku models may have no on-demand quota, so the cross-region quota is the one to read and raise. Defaults for Haiku 5.5 on Bedrock and any Vertex limits were not published where we could find them: read them from the Service Quotas console (`aws service-quotas list-service-quotas --service-code bedrock`) or the Google Cloud quota page before planning numbers.
+
+Plan, if approved:
+1. Owner decides platform and creates the account and a budget alarm (a new paid service: not done by the swarm). Credentials in the Keychain, never in the repo.
+2. Read the real quotas, request an increase if the default is under 1M output tokens per minute.
+3. Add a `bedrock` lane next to `anthropic`: same job format and Haiku routing, its own concurrency cap derived from its output-token quota (output tokens per minute divided by about 14,000 per agent, then 70%), its own spend cap, sensitive jobs allowed only if the owner agrees to send code to that cloud account.
+4. Router: fill the `anthropic` lane to its safe cap, spill extra ready tickets to `bedrock`; failures escalate as today.
+5. Smoke test with the 8 golden evals and the lane benchmark; compare pass rate and cost per passing task with first-party Haiku before it gets real work.
+Open points: Bedrock limits on tool-use streaming fields differ by model generation (see the platform table), and prices may differ slightly from first-party.

@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "L-0032",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A worker's own mutants file used the wrong shape, discovered only after the run. A job wrote its post-build mutants file with different key names than required, and `integrate --mutants --mutants-file` refused only once the build had already finished — well after the manifest could have named the file so its shape could be checked up front.",
+  "rule": "A job that writes mutants declares which output that is, so its shape is checked at validate time, not discovered later.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `validate` warns when a job's output path matches `*mutants*.json` but the job declares no `mutantsFile`; the worker preamble for a job that does declare one states the exact `{name,file,find,replace}` shape directly. Documentation: manifest reference.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "mutation-testing",
+    "path-safety",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#32"
+  }
+}

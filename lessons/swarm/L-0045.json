@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0045",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "Toolchains under the OS temp dir get purged. A toolchain cache placed under the OS temp directory worked at first, then silently broke once the OS reclaimed unread files there after a few days.",
+  "rule": "Point toolchains at a stable, non-temp directory, and flag it plainly whenever one still resolves under the temp dir.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a reusable report names the expected toolchains directory, whether it exists, and every configured path that still resolves under the temp dir; both diagnostics and onboarding surface it as advice, never a status change. Documentation: manifest reference.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "build",
+    "manifest",
+    "path-safety"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#45"
+  }
+}

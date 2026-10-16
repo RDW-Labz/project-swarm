@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0188",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A tool-free worker job with no declared output file was asked for a substantial piece of real written content, which had nowhere to go but a short, capped summary field. The job could only ever return a small fraction of what was asked for, silently truncated, with no declared file to hold the rest.",
+  "rule": "A job with no declared output file may only ever be asked a short question, never for substantial written content.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a job with no declared outputs whose prompt plainly asks for written content (a summary, a report, a draft) now refuses before any request is sent; a response that was cut off for running out of room now states the size of what was sent in, so the cause is provable instead of guessed at. Regression coverage is in `tests/field-lessons-batch-x.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "prompt",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#188"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0125",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "One broken shared instruction file, sitting in a directory shared across every project, blocked every single task in every project — including tasks that would never have used it at all. A field meant to say \"none\" was mistaken for missing, and a compact list format was silently read as empty.",
+  "rule": "An explicit \"none\" is valid, not missing; a shared broken resource should only ever block the tasks that would actually use it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: an explicit empty list in that instruction format is now accepted; a compact list is now parsed correctly; and a broken shared instruction file now only blocks a task that actually references it, warning everywhere else instead of refusing. A new check validates such a directory directly, on demand. Regression coverage is in `tests/field-lessons-batch-o.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#125"
+  }
+}

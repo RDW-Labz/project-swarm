@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0145",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "deploy",
+  "what": "A one-off platform-only failure in a file a change never touched still stopped the ship outright, even though the tool already recognized and named it as platform-only; a person had to notice the label and manually trigger a rerun each time.",
+  "rule": "A platform-only failure in an untouched file earns one automatic rerun before a person is asked to look, while an explicit rerun-count setting (including \"never rerun\") always overrides that default, and a failure that recurs after the automatic rerun still blocks.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the release tool now defaults to exactly one automatic rerun when every failing check is platform-only and no explicit rerun count was given, naming the default in a warning; an explicit setting always wins, and a failing check already inside the change's own diff is still never rerun. Regression coverage is in `tests/field-lessons-batch-r.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "deploy",
+    "release"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#145"
+  }
+}

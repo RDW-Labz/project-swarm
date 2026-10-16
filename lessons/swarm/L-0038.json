@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0038",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A bad output was only ever discovered after `integrate` had already read it. Knowing where a job's own output actually landed, and whether a `.json` one even parsed, meant opening the run's workspace by hand; the first real signal came only once `integrate` (or a post-build mutants read) tried to use it.",
+  "rule": "Show where each declared output sits, and whether it parses, at the moment of inspection — before integration ever depends on it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `inspect --results` lists, per job output, its workspace copy's absolute path and, for a `.json` output, whether it currently parses. Documentation: verification.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration",
+    "mutation-testing",
+    "path-safety"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#38"
+  }
+}

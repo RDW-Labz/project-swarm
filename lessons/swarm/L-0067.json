@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0067",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Layout mutants survived unit tests that never read layout. Nine of thirty style mutants survived the unit-test check; rerunning just those against the screenshot harness for the affected views killed three more, through a hand-written wrapper per worktree.",
+  "rule": "A layout mutant runs against the harness view that shows it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a mutant may carry its own `check` argv, overriding the shared mutant check for that mutant; each distinct check must pass unmutated first, and the report names which check ran. Regression coverage is in `tests/field-lessons-batch-e.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "mutation-testing",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#67"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0097",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A stale internal version pin was found three times before anyone built a check for it. The same kind of mistake — a library pinning an internal dependency to one exact version instead of a range, or an exact pin left behind after a vendored copy moved on — recurred across unrelated projects, discovered only once each at a fresh, offline install.",
+  "rule": "Check what a project actually ships against what it actually pins, before a stale pin ever reaches an offline install.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a new check reads each project's own dependency declaration, lock information, and vendored copies, and reports every exact-pin mismatch it finds, exiting non-zero on any finding. Regression coverage is in `tests/check-pins.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "installer",
+    "locking",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#97"
+  }
+}

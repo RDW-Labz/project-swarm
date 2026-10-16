@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0118",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A regression check across several stacked changes to the same file could not tell whether an older change still mattered, because the reconstruction it relied on assumed only one change had ever touched that file.",
+  "rule": "A regression check across stacked changes must work on the tree as it now stands, not on bookkeeping that assumed no later change would touch the same file.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a regression check can now target one specific change directly, reverting only that change's own effect on a disposable copy of the current tree, and it now says plainly when every failure it saw was only a loading error rather than real evidence. Regression coverage is in `tests/field-lessons-batch-n.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#118"
+  }
+}

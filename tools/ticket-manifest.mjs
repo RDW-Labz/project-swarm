@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import * as scopeModule from './scope.mjs';
+import { queryFromTicket, selectNotes, renderNotes } from './lesson-notes.mjs';
 const TYPE_MAP={build:'build',migration:'build',contract:'build',test:'test',docs:'docs'};
 const RULE='Work only on the files you own; report the ticket id.';
 
@@ -29,7 +30,7 @@ function isSensitiveJob(t,scope,reqs){
   return !!t.sensitive||isSensitiveText(scope,sensitiveText(t,reqs));
 }
 
-function promptFor(t,reqs){
+function promptFor(t,reqs,lessons){
   const lines=['Ticket '+t.id+': '+t.title];
   for(const id of t.scopeRefs||[]){
     const r=reqs.get(id);
@@ -37,12 +38,18 @@ function promptFor(t,reqs){
     else lines.push(id+' (not found in scope)');
   }
   if((t.acceptance||[]).length){lines.push('Acceptance:');for(const a of t.acceptance)lines.push('- '+a);}
+  // Notes sit after the ticket text and before the job rule, so the job rule stays last.
+  if(lessons?.length){
+    const reqTexts=(t.scopeRefs||[]).map(id=>reqs.get(id)).filter(Boolean).flatMap(r=>[r.text,...(r.acceptance||[])]);
+    const notes=renderNotes(selectNotes(queryFromTicket(t,reqTexts),lessons));
+    if(notes)lines.push(notes);
+  }
   lines.push(RULE);
   return lines.join('\n');
 }
 
 export function ticketsToManifest(tickets,opts={}){
-  const {ledger,scope,ready=true,contract,maxJobs}=opts;
+  const {ledger,scope,ready=true,contract,maxJobs,lessons}=opts;
   if(maxJobs!==undefined&&!(Number.isSafeInteger(maxJobs)&&maxJobs>0)){
     const e=new Error('maxJobs must be a positive safe integer');
     e.code='ticket-max-jobs';
@@ -69,7 +76,7 @@ export function ticketsToManifest(tickets,opts={}){
     }
     const context=[...new Set([...(t.context||[]),...(t.contracts||[])])];
     if(contract&&!context.includes(contract))context.push(contract);
-    const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:isSensitiveJob(t,scope,reqs),prompt:promptFor(t,reqs),context,outputs,acceptance:t.acceptance||[],timeoutMs:600000};
+    const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:isSensitiveJob(t,scope,reqs),prompt:promptFor(t,reqs,lessons),context,outputs,acceptance:t.acceptance||[],timeoutMs:600000};
     const deps=(t.dependsOn||[]).filter(d=>inSet.has(d));
     if(deps.length)job.after=deps;
     if(t.risk==='high')job.hard=true;

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0006",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "An inference became false evidence. A job prompt stated a suspected cause as fact and the worker built on it.",
+  "rule": "Separate “Evidence (measured)” from “Hypothesis” in every diagnostic prompt.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Documentation: the skill's prompt guidance and orchestration.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "build",
+    "prompt",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#6"
+  }
+}

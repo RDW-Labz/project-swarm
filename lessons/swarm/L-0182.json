@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0182",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "An offline package-cache step failed inside a sandbox even though the exact same command succeeded instantly outside it. The sandbox pointed the cache variable at a fresh, empty, per-run directory instead of the real one already warmed by everyday use, so an offline step had nothing to read from no matter how many times it had already succeeded elsewhere.",
+  "rule": "An offline step needs to run where its already-warm cache actually lives, not a new empty directory invented for the occasion.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the sandbox now points that cache variable at the real, shared cache directory under the real machine's own home (already readable by the sandbox) instead of a fresh per-run one beside the job's own workspace. Regression coverage is in `tests/field-lessons-batch-w.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "sandbox",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#182"
+  }
+}

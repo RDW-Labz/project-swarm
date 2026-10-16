@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0064",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A packaging change passed every check and still broke the package. A mid-tier job ($4.77) added a build-backend include rule for data that was already packaged; tests, lint and types all passed, but the wheel build failed on a duplicate archive path, caught only by a hand build.",
+  "rule": "A job that touches packaging config gets a check that builds the package.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `validate` warns `packaging-change-without-build-check` for a packaging-file output with no build check; `integrate` warns and `ship` refuses when the change touches packaging keys and no check builds the package. Regression coverage is in `tests/field-lessons-batch-e.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration",
+    "lint",
+    "path-safety"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#64"
+  }
+}

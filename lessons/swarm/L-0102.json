@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "L-0102",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A job that never even got the chance to start looked identical, from the outside, to one that ran and produced nothing. A one-time setup step failing before the actual worker ever launched left an empty error, empty result, and empty cost — the same shape a worker that ran and simply reported nothing would leave — with the real cause visible only in a log file nobody was told to open. Separately, a dependency lock naming a local file no longer present in the tree was only discovered once an offline install actually tried to use it.",
+  "rule": "A job that never started says so, with the setup failure's own tail alongside it; a lock naming a path that is not there is flagged before anything tries to install it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: inspecting a run now names the phase a setup failure happened in and includes that failure's own log tail, and validation now warns when a dependency lock names a local path missing from the tree. Regression coverage is in `tests/field-lessons-batch-l.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "installer",
+    "locking",
+    "path-safety",
+    "spend",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#102"
+  }
+}

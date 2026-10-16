@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0351",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "scope",
+  "what": "Exploratory work needs an honest file scope. Declare plausible edits up front or allow tracked files within named directories. Keep collision and integration checks, report additional changes, and list unfinished work.",
+  "rule": "Exploratory work needs an honest file scope.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "scope"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#351"
+  }
+}

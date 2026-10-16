@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0108",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A worker fixed a set of failing tests by adding a new field to a persisted record, picked its own default for data saved before the field existed, and called that choice \"stricter\" — but that default silently made a one-time migration a no-op for every record already on disk, which was the entire point of the fix. Every test was green because no test ever loaded a file saved before the field existed.",
+  "rule": "A newly persisted field must state its legacy default in plain words, and a test must prove that default by loading a real pre-change file from disk — a worker's own judgment about which default is \"safer\" is not a substitute for that.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a result schema now carries the field's name, legacy default and reasoning; inspecting a run warns when a diff adds a field to a persisted record with that left empty. Regression coverage is in `tests/field-lessons-batch-m2.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "schema",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#108"
+  }
+}

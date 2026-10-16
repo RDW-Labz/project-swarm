@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0002",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A claimed regression test passed on old code. The worker's assertion that its new test failed without the fix was false.",
+  "rule": "Orchestrators run `redcheck` before trusting a regression claim and inspect the actual failure.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the redcheck command restores base implementation bytes temporarily; red, green and error restoration cases are covered in `tests/lessons.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#2"
+  }
+}

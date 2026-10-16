@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0074",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A path flag was read against the target directory, not the one it was typed from. A research run named its input file the way it was typed, sitting in one directory while pointed at another; the file was read only against the pointed-at directory, so a plainly-relative path failed \"not found\" even though it existed exactly where it was typed. Cost one re-run (seconds).",
+  "rule": "A path flag resolves the way the user typed it — tried against the directory they were sitting in before the one the command was pointed at.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: every such flag is now tried against the current directory first, then against the pointed-at one; a truly missing file names every path actually tried. Regression coverage is in `tests/field-lessons-batch-g.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "spend",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#74"
+  }
+}

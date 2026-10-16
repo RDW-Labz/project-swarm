@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0046",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A worker's final JSON extraction returned one nested element, not the whole result. A final message held prose plus a fenced object whose own value included an array of similarly-shaped objects; naive per-line parsing matched one of those inner objects before it ever reached the real top-level result, so the report looked complete but carried the wrong (and mostly null) fields.",
+  "rule": "Extraction must find the last *balanced top-level* object, string-aware so a brace inside a string value never counts, not merely the last line or fenced block that happens to parse.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the same brace-depth scan prefers the last fenced block when one exists and never returns a span that only opened at a nested depth. Regression coverage is in `tests/final-json.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#46"
+  }
+}

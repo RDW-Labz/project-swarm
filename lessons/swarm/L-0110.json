@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0110",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A public tool hard-coded a private product's keychain service name, an app-support path, and a product-specific denied-directory entry. A contract written for one project's own conventions was carried faithfully into a tool meant to be read by anyone.",
+  "rule": "A public-repo tool names no private product specifics directly; project-specific values arrive through local configuration, with a generic default.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: all three now default to generic values, overridden only through local config. Regression coverage is in `tests/field-lessons-batch-m3.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#110"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0103",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A failed check at integration time stayed invisible unless a rarely remembered flag was passed, letting a broken change through silently. The default behavior treated a check that failed exactly like one that passed, reporting success and requiring extra, easy-to-forget ceremony to surface the failure at all.",
+  "rule": "A failed check at integration time is loud by default, never a quiet field a reader has to go looking for.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: integration now refuses by default when a check has failed, naming every failed check, with an explicit opt-in for the rare case that failure should be accepted anyway. Regression coverage is in `tests/field-lessons-batch-l.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#103"
+  }
+}

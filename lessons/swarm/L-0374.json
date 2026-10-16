@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0374",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "Validation should expose live conflicts. Reuse the run-time output-conflict scan, return conflict details with the startable subset, and allow that subset to be selected directly.",
+  "rule": "Validation should expose live conflicts.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "build"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#374"
+  }
+}

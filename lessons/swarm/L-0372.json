@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0372",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Failure records need the failing assertion. Preserve each failed test's name, location, and assertion, and rerun only failed local files when a flaky rerun is requested.",
+  "rule": "Failure records need the failing assertion.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "flaky-test",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#372"
+  }
+}

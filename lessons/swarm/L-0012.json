@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "L-0012",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "deploy",
+  "what": "`update` reported up to date on the old version. It ran seconds before the release-tag workflow finished publishing the new tag.",
+  "rule": "Distinguish \"no newer tag yet\" from \"the tag is still on its way.\".",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `update` returns `tagPending: true` and message `tag pending for <version>; retry in a minute` when origin's package.json version is already newer than the newest `v*` tag; `ship` itself polls for the new tag after merging a version-bump PR and reports `tag: {name, status, waitedSeconds}`. Documentation: manifest reference.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "deploy",
+    "manifest",
+    "release",
+    "retries",
+    "updater"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#12"
+  }
+}

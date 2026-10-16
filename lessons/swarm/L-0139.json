@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0139",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "merge",
+  "what": "A pasted standing approval already covering queued work was still held for a second confirmation round trip, only because an unrelated policy change arrived bundled in the same message.",
+  "rule": "Work already recorded and queued is pre-approved and can start right away; a fresh typed confirmation is needed only for genuinely new requests, secrets, credentials, material meant for publication, or anything that spends money.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the coordination guide and the onboarding instructions both now state this rule at the point work begins. Regression coverage is in `tests/kickoff.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "merge",
+    "secrets",
+    "spend"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#139"
+  }
+}

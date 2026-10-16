@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0017",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "A correct report got lost behind a one-line summary. A worker wrote a valid JSON report file but ended its turn with a short prose summary instead of that JSON as its final message, so `inspect --results` showed nulls and the orchestrator had to open the file by hand.",
+  "rule": "Let a job declare its own report file so review does not depend on the worker's last line matching it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: job field `resultFile` (must be one of that job's `outputs`, with optional `resultSchema` listing required keys); `inspect --results` reads and parses that file directly, warning on missing/invalid JSON, missing keys, or a mismatch with the worker's own final message, and reports `resultSource: 'file'|'message'`. Documentation: verification.",
+  "guard": {
+    "kind": "review-item",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "review",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#17"
+  }
+}

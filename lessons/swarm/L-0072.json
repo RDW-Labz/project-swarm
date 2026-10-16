@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0072",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A known platform quirk cost a CI round. A Windows-only quirk (it refuses private files placed directly under the test runner's raw temp directory) was known but lived only in the coordinator's memory, not in any job prompt. A new job hit it again: one CI round (about 6 minutes) plus one fix job.",
+  "rule": "Known platform gotchas travel with every build job in that repository.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a per-root `.swarm/gotchas.md` (a linked worktree falls back to its main worktree's file, like the toolchain env file) is appended to every claude, codex and shell job prompt and to `env --print`; `validate` warns `windows-ci-no-gotchas` when the repository's CI runs on Windows and no gotchas file exists. Regression coverage is in `tests/field-lessons-batch-f.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "ci",
+    "prompt",
+    "spend",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#72"
+  }
+}

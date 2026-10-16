@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0187",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "merge",
+  "what": "A one-pass pre-push guard and a fresh-merge-base squash command both already existed, but nothing pointed a batch at either one before it shipped. A batch re-learned, by hand, the order these two steps should run in.",
+  "rule": "A shared contract template names the already-built tools to use, and in what order, instead of leaving each batch to rediscover them.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the shared contract template's own release guidance now names both commands directly. No code changed; this is a documentation-only entry.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "merge",
+    "merge-queue",
+    "release"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#187"
+  }
+}

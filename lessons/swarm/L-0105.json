@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0105",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "An exact pin on a repo's own package was vendored nowhere at all, and passed clean. The stale-pin check only ever compared an exact pin against a vendored copy of the same package; a pin with no vendored copy to compare against fell through both of its rules instead of failing either one.",
+  "rule": "An exact pin is only trustworthy when it is backed by something the tests actually ran against — a vendored copy, or an explicit local/override source.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: an exact pin with neither now fails a new rule, in every kind of repo (no exemption for the kind of repo that owns the shared core package). Regression coverage is in `tests/field-lessons-batch-m1.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#105"
+  }
+}

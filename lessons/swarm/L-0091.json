@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0091",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A read-only research job's reply could not be trusted to hold JSON at all. A research call to a plain API model expected a final line of JSON, but the model's real reply was ordinary prose, so the exchange returned only a hard parse error instead of anything usable.",
+  "rule": "A read-only reply that fails to parse as the requested JSON still returns a usable answer, marked as such, rather than nothing at all.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: when no parsable JSON line is found, the reply now falls back to the model's own summary text with an explicit \"not parsed as JSON\" flag alongside it. Regression coverage is in `tests/ask-125.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#91"
+  }
+}

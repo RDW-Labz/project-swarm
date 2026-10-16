@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0104",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A worker was told to run a check that lived somewhere its own sandbox could never reach, and spent its turns discovering that the hard way. A check naming a path outside the worker's own restricted environment was indistinguishable, in the instructions it was given, from one it could actually run itself.",
+  "rule": "A check a sandboxed worker is told to run must be reachable from within its own sandbox, or the instructions must say plainly that a later, unrestricted step runs it instead.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: validation now warns when a check or a job's own instructions name a path outside the sandboxed environment, and that worker's own boilerplate now marks such a check as run by a later step instead of asking the worker to run it itself. Regression coverage is in `tests/field-lessons-batch-l.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "sandbox",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#104"
+  }
+}

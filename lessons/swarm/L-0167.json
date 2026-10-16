@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0167",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A plain piece of text reported as a deviation rendered as nothing, or as a jumble of individual characters. A worker's own report of a contract rule it could not meet was expected to always arrive as a structured entry with named fields, but a plain line of text reported the same way instead read as blank in a refusal message and, once accepted, turned into an object keyed by character position rather than any real field.",
+  "rule": "A reported deviation is real text a person needs to read, however it happens to be shaped, and every place that displays or records one must render that text intact.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: every place that turns a deviation into a message or a stored record now recognizes a plain line of text as a deviation in its own right, displaying and recording it exactly as given instead of assuming one fixed shape. Regression coverage is in `tests/field-lessons-batch-v.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#167"
+  }
+}

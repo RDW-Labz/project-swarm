@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0375",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "Coordination notes belong in coordination. Resolve task and handoff files under the configured coordination directory, refuse root-level replacements, and list allowed lesson areas on invalid input.",
+  "rule": "Coordination notes belong in coordination.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "build"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#375"
+  }
+}

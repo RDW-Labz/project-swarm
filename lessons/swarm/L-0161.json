@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0161",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "A held review request carried no fixed shape for what a reviewer actually needed to see. A pull request held for a named reviewer's attention read like any other held request, so the reviewer had to hunt through the whole body for what changed, what could break, and what evidence backed it, every single time.",
+  "rule": "A request held for that reviewer carries a fixed three-field summary — what changed, what could break, and the proof — surfaced the moment the hold happens, not buried in prose.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a hold whose body opens with that reviewer's own marker now gains a structured summary built from the body's own Summary, Could break, and Mutation check sections (a missing Could break section becomes an explicit fill-in-later marker, never blank), printed at the point the hold decision is made. Regression coverage is in `tests/field-lessons-batch-u.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "review"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#161"
+  }
+}

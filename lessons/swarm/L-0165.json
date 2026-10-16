@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0165",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A sandboxed job's scratch directory still occasionally landed somewhere a version-control-aware path check could reach, or refuse. An earlier fix already moved a sandboxed job's own scratch directory off the plain system temp path, but the underlying system temp location itself turned out to still be reachable by, or subject to, that same kind of check on some machines, so the same class of failure came back in the field.",
+  "rule": "A sandboxed job's scratch directory belongs under the orchestrator's own install location, a place no project checkout ever occupies, not merely off the plain system temp path; a defensive check for the earlier failure mode stays in place alongside the new one rather than being removed.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the scratch directory is now created as a per-run, per-job directory under the orchestrator's own install root (overridable by one environment variable), while the original safety scan is kept as a second, belt-and-suspenders check. Regression coverage is in `tests/field-lessons-batch-v.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "installer",
+    "path-safety",
+    "sandbox",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#165"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0147",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A change touched two source files, but only one of them ever got a mutant. Mutation testing reported a clean result, and a fix's own regression tests passed, while the second changed file's logic was never exercised by any mutant at all — found only once a reviewer traced which file each mutant actually targeted.",
+  "rule": "Every non-test source file a change touches needs at least one mutant of its own; a changed file with none is named as a gap, not silently passed over.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: mutant validation now warns of a changed source file with no covering mutant, at the same point a run's mutants are checked. Regression coverage is in `tests/field-lessons-batch-s.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "mutation-testing",
+    "review",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#147"
+  }
+}

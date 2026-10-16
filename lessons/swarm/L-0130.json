@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0130",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "merge",
+  "what": "A record meant to prompt a follow-up check after a merge was written with only vague instructions, so the check ran against the wrong state entirely, well before the real change had even landed.",
+  "rule": "A post-merge follow-up record must name the exact resulting state, not vague instructions to pull and restart.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: shipping now prints the exact merged state plus a ready-to-use line naming it, right after a merge completes. Regression coverage is in `tests/field-lessons-batch-o.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "merge",
+    "merge-queue",
+    "prompt"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#130"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0138",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A fresh working copy with none of its usual tooling installed yet had every one of its checks fail to even start, and that was silently scored the same as a real failure of the change itself.",
+  "rule": "An environment-setup step meant to prepare a fresh working copy should run on every attempt, not only when something happened to look like it needed it; and a check that never even started is not the same thing as a real failure.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a setup step now runs before checks on every attempt; a setup step that cannot even start is now called out plainly instead of being scored as a real failure of the change. Regression coverage is in `tests/field-lessons-batch-p.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "installer",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#138"
+  }
+}

@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "concurrency": 7,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15fix-evals",
+      "type": "build",
+      "prompt": "Apply the eval items of section 7 of the design to the eval module: argv rules, no symlinks (listEvals, copyTree, output copy; lstat every path part, O_NOFOLLOW reads), skipping dot folders and non-folders in listEvals, scoreRun workspace checks and agents and models only from scored eval jobs, validateBaseline, compareBaseline with ok and reasons, redaction through redactText imported from the lesson schema module (use exactly that name; it exists), and the agent and lane refusal in evalManifest. Keep the file under 24000 characters.\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design section 7 does not change. Keep the code style of the file. Tests use node:test and node:assert/strict; build any secret-looking test value at run time from pieces; compare URLs by parsed hostname, never with includes.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/evals.mjs",
+        "tools/lesson-schema.mjs"
+      ],
+      "outputs": [
+        "tools/evals.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15fix-evals-test",
+      "type": "build",
+      "prompt": "Update the test file for the eval module for the new rules of section 7 of the design (the module is changed by another job at the same time; use exactly the names and results in section 7). Keep the existing tests that still apply (the fake run function takes command, args, options and returns code, stdout, stderr). Add tests for: each forbidden argv flag, a symlinked repo folder, a symlinked output folder, a dot folder skipped by listEvals, a workspace path outside the workspaces folder scoring as a failure, validateBaseline cases (null, array, string total, passed over total, total 0), and compareBaseline reasons (invalid baseline, total 0, unknown or mixed key, total changed, regressed, ok).\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design section 7 does not change. Keep the code style of the file. Tests use node:test and node:assert/strict; build any secret-looking test value at run time from pieces; compare URLs by parsed hostname, never with includes.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/evals.mjs",
+        "tests/evals.test.mjs"
+      ],
+      "outputs": [
+        "tests/evals.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15fix-schema",
+      "type": "build",
+      "prompt": "Apply the lesson schema items of section 7 of the design to the schema module.\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design section 7 does not change. Keep the code style of the file. Tests use node:test and node:assert/strict; build any secret-looking test value at run time from pieces; compare URLs by parsed hostname, never with includes.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/lesson-schema.mjs"
+      ],
+      "outputs": [
+        "tools/lesson-schema.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15fix-schema-test",
+      "type": "build",
+      "prompt": "Update the test file for the lesson schema module for section 7 of the design (the module is changed by another job at the same time). Keep the tests that still apply and add tests for: ticket, requirement, guard.ref, project, id and date scanning, guard.ref length 121 fails, a zero-width character inside an email, a fullwidth at sign, an upper-case home path and a C: slash home path, an upper-case run id with a letter prefix, a hex run after an underscore, a token split by a space across two words, and that no error message contains the unsafe text or an unknown key name.\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design section 7 does not change. Keep the code style of the file. Tests use node:test and node:assert/strict; build any secret-looking test value at run time from pieces; compare URLs by parsed hostname, never with includes.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/lesson-schema.mjs",
+        "tests/lesson-schema.test.mjs"
+      ],
+      "outputs": [
+        "tests/lesson-schema.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15fix-notes",
+      "type": "build",
+      "prompt": "Apply the notes items of section 7 of the design to the notes module and update its test file.\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design section 7 does not change. Keep the code style of the file. Tests use node:test and node:assert/strict; build any secret-looking test value at run time from pieces; compare URLs by parsed hostname, never with includes.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/lesson-notes.mjs",
+        "tests/lesson-notes.test.mjs"
+      ],
+      "outputs": [
+        "tools/lesson-notes.mjs",
+        "tests/lesson-notes.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15fix-store",
+      "type": "build",
+      "prompt": "Apply the store items of section 7 of the design to the store module and update its test file (add tests for a symlink swapped in, an oversize file, id and project mismatches).\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design section 7 does not change. Keep the code style of the file. Tests use node:test and node:assert/strict; build any secret-looking test value at run time from pieces; compare URLs by parsed hostname, never with includes.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/lesson-store.mjs",
+        "tests/lesson-store.test.mjs"
+      ],
+      "outputs": [
+        "tools/lesson-store.mjs",
+        "tests/lesson-store.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15fix-backfill",
+      "type": "build",
+      "prompt": "Apply the backfill items of section 7 of the design to the backfill module and update its test file (add tests for two entries with one number, a number of 5000 or more, and the dry run count).\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design section 7 does not change. Keep the code style of the file. Tests use node:test and node:assert/strict; build any secret-looking test value at run time from pieces; compare URLs by parsed hostname, never with includes.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/lesson-backfill.mjs",
+        "tests/lesson-backfill.test.mjs"
+      ],
+      "outputs": [
+        "tools/lesson-backfill.mjs",
+        "tests/lesson-backfill.test.mjs"
+      ]
+    }
+  ]
+}

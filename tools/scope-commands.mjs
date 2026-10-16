@@ -451,7 +451,7 @@ async function withLock(root, fn) {
 // `swarm go --scope`: builds a manifest from the ready tickets, marks them running (one ledger write) and
 // returns the manifest path for the normal go path. Refuses an unapproved ledger, a ticket set changed since
 // approval, or a scope file that is missing or changed since approval.
-export async function prepareScopeRun(root, { maxJobs, now = Date.now } = {}) {
+export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons = [] } = {}) {
   return withLock(root, async () => {
     const ledger = await readLedger(root);
     if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
@@ -465,7 +465,7 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now } = {}) {
     const scope = parseScope(snapshot);
     const ready = readyTickets(ledger.tickets);
     const humans = ready.filter(t => t.type === 'human').length;
-    const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: false, maxJobs });
+    const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: false, maxJobs, lessons });
     manifest.jobs = manifest.jobs.filter(j => j.type !== 'human');
     const ids = manifest.jobs.map(j => j.id);
     if (!ids.length) throw fail('scope-nothing', humans ? `only ${humans} human ticket(s) are ready; finish them with swarm tickets ID --set done` : 'no ready tickets');
