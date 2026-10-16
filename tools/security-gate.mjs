@@ -55,7 +55,7 @@ const live=changes.filter(c=>c&&c.bytes!=null);
 const run=async(argv,tool,opts={})=>{try{return await exec(argv,{cwd,timeoutMs:120000,...opts});}catch{skipped.push(`${tool} not installed`);return null;}};
 
 checked.push('secret-scan');
-const previous=new Map(changes.map(c=>[c.file,c.previous??null]));
+const previous=Object.fromEntries(changes.map(c=>[c.file,c.previous??null]));
 const secretFn=typeof scan.scanSecretsDetailed==='function'?scan.scanSecretsDetailed:async(files,o)=>({findings:scan.scanSecrets(files,o)||[],skipped:[]});
 const sr=(await secretFn(live.map(c=>({path:c.file,content:c.bytes})),{allowFingerprints:pol.allowedSecretFingerprints,previous,key:fingerprintKey}))||{};
 for(const f of sr.findings||[]){const p=f.path||f.file;blocks.push({check:'secret-scan',severity:'critical',message:`possible ${f.name} in ${p}:${f.line} (fingerprint ${f.fingerprint})`,path:p,line:f.line,fingerprint:f.fingerprint});}

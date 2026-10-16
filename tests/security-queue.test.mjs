@@ -34,6 +34,19 @@ async function fixture(t, count = 1) {
   return root;
 }
 const read = (root, file) => fs.readFile(path.join(root, file), 'utf8');
+const exists = p => fs.access(p).then(() => true, () => false);
+const writeProfile = async (root, sensitive) => {
+  const profile = { version: 1, profile: { sensitive, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none', ranAt: null, head: null, checks: [] } } };
+  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify(profile, null, 2) + '\n');
+  await commit(root, 'profile');
+};
+const recorder = (calls, semgrep = { results: [] }) => async argv => {
+  calls.push(argv);
+  if (argv[0] === 'osv-scanner') return { exitCode: 0, stdout: '{"results":[]}', stderr: '' };
+  if (argv[0] === 'semgrep' && argv[1] === '--config') return { exitCode: 0, stdout: JSON.stringify(semgrep), stderr: '' };
+  return { exitCode: 0, stdout: '', stderr: '' };
+};
+const MARKER_CHECK = [{ name: 'marker', argv: ['node', '-e', "require('fs').writeFileSync('ran.marker','x')"] }];
 
 test('a planted github token blocks the job, rolls back and records a lesson', async t => {
   const root = await fixture(t);
@@ -112,7 +125,7 @@ async function depRun(t) {
 }
 
 test('a made-up dependency is blocked by package-check and a real one passes', async t => {
-  const exec0 = async () => ({ exitCode: 0, stdout: '', stderr: '' });
+  const exec0 = async argv => ({ exitCode: 0, stdout: argv[0] === 'osv-scanner' ? '{"results":[]}' : '', stderr: '' });
   const { root, run } = await depRun(t);
   const gate = { fetchImpl: async () => new Response('not found', { status: 404 }), exec: exec0 };
   const blocked = await integrateRun(root, run.id, { queue: true, noChecks: true, securityGate: gate });
@@ -140,4 +153,70 @@ test('a high npm audit vulnerability blocks the job with check vulnerability', a
   const gate = { exec: async argv => argv[0] === 'npm' ? { exitCode: 1, stdout: JSON.stringify(audit), stderr: '' } : { exitCode: 0, stdout: '', stderr: '' } };
   const result = await integrateRun(root, run.id, { queue: true, noChecks: true, securityGate: gate });
   assert.ok(result.mergeQueue.securityBlocked[0].blocks.some(b => b.check === 'vulnerability'));
+});
+
+test('the gate runs before project checks: a blocked batch runs no checks and is rolled back', async t => {
+  const root = await fixture(t);
+  const run = await runManifest(root, manifest([job(0)], { checks: MARKER_CHECK }), { fetchImpl: worker({ 0: `token ${GH}\n` }) });
+  assert.equal(run.status, 'complete', run.error);
+  const calls = [];
+  const result = await integrateRun(root, run.id, { queue: true, securityGate: { exec: recorder(calls) } });
+  assert.equal(await exists(path.join(root, 'ran.marker')), false);
+  assert.equal(await read(root, 'out/0.txt'), 'base 0\n');
+  assert.equal(result.mergeQueue.securityBlocked.length, 1);
+  const b = result.mergeQueue.batches.find(x => JSON.stringify(x).includes('job-0'));
+  assert.equal(b.security, 'blocked');
+});
+
+test('a clean batch records security passed and then runs the project checks', async t => {
+  const root = await fixture(t);
+  const run = await runManifest(root, manifest([job(0)], { checks: MARKER_CHECK }), { fetchImpl: worker({ 0: 'clean\n' }) });
+  assert.equal(run.status, 'complete', run.error);
+  const calls = [];
+  const result = await integrateRun(root, run.id, { queue: true, securityGate: { exec: recorder(calls) } });
+  assert.equal(await exists(path.join(root, 'ran.marker')), true);
+  const b = result.mergeQueue.batches.find(x => JSON.stringify(x).includes('job-0'));
+  assert.equal(b.security, 'passed');
+});
+
+test('queue securityNotes lists scanners that were skipped as not installed', async t => {
+  const root = await fixture(t);
+  await fs.writeFile(path.join(root, 'package.json'), '{}\n');
+  await fs.writeFile(path.join(root, 'package-lock.json'), '{}\n');
+  await commit(root, 'lockfiles');
+  const pair = async () => reply([{ path: 'package.json', content: '{"name":"x"}\n' }, { path: 'package-lock.json', content: '{"lockfileVersion":3}\n' }]);
+  const run = await runManifest(root, manifest([job(0, { outputs: ['package.json', 'package-lock.json'], prompt: 'Update the lockfiles.' })]), { fetchImpl: pair });
+  assert.equal(run.status, 'complete', run.error);
+  const exec = async argv => {
+    if (argv[0] === 'npm') throw new Error('ENOENT');
+    return argv[0] === 'osv-scanner' ? { exitCode: 0, stdout: '{"results":[]}', stderr: '' } : { exitCode: 0, stdout: '', stderr: '' };
+  };
+  const result = await integrateRun(root, run.id, { queue: true, noChecks: true, securityGate: { exec } });
+  assert.ok(result.mergeQueue.securityNotes.some(n => String(n).includes('npm not installed')));
+});
+
+test('semgrep is not called for a sensitive project by default', async t => {
+  const root = await fixture(t);
+  const run = await runManifest(root, manifest([job(0)]), { fetchImpl: worker({ 0: 'clean\n' }) });
+  assert.equal(run.status, 'complete', run.error);
+  const calls = [];
+  const result = await integrateRun(root, run.id, { queue: true, noChecks: true, securityGate: { exec: recorder(calls) } });
+  assert.deepEqual(result.mergeQueue.securityBlocked, []);
+  assert.ok(!calls.some(argv => argv[0] === 'semgrep'));
+});
+
+test('security tickets are recorded only for a batch that stays integrated', async t => {
+  const semgrep = { results: [{ check_id: 'demo.rule', path: 'out/0.txt', start: { line: 1 }, extra: { severity: 'ERROR' } }] };
+  const root = await fixture(t);
+  await writeProfile(root, false);
+  const run = await runManifest(root, manifest([job(0)]), { fetchImpl: worker({ 0: 'clean\n' }) });
+  assert.equal(run.status, 'complete', run.error);
+  const ok = await integrateRun(root, run.id, { queue: true, noChecks: true, securityGate: { exec: recorder([], semgrep) } });
+  assert.equal(ok.mergeQueue.securityTickets.length, 1);
+  const bad = await fixture(t);
+  await writeProfile(bad, false);
+  const badRun = await runManifest(bad, manifest([job(0)]), { fetchImpl: worker({ 0: `token ${GH}\n` }) });
+  assert.equal(badRun.status, 'complete', badRun.error);
+  const blocked = await integrateRun(bad, badRun.id, { queue: true, noChecks: true, securityGate: { exec: recorder([], semgrep) } });
+  assert.equal((blocked.mergeQueue.securityTickets ?? []).length, 0);
 });
