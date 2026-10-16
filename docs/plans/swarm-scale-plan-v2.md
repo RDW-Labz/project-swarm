@@ -121,13 +121,20 @@ The alias only works in your interactive shell. Claude Code, Cursor agents, and 
 - `swarm init --check`: a read-only health check of the setup.
 - Done when: a fresh clone of a real project goes from `swarm init` to a green `swarm plan` with no hand edits.
 
-## Phase 13 — Planner quality (split work well)
+## Phase 13 — Scope → Tickets → Swarm (replaces "Planner quality")
 
-- The planner uses the repo map and import graph to split work along real boundaries, keeping tightly coupled files in one job.
-- **Waves:** shared interfaces and contracts come first (wave 1), implementations in parallel next (wave 2), then integration and tests (wave 3). This is built on the existing `after` support.
-- **Job sizing:** target a size per job type, splitting jobs that are too big and merging ones that are too small, so thousands of jobs don't mean thousands of tiny, wasteful calls.
-- Contracts are auto-attached to every job that needs them, and a job that mentions a contract it doesn't include is refused (the Phase 0 lesson).
-- Done when: on 3 real repos, plans have zero file-ownership conflicts and fewer than 5% of jobs blocked on missing context.
+The full spec is [swarm-scope-tickets-spec.md](swarm-scope-tickets-spec.md). Built after Phase 14b, then Phase 15, 16 and 17. Order: 14b → 13 → 15 → 16 → 17.
+
+Goal: Braden drops in a full build scope written with Claude; the swarm breaks it into hundreds or thousands of small tickets without losing anything in it, runs them in parallel, and keeps one live Build Plan that everyone (Braden, the orchestrator, leads, workers, the dashboard) checks progress against. Change orders update it.
+
+- **The scope is the source of truth** (`docs/scope/scope.md`): a template with stages and requirement IDs (`R-001` …) with acceptance criteria; `swarm scope template` prints it and `swarm scope check` lints it (missing IDs, untestable wording, duplicates, missing acceptance criteria, unclear stage order).
+- **`swarm scope split`** builds a Stage → Epic → Ticket tree. Every ticket traces to requirement IDs (`scopeRefs`), carries acceptance criteria copied or derived from the requirement (never invented), owns its files (one writer per file), has `dependsOn`, a size (S or M, never L), a risk and a sensitive flag. It splits along real boundaries using the repo map and import graph (Phase 12), puts **contracts first** (types, API shapes, schema) so the rest runs in parallel, takes waves from the dependency graph, and uses leads (Phase 5) to split each stage in parallel. This keeps the old Phase 13 aims: real boundaries, contracts first, waves, job sizing, contracts auto-attached and a job that names a contract it lacks is refused.
+- **Integrity before anything runs:** 100% requirement coverage, every ticket traced (untraced ones are "not in scope" and need Braden's OK), testable acceptance criteria, no two tickets writing the same file in a wave, size budget, a strong-model review of the whole tree against the scope (the local brain, Phase 14b, does a free first pass), and Braden's approval of a summary (stages, ticket count, coverage %, cost and time estimate, risks). While it runs, every worker report names its ticket; review checks the result against the ticket's criteria and the original requirement text; work outside the ticket is flagged as **drift** and not merged without approval; a ticket is `done` only when checks, review and merge have passed.
+- **Change orders:** `swarm change "…"` or edit `scope.md` and `swarm scope sync`: impact analysis (requirements and tickets affected, new, cancelled or reopened, cost and time change), Braden approves, the scope gets new or versioned requirement IDs, tickets are added, cancelled or reopened and dependents re-planned, and it is all logged as a numbered change order (`CO-007`). History is never deleted.
+- **The ticket ledger:** `.swarm/project/tickets.json` (current) plus `tickets.log` (append-only), committed summaries in `docs/scope/build-plan.md`; `swarm tickets`, `swarm ticket T-0123`; `swarm brief` and autopilot read it, so the orchestrator knows what is done, next and blocked against the scope, not only against runs. GitHub Issues or Linear sync is optional and later.
+- **Commands:** `swarm scope template|check|split|approve`, `swarm go --scope` (runs every ready ticket), `swarm tickets`, `swarm ticket <id>`, `swarm change "<text>"`, `swarm scope sync`.
+- **Builds on:** repo map and profile (12), plan preview and approval (11), human jobs and inbox (10c: human tickets), backlog, local brain (14b), protected paths (12), throughput (14).
+- Done when: a real scope with at least 100 requirements splits into 300+ tickets with 100% coverage, zero untraced tickets after review, and Braden's approval; `swarm go --scope` runs them in waves with hundreds in flight and every merged change traces to a ticket and a requirement; and a change order mid-build adds and cancels the right tickets, with the Build Plan view showing it live.
 
 ## Phase 14 — Throughput to thousands
 
@@ -170,11 +177,17 @@ Use dev2's model (the Strata API, reached the way `dev2chat` does: an ssh tunnel
 
 ## Phase 16 — Swarm Watch (replaced by the spec)
 
-The full spec is [swarm-watch-spec.md](swarm-watch-spec.md) and the reference design is [the prototype](../design/swarm-watch-prototype.html). Build it with real run data from the Phase 14 event log, to match the prototype.
+The full spec is [swarm-watch-spec.md](swarm-watch-spec.md) and the reference design is [the prototype](../design/swarm-watch-prototype.html). Build it with real run data (the run state snapshots and the ticket ledger; Phase 14 found an event log unnecessary), to match the prototype.
 
 - `swarm watch` opens a local, read-only web dashboard for the newest live run (`<run-id>`, `--all` and `--tui` are in the spec). `swarm go` and `swarm "goal"` print the watch URL, and `--watch` opens it.
 - The server binds to 127.0.0.1 only, uses a random port and token, streams deltas over Server-Sent Events, and has no write routes.
-- Done when: you can follow a real 1,000+ job `swarm go` run from start to the final gate without reading logs, on desktop or phone.
+- **Build Plan tab** (from [the scope and tickets spec](swarm-scope-tickets-spec.md), section 6), next to the live run view, reading the ticket ledger from Phase 13:
+  - a header with scope name and version, overall % done, coverage % (requirements done / total), tickets by status, spend against estimate and the change-order count;
+  - **stage lanes**: each stage a row with a progress bar; expand to epics, and an epic to ticket cards with status colour, type icon, risk and sensitive pills and the lane working on it;
+  - a **dependency view** (blocked chains highlighted) and a **requirement view** (each `R-` ID with its tickets and a done / partial / missing state, so nothing dropped from the scope hides);
+  - a **change-order timeline** (what each added, cancelled or reopened) and a **ticket drawer** (scope text, acceptance criteria, files, runs, review result, PR, cost, drift flags);
+  - live: it updates as tickets move, and tickets from a change order animate in.
+- Done when: you can follow a real 1,000+ job `swarm go` run from start to the final gate without reading logs, on desktop or phone, and the Build Plan tab shows a real scoped build (stages, tickets, requirements, change orders) live.
 
 ---
 
