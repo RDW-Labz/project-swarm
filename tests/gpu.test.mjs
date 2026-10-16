@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { PINNED_IMAGE, gpuUp, gpuDown, gpuStatus, formatStatus, validateUpOptions, remoteStartScript, sessionHours, parseGpuCount, readSessionFile } from '../tools/gpu.mjs';
+import { PINNED_IMAGE, gpuUp, gpuDown, gpuStatus, formatStatus, validateUpOptions, remoteStartScript, sessionHours, parseGpuCount, readSessionFile, SHORTLIST } from '../tools/gpu.mjs';
 import { runBakeoff, measureThroughput, agentsPerGpu, renderBakeoff, selectCandidates, LEVELS } from '../tools/gpu-bakeoff.mjs';
 import { createBalancer, balancedFetch, loadRentedConfig, readGpuSession } from '../tools/rented.mjs';
 import { routeJob, rentedContractProblem } from '../tools/router.mjs';
@@ -188,8 +188,15 @@ test('bake-off: our own tasks decide the ranking; cost per passing task from the
   assert.match(text, /\| 1 \| a \| fp8 \| \$0\.2875 \| 8\/10 \(80%\) \| n\/a \| 192 \| 192 \| n\/a \| 23 min, \$2\.30 \|/);
   assert.match(text, /lessons eval set does not exist yet/);
   assert.deepEqual(selectCandidates('qwen3-coder-30b-a3b-fp8,foo/Bar-NVFP4').map(item => item.quant), ['fp8', 'nvfp4']);
-  assert.deepEqual(selectCandidates().map(item => item.label), ['qwen3.6-35b-a3b-nvfp4', 'nemotron-3.5-lightning-nvfp4', 'qwen3-coder-next-nvfp4']);
-  assert.equal(selectCandidates().every(item => item.quant === 'nvfp4'), true, 'the default list is the three NVFP4 entries');
+  assert.deepEqual(selectCandidates().map(item => item.label), ['qwen3.6-35b-a3b-nvfp4']);
+  assert.equal(selectCandidates().every(item => item.quant === 'nvfp4'), true, 'the default list is the one NVFP4 entry');
+});
+
+test('the shortlist is the one Qwen3.6 NVFP4 entry; Lightning and Coder-Next are not in it', () => {
+  assert.equal(SHORTLIST.length, 1);
+  assert.equal(SHORTLIST[0].label, 'qwen3.6-35b-a3b-nvfp4');
+  assert.equal(SHORTLIST.some(item => /lightning/i.test(item.label) || /coder-next/i.test(item.label)), false, 'Lightning and Coder-Next are removed from the shortlist');
+  assert.equal(SHORTLIST.some(item => /nemotron|coder-next/i.test(item.model)), false, 'no removed model id is in the shortlist');
 });
 
 test('a failing model is recorded, not fatal, and its server is still stopped', async () => {
@@ -208,7 +215,8 @@ test('swarm gpu: without --yes it only prints the plan; flags are strict; bake-o
   assert.equal((await runGpuCommand(['bakeoff', ...base], { out: x => lines.push(x), env, gpu })).status, 'planned');
   assert.deepEqual(touched, []);
   assert.match(lines.join('\n'), /nothing is started yet.*sent to the node: commands only; nothing of yours.*only sensitive: false/s);
-  assert.match(lines.join('\n'), /qwen3\.6-35b-a3b-nvfp4.*nemotron-3\.5-lightning-nvfp4/s);
+  assert.match(lines.join('\n'), /qwen3\.6-35b-a3b-nvfp4/);
+  assert.doesNotMatch(lines.join('\n'), /nemotron|coder-next/i, 'the removed entries are not named in the plan');
   assert.throws(() => parseGpuFlags(['--nope']), /gpu-usage/);
   assert.throws(() => parseGpuFlags(['--target']), /needs a value/);
   await assert.rejects(runGpuCommand(['up', ...base], { out: () => {}, env }), /gpu-model-invalid/);
