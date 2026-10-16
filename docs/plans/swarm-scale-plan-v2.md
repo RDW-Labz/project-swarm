@@ -132,9 +132,13 @@ Goal: Braden drops in a full build scope written with Claude; the swarm breaks i
 - **Integrity before anything runs:** 100% requirement coverage, every ticket traced (untraced ones are "not in scope" and need Braden's OK), testable acceptance criteria, no two tickets writing the same file in a wave, size budget, a strong-model review of the whole tree against the scope (the local brain, Phase 14b, does a free first pass), and Braden's approval of a summary (stages, ticket count, coverage %, cost and time estimate, risks). While it runs, every worker report names its ticket; review checks the result against the ticket's criteria and the original requirement text; work outside the ticket is flagged as **drift** and not merged without approval; a ticket is `done` only when checks, review and merge have passed.
 - **Change orders:** `swarm change "…"` or edit `scope.md` and `swarm scope sync`: impact analysis (requirements and tickets affected, new, cancelled or reopened, cost and time change), Braden approves, the scope gets new or versioned requirement IDs, tickets are added, cancelled or reopened and dependents re-planned, and it is all logged as a numbered change order (`CO-007`). History is never deleted.
 - **The ticket ledger:** `.swarm/project/tickets.json` (current) plus `tickets.log` (append-only), committed summaries in `docs/scope/build-plan.md`; `swarm tickets`, `swarm ticket T-0123`; `swarm brief` and autopilot read it, so the orchestrator knows what is done, next and blocked against the scope, not only against runs. GitHub Issues or Linear sync is optional and later.
+- **Contracts first, then generate** (speed spec [swarm-speed-multipliers-spec.md](swarm-speed-multipliers-spec.md), 1a): wave 0 is small: database schema, API spec (OpenAPI), shared types, events, and the screen list with routes, straight from the scope and approved once by Braden. A tool, not a model, then generates types, API clients, validators, migrations, **mock API servers** and **seed data** from the contracts, so database, API and screens build at the same time against the contract and mocks (about 6 waves become about 2). Contract tests for both sides are generated from the same contract.
+- **Day 0 setup checklist** (speed spec 3): splitting the scope lists every account, key and decision the project needs (Stripe, domain, app store, email provider, …) as human tickets (10c), to be done together on day 0, not as surprises mid-build. Store and launch work (developer accounts, listings, privacy policy, review submission) also starts on day 0 as human tickets.
+- **Approval policy, set once per project** (speed spec 3): auto-merge into the `swarm/*` branch when tests and review pass; Braden approves only the scope and contracts (day 0), the design gallery (16), change orders over $X and the final PR per stage; a pre-approved budget per project. Stored in the project profile.
+- **Tests from the scope first** (speed spec 2): acceptance tests are written straight from the requirement criteria in wave 1, in parallel with the code, so every ticket has a pass/fail target from the start.
 - **Commands:** `swarm scope template|check|split|approve`, `swarm go --scope` (runs every ready ticket), `swarm tickets`, `swarm ticket <id>`, `swarm change "<text>"`, `swarm scope sync`.
 - **Builds on:** repo map and profile (12), plan preview and approval (11), human jobs and inbox (10c: human tickets), backlog, local brain (14b), protected paths (12), throughput (14).
-- Done when: a real scope with at least 100 requirements splits into 300+ tickets with 100% coverage, zero untraced tickets after review, and Braden's approval; `swarm go --scope` runs them in waves with hundreds in flight and every merged change traces to a ticket and a requirement; and a change order mid-build adds and cancels the right tickets, with the Build Plan view showing it live.
+- Done when: a real scope with at least 100 requirements splits into 300+ tickets with 100% coverage, zero untraced tickets after review, and Braden's approval; `swarm go --scope` runs them in waves with hundreds in flight and every merged change traces to a ticket and a requirement; and a change order mid-build adds and cancels the right tickets, with the Build Plan view showing it live. For the contracts-first part: on a real scope, codegen and mocks produce a working mock API and seed data in seconds, and the build takes 3 waves or fewer.
 
 ## Phase 14 — Throughput to thousands
 
@@ -172,6 +176,14 @@ Use dev2's model (the Strata API, reached the way `dev2chat` does: an ssh tunnel
 - **Escalation ladder:** if a cheap lane fails checks, retry once on the next tier up (Haiku → Sonnet → Codex/Cursor → Claude). Record which lane passes which job type.
 - **Learned routing:** use the pass/fail and cost history per (job type × lane × model) to pick the cheapest lane that usually passes. Start from the current fixed order and adjust slowly.
 - **Best-of-N** for risky jobs (`quality: "high"`): run 2–3 cheap attempts, keep the one that passes checks and review.
+- **Speed multipliers** (speed spec [swarm-speed-multipliers-spec.md](swarm-speed-multipliers-spec.md), 1b, 2 and 4):
+  - **Test only what changed:** each batch runs the tests affected by its files (the repo map's test links, Phase 12); the full suite runs every N batches and at the end.
+  - **Adaptive batch size:** when batches keep passing, merge bigger ones (10 → 25 → 50); when failures rise, shrink; bisect stays the safety net. **Merge often, branch short:** every green batch lands on the `swarm/*` branch at once, so later tickets build on real code.
+  - **Speculative start:** the next wave starts against the contract before the previous one finishes merging; only tickets whose contract changed are redone.
+  - **Skeleton first:** one feature built all the way through (database → API → screen → test) before fanning out, so connection bugs show on day 0.
+  - **Continuous integration:** after every merged batch, end-to-end smoke tests (Playwright) on a running copy; failures are triaged by the local brain (14b) and become fix tickets. One **integration lead** watches the connections between areas and opens fix tickets.
+  - **Preview deploy per batch:** every green batch deploys to a preview URL (Vercel, Fly, Cloudflare, …); Playwright mobile emulation and simulators check each batch, real devices only for final candidates.
+  - **Fast test machines:** cached dependencies, a prebuilt dev container, tests split across CPU cores (also on the rented GPU box's CPUs).
 - **Final gate:** before a `swarm/go` branch is marked done, run the full test suite plus one high-tier review of the whole diff (Claude subscription).
 - Done when: on the scale-test repos, the final branch passes the full test suite with zero human fixes on at least 90% of runs.
 
@@ -187,6 +199,7 @@ The full spec is [swarm-watch-spec.md](swarm-watch-spec.md) and the reference de
   - a **dependency view** (blocked chains highlighted) and a **requirement view** (each `R-` ID with its tickets and a done / partial / missing state, so nothing dropped from the scope hides);
   - a **change-order timeline** (what each added, cancelled or reopened) and a **ticket drawer** (scope text, acceptance criteria, files, runs, review result, PR, cost, drift flags);
   - live: it updates as tickets move, and tickets from a change order animate in.
+- **Screenshot gallery** (speed spec 3): design review is one gallery of screenshots per batch that Braden approves in one sitting; comments become fix tickets. The design system is picked once per brand (for example RDW Labz navy and lime) and every screen uses it.
 - Done when: you can follow a real 1,000+ job `swarm go` run from start to the final gate without reading logs, on desktop or phone, and the Build Plan tab shows a real scoped build (stages, tickets, requirements, change orders) live.
 
 ---
@@ -197,12 +210,32 @@ The full spec is [swarm-watch-spec.md](swarm-watch-spec.md) and the reference de
 - 200 real jobs on a throwaway repo across all lanes (Hermes included if dev2 is reachable), with a $10 cap. Record cost and pass rate per tier.
 - One real `swarm go` on a medium project. Record plan accuracy, the conflict rate, and how many fixes it needed after the run.
 - **Lane benchmark** (a small one ran at 1.63.0; see `docs/state/lane-benchmark.md`): 10 real tasks from this repo, 2 each of small bug fix, new function plus test, refactor, test-writing and docs, run on every lane including Hermes on dev2. Each result is scored by real tests (hidden tests, mutants and fact checks the worker never sees) plus a review. Record pass rate, cost, time and quality per lane and per kind. Rerun it whenever a lane, model or the router changes, and use the results to set the default route per job type (`tools/job-types.mjs`). The harness is `bench/lane-benchmark/`.
+- Verify the Phase 18 effect table on a medium app: waves, swarm build time, Braden's time, and when glue bugs are found.
 - Publish the numbers in `docs/field-report.md`.
+
+---
+
+## Phase 18 — Speed multipliers
+
+The full spec is [swarm-speed-multipliers-spec.md](swarm-speed-multipliers-spec.md). Goal: the code is already fast; cut the five things around it that are slow (work that must happen in order, testing and merging, Braden's own steps, gluing the pieces, real-world steps) so a medium app ships in hours and days.
+
+Most of it lives in earlier phases, as the spec's build order says:
+1. Contracts first, codegen and mocks: **Phase 13**.
+2. Day 0 checklist and approval policy: **Phase 13**.
+3. Affected-only tests and adaptive batches: **Phase 15**.
+4. Skeleton first, continuous integration tests, preview deploys: **Phase 15**.
+5. Screenshot gallery approval: **Phase 16**.
+6. **RDW Labz starter kit** (this phase, its own project): one template repo per app type (web app, mobile app, booking or portal) with auth, roles, layout, design system, forms, tables, payments (sandbox), emails, file upload, admin panel, CI/CD, deploy, error tracking and test setup already built and tested, so the swarm builds only what is unique. `swarm init --kit web-portal`; first kit is `web-portal`, dogfooded on the parts request app. Secrets stay in the vault (the Oasis plan): keys go in once, deploys and tests use them, agents never see them.
+7. **Scope interview** (this phase, built after Phase 13): `swarm scope new` asks structured questions (local brain or Claude), uses a scope template for the app type and writes the scope with requirement IDs, so the scope takes about 30–60 minutes instead of hours.
+
+Expected effect, to verify in Phase 17: waves for a medium app ~6–10 → ~2–3; swarm build time ~4–10 h → ~1–3 h; Braden's time ~2–4 days spread out → ~1 day in 3–4 planned sittings; glue bugs found at the end → in the first hour.
+
+Done when: the starter kit and scope interview exist, and the Phase 17 medium-app run shows the effect table's numbers (or says honestly which ones were missed).
 
 ---
 
 ## Suggested order
 
-10 → 10b → 10c → 11 → 12 → 14 → 14b → 13 → 15 → 16 (use swarm-watch-spec.md) → 17
+10 → 10b → 10c → 11 → 12 → 14 → 14b → 13 → 15 → 16 (use swarm-watch-spec.md) → 17 → 18 (scope interview right after 13; starter kit is its own project and can start any time)
 
 (The CLI comes first. Failover and the inbox (10b, 10c) come next because they fix the biggest day-to-day stalls; see the addendum. The plan preview follows because it makes every later run safer and easier to use. Throughput comes before the planner and quality work, so those can be tested at real scale.)
