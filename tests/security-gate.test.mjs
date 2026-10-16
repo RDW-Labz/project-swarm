@@ -13,7 +13,7 @@ const noExec = async () => { throw new Error('missing'); };
 const noFetch = async () => { throw new Error('no fetch expected'); };
 const jsonRes = (body, status = 200) => ({ status, ok: status < 300, json: async () => body });
 const meta = (license) => ({ time: { created: new Date(NOW - 500 * 864e5).toISOString() }, 'dist-tags': { latest: '1.0.0' }, versions: { '1.0.0': license === undefined ? {} : { license } } });
-const registry = (m, downloads = 100000) => async (url) => (url.includes('api.npmjs.org') ? jsonRes({ downloads }) : jsonRes(m));
+const registry = (m, downloads = 100000) => async (url) => (new URL(url).hostname === 'api.npmjs.org' ? jsonRes({ downloads }) : jsonRes(m));
 const pkg = (deps) => Buffer.from(JSON.stringify({ dependencies: deps }));
 const auditOnly = (handler) => async (argv, opts) => { if (argv[0] === 'npm' && argv[1] === 'audit') return handler(argv, opts); throw new Error('missing'); };
 const LOCK = [{ file: 'package-lock.json', bytes: Buffer.from('{}'), previous: Buffer.from('{}') }];

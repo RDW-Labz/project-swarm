@@ -9,7 +9,7 @@ const DAY = 864e5;
 const ago = d => new Date(NOW - d * DAY).toISOString();
 const reply = (status, body) => ({ ok: status >= 200 && status < 300, status, async json() { return body; } });
 function npmFake({ days, downloads, license = 'MIT' }) {
-  return async url => url.includes('api.npmjs.org')
+  return async url => new URL(url).hostname === 'api.npmjs.org'
     ? reply(200, { downloads })
     : reply(200, { time: { created: ago(days) }, 'dist-tags': { latest: '1.0.0' }, versions: { '1.0.0': { license } } });
 }
@@ -151,7 +151,7 @@ test('workspace spec is ok with no fetch call', async () => {
 });
 
 test('exact version uses that version age and license', async () => {
-  const fetchImpl = async u => u.includes('api.npmjs.org')
+  const fetchImpl = async u => new URL(u).hostname === 'api.npmjs.org'
     ? reply(200, { downloads: 5000 })
     : reply(200, { time: { created: ago(400), '1.2.3': ago(10) }, 'dist-tags': { latest: '2.0.0' }, versions: { '2.0.0': { license: 'MIT' }, '1.2.3': { license: 'BSD-3-Clause' } } });
   const r = await checkPackage({ name: 'acme', ecosystem: 'npm', spec: '1.2.3', dev: false }, { fetchImpl, now: () => NOW });
@@ -160,7 +160,7 @@ test('exact version uses that version age and license', async () => {
 });
 
 test('missing exact version adds a reason that mentions the version', async () => {
-  const fetchImpl = async u => u.includes('api.npmjs.org')
+  const fetchImpl = async u => new URL(u).hostname === 'api.npmjs.org'
     ? reply(200, { downloads: 5000 })
     : reply(200, { time: { created: ago(400) }, 'dist-tags': { latest: '2.0.0' }, versions: { '2.0.0': { license: 'MIT' } } });
   const r = await checkPackage({ name: 'acme', ecosystem: 'npm', spec: '9.9.9', dev: false }, { fetchImpl, now: () => NOW });
