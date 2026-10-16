@@ -96,7 +96,7 @@ test('after lists only dependencies inside the manifest', () => {
     ticket({ id: 'T-0002', dependsOn: ['T-0001', 'T-0000'], status: 'todo' }),
   ];
   const { manifest } = ticketsToManifest(tickets, { ledger, scope, ready: false });
-  assert.deepEqual(manifest.jobs[0].after, []);
+  assert.equal(manifest.jobs[0].after, undefined);
   assert.deepEqual(manifest.jobs[1].after, ['T-0001']);
 });
 

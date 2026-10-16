@@ -43,7 +43,9 @@ export function ticketsToManifest(tickets,opts={}){
     }
     const context=[...new Set([...(t.context||[]),...(t.contracts||[])])];
     if(contract&&!context.includes(contract))context.push(contract);
-    const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:!!t.sensitive,prompt:promptFor(t,reqs),context,outputs,after:(t.dependsOn||[]).filter(d=>inSet.has(d)),acceptance:t.acceptance||[],timeoutMs:600000};
+    const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:!!t.sensitive,prompt:promptFor(t,reqs),context,outputs,acceptance:t.acceptance||[],timeoutMs:600000};
+    const deps=(t.dependsOn||[]).filter(d=>inSet.has(d));
+    if(deps.length)job.after=deps;
     if(t.risk==='high')job.hard=true;
     return job;
   });
