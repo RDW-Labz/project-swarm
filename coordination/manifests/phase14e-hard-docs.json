@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/kickoff.test.mjs"
+      ],
+      "id": "docs-hard-rented",
+      "context": [
+        "docs/rented-gpu.md",
+        "bench/gpu-bakeoff/tasks/hard-planwaves/README.md"
+      ],
+      "outputs": [
+        "docs/rented-gpu.md"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/rented-gpu.md, in the section \"## Bake-off: swarm gpu bakeoff\", add a paragraph at the end of that section (use the next heading line \"## Using the winner\" as the anchor, add the paragraph just before it) titled in bold \"The tasks\" is not needed: write plain text: \"Tasks. The 10 lane-benchmark tasks (two bug fixes, two new functions, two refactors, two test-writing tasks, two docs tasks; see bench/lane-benchmark/README.md) are scored by hidden tests, structural checks, mutants or fact checks. A hard task is added on top (bench/gpu-bakeoff/tasks/hard-planwaves): planWaves, a ticket wave planner. The model gets only TASK.md and a stub planWaves.mjs, never the tests or the solution; it is graded by running the 16 hidden tests (pass is 16 of 16), with 10 minutes per attempt. Per model and per best-of count the report records tests passed, time, attempts and tokens. Claude solved it in about 30 seconds, 16 of 16 on the first run (and Claude wrote the spec, so it had an advantage).\" Also add one sentence at the end of that paragraph: \"Known issue: Qwen3.6 NVFP4 crashes with a CUDA illegal memory access under vLLM 0.31.0 on the RTX PRO 6000 when started with --moe-backend flashinfer_b12x, so that flag is not used; vLLM's default MoE backend starts and serves.\" \nignoreTests: tests/kickoff.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "sensitive": true,
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/router.test.mjs",
+        "tests/t101-release.test.mjs",
+        "tests/update.test.mjs"
+      ],
+      "id": "docs-hard-changelog",
+      "context": [
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "CHANGELOG.md"
+      ],
+      "prompt": "Edit CHANGELOG.md in place; change nothing else. In the \"## 1.77.0\" section add these bullets after the last bullet of that section (before the \"## 1.76.0\" heading): \"- A hard task joins the bake-off (planWaves, bench/gpu-bakeoff/tasks/hard-planwaves): the model gets only the spec and a stub, 16 hidden tests grade it (pass is 16 of 16), 10 minutes per attempt; tests passed, time, attempts and tokens are recorded per model at best-of-1 and best-of-3 (bench/gpu-bakeoff/hard-task.mjs).\" and \"- Qwen3.6 NVFP4 is started without --moe-backend flashinfer_b12x: with it vLLM 0.31.0 crashed on the RTX PRO 6000 (CUDA illegal memory access while profiling CUDA graphs); the default MoE backend works.\" \nignoreTests: tests/anthropic-lane.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/codex-envelope.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lesson-t80-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-aa-core.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ab-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ag-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ah-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-context.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-o.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-x.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/job-types.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/openrouter.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/router.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/t101-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/update.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

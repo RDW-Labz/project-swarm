@@ -51,6 +51,8 @@ Models are ranked by pass rate, then cost per passing task. A model that fails t
 
 **Best-of-N.** On this lane only (tokens are nearly free), set `bestOf` (1 to 8) on a job, or `swarm gpu up --best-of 3` for a default. The lane asks the server for N answers in one request, runs the ticket's visible tests (the test files in the job's `context`) on each in a temporary git worktree with the answer applied, and keeps the smallest passing one. If none pass, the job fails with `best-of-failed` and escalates to Haiku, then Codex, as usual. A candidate that is not valid output is skipped. With no tests in context it picks the smallest valid one. It is never used on paid API lanes.
 
+Tasks. The 10 lane-benchmark tasks (two bug fixes, two new functions, two refactors, two test-writing tasks, two docs tasks; see bench/lane-benchmark/README.md) are scored by hidden tests, structural checks, mutants or fact checks. A hard task is added on top (bench/gpu-bakeoff/tasks/hard-planwaves): planWaves, a ticket wave planner. The model gets only TASK.md and a stub planWaves.mjs, never the tests or the solution; it is graded by running the 16 hidden tests (pass is 16 of 16), with 10 minutes per attempt. Per model and per best-of count the report records tests passed, time, attempts and tokens. Claude solved it in about 30 seconds, 16 of 16 on the first run (and Claude wrote the spec, so it had an advantage). Known issue: Qwen3.6 NVFP4 crashes with a CUDA illegal memory access under vLLM 0.31.0 on the RTX PRO 6000 when started with --moe-backend flashinfer_b12x, so that flag is not used; vLLM's default MoE backend starts and serves.
+
 ## Using the winner: `swarm gpu up|down|status`
 
 ```

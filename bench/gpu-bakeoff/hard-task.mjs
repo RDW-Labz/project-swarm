@@ -5,6 +5,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
+// A grading run started from inside another node --test process must not inherit its test-runner context (the child would print no summary).
+const gradingEnv = () => { const env = { ...process.env }; delete env.NODE_TEST_CONTEXT; return env; };
+
 export const TASK_DIR = fileURLToPath(new URL('./tasks/hard-planwaves', import.meta.url));
 export const HARD_TIMEOUT_MS = 600000;
 
@@ -27,7 +30,7 @@ export function gradeSolution({ file, taskDir = TASK_DIR, exec = spawnSync, time
     fs.mkdirSync(path.join(tmp, 'test'), { recursive: true });
     fs.copyFileSync(path.join(taskDir, 'test', 'planWaves.test.mjs'), path.join(tmp, 'test', 'planWaves.test.mjs'));
     fs.writeFileSync(path.join(tmp, 'planWaves.mjs'), source);
-    const result = exec(process.execPath, ['--test', 'test/planWaves.test.mjs'], { cwd: tmp, encoding: 'utf8', timeout: timeoutMs });
+    const result = exec(process.execPath, ['--test', 'test/planWaves.test.mjs'], { cwd: tmp, encoding: 'utf8', timeout: timeoutMs, env: gradingEnv() });
     const parsed = parseTapSummary(`${result.stdout ?? ''}${result.stderr ?? ''}`);
     return { ...parsed, passedAll: parsed.passed === parsed.total && parsed.total > 0 };
   } finally {
