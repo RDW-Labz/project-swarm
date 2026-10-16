@@ -8,6 +8,10 @@ rules:
       - pattern: execSync($A + $B)
       - pattern: exec(`...${$X}...`)
       - pattern: execSync(`...${$X}...`)
+      - pattern: $CP.exec($A + $B)
+      - pattern: $CP.execSync($A + $B)
+      - pattern: $CP.exec(`...${$X}...`)
+      - pattern: $CP.execSync(`...${$X}...`)
     metadata:
       category: security
   - id: swarm-js-eval
