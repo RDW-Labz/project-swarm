@@ -1195,6 +1195,11 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
   for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract', 'preChecks', 'skillsDir', 'allowEmptyContext', 'resources', 'lanes', 'batch', 'report', 'budget', 'idle', 'ledger', 'hosts'].includes(key)) fail(`Unknown manifest field: ${key}`);
   resolveBudget({ manifest });
   if (manifest.hosts !== undefined) resolveHosts(manifest.hosts);
+  if (manifest.batch !== undefined && manifest.batch !== true && manifest.batch !== false) {
+    const own = manifest.batch;
+    const shape = own && typeof own === 'object' && !Array.isArray(own) && Object.keys(own).every(key => key === 'types') && Array.isArray(own.types) && own.types.length <= 20 && own.types.every(type => typeof type === 'string' && Object.hasOwn(JOB_TYPES, type));
+    if (!shape) fail('batch must be true, false or { types: [job types] }', 'batch-invalid');
+  }
   if (manifest.idle !== undefined) validateRunIdle(manifest.idle);
   if (manifest.ledger !== undefined) {
     if (!manifest.ledger || typeof manifest.ledger !== 'object' || Array.isArray(manifest.ledger)) fail('ledger must be an object');
@@ -2647,7 +2652,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
   await safePath(root, `${directory}/state.json`, { internal: true, parents: true });
   const claim = await safePath(root, `${directory}/claim`, { internal: true });
   if (!resumeState) await fs.writeFile(claim, '', { flag: 'wx' });
-  const state = resumeState ?? { version: 1, id, root, concurrency: manifest.concurrency??2, peakConcurrency: 0, status: 'running', startedAt: new Date(now()).toISOString(), jobs: [], ...(redBaseAutoAccept ? { redBaseAutoAccept } : {}), ...(acceptedRedBaseInfo ? { acceptRedBase: true, acceptRedBaseReason: acceptedRedBaseInfo.reason, baseCheckFailures: acceptedRedBaseInfo.failures } : {}), ...(pendingBaseChecks ? { pendingBaseChecks } : {}) };
+  const state = resumeState ?? { version: 1, id, root, ...(batchFlag ? { batchFlag: true } : {}), concurrency: manifest.concurrency??2, peakConcurrency: 0, status: 'running', startedAt: new Date(now()).toISOString(), jobs: [], ...(redBaseAutoAccept ? { redBaseAutoAccept } : {}), ...(acceptedRedBaseInfo ? { acceptRedBase: true, acceptRedBaseReason: acceptedRedBaseInfo.reason, baseCheckFailures: acceptedRedBaseInfo.failures } : {}), ...(pendingBaseChecks ? { pendingBaseChecks } : {}) };
   if (parentRun !== undefined) { state.parentRun = parentRun; state.leadJob = leadJob; }
   const childClaims = new Map();
   const worktreeConfig = loadLocalConfig({ env });
@@ -2672,6 +2677,8 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
   const hostTransportUsed = configuredHosts ? (hostTransport ?? defaultHostTransport({ spawnImpl })) : null;
   const hostHooks = { save: () => Promise.resolve() };
   let batchCollector = null;
+  // Whether a job goes to a batch is decided once, before it takes (or skips) a slot, and read again where the request is sent.
+  const batchDecisions = new Map();
   const hostPool = configuredHosts ? createHostPool({
     hosts: configuredHosts,
     ping: host => hostTransportUsed.ping(host),
@@ -2956,6 +2963,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
         // A batch job runs nothing here while it waits (hours, possibly): it does not hold a lane or global slot, or a run could never gather
         // more than a lane's worth of requests into one batch. Its spend is still reserved and capped in the admission step below.
         const heldInBatch = batchEligible(job, batchPolicyFor(manifest, batchFlag, env));
+        batchDecisions.set(job.id, heldInBatch);
         try { release = heldInBatch ? async () => {} : await scheduler.acquire(job.agent, { signal: AbortSignal.any([signal, waiting.signal]) }); }
         finally {
           waitingJobs.delete(waiting);
@@ -3129,7 +3137,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
           else if (job.agent === 'claude') result = await execute(job, workspaceRoot, message, { spawnImpl, signal, cancelled, killImpl, onOutput: tracker.onOutput });
           else {
             // Batch jobs send the same request as any Anthropic job, later and at half price: the run's collector gathers them.
-            const batched = batchEligible(job, batchPolicyFor(manifest, batchFlag, env));
+            const batched = batchDecisions.get(job.id) === true;
             let apiJob = job;
             if (batched) {
               batchCollector ??= createBatchCollector({ fetchImpl: (...args) => (fetchImpl ?? fetch)(...args), readKey: () => readAnthropicKey(env), ...(batchLimits ? { limits: batchLimits } : {}) });
@@ -3146,7 +3154,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
               const providerMessage=extraCliMessage(job,context);
               await write(root,`${directory}/${job.id}/message.txt`,providerMessage,true);
               result=await execute(job,workspaceRoot,providerMessage,{spawnImpl,signal,cancelled,killImpl,onOutput:tracker.onOutput});
-            } else result=await executeApi(apiJob, context, { fetchImpl: async (...args) => { if (args[0] !== OPENROUTER_MODELS_URL) adapterStarted = true; if (batched && args[0] === ANTHROPIC_ENDPOINT) return batchCollector.submit(JSON.parse(args[1].body), { id: job.id, signal: args[1].signal }); return (fetchImpl ?? fetch)(...args); }, env, signal, cancelled, skillsBlock: skillsBlockText, onFinishReason: async finishReason => { record.finishReason = finishReason; await queueSave(); } });
+            } else result=await executeApi(apiJob, context, { fetchImpl: async (...args) => { if (args[0] !== OPENROUTER_MODELS_URL) adapterStarted = true; if (batched && args[0] === ANTHROPIC_ENDPOINT) return batchCollector.submit(JSON.parse(args[1].body), { id: job.id, signal: args[1].signal, onSent: sent => { record.batchId = sent.batchId; record.batchCustomId = sent.customId; queueSave().catch(() => {}); } }); if (batched && args[0] !== OPENROUTER_MODELS_URL) fail('batch-endpoint-mismatch: a batch job would have been sent as an ordinary request', 'batch-endpoint-mismatch'); return (fetchImpl ?? fetch)(...args); }, env, signal, cancelled, skillsBlock: skillsBlockText, onFinishReason: async finishReason => { record.finishReason = finishReason; await queueSave(); } });
             attemptResult = result;
             await applyEnvelope();
           }
@@ -3559,7 +3567,7 @@ export async function resumeRun(root, id, { raises = [], reason, wait = false, n
   }
   state.budgetRaises = budgetRaises;
   state.budget = budget;
-  return runManifest(root, manifest, { ...runOptions, jobs: null, id, now, sleep, resumeState: state });
+  return runManifest(root, manifest, { ...runOptions, ...(state.batchFlag ? { batch: true } : {}), jobs: null, id, now, sleep, resumeState: state });
 }
 
 // State written before this field existed carries no telemetry; report null instead of

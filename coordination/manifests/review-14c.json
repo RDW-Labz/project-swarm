@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "id": "review-14c",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "spend caps, reservations and a new way of sending paid requests",
+      "type": "review",
+      "prompt": "Safety review of Phase 14c (batch mode, Anthropic Message Batches). Files: tools/batch.mjs (the collector), docs/plans/phase14c-design.md (the rules), docs/batch.md, coordination/review/phase14c.diff (changes to swarm.mjs, api-adapters.mjs, plan-commands.mjs, plan-preview.mjs). Check with evidence: (1) spend: with the same run, lane day and machine-wide ($500/$20/$5) caps, can batch jobs overshoot any cap or reservation (batch jobs no longer hold a lane or global slot while waiting: can thousands be admitted at once and pass the cap check; the half-price recorded cost vs the standard-price reservation; the Anthropic ledger and per-job cap using the right numbers; a batch that is created but whose results are never read: is spend recorded; a job whose request was sent, then aborted, then retried: double sends and double spend; expiry and cancel semantics: is a canceled or expired request billed); (2) the collector: key handling (never in errors, events, status), request validation, custom_id collisions across collectors or runs, matching results to jobs (can a result for one job be delivered to another), unbounded memory or polling (poll failures, results_url from the API response used as a URL: SSRF or key leak to another host), the quiet-period window starving or holding requests, cancelAll and close; (3) the runner wiring: timeoutMs 25 h override, the job `batch` field, eligibility (leads never batched, non-Anthropic never batched), sensitive rules unchanged, `after` dependencies, resume of a run that has pending batch jobs (is the batch id persisted so results are not lost or re-sent), cancel of the run; (4) the plan preview saving estimate honesty. Report findings ranked high/medium/low with file and line.",
+      "context": [
+        "docs/plans/phase14c-design.md",
+        "docs/batch.md",
+        "tools/batch.mjs",
+        "coordination/review/phase14c.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 1800000
+    }
+  ]
+}

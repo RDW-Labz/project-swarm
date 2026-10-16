@@ -68,8 +68,10 @@ test('--batch sends eligible Anthropic jobs as one batch, at half price, with th
   for (const entry of state.jobs) assert.ok(Math.abs(entry.costUsd - standard / 2) < 1e-9, `${entry.costUsd} vs ${standard / 2}`);
   assert.equal(await fs.readFile(path.join(root, state.jobs[1].workspace, 'out/1.txt'), 'utf8'), 'o1\n');
   const rows = readLedger(ledgerPath(options(root, fetchImpl).env));
-  assert.equal(rows.length, 3);
-  assert.ok(rows.every(row => Math.abs(row.costUsd - standard / 2) < 1e-9));
+  // each batch job wrote its worst case before the request and settled it to the real half price when the answer came back
+  assert.deepEqual(rows.map(row => row.kind).sort(), ['batch-reservation', 'batch-reservation', 'batch-reservation', 'batch-settle', 'batch-settle', 'batch-settle']);
+  assert.ok(rows.filter(row => row.kind === 'batch-reservation').every(row => row.costUsd > standard), 'the reservation is a worst case');
+  assert.ok(Math.abs(rows.reduce((sum, row) => sum + row.costUsd, 0) - 3 * standard / 2) < 1e-9, 'the ledger nets to the real cost');
 });
 
 test('without an opt-in nothing is batched; a job can opt in or out; types and the manifest field work', async t => {
@@ -133,4 +135,48 @@ test('batch is validated, parsed from --batch, and shown in the plan as an estim
   assert.ok(Math.abs(batched.estimate.batchSavingsUsd - plain.estimate.costUsd / 2) < 1e-3, 'half of the child cost (the lead is free here)');
   assert.match(formatPreview(batched), /Batch: saves about \$[\d.]+ of \$[\d.]+ \(50% on the child jobs\); results can take up to 24 hours/);
   assert.doesNotMatch(formatPreview(plain), /Batch:/);
+});
+
+test('review fixes: the worst case is reserved in the Anthropic ledger, so many batch jobs cannot overshoot the day cap', { timeout: 60000 }, async t => {
+  const root = await repo(t), { seen, fetchImpl } = fakeAnthropic();
+  const configFile = path.join(root, '..', `batch-cap-${path.basename(root)}.json`);
+  await fs.writeFile(configFile, JSON.stringify({ spend: { lanes: { anthropic: { dailyUsd: 0.05 } } } }));
+  t.after(() => fs.rm(configFile, { force: true }));
+  const base = options(root, fetchImpl, { batch: true });
+  const env = { ...base.env, SWARM_CONFIG: configFile };
+  const jobs = Array.from({ length: 40 }, (_, n) => job(n, { maxOutputTokens: 4000 }));
+  const state = await runManifest(root, { version: 1, concurrency: 40, lanes: { anthropic: { concurrency: 40 } }, jobs }, { ...base, env, id: 'ledger-cap' });
+  const rows = readLedger(ledgerPath(env));
+  const reservations = rows.filter(row => row.kind === 'batch-reservation');
+  const worst = Math.max(...reservations.map(row => row.costUsd));
+  const sent = seen.created.flat().length;
+  assert.ok(sent >= 1 && sent < 40, `${sent} requests were sent`);
+  assert.equal(reservations.length, sent);
+  const net = rows.reduce((sum, row) => sum + row.costUsd, 0);
+  assert.ok(net <= 0.05 + worst, `net ledger ${net} against a day cap of 0.05`);
+  // the lane day cap (spend store) holds most; the ledger's own day cap is the second line if anything got past it
+  const refused = state.jobs.filter(entry => ['failed', 'held'].includes(entry.status));
+  assert.equal(refused.length + sent, 40, 'every job either went out or was stopped by a cap');
+  assert.ok(refused.length >= 1 && refused.every(entry => entry.status === 'held' ? /spend-cap|lane-cap|run-cap/.test(entry.error ?? entry.heldReason ?? '') || entry.heldReason : /Anthropic day cap/.test(entry.error)), 'the rest were stopped by a cap, not sent');
+});
+
+test('review fixes: an aborted batch request keeps its worst case as spent; the batch id is saved on the job; private data is never batched; the manifest field is validated', async t => {
+  const root = await repo(t), { seen, fetchImpl } = fakeAnthropic();
+  const stuck = async (url, init) => (/\/batches\/msgbatch_\d+$/.test(String(url)) && (init?.method ?? 'GET') === 'GET' ? json({ id: 'msgbatch_1', processing_status: 'in_progress' }) : fetchImpl(url, init));
+  const controller = new AbortController();
+  const running = runManifest(root, { version: 1, jobs: [job(0)] }, { ...options(root, stuck, { batch: true }), id: 'aborted', signal: controller.signal });
+  while (seen.created.length === 0) await new Promise(resolve => setTimeout(resolve, 10));
+  await new Promise(resolve => setTimeout(resolve, 50));
+  controller.abort();
+  const state = await running;
+  assert.equal(state.jobs[0].batchId, 'msgbatch_1');
+  assert.match(state.jobs[0].batchCustomId, /^job-0-\d+$/);
+  const rows = readLedger(ledgerPath(options(root, fetchImpl).env));
+  assert.equal(rows.length, 1, 'only the reservation: the real cost is unknown, so the worst case stays');
+  assert.equal(rows[0].kind, 'batch-reservation');
+  const { batchEligible } = await import('../tools/batch.mjs');
+  assert.equal(batchEligible({ agent: 'anthropic', type: 'docs', privateData: true }, { all: true }), false);
+  assert.throws(() => validateManifest({ version: 1, batch: 'yes', jobs: [job(0)] }), /batch must be true, false or/);
+  assert.throws(() => validateManifest({ version: 1, batch: { types: ['nonsense'] }, jobs: [job(0)] }), /batch must be true, false or/);
+  assert.throws(() => validateManifest({ version: 1, batch: { types: 'docs' }, jobs: [job(0)] }), /batch must be true, false or/);
 });

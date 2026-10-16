@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createBatchCollector, batchEligible, batchCostUsd, estimateBatchSavings } from '../tools/batch.mjs';
 
-const RESULTS = 'https://results.test/b1';
+const RESULTS = 'https://api.anthropic.com/v1/messages/batches/b1/results';
 const BODY = { model: 'm', max_tokens: 10, messages: [{ role: 'user', content: 'PROMPT-XYZ' }] };
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const line = (custom_id, result) => JSON.stringify({ custom_id, result }) + '\n';
@@ -205,4 +205,32 @@ test('estimateBatchSavings computes batch and saved amounts', () => {
   assert.deepEqual(estimateBatchSavings(2), { standardUsd: 2, batchUsd: 1, savedUsd: 1 });
   assert.deepEqual(estimateBatchSavings(1, { fraction: 0.25 }), { standardUsd: 1, batchUsd: 0.25, savedUsd: 0.75 });
   assert.deepEqual(estimateBatchSavings(null), { standardUsd: null, batchUsd: null, savedUsd: null });
+});
+
+test('results are only fetched from the API host, with the key; a foreign results_url fails the batch', async () => {
+  const seen = [];
+  const fetchImpl = async (url, init = {}) => {
+    seen.push(String(url));
+    if ((init.method ?? 'GET') === 'POST') return json(200, { id: 'b1', processing_status: 'in_progress' });
+    return json(200, { id: 'b1', processing_status: 'ended', results_url: 'https://evil.example/results' });
+  };
+  const col = createBatchCollector({ fetchImpl, readKey: () => 'sk-SECRET', setTimer: (fn) => { setImmediate(fn); return 1; }, clearTimer() {}, sleep: async () => {}, now: () => 0 });
+  await assert.rejects(col.submit({ model: 'm', max_tokens: 5, messages: [{ role: 'user', content: 'x' }] }, { id: 'a' }), /batch-results-url-invalid/);
+  assert.ok(!seen.some(url => url.includes('evil.example')), 'the foreign URL was never fetched');
+});
+
+test('onSent reports the batch id and custom id once the batch exists; ids are URL-encoded', async () => {
+  const urls = [];
+  const fetchImpl = async (url, init = {}) => {
+    urls.push(String(url));
+    if ((init.method ?? 'GET') === 'POST') return json(200, { id: 'b/../1', processing_status: 'in_progress' });
+    return json(200, { id: 'b1', processing_status: 'ended', results_url: 'https://api.anthropic.com/v1/messages/batches/b1/results' });
+  };
+  const sent = [];
+  const col = createBatchCollector({ fetchImpl, readKey: () => 'k', setTimer: (fn) => { setImmediate(fn); return 1; }, clearTimer() {}, sleep: async () => {}, now: () => 0 });
+  const response = await col.submit({ model: 'm', max_tokens: 5, messages: [{ role: 'user', content: 'x' }] }, { id: 'job', onSent: info => sent.push(info) }).catch(error => error);
+  assert.deepEqual(sent, [{ batchId: 'b/../1', customId: 'job-1' }]);
+  assert.ok(urls.some(url => url.includes('b%2F..%2F1')));
+  assert.ok(!urls.some(url => url.includes('b/../1')));
+  assert.ok(response);
 });
