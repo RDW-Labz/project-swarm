@@ -29,7 +29,7 @@ import { createBatchController } from './adaptive-batch.mjs';
 import { runHook, shouldRun, fixTicketFromFailure } from './ci-hooks.mjs';
 import { redactText } from './lesson-schema.mjs';
 import { addCiFixTicket } from './scope-commands.mjs';
-import { protectedViolations, protectedPathHit, formatBaseCheck, validateProfile, hookFiles, hookScriptNames } from './init-profile.mjs';
+import { protectedViolations, protectedPathHit, isExampleFile, formatBaseCheck, validateProfile, hookFiles, hookScriptNames } from './init-profile.mjs';
 import { resolveCliHosts, sshInvocation, sshEnv, remoteExec, cliHostFailure } from './cli-host.mjs';
 import { isHumanJob, validateHumanJob, liftHumanJobs, addGroup, readStore as readHumanStore, humanGroupReady, updateGroup as updateHumanGroup } from './human-jobs.mjs';
 import { createBatchCollector, batchEligible, BATCH_LIMITS } from './batch.mjs';
@@ -862,11 +862,12 @@ function extractSessionId(stdout) {
   return null;
 }
 
-function relative(value, internal = false) {
+function relative(value, internal = false, { readOnly = false } = {}) {
   if (typeof value !== 'string' || !value || path.isAbsolute(value) || value.includes('\\') || /[\x00-\x1f\x7f:]/.test(value)) fail(`Invalid relative path: ${value}`);
   const parts = value.split('/');
   if (parts.some(p => !p || p === '.' || p === '..')) fail(`Unsafe path: ${value}`);
-  if (!internal && parts.some(p => ['.git', '.swarm', '.env', '.ssh', '.aws', '.gnupg'].includes(p.toLowerCase()) || p.toLowerCase().startsWith('.env.'))) fail(`Reserved or secret path: ${value}`);
+  // A names-only template (.env.example) may be read as context, never written.
+  if (!internal && !(readOnly && isExampleFile(value)) && parts.some(p => ['.git', '.swarm', '.env', '.ssh', '.aws', '.gnupg'].includes(p.toLowerCase()) || p.toLowerCase().startsWith('.env.'))) fail(`Reserved or secret path: ${value}`);
   return parts;
 }
 
@@ -1389,7 +1390,8 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
       }
     }
     if (new Set(job.context).size !== job.context.length || new Set(job.outputs).size !== job.outputs.length) fail('Duplicate file path');
-    for (const file of [...job.context, ...job.outputs]) relative(file);
+    for (const file of job.context) relative(file, false, { readOnly: true });
+    for (const file of job.outputs) relative(file);
     const typeViolations = jobTypeOutputViolations(job);
     if (typeViolations.length) fail(`Job ${job.id} (type ${job.type}) may not write: ${typeViolations.join(', ')}`, 'job-type-output');
     // Decision #227: a deepseek/* model on OpenRouter writes bookkeeping files only.

@@ -74,7 +74,9 @@ test('eval 34.1b: swarm scope split --wire asks only for the missing integration
   await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
   // An old ledger: modules built, nothing mounts them.
   await edit(root, l => { l.tickets = l.tickets.filter(x => !x.integration); l.tickets[0].status = 'done'; delete l.wiring; });
-  const made = await runScopeCommand(root, 'scope', ['split', '--wire']);
+  // Done modules are skipped by default (lesson 37); --all wires them too.
+  assert.match((await runScopeCommand(root, 'scope', ['split', '--wire'])).stdout, /nothing to wire: 1 requirement\(s\) are already built and done/);
+  const made = await runScopeCommand(root, 'scope', ['split', '--wire', '--all']);
   assert.equal(made.exitCode, 0, made.stdout);
   const manifest = JSON.parse(await fs.readFile(path.join(root, 'docs/scope/split/manifest.json'), 'utf8'));
   assert.match(manifest.jobs[0].prompt, /Write ONLY integration tickets.*Existing module tickets of R-001: T-0001 Create module \(src\/create\.mjs\)/s);

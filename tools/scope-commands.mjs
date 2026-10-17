@@ -17,7 +17,7 @@ import { ticketsToManifest, ticketOutcome } from './ticket-manifest.mjs';
 import { safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 import { validateOpenApi, contractFiles } from './contracts.mjs';
 import { verifyContracts } from './contracts-verify.mjs';
-import { validateProfile, protectedPathHit, isSecretPath } from './init-profile.mjs';
+import { validateProfile, protectedPathHit, isSecretPath, isExampleFile } from './init-profile.mjs';
 import { ensureGitignore } from './gitignore-defaults.mjs';
 import { workTreeFingerprint } from './work-tree.mjs';
 import { otherManagerLockfile } from './ticket-manifest.mjs';
@@ -25,7 +25,7 @@ import { doneEvidence, ticketTests } from './verify-config.mjs';
 import { deriveQualityChecks, qualityEvidence } from './quality-checks.mjs';
 import { nextStep, sizeTicket } from './escalation.mjs';
 import { unlockReady, releaseReady } from './ticket-unlock.mjs';
-import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, unwiredRequirements, moduleTickets } from './wiring.mjs';
+import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, chainSharedFiles, builtRequirements, unwiredRequirements, moduleTickets } from './wiring.mjs';
 import { parseEnvNames, envNamesLine } from './env-names.mjs';
 import { detectTestCommand } from './zero-tests.mjs';
 import { execFile } from 'node:child_process';
@@ -35,7 +35,7 @@ import { promisify } from 'node:util';
 export const SCOPE_USAGE = [
   'Usage: swarm scope template [--out FILE]',
   '       swarm scope check [FILE]',
-  '       swarm scope split [FILE] [--stage S1] | scope split --wire | scope split --ingest RUN [--merge] [--wire]',
+  '       swarm scope split [FILE] [--stage S1] | scope split --wire [--all] | scope split --ingest RUN [--merge] [--wire]',
   '       swarm scope approve [FILE] [--yes]',
   '       swarm scope sync RUN [--integrated]',
   '       swarm scope contracts OPENAPI.json',
@@ -131,7 +131,8 @@ export function contextEnvFor(root, profile) {
   // A context file is a regular file reached without any symlink, inside the project, that is neither protected nor a secret.
   const usable = (p, allowProtected = false) => {
     if (!safe(p)) return false;
-    if (isSecretPath(p) || (!allowProtected && profile && protectedPathHit(profile, p))) { if (!rejected.includes(p)) rejected.push(p); return false; }
+    // A names-only template (.env.example) is read-only context: allowed here, still refused as an output.
+    if (!isExampleFile(p) && (isSecretPath(p) || (!allowProtected && profile && protectedPathHit(profile, p)))) { if (!rejected.includes(p)) rejected.push(p); return false; }
     try {
       let current = root;
       for (const part of p.split('/')) { current = path.join(current, part); if (lstatSync(current).isSymbolicLink()) return false; }
@@ -496,12 +497,15 @@ async function cmdSplit(root, { rest, flags }) {
     const led = await readLedger(root);
     if (flags.wire) {
       if (!led) return out('no ticket ledger to wire', 1);
-      const reqs = unwiredRequirements(led.tickets);
-      if (!reqs.length) return out('every requirement with build tickets already has an integration ticket', 1);
+      const unwired = unwiredRequirements(led.tickets);
+      // Stages that are already built and done (S1) are not rewired unless --all: their files are final and would only collide with the newer stages.
+      const skipped = flags.all === true ? [] : builtRequirements(led.tickets, unwired);
+      const reqs = unwired.filter(r => !skipped.includes(r));
+      if (!reqs.length) return out(skipped.length ? `nothing to wire: ${skipped.length} requirement(s) are already built and done (${skipped.slice(0, 8).join(', ')}); add --all to wire them too` : 'every requirement with build tickets already has an integration ticket', 1);
       const wire = reqs.map(req => ({ req, stage: scope.requirements.find(r => r.id === req)?.stage, modules: moduleTickets(led.tickets, req) }));
       const manifest = buildSplitManifest(scope, { stage: flags.stage, only: new Set(reqs), layout: await projectLayout(root, scope, await readProfile(root)), wire });
       await writeFileSafe(root, `${SPLIT_DIR}/manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`);
-      return out(`wire manifest: integration tickets for ${reqs.length} requirement(s) (${reqs.slice(0, 8).join(', ')}) written to ${SPLIT_DIR}/manifest.json\nNext: swarm run ${SPLIT_DIR}/manifest.json, then swarm scope split --ingest RUN --merge --wire`);
+      return out(`wire manifest: integration tickets for ${reqs.length} requirement(s) (${reqs.slice(0, 8).join(', ')}) written to ${SPLIT_DIR}/manifest.json${skipped.length ? `\nskipped ${skipped.length} requirement(s) already built and done: ${skipped.slice(0, 8).join(', ')} (--all includes them)` : ''}\nNext: swarm run ${SPLIT_DIR}/manifest.json, then swarm scope split --ingest RUN --merge --wire`);
     }
     const only = led ? pendingRequirements(scope, led.tickets) : null;
     if (only && !only.size) return out('every requirement already has tickets; nothing to split', 1);
@@ -529,6 +533,7 @@ async function cmdSplit(root, { rest, flags }) {
     if (stray.length) return out(`split refused; a change order may only add tickets for requirements that have none (${[...pending].slice(0, 8).join(', ') || 'none'}). These tickets touch other requirements:\n${stray.slice(0, 10).map(t => `  ${t.title} (${t.scopeRefs.join(', ')})`).join('\n')}\nNothing was written; rerun the split job.`, 1);
   }
   addWiringDeps(built.tickets, existing?.tickets ?? []);
+  chainSharedFiles(built.tickets, existing?.tickets ?? []);
   const touched = [...new Set(built.tickets.filter(t => t.type === 'build').flatMap(t => t.scopeRefs))];
   const unwired = wiringGaps([...(existing?.tickets ?? []), ...built.tickets], touched);
   if (unwired.length) return out(`split refused; the features are not wired (add an integration ticket per requirement, then split these stages again):\n${unwired.slice(0, 15).map(g => `  ${g.reason}`).join('\n')}`, 1);
