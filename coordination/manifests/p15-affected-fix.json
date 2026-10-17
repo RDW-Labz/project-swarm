@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15fix-affected",
+      "type": "build",
+      "prompt": "Apply section 9b of the design to the affected tests module. Keep it under 18000 characters.\nReturn each output file complete in files, never edits. Keep every behavior and test that section 9b does not change. ES modules, node:test, no secrets in code or tests. Follow sections 9 and 9b of the design exactly.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/affected.mjs"
+      ],
+      "outputs": [
+        "tools/affected.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15fix-affected-test",
+      "type": "build",
+      "prompt": "Update the test file of the affected tests module for section 9b of the design (the module is changed by another job at the same time; use exactly the names and reasons in section 9 and 9b). Keep tests that still apply and adjust the ones that now differ (untested source now gives a full run, depth default, new test files run themselves). Add tests for every new rule: unsafe path segments, the dot-slash prefix and the index 0 refusal, base-name test detection and test helpers, new test files, the extra global patterns, no depth limit and the depth-limit reason, truncated graph by importer count and by file size, languages without an import graph, a map with no tests, no test reach, deleted files.\nReturn each output file complete in files, never edits. Keep every behavior and test that section 9b does not change. ES modules, node:test, no secrets in code or tests. Follow sections 9 and 9b of the design exactly.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/affected.mjs",
+        "tests/affected.test.mjs"
+      ],
+      "outputs": [
+        "tests/affected.test.mjs"
+      ]
+    }
+  ]
+}

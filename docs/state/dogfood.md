@@ -141,3 +141,8 @@ One row per plan phase, built with the swarm itself. Rules (from Braden): worker
 ## Phase 15 lessons mine (1.84.0)
 
 - 2 swarm jobs (module, test file), both complete on the first try; one hand fix (a test looked for a line starting with "Example" while the module writes a heading); command glue and wiring by hand. No Opus review: no spend, secret or sensitive-routing change (it only writes proposal files, never over an existing one). Real data: 33 of 231 lessons still have only a proposed guard; one cluster (ci, 5 lessons) became `proposals/ci.md`.
+
+## Phase 15 affected-only tests and adaptive batches (1.85.0)
+
+- 4 swarm jobs (2 modules, 2 test files; all complete first try; one hand fix to a test fixture with a single test, which tripped the too-wide rule) + 2 swarm jobs for the review fixes; the queue wiring in swarm.mjs by hand (core runner, 615 KB file, not given to workers) and its integration tests.
+- Opus review ($0.65): 5 high, 6 medium, 2 low. The most serious: bisected halves of a failed full run ran the narrowed check and could integrate a failure only the full run catches; a pass could end with no passing full run; a stale or outdated repo map; a path starting with a dash could become a flag in the check command. All fixed with tests; the review changed the design (section 9b).

@@ -44,6 +44,18 @@ Passing sub-batches stay applied. A single job whose checks fail is rolled back 
 
 Rollback after failed checks is intentional in queue mode. Plain integration never rolls back because a check failed. Queue rollback restores the batch's declared writes; it is not a general rollback of arbitrary check side effects.
 
+## Affected-only checks and adaptive batches (Phase 15)
+
+A manifest check may carry `affectedArgv` (an argv with exactly one `{affected}` item) and `fullEvery` (1 to 100, default 5):
+
+```json
+{ "name": "tests", "argv": ["node", "--test", "tests/"], "affectedArgv": ["node", "--test", "{affected}"], "fullEvery": 5 }
+```
+
+In queue mode, with a repo map built at the current HEAD (`swarm map`), each batch's changed files select the tests that import them (following importers all the way) or are linked to them. That check then runs `affectedArgv` with those tests (each as `./path`, never read as a flag) instead of `argv`. The normal `argv` runs instead when: the map is missing or stale, a changed file is unknown to the map, not code (Markdown, JSON, scripts), a test helper, config, lockfile or fixture, in a language without an import graph, deleted, or changed earlier in the same pass; the import graph is truncated (200 or more importers, or a big file); the file reaches no test; more than 60 percent of the tests would run; it is the check's `fullEvery`-th batch; it is the last batch of the pass; or it is a bisected half of a failed batch. Tests added or changed by earlier batches of the pass always run again. A new test file runs itself. If the last batch cannot give a passing full run (it fails, is blocked or conflicts), one full run of the checks covers the earlier affected-only batches at the end; a failure there is reported as `(final full check)` in `checkFailed` and the queue state is `final-check-failed`. Results say `mode: "affected"` and `affectedTests`.
+
+`--adaptive` sizes batches with a controller: `--batch-size` is the start size; after 3 passing batches in a row the size steps 10 to 25 to 50 (never above 100); one failed batch steps down at once (50 to 25, 25 to 10, below that halved). Bisect stays the safety net. The state records `mergeQueue.adaptive: { sizes, steps }`.
+
 ## Security gate
 
 Every batch also goes through the security gate (secret scan, new-package check, known vulnerabilities, code scan, licence check) after its files are written. A block fails the batch like a failed check: it is rolled back, bisected, and recorded in `checkFailed` as `security-gate`, and listed in `securityBlocked` with an inbox blocker and a sanitized lesson. `--no-checks` does not skip the security gate.
