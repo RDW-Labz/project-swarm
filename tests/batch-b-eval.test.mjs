@@ -14,6 +14,7 @@ import { missingToolConfigs } from '../tools/tool-config.mjs';
 import { validateManifest } from '../tools/swarm.mjs';
 import { looseKill } from '../tools/process-guard.mjs';
 import { shellMessage } from '../tools/claude-shell.mjs';
+import { readLessons } from '../tools/lessons.mjs';
 
 const tmp = async (t, prefix) => { const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix))); t.after(() => fs.rm(root, { recursive: true, force: true })); return root; };
 const SCOPE = ['# Scope: Demo', 'Version: 1', '', '## Overview', 'Demo app.', '', '## Stages', '- S1: Core', '',
@@ -75,4 +76,13 @@ test('eval 37.3 (lesson 26): a manifest command that kills processes by a loose 
 
 test('eval 37.4 (lesson 26): the agent pointer files carry the rule', async () => {
   for (const f of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', 'cursor-rule.mdc']) assert.match(await fs.readFile(path.join(path.dirname(new URL(import.meta.url).pathname), '../templates/agent-pointers', f), 'utf8'), /Never stop a process by a loose pattern/, f);
+});
+
+test('eval 37.5 (lesson 2): the repo lesson store is valid and lesson 2 is closed', async () => {
+  // A malformed row makes every swarm run fail with lesson-store-invalid.
+  const root = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
+  const rows = await readLessons(root, { storeFile: 'coordination/swarm-lessons.jsonl' });
+  const two = (rows.rows ?? rows).find(r => r.id === 2);
+  assert.equal(two.status, 'shipped');
+  assert.equal(two.version, '1.66.0');
 });
