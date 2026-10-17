@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "id": "dependency-version-match",
+  "title": "Match the installed Tailwind major version",
+  "tags": [
+    "css",
+    "tailwind",
+    "dependencies"
+  ],
+  "prompt": "This project is a small web app whose package.json pins the dependency versions you must follow. Write the global stylesheet entry at src/app/dependency-version-match.css so that it matches the Tailwind version listed in package.json. Bring Tailwind into that file the way that version expects. Add one custom property named --brand with the value #0a7 on :root. Do not add any other rules. Write only the one stylesheet file.",
+  "context": [
+    "package.json"
+  ],
+  "outputs": [
+    "src/app/dependency-version-match.css"
+  ],
+  "check": {
+    "argv": [
+      "node",
+      "--test",
+      "test/dependency-version-match.test.mjs"
+    ],
+    "timeoutSec": 30
+  }
+}

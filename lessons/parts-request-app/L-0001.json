@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0001",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "scope",
+  "what": "scope check Day 0 listed Stripe and SMS for a scope that only names payments and Twilio under 'Out of scope'; 'quick-reply' flagged untestable-wording as a feature name",
+  "rule": "Scope check should skip out-of-scope text and hyphenated feature names.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "ignore out-of-scope sentences for Day 0 service detection; allow hyphenated feature names in vague-word check",
+  "guard": {
+    "kind": "scope-rule",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "day0",
+    "false-positive",
+    "scope-check"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 1"
+  }
+}

@@ -15,6 +15,14 @@ import { validateApprovalPolicy, needsHuman } from './approval-policy.mjs';
 import { ticketsToManifest, ticketOutcome } from './ticket-manifest.mjs';
 import { safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 import { validateOpenApi, contractFiles } from './contracts.mjs';
+import { verifyContracts } from './contracts-verify.mjs';
+import { validateProfile, protectedPathHit, isSecretPath } from './init-profile.mjs';
+import { ensureGitignore } from './gitignore-defaults.mjs';
+import { otherManagerLockfile } from './ticket-manifest.mjs';
+import { doneEvidence, ticketTests } from './verify-config.mjs';
+import { execFile } from 'node:child_process';
+import { existsSync, statSync, lstatSync, realpathSync, readdirSync } from 'node:fs';
+import { promisify } from 'node:util';
 
 export const SCOPE_USAGE = [
   'Usage: swarm scope template [--out FILE]',
@@ -36,6 +44,7 @@ const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
 const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--set', '--note', '--max-jobs']);
+const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const out = (text, exitCode = 0) => ({ stdout: text.endsWith('\n') ? text : `${text}\n`, exitCode });
 const bad = message => out(`${message}\n${SCOPE_USAGE}`, 1);
@@ -83,6 +92,90 @@ export async function readApprovalPolicy(root) {
 
 // Writes through a temp file opened O_EXCL|O_NOFOLLOW, then renames, so a symlink at the target is never followed.
 // `exclusive` links instead of renaming: an existing target (even a dangling symlink) is an EEXIST error.
+// The validated profile of the project (null when there is none or it is invalid).
+export async function readProfile(root) {
+  try {
+    const pointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? 'null');
+    if (!pointer?.profile) return null;
+    const { profile, errors } = validateProfile(pointer.profile);
+    return errors.length ? null : { ...profile, stack: pointer.stack ?? profile.stack };
+  } catch { return null; }
+}
+export const packageManagerOf = profile => (profile?.stack ?? []).find(entry => entry?.name === 'node')?.packageManager ?? null;
+
+// Project files a context entry may name: existence and size are looked up on disk, only for safe relative paths.
+export function contextEnvFor(root, profile) {
+  const safe = p => typeof p === 'string' && p && !path.isAbsolute(p) && !p.split('/').some(part => part === '..' || part === '') && !p.includes('\\');
+  const walk = (dir, out, depth = 0) => {
+    if (out.length >= 400 || depth > 4) return;
+    let entries = [];
+    try { entries = readdirSync(path.join(root, dir), { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const rel = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) walk(rel, out, depth + 1); else out.push(rel);
+    }
+  };
+  let realRoot = root;
+  try { realRoot = realpathSync(root); } catch { /* the root exists; keep it as given */ }
+  const rejected = [];
+  // A context file is a regular file reached without any symlink, inside the project, that is neither protected nor a secret.
+  const usable = p => {
+    if (!safe(p)) return false;
+    if (isSecretPath(p) || (profile && protectedPathHit(profile, p))) { if (!rejected.includes(p)) rejected.push(p); return false; }
+    try {
+      let current = root;
+      for (const part of p.split('/')) { current = path.join(current, part); if (lstatSync(current).isSymbolicLink()) return false; }
+      if (!lstatSync(current).isFile()) return false;
+      const real = realpathSync(current);
+      return real === realRoot || real.startsWith(realRoot + path.sep);
+    } catch { return false; }
+  };
+  return {
+    exists: usable,
+    rejected,
+    sizes: new Proxy({}, { get: (_, p) => { try { return safe(String(p)) ? statSync(path.join(root, String(p))).size : undefined; } catch { return undefined; } } }),
+    listFiles: prefix => { const out = []; if (safe(prefix)) walk(prefix, out); return out.filter(usable); },
+    profileContext: profile?.context ?? {},
+  };
+}
+
+// Reference sections of the scope become two context files every ticket can be given: the overview, and the data model.
+const DATA_MODEL_TITLE = /\b(data model|schema|tables|database)\b/i;
+export function contextFilesOf(scope) {
+  const model = scope.sections.filter(s => DATA_MODEL_TITLE.test(s.title));
+  const rest = scope.sections.filter(s => !DATA_MODEL_TITLE.test(s.title));
+  const files = { 'docs/scope/context/overview.md': [`# ${scope.name}: overview`, scope.overview, ...rest.map(s => `## ${s.title}\n${s.text}`)].filter(Boolean).join('\n\n') + '\n' };
+  if (model.length) files['docs/scope/context/data-model.md'] = [`# ${scope.name}: data model`, ...model.map(s => `## ${s.title}\n${s.text}`)].join('\n\n') + '\n';
+  return files;
+}
+
+// Protected-path mentions in requirement text (env files, keys) would make the manifest check refuse the split job: they are hidden.
+const SECRET_MENTION = /(^|[\s"'`(])((?:\.env[\w.*-]*)|(?:[\w./*-]*\.(?:pem|key|p12))|(?:id_(?:rsa|ed25519)[\w.]*))(?=$|[\s"'`)>,;:.])/gim;
+export const hideSecretMentions = text => String(text ?? '').replace(SECRET_MENTION, '$1<secret file>');
+
+// A python-style ticket list (single quotes, True/False/None, trailing commas) is repaired; anything else invalid is refused.
+export function parseLooseJson(text) {
+  try { return { value: JSON.parse(text), repaired: false }; } catch (first) {
+    let out = '', i = 0;
+    const s = String(text);
+    while (i < s.length) {
+      const c = s[i];
+      if (c === '"' || c === "'") {
+        const quote = c; let body = ''; i += 1;
+        while (i < s.length && s[i] !== quote) { if (s[i] === '\\' && i + 1 < s.length) { body += s[i] + s[i + 1]; i += 2; } else { body += s[i]; i += 1; } }
+        i += 1;
+        out += quote === "'" ? `"${body.replace(/\\'/g, "'").replace(/(?<!\\)"/g, '\\"')}"` : `"${body}"`;
+      } else if (/[A-Za-z_]/.test(c)) {
+        let word = ''; while (i < s.length && /[A-Za-z_]/.test(s[i])) { word += s[i]; i += 1; }
+        out += word === 'True' ? 'true' : word === 'False' ? 'false' : word === 'None' ? 'null' : word;
+      } else { out += c; i += 1; }
+    }
+    out = out.replace(/,(\s*[}\]])/g, '$1');
+    try { return { value: JSON.parse(out), repaired: true }; } catch { throw first; }
+  }
+}
+
 async function writeFileSafe(root, rel_, text, { exclusive = false } = {}) {
   const segments = rel_.split('/');
   const dir = await safeWritableDir(root, segments.slice(0, -1));
@@ -108,7 +201,7 @@ const readRunState = async (root, runId) => {
   return state;
 };
 
-function splitPrompt(scope, stage, only) {
+function splitPrompt(scope, stage, only, layout = '') {
   const reqs = scope.requirements.filter(r => r.stage === stage.id && (!only || only.has(r.id)));
   const lines = [
     `Split the requirements of stage ${stage.id} (${stage.title || 'no title'}) of "${scope.name}" into small build tickets.`,
@@ -116,19 +209,22 @@ function splitPrompt(scope, stage, only) {
     'Each ticket object has these fields:',
     'key (short unique name in this file), title (under 140 characters), type (build, test, docs, migration, design, contract or human),',
     'epic (a feature group name), scopeRefs (requirement ids, at least one for build, test, docs, migration), acceptance (1 to 5 observable checks; required for build, test, migration),',
-    'files (the files this ticket writes; no folders, no absolute paths), context (files it reads), contracts (contract files it uses), dependsOn (keys of other tickets in this file),',
+    'files (the files this ticket writes: repo-relative paths WITH their folders, for example src/app/page.tsx or supabase/migrations/0001_init.sql, never a bare file name unless the file really lives at the repo root; never a folder, never an absolute path, never a dot-env file: use env.example.txt for an env template), context (files it reads), contracts (contract files it uses), tests (the test files that prove this ticket: a build ticket lists the test files owned by its test ticket and depends on that test ticket; a test ticket lists its own), dependsOn (keys of other tickets in this file),',
     'size (S or M; never larger: split instead), risk (low, medium or high), sensitive (true for payments, auth or customer data), steps (only for human tickets: 1 to 30 short imperative steps), skeleton (true only on the tickets of the thinnest vertical slice of the first stage: database, API, screen and test, the smallest path through the product; omit it elsewhere).',
     'Rules: every requirement is covered by at least one ticket; every ticket traces to a requirement; two tickets that can run at the same time never write the same file;',
     'put shared types or contracts first and make the tickets that use them depend on them; add a test ticket for each requirement group.',
+    'A ticket of type contract writes exactly one OpenAPI 3 JSON file under contracts/ (for example contracts/api.json) using only paths (get, post, put, patch, delete, each with an operationId), components.schemas and local $ref; TypeScript, SQL and YAML types belong in build tickets that depend on the contract ticket.',
+    'Migration tickets write DDL only; their tests are separate tickets in a tests folder.',
+    ...(layout ? ['Project layout (use these folders):', layout] : []),
     'Work only from the requirements below.',
     '',
-    ...reqs.flatMap(r => [`${r.id}: ${r.text}`, ...r.acceptance.map(a => `  - ${a}`)]),
+    ...reqs.flatMap(r => [`${r.id}: ${hideSecretMentions(r.text)}`, ...r.acceptance.map(a => `  - ${hideSecretMentions(a)}`)]),
     ...(scope.sensitive.length ? ['', `Sensitive areas: ${scope.sensitive.join('; ')}`] : []),
   ];
   return lines.join('\n');
 }
 
-export function buildSplitManifest(scope, { stage, only } = {}) {
+export function buildSplitManifest(scope, { stage, only, layout = '' } = {}) {
   const stages = scope.stages.filter(s => (!stage || s.id === stage) && scope.requirements.some(r => r.stage === s.id && (!only || only.has(r.id))));
   if (!stages.length) throw fail('scope-stage', stage ? `stage ${stage} has no requirements` : 'the scope has no stages with requirements');
   return {
@@ -140,7 +236,7 @@ export function buildSplitManifest(scope, { stage, only } = {}) {
       agent: 'auto',
       sensitive: true,
       maxOutputTokens: 32000,
-      prompt: splitPrompt(scope, s, only),
+      prompt: splitPrompt(scope, s, only, layout),
       context: [],
       outputs: [`${SPLIT_DIR}/${s.id}.json`],
       timeoutMs: 900000,
@@ -150,17 +246,40 @@ export function buildSplitManifest(scope, { stage, only } = {}) {
 
 function parseTicketFile(text) {
   const body = String(text).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  const value = JSON.parse(body);
+  const { value, repaired } = parseLooseJson(body);
   const list = Array.isArray(value) ? value : value?.tickets;
   if (!Array.isArray(list)) throw new Error('not a JSON array of tickets');
-  return list;
+  return { list, repaired };
 }
 
-const ARRAY_FIELDS = ['scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'steps'];
+// Files that really live at the repo root; every other ticket file needs its folder.
+const ROOT_FILE_OK = /^(?:package(?:-lock)?\.json|tsconfig[\w.-]*\.json|readme(?:\.md)?|license(?:\.md)?|\.gitignore|\.nvmrc|dockerfile|makefile|components\.json|env\.example\.txt|next-env\.d\.ts|[\w.-]+\.config\.(?:[cm]?[jt]s|json)|\.eslintrc[\w.]*|\.prettierrc[\w.]*)$/i;
+
+// The first two folder levels of the tracked files, so the worker puts files where the project keeps them.
+async function projectLayout(root, scope, profile) {
+  if (scope.layout) return hideSecretMentions(scope.layout).slice(0, 2000);
+  const lines = [];
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', root, 'ls-files'], { maxBuffer: 16 * 1024 * 1024 });
+    const folders = new Map();
+    for (const file of stdout.split('\n').filter(Boolean)) {
+      const parts = file.split('/');
+      if (parts.length < 2 || parts[0].startsWith('.') || parts[0] === 'node_modules') continue;
+      const key = parts.length > 2 ? `${parts[0]}/${parts[1]}/` : `${parts[0]}/`;
+      folders.set(key, (folders.get(key) ?? 0) + 1);
+    }
+    for (const [folder, n] of [...folders].sort(([a], [b]) => (a < b ? -1 : 1)).slice(0, 40)) lines.push(`- ${hideSecretMentions(folder)} (${n} files)`);
+  } catch { /* not a git project: the stack line below still helps */ }
+  const stack = (profile?.stack ?? []).map(entry => (entry.packageManager ? `${entry.name} (${entry.packageManager})` : entry.name));
+  if (stack.length) lines.push(`Stack: ${stack.join(', ')}`);
+  return lines.join('\n');
+}
+
+const ARRAY_FIELDS = ['scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'tests', 'dependsOn', 'steps'];
 const isStrings = v => Array.isArray(v) && v.every(x => typeof x === 'string');
 const strings = v => (isStrings(v) ? v : []);
 
-export function ticketsFromStageLists(lists, scope, { startAt = 1 } = {}) {
+export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManager = null } = {}) {
   const keyToId = new Map();
   const tickets = [];
   const errors = [];
@@ -188,7 +307,7 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1 } = {}) {
     const t = {
       id, title: String(raw.title ?? ''), type: raw.type, stage, epic: String(raw.epic ?? 'E-00'),
       scopeRefs: strings(raw.scopeRefs), acceptance: strings(raw.acceptance), files: strings(raw.files),
-      context: strings(raw.context), contracts: strings(raw.contracts), dependsOn: deps,
+      context: strings(raw.context), contracts: strings(raw.contracts), tests: strings(raw.tests), dependsOn: deps,
       size: raw.size, risk: raw.risk, sensitive: raw.sensitive === true || isSensitiveText(scope, text),
       status: 'todo',
     };
@@ -197,6 +316,15 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1 } = {}) {
     if (raw.skeleton === true) t.skeleton = true;
     const v = validateTicket(t);
     if (!v.ok) errors.push(`${id}: ${v.errors[0]}`);
+    // Format rules the dogfood run needed (contract format, real paths, env template, one package manager).
+    if (t.type === 'contract' && !(t.files.length === 1 && /^contracts\/[\w.-]+\.json$/.test(t.files[0]))) errors.push(`${id}: a contract ticket must write exactly one OpenAPI JSON file under contracts/ (for example contracts/api.json); put TypeScript or SQL types in build tickets that depend on it`);
+    for (const f of t.files) {
+      const base = f.split('/').pop();
+      if (base.startsWith('.env')) errors.push(`${id}: ${f} is a reserved name; use env.example.txt for an env template`);
+      else if (!f.includes('/') && !ROOT_FILE_OK.test(f)) errors.push(`${id}: ${f} has no folder; give it its real path (for example src/... or supabase/migrations/...)`);
+    }
+    const other = otherManagerLockfile(t.files, packageManager);
+    if (other) errors.push(`${id}: ${other.file} is a ${other.manager} lockfile but the project uses ${packageManager}`);
     tickets.push(t);
   }
   return { tickets, errors };
@@ -207,6 +335,7 @@ async function readStageFiles(root, runId) {
   const realRoot = await fs.realpath(root);
   const lists = [];
   const errors = [];
+  const notes = [];
   for (const job of state?.jobs ?? []) {
     if (!/^split-S\d+$/.test(job.id)) continue;
     const stage = job.id.slice('split-'.length);
@@ -220,13 +349,14 @@ async function readStageFiles(root, runId) {
     } catch { /* missing file is reported below */ }
     if (text === null) { errors.push(`${job.id}: no output file`); continue; }
     try {
-      const items = parseTicketFile(text);
+      const { list: items, repaired } = parseTicketFile(text);
       if (items.length > MAX_STAGE_TICKETS) throw new Error(`more than ${MAX_STAGE_TICKETS} tickets`);
+      if (repaired) notes.push(`${job.id}: the ticket file was not valid JSON (python-style quotes or constants); it was repaired`);
       lists.push({ stage, items });
     } catch (error) { errors.push(`${job.id}: ${error.message}`); }
   }
   if (!lists.length && !errors.length) throw fail('scope-run', `run ${runId} has no split jobs`);
-  return { lists: lists.sort((a, b) => a.stage.localeCompare(b.stage, 'en', { numeric: true })), errors };
+  return { lists: lists.sort((a, b) => a.stage.localeCompare(b.stage, 'en', { numeric: true })), errors, notes };
 }
 
 function treeReport(scope, tickets) {
@@ -264,7 +394,7 @@ async function cmdSplit(root, { rest, flags }) {
     const led = await readLedger(root);
     const only = led ? new Set(scope.requirements.filter(r => !led.tickets.some(t => t.status !== 'cancelled' && t.scopeRefs.includes(r.id))).map(r => r.id)) : null;
     if (only && !only.size) return out('every requirement already has tickets; nothing to split', 1);
-    const manifest = buildSplitManifest(scope, { stage: flags.stage, only });
+    const manifest = buildSplitManifest(scope, { stage: flags.stage, only, layout: await projectLayout(root, scope, await readProfile(root)) });
     await writeFileSafe(root, `${SPLIT_DIR}/manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`);
     return out(`split manifest: ${manifest.jobs.length} job(s) written to ${SPLIT_DIR}/manifest.json\nNext: swarm run ${SPLIT_DIR}/manifest.json, then swarm scope split --ingest RUN${led ? ' --merge' : ''}`);
   }
@@ -272,9 +402,10 @@ async function cmdSplit(root, { rest, flags }) {
   if (existing && existing.scope?.hash !== hash) return out('the scope file changed since the ledger was made; record it with swarm change "reason" first', 1);
   if (existing && !flags.merge) return out('a ticket ledger already exists; use --merge to add tickets, or delete .swarm/project/tickets.json first', 1);
   if (flags.merge && !existing) return out('no ticket ledger to merge into', 1);
-  const { lists, errors } = await readStageFiles(root, flags.ingest);
+  const { lists, errors, notes } = await readStageFiles(root, flags.ingest);
+  const profile = await readProfile(root);
   const startAt = existing ? Math.max(0, ...existing.tickets.filter(t => t.id < 'T-9000').map(t => Number(t.id.slice(2)))) + 1 : 1;
-  const built = ticketsFromStageLists(lists, scope, { startAt });
+  const built = ticketsFromStageLists(lists, scope, { startAt, packageManager: packageManagerOf(profile) });
   const all = [...errors, ...built.errors];
   if (startAt + built.tickets.length > 9000) all.push('too many tickets: ids T-9000 and up are reserved for day 0 tickets');
   if (all.length) return out(`split refused; fix and rerun the failed stages:\n${all.slice(0, 15).map(e => `  ${e}`).join('\n')}`, 1);
@@ -289,7 +420,7 @@ async function cmdSplit(root, { rest, flags }) {
   await writeLedger(root, ledger);
   await appendLog(root, { event: flags.merge ? 'split-merge' : 'split', tickets: tickets.length, run: flags.ingest, ok: tree.ok });
   const gaps = tree.ok ? [] : ['Some requirements still have no tickets: run swarm scope split again (it splits only those), then --ingest RUN --merge.'];
-  return out([`ledger written: ${tickets.length} tickets added (not approved)`, ...lines, ...gaps, tree.ok ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
+  return out([`ledger written: ${tickets.length} tickets added (not approved)`, ...notes.map(n => `note: ${n}`), ...lines, ...gaps, tree.ok ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
 }
 
 async function cmdApprove(root, { rest, flags }) {
@@ -308,8 +439,42 @@ async function cmdApprove(root, { rest, flags }) {
   await writeLedger(root, next);
   await writeFileSafe(root, '.swarm/project/scope.snapshot.md', text);
   await writeFileSafe(root, 'docs/scope/build-plan.md', renderBuildPlan(next, scope));
+  // What every ticket is given as context: the overview and the data model, from the scope's own sections.
+  const written = [];
+  for (const [name, body] of Object.entries(contextFilesOf(scope))) { await writeFileSafe(root, name, body); written.push(name); }
+  const missing = scope.context.filter(entry => !existsSync(path.join(root, entry.path))).map(entry => entry.path);
+  // Build output must never be committed: the usual ignore lines for the project's stacks (nothing is removed).
+  const profile = await readProfile(root);
+  const stacks = new Set((profile?.stack ?? []).map(entry => entry.name));
+  if (/\b(next\.?js|node|typescript|react|npm)\b/i.test(`${scope.overview}`)) stacks.add('node');
+  if (/\b(python|django|fastapi|flask)\b/i.test(`${scope.overview}`)) stacks.add('python');
+  const ignored = stacks.size ? await ensureGitignore(root, [...stacks].filter(s => ['node', 'python'].includes(s))).catch(() => ({ changed: false })) : { changed: false };
   await appendLog(root, { event: 'approve', by, scopeHash: hash, ticketsHash: next.approved.ticketsHash });
-  return out(`${summary}\n\napproved. Build plan: docs/scope/build-plan.md. Next: swarm go --scope`);
+  return out([summary, '', 'approved. Build plan: docs/scope/build-plan.md', `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : ['warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)']), 'Next: swarm go --scope'].join('\n'));
+}
+
+// A failed test run sends the ticket back to ready once with the failure; the second failure blocks it. One locked ledger write.
+async function applyRetry(root, id, note, runId) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await withLock(root, async () => {
+        const ledger = await readLedger(root);
+        const ticket = ledger.tickets.find(x => x.id === id);
+        if (!ticket || ticket.status !== 'review') return 'skipped';
+        const attempts = (ticket.attempts ?? 0) + 1;
+        ticket.attempts = attempts;
+        ticket.retryNote = note.slice(0, 600);
+        ticket.retryHistory = [...(ticket.retryHistory ?? []), { run: runId, note: note.slice(0, 200) }].slice(-5);
+        ticket.status = attempts >= 2 ? 'blocked' : 'ready';
+        delete ticket.runId;
+        ledger.updatedAt = new Date().toISOString();
+        await writeLedger(root, ledger);
+        await appendLog(root, { event: 'retry', id, attempts, to: ticket.status, run: runId, by: 'sync' });
+        return ticket.status;
+      });
+    } catch (error) { if (error.code !== 'scope-busy' || attempt === 4) throw error; await new Promise(resolve => setTimeout(resolve, 300)); }
+  }
+  return 'skipped';
 }
 
 async function cmdSync(root, { rest, flags }) {
@@ -320,24 +485,71 @@ async function cmdSync(root, { rest, flags }) {
   if (flags.integrated === true) {
     if (!state.integratedAt) return out(`run ${rest[0]} is not integrated yet; run swarm integrate ${rest[0]} first`, 1);
     const finished = new Set((state.jobs ?? []).filter(j => j.status === 'complete').map(j => j.id));
-    const done = [];
-    for (const t of ledger.tickets.filter(x => x.status === 'review' && finished.has(x.id))) { await transition(root, t.id, 'done', { by: 'sync', note: `integrated ${rest[0]}` }); done.push(t.id); }
+    const queue = state.mergeQueue;
+    const integrated = queue ? new Set((queue.integrated ?? []).map(entry => (typeof entry === 'string' ? entry : entry?.job))) : null;
+    const failedChecks = new Map((queue?.checkFailed ?? []).map(entry => [entry.job, entry]));
+    const profile = await readProfile(root);
+    // A profile that names a verify block but does not validate must not turn the test gate off.
+    const rawPointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? 'null');
+    if (rawPointer?.profile?.verify !== undefined && !profile?.verify) {
+      const { errors } = validateProfile(rawPointer.profile);
+      return out(`the profile has a verify block but the profile is invalid, so tests cannot be checked: ${errors[0] ?? 'unknown error'}`, 1);
+    }
+    const done = [], unverified = [], retried = [], blocked = [], notIntegrated = [];
+    for (const t of ledger.tickets.filter(x => x.status === 'review' && finished.has(x.id) && (x.runId === undefined || x.runId === rest[0]))) {
+      const failed = failedChecks.get(t.id);
+      if (failed) {
+        // The merge queue rolled this ticket back because its tests failed: it goes back to ready once with the failure, then blocks.
+        const note = `failed checks: ${(failed.checks ?? []).join(', ') || 'unknown'}${failed.tail ? `; ${String(failed.tail).slice(0, 500)}` : ''}`;
+        const result = await applyRetry(root, t.id, note, rest[0]);
+        (result === 'blocked' ? blocked : retried).push(t.id);
+        continue;
+      }
+      if (integrated && !integrated.has(t.id)) { notIntegrated.push(t.id); continue; }
+      // A ticket with tests is done only when the runner itself saw them pass (a worker's own report is not evidence).
+      if (profile?.verify && ticketTests(t).length) {
+        const evidence = doneEvidence(state, t.id);
+        if (!evidence.ok) { unverified.push(`${t.id} (${evidence.reason})`); continue; }
+      }
+      await transition(root, t.id, 'done', { by: 'sync', note: `integrated ${rest[0]}` });
+      done.push(t.id);
+    }
     await refreshPlan(root);
-    return out(`${done.length} ticket(s) marked done`);
+    return out([`${done.length} ticket(s) marked done`,
+      ...(retried.length ? [`${retried.length} ticket(s) back to ready after failed tests: ${retried.join(', ')}`] : []),
+      ...(blocked.length ? [`${blocked.length} ticket(s) blocked after 2 failed attempts: ${blocked.join(', ')}`] : []),
+      ...(unverified.length ? [`${unverified.length} ticket(s) stay in review: their tests were not seen passing: ${unverified.join('; ')}`] : []),
+      ...(notIntegrated.length ? [`${notIntegrated.length} ticket(s) stay in review: not integrated by this run: ${notIntegrated.join(', ')}`] : []),
+      ...(!profile?.verify && ledger.tickets.some(x => ticketTests(x).length) ? ['warning: the profile has no verify block, so tickets with tests were marked done without test evidence'] : [])].join('\n'));
   }
   const moves = ticketOutcome(state.jobs ?? [], ledger).filter(m => ledger.tickets.find(t => t.id === m.id)?.status === 'running');
   for (const m of moves) await transition(root, m.id, m.to, { by: 'sync', note: m.note });
+  if (moves.some(m => m.to === 'review')) {
+    // The ticket remembers which run handed it in, so an older run cannot decide it later.
+    const fresh = await readLedger(root);
+    for (const m of moves) if (m.to === 'review') fresh.tickets.find(x => x.id === m.id).runId = rest[0];
+    await writeLedger(root, fresh);
+  }
   await refreshPlan(root);
   const review = moves.filter(m => m.to === 'review').length;
   return out(`${review} ticket(s) in review, ${moves.length - review} blocked. After swarm integrate ${rest[0]}: swarm scope sync ${rest[0]} --integrated`);
 }
 
+// The OpenAPI file a contract ticket wrote: contracts/api.json or contracts/openapi.json, else the only .json a contract ticket names.
+async function detectContractFile(root) {
+  for (const candidate of ['contracts/api.json', 'contracts/openapi.json']) if (await readText(path.join(root, candidate)) !== null) return candidate;
+  const ledger = await readLedger(root);
+  const named = [...new Set((ledger?.tickets ?? []).filter(t => t.type === 'contract').flatMap(t => t.files ?? []).filter(f => f.endsWith('.json')))];
+  return named.length === 1 ? named[0] : null;
+}
+
 async function cmdContracts(root, { rest, flags }) {
-  if (rest.length !== 1) return bad('scope contracts needs an OpenAPI JSON file');
-  const text = await readText(resolveInside(root, rest[0]));
-  if (text === null) return out(`no file ${rest[0]}`, 1);
+  const given = rest[0] ?? await detectContractFile(root);
+  if (!given || rest.length > 1) return bad('scope contracts needs an OpenAPI JSON file (or contracts/api.json from a contract ticket)');
+  const text = await readText(resolveInside(root, given));
+  if (text === null) return out(`no file ${given}`, 1);
   let doc;
-  try { doc = JSON.parse(text); } catch { return out(`${rest[0]} is not valid JSON (YAML is not supported)`, 1); }
+  try { doc = JSON.parse(text); } catch { return out(`${given} is not valid JSON (YAML and TypeScript are not supported: a contract ticket must write OpenAPI JSON)`, 1); }
   const checked = validateOpenApi(doc);
   if (!checked.ok) return out(`contract invalid:\n${checked.errors.slice(0, 10).map(e => `  ${e}`).join('\n')}`, 1);
   const files = contractFiles(doc);
@@ -345,10 +557,14 @@ async function cmdContracts(root, { rest, flags }) {
   for (const name of Object.keys(files)) if (await readText(path.join(root, name)) !== null) existing.push(name);
   const policy = await readApprovalPolicy(root);
   if ((existing.length || needsHuman(policy, { kind: 'contracts' })) && flags.yes !== true) {
-    return out(`${existing.length ? `would overwrite: ${existing.join(', ')}\n` : ''}Generating contracts needs your approval: swarm scope contracts ${rest[0]} --yes`, 1);
+    return out(`${existing.length ? `would overwrite: ${existing.join(', ')}\n` : ''}Generating contracts needs your approval: swarm scope contracts ${given} --yes`, 1);
   }
   for (const [name, body] of Object.entries(files)) await writeFileSafe(root, name, body);
-  return out(`generated ${Object.keys(files).length} files: ${Object.keys(files).join(', ')}\nRun the mock: node -e "import('./contracts/mock-server.mjs').then(m=>m.createMockServer({port:4010}))"`);
+  // The generated mock must pass the generated contract tests before anyone builds against it.
+  const check = await verifyContracts(root).catch(error => ({ ok: false, failures: [], detail: [String(error.message).slice(0, 200)], tail: '' }));
+  const names = Object.keys(files).join(', ');
+  if (!check.ok) return out(`generated ${Object.keys(files).length} files: ${names}\nSELF-CHECK FAILED: the generated mock does not pass its own contract tests${check.failures.length ? `: ${check.failures.join(', ')}` : ''}\n${check.detail.slice(0, 5).map(d => `  ${d}`).join('\n')}`, 1);
+  return out(`generated ${Object.keys(files).length} files: ${names}\nself-check passed: the mock answers every operation with a body that matches its schema\nRun the mock: node -e "import('./contracts/mock-server.mjs').then(m=>m.createMockServer({port:4010}))"`);
 }
 
 async function refreshPlan(root) {
@@ -453,7 +669,7 @@ async function withLock(root, fn) {
 // `swarm go --scope`: builds a manifest from the ready tickets, marks them running (one ledger write) and
 // returns the manifest path for the normal go path. Refuses an unapproved ledger, a ticket set changed since
 // approval, or a scope file that is missing or changed since approval.
-export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons = [], skipSkeleton = false } = {}) {
+export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons = [], skipSkeleton = false, validate } = {}) {
   return withLock(root, async () => {
     const ledger = await readLedger(root);
     if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
@@ -477,10 +693,22 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
       if (!ready.length) throw fail('scope-skeleton', `the skeleton is not finished (${open.map(t => t.id).slice(0, 5).join(', ')}) and nothing of it is ready${open.some(t => ['running', 'review'].includes(t.status)) ? '; some are running or in review: run swarm scope sync RUN (and --integrated after integrating)' : '; finish or unblock it'}; --skip-skeleton skips skeleton-first for one run`);
     }
     const humans = ready.filter(t => t.type === 'human').length;
-    const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: false, maxJobs, lessons });
+    const profile = await readProfile(root);
+    const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: false, maxJobs, lessons, verify: profile?.verify, packageManager: packageManagerOf(profile), contextEnv: contextEnvFor(root, profile) });
     manifest.jobs = manifest.jobs.filter(j => j.type !== 'human');
     const ids = manifest.jobs.map(j => j.id);
     if (!ids.length) throw fail('scope-nothing', humans ? `only ${humans} human ticket(s) are ready; finish them with swarm tickets ID --set done` : 'no ready tickets');
+    // A manifest the runner would refuse must not leave tickets stuck in running: it is validated before any ticket moves.
+    if (typeof validate === 'function') {
+      // Existing project tests that mention a ticket's files go into that job's context (so the worker sees what they assert); then it is validated again.
+      for (let pass = 0; ; pass += 1) {
+        try { await validate(manifest); break; } catch (error) {
+          const suggested = error?.details?.suggestedIgnoreTests;
+          if (!suggested || pass >= 2) throw error;
+          for (const job of manifest.jobs) for (const test of (suggested[job.id] ?? []).slice(0, 6)) if (!job.context.includes(test) && !job.outputs.includes(test)) job.context.push(test);
+        }
+      }
+    }
     const before = new Map(ids.map(id => [id, ledger.tickets.find(t => t.id === id).status]));
     for (const id of ids) ledger.tickets.find(t => t.id === id).status = 'running';
     ledger.updatedAt = new Date(now()).toISOString();

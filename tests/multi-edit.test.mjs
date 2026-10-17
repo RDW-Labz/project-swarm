@@ -21,11 +21,17 @@ test('several edits to one path are valid; a path in both files and edits keeps 
   const both = validateEnvelope({ summary: 's', files: [{ path: 'a.txt', content: 'A' }], edits: [edit('a.txt', 'x', 'y'), edit('b.txt', 'q', 'r')] }, outputs);
   assert.deepEqual(both.edits.map(e => e.path), ['b.txt']);
   assert.deepEqual(both.normalized, ['edits-dropped-for-whole-file:a.txt']);
+  // A lone empty-find edit is a whole-file write; with a whole file for that path, or next to other edits to it, it still fails.
+  const created = validateEnvelope({ summary: 's', files: [{ path: 'b.txt', content: 'B' }], edits: [edit('a.txt', '', 'new file text')] }, outputs);
+  assert.deepEqual(created.files.map(f => `${f.path}=${f.content}`), ['b.txt=B', 'a.txt=new file text']);
+  assert.deepEqual(created.edits, []);
+  assert.deepEqual(created.normalized, ['empty-find-edit-as-file:a.txt']);
   assert.throws(() => validateEnvelope({ summary: 's', files: [{ path: 'a.txt', content: 'A' }], edits: [edit('a.txt', '', 'y'), edit('b.txt', 'q', 'r')] }, outputs), /find cannot be empty/);
+  assert.throws(() => validateEnvelope({ summary: 's', files: [], edits: [edit('a.txt', '', 'y'), edit('a.txt', 'x', 'z'), edit('b.txt', 'q', 'r')] }, outputs), /find cannot be empty/);
   assert.throws(() => validateEnvelope({ summary: 's', files: [{ path: 'a.txt', content: 'A' }], edits: [{ path: 'a.txt', find: 'x', replace: 'y', extra: 1 }, edit('b.txt', 'q', 'r')] }, outputs), /unexpected/);
   assert.throws(() => validateEnvelope({ summary: 's', files: [], edits: [edit('a.txt', 'x', 'y')] }, outputs), /every declared output exactly once/);
   assert.throws(() => validateEnvelope({ summary: 's', files: [], edits: [edit('c.txt', 'x', 'y')] }, outputs), /not in declared outputs/);
-  assert.throws(() => validateEnvelope({ summary: 's', files: [], edits: [edit('a.txt', '', 'y'), edit('b.txt', 'q', 'r')] }, outputs), /find cannot be empty/);
+  assert.deepEqual(validateEnvelope({ summary: 's', files: [], edits: [edit('a.txt', '', 'y'), edit('b.txt', 'q', 'r')] }, outputs).files.map(f => f.path), ['a.txt']);
   const many = Array.from({ length: 201 }, (_, n) => edit('a.txt', `f${n}`, `r${n}`));
   assert.throws(() => validateEnvelope({ summary: 's', files: [{ path: 'b.txt', content: 'B' }], edits: many }, outputs), /too many edits/);
   assert.equal(validateEnvelope({ summary: 's', files: [{ path: 'b.txt', content: 'B' }], edits: many.slice(0, 200) }, outputs).edits.length, 200);

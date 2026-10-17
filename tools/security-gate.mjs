@@ -12,7 +12,7 @@ export const SEMGREP_RULES_SHA256='3ad961b22a3ac752a1ba8815a4ea234feb8b605ede0a4
 export const SEMGREP_RULES_PATH=fileURLToPath(new URL('./security-rules/semgrep-local.yml',import.meta.url));
 export const UNPARSED_MANIFESTS=Object.freeze({'pnpm-lock.yaml':'pnpm','pnpm-workspace.yaml':'pnpm','yarn.lock':'yarn','.yarnrc.yml':'yarn','go.mod':'go','go.sum':'go','go.work':'go','cargo.toml':'cargo','cargo.lock':'cargo','pyproject.toml':'python','pipfile':'python','pipfile.lock':'python','poetry.lock':'python','setup.py':'python','uv.lock':'python','setup.cfg':'python','composer.json':'php','composer.lock':'php','gemfile':'ruby','gemfile.lock':'ruby','pom.xml':'jvm','build.gradle':'jvm','build.gradle.kts':'jvm','gradle-wrapper.properties':'jvm','gradle.lockfile':'jvm','settings.gradle':'jvm','settings.gradle.kts':'jvm','.npmrc':'node','.yarnrc':'node','.pnpmfile.cjs':'node','bun.lock':'bun','bun.lockb':'bun','environment.yml':'conda','package.swift':'swift','podfile':'cocoapods','podfile.lock':'cocoapods','pubspec.yaml':'dart','pubspec.lock':'dart','mix.exs':'elixir','mix.lock':'elixir','packages.config':'dotnet','.gitmodules':'git submodules'});
 
-export const DEFAULT_POLICY=Object.freeze({enabled:true,minAgeDays:30,minWeeklyDownloads:100,blockSeverities:['high','critical'],allowCopyleft:false,approvedLicenses:[],allowedSecretFingerprints:[],allowUnparsedManifests:[],requireVulnerabilityScan:true,codeScan:'local',codeScanSensitive:false});
+export const DEFAULT_POLICY=Object.freeze({enabled:true,minAgeDays:30,minWeeklyDownloads:100,blockSeverities:['high','critical'],allowCopyleft:false,approvedLicenses:[],allowedSecretFingerprints:[],allowUnparsedManifests:[],acceptedAdvisories:[],requireVulnerabilityScan:true,codeScan:'local',codeScanSensitive:false});
 const ARR=['blockSeverities','approvedLicenses','allowedSecretFingerprints','allowUnparsedManifests'];
 const NUM=['minAgeDays','minWeeklyDownloads'];
 const BOOL=['allowCopyleft','requireVulnerabilityScan','codeScanSensitive'];
@@ -26,6 +26,9 @@ for(const k of NUM)if(Number.isFinite(r[k])&&r[k]>=0)p[k]=r[k];
 for(const k of BOOL)if(typeof r[k]==='boolean')p[k]=r[k];
 for(const k of ARR)if(Array.isArray(r[k])&&r[k].every(x=>typeof x==='string'))p[k]=[...r[k]];
 if(r.codeScan==='auto'||r.codeScan==='off'||r.codeScan==='local')p.codeScan=r.codeScan;
+// Accepted advisories: { package, id?, reason, reviewBy: YYYY-MM-DD }. Malformed entries are dropped (the block stays).
+const realDate=d=>typeof d==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(d)&&Number.isFinite(Date.parse(d+'T00:00:00Z'))&&new Date(d+'T00:00:00Z').toISOString().slice(0,10)===d;
+p.acceptedAdvisories=Array.isArray(r.acceptedAdvisories)?r.acceptedAdvisories.filter(a=>a&&typeof a.package==='string'&&a.package&&(a.id===undefined||(typeof a.id==='string'&&a.id.length>0&&a.id.length<=60))&&typeof a.reason==='string'&&a.reason.length>=5&&a.reason.length<=300&&realDate(a.reviewBy)).slice(0,50).map(a=>({package:a.package,...(a.id!==undefined?{id:a.id}:{}),reason:a.reason,reviewBy:a.reviewBy})):[];
 return p;
 }
 
@@ -42,6 +45,22 @@ const isText=b=>!Buffer.from(b).subarray(0,8000).includes(0);
 const txt=b=>b==null?null:Buffer.from(b).toString('utf8');
 const isObj=x=>!!x&&typeof x==='object';
 const clean=s=>String(s??'').slice(0,120).replace(/[^A-Za-z0-9 @\\/._:()+,;-]/g,'?');
+
+// The part of a package.json that decides what gets installed, or null when any spec is not a registry range (or the file is not JSON).
+const NON_REGISTRY=/^(?:git(?:\+[a-z]+)?:|github:|gitlab:|bitbucket:|https?:|file:|link:|workspace:|portal:|patch:|ssh:|[\w.-]+\/[\w.-]+$)/i;
+function lockableManifest(text){
+let j;try{j=JSON.parse(text);}catch{return null;}
+if(!isObj(j))return null;
+const keep={};
+for(const k of ['name','version'])if(typeof j[k]==='string')keep[k]=j[k];
+const clean=v=>typeof v==='string'?!NON_REGISTRY.test(v.trim()):isObj(v)?Object.values(v).every(clean):false;
+for(const k of ['dependencies','devDependencies','optionalDependencies','overrides']){
+if(j[k]===undefined)continue;
+if(!isObj(j[k])||!clean(j[k]))return null;
+keep[k]=j[k];
+}
+return keep;
+}
 
 const LIFECYCLE=['preinstall','install','postinstall','prepare','prepublish','prepublishOnly','prepack','postpack','preuninstall','uninstall','postuninstall'];
 
@@ -64,7 +83,8 @@ const allowedUnparsed=(file,list)=>{const p=normPath(file);return (list||[]).som
 
 const parseJson=s=>{if(typeof s!=='string')return s??null;try{return JSON.parse(s);}catch{return null;}};
 const readJson=b=>{if(b==null)return {ok:true,value:{}};try{return {ok:true,value:JSON.parse(txt(b))};}catch{return {ok:false,value:undefined};}};
-const profileOf=v=>({security:v?.profile?.security,sensitive:v?.profile?.sensitive});
+const GUARDED=['security','sensitive','verify','context','ci','approval','protectedPaths'];
+const profileOf=v=>Object.fromEntries(GUARDED.map(k=>[k,v?.profile?.[k]]));
 const scriptsOf=b=>{const j=readJson(b);const s=j.ok?j.value?.scripts:undefined;return isObj(s)?s:{};};
 const hasList=j=>Array.isArray(j)||isObj(j?.vulnerabilities)||Array.isArray(j?.results)||Array.isArray(j?.dependencies)||isObj(j?.advisories);
 function usable(r){
@@ -77,7 +97,7 @@ return true;
 }
 const safeParse=(fn,s,warnings)=>{try{return (typeof fn==='function'?fn(s):[])||[];}catch{warnings.push('could not parse scanner output');return [];}};
 
-export async function runSecurityGate({changes=[],policy,exec,fetchImpl,now=Date.now,cwd,fingerprintKey,sensitive=true,cache=new Map(),fileExists,readRules=()=>readFileSync(SEMGREP_RULES_PATH)}={}){
+export async function runSecurityGate({changes=[],policy,hookScripts=[],exec,fetchImpl,now=Date.now,cwd,fingerprintKey,sensitive=true,cache=new Map(),fileExists,readRules=()=>readFileSync(SEMGREP_RULES_PATH)}={}){
 const pol=normalizePolicy(policy);
 if(pol.enabled===false)return{ok:true,blocks:[],tickets:[],warnings:[],skipped:['security gate disabled by policy'],checked:[]};
 const blocks=[],tickets=[],warnings=[],skipped=[],checked=[];
@@ -125,11 +145,51 @@ usableCount++;
 all.push(...safeParse(fn,r.stdout,warnings));
 };
 if(hasNpmLock)tally('npm',await run(['npm','audit','--json','--registry=https://registry.npmjs.org/'],'npm'),scan.parseNpmAudit);
+else if(pol.requireVulnerabilityScan!==false){
+// package.json changed with no lockfile (a scaffold ticket): build a lockfile from that package.json alone in a temporary folder
+// (nothing is installed, no script runs) and audit it, so the batch is not refused with "no scanner ran".
+const pj=changes.find(c=>c.file==='package.json'&&c.bytes!=null);
+if(pj){
+let tmp=null;
+try{
+// Only registry dependency specs go into the temporary package.json (a git, http, file, link or workspace spec could make npm contact other hosts or read other folders).
+const lock=lockableManifest(txt(pj.bytes));
+if(!lock){warnings.push('package.json has non-registry dependency specs or is not valid JSON: no lockfile was built to audit it');}
+else{
+tmp=mkdtempSync(path.join(os.tmpdir(),'swarm-audit-'));
+writeFileSync(path.join(tmp,'package.json'),JSON.stringify(lock));
+writeFileSync(path.join(tmp,'empty-user.npmrc'),'');
+writeFileSync(path.join(tmp,'empty-global.npmrc'),'');
+// No owner credentials: empty npm config files, no git config or prompts, no ssh, no scripts, HOME inside the temp folder.
+const cleanEnv={PATH:process.env.PATH||'',HOME:tmp,npm_config_userconfig:path.join(tmp,'empty-user.npmrc'),npm_config_globalconfig:path.join(tmp,'empty-global.npmrc'),npm_config_ignore_scripts:'true',npm_config_update_notifier:'false',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_TERMINAL_PROMPT:'0',GIT_SSH_COMMAND:'false'};
+const made=await run(['npm','install','--package-lock-only','--ignore-scripts','--no-audit','--no-fund','--registry=https://registry.npmjs.org/'],'npm-lock',{cwd:tmp,env:cleanEnv});
+if(made&&made.exitCode===0){
+const audited=await run(['npm','audit','--json','--registry=https://registry.npmjs.org/'],'npm',{cwd:tmp,env:cleanEnv});
+// An unusable answer here is a warning, not a block: another scanner (osv-scanner) may still cover the batch, and "no scanner ran" blocks when none did.
+if(audited&&usable(audited)){usableCount++;all.push(...safeParse(scan.parseNpmAudit,audited.stdout,warnings));}
+else warnings.push('npm audit of the lockfile built from package.json gave no usable result');
+}
+else if(made)warnings.push('could not build a lockfile from package.json to audit it');
+}
+}finally{if(tmp)try{rmSync(tmp,{recursive:true,force:true});}catch{/* best effort */}}
+}
+}
 for(const c of changes.filter(c=>isReq(c.file)))tally('pip-audit',await run(['pip-audit','-f','json','--no-deps','--disable-pip','-r',c.file],'pip-audit',{env:{PATH:process.env.PATH||'',HOME:os.tmpdir()}}),scan.parsePipAudit);
 tally('osv-scanner',await run(['osv-scanner','--format','json','-r','.'],'osv-scanner'),scan.parseOsv);
 if(usableCount===0&&pol.requireVulnerabilityScan!==false)blocks.push({check:'vulnerability',severity:'high',message:'could not verify vulnerabilities: no scanner ran (needs a lockfile with npm, or pip-audit, or osv-scanner)'});
 const scoped=newNames&&newNames.size>0?all.filter(v=>newNames.has(v.name)):all;
-for(const v of scan.blockingVulns(scoped,pol.blockSeverities)||[])blocks.push({check:'vulnerability',severity:clean(v.severity),message:`${clean(v.name)} has a ${clean(v.severity)} vulnerability`});
+const today=new Date(now()).toISOString().slice(0,10);
+for(const v of scan.blockingVulns(scoped,pol.blockSeverities)||[]){
+// npm audit lists one entry per package, combining its advisories: an id-specific exception counts only when it covers every id of the
+// entry; an entry with no ids needs a package-wide exception (no id), which is the owner's explicit, broader choice.
+const mine=pol.acceptedAdvisories.filter(a=>a.package===v.name);
+const live=mine.filter(a=>today<=a.reviewBy),stale=mine.filter(a=>today>a.reviewBy);
+const ids=Array.isArray(v.ids)&&v.ids.length?v.ids:(v.id?[v.id]:[]);
+const uncovered=ids.filter(id=>!live.some(a=>a.id===id));
+const covered=live.some(a=>!a.id)||(ids.length>0&&uncovered.length===0);
+if(covered){const ex=live.find(a=>!a.id)||live.find(a=>a.id===ids[0]);warnings.push(`accepted advisory: ${clean(v.name)} (${clean(ex.reason)}; review by ${ex.reviewBy})`);continue;}
+blocks.push({check:'vulnerability',severity:clean(v.severity),message:`${clean(v.name)} has a ${clean(v.severity)} vulnerability${stale.length?`; exception expired on ${stale[0].reviewBy}`:''}${live.length&&uncovered.length?`; not covered by an exception: ${uncovered.map(clean).join(', ')}`:''}`});
+}
 }
 
 const unparsed=changes.map(c=>({c,eco:unparsedEcosystem(c.file)})).filter(x=>x.eco);
@@ -141,12 +201,18 @@ if(policyFiles.length)checked.push('policy-change');
 for(const c of policyFiles){
 const prev=readJson(c.previous),next=readJson(c.bytes);
 const p=profileOf(prev.ok?prev.value:undefined),n=profileOf(next.value);
-const differs=['security','sensitive'].some(k=>JSON.stringify(p[k])!==JSON.stringify(n[k]));
-if(!next.ok||differs)blocks.push({check:'policy-change',severity:'critical',message:'.project-swarm.json changes the security policy or sensitivity: the owner must make this change by hand'});
+const differs=GUARDED.some(k=>JSON.stringify(p[k])!==JSON.stringify(n[k]));
+if(!next.ok||differs)blocks.push({check:'policy-change',severity:'critical',message:'.project-swarm.json changes the security policy, sensitivity, verify, context, ci, approval or protected paths: the owner must make this change by hand'});
 }
 
 const pkgChanges=changes.filter(c=>isPkg(c.file));
 if(pkgChanges.length)checked.push('install-script');
+// A package.json script that a profile hook (verify or ci) runs is the owner's: a batch cannot change what runs with the owner's rights.
+for(const c of pkgChanges){
+if(!hookScripts.length)break;
+const before=scriptsOf(c.previous),after=scriptsOf(c.bytes);
+for(const k of hookScripts)if(JSON.stringify(before[k])!==JSON.stringify(after[k]))blocks.push({check:'hook-script-change',severity:'critical',message:`${c.file}: the script ${clean(k)} is run by a profile hook (verify or ci); the owner must change it by hand`});
+}
 for(const c of pkgChanges){
 const before=scriptsOf(c.previous),after=scriptsOf(c.bytes);
 for(const k of LIFECYCLE){const nv=after[k];if(nv==null)continue;if(JSON.stringify(nv)!==JSON.stringify(before[k]))blocks.push({check:'install-script',severity:'high',message:`${c.file}: lifecycle script ${k} changed; the owner must review it`});}

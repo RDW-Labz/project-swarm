@@ -8,6 +8,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runManifest, integrateQueue } from '../tools/swarm.mjs';
+import { hookScriptNames } from '../tools/init-profile.mjs';
 import { createLedger, writeLedger, readLedger, approveLedger, isApproved } from '../tools/tickets.mjs';
 
 const exec = promisify(execFile);
@@ -15,7 +16,7 @@ const git = (root, ...args) => exec('git', ['-C', root, '-c', 'user.name=Test', 
 const job = n => ({ id: `job-${n}`, agent: 'ollama', model: 'test-model', prompt: `Update out/${n}.txt with the intended change.`, context: ['input.txt'], outputs: [`out/${n}.txt`], timeoutMs: 30000 });
 const completion = (n, content) => new Response(JSON.stringify({ done: true, done_reason: 'stop', message: { content: JSON.stringify({ summary: 'done', files: [{ path: `out/${n}.txt`, content }] }) } }), { headers: { 'content-type': 'application/json' } });
 const stub = async (_url, options) => { const n = Number(/out\/(\d+)\.txt/.exec(options.body)[1]); return completion(n, `proposed ${n}\n`); };
-const node = code => ['node', '-e', code];
+const node = (code, ...args) => ['node', '-e', code, ...args];
 
 async function fixture(t, count, ci) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-ci-'));
@@ -31,10 +32,11 @@ async function fixture(t, count, ci) {
   return root;
 }
 const state = async (root, id) => JSON.parse(await fs.readFile(path.join(root, `.swarm/runs/${id}/state.json`), 'utf8'));
-const append = text => `require('fs').appendFileSync('ci-log.txt', ${JSON.stringify(text)})`;
+// The text to log is passed as an argument, never spliced into the code.
+const APPEND = "require('fs').appendFileSync('ci-log.txt', process.argv[1] + String.fromCharCode(10))";
 
 test('smoke and preview hooks run after each green batch and a preview url is recorded', async t => {
-  const root = await fixture(t, 2, { smoke: { argv: node(`${append('smoke\n')}`), everyBatches: 1 }, preview: { argv: node(`${append('preview\n')};console.log('Ready https://p-1.example.dev')`), everyBatches: 2 } });
+  const root = await fixture(t, 2, { smoke: { argv: node(APPEND, 'smoke'), everyBatches: 1 }, preview: { argv: node(`${APPEND};console.log('Ready https://p-1.example.dev')`, 'preview'), everyBatches: 2 } });
   const run = await runManifest(root, { version: 1, concurrency: 4, jobs: [job(0), job(1)] }, { fetchImpl: stub });
   assert.equal(run.status, 'complete', String(run.error));
   const result = await integrateQueue(root, run.id, { batchSize: 1, noChecks: true });
@@ -65,12 +67,14 @@ test('a failing smoke hook keeps the batch, warns, and makes a fix ticket; the a
   assert.deepEqual(ledger.approved.ciTickets, ['T-0002']);
 });
 
-test('the profile protects the script a hook runs (and package.json for package runners); a job writing it is refused', async t => {
+test('the profile protects the script file a hook runs; a job writing it is refused', async t => {
   const { validateProfile } = await import('../tools/init-profile.mjs');
   const checked = validateProfile({ ci: { smoke: { argv: ['node', 'scripts/smoke.mjs'] }, preview: { argv: ['npm', 'run', 'preview'] } } });
   assert.deepEqual(checked.errors, []);
   assert.ok(checked.profile.protectedPaths.includes('scripts/smoke.mjs'));
-  assert.ok(checked.profile.protectedPaths.includes('package.json'));
+  // package.json is not protected as a whole (scaffold tickets must write it); the scripts a hook runs are guarded by the gate.
+  assert.ok(!checked.profile.protectedPaths.includes('package.json'));
+  assert.deepEqual(hookScriptNames(checked.profile), ['preview']);
   const root = await fixture(t, 1, { smoke: { argv: ['node', 'out/hook.mjs'], everyBatches: 1 } });
   await fs.writeFile(path.join(root, 'out/hook.mjs'), 'process.exit(0);\n');
   await git(root, 'add', '.');

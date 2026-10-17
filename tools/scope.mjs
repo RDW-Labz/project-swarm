@@ -32,8 +32,10 @@ const UNTESTABLE = ['fast', 'quick', 'nice', 'good', 'easy', 'intuitive', 'user-
 
 export function parseScope(markdown) {
   const lines = String(markdown ?? '').replace(/\r\n?/g, '\n').split('\n');
-  const out = { name: '', version: 1, overview: '', stages: [], requirements: [], external: [], sensitive: [], protected: [], errors: [], strays: [] };
+  const out = { name: '', version: 1, overview: '', stages: [], requirements: [], external: [], sensitive: [], protected: [], sections: [], context: [], layout: '', errors: [], strays: [] };
   const over = [];
+  const layout = [];
+  let other = null;
   let section = 'overview', stage = null, req = null, inAcc = false;
   const addStage = (id, title) => {
     const s = out.stages.find(x => x.id === id);
@@ -48,9 +50,10 @@ export function parseScope(markdown) {
     if ((m = /^Version:\s*(\d+)\s*$/.exec(line))) { out.version = Number(m[1]); return; }
     if (/^## /.test(line)) {
       const h = line.slice(3).trim();
-      req = null; inAcc = false; stage = null;
+      req = null; inAcc = false; stage = null; other = null;
       if ((m = /^(S\d+)\b\s*(.*)$/.exec(h))) { section = 'stage'; stage = m[1]; addStage(m[1], m[2].trim()); }
-      else section = /^stages$/i.test(h) ? 'stages' : /^external$/i.test(h) ? 'external' : /^sensitive$/i.test(h) ? 'sensitive' : /^protected$/i.test(h) ? 'protected' : /^overview$/i.test(h) ? 'overview' : 'other';
+      else section = /^stages$/i.test(h) ? 'stages' : /^external$/i.test(h) ? 'external' : /^sensitive$/i.test(h) ? 'sensitive' : /^protected$/i.test(h) ? 'protected' : /^overview$/i.test(h) ? 'overview' : /^context$/i.test(h) ? 'context' : /^layout$/i.test(h) ? 'layout' : 'other';
+      if (section === 'other') { other = { title: h, slug: h.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60), lines: [] }; out.sections.push(other); }
       return;
     }
     if (/^### /.test(line)) {
@@ -77,11 +80,23 @@ export function parseScope(markdown) {
         out.external.push(m ? { name: m[1].trim(), note: m[2].trim() } : { name: item, note: '' });
       } else if (section === 'sensitive') out.sensitive.push(item);
       else if (section === 'protected') out.protected.push(item);
+      else if (section === 'context') {
+        // "path" or "path [db, ui, api, test, all]": files every ticket of those kinds gets as context.
+        m = /^`?([^`\s\[]+)`?\s*(?:\[([^\]]*)\])?\s*(?::.*)?$/.exec(item);
+        if (m) out.context.push({ path: m[1], kinds: (m[2] ? m[2].split(',').map(k => k.trim().toLowerCase()).filter(Boolean) : ['all']) });
+        else out.errors.push(`line ${no}: context item needs "path [kinds]"`);
+      } else if (section === 'overview') over.push(line);
+      else if (section === 'layout') layout.push(line);
+      else if (section === 'other' && other) other.lines.push(line);
       return;
     }
     if (section === 'overview') over.push(line);
+    else if (section === 'layout') layout.push(line);
+    else if (section === 'other' && other) other.lines.push(line);
   });
   out.overview = over.join('\n').trim();
+  out.layout = layout.join('\n').trim();
+  for (const s of out.sections) { s.text = s.lines.join('\n').trim(); delete s.lines; }
   if (!out.name) out.errors.push('missing "# Scope: NAME" title');
   return out;
 }

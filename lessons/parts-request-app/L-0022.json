@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0022",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "split",
+  "what": "Tickets carried only title+acceptance, no scope sections or contracts, so workers invented a schema (S2) and wrote tests that matched their own code; the wrong schema passed all its tests until I ran submit_request",
+  "rule": "Tests must be derived from scope acceptance criteria and the data-model contract, not from the worker's own code; every ticket gets its scope sections plus contracts as context.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "auto-attach scope.md requirement text, the data model section and generated contracts to each ticket's context; generate test tickets from acceptance bullets by a different worker than the builder",
+  "guard": {
+    "kind": "prompt-rule",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "data-model",
+    "prompt-context",
+    "tests-from-scope"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 22"
+  }
+}

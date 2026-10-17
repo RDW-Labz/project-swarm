@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0009",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "split",
+  "what": "ticket T-0043 listed .env.example as an output; go failed at run stage: Reserved or secret path: .env.example",
+  "rule": "Split must not assign .env.example (reserved path) to a worker; scope check should warn.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "allow .env.example as a placeholder-only output or have split use a template name",
+  "guard": {
+    "kind": "scope-rule",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "env-template",
+    "reserved-path"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 9"
+  }
+}

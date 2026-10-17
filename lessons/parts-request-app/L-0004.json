@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0004",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "split",
+  "what": "scope.md text naming an env-file glob made preflight refuse every split job: prompt-path-not-in-workspace",
+  "rule": "Split prompts must not trip path checks on prose mentioning env files.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "ignore protected-path mentions in requirement text when checking prompt paths",
+  "guard": {
+    "kind": "scope-rule",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "prompt-path",
+    "secrets",
+    "split"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 4"
+  }
+}

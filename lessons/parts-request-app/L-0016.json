@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0016",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "split",
+  "what": "No ticket created supabase/config.toml; local supabase start and supabase test db were impossible until I ran supabase init",
+  "rule": "Split should cover project config files required to run the tools it uses in acceptance checks.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "scope check: flag acceptance steps that need tools with no config ticket",
+  "guard": {
+    "kind": "scope-rule",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "acceptance-tools",
+    "config-files"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 16"
+  }
+}

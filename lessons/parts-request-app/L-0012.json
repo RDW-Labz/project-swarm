@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0012",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "Workers wrote Tailwind v3 config (@tailwind directives, tailwindcss+autoprefixer postcss) while package.json had v4; I pinned tailwindcss to 3.4",
+  "rule": "Worker prompts must include the installed dependency versions.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": "anthropic/claude-haiku-5-5",
+  "fix": "inject package.json versions into build prompts; scaffold ticket must fix major versions",
+  "guard": {
+    "kind": "prompt-rule",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "dependency-versions",
+    "prompt-context",
+    "tailwind"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 12"
+  }
+}

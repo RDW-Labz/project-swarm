@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0013",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "T-0040 eslint.config.mjs had no TypeScript parser; lint failed with 44 parse errors; vitest and tsc also scanned .swarm/ workspaces",
+  "rule": "Generated lint/test configs must be validated by running them and must ignore .swarm/.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "run lint/test in the integrate checks; default configs ignore .swarm/",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "lint-config",
+    "swarm-dir",
+    "tests-not-run"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 13"
+  }
+}

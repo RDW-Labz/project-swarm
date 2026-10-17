@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0007",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "split",
+  "what": "scope split put every ticket file at the repo root (theme-contract.ts, 0001_status_enum.sql) because the split prompt says no folders",
+  "rule": "Scope split should assign real paths (src/, supabase/migrations/, tests/) from the start.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "allow relative paths with folders in ticket files; give the split prompt the project layout",
+  "guard": {
+    "kind": "prompt-rule",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "layout",
+    "paths",
+    "split"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 7"
+  }
+}

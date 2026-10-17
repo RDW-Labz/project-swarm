@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0008",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "scaffold worker T-0037 chose pnpm; security gate only audits npm lockfiles so integrate was blocked",
+  "rule": "The package manager must be set in the project profile and passed to every worker.",
+  "caughtBy": "merge-check",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "add packageManager to .project-swarm.json profile and inject it into worker prompts; gate should match",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "package-manager",
+    "security-gate"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 8"
+  }
+}
