@@ -201,8 +201,8 @@ test('closing the ssh session leaves no remote process', async t => {
   });
   const pids = [];
   t.after(() => { child.kill('SIGKILL'); for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } } });
-  const script = `const fs=require('fs');const {spawn}=require('child_process');const grand=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(pidFile)},JSON.stringify({worker:process.pid,grand:grand.pid}));setInterval(()=>{},1000);`;
-  child.stdin.write(`${JSON.stringify({ id: 'abc12345', command: process.execPath, args: ['-e', script], costUsd: 0.2 })}\n`);
+  const script = "const fs=require('fs');const {spawn}=require('child_process');const grand=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});fs.writeFileSync(process.argv[1],JSON.stringify({worker:process.pid,grand:grand.pid}));setInterval(()=>{},1000);";
+  child.stdin.write(`${JSON.stringify({ id: 'abc12345', command: process.execPath, args: ['-e', script, pidFile], costUsd: 0.2 })}\n`);
   const recorded = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('remote job did not start')), 4000);
     const poll = () => fs.readFile(pidFile, 'utf8').then(text => { clearTimeout(timer); resolve(JSON.parse(text)); }).catch(() => setTimeout(poll, 20));

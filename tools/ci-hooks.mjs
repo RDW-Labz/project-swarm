@@ -9,7 +9,7 @@ const PROGRAM_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const PROD_PARTS = new Set(['--prod', '--production', 'prod', 'production', 'promote', '-p']);
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'fish', 'cmd', 'powershell', 'pwsh']);
 const PREVIEW_URL_RE = new RegExp('https://[A-Za-z0-9.-]+(?:/[A-Za-z0-9._~%/-]*)?', 'g');
-const SPLIT_RE = new RegExp('[=:,\s]+');
+const SPLIT_RE = /[=:,\s]+/;
 const BACKSLASH = String.fromCharCode(92);
 const DEFAULT_TIMEOUT_SEC = 600;
 const TAIL_CHARS = 1500;

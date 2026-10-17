@@ -118,7 +118,7 @@ export function validateProfile(profile) {
   if (security) out.security = security;
   if (profile.verify !== undefined) {
     const checked = validateVerifyConfig(profile.verify);
-    for (const message of checked.errors) errors.push(`profile.${message.replace(/^verify\./, 'verify.')}`);
+    for (const message of checked.errors) errors.push(`profile.${message}`);
     if (checked.ok && checked.value) {
       out.verify = checked.value;
       // The scripts a setup or test command runs, and package.json for package runners, are protected like a ci hook's files.

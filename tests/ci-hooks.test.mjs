@@ -305,3 +305,10 @@ test('fixTicketFromFailure: notes are at most 600 characters', () => {
   const s = fixTicketFromFailure({ kind: 'smoke', batchNumber: 1, jobs: [], files: [], tail: '', summary: 'y'.repeat(3000) });
   assert.ok(s.notes.length <= 600);
 });
+
+test('isProductionArgv: a production word is still found next to the letter s and inside a spaced argument', () => {
+  assert.equal(isProductionArgv(['deploy', 'stage production']), true);
+  assert.equal(isProductionArgv(['deploy', '--stage=production']), true);
+  assert.equal(isProductionArgv(['deploy', '--target', 'staging']), false);
+  assert.equal(isProductionArgv(['deploy', '--scope=preview']), false);
+});

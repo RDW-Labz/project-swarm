@@ -83,7 +83,8 @@ test('a Hermes job that answers with edits has them applied (they used to be dro
   const envelope = { summary: 'edited', files: [], edits: [edit('src.txt', 'one', '1'), edit('src.txt', 'three', '3')] };
   const result = { type: 'result', exit_code: 0, text: JSON.stringify(envelope), tokens: { input: 5, output: 5 } };
   const state = await runManifest(root, manifest('hermes'), {
-    env, spawnImpl: () => spawn(process.execPath, ['-e', `process.stdin.resume();process.stdin.on('end',()=>process.stdout.write(${JSON.stringify(`${JSON.stringify(result)}\n`)}));`], { stdio: ['pipe', 'pipe', 'pipe'] }),
+    env, // The reply is passed as an argument, never spliced into the code.
+    spawnImpl: () => spawn(process.execPath, ['-e', "process.stdin.resume();process.stdin.on('end',()=>process.stdout.write(process.argv[1]));", `${JSON.stringify(result)}\n`], { stdio: ['pipe', 'pipe', 'pipe'] }),
   });
   assert.equal(state.status, 'complete', state.error);
   assert.equal(await workspaceFile(root, state), '1 two 3\n');

@@ -69,7 +69,7 @@ test('a hermes job runs over ssh with the message on stdin and none of the local
   const state = await runManifest(root, manifest(), {
     spawnImpl: (command, args, options) => {
       received = { command, args, options };
-      return spawn(process.execPath, ['-e', `let input='';process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{process.stderr.write('');process.stdout.write(${JSON.stringify(hermesEvents)});});`], { stdio: ['pipe', 'pipe', 'pipe'] });
+      return spawn(process.execPath, ['-e', "let input='';process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{process.stderr.write('');process.stdout.write(process.argv[1]);});", String(hermesEvents)], { stdio: ['pipe', 'pipe', 'pipe'] });
     },
   });
   assert.equal(state.status, 'complete', JSON.stringify(state.jobs[0].error));
