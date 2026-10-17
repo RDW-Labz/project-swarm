@@ -1,0 +1,33 @@
+# Merge guard: never merge with a red or pending check, enforced in code
+
+Why: #135 was merged while a CodeQL check was red (the check was optional in the repo's branch protection and the merge was done by hand). The rule is now in code, with no flag to skip it.
+
+## `tools/merge-guard.mjs`
+
+- `checkRollup(rollup)` takes the `statusCheckRollup` array of `gh pr view --json statusCheckRollup` (check runs have `name`, `status`, `conclusion`, `startedAt`, `completedAt`; status contexts have `context`, `state`). Items are grouped by name (`name` or `context`); only the newest item of a group counts (largest `completedAt`, else `startedAt`, else the later position), because a rerun replaces an older failed or cancelled run. A group is green when it is a check run with `status` COMPLETED and `conclusion` SUCCESS, NEUTRAL or SKIPPED, or a status context with `state` SUCCESS. A check run that is not COMPLETED (or a context in PENDING or EXPECTED) is pending; any other result (FAILURE, ERROR, CANCELLED, TIMED_OUT, ACTION_REQUIRED, STARTUP_FAILURE, STALE) is failing. Returns `{ ok, total, green, failing: [names], pending: [names] }`; `ok` is true only when `total > 0` and nothing fails or is pending. An empty or non-array rollup is `ok: false` with `total: 0`.
+- `assertMergeable(view, { defaultBranch })` takes the parsed `gh pr view --json state,mergeable,baseRefName,headRefOid,statusCheckRollup` object and returns `{ ok, reasons: [string] }`. Reasons: `pr-not-open` (state is not OPEN), `has-conflicts` (mergeable CONFLICTING), `not-default-branch` (baseRefName differs from `defaultBranch`: a stacked PR must be retargeted to the default branch first), `no-checks` (total 0), `failing: <names>`, `pending: <names>`, `no-head` (no headRefOid).
+- `parsePrArgument(text)` accepts `123`, `#123` or a full PR URL (`https://github.com/OWNER/NAME/pull/123`) and returns `{ number, repo }` (`repo` is `OWNER/NAME` only from a URL), or null.
+- `async runMerge(root, args, { exec, now })` implements `swarm merge PR [--repo OWNER/NAME]`. It accepts no other flag: every other flag, including `--force`, `--admin`, `--skip-checks`, `--no-checks`, `--yes`, is refused with `merge-flag-refused` (there is nothing to skip). Steps, each through `exec(command, args, { cwd })` returning `{ code, stdout, stderr }`:
+  1. `gh repo view [--repo R] --json defaultBranchRef,nameWithOwner` for the default branch (a failure refuses).
+  2. `gh pr view N [--repo R] --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup`; `assertMergeable`; on `ok: false` return `{ status: 'refused', reasons, checks: { failing, pending, green, total } }` and run no merge.
+  3. If any other open PR has this PR's head branch as its base (`gh pr list --base <headRefName> --state open --json number`), refuse with reason `stacked-prs-open: #N,...` (retarget them to the default branch first; deleting the branch would close them).
+  4. `gh pr merge N [--repo R] --squash --delete-branch --match-head-commit <headRefOid>`; a failure returns `{ status: 'merge-failed', reason }`.
+  5. `gh pr view N --json state`: must be MERGED, else `merge-failed`.
+  6. Local update, only when `root` is a git work tree with no uncommitted changes outside generated files: `git fetch origin`, `git checkout <defaultBranch>`, `git pull --ff-only origin <defaultBranch>`; failures are reported as `localUpdate: 'skipped: <reason>'`, never as a merge failure.
+  Returns `{ status: 'merged', pr, repo, sha, checks: { total, green }, localUpdate: 'pulled' | 'skipped: ...' }`. The CLI prints one JSON line and exits 0 only for `merged`.
+
+## Wiring
+
+- `swarm merge` dispatches to `runMerge` (usage line `merge PR [--repo OWNER/NAME]`).
+- `swarm ship` (and the ticket pipeline that calls it): `--wait-required-only` keeps meaning "wait only for the required checks", but ship now also runs `checkRollup` over the whole rollup of the PR head right before `gh pr merge` and refuses (`status: 'ci-failed'`, `reason: 'checks not green: ...'`) when anything is failing or pending, required or not. No flag disables this.
+
+## Review fixes (Opus review of the first build)
+
+These replace the matching rules above.
+
+- **Every item counts, no replacement by newer items.** `checkRollup` no longer groups by name or ranks items by time (timestamps are unreliable: a pending run reports a year-1 `completedAt`, queued runs have none). Every item of the rollup is judged on its own: green only as described; a check run that is not COMPLETED is pending whatever its times; a non-object item, or an item with no name and no context, is failing with the name `invalid-item`; the result names every non-green item (`name`, plus `workflowName` in brackets when present), and the same name can be listed twice. A stale cancelled or failed run that GitHub still lists therefore blocks the merge until it is gone or rerun; that is intended.
+- **Required checks must have reported.** `runMerge` also reads `gh api repos/R/branches/BASE/protection/required_status_checks` (`contexts` and `checks[].context`); a required context that is not in the rollup counts as pending (`missing-required: names`). When the API answers 404, 403 or anything else that is not a JSON list, this step is skipped and `requiredChecks: 'unknown'` is reported (a repo without protection has no required checks).
+- **Fresh and complete:** `mergeable` must be `MERGEABLE`; `UNKNOWN` is retried up to 4 times, 2 seconds apart (injectable `sleep`), then refused as `mergeable-unknown`. A view that is not an object is refused as `pr-view-unparseable`.
+- **Right repo:** `gh pr list --base` gets the `--repo` argument too. The local update runs only when `git remote get-url origin` of `root` names the same `OWNER/NAME` as the merged repo (else `localUpdate: 'skipped: this folder is another repository'`), and uses `git checkout <branch> --`.
+- **Argument rules:** `--repo` must match `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`; the PR argument rules are unchanged. Every non-merged result has `reasons` (an array); `merge-failed` has `reasons: [text]` too. The `now` option is removed.
+- **Ship:** right before `gh pr merge`, ship fetches the PR again (`gh pr view --json headRefOid,statusCheckRollup`), requires `headRefOid` to equal the shipped commit (else `ci-failed`, reason `head moved`), and runs `checkRollup` on that fresh rollup. When the only problem is pending checks (typically optional ones after `--wait-required-only`), ship keeps polling (every `pollMs`) until they settle or `timeoutMs` has passed since the guard started; on timeout the status is `ci-pending` and the reason `checks not green: name (pending), ...`. Failing checks give `ci-failed` at once.

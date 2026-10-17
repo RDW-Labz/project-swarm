@@ -2,6 +2,7 @@
 // Ships a reviewed run's integrated tree: push the branch, open or update a PR, wait for CI,
 // and merge when everything is green and nobody has asked for a human to look first. No shell:
 // git and gh are invoked through the injected `exec` with an argv array.
+import { checkRollup } from './merge-guard.mjs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -2182,6 +2183,24 @@ export async function ship(options) {
   }
   if (merge === false) return { ...base, status: 'ready' };
 
+  // Never merge with a failing or pending check, required or not. --wait-required-only changes what ship waits for, not this rule; there is
+  // no flag to skip it. The PR is read again right before the merge (fresh checks, same head commit); checks that are only pending, typically
+  // optional ones after --wait-required-only, are waited for until timeoutMs has passed, failing checks refuse at once.
+  {
+    const guardStart = now();
+    for (;;) {
+      const viewRes = await exec('gh', ['pr', 'view', String(pr.number), '--repo', repo, '--json', 'state,headRefOid,mergeStateStatus,statusCheckRollup'], { cwd: root });
+      let fresh = null;
+      try { fresh = JSON.parse(viewRes.stdout); } catch { fresh = null; }
+      if (viewRes.code !== 0 || !fresh || typeof fresh !== 'object') return { ...base, status: 'ci-failed', reason: 'checks not green: the checks could not be read before merging' };
+      if (fresh.headRefOid !== sha) return { ...base, status: 'ci-failed', reason: 'checks not green: the PR head moved after the checks were read' };
+      const guard = checkRollup(fresh.statusCheckRollup);
+      if (guard.ok) break;
+      const reason = `checks not green: ${[...guard.failing.map(name => `${name} (failing)`), ...guard.pending.map(name => `${name} (pending)`)].join(', ') || 'no checks reported'}`;
+      if (guard.failing.length === 0 && guard.pending.length > 0 && now() - guardStart < timeoutMs) { await sleep(pollMs); continue; }
+      return { ...base, status: guard.failing.length === 0 && guard.pending.length > 0 ? 'ci-pending' : 'ci-failed', reason };
+    }
+  }
   const version = await releaseVersion(exec, root, payload.base);
   if (version) base.tag.name = `v${version}`;
   const mergeRes = await exec('gh', ['pr', 'merge', String(pr.number), '--repo', repo, `--${mergeMethod}`, '--match-head-commit', sha], { cwd: root });
