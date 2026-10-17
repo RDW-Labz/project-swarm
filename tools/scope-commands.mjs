@@ -649,6 +649,28 @@ async function applyInfraReturn(root, id, note) {
   return 'skipped';
 }
 
+// Block a ticket whose check failed on another ticket's files, with the reason; no attempt, no escalation. A person (or --release) decides.
+async function applyForeignBlock(root, id, note) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await withLock(root, async () => {
+        const ledger = await readLedger(root);
+        const ticket = ledger.tickets.find(x => x.id === id);
+        if (!ticket || ticket.status !== 'review') return 'skipped';
+        ticket.status = 'blocked';
+        ticket.blockReason = 'manual';
+        ticket.blockNote = redactNote(note).slice(0, 600);
+        delete ticket.runId;
+        ledger.updatedAt = new Date().toISOString();
+        await writeLedger(root, ledger);
+        await appendLog(root, { event: 'foreign-failure', id, to: 'blocked', note: ticket.blockNote, by: 'sync' });
+        return 'blocked';
+      });
+    } catch (error) { if (error.code !== 'scope-busy' || attempt === 4) throw error; await new Promise(resolve => setTimeout(resolve, 300)); }
+  }
+  return 'skipped';
+}
+
 async function applyRetry(root, id, note, runId) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
@@ -775,8 +797,42 @@ async function cmdSync(root, { rest, flags }) {
     }
     const done = [], unverified = [], retried = [], blocked = [], notIntegrated = [];
     const inTree = new Set();
+    // A failure whose errors name only files that other tickets own is theirs, not this ticket's (T-0091's lint failed on the file T-0090 wrote):
+    // no escalation and no attempt for this ticket. It goes to the owner when the owner is in this run; otherwise this ticket is blocked with a clear note.
+    const routed = new Set();
+    const ownersNamed = (excludeId, tail) => {
+      const text = String(tail ?? '');
+      if (!text.trim()) return [];
+      const live = ledger.tickets.filter(x => x.id !== excludeId && x.status !== 'cancelled' && x.type !== 'human');
+      const byPath = live.filter(x => (x.files ?? []).some(f => text.includes(f)));
+      if (byPath.length) return byPath;
+      const byName = live.filter(x => (x.files ?? []).some(f => text.includes(f.split('/').pop())));
+      return byName.length === 1 ? byName : [];
+    };
+    const routeForeign = async (t, check, tail) => {
+      if (!String(tail ?? '').trim() || mentionsFiles(t, tail)) return false;
+      const owners = ownersNamed(t.id, tail);
+      if (!owners.length) return false;
+      const note = `failed checks: ${check}; ${String(tail).slice(-500)}`;
+      const sent = [];
+      for (const owner of owners.filter(o => o.status === 'review' && finished.has(o.id) && (o.runId === undefined || o.runId === rest[0]))) {
+        const result = await applyRetry(root, owner.id, note, rest[0]);
+        if (result === 'skipped') continue;
+        routed.add(owner.id);
+        (result === 'blocked' ? blocked : retried).push(owner.id);
+        sent.push(owner.id);
+      }
+      if (sent.length) { unverified.push(`${t.id} (the ${check} check failed on files of ${sent.join(', ')}, not on its own; the failure went to ${sent.length > 1 ? 'them' : 'that ticket'}, no attempt counted for ${t.id}; run sync again after the fix)`); return true; }
+      const blame = owners.map(o => `${o.id} (${o.status})`).join(', ');
+      const result = await applyForeignBlock(root, t.id, `the ${check} check failed on files of ${blame}, not on this ticket's own files, and none of them is in run ${rest[0]}: fix those files (reopen the ticket or edit them), then swarm tickets ${t.id} --release; no attempt was counted`);
+      if (result === 'blocked') { blocked.push(t.id); return true; }
+      return false;
+    };
     let uiResults = null, uiTree = null;
-    for (const t of ledger.tickets.filter(x => x.status === 'review' && finished.has(x.id) && (x.runId === undefined || x.runId === rest[0]))) {
+    // Tickets with a failed check go first, so a failure that names another ticket's file reaches that ticket before it is marked done.
+    const failing = t => Boolean(failedChecks.has(t.id) || qualityResults.get(t.id)?.failed || testResults.get(t.id)?.failed || failedRunChecks(state, t.id, { accepted: [...accepted] }));
+    for (const t of ledger.tickets.filter(x => x.status === 'review' && finished.has(x.id) && (x.runId === undefined || x.runId === rest[0])).sort((a, b) => Number(failing(b)) - Number(failing(a)))) {
+      if (routed.has(t.id)) continue;
       const failed = failedChecks.get(t.id);
       if (failed && /no-tests:/.test(String(failed.tail ?? ''))) { unverified.push(`${t.id} (the tests check ran 0 tests: fix verify.command, then run sync again; not retried)`); continue; }
       const common = failed ? (failed.checks ?? []).find(systemic) : null;
@@ -784,6 +840,7 @@ async function cmdSync(root, { rest, flags }) {
       if (failed) {
         // The merge queue rolled this ticket back because its tests failed: it goes back to ready once with the failure, then blocks.
         const note = `failed checks: ${(failed.checks ?? []).join(', ') || 'unknown'}${failed.tail ? `; ${String(failed.tail).slice(0, 500)}` : ''}`;
+        if (await routeForeign(t, (failed.checks ?? []).join(', ') || 'checks', failed.tail)) continue;
         const result = await applyRetry(root, t.id, note, rest[0]);
         (result === 'blocked' ? blocked : retried).push(t.id);
         continue;
@@ -796,6 +853,7 @@ async function cmdSync(root, { rest, flags }) {
         if (evidence.failed && systemic('tests')) { unverified.push(`${t.id} (the tests check failed for ${failCounts.get('tests')} tickets of this run, so the base or the setup is likely at fault; fix it and run sync again; not retried)`); continue; }
         if (evidence.failed && evidence.shared && sharedTestFailures > 1 && !mentionsFiles(t, evidence.tail) && !ticketTests(t).some(f => String(evidence.tail).includes(f))) { unverified.push(`${t.id} (the tests check failed for the whole run and its output does not name this ticket's files; fix it, then run sync again; not retried)`); continue; }
         if (evidence.failed) {
+          if (await routeForeign(t, 'tests', evidence.tail)) continue;
           const result = await applyRetry(root, t.id, `failed checks: tests${evidence.tail ? `; ${String(evidence.tail).slice(-500)}` : ''}`, rest[0]);
           (result === 'blocked' ? blocked : retried).push(t.id);
           continue;
@@ -811,6 +869,7 @@ async function cmdSync(root, { rest, flags }) {
         // A batch of one job is exact.
         if (quality.failed && quality.shared && sharedFailures > 1 && !mentionsFiles(t, quality.tail)) { unverified.push(`${t.id} (the ${quality.check} check failed for the whole run and its errors do not name this ticket's files; fix it, then run sync again; not retried)`); continue; }
         if (quality.failed) {
+          if (await routeForeign(t, quality.check, quality.tail)) continue;
           const result = await applyRetry(root, t.id, `failed checks: ${quality.check}${quality.tail ? `; ${String(quality.tail).slice(-500)}` : ''}`, rest[0]);
           (result === 'blocked' ? blocked : retried).push(t.id);
           continue;
@@ -821,6 +880,7 @@ async function cmdSync(root, { rest, flags }) {
       const runFailed = failedRunChecks(state, t.id, { accepted: [...accepted] });
       if (runFailed) {
         if (runFailed.single) {
+          if (await routeForeign(t, runFailed.names.join(', '), runFailed.tail)) continue;
           const result = await applyRetry(root, t.id, `failed checks: ${runFailed.names.join(', ')}${runFailed.tail ? `; ${runFailed.tail.slice(-500)}` : ''}`, rest[0]);
           (result === 'blocked' ? blocked : retried).push(t.id);
         } else unverified.push(`${t.id} (the ${runFailed.names.join(', ')} check failed ${runFailed.shared ? 'on this run' : 'on its batch'}, so no ticket in it is done; fix it and run sync again; not retried)`);

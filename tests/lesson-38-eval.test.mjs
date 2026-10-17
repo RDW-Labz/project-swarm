@@ -190,3 +190,58 @@ test('eval 38.5: swarm tickets --release is a clean release of held tickets', as
   assert.match(await fs.readFile(path.join(root, '.swarm/project/tickets.log'), 'utf8'), /"event":"release","by":"owner","tickets":\["T-0002"\],"from":"blocked","note":"S6 fixed the base"/);
   assert.equal((await run(['T-0001', '--release'])).exitCode, 1, 'a done ticket is not released');
 });
+
+test('eval 38.6 (S6 T-0090/T-0091): a failure in another ticket\'s file goes to its owner, or blocks with a note; no attempt, no escalation for the ticket that did not cause it', async t => {
+  const lint = tail => ({ id: 1, jobs: ['T-0091'], checks: 'failed', security: 'skipped', checkResults: [{ name: 'lint', status: 'failed', tail }] });
+  const batchState = (jobs, batches, integratedIn) => ({ id: 'r9', integratedAt: 'now', jobs, mergeQueue: { integrated: jobs.map(j => j.id), integratedIn, checkFailed: [], batches } });
+  const make = async tickets => {
+    const root = await project(t, tickets);
+    await fs.mkdir(path.join(root, '.swarm/runs/r9'), { recursive: true });
+    await fs.writeFile(path.join(root, '.swarm/runs/r9/manifest.json'), JSON.stringify({ checks: [{ name: 'lint', argv: ['x'] }] }));
+    return root;
+  };
+  const own = tk('T-0091', { files: ['src/useRequests.ts'], runId: 'r9' });
+  const job91 = { id: 'T-0091', status: 'complete', outputs: ['src/useRequests.ts'] };
+  const job90 = { id: 'T-0090', status: 'complete', outputs: ['src/useShops.ts'] };
+  const message = "src/useShops.ts:12:3  error  React Hook \"use...\" is called in function \"loadShops\"  react-hooks/rules-of-hooks";
+  // (a) T-0090 was finished in an earlier run: T-0091 is blocked with a clear note, nothing counted against it. Old behavior: it was sent back and climbed the ladder.
+  let root = await make([tk('T-0090', { status: 'done', files: ['src/useShops.ts'] }), own]);
+  await writeState(root, batchState([job91], [lint(message)], { 'T-0091': 1 }));
+  let synced = await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated']);
+  assert.match(synced.stdout, /1 ticket\(s\) blocked after every escalation level failed|blocked/);
+  let t91 = (await readLedger(root)).tickets.find(x => x.id === 'T-0091');
+  assert.equal(t91.status, 'blocked');
+  assert.equal(t91.blockReason, 'manual');
+  assert.match(t91.blockNote, /the lint check failed on files of T-0090 \(done\), not on this ticket's own files, and none of them is in run r9/);
+  assert.equal(t91.attempts, undefined);
+  assert.equal(t91.escalation, undefined);
+  assert.match(await fs.readFile(path.join(root, '.swarm/project/tickets.log'), 'utf8'), /"event":"foreign-failure","id":"T-0091"/);
+  // (b) T-0090 is in review in this run: it gets the failure (one attempt), T-0091 waits in review with nothing counted.
+  root = await make([tk('T-0090', { files: ['src/useShops.ts'], runId: 'r9' }), own]);
+  await writeState(root, batchState([job90, job91], [{ id: 1, jobs: ['T-0090'], checks: 'passed', security: 'skipped', checkResults: [{ name: 'lint', status: 'passed' }] }, lint(message)], { 'T-0090': 1, 'T-0091': 2 }));
+  // T-0091's batch is the second one
+  const state = batchState([job90, job91], [{ id: 1, jobs: ['T-0090'], checks: 'passed', security: 'skipped', checkResults: [{ name: 'lint', status: 'passed' }] }, { ...lint(message), id: 2 }], { 'T-0090': 1, 'T-0091': 2 });
+  await writeState(root, state);
+  synced = await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated']);
+  assert.match(synced.stdout, /T-0091 \(the lint check failed on files of T-0090, not on its own; the failure went to that ticket, no attempt counted for T-0091/);
+  const both = (await readLedger(root)).tickets;
+  const t90 = both.find(x => x.id === 'T-0090');
+  assert.equal(t90.status, 'ready');
+  assert.equal(t90.attempts, 1);
+  assert.match(t90.retryNote, /failed checks: lint; src\/useShops\.ts:12:3/);
+  t91 = both.find(x => x.id === 'T-0091');
+  assert.equal(t91.status, 'review');
+  assert.equal(t91.attempts, undefined);
+  // (c) The errors name the ticket's own file: the usual retry, one attempt.
+  root = await make([tk('T-0090', { status: 'done', files: ['src/useShops.ts'] }), own]);
+  await writeState(root, batchState([job91], [lint('src/useRequests.ts:3:1 error no-unused-vars')], { 'T-0091': 1 }));
+  await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated']);
+  t91 = (await readLedger(root)).tickets.find(x => x.id === 'T-0091');
+  assert.equal(t91.status, 'ready');
+  assert.equal(t91.attempts, 1);
+  // (d) Errors that name no file of any ticket are the ticket's own, as before.
+  root = await make([tk('T-0090', { status: 'done', files: ['src/useShops.ts'] }), own]);
+  await writeState(root, batchState([job91], [lint('error: something unexpected')], { 'T-0091': 1 }));
+  await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated']);
+  assert.equal((await readLedger(root)).tickets.find(x => x.id === 'T-0091').attempts, 1);
+});
