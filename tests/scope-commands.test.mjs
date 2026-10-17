@@ -102,7 +102,7 @@ test('split, approve, go --scope preparation, sync and change order work end to 
   assert.equal((await runScopeCommand(root, 'scope', ['split'])).exitCode, 0);
   const again = JSON.parse(await fs.readFile(path.join(root, 'docs/scope/split/manifest.json'), 'utf8'));
   assert.match(again.jobs[0].prompt, /R-003/);
-  assert.doesNotMatch(again.jobs[0].prompt, /R-001/);
+  assert.doesNotMatch(again.jobs[0].prompt, /^R-001: /m);
 });
 
 test('ingest refuses a bad ticket file and writes no ledger', async () => {

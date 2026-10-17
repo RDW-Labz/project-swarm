@@ -197,3 +197,9 @@ One row per plan phase, built with the swarm itself. Rules (from Braden): worker
 - Left out on purpose: the route-level test is required to exist (`tests` not empty) but its path is not pattern-checked; two integration tickets that edit the same shared file are asked to chain in the prompt, not forced by code.
 - Opus review ($0.50, `coordination/manifests/l34-review.json`): 7 medium, 5 low. Fixed: build-folder filter hid tracked files and secrets (now only untracked non-secret files, tracked files and secret-looking files always stay), broad `.gitignore` rules (`*`, global or info/exclude ignores no longer count), quality retries blamed every ticket of a shared check (now only a single-job batch, or the ticket whose files the errors name), `wiring` was set on merges into old ledgers, two different "wired" tests (now one), approval reseal dropped fields, `--wire` ingest accepted non-integration tickets, more secret name patterns. Left, in ideas.md: new modules added to an already-wired requirement, stricter cancel handling. Not changed: release of `todo` tickets (they already ran when their dependencies were done; it now also marks them ready).
 
+
+### Lesson 34 follow-up (1.93.1)
+
+Owner asked for a visible trace when a cancel drops a dependency: one non-blocking inbox note per prune, listing the affected tickets. Covered by eval 34.3. Hand-written (small core-runner wiring).
+
+Lesson 35 (parts app): one new requirement (R-037) by change order made the split worker rewrite the whole S5 stage with guessed paths; the merge was refused and the ticket was hand-written. Fixed in 1.93.1: the split prompt carries the real file list and existing tickets, and a merge ingest refuses any ticket outside the requirements that have none. Eval: tests/lesson-35-eval.test.mjs.
