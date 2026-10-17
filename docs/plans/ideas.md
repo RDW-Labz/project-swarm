@@ -55,3 +55,10 @@ Open points: Bedrock limits on tool-use streaming fields differ by model generat
 - `autopilot` `retry-failed` reruns a failed job at the same level while `scope sync` also escalates the ticket; the extra paid attempt is not counted by the ladder. Make retry-failed skip jobs of scope tickets (sync owns them) or count it.
 - A change-order reopen sets a ticket back to todo but keeps its `escalation` level, so a reopened ticket may start at Codex or Claude. Reset `escalation`, `attempts` and `retryNote` when a change order reopens a ticket.
 
+## Lesson 34 left-overs
+- Check that an integration ticket's test is really route-level or end-to-end (the file requests a route or page), not only that `tests` is set.
+- Chain integration tickets that edit the same shared file (router, navigation, layout) by code instead of by the split prompt.
+- A failed doneEvidence test check in review (not only typecheck, lint, build) could also go back to the worker automatically.
+- A later split that adds a module to an already-wired requirement does not add it to the existing integration ticket's dependencies (`--wire` only helps requirements with none): flag it.
+- Cancelling a ticket now drops it from dependents and reseals the approval (asked for by the owner); a stricter option would block dependents for a look first.
+

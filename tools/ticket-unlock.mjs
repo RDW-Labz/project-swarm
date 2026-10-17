@@ -32,7 +32,8 @@ export function findUnlockable(tickets) {
     if (!hasNoAttempts(t)) continue;
     if (!hasNoRetryNote(t)) continue;
     const deps = t.dependsOn;
-    if (!Array.isArray(deps) || deps.length === 0) continue;
+    // A dependency block whose dependencies are gone (cancelled and removed) has nothing left to wait for.
+    if (!Array.isArray(deps)) continue;
     let allDone = true;
     for (const depId of deps) {
       const dep = byId.get(depId);
@@ -55,4 +56,24 @@ export function unlockReady(ledger) {
     if (t && set.has(t.id)) t.status = 'ready';
   }
   return { ledger: copy, unlocked };
+}
+
+// A todo ticket of an approved ledger whose dependencies are all done (a root ticket has none) is released to ready.
+// Human tickets stay todo: a person finishes them.
+export function findReleasable(tickets) {
+  const list = Array.isArray(tickets) ? tickets : [];
+  const done = new Set(list.filter((t) => t && t.status === 'done').map((t) => t.id));
+  return list
+    .filter((t) => t && t.status === 'todo' && t.type !== 'human' && (Array.isArray(t.dependsOn) ? t.dependsOn : []).every((d) => done.has(d)))
+    .map((t) => t.id)
+    .sort();
+}
+
+export function releaseReady(ledger) {
+  const copy = structuredClone(ledger);
+  const tickets = copy && Array.isArray(copy.tickets) ? copy.tickets : [];
+  const released = findReleasable(tickets);
+  const set = new Set(released);
+  for (const t of tickets) if (t && set.has(t.id)) t.status = 'ready';
+  return { ledger: copy, released };
 }

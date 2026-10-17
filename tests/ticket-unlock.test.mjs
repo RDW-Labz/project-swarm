@@ -53,9 +53,10 @@ test('findUnlockable: a ticket with a retryNote is not returned', () => {
   assert.deepStrictEqual(findUnlockable(tickets), []);
 });
 
-test('findUnlockable: empty dependsOn is not returned', () => {
+test('findUnlockable: a deps block with no dependencies left (all cancelled and removed) is returned', () => {
   const tickets = [blocked('t1', [])];
-  assert.deepStrictEqual(findUnlockable(tickets), []);
+  assert.deepStrictEqual(findUnlockable(tickets), ['t1']);
+  assert.deepStrictEqual(findUnlockable([blocked('t2', [], { blockReason: 'manual' })]), []);
 });
 
 test('findUnlockable: non-array dependsOn is not returned', () => {
