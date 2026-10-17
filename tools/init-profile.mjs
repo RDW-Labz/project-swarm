@@ -2,13 +2,14 @@
 import { validateApprovalPolicy } from './approval-policy.mjs';
 import { validateCiConfig } from './ci-hooks.mjs';
 import { validateVerifyConfig } from './verify-config.mjs';
+import { validateUiConfig } from './ui-compare.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { sanitizeText } from './journal.mjs';
 
 export const DEFAULT_PROFILE_BUDGET = Object.freeze({ maxUsd: 5, maxTokens: 2000000 });
 const STATUSES = ['green', 'red', 'skipped', 'none'];
-const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci', 'verify', 'context'];
+const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci', 'verify', 'context', 'ui'];
 const REQUIRED_KEYS = ['sensitive', 'protectedPaths', 'budget', 'baseCheck'];
 const BASE_KEYS = ['status', 'ranAt', 'head', 'checks'];
 // The pointer (profile) and the checks file decide what later runs may do and execute, so no job may rewrite them.
@@ -132,6 +133,18 @@ export function validateProfile(profile) {
     for (const message of checked.errors) errors.push(`profile.context: ${message}`);
     if (checked.value) out.context = checked.value;
   }
+  if (profile.ui !== undefined) {
+    const checked = validateUiConfig(profile.ui);
+    for (const message of checked.errors) errors.push(`profile.ui: ${message}`);
+    if (checked.config && !checked.errors.length) {
+      out.ui = checked.config;
+      // The script the dev server command runs is protected like a ci hook's files.
+      // The mockups are what pages are compared with: workers cannot edit them (jobs that render those screens may still read them).
+      for (const entry of [...hookFiles(checked.config.start), ...checked.config.screens.map(screen => screen.mockup)]) {
+        try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch { /* not a usable path */ }
+      }
+    }
+  }
   if (profile.ci !== undefined) {
     const checked = validateCiConfig(profile.ci);
     for (const message of checked.errors) errors.push(`profile.ci: ${message}`);
@@ -159,12 +172,13 @@ export function hookFiles(argv) {
 // The package.json scripts a package-runner command runs (npm run X, npm test, pnpm X, yarn X): a batch must not change them (the gate checks).
 export function hookScriptNames(profile) {
   const names = new Set();
-  const argvs = [profile?.verify?.command, ...(profile?.verify?.setup ?? []), profile?.ci?.smoke?.argv, profile?.ci?.preview?.argv];
+  const argvs = [profile?.verify?.command, ...(profile?.verify?.setup ?? []), profile?.ci?.smoke?.argv, profile?.ci?.preview?.argv, profile?.ui?.start];
   for (const argv of argvs) {
     if (!Array.isArray(argv) || !PACKAGE_RUNNERS.has(String(argv[0]).split('/').pop())) continue;
     const rest = argv.slice(1).filter(item => typeof item === 'string' && !item.startsWith('-'));
-    if (rest[0] === 'run' && rest[1]) names.add(rest[1]);
-    else if (rest[0] && !['install', 'ci', 'exec', 'dlx', 'x', 'add', 'run'].includes(rest[0])) names.add(rest[0]);
+    const script = rest[0] === 'run' ? rest[1] : (rest[0] && !['install', 'ci', 'exec', 'dlx', 'x', 'add', 'run'].includes(rest[0]) ? rest[0] : null);
+    // npm also runs the pre and post scripts of the one it was asked to run
+    if (script) for (const name of [script, `pre${script}`, `post${script}`]) names.add(name);
   }
   return [...names];
 }

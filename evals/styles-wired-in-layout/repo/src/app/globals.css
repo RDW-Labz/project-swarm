@@ -1,0 +1,6 @@
+@import 'tailwindcss';
+
+:root {
+  --font-display: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
+  --font-body: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+}

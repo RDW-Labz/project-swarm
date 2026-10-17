@@ -74,7 +74,7 @@ test('the profile protects the script file a hook runs; a job writing it is refu
   assert.ok(checked.profile.protectedPaths.includes('scripts/smoke.mjs'));
   // package.json is not protected as a whole (scaffold tickets must write it); the scripts a hook runs are guarded by the gate.
   assert.ok(!checked.profile.protectedPaths.includes('package.json'));
-  assert.deepEqual(hookScriptNames(checked.profile), ['preview']);
+  assert.deepEqual(hookScriptNames(checked.profile).sort(), ['postpreview', 'prepreview', 'preview']);
   const root = await fixture(t, 1, { smoke: { argv: ['node', 'out/hook.mjs'], everyBatches: 1 } });
   await fs.writeFile(path.join(root, 'out/hook.mjs'), 'process.exit(0);\n');
   await git(root, 'add', '.');

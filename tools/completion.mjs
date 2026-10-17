@@ -47,6 +47,7 @@ export const COMMANDS = [
   command('scope', 'Scope file: template, check, split into tickets, approve, sync.', 'none', '--out --stage --ingest --merge --yes --integrated'),
   command('tickets', 'List or show scope tickets and their status.', 'none', '--stage --status --type --risk --set --note --json'),
   command('change', 'Record a scope change order.', 'none', '--yes'),
+  command('ui', 'Render design screens and compare them with the mockups.', 'none', '--base-url --json'),
   command('merge', 'Squash-merge a PR only when every check is green.', 'none', '--repo'),
   command('lessons', 'Structured lessons: list, show, add, check, stats, backfill, mine, notes.', 'none', '--stage --tag --caught-by --text --what --rule --fix --lane-model --ticket --requirement --guard-kind --guard-text --retries --minutes --usd --file --project --json --dry-run --min --include-guarded --write'),
   command('eval', 'Golden eval set: list, validate, manifest, score, gate.', 'none', '--all --agent --model --out --record --update-baseline --reset-baseline'),
