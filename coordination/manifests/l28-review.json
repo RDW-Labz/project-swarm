@@ -1,0 +1,32 @@
+{
+ "version": 1,
+ "jobs": [
+  {
+   "id": "l28-review",
+   "type": "review",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "Spend ladder, evidence gates and process spawning; review before the PR.",
+   "prompt": "Review the changes for lessons 28 to 32 (read docs/plans/lessons-28-32-design.md first) before a PR. They touch the merge-queue evidence rules (a build ticket needs typecheck/lint to have passed on its batch), an escalation ladder that sends failed tickets to stronger and costlier lanes (Codex, then Claude 'expensive'), a UI check that now spawns the profile's start command on a free port, a zero-test guard on checks, and reading an example env file into prompts. Find concrete defects: (1) spend: can the ladder loop forever or run more attempts than 3 levels, can it send a sensitive ticket to a lane it should not, can a retry storm cost money; (2) secrets: can env values (not names) from the example env file reach a prompt, can the names parser be fooled, any path outside the project read; (3) the UI server: the start command argv expansion ({port}), env passed to the child, process cleanup, a race on the free port, the explicit --base-url path, can a profile make it run something unsafe; (4) evidence gates: can a build ticket become done without quality evidence (the batch lookup, integratedIn, state.checks fallback, tickets with no batch), can the zero-test guard produce a false failure on a real passing run or a false pass; (5) unlock: can a failure- or manually-blocked ticket unlock, race with a wave start (locking), mutate approval; (6) logic bugs in applyRetry/applyEscalation/ticketOutcome (a cancelled run now moves tickets to ready, a skipped job blocks with reason deps) and in the sync paths. Write a report ranked high, medium, low with file, line, a concrete failing scenario and a fix. Say what you checked and found fine. Do not claim to have run code. Put the whole report in your final answer.",
+   "context": [
+    "docs/plans/lessons-28-32-design.md",
+    "tools/quality-checks.mjs",
+    "tools/escalation.mjs",
+    "tools/ticket-unlock.mjs",
+    "tools/ui-server.mjs",
+    "tools/zero-tests.mjs",
+    "tools/env-names.mjs",
+    "tools/scope-commands.mjs",
+    "tools/ticket-manifest.mjs",
+    "tools/tickets.mjs",
+    "tools/ui-check.mjs",
+    "tools/autopilot.mjs",
+    "tools/verify-config.mjs",
+    "tests/lessons-28-32-eval.test.mjs"
+   ],
+   "outputs": [],
+   "timeoutMs": 1500000
+  }
+ ]
+}
