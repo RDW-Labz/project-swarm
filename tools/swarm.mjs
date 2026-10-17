@@ -4473,7 +4473,7 @@ function failureTail(checks) {
 async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, adaptive = false, conflicts, skipped, noChecks, noFlakeCheck, spawnImpl, warnings, releaseIntegrationLock, securityGate = {} }) {
   const queue = state.mergeQueue = { state: 'running', batchSize, ...(adaptive ? { adaptive: { sizes: [], steps: { up: 0, down: 0 } } } : {}), batches: [], integrated: [], conflicts, checkFailed: [], skipped, securityBlocked: [], securityTickets: [], securityNotes: [] };
   const securityProfile = await projectProfile(root);
-  const securityPolicy = securityGate.policy ?? securityProfile?.security;
+  const securityPolicy = withApprovedManifests(securityGate.policy ?? securityProfile?.security, securityGate.approveManifests);
   const securitySensitive = securityProfile?.sensitive !== false;
   const securityCache = new Map();
   const securityKey = await securityFingerprintKey(root);
@@ -5110,7 +5110,7 @@ async function integrateRunLocked(root, id, options = {}) {
       }
       let plainGate;
       try {
-        plainGate = await runSecurityGate({ changes: writes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: securityGate.policy ?? profile?.security, hookScripts: hookScriptNames(profile), exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: profile?.sensitive !== false, fingerprintKey: await securityFingerprintKey(root), cache: new Map() });
+        plainGate = await runSecurityGate({ changes: writes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: withApprovedManifests(securityGate.policy ?? profile?.security, securityGate.approveManifests), hookScripts: hookScriptNames(profile), exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: profile?.sensitive !== false, fingerprintKey: await securityFingerprintKey(root), cache: new Map() });
       } catch (error) {
         fail(`security-gate-error: the gate could not run (${String(error?.message ?? error).slice(0, 200)}). Nothing was written.`, 'security-gate-error');
       }
@@ -6527,6 +6527,13 @@ async function installNewRelease(root,home){
  try{({stdout}=await execFileAsync(process.execPath,[installer,'--user'],{encoding:'utf8',env:{...process.env,...(home?{HOME:home}:{})},cwd:root}));}
  catch(error){fail(`update-install-failed: ${String(error.stderr||error.message).trim().split('\n').at(-1)}`);}
  try{return JSON.parse(stdout.trim().split('\n').at(-1));}catch{return {status:'installed'};}
+}
+
+// The owner's --approve-manifest files are added to the security policy that is already in force; a disabled gate stays disabled.
+function withApprovedManifests(policy,files){
+  if(!files?.length||policy?.enabled===false)return policy;
+  const base=policy&&typeof policy==='object'&&!Array.isArray(policy)?policy:{};
+  return {...base,allowUnparsedManifests:[...(Array.isArray(base.allowUnparsedManifests)?base.allowUnparsedManifests:[]),...files]};
 }
 
 export async function updateInstall(root,{home,doctorAllImpl=doctorAll}={}){
@@ -8027,7 +8034,7 @@ async function mainInner() {
   }
   // integrate's checks/mutants flags are read-only selection of whether/how checks run; strip
   // them here so the generic argument-count check below still fails on anything else.
-  let noChecks=false,requireChecks=false,acceptFailedChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag,acceptBlocked=false,salvage=false,acceptDeviation=false,acceptResultShape=false,acceptDropped=false,salvageDropped=false,integrateJobs,queue=false,adaptive=false,batchSize=10,maxRequeues=2;
+  let noChecks=false,requireChecks=false,acceptFailedChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag,acceptBlocked=false,salvage=false,acceptDeviation=false,acceptResultShape=false,acceptDropped=false,salvageDropped=false,approveManifests=[],integrateJobs,queue=false,adaptive=false,batchSize=10,maxRequeues=2;
   if(command==='integrate'){
     const flags=[...(argument === undefined ? [] : [argument]),...rest.splice(0,rest.length)];
     argument=undefined;
@@ -8061,6 +8068,8 @@ async function mainInner() {
       // integrate unless one of these is passed — proceed without it, or apply it from where it
       // was saved the moment it was detected.
       if(flag==='--accept-dropped'){acceptDropped=true;continue;}
+      // Lesson 14: the owner reviewed a dependency or workflow file by hand and lets the security gate pass it for this run only.
+      if(flag==='--approve-manifest'){const file=flags[++index];if(typeof file!=='string'||file.length>200||!/^[A-Za-z0-9_@+.\/-]+$/.test(file)||file.startsWith('-')||file.startsWith('/')||file.startsWith('./')||file.endsWith('/')||file.includes('//')||file.split('/').includes('..')||file.split('/').includes('.'))fail('--approve-manifest needs one exact repo-relative file path (letters, digits, . _ - @ + and /; no glob, no spaces, no ..)');approveManifests.push(file);continue;}
       if(flag==='--salvage-dropped'){salvageDropped=true;continue;}
       rest.push(flag);
     }
@@ -8362,7 +8371,20 @@ async function mainInner() {
       ship: (goRoot,id,goShipFlags)=>shipRun(goRoot,id,goShipFlags),
     });
   }
-  else result=await (queue?integrateQueue:integrateRun)(root,argument,{batchSize,adaptive,maxRequeues,noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
+  else {
+    // The approval is for this run only and is recorded as a decision (who, which file, which run).
+    let approvedGate;
+    if(command==='integrate'&&approveManifests.length){
+      // Only a file this run really changes can be approved, so the record names a real review. The record is written before integrate (a failed write stops it).
+      const state=await readState(await fs.realpath(root),argument);
+      const changed=new Set((state.jobs??[]).flatMap(job=>Array.isArray(job.outputs)?job.outputs:[]));
+      const unknown=approveManifests.filter(file=>!changed.has(file));
+      if(unknown.length)fail(`approve-manifest-unknown: run ${argument} does not change ${unknown.join(', ')}`,'approve-manifest-unknown');
+      approvedGate={approveManifests:[...new Set(approveManifests)]};
+      for(const file of approvedGate.approveManifests)await appendEvent(root,{kind:'decision',id:`approve-manifest-${argument}-${file}-${Date.now()}`,text:`owner reviewed ${file} by hand and approved it past the security gate for run ${argument}`,confirm:true,confirmed:true,by:'owner'});
+    }
+    result=await (queue?integrateQueue:integrateRun)(root,argument,{...(approvedGate?{securityGate:approvedGate}:{}),batchSize,adaptive,maxRequeues,noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
+  }
   // Field lesson #203: a failed check at integrate used to be a quiet field (`status: "integrated"`,
   // exit 0) unless the coordinator remembered --require-checks; refusing (or, with the escape
   // hatch, at least saying so loudly) is now the default. --require-checks stays an accepted no-op

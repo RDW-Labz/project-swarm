@@ -150,6 +150,8 @@ export function doneEvidence(state, jobId) {
   const batch = integratedId !== undefined ? holding.find((b) => b.id === integratedId) : (holding.find((b) => b.checks === 'passed' && b.security !== 'blocked') ?? holding.at(-1));
   if (batch) {
     const r = (batch.checkResults ?? []).find((c) => c.name === 'tests');
+    // A test failure in a batch of one job is that job's failure: it goes back to the worker with the output (a larger batch cannot say whose it is).
+    if (r?.status === 'failed' && batch.security !== 'blocked' && (batch.jobs ?? batch.jobIds ?? []).length === 1) return { ok: false, failed: true, check: 'tests', tail: String(r.tail ?? ''), reason: `tests check failed in batch ${batch.id ?? '?'}` };
     if (batch.checks !== 'passed' || batch.security === 'blocked') return { ok: false, reason: `batch ${batch.id ?? '?'} did not pass (checks ${batch.checks}, security ${batch.security ?? 'unknown'})` };
     if (r?.status === 'passed' && (r.mode !== 'affected' || (r.tests ?? 0) > 0)) return { ok: true, reason: `tests check passed in batch ${batch.id}` };
     if (r?.status === 'passed') return { ok: false, reason: `tests check ran no test in batch ${batch.id}` };
@@ -164,5 +166,7 @@ export function doneEvidence(state, jobId) {
   }
   const c = (Array.isArray(state.checks) ? state.checks : []).find((x) => x.name === 'tests');
   if (c?.status === 'passed') return { ok: true, reason: 'tests check passed on integrate' };
+  // A plain integrate runs the tests once for the whole run: a failure is shared, so only a ticket the output names goes back.
+  if (c?.status === 'failed') return { ok: false, failed: true, shared: true, check: 'tests', tail: String(c.tail ?? ''), reason: 'tests check is failed' };
   return { ok: false, reason: c ? `tests check is ${c.status}` : 'no tests check ran' };
 }

@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runScopeCommand, contextEnvFor } from '../tools/scope-commands.mjs';
-import { readLedger, writeLedger, createLedger } from '../tools/tickets.mjs';
+import { readLedger, writeLedger, createLedger, validateTicket } from '../tools/tickets.mjs';
 import { validateManifest } from '../tools/swarm.mjs';
 import { ticketsToManifest } from '../tools/ticket-manifest.mjs';
 import { parseScope } from '../tools/scope.mjs';
@@ -97,6 +97,10 @@ test('eval 37.2: .env.example is allowed as read-only context, and still refused
   assert.equal(env.exists('.env'), false);
   for (const ok of ['.env.example', '.env.local.example', 'config.example.json']) assert.equal(isExampleFile(ok), true, ok);
   for (const no of ['.env', '.env.local', 'id_rsa.example', '.env.example.bak']) assert.equal(isExampleFile(no), false, no);
+  // The ticket check (split ingest, approve) accepts it as context too, and still refuses it as a file the ticket writes.
+  assert.equal(validateTicket(tk('T-0008', 'R-002', 'S2', { context: ['.env.example'] })).ok, true);
+  assert.equal(validateTicket(tk('T-0008', 'R-002', 'S2', { files: ['src/.env.example'] })).ok, false);
+  assert.equal(validateTicket(tk('T-0008', 'R-002', 'S2', { context: ['.env'] })).ok, false);
   // A ticket may name it as context.
   const ticket = tk('T-0009', 'R-002', 'S2', { context: ['.env.example'], status: 'ready' });
   const { manifest } = ticketsToManifest([ticket], { ledger: { tickets: [] }, scope: parseScope(SCOPE), ready: true, contextEnv: env });

@@ -52,3 +52,8 @@ Design: [plans/lessons-28-32-design.md](plans/lessons-28-32-design.md).
 ## The --wire flow (lesson 37)
 
 `swarm scope split --wire` skips requirements that are already built and done (add `--all` to include them). Integration tickets that write the same file are chained at ingest, the later one after the earlier, across stages. `.env.example` and other names-only example files can be context; they cannot be outputs. A file conflict error names the tickets and the file.
+## Edit a ticket's files, and approve a reviewed manifest
+
+- `swarm tickets T-0007 --files src/a.ts,src/b.ts --context docs/x.md --tests tests/a.test.ts` shows the change; add `--yes` to apply it. Only a todo, ready, blocked or review ticket can change. A file another live ticket writes is refused. An approved ledger stays approved (sealed again over the new lists); a ledger that was not approved stays that way. The log has a `ticket-edit` line.
+- A failed tests check at `scope sync --integrated` goes back to the worker with the failure, the same as typecheck and lint.
+- When the security gate blocks a dependency or workflow file ("the owner must review it"), read it, then run `swarm integrate RUN --approve-manifest FILE`. It is for that run only and is written to the journal as a decision.

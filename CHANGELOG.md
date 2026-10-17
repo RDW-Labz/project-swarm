@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.94.0
+
+- A failed tests check at done-check goes back to the worker with the failure, like lint and typecheck (one job in the batch: that job; a run-wide failure: only the ticket the output names; many tickets: base or setup, no paid retries).
+- `swarm tickets ID --files a,b --context c --tests t [--yes]` changes a ticket's file lists (todo, ready, blocked or review only). It previews first, refuses a file another ticket owns, a bad path or an integration ticket with no test, and with `--yes` seals an approved ledger again.
+- `swarm integrate RUN --approve-manifest FILE` lets one reviewed manifest or workflow file pass the security gate for that run only, and records a decision. The gate message now names the flag. Only a file the run really changes can be approved; the path must be exact (no glob, folder or spaces); the file joins the policy already in force (a disabled gate stays disabled); the decision is written before integrate and a failed write stops it; it works with `--queue`.
+- `swarm tickets` only edits todo, ready or blocked tickets, refuses `.env` in context or tests, drops duplicates, logs the old and new lists, and reports a busy go lock instead of crashing.
+- A ticket may name `.env.example` (and other names-only templates) as `context`: ticket validation no longer refuses it (lesson 37 follow-up). It is still refused as a file the ticket writes.
+
 ## 1.93.2
 
 - Lesson 37 (the `--wire` flow failed on the parts app):

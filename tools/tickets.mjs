@@ -4,6 +4,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import path from 'node:path';
 import { safeWritableDir, assertRegularOrMissing, appendEvent } from './journal.mjs';
 import { wiringGaps } from './wiring.mjs';
+import { isExampleFile } from './init-profile.mjs';
 
 export const STATUSES = ['todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled'];
 export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'contract', 'human'];
@@ -38,7 +39,8 @@ const canon = v => {
   if (v && typeof v === 'object') return '{' + Object.keys(v).filter(k => v[k] !== undefined).sort().map(k => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}';
   return JSON.stringify(v);
 };
-const badPath = p => {
+// readOnly (a context path): a names-only template such as .env.example is allowed to be read, never written.
+const badPath = (p, readOnly = false) => {
   const segs = p.split('/');
   return p === '' ||
     p.startsWith('/') ||
@@ -47,7 +49,7 @@ const badPath = p => {
     segs.some(s => s === '' || s === '.' || s === '..') ||
     RESERVED_FIRST.includes(segs[0]) ||
     p.endsWith('.tsbuildinfo') ||
-    segs.some(s => BUILD_DIRS.includes(s) || /^\.env(?:$|\.)/i.test(s)) ||
+    segs.some(s => BUILD_DIRS.includes(s) || (/^\.env(?:$|\.)/i.test(s) && !(readOnly && isExampleFile(p)))) ||
     segs.some(s => SECRET_NAMES.includes(s.toLowerCase()));
 };
 
@@ -73,7 +75,7 @@ export function validateTicket(t) {
   else if (!SIZES.includes(t.size)) errors.push(`bad size: ${t.size}`);
   if (!RISKS.includes(t.risk)) errors.push(`bad risk: ${t.risk}`);
   for (const k of ['dependsOn', 'files', 'context', 'contracts', 'tests']) if (t[k] !== undefined && !isStrArr(t[k])) errors.push(`${k} must be an array of strings`);
-  for (const k of ['files', 'context', 'contracts', 'tests']) if (isStrArr(t[k])) for (const p of t[k]) if (badPath(p)) errors.push(`${k} path not allowed: ${p}`);
+  for (const k of ['files', 'context', 'contracts', 'tests']) if (isStrArr(t[k])) for (const p of t[k]) if (badPath(p, k === 'context')) errors.push(`${k} path not allowed: ${p}`);
   if (isStrArr(t.tests) && t.tests.some(p => p.startsWith('-'))) errors.push('tests path must not start with a dash');
   if (!STATUSES.includes(t.status)) errors.push(`bad status: ${t.status}`);
   if (t.sensitive !== undefined && typeof t.sensitive !== 'boolean') errors.push('sensitive must be a boolean');

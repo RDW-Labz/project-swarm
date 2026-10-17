@@ -207,3 +207,8 @@ Lesson 35 (parts app): one new requirement (R-037) by change order made the spli
 ### Lesson 37 (1.93.2): the --wire flow
 
 Hand-written (small core wiring). Evals 37.1 to 37.4 in tests/lesson-37-eval.test.mjs reproduce the parts-app failure (done S1 re-wired, two integration tickets on one router file, .env.example refused, nameless conflict error).
+### Batch A (1.94.0): lessons 17, 14 and the failed-test retry
+
+Hand-written (core-runner wiring). Evals 36.1 (failed test goes back), 36.2 (swarm tickets files edit), 36.3 (approve-manifest) in tests/batch-a-eval.test.mjs. No release tag until the owner says the parts app is between stages.
+
+Batch A Opus review (claude opus, about $0.5): 17 findings. Fixed: the approve-manifest decision is written only for a file the run changes (and before integrate, a failed write stops it); exact path only; policy extended in place instead of rebuilt; hint quotes the path; busy lock; review tickets cannot change lists; .env refused in context/tests; duplicates dropped; blocked security wins over a test retry; old and new lists logged. Not changed (noted): an approval is tied to the path, not the content hash (a queue requeue of the same run could carry a second change to the file); systemic-guard denominator for tests; one retry for both a test and a lint failure; untrusted test output in the retry note (same as the lint path). Also found by writing the fix: ticket validation still refused .env.example as context, so lesson 37 item 2 was only half done; fixed here.
