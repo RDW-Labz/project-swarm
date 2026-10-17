@@ -118,7 +118,7 @@ export function ticketsToManifest(tickets,opts={}){
     const mockupReason=mockupAdded?'design mockup for the ticket screens':null;
     // The contract files are shared by every ticket of a project: ask the Anthropic lane to cache them as the shared prefix.
     const shared=[...new Set([...autoShared,...(t.contracts||[]),...(contract?[contract]:[])])].filter(p=>context.includes(p)).sort().slice(0,10);
-    const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:isSensitiveJob(t,scope,reqs),prompt:promptFor(t,reqs,lessons,{envLine:contextEnv?.envLine,promptLine:vfields?.promptLine,kind,hasPackageJson:context.includes('package.json'),packageManager}),context,outputs,acceptance:t.acceptance||[],timeoutMs:600000};
+    const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:isSensitiveJob(t,scope,reqs),prompt:promptFor(t,reqs,lessons,{envLine:['build','migration','contract'].includes(t.type)?contextEnv?.envLine:undefined,promptLine:vfields?.promptLine,kind,hasPackageJson:context.includes('package.json'),packageManager}),context,outputs,acceptance:t.acceptance||[],timeoutMs:600000};
     if(shared.length)job.cacheContext=shared;
     // The mockups are protected paths (workers cannot change them); this job may read them, nothing else protected.
     if(mockupReason)job.allowProtectedContext=mockupReason;
@@ -161,7 +161,13 @@ export function ticketOutcome(state,ledger){
     if(st==='complete')moves.push({id,to:'review',note:'run complete'});
     else if(st==='failed'||st==='timeout')moves.push({id,to:'blocked',note:String(error||st)});
     // A job skipped because one it waits on failed is blocked by dependencies (it unlocks by itself); a cancelled run just frees the ticket.
-    else if(st==='skipped')moves.push({id,to:'blocked',note:String(error||st),reason:'deps'});
+    else if(st==='skipped'){
+      // Skipped because something it waits on failed: blocked by dependencies. Skipped with every dependency done (a cap or lane skip): just ready again.
+      const t=(ledger?.tickets||[]).find(x=>x.id===id);
+      const doneIds=new Set((ledger?.tickets||[]).filter(x=>x.status==='done').map(x=>x.id));
+      if(t&&(t.dependsOn||[]).every(d=>doneIds.has(d)))moves.push({id,to:'ready',note:String(error||'skipped')});
+      else moves.push({id,to:'blocked',note:String(error||st),reason:'deps'});
+    }
     else if(st==='cancelled')moves.push({id,to:'ready',note:'run cancelled'});
   }
   return moves;

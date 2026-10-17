@@ -52,6 +52,9 @@ test('eval 28: a build ticket is done only after typecheck and lint passed; a fa
   const quality = await qualityFor(root, null);
   const { manifest } = ticketsToManifest([ticket({ files: ['src/a.ts'] })], { ledger: { tickets: [] }, ready: false, quality });
   assert.deepEqual(manifest.checks.map(c => c.name), ['typecheck', 'lint']);
+  // The run's manifest is what says which checks the batches ran (a tsconfig or lint script added later by a ticket cannot demand more).
+  await fs.mkdir(path.join(root, '.swarm/runs/r9'), { recursive: true });
+  await fs.writeFile(path.join(root, '.swarm/runs/r9/manifest.json'), JSON.stringify(manifest));
   // Old behavior: a batch with no quality check marked the ticket done. Now it stays in review.
   await writeState(root, { id: 'r9', integratedAt: 'now', jobs: [{ id: 'T-0001', status: 'complete', outputs: ['src/a.ts'] }], mergeQueue: batch(['tests']) });
   const missing = await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated']);
@@ -184,4 +187,57 @@ test('small fixes: lesson areas are the real ones; example env names reach the t
   assert.doesNotMatch(env.envLine, /secretpw|sk_live|postgres/);
   const { manifest } = ticketsToManifest([ticket({ files: ['src/a.ts'] })], { ledger: { tickets: [] }, ready: false, contextEnv: { ...env, exists: () => false, sizes: {}, listFiles: () => [], profileContext: {} } });
   assert.match(manifest.jobs[0].prompt, /Environment variable names this project reads/);
+});
+
+test('review fixes: no paid retries for failures that are not the tickets, stale runs cannot move tickets, notes are redacted', async t => {
+  const root = await project(t);
+  const three = ['T-0001', 'T-0002', 'T-0003'];
+  const mk = id => ticket({ id, status: 'review', files: [`src/${id}.ts`] });
+  await withLedger(root, three.map(mk), {});
+  const jobs = three.map(id => ({ id, status: 'complete', outputs: [`src/${id}.ts`] }));
+  // A run built before the project had a lint script: the batches never ran lint, so the ticket cannot be asked for it (and the owner is warned).
+  await fs.mkdir(path.join(root, '.swarm/runs/r9'), { recursive: true });
+  await fs.writeFile(path.join(root, '.swarm/runs/r9/manifest.json'), JSON.stringify({ version: 1, jobs: [], checks: [] }));
+  await writeState(root, { id: 'r9', integratedAt: 'now', jobs, mergeQueue: { state: 'done', integrated: three, integratedIn: Object.fromEntries(three.map(id => [id, 1])), checkFailed: [], batches: [{ id: 1, jobs: three, checks: 'passed', checkResults: [] }] } });
+  const early = await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated']);
+  assert.match(early.stdout, /3 ticket\(s\) marked done/);
+  assert.match(early.stdout, /profile now asks for typecheck, lint/);
+  // The base already fails lint: every ticket of the run fails it. Nothing climbs the paid ladder.
+  await withLedger(root, three.map(mk), {});
+  const lint = id => ({ job: id, checks: ['lint'], tail: 'old error in a file nobody owns' });
+  await writeState(root, { id: 'r9', integratedAt: 'now', jobs, mergeQueue: { state: 'done', integrated: [], checkFailed: three.map(lint), batches: [] } });
+  const systemic = await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated']);
+  assert.match(systemic.stdout, /lint check failed for 3 tickets of this run/);
+  assert.deepEqual((await readLedger(root)).tickets.map(x => [x.status, x.escalation ?? 0]), [['review', 0], ['review', 0], ['review', 0]]);
+  // A test check that ran 0 tests is a configuration error, not a ticket failure.
+  await writeState(root, { id: 'r9', integratedAt: 'now', jobs, mergeQueue: { state: 'done', integrated: [], checkFailed: [{ job: 'T-0001', checks: ['tests'], tail: 'ok\nno-tests: the check passed but ran 0 tests' }], batches: [] } });
+  const noTests = await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated']);
+  assert.match(noTests.stdout, /T-0001 \(the tests check ran 0 tests: fix verify.command/);
+  assert.equal((await readLedger(root)).tickets[0].status, 'review');
+  // One ticket failing alone is retried, and its stored note holds no credentials.
+  await writeState(root, { id: 'r9', integratedAt: 'now', jobs, mergeQueue: { state: 'done', integrated: [], checkFailed: [{ job: 'T-0001', checks: ['tests'], tail: 'connect postgres://app:hunter2pw@db.internal/x failed; API_TOKEN=abcd1234 ' + 'a'.repeat(40) }], batches: [] } });
+  await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated']);
+  const note = (await readLedger(root)).tickets[0].retryNote;
+  assert.match(note, /connect postgres:\/\/\*\*\*@db\.internal/);
+  assert.doesNotMatch(note, /hunter2pw|abcd1234|a{32}/);
+  // An older run synced again cannot move a ticket that a newer wave is running.
+  const ledger = await readLedger(root);
+  ledger.tickets[1] = { ...ledger.tickets[1], status: 'running', waveAt: '2026-10-17T12:00:00.000Z' };
+  await writeLedger(root, ledger);
+  await writeState(root, { id: 'r9', startedAt: '2026-10-17T10:00:00.000Z', jobs: [{ id: 'T-0002', status: 'failed', error: 'boom' }] });
+  await runScopeCommand(root, 'scope', ['sync', 'r9']);
+  assert.equal((await readLedger(root)).tickets[1].status, 'running');
+});
+
+test('review fixes: zero-test counting handles go, vitest and nested tap; verify tickets get one retry', async () => {
+  const { countTests } = await import('../tools/zero-tests.mjs');
+  assert.equal(countTests('ok  mod/a 0.01s\n?   mod/b [no test files]').count, 1);
+  assert.equal(countTests('?   mod/b [no test files]').count, 0);
+  assert.equal(countTests('# Subtest\n    1..0\n# tests 4').count, 4);
+  assert.equal(countTests('No test files found\n Tests  3 passed (3)').count, 3);
+  assert.equal(countTests(' Tests  5 skipped (5)').count, 0);
+  assert.equal(countTests('ℹ tests 0\nℹ pass 0').count, 0);
+  const { nextStep } = await import('../tools/escalation.mjs');
+  assert.equal(nextStep({}, { error: 'x', maxLevel: 1 }).status, 'ready');
+  assert.equal(nextStep({ escalation: 1 }, { error: 'x', maxLevel: 1 }).status, 'blocked');
 });

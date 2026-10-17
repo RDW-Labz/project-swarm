@@ -159,8 +159,9 @@ async function ensureServer(config, baseUrl, fetchImpl, { cwd, log, explicitBase
   const logDir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-ui-server-'));
   const logFile = path.join(logDir, 'server.log');
   const handle = await fs.open(logFile, 'wx');
-  const startArgv = own ? expandStart(config.start, Number(port)) : config.start;
-  const child = spawn(startArgv[0], startArgv.slice(1), { cwd, shell: false, detached: true, stdio: ['ignore', handle.fd, handle.fd], env: allowedEnv(own ? startEnv(Number(port)) : (port ? { PORT: port } : {})) });
+  const portNumber = Number(port) || 80;
+  const startArgv = expandStart(config.start, portNumber);
+  const child = spawn(startArgv[0], startArgv.slice(1), { cwd, shell: false, detached: true, stdio: ['ignore', handle.fd, handle.fd], env: allowedEnv(startEnv(portNumber)) });
   live.add(child.pid);
   let exited = false;
   child.on('error', () => { exited = true; });
@@ -168,7 +169,8 @@ async function ensureServer(config, baseUrl, fetchImpl, { cwd, log, explicitBase
   const stop = async () => { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } live.delete(child.pid); await handle.close().catch(() => {}); await fs.rm(logDir, { recursive: true, force: true }); };
   const deadline = Date.now() + config.timeoutSec * 1000;
   while (Date.now() < deadline && !exited) {
-    if (await answers(ready, fetchImpl)) { log?.(`dev server started: ${startArgv.join(' ')}`); return { stop, started: true, base: baseUrl }; }
+    // Only an answer while our own child is still running counts: another process on the port is not evidence.
+    if (await answers(ready, fetchImpl) && !exited) { log?.(`dev server started: ${startArgv.join(' ')}`); return { stop, started: true, base: baseUrl }; }
     await new Promise(resolve => setTimeout(resolve, 500));
   }
   const tail = (await fs.readFile(logFile, 'utf8').catch(() => '')).slice(-400);

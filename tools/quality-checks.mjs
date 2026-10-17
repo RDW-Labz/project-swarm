@@ -83,7 +83,7 @@ export function qualityEvidence(state, jobId, names) {
   } else {
     for (let i = batches.length - 1; i >= 0; i -= 1) {
       const b = batches[i];
-      const jobs = (b && Array.isArray(b.jobs)) ? b.jobs : [];
+      const jobs = (b && Array.isArray(b.jobs)) ? b.jobs : (b && Array.isArray(b.jobIds)) ? b.jobIds : [];
       if (jobs.some((entry) => jobIdOf(entry) === jobId)) {
         batch = b;
         break;
@@ -96,6 +96,9 @@ export function qualityEvidence(state, jobId, names) {
   }
 
   const batchId = batch.id;
+  if (batch.security === 'blocked') {
+    return { ok: false, reason: `batch ${batch.id} was blocked by the security gate` };
+  }
   if (batch.checks !== 'passed') {
     return { ok: false, reason: `batch ${batchId} checks are ${batch.checks}` };
   }

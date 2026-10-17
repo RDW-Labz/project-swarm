@@ -10,16 +10,17 @@ export function isTruncation(error) {
   return TRUNCATION_MARKERS.some((marker) => lower.includes(marker));
 }
 
-export function nextStep(ticket, { error } = {}) {
+export function nextStep(ticket, { error, maxLevel } = {}) {
+  const top = Number.isInteger(maxLevel) && maxLevel >= 0 && maxLevel < MAX_LEVEL ? maxLevel : MAX_LEVEL;
   const truncated = isTruncation(error);
   let level = (Number(ticket?.escalation) || 0) + 1;
   if (truncated) {
-    level = Math.min(Math.max(level, 2), MAX_LEVEL + 1);
+    level = Math.min(Math.max(level, 2), top + 1);
   }
   const kind = truncated ? 'truncated' : 'failed';
-  const status = level <= MAX_LEVEL ? 'ready' : 'blocked';
+  const status = level <= top ? 'ready' : 'blocked';
   const reason = status === 'blocked'
-    ? `blocked: ${MAX_LEVEL} escalations failed`
+    ? `blocked: ${top} escalations failed`
     : `escalated to level ${level} after ${truncated ? 'truncated output' : 'failure'}`;
   return { level, status, kind, reason };
 }

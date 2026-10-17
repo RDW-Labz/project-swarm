@@ -170,7 +170,7 @@ test('sync --integrated marks a ticket with tests done only when the runner saw 
   assert.equal((await readLedger(root)).tickets.find(x => x.id === 'T-0001').status, 'done');
 });
 
-test('a ticket whose tests failed in the queue goes back to ready one level higher with the failure, and blocks only after the last level', async t => {
+test('a ticket with tests goes back to ready once with the failure, then blocks (the verify lane does not change with a level)', async t => {
   const root = await project(t);
   await approvedWith(root, { profile: { verify: { command: ['npm', 'test'] } }, tickets: [ticket({ files: ['src/a.ts', 'tests/a.test.ts'], status: 'review' })] });
   const failed = { state: 'done', integrated: [], checkFailed: [{ job: 'T-0001', checks: ['tests'], tail: 'expected 200 got 500' }], batches: [] };
@@ -182,18 +182,14 @@ test('a ticket whose tests failed in the queue goes back to ready one level high
   assert.equal(tk.attempts, 1);
   assert.equal(tk.escalation, 1);
   assert.match(tk.retryNote, /failed checks: tests; expected 200 got 500/);
-  // each further failed attempt climbs a level (Codex, then Claude); the one after the last level blocks it
-  let last;
-  for (let i = 0; i < 3; i += 1) {
-    await transition(root, 'T-0001', 'running');
-    await transition(root, 'T-0001', 'review');
-    last = await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated']);
-  }
-  assert.match(last.stdout, /blocked after every escalation level failed: T-0001/);
+  // the second failed attempt blocks it: a higher level would run on the same lane with the same limits
+  await transition(root, 'T-0001', 'running');
+  await transition(root, 'T-0001', 'review');
+  const second = await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated']);
+  assert.match(second.stdout, /blocked after every escalation level failed: T-0001/);
   tk = (await readLedger(root)).tickets[0];
   assert.equal(tk.status, 'blocked');
   assert.equal(tk.blockReason, 'failure');
-  assert.equal(tk.attempts, 4);
 });
 
 test('a manifest the runner would refuse leaves the tickets as they were', async t => {

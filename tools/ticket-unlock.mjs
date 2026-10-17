@@ -14,7 +14,8 @@ function hasNoRetryNote(ticket) {
 
 function blockReasonAllowsUnlock(ticket) {
   const r = ticket.blockReason;
-  return r === undefined || r === null || r === 'deps';
+  // Only a recorded dependency block unlocks by itself; an unknown reason (an older ledger) could be a failure or an owner's hold.
+  return r === 'deps';
 }
 
 export function findUnlockable(tickets) {

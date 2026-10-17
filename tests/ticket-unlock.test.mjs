@@ -8,7 +8,7 @@ function done(id) {
 }
 
 function blocked(id, dependsOn, extra) {
-  return Object.assign({ id, status: 'blocked', dependsOn }, extra || {});
+  return Object.assign({ id, status: 'blocked', dependsOn, blockReason: 'deps' }, extra || {});
 }
 
 function clone(value) {
@@ -23,9 +23,9 @@ test('findUnlockable: empty input returns empty list', () => {
   assert.deepStrictEqual(findUnlockable([]), []);
 });
 
-test('findUnlockable: blocked ticket with all deps done and no blockReason is unlockable', () => {
-  const tickets = [done('a'), blocked('t1', ['a'])];
-  assert.deepStrictEqual(findUnlockable(tickets), ['t1']);
+test('findUnlockable: a blocked ticket with no recorded reason (an older ledger) is not unlocked', () => {
+  const tickets = [done('a'), { id: 't1', status: 'blocked', dependsOn: ['a'] }];
+  assert.deepStrictEqual(findUnlockable(tickets), []);
 });
 
 test('findUnlockable: blockReason deps is unlockable', () => {
