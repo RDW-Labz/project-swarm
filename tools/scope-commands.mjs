@@ -38,6 +38,7 @@ export const SCOPE_USAGE = [
   '       swarm scope sync RUN [--integrated]',
   '       swarm scope contracts OPENAPI.json',
   '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high] [--set STATUS] [--note TEXT] [--json]',
+  '       swarm tickets --mark-deps [ID...] [--yes]     (one time, older ledgers: mark blocked tickets with no reason as dependency-blocked so they unlock)',
   '       swarm change "reason" [FILE] [--yes]',
   '       swarm go --scope [--max-jobs N] [go options]',
   ''].join('\n');
@@ -743,10 +744,41 @@ async function refreshPlan(root) {
 
 const row = t => `${t.id} ${t.status.padEnd(9)} ${t.stage} ${t.risk.padEnd(6)} ${t.type.padEnd(9)} ${t.title}`;
 
+// One-time migration for ledgers made before blockReason existed: a blocked ticket with no reason, no attempts, no retry note and
+// dependencies was blocked by its dependencies (its job was skipped). Marking it `deps` lets it unlock by itself; ready ones unlock now.
+async function markDepsCommand(root, ledger, ids, flags) {
+  const wanted = ids.length ? new Set(ids) : null;
+  const eligible = t => t.status === 'blocked' && !t.blockReason && !t.attempts && !t.retryNote && (t.dependsOn ?? []).length > 0;
+  const candidates = ledger.tickets.filter(t => eligible(t) && (!wanted || wanted.has(t.id)));
+  const refused = wanted ? [...wanted].filter(id => !candidates.some(t => t.id === id)) : [];
+  if (refused.length) return out(`not eligible (not blocked, already has a reason, failed before, or no dependencies): ${refused.join(', ')}`, 1);
+  if (!candidates.length) return out('no old blocked tickets to mark (a blocked ticket needs no reason, no failed attempts and dependencies)');
+  const list = candidates.map(t => `${t.id}  waits on ${t.dependsOn.join(', ')}`);
+  if (flags.yes !== true) return out([`${candidates.length} blocked ticket(s) with no recorded reason look dependency-blocked:`, ...list.slice(0, 60), ...(list.length > 60 ? [`...and ${list.length - 60} more`] : []), '', 'Mark them as dependency-blocked (they unlock when their dependencies are done): rerun with --yes. Name ticket ids to mark only those.'].join('\n'));
+  const ours = new Set(candidates.map(t => t.id));
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const result = await withLock(root, async () => {
+        const fresh = await readLedger(root);
+        for (const t of fresh.tickets) if (ours.has(t.id) && eligible(t)) t.blockReason = 'deps';
+        const { ledger: next, unlocked } = unlockReady(fresh);
+        next.updatedAt = new Date().toISOString();
+        await writeLedger(root, next);
+        await appendLog(root, { event: 'mark-deps', by: 'owner', tickets: [...ours], unlocked });
+        return unlocked;
+      });
+      await refreshPlan(root);
+      return out(`${ours.size} ticket(s) marked as blocked by dependencies; ${result.length} unlocked now${result.length ? ` (${result.slice(0, 20).join(', ')})` : ''}. The others unlock when their dependencies are done (swarm go --scope and autopilot check).`);
+    } catch (error) { if (error.code !== 'scope-busy' || attempt === 4) throw error; await new Promise(resolve => setTimeout(resolve, 300)); }
+  }
+  return out('another swarm go --scope is starting a wave; try again in a minute', 1);
+}
+
 export async function runTicketsCommand(root, args) {
   const { flags, rest } = parseArgs(args);
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
+  if (flags['mark-deps']) return markDepsCommand(root, ledger, rest, flags);
   if (flags.set !== undefined) {
     if (rest.length !== 1) return bad('tickets --set needs one ticket id');
     if (!STATUSES.includes(flags.set)) return out(`status must be one of: ${STATUSES.join(', ')}`, 1);
