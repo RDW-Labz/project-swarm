@@ -64,6 +64,7 @@ Open points: Bedrock limits on tool-use streaming fields differ by model generat
 - Tests systemic-failure guard: `failCounts.get('tests')` counts only tickets with tests; compare it with the number of tickets that have test evidence, not the quality-checked total.
 - One retry, two failures: a ticket whose tests and lint both failed uses one retry for the tests and a second for the lint; combine them into one retry note.
 - The retry note carries the last 500 characters of check output as is (same as the lint path); strip control characters and wrap it as data.
+
 ## Parked by the owner (2026-10-17)
 - Lesson 1: remote hosts (ssh/sandbox) send no command, so remote jobs hang; fix needs a test against a real host (dev2). Low while only local lanes are used.
 - Strict cancel: block dependents of a cancelled ticket for a look instead of dropping the dependency and resealing the approval.
