@@ -56,9 +56,7 @@ Open points: Bedrock limits on tool-use streaming fields differ by model generat
 - A change-order reopen sets a ticket back to todo but keeps its `escalation` level, so a reopened ticket may start at Codex or Claude. Reset `escalation`, `attempts` and `retryNote` when a change order reopens a ticket.
 
 ## Lesson 34 left-overs
-- Check that an integration ticket's test is really route-level or end-to-end (the file requests a route or page), not only that `tests` is set.
-- Chain integration tickets that edit the same shared file (router, navigation, layout) by code instead of by the split prompt.
-- A failed doneEvidence test check in review (not only typecheck, lint, build) could also go back to the worker automatically.
+- Done in 1.94.0 to 1.96.0: failed test goes back to the worker; the route-level test path must be a test file (a stricter check that the file really requests a route is still open); integration tickets sharing a file are chained by code.
 - A later split that adds a module to an already-wired requirement does not add it to the existing integration ticket's dependencies (`--wire` only helps requirements with none): flag it.
 - Cancelling a ticket now drops it from dependents and reseals the approval (asked for by the owner); a stricter option would block dependents for a look first.
 
@@ -66,3 +64,7 @@ Open points: Bedrock limits on tool-use streaming fields differ by model generat
 - Tests systemic-failure guard: `failCounts.get('tests')` counts only tickets with tests; compare it with the number of tickets that have test evidence, not the quality-checked total.
 - One retry, two failures: a ticket whose tests and lint both failed uses one retry for the tests and a second for the lint; combine them into one retry note.
 - The retry note carries the last 500 characters of check output as is (same as the lint path); strip control characters and wrap it as data.
+## Parked by the owner (2026-10-17)
+- Lesson 1: remote hosts (ssh/sandbox) send no command, so remote jobs hang; fix needs a test against a real host (dev2). Low while only local lanes are used.
+- Strict cancel: block dependents of a cancelled ticket for a look instead of dropping the dependency and resealing the approval.
+

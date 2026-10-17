@@ -5,11 +5,16 @@
 export const WIRING_PROMPT = [
   'Wiring rule: for every requirement that has build tickets, add ONE integration ticket (type build, "integration": true) that mounts those modules in the real routes, pages or entry points (for example src/app/.../page.tsx, a router file, an API route file) so a user can reach the feature.',
   'Its "tests" lists a route-level or end-to-end test that requests the real route or page and checks the result (not a unit test of one module); its acceptance names the route or page; its scopeRefs are the requirement ids; its files are the route and page files only.',
-  'You do not need to list its dependsOn on the module tickets of the same requirement: the runner adds them. Two integration tickets that must edit the same shared file (router, navigation, layout) depend on each other in a chain.',
+  'You do not need to list its dependsOn on the module tickets of the same requirement: the runner adds them. Two integration tickets that edit the same shared file (router, navigation, layout) are chained by the runner, the later one after the earlier.',
   'A requirement is done only when its integration ticket is done and its route-level test passed.',
 ].join('\n');
 
 export const WIRE_ONLY_PROMPT = 'Write ONLY integration tickets (every ticket has "integration": true). The module tickets below already exist; do not repeat them.';
+
+// A test path must look like a test: a test folder, a .test/.spec file, or a python/go test file. A page or module file is not a route-level test.
+const TEST_DIR_RE = /(^|\/)(tests?|__tests__|e2e|spec|specs|cypress|playwright)\//i;
+const TEST_FILE_RE = /\.(test|spec)\.[A-Za-z0-9]+$|(^|\/)test_[^/]+\.py$|_test\.(py|go)$/i;
+export const looksLikeTestFile = p => typeof p === 'string' && (TEST_FILE_RE.test(p) || TEST_DIR_RE.test(p)) && !/\/$/.test(p);
 
 const buildOf = t => t && t.type === 'build' && t.status !== 'cancelled';
 
@@ -32,6 +37,7 @@ export function wiringGaps(tickets, reqIds) {
     const integ = integrationTickets(list, req);
     if (!integ.length) gaps.push({ req, reason: `${req}: build tickets but no integration ticket that mounts them in a route or page` });
     else if (!integ.some(t => (t.tests ?? []).length)) gaps.push({ req, reason: `${req}: its integration ticket has no route-level test (set "tests")` });
+    else if (!integ.some(t => (t.tests ?? []).some(looksLikeTestFile))) gaps.push({ req, reason: `${req}: the route-level test of its integration ticket is not a test file (${integ.flatMap(t => t.tests ?? []).slice(0, 3).join(', ')}); name a file in a tests folder or ending in .test or .spec` });
   }
   return gaps;
 }
