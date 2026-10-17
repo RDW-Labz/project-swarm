@@ -87,7 +87,7 @@ test('no asset file uses DOM-string sinks or eval', () => {
 test('no http(s) URL outside comment or SPDX lines in css and js files', () => {
   for (const name of files.filter((f) => /\.(?:js|css)$/.test(f))) {
     read(name).split(/\r?\n/).forEach((line, i) => {
-      if (URL_RE.test(line) && !isCommentLine(line) && !line.includes('http://www.w3.org/2000/svg')) {
+      if (URL_RE.test(line.split('http://www.w3.org/2000/svg').join('')) && !isCommentLine(line)) {
         assert.fail(name + ':' + (i + 1) + ' has a URL outside a comment');
       }
     });
