@@ -296,7 +296,7 @@ function splitPrompt(scope, stage, only, layout = '', wire = null, existing = nu
     'A ticket of type contract writes exactly one OpenAPI 3 JSON file under contracts/ (for example contracts/api.json) using only paths (get, post, put, patch, delete, each with an operationId), components.schemas and local $ref; TypeScript, SQL and YAML types belong in build tickets that depend on the contract ticket.',
     'Migration tickets write DDL only; their tests are separate tickets in a tests folder.',
     'Keep every ticket small enough for one worker answer: at most 4 files, each file under about 12 KB when written; split a bigger feature into several tickets (the output of one worker is capped at about 15 KB per file).',
-    'Tools: when an acceptance check or test runs a tool (supabase, playwright, vitest, jest, cypress, prisma, drizzle, eslint), a ticket must write that tool\'s config file (for example supabase/config.toml, playwright.config.ts) unless the project already has it.',
+    'Tools: when an acceptance check or test runs a tool command (supabase, cypress, prisma, drizzle-kit), a ticket must write that tool\'s config file (for example supabase/config.toml, cypress.config.ts) unless the project already has it.',
     WIRING_PROMPT,
     ...(wire ? [WIRE_ONLY_PROMPT, ...wire.filter(w => w.stage === stage.id).map(w => `Existing module tickets of ${w.req}: ${w.modules.map(m => `${m.id} ${m.title} (${(m.files ?? []).join(', ')})`).join('; ')}`)] : []),
     ...(layout ? ['Project layout (use these folders):', layout] : []),
@@ -492,7 +492,7 @@ async function cmdCheck(root, { rest }) {
   const result = checkScope(scope);
   const lines = [`${file}: ${scope.requirements.length} requirements, ${scope.stages.length} stages, ${result.findings.length} findings`];
   for (const f of result.findings) lines.push(`  ${f.level} ${f.code}${f.id ? ` ${f.id}` : ''}: ${f.message} -> ${f.fix}`);
-  const led = await readLedger(root);
+  const led = await readLedger(root).catch(() => null);
   if (led) lines.push(...await toolConfigWarnings(root, led.tickets));
   const items = day0Checklist(scope);
   if (items.length) lines.push(`Day 0: ${items.length} outside services need an owner: ${items.map(i => i.service).join(', ')}`);

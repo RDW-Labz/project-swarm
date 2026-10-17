@@ -44,7 +44,7 @@ function isSensitiveJob(t,scope,reqs){
 }
 
 const DB_TEST_RULES='Database tests (pgTAP, run by supabase test db): the runner runs every .sql file in supabase/tests and in all its subfolders, so a helper or fixture file left there runs as a test too; inline helpers in the test file. A test file can only \\ir files inside the folder the runner mounts, never files elsewhere in the repo. Do not use dblink as a non-superuser (it needs a password); test through roles with set local role and request.jwt.claims instead. Start each test with begin; select plan(N); and end with select * from finish(); rollback;';
-export const isDbTestTicket=t=>(t.files||[]).some(f=>/(^|\/)supabase\/tests\//.test(f)||/(^|\/)(db|database)\/tests?\/.*\.sql$/.test(f))||(t.acceptance||[]).some(a=>/\b(pgtap|supabase test db)\b/i.test(a));
+export const isDbTestTicket=t=>(t.files||[]).some(f=>/(^|\/)supabase\/tests\//.test(f))||(t.type==='test'&&(t.acceptance||[]).some(a=>/\b(pgtap|supabase test db)\b/i.test(a)));
 
 function promptFor(t,reqs,lessons,extra={}){
   const lines=['Ticket '+t.id+': '+t.title];

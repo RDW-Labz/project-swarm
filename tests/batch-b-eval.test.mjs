@@ -46,7 +46,14 @@ test('eval 37.1 (lesson 16): an acceptance check that runs a tool with no config
   const cfg = item('cfg', { files: ['supabase/config.toml'] });
   assert.deepEqual(missingToolConfigs([{ id: 'T-1', type: 'test', status: 'todo', acceptance: ['supabase test db passes'], files: [] }, { id: 'T-2', type: 'build', status: 'todo', files: ['supabase/config.toml'] }]), []);
   assert.deepEqual(missingToolConfigs([{ id: 'T-1', type: 'test', status: 'todo', acceptance: ['supabase test db passes'], files: [] }], ['supabase/config.toml']), []);
-  assert.equal(missingToolConfigs([{ id: 'T-1', type: 'test', status: 'todo', acceptance: ['playwright run passes'], files: [] }])[0].config, 'playwright.config.ts');
+  assert.equal(missingToolConfigs([{ id: 'T-1', type: 'test', status: 'todo', acceptance: ['cypress run passes'], files: [] }])[0].config, 'cypress.config.ts');
+  // No false warnings: prose that only names a product, tools that run without a config, a runtime library, a config in a subfolder.
+  const warn = (acceptance, files = []) => missingToolConfigs([{ id: 'T-1', type: 'build', status: 'todo', acceptance: [acceptance], files: [] }], files);
+  assert.deepEqual(warn('the profile row is saved in Supabase and supabase.auth.signUp works'), []);
+  assert.deepEqual(warn('vitest run passes and eslint is clean and jest and playwright test pass'), []);
+  assert.deepEqual(warn('queries use drizzle-orm and prisma.user.findMany returns rows'), []);
+  assert.deepEqual(warn('supabase test db passes', ['apps/db/supabase/config.toml']), []);
+  assert.equal(warn('drizzle-kit generate works')[0].config, 'drizzle.config.ts');
   assert.equal(cfg.files[0], 'supabase/config.toml');
   // The split prompt asks for it.
   const { buildSplitManifest } = await import('../tools/scope-commands.mjs');
@@ -63,11 +70,14 @@ test('eval 37.2 (lesson 21): a ticket that writes or runs DB tests gets the runn
   assert.match(prompt(base), /can only \\ir files inside the folder the runner mounts/);
   assert.match(prompt(base), /Do not use dblink as a non-superuser/);
   assert.doesNotMatch(prompt({ ...base, type: 'build', files: ['src/a.ts'], acceptance: ['returns 201'] }), /pgTAP/);
+  // Not for a migration ticket that only mentions the test run, nor a plain-postgres db/tests folder.
+  assert.doesNotMatch(prompt({ ...base, type: 'migration', files: ['supabase/migrations/0001.sql'] }), /pgTAP/);
+  assert.doesNotMatch(prompt({ ...base, files: ['db/tests/a.sql'], acceptance: ['pg_prove passes'] }), /pgTAP/);
 });
 
 test('eval 37.3 (lesson 26): a manifest command that kills processes by a loose pattern is refused, and workers and agents are told', () => {
-  for (const bad of ['pkill -f cat', 'killall node', 'kill $(pgrep -f vite)', 'ps aux | xargs kill', 'sh -c "pkill -f x"']) assert.equal(looseKill(bad), true, bad);
-  for (const ok of ['kill 4242', 'npm test', 'node scripts/pkill-free.mjs', 'echo skill']) assert.equal(looseKill(ok), false, ok);
+  for (const bad of ['pkill -f cat', 'killall node', 'kill $(pgrep -f vite)', 'pgrep -f vite | xargs kill', 'sh -c "pkill -f x"', '/usr/bin/pkill -f node', 'kill $(lsof -ti :5432)', 'fuser -k 5432/tcp', 'npx kill-port 5432']) assert.equal(looseKill(bad), true, bad);
+  for (const ok of ['kill 4242', 'npm test', 'node scripts/pkill-free.mjs', 'echo skill', 'pkill -P 123', 'pkill -F app.pid', 'kill $(pgrep -P $$)', 'cat app.pid | xargs kill', "! grep -rn 'pkill' scripts/"]) assert.equal(looseKill(ok), false, ok);
   const manifest = argv => ({ version: 1, jobs: [{ id: 'j', agent: 'ollama', model: 'm', prompt: 'x', context: [], outputs: ['out.txt'], timeoutMs: 5000 }], checks: [{ name: 'stop', argv }] });
   assert.throws(() => validateManifest(manifest(['sh', '-c', 'pkill -f cat'])), /loose-kill/);
   assert.doesNotThrow(() => validateManifest(manifest(['npm', 'test'])));
