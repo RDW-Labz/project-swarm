@@ -128,7 +128,7 @@ test('a python-style ticket list is repaired, anything else invalid is refused',
 
 test('approve writes the context files and the build output ignore lines', async t => {
   const root = await project(t);
-  const stage = [{ key: 'a', title: 'Create', type: 'build', scopeRefs: ['R-001', 'R-002'], acceptance: ['ok'], files: ['src/a.ts'], size: 'S', risk: 'low' }];
+  const stage = [{ key: 'a', title: 'Create', type: 'build', scopeRefs: ['R-001', 'R-002'], acceptance: ['ok'], files: ['src/a.ts'], size: 'S', risk: 'low' }, { key: 'm', title: 'Mount', type: 'build', integration: true, scopeRefs: ['R-001', 'R-002'], acceptance: ['route'], files: ['src/routes/a.ts'], tests: ['tests/routes.test.ts'], size: 'S', risk: 'low' }];
   await fs.mkdir(path.join(root, '.swarm/workspaces/r1/split-S1/docs/scope/split'), { recursive: true });
   await fs.writeFile(path.join(root, '.swarm/workspaces/r1/split-S1/docs/scope/split/S1.json'), JSON.stringify(stage));
   await fs.mkdir(path.join(root, '.swarm/runs/r1'), { recursive: true });

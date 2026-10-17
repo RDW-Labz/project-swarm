@@ -3,13 +3,14 @@ import fs from 'node:fs/promises';
 import { randomBytes, createHash } from 'node:crypto';
 import path from 'node:path';
 import { safeWritableDir, assertRegularOrMissing } from './journal.mjs';
+import { wiringGaps } from './wiring.mjs';
 
 export const STATUSES = ['todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled'];
 export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'contract', 'human'];
 const RISKS = ['low', 'medium', 'high'];
 const SIZES = ['S', 'M'];
 const NEEDS_ACCEPTANCE = ['build', 'test', 'migration'];
-const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps', 'skeleton', 'tests', 'screens'];
+const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps', 'skeleton', 'tests', 'screens', 'integration'];
 const RESERVED_FIRST = ['.git', '.swarm', '.github-hooks-free'];
 // Build output anywhere in a path, and any dot-env file, are never ticket files.
 const BUILD_DIRS = ['.next', 'node_modules', 'dist'];
@@ -77,6 +78,7 @@ export function validateTicket(t) {
   if (!STATUSES.includes(t.status)) errors.push(`bad status: ${t.status}`);
   if (t.sensitive !== undefined && typeof t.sensitive !== 'boolean') errors.push('sensitive must be a boolean');
   if (t.skeleton !== undefined && typeof t.skeleton !== 'boolean') errors.push('skeleton must be a boolean');
+  if (t.integration !== undefined && typeof t.integration !== 'boolean') errors.push('integration must be a boolean');
   if (t.screens !== undefined && !(isStrArr(t.screens) && t.screens.length <= 5 && t.screens.every(id => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id) && id.length >= 2 && id.length <= 40))) errors.push('screens must be up to 5 kebab-case screen ids');
   if (t.origin !== undefined && t.origin !== 'ci') errors.push('origin must be ci when set');
   if (t.type === 'human' && !(isStrArr(t.steps) && t.steps.length >= 1 && t.steps.length <= 30)) errors.push('human tickets need 1 to 30 steps');
@@ -151,10 +153,33 @@ export async function transition(root, id, to, { by = 'system', note, now = Date
   ticket.status = to;
   // Why a ticket is blocked decides whether it may unlock by itself: only a dependency block does.
   if (to === 'blocked') ticket.blockReason = reason ?? 'manual'; else delete ticket.blockReason;
+  // A cancelled ticket stops being a dependency: the tickets that waited on it no longer wait.
+  const pruned = to === 'cancelled' ? pruneCancelledDeps(ledger).pruned : [];
   ledger.updatedAt = new Date(now).toISOString();
   await writeLedger(root, ledger);
   await appendLog(root, { event: 'transition', id, from, to, by, note: note ?? null });
+  if (pruned.length) await appendLog(root, { event: 'prune-deps', cancelled: id, tickets: pruned.map(p => p.id) });
   return ticket;
+}
+
+// Takes every cancelled ticket out of the dependsOn of the others (in place). The owner's approval stays valid when it was valid just
+// before: removing a dependency on a cancelled ticket only makes a ticket less blocked, and the seal is renewed over the new set.
+export function pruneCancelledDeps(ledger) {
+  const tickets = ledger?.tickets ?? [];
+  const cancelled = new Set(tickets.filter(t => t.status === 'cancelled').map(t => t.id));
+  const wasApproved = isApproved(ledger);
+  const pruned = [];
+  for (const t of tickets) {
+    const removed = (t.dependsOn ?? []).filter(d => cancelled.has(d));
+    if (!removed.length) continue;
+    t.dependsOn = t.dependsOn.filter(d => !cancelled.has(d));
+    pruned.push({ id: t.id, removed });
+  }
+  if (pruned.length && wasApproved) {
+    const prev = ledger.approved;
+    ledger.approved = { ...prev, ...approveLedger(ledger, { by: prev.by }).approved, at: prev.at };
+  }
+  return { ledger, pruned };
 }
 
 export function readyTickets(tickets) {
@@ -192,6 +217,13 @@ export function filterTickets(tickets, { stage, status, type, risk, requirement,
     (none(file) || (t.files ?? []).includes(file)));
 }
 
+// A requirement that has build tickets is wired when one of them is an integration ticket (it mounts the modules in real routes or
+// pages and has a route-level test). Only ledgers made with the wiring rule (ledger.wiring) are held to it.
+export function requirementWired(ledger, reqId) {
+  if (!ledger?.wiring) return true;
+  return wiringGaps(ledger.tickets ?? [], [reqId]).length === 0;
+}
+
 export function ledgerStats(ledger) {
   const tickets = ledger?.tickets ?? [];
   const byStatus = Object.fromEntries(STATUSES.map(s => [s, 0]));
@@ -210,7 +242,7 @@ export function ledgerStats(ledger) {
     const reqIds = ledger.requirements.map(r => (typeof r === 'string' ? r : r.id));
     const covered = reqIds.filter(id => {
       const refs = live.filter(t => (t.scopeRefs ?? []).includes(id));
-      return refs.length > 0 && refs.every(t => t.status === 'done');
+      return refs.length > 0 && refs.every(t => t.status === 'done') && requirementWired(ledger, id);
     }).length;
     coveragePct = reqIds.length ? Math.round(100 * covered / reqIds.length) : 100;
   }
@@ -248,7 +280,7 @@ export function renderBuildPlan(ledger, scope) {
     for (const r of reqs) {
       const refs = live.filter(t => (t.scopeRefs ?? []).includes(r.id));
       const done = refs.filter(t => t.status === 'done').length;
-      const state = refs.length && done === refs.length ? 'done' : done || refs.some(t => t.status === 'running' || t.status === 'review') ? 'partial' : 'missing';
+      const state = refs.length && done === refs.length && !requirementWired(ledger, r.id) ? 'unwired' : refs.length && done === refs.length ? 'done' : done || refs.some(t => t.status === 'running' || t.status === 'review') ? 'partial' : 'missing';
       out.push(`| ${cell(r.id)} | ${cell(r.text)} | ${refs.map(t => t.id).join(', ') || '-'} | ${state} |`);
     }
   }

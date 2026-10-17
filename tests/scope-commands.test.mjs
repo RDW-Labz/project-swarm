@@ -15,6 +15,8 @@ const STAGE = [
   { key: 'api', title: 'Contract', type: 'contract', scopeRefs: ['R-001', 'R-002'], files: ['contracts/api.json'], size: 'S', risk: 'low' },
   { key: 'create', title: 'Create endpoint', type: 'build', scopeRefs: ['R-001'], acceptance: ['201'], files: ['src/create.mjs'], dependsOn: ['api'], size: 'S', risk: 'medium' },
   { key: 'list', title: 'List endpoint', type: 'build', scopeRefs: ['R-002'], acceptance: ['50 rows'], files: ['src/list.mjs'], dependsOn: ['api'], size: 'S', risk: 'low' },
+  { key: 'mount-create', title: 'Mount create route', type: 'build', integration: true, scopeRefs: ['R-001'], acceptance: ['POST /requests returns 201'], files: ['src/routes/create.mjs'], tests: ['tests/routes-create.test.mjs'], size: 'S', risk: 'low' },
+  { key: 'mount-list', title: 'Mount list route', type: 'build', integration: true, scopeRefs: ['R-002'], acceptance: ['GET /requests returns rows'], files: ['src/routes/list.mjs'], tests: ['tests/routes-list.test.mjs'], size: 'S', risk: 'low' },
 ];
 
 async function project() {
@@ -52,7 +54,7 @@ test('ticketsFromStageLists maps keys to ids and reports bad dependencies', () =
   const scope = parseScope(SCOPE);
   const ok = ticketsFromStageLists([{ stage: 'S1', items: STAGE }], scope);
   assert.deepEqual(ok.errors, []);
-  assert.deepEqual(ok.tickets.map(t => t.id), ['T-0001', 'T-0002', 'T-0003']);
+  assert.deepEqual(ok.tickets.map(t => t.id), ['T-0001', 'T-0002', 'T-0003', 'T-0004', 'T-0005']);
   assert.deepEqual(ok.tickets[1].dependsOn, ['T-0001']);
   const bad = ticketsFromStageLists([{ stage: 'S1', items: [{ ...STAGE[1], dependsOn: ['nope'] }] }], scope);
   assert.match(bad.errors[0], /unknown keys/);
@@ -156,7 +158,7 @@ test('merging new tickets clears the approval, so go --scope refuses until you a
   await fs.writeFile(path.join(root, 'docs/scope/scope.md'), SCOPE.replace('## External', '### R-003 A user can cancel a request.\nAcceptance:\n- Cancelling returns 200.\n\n## External'));
   assert.match((await runScopeCommand(root, 'change', ['add cancel', '--yes'])).stdout, /recorded CO-001/);
   await prepareScopeRun(root, {}).then(() => {}, () => assert.fail('approval must survive the change order'));
-  await fakeRun(root, 'r3', [{ key: 'cancel', title: 'Cancel endpoint', type: 'build', scopeRefs: ['R-003'], acceptance: ['200'], files: ['src/cancel.mjs'], size: 'S', risk: 'low' }]);
+  await fakeRun(root, 'r3', [{ key: 'cancel', title: 'Cancel endpoint', type: 'build', scopeRefs: ['R-003'], acceptance: ['200'], files: ['src/cancel.mjs'], size: 'S', risk: 'low' }, { key: 'mount', title: 'Mount cancel route', type: 'build', integration: true, scopeRefs: ['R-003'], acceptance: ['route'], files: ['src/routes/cancel.mjs'], tests: ['tests/cancel-route.test.mjs'], size: 'S', risk: 'low' }]);
   const merged = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r3', '--merge']);
   assert.equal(merged.exitCode, 0, merged.stdout);
   await assert.rejects(prepareScopeRun(root, {}), /not approved/);
@@ -235,6 +237,8 @@ test('skeleton first: only the skeleton (and its dependencies) runs until it is 
     { key: 'api', title: 'Contract', type: 'contract', scopeRefs: ['R-001', 'R-002'], files: ['contracts/api.json'], size: 'S', risk: 'low' },
     { key: 'create', title: 'Create endpoint', type: 'build', scopeRefs: ['R-001'], acceptance: ['201'], files: ['src/create.mjs'], dependsOn: ['api'], size: 'S', risk: 'medium', skeleton: true },
     { key: 'list', title: 'List endpoint', type: 'build', scopeRefs: ['R-002'], acceptance: ['50 rows'], files: ['src/list.mjs'], dependsOn: ['api'], size: 'S', risk: 'low' },
+    { key: 'mount-create', title: 'Mount create route', type: 'build', integration: true, scopeRefs: ['R-001'], acceptance: ['route works'], files: ['src/routes/create.mjs'], tests: ['tests/routes-create.test.mjs'], size: 'S', risk: 'low' },
+    { key: 'mount-list', title: 'Mount list route', type: 'build', integration: true, scopeRefs: ['R-002'], acceptance: ['route works'], files: ['src/routes/list.mjs'], tests: ['tests/routes-list.test.mjs'], size: 'S', risk: 'low' },
   ];
   await fakeRun(root, 'r1', stage);
   await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
@@ -257,6 +261,7 @@ test('skeleton first: only the skeleton (and its dependencies) runs until it is 
 test('a ledger of 30 or more tickets without a skeleton gets a warning', async () => {
   const root = await project();
   const items = Array.from({ length: 31 }, (_, i) => ({ key: `k${i}`, title: `Ticket ${i}`, type: 'build', scopeRefs: ['R-001', 'R-002'][i % 2] ? [['R-001', 'R-002'][i % 2]] : [], acceptance: ['ok'], files: [`src/f${i}.mjs`], size: 'S', risk: 'low' }));
+  items.push({ key: 'm1', title: 'Mount one', type: 'build', integration: true, scopeRefs: ['R-001'], acceptance: ['ok'], files: ['src/routes/one.mjs'], tests: ['tests/one.test.mjs'], size: 'S', risk: 'low' }, { key: 'm2', title: 'Mount two', type: 'build', integration: true, scopeRefs: ['R-002'], acceptance: ['ok'], files: ['src/routes/two.mjs'], tests: ['tests/two.test.mjs'], size: 'S', risk: 'low' });
   await fakeRun(root, 'r1', items);
   const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
   assert.match(result.stdout, /warning: no skeleton tickets/);

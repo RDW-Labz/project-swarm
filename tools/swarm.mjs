@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Project Swarm contributors
 // Fresh, project-local workers. No daemon or terminal attachment; a worker shell exists only inside a sandbox (codex, claude shell jobs).
+import { isBuildArtifact, withoutIgnored } from './ignored-artifacts.mjs';
 import fs from 'node:fs/promises';
 import { createReadStream, realpathSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -2144,7 +2145,7 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
       for (const file of job.outputs) if (await outputsChanged(worktree, { ...baseline, outputs: [file] })) result.filesChanged.push(file);
       const dropped = [], droppedNew = [];
       for (const [file, code] of await worktreeStatusMap(worktree)) {
-        if (job.outputs.includes(file) || resultFiles.has(file) || beforeStatus.get(file) === code) continue;
+        if (job.outputs.includes(file) || resultFiles.has(file) || beforeStatus.get(file) === code || (code === '??' && isBuildArtifact(file))) continue;
         dropped.push(file);
         if (code === '??') droppedNew.push(file);
         await saveDroppedWrite(root, path.basename(directory), file, await droppedBytesAt(worktree, file), await droppedBytesAt(root, file), { useGit: true });
@@ -2370,7 +2371,7 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
       const afterStatus = await worktreeStatusMap(worktree);
       const dropped = [], droppedNew = [];
       for (const [file, code] of afterStatus) {
-        if (job.outputs.includes(file) || beforeStatus.get(file) === code) continue;
+        if (job.outputs.includes(file) || beforeStatus.get(file) === code || (code === '??' && isBuildArtifact(file))) continue;
         dropped.push(file);
         if (!beforeStatus.has(file)) droppedNew.push(file);
       }
@@ -3285,7 +3286,8 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
           // write on its own — the job wrote none of them — unless its content no longer matches
           // what was actually seeded, meaning a worker did edit it.
           const seededHashes = seededHashesByJob.get(job.id);
-          for (const file of await listWorkspaceFiles(workspaceRoot)) {
+          // Build files a command left behind (tsconfig.tsbuildinfo, coverage/) and files the project's .gitignore names are not worker output.
+          for (const file of await withoutIgnored(root, await listWorkspaceFiles(workspaceRoot))) {
             if (known.has(file)) continue;
             if (seededHashes?.has(file)) {
               const bytes = await droppedBytesAt(workspaceRoot, file);
@@ -4589,7 +4591,7 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, ad
     } catch (error) { await journal.rollback(); throw error; }
     const failed = result.checksPassed === false;
     const batchId = queue.batches.length + 1;
-    queue.batches.push({ id: batchId, jobs: batch.map(plan => plan.job), checks: noChecks && gate?.ok !== false ? 'skipped' : failed ? 'failed' : 'passed', security: gate ? (gate.ok ? 'passed' : 'blocked') : 'skipped', bisected: failed && batch.length > 1, checkResults: (result.checks ?? []).map(check => ({ name: check.name, status: check.status, mode: check.mode ?? 'full', ...(check.affectedTests !== undefined ? { tests: check.affectedTests } : {}) })) });
+    queue.batches.push({ id: batchId, jobs: batch.map(plan => plan.job), checks: noChecks && gate?.ok !== false ? 'skipped' : failed ? 'failed' : 'passed', security: gate ? (gate.ok ? 'passed' : 'blocked') : 'skipped', bisected: failed && batch.length > 1, checkResults: (result.checks ?? []).map(check => ({ name: check.name, status: check.status, mode: check.mode ?? 'full', ...(check.affectedTests !== undefined ? { tests: check.affectedTests } : {}), ...(check.status === 'failed' && typeof check.tail === 'string' && check.tail.trim() ? { tail: redactText(check.tail).slice(-600) } : {}) })) });
     warnings.push(...swarmCheckWarnings(result.checks));
     // Queue mode deliberately rolls failed batches back before bisecting. Plain integrate
     // retains its existing behavior: check failures never roll back its writes.

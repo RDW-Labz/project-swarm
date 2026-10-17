@@ -100,6 +100,12 @@ export function qualityEvidence(state, jobId, names) {
     return { ok: false, reason: `batch ${batch.id} was blocked by the security gate` };
   }
   if (batch.checks !== 'passed') {
+    // A batch of exactly this one job failed a quality check: the failure is this ticket's. A bigger batch says nothing about one job.
+    const jobs = Array.isArray(batch.jobs) ? batch.jobs : Array.isArray(batch.jobIds) ? batch.jobIds : [];
+    const bad = jobs.length === 1 ? list.map((name) => findCheckResult(batch.checkResults, name)).find((r) => r && r.status === 'failed') : null;
+    if (bad) {
+      return { ok: false, failed: true, check: bad.name, ...(typeof bad.tail === 'string' && bad.tail ? { tail: bad.tail } : {}), reason: `${bad.name} check is failed in batch ${batchId}` };
+    }
     return { ok: false, reason: `batch ${batchId} checks are ${batch.checks}` };
   }
 
@@ -109,7 +115,7 @@ export function qualityEvidence(state, jobId, names) {
       return { ok: false, reason: `no ${name} check ran in batch ${batchId}` };
     }
     if (result.status !== 'passed') {
-      return { ok: false, reason: `${name} check is ${result.status} in batch ${batchId}` };
+      return { ok: false, failed: result.status === 'failed', check: name, ...(typeof result.tail === 'string' && result.tail ? { tail: result.tail } : {}), reason: `${name} check is ${result.status} in batch ${batchId}` };
     }
   }
 

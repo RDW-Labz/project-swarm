@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText, isSensitiveText } from './scope.mjs';
-import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, approveLedger, isApproved, validateTicket, STATUSES } from './tickets.mjs';
+import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, approveLedger, isApproved, validateTicket, STATUSES } from './tickets.mjs';
 import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
 import { diffScopes, impactAnalysis, nextChangeOrderId, applyChangeOrder } from './change-orders.mjs';
 import { day0Checklist, checklistToTickets } from './day0.mjs';
@@ -23,7 +23,8 @@ import { otherManagerLockfile } from './ticket-manifest.mjs';
 import { doneEvidence, ticketTests } from './verify-config.mjs';
 import { deriveQualityChecks, qualityEvidence } from './quality-checks.mjs';
 import { nextStep, sizeTicket } from './escalation.mjs';
-import { unlockReady } from './ticket-unlock.mjs';
+import { unlockReady, releaseReady } from './ticket-unlock.mjs';
+import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, unwiredRequirements, moduleTickets } from './wiring.mjs';
 import { parseEnvNames, envNamesLine } from './env-names.mjs';
 import { detectTestCommand } from './zero-tests.mjs';
 import { execFile } from 'node:child_process';
@@ -33,7 +34,7 @@ import { promisify } from 'node:util';
 export const SCOPE_USAGE = [
   'Usage: swarm scope template [--out FILE]',
   '       swarm scope check [FILE]',
-  '       swarm scope split [FILE] [--stage S1] | scope split --ingest RUN [--merge]',
+  '       swarm scope split [FILE] [--stage S1] | scope split --wire | scope split --ingest RUN [--merge] [--wire]',
   '       swarm scope approve [FILE] [--yes]',
   '       swarm scope sync RUN [--integrated]',
   '       swarm scope contracts OPENAPI.json',
@@ -195,6 +196,9 @@ async function runQualityNames(root, runId) {
   } catch { return []; }
 }
 
+// Does the check output name one of the ticket's files (by path or file name)?
+const mentionsFiles = (ticket, text) => (ticket.files ?? []).some(f => String(text ?? '').includes(f) || String(text ?? '').includes(f.split('/').pop()));
+
 // Evidence that a build ticket's quality checks passed: the merge batch that integrated it, else the run's own checks.
 function qualityOk(state, id, names) {
   const result = qualityEvidence(state, id, names);
@@ -207,7 +211,9 @@ function qualityOk(state, id, names) {
   if (files.length && !files.every(f => integratedFiles.has(f))) return { ok: false, reason: 'job files are not in the integrated files' };
   const checks = Array.isArray(state.checks) ? state.checks : [];
   const bad = names.find(name => checks.find(c => c.name === name)?.status !== 'passed');
-  return bad ? { ok: false, reason: `no ${bad} check passed on integrate` } : { ok: true, reason: 'quality checks passed on integrate' };
+  if (!bad) return { ok: true, reason: 'quality checks passed on integrate' };
+  const found = checks.find(c => c.name === bad);
+  return { ok: false, failed: found?.status === 'failed', shared: true, check: bad, ...(typeof found?.tail === 'string' && found.tail ? { tail: String(found.tail).slice(-600) } : {}), reason: `no ${bad} check passed on integrate` };
 }
 
 // Reference sections of the scope become two context files every ticket can be given: the overview, and the data model.
@@ -271,7 +277,7 @@ const readRunState = async (root, runId) => {
   return state;
 };
 
-function splitPrompt(scope, stage, only, layout = '') {
+function splitPrompt(scope, stage, only, layout = '', wire = null) {
   const reqs = scope.requirements.filter(r => r.stage === stage.id && (!only || only.has(r.id)));
   const lines = [
     `Split the requirements of stage ${stage.id} (${stage.title || 'no title'}) of "${scope.name}" into small build tickets.`,
@@ -286,6 +292,8 @@ function splitPrompt(scope, stage, only, layout = '') {
     'A ticket of type contract writes exactly one OpenAPI 3 JSON file under contracts/ (for example contracts/api.json) using only paths (get, post, put, patch, delete, each with an operationId), components.schemas and local $ref; TypeScript, SQL and YAML types belong in build tickets that depend on the contract ticket.',
     'Migration tickets write DDL only; their tests are separate tickets in a tests folder.',
     'Keep every ticket small enough for one worker answer: at most 4 files, each file under about 12 KB when written; split a bigger feature into several tickets (the output of one worker is capped at about 15 KB per file).',
+    WIRING_PROMPT,
+    ...(wire ? [WIRE_ONLY_PROMPT, ...wire.filter(w => w.stage === stage.id).map(w => `Existing module tickets of ${w.req}: ${w.modules.map(m => `${m.id} ${m.title} (${(m.files ?? []).join(', ')})`).join('; ')}`)] : []),
     ...(layout ? ['Project layout (use these folders):', layout] : []),
     'Work only from the requirements below.',
     '',
@@ -295,7 +303,7 @@ function splitPrompt(scope, stage, only, layout = '') {
   return lines.join('\n');
 }
 
-export function buildSplitManifest(scope, { stage, only, layout = '' } = {}) {
+export function buildSplitManifest(scope, { stage, only, layout = '', wire = null } = {}) {
   const stages = scope.stages.filter(s => (!stage || s.id === stage) && scope.requirements.some(r => r.stage === s.id && (!only || only.has(r.id))));
   if (!stages.length) throw fail('scope-stage', stage ? `stage ${stage} has no requirements` : 'the scope has no stages with requirements');
   return {
@@ -307,7 +315,7 @@ export function buildSplitManifest(scope, { stage, only, layout = '' } = {}) {
       agent: 'auto',
       sensitive: true,
       maxOutputTokens: 32000,
-      prompt: splitPrompt(scope, s, only, layout),
+      prompt: splitPrompt(scope, s, only, layout, wire),
       context: [],
       outputs: [`${SPLIT_DIR}/${s.id}.json`],
       timeoutMs: 900000,
@@ -385,6 +393,7 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
     if (raw.type === 'human') t.steps = strings(raw.steps);
     if (raw.hard === true) t.hard = true;
     if (raw.skeleton === true) t.skeleton = true;
+    if (raw.integration === true) t.integration = true;
     const v = validateTicket(t);
     if (!v.ok) errors.push(`${id}: ${v.errors[0]}`);
     // Format rules the dogfood run needed (contract format, real paths, env template, one package manager).
@@ -463,6 +472,15 @@ async function cmdSplit(root, { rest, flags }) {
   if (!checked.ok) return out(`${file} has errors; run swarm scope check ${file} first`, 1);
   if (!flags.ingest) {
     const led = await readLedger(root);
+    if (flags.wire) {
+      if (!led) return out('no ticket ledger to wire', 1);
+      const reqs = unwiredRequirements(led.tickets);
+      if (!reqs.length) return out('every requirement with build tickets already has an integration ticket', 1);
+      const wire = reqs.map(req => ({ req, stage: scope.requirements.find(r => r.id === req)?.stage, modules: moduleTickets(led.tickets, req) }));
+      const manifest = buildSplitManifest(scope, { stage: flags.stage, only: new Set(reqs), layout: await projectLayout(root, scope, await readProfile(root)), wire });
+      await writeFileSafe(root, `${SPLIT_DIR}/manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`);
+      return out(`wire manifest: integration tickets for ${reqs.length} requirement(s) (${reqs.slice(0, 8).join(', ')}) written to ${SPLIT_DIR}/manifest.json\nNext: swarm run ${SPLIT_DIR}/manifest.json, then swarm scope split --ingest RUN --merge --wire`);
+    }
     const only = led ? new Set(scope.requirements.filter(r => !led.tickets.some(t => t.status !== 'cancelled' && t.scopeRefs.includes(r.id))).map(r => r.id)) : null;
     if (only && !only.size) return out('every requirement already has tickets; nothing to split', 1);
     const manifest = buildSplitManifest(scope, { stage: flags.stage, only, layout: await projectLayout(root, scope, await readProfile(root)) });
@@ -480,11 +498,17 @@ async function cmdSplit(root, { rest, flags }) {
   const all = [...errors, ...built.errors];
   if (startAt + built.tickets.length > 9000) all.push('too many tickets: ids T-9000 and up are reserved for day 0 tickets');
   if (all.length) return out(`split refused; fix and rerun the failed stages:\n${all.slice(0, 15).map(e => `  ${e}`).join('\n')}`, 1);
+  // Integration tickets wait for the module tickets of their requirements; a requirement with modules and no integration ticket is refused.
+  if (flags.wire && built.tickets.some(t => t.integration !== true)) return out(`split refused: --wire takes integration tickets only; these are not: ${built.tickets.filter(t => t.integration !== true).map(t => t.title).slice(0, 5).join('; ')}`, 1);
+  addWiringDeps(built.tickets, existing?.tickets ?? []);
+  const touched = [...new Set(built.tickets.filter(t => t.type === 'build').flatMap(t => t.scopeRefs))];
+  const unwired = wiringGaps([...(existing?.tickets ?? []), ...built.tickets], touched);
+  if (unwired.length) return out(`split refused; the features are not wired (add an integration ticket per requirement, then split these stages again):\n${unwired.slice(0, 15).map(g => `  ${g.reason}`).join('\n')}`, 1);
   let tickets = built.tickets;
   if (!existing) tickets = [...tickets, ...checklistToTickets(day0Checklist(scope))];
   const base = existing ?? createLedger({ scope: { name: scope.name, version: scope.version, hash, file }, tickets: [] });
   // New tickets are written by a worker, so any earlier approval no longer covers the ticket set.
-  const ledger = { ...createLedger({ scope: base.scope, tickets: [...base.tickets, ...tickets] }), changeOrders: base.changeOrders ?? [], createdAt: base.createdAt, approved: null };
+  const ledger = { ...createLedger({ scope: base.scope, tickets: [...base.tickets, ...tickets] }), wiring: existing ? existing.wiring === true : true, changeOrders: base.changeOrders ?? [], createdAt: base.createdAt, approved: null };
   const { tree, lines } = treeReport(scope, ledger.tickets);
   const structural = tree.errors.filter(e => e.code !== 'uncovered');
   if (structural.length) return out(`split refused; the tickets are inconsistent:\n${lines.join('\n')}`, 1);
@@ -631,6 +655,15 @@ async function cmdSync(root, { rest, flags }) {
     const failCounts = new Map();
     for (const entry of failedChecks.values()) for (const name of entry.checks ?? []) failCounts.set(name, (failCounts.get(name) ?? 0) + 1);
     const systemic = name => (failCounts.get(name) ?? 0) >= Math.max(3, Math.ceil(reviewCount / 2));
+    // A typecheck or lint check that failed (not one that never ran) goes back to the worker with its errors, like a failed test.
+    const qualityResults = new Map();
+    let sharedFailures = 0;
+    for (const t of ledger.tickets.filter(x => x.status === 'review' && finished.has(x.id) && (x.runId === undefined || x.runId === rest[0]))) {
+      if (!qualityNames.length || !['build', 'migration', 'contract'].includes(t.type) || failedChecks.has(t.id) || (integrated && !integrated.has(t.id))) continue;
+      const quality = qualityOk(state, t.id, qualityNames);
+      qualityResults.set(t.id, quality);
+      if (quality.failed) { failCounts.set(quality.check, (failCounts.get(quality.check) ?? 0) + 1); sharedFailures += quality.shared ? 1 : 0; }
+    }
     const done = [], unverified = [], retried = [], blocked = [], notIntegrated = [];
     let uiResults = null, uiTree = null;
     for (const t of ledger.tickets.filter(x => x.status === 'review' && finished.has(x.id) && (x.runId === undefined || x.runId === rest[0]))) {
@@ -653,7 +686,16 @@ async function cmdSync(root, { rest, flags }) {
       }
       // A build ticket is done only when the project's typecheck and lint (and build, when the profile asks) passed on the batch that integrated it.
       if (qualityNames.length && ['build', 'migration', 'contract'].includes(t.type)) {
-        const quality = qualityOk(state, t.id, qualityNames);
+        const quality = qualityResults.get(t.id) ?? qualityOk(state, t.id, qualityNames);
+        if (quality.failed && systemic(quality.check)) { unverified.push(`${t.id} (the ${quality.check} check failed for ${failCounts.get(quality.check)} tickets of this run, so the base or the setup is likely at fault; fix it and run sync again; not retried)`); continue; }
+        // A run-wide check (a plain integrate) fails once for every ticket: only the ticket the errors point at is sent back.
+        // A batch of one job is exact.
+        if (quality.failed && quality.shared && sharedFailures > 1 && !mentionsFiles(t, quality.tail)) { unverified.push(`${t.id} (the ${quality.check} check failed for the whole run and its errors do not name this ticket's files; fix it, then run sync again; not retried)`); continue; }
+        if (quality.failed) {
+          const result = await applyRetry(root, t.id, `failed checks: ${quality.check}${quality.tail ? `; ${String(quality.tail).slice(-500)}` : ''}`, rest[0]);
+          (result === 'blocked' ? blocked : retried).push(t.id);
+          continue;
+        }
         if (!quality.ok) { unverified.push(`${t.id} (${quality.reason})`); continue; }
       }
       // A UI ticket is done only when the rendered check passed for each of its screens after this run was integrated.
@@ -882,8 +924,13 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
     if (snapshot === null || scopeHash(snapshot) !== ledger.scope.hash) throw fail('scope-snapshot', 'the approved scope snapshot is missing or does not match; run swarm scope approve --yes again');
     const scope = parseScope(snapshot);
     // A ticket that was blocked only by dependencies becomes ready as soon as they are done.
+    const prune = pruneCancelledDeps(ledger);
+    if (prune.pruned.length) await appendLog(root, { event: 'prune-deps', by: 'go', tickets: prune.pruned.map(p => p.id) });
     const unlock = unlockReady(ledger);
     if (unlock.unlocked.length) { ledger.tickets = unlock.ledger.tickets; await appendLog(root, { event: 'unlock', by: 'go', tickets: unlock.unlocked }); }
+    // The root tickets of an approved stage (and anything else whose dependencies are done) are released without a hand move.
+    const release = releaseReady(ledger);
+    if (release.released.length) { ledger.tickets = release.ledger.tickets; await appendLog(root, { event: 'release', by: 'go', tickets: release.released }); }
     let ready = readyTickets(ledger.tickets);
     // Skeleton first: while a skeleton ticket is open, only the skeleton (and what it depends on, and runner-made fix tickets) runs.
     const open = ledger.tickets.filter(t => t.skeleton && !['done', 'cancelled'].includes(t.status));
@@ -937,12 +984,16 @@ export async function unlockLedger(root) {
       return await withLock(root, async () => {
         const ledger = await readLedger(root);
         if (!ledger) return [];
-        const { ledger: next, unlocked } = unlockReady(ledger);
-        if (!unlocked.length) return [];
+        const pruned = pruneCancelledDeps(ledger).pruned;
+        const { ledger: unlockedLedger, unlocked } = unlockReady(ledger);
+        const { ledger: next, released } = isApproved(unlockedLedger) ? releaseReady(unlockedLedger) : { ledger: unlockedLedger, released: [] };
+        if (!unlocked.length && !released.length && !pruned.length) return [];
         next.updatedAt = new Date().toISOString();
         await writeLedger(root, next);
-        await appendLog(root, { event: 'unlock', by: 'autopilot', tickets: unlocked });
-        return unlocked;
+        if (pruned.length) await appendLog(root, { event: 'prune-deps', by: 'autopilot', tickets: pruned.map(p => p.id) });
+        if (released.length) await appendLog(root, { event: 'release', by: 'autopilot', tickets: released });
+        if (unlocked.length) await appendLog(root, { event: 'unlock', by: 'autopilot', tickets: unlocked });
+        return [...unlocked, ...released];
       });
     } catch (error) { if (error.code !== 'scope-busy' || attempt === 4) return []; await new Promise(resolve => setTimeout(resolve, 300)); }
   }
