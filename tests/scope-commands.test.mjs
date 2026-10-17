@@ -50,14 +50,16 @@ test('split manifest has one sensitive job per stage and a plain prompt', () => 
   assert.throws(() => buildSplitManifest(parseScope(SCOPE), { stage: 'S9' }), /no requirements/);
 });
 
-test('ticketsFromStageLists maps keys to ids and reports bad dependencies', () => {
+test('ticketsFromStageLists maps keys to ids and drops invented dependency keys with a note', () => {
   const scope = parseScope(SCOPE);
   const ok = ticketsFromStageLists([{ stage: 'S1', items: STAGE }], scope);
   assert.deepEqual(ok.errors, []);
   assert.deepEqual(ok.tickets.map(t => t.id), ['T-0001', 'T-0002', 'T-0003', 'T-0004', 'T-0005']);
   assert.deepEqual(ok.tickets[1].dependsOn, ['T-0001']);
   const bad = ticketsFromStageLists([{ stage: 'S1', items: [{ ...STAGE[1], dependsOn: ['nope'] }] }], scope);
-  assert.match(bad.errors[0], /unknown keys/);
+  assert.deepEqual(bad.errors, []);
+  assert.match(bad.notes[0], /dropped dependsOn keys that name no ticket in the file: nope/);
+  assert.deepEqual(bad.tickets[0].dependsOn, []);
 });
 
 test('split, approve, go --scope preparation, sync and change order work end to end', async () => {

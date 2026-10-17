@@ -68,3 +68,10 @@ Design: [plans/lessons-28-32-design.md](plans/lessons-28-32-design.md).
 ## Integration test path and shared files
 
 The route-level test of an integration ticket must be a test file (a tests, e2e or spec folder, or a `.test` or `.spec` file). Integration tickets that write the same file are chained by the runner, the later one after the earlier.
+
+## S6 fixes (1.97.0)
+
+- A check that failed on the batch or the run keeps all its tickets out of done (tickets with no tests too). A one-job batch goes back to the worker.
+- Invented `dependsOn` keys from a split worker are dropped with a note.
+- `--help` never acts. A failure that is not the ticket's own (credit, rate limit, host or network down, run stopped) returns the ticket to ready at the same level (three times at most). Output that already matches the tree does not need integration evidence.
+- `swarm tickets T-0007 T-0008 --release` is the clean release of held tickets (attempts, escalation and retry notes cleared).

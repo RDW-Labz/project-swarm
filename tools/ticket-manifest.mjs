@@ -155,6 +155,12 @@ export function ticketsToManifest(tickets,opts={}){
   return {manifest,warnings,skipped};
 }
 
+// A job that failed for a reason outside the ticket (the provider ran out of credit or was rate limited, the host or the network was down, the run was
+// stopped) did not fail its own work: it goes back to ready at the same level instead of climbing the ladder.
+// Judged on the runner's own error line only (never on test output), with patterns that name a provider or host problem; a bare number or word such as 429 or network is not enough.
+export const NOT_OWN_FAILURE=/credit exhausted|insufficient[ _-]?(?:credit|quota|funds)|rate[ -]?limit(?:ed)?\b|\b(?:HTTP|status|error)[ :]*(?:402|429|502|503|529)\b|provider (?:is )?overloaded|temporarily unavailable|\bECONN(?:RESET|REFUSED)\b|\bETIMEDOUT\b|\bENOTFOUND\b|\bEAI_AGAIN\b|socket hang up|host-(?:dead|exhausted)|lane [a-z]+ (?:is )?paused|run (?:was )?(?:cancelled|stopped|paused)/i;
+export const isOwnFailure=error=>!NOT_OWN_FAILURE.test(String(error??'').split('\n')[0].slice(0,300));
+
 export function ticketOutcome(state,ledger){
   const entries=Array.isArray(state)?state.map(s=>[s.id,s]):Object.entries(state||{});
   const known=new Set((ledger?.tickets||[]).map(t=>t.id));
@@ -164,7 +170,7 @@ export function ticketOutcome(state,ledger){
     const st=typeof s==='string'?s:(s?.status??s?.state);
     const error=s?.error;
     if(st==='complete')moves.push({id,to:'review',note:'run complete'});
-    else if(st==='failed'||st==='timeout')moves.push({id,to:'blocked',note:String(error||st)});
+    else if(st==='failed'||st==='timeout')moves.push(isOwnFailure(error)?{id,to:'blocked',note:String(error||st)}:{id,to:'ready',note:String(error||st),infra:true});
     // A job skipped because one it waits on failed is blocked by dependencies (it unlocks by itself); a cancelled run just frees the ticket.
     else if(st==='skipped'){
       // Skipped because something it waits on failed: blocked by dependencies. Skipped with every dependency done (a cap or lane skip): just ready again.

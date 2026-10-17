@@ -7405,6 +7405,16 @@ async function mainInner() {
     }
     root=args[rootIndex+1];args.splice(rootIndex,2);
   }
+  // Help never acts: `swarm go --scope --help` (or -h on any command) prints the help and does nothing else.
+  // (Commands that print their own usage, such as ship and lesson, keep doing so.)
+  {
+    // Only a flag position counts: before any `--`, and not as the value of a flag that takes one (swarm tickets T-1 --note -h).
+    const VALUE_FLAGS=new Set(['--note','--set','--out','--files','--context','--tests','--stage','--ingest','--status','--type','--risk','--max-jobs','--reason','--jobs','--evidence','--repo','--pr','--accept-failed-check','--plan','--leads','--concurrency','--max-usd','--max-tokens','--commit-message']);
+    const cut=args.indexOf('--');
+    const flagArgs=(cut===-1?args:args.slice(0,cut));
+    const helpAt=flagArgs.findIndex((a,i)=>i>0&&(a==='--help'||a==='-h')&&!VALUE_FLAGS.has(flagArgs[i-1]));
+    if(helpAt!==-1&&['go','plan','scope','tickets','change','run','integrate','autopilot','merge','update','cancel','resume','sweep','backlog','ui','gallery'].includes(args[0]))args.splice(0,args.length,'--help');
+  }
   // Commands that act on the install itself keep the install root even when run from a project folder.
   if(rootIndex===-1&&INSTALL_COMMANDS.includes(args[0]))root=defaultRoot(ownRoot);
   // Phase 11: `swarm plan`, and go's approval flags (--yes, --plan ID, --accept-stale).

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.97.0
+
+Parts-app S6 report (9 hand fixes):
+- A failing check keeps every ticket in its batch or run out of done, whatever the check is called (tests, an env check, a log lint; also a timeout or crash, and a run-level check after a passing batch) and whether or not the ticket has tests. `scope sync --integrated` leaves them in review and says which check failed; a batch of one job goes back to the worker with the failure. If the check was already failing on the base, `scope sync RUN --integrated --accept-failed-check NAME --yes [--note TEXT]` lets tickets pass; it is named, confirmed and logged.
+- Dependency keys the split worker invented (a `dependsOn` key that names no ticket in its file) are dropped with a note instead of refusing the whole split.
+- `--help` or `-h` on go, scope, tickets, change, run, integrate and other acting commands prints the help and does nothing else (`go --scope --help` used to prepare and release a wave).
+- A check failure whose errors name only files that other tickets own (S6: T-0091's lint failed on the file T-0090 wrote) is not that ticket's failure: no escalation and no attempt for it. If the owner is in the run, the failure goes to the owner; if not, the ticket is blocked (manual) with a note naming the owner, to fix and `swarm tickets ID --release`. Applies to batches of one too. Tickets with failed checks are processed first, so the owner is not marked done before it gets the failure.
+- A job that failed for a reason outside the ticket (credit exhausted, rate limit, HTTP 402/429/5xx, host or network down, run stopped; judged on the runner's error line only, never on test output) returns to ready at the same level instead of climbing the escalation ladder; after three in a row it is treated as the ticket's own.
+- A ticket whose proposed output already matches the tree (a regular file in the run workspace, byte for byte, never a symlink or the project itself) is no longer stuck in review waiting for integration evidence; sync says it was not re-verified. A different tree still stays in review.
+- `swarm tickets ID... --release [--note TEXT]` releases held tickets cleanly: blocked, todo or review go back to ready with attempts, escalation level and retry notes cleared (dependencies must be done; the approval stays valid).
+
 ## 1.96.0
 
 - The route-level test of an integration ticket must be a test file (a tests, e2e or spec folder with a source file that is not a helper, fixture, support file or page; a `.test` or `.spec` file; `tests.py`, `test_*.py`, `*_test.go`, `*_test.ts`); a page or module file named as the test is refused at split. `swarm tickets --tests` applies the same rule to integration tickets.
