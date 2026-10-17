@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { executeApi, apiConfiguration, anthropicSchema } from '../tools/api-adapters.mjs';
-import { worstCaseUsd, usageCostUsd, assertWithinCaps, assertOpusTier, spentSoFar, readAnthropicKey, ledgerPath } from '../tools/anthropic.mjs';
+import { appendLedger as appendAnthropicLedger, worstCaseUsd, usageCostUsd, assertWithinCaps, assertOpusTier, spentSoFar, readAnthropicKey, ledgerPath } from '../tools/anthropic.mjs';
 import { routeJob } from '../tools/router.mjs';
 
 const KEY = 'sk-ant-test-0123456789';
@@ -47,7 +47,37 @@ test('a refusal or truncation fails the job without echoing the key', async () =
   assert.equal(refused.status, 'failed');
   const cut = await executeApi(job(), [], { env, fetchImpl: async () => reply({ stop_reason: 'max_tokens' }) });
   assert.match(cut.error, /truncated/);
-  assert.equal(cut.costUsd, usageCostUsd('claude-haiku-5-5', { input_tokens: 1000, output_tokens: 200 }));
+  // truncated at the 4096 default, retried once at 8192, truncated again: both calls are billed
+  assert.equal(cut.costUsd, 2 * usageCostUsd('claude-haiku-5-5', { input_tokens: 1000, output_tokens: 200 }));
+});
+
+test('default max_tokens is 4096; a truncated answer is retried once at double and then succeeds', async () => {
+  const env = { SWARM_LOGS_DIR: tmp(), SWARM_ANTHROPIC_API_KEY: KEY };
+  const limits = [];
+  let n = 0;
+  const result = await executeApi(job(), [], { env, fetchImpl: async (url, init) => { limits.push(JSON.parse(init.body).max_tokens); n += 1; return n === 1 ? reply({ stop_reason: 'max_tokens' }) : reply(); } });
+  assert.equal(result.status, 'complete');
+  assert.deepEqual(limits, [4096, 8192]);
+  assert.equal(result.costUsd, 2 * usageCostUsd('claude-haiku-5-5', { input_tokens: 1000, output_tokens: 200 }));
+});
+
+test('no length retry when the job sets a large limit itself, and none beyond one retry', async () => {
+  const env = { SWARM_LOGS_DIR: tmp(), SWARM_ANTHROPIC_API_KEY: KEY };
+  let calls = 0;
+  const big = await executeApi(job({ maxOutputTokens: 12000 }), [], { env, fetchImpl: async () => { calls += 1; return reply({ stop_reason: 'max_tokens' }); } });
+  assert.equal(big.status, 'failed');
+  assert.equal(calls, 1);
+  calls = 0;
+  await executeApi(job(), [], { env, fetchImpl: async () => { calls += 1; return reply({ stop_reason: 'max_tokens' }); } });
+  assert.equal(calls, 2);
+});
+
+test('a path returned both whole and as edits is normalized to the whole file instead of failing', async () => {
+  const env = { SWARM_LOGS_DIR: tmp(), SWARM_ANTHROPIC_API_KEY: KEY };
+  const both = { summary: 'ok', files: [{ path: 'src/a.js', content: 'export const a = 1;\n' }], edits: [{ path: 'src/a.js', find: 'x', replace: 'y' }] };
+  const result = await executeApi(job({ outputs: ['src/a.js'] }), [], { env, fetchImpl: async () => reply({ content: [{ type: 'text', text: JSON.stringify(both) }] }) });
+  assert.equal(result.status, 'complete', result.error);
+  assert.deepEqual(result.files?.map?.(f => f.path) ?? ['src/a.js'], ['src/a.js']);
 });
 
 test('missing key names the keychain item before any request', async () => {
@@ -119,4 +149,25 @@ test('cacheContext puts the shared files first in their own cacheable block, and
   // without cacheContext the request is the single string it always was
   await executeApi(job({ context: context.map(file => file.path) }), context, { env, fetchImpl: async (url, init) => { seen = JSON.parse(init.body); return reply(); } });
   assert.equal(typeof seen.messages[0].content, 'string');
+});
+
+test('the length retry is refused by the job cap when the first call plus the doubled worst case would pass it', async () => {
+  const env = { SWARM_LOGS_DIR: tmp(), SWARM_ANTHROPIC_API_KEY: KEY };
+  appendAnthropicLedger(ledgerPath(env), { ts: new Date().toISOString(), jobId: 'j1', model: 'claude-haiku-5-5', costUsd: 4.997, estimated: false });
+  let calls = 0;
+  const result = await executeApi(job(), [], { env, fetchImpl: async () => { calls += 1; return reply({ stop_reason: 'max_tokens' }); } });
+  assert.equal(result.status, 'failed');
+  assert.equal(calls, 1);
+});
+
+test('a length retry writes the first call to the ledger before the second and each call exactly once', async () => {
+  const env = { SWARM_LOGS_DIR: tmp(), SWARM_ANTHROPIC_API_KEY: KEY };
+  let n = 0;
+  const seenRows = [];
+  const result = await executeApi(job(), [], { env, fetchImpl: async () => { n += 1; if (n === 2) seenRows.push(...fs.readFileSync(ledgerPath(env), 'utf8').trim().split('\n')); return n === 1 ? reply({ stop_reason: 'max_tokens' }) : reply(); } });
+  assert.equal(result.status, 'complete');
+  assert.equal(seenRows.length, 1);
+  const rows = fs.readFileSync(ledgerPath(env), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(rows.length, 2);
+  assert.equal(rows.reduce((sum, r) => sum + r.costUsd, 0), result.costUsd);
 });

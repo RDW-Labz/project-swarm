@@ -46,7 +46,7 @@ test('defaults are complete, deeply frozen, and independently resolved', () => {
     assert.ok(Object.isFrozen(LANE_DEFAULTS[agent]));
     assert.ok(Object.isFrozen(LANE_DEFAULTS[agent].backoff));
     assert.deepEqual(lanes[agent], {
-      concurrency: ({ hermes: 1, cursor: 8, codex: 6, claude: 4, openrouter: 64, anthropic: 32 })[agent] ?? 32,
+      concurrency: ({ hermes: 1, cursor: 8, codex: 6, claude: 4, openrouter: 64, anthropic: 64 })[agent] ?? 32,
       requestsPerMinute: null, backoff: { baseMs: 2000, maxMs: 300000, maxRetries: 5 },
       pauseMs: 900000, maxPauseMs: 900000, model: null, adaptive: agent === 'rented' ? { min: 1, start: 4 } : null,
     });

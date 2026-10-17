@@ -199,3 +199,11 @@ test('ticketOutcome maps complete, failed and timeout and leaves held alone', ()
 test('ticketOutcome ignores ids that are not in the ledger', () => {
   assert.deepEqual(ticketOutcome({ 'T-9999': { state: 'complete' } }, { tickets: [] }), []);
 });
+
+test('contract files are listed in cacheContext, sorted, only when they are in context', () => {
+  const t = ticket({ id: 'T-0001', contracts: ['contracts/b.json', 'contracts/a.json'], context: ['src/x.mjs'] });
+  const none = ticket({ id: 'T-0002' });
+  const { manifest } = ticketsToManifest([t, none], { ledger: { tickets: [] }, scope, ready: false });
+  assert.deepEqual(manifest.jobs[0].cacheContext, ['contracts/a.json', 'contracts/b.json']);
+  assert.equal(manifest.jobs[1].cacheContext, undefined);
+});

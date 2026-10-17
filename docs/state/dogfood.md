@@ -133,3 +133,7 @@ One row per plan phase, built with the swarm itself. Rules (from Braden): worker
 - First eval run of the 8 golden tasks on Haiku 5.5: 6 of 8 passed; the 2 misses were worker output-format slips (the same file in both files and edits). Baseline recorded: 6 of 8.
 - Real data check: backfill converted 229 numbered field lessons plus 2 queue rows with 0 failures and a second run wrote nothing.
 - A real bug the unit tests of the first build did not catch: the lesson parser found 95 of 229 entries because bold titles wrap over lines; found by comparing the count to the file.
+
+## Follow-ups after Phase 15 part 1 (1.83.0)
+
+- Small core-runner changes written by hand (output normalization, 4096 default with one length retry, concurrency 64, cached contract prefix): allowed by the rule for core wiring and small fixes. The Opus review ($0.51, after one rerun when the network dropped mid-review) found a real high bug the tests missed: the retry's cap check added a number to the `{job, today, total}` object, so every cap compared `NaN` and always passed; plus the first call was written to the ledger only after the second. Both fixed with tests that place the spend right at the job cap.
