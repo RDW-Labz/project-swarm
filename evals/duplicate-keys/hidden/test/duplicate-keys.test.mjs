@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mapKeys } from '../src/intake.mjs';
+import { mapKeys } from '../src/duplicate-keys.mjs';
 
 test('assigns ids in item order from startAt', () => {
   const r = mapKeys([{ key: 'a' }, { key: 'b' }], 1);

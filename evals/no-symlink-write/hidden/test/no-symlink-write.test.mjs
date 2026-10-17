@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, readFile, readdir, symlink, rm, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { writeNoFollow } from '../src/write.mjs';
+import { writeNoFollow } from '../src/no-symlink-write.mjs';
 
 async function withDir(fn) {
   const root = await mkdtemp(path.join(tmpdir(), 'wnf-'));

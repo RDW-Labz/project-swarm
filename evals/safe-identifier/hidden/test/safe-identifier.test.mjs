@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validatorSource } from '../src/gen.mjs';
+import { validatorSource } from '../src/safe-identifier.mjs';
 
 const badName = (e) => e instanceof Error && e.code === 'bad-name';
 

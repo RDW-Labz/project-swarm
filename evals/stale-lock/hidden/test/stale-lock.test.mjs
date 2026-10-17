@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile, readFile, utimes, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { withLock } from '../src/lock.mjs';
+import { withLock } from '../src/stale-lock.mjs';
 
 async function withTmp(run) {
   const dir = await mkdtemp(join(tmpdir(), 'lock-test-'));

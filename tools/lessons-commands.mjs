@@ -171,8 +171,14 @@ async function coverCoincidentalTests(root, manifest) {
   for (const job of manifest.jobs) {
     const stems = [...new Set(job.outputs.map(o => path.basename(o).replace(/\.[^.]+$/, '')))];
     const hits = files.filter(f => stems.some(s => new RegExp(`\\b${s.replace(/[^A-Za-z0-9_-]/g, '')}\\b`).test(texts.get(f)))).slice(0, 100).map(f => `tests/${f}`);
+    // The task's own hidden tests live in the repo too (never shown to the worker); the manifest check would flag them as uncovered.
+    const own = `evals/${job.id.slice('eval-'.length)}/hidden`;
+    const ownTests = [];
+    const walk = async dir => { for (const entry of await fs.readdir(path.join(root, dir), { withFileTypes: true }).catch(() => [])) { const rel = `${dir}/${entry.name}`; if (entry.isDirectory()) await walk(rel); else if (/\.(?:test|spec)\.[cm]?[jt]s$/.test(entry.name)) ownTests.push(rel); } };
+    await walk(own);
+    hits.push(...ownTests);
     if (!hits.length) continue;
-    job.ignoreTests = hits;
+    job.ignoreTests = [...new Set(hits)].slice(0, 100);
     job.prompt += '\nignoreTests: the fixture file names coincide with words in unrelated project tests; the coordinator does not run them for this job.';
   }
 }
