@@ -117,7 +117,7 @@ function splitPrompt(scope, stage, only) {
     'key (short unique name in this file), title (under 140 characters), type (build, test, docs, migration, design, contract or human),',
     'epic (a feature group name), scopeRefs (requirement ids, at least one for build, test, docs, migration), acceptance (1 to 5 observable checks; required for build, test, migration),',
     'files (the files this ticket writes; no folders, no absolute paths), context (files it reads), contracts (contract files it uses), dependsOn (keys of other tickets in this file),',
-    'size (S or M; never larger: split instead), risk (low, medium or high), sensitive (true for payments, auth or customer data), steps (only for human tickets: 1 to 30 short imperative steps).',
+    'size (S or M; never larger: split instead), risk (low, medium or high), sensitive (true for payments, auth or customer data), steps (only for human tickets: 1 to 30 short imperative steps), skeleton (true only on the tickets of the thinnest vertical slice of the first stage: database, API, screen and test, the smallest path through the product; omit it elsewhere).',
     'Rules: every requirement is covered by at least one ticket; every ticket traces to a requirement; two tickets that can run at the same time never write the same file;',
     'put shared types or contracts first and make the tickets that use them depend on them; add a test ticket for each requirement group.',
     'Work only from the requirements below.',
@@ -194,6 +194,7 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1 } = {}) {
     };
     if (raw.type === 'human') t.steps = strings(raw.steps);
     if (raw.hard === true) t.hard = true;
+    if (raw.skeleton === true) t.skeleton = true;
     const v = validateTicket(t);
     if (!v.ok) errors.push(`${id}: ${v.errors[0]}`);
     tickets.push(t);
@@ -230,7 +231,8 @@ async function readStageFiles(root, runId) {
 
 function treeReport(scope, tickets) {
   const tree = checkTicketTree({ scope, tickets });
-  const lines = [`coverage ${tree.coveragePct}% | ${tickets.length} tickets | errors ${tree.errors.length} | warnings ${tree.warnings.length}`];
+  const noSkeleton = tickets.length >= 30 && !tickets.some(t => t.skeleton);
+  const lines = [...(noSkeleton ? ['warning: no skeleton tickets: mark the thin vertical slice (database to API to screen to test) so connection bugs show on day 0'] : []), `coverage ${tree.coveragePct}% | ${tickets.length} tickets | errors ${tree.errors.length} | warnings ${tree.warnings.length}`];
   for (const e of tree.errors.slice(0, 12)) lines.push(`  error ${e.code}: ${e.message}`);
   if (tree.errors.length > 12) lines.push(`  ...and ${tree.errors.length - 12} more`);
   return { tree, lines };
@@ -451,7 +453,7 @@ async function withLock(root, fn) {
 // `swarm go --scope`: builds a manifest from the ready tickets, marks them running (one ledger write) and
 // returns the manifest path for the normal go path. Refuses an unapproved ledger, a ticket set changed since
 // approval, or a scope file that is missing or changed since approval.
-export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons = [] } = {}) {
+export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons = [], skipSkeleton = false } = {}) {
   return withLock(root, async () => {
     const ledger = await readLedger(root);
     if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
@@ -463,7 +465,17 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
     const snapshot = await readText(path.join(root, ...SNAPSHOT));
     if (snapshot === null || scopeHash(snapshot) !== ledger.scope.hash) throw fail('scope-snapshot', 'the approved scope snapshot is missing or does not match; run swarm scope approve --yes again');
     const scope = parseScope(snapshot);
-    const ready = readyTickets(ledger.tickets);
+    let ready = readyTickets(ledger.tickets);
+    // Skeleton first: while a skeleton ticket is open, only the skeleton (and what it depends on, and runner-made fix tickets) runs.
+    const open = ledger.tickets.filter(t => t.skeleton && !['done', 'cancelled'].includes(t.status));
+    if (open.length && !skipSkeleton) {
+      const byId = new Map(ledger.tickets.map(t => [t.id, t]));
+      const keep = new Set();
+      const visit = id => { if (keep.has(id) || !byId.has(id)) return; keep.add(id); for (const d of byId.get(id).dependsOn ?? []) visit(d); };
+      for (const t of ledger.tickets.filter(x => x.skeleton)) visit(t.id);
+      ready = ready.filter(t => keep.has(t.id) || t.origin === 'ci');
+      if (!ready.length) throw fail('scope-skeleton', `the skeleton is not finished (${open.map(t => t.id).slice(0, 5).join(', ')}) and nothing of it is ready${open.some(t => ['running', 'review'].includes(t.status)) ? '; some are running or in review: run swarm scope sync RUN (and --integrated after integrating)' : '; finish or unblock it'}; --skip-skeleton skips skeleton-first for one run`);
+    }
     const humans = ready.filter(t => t.type === 'human').length;
     const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: false, maxJobs, lessons });
     manifest.jobs = manifest.jobs.filter(j => j.type !== 'human');
@@ -484,6 +496,39 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
     await appendLog(root, { event: 'wave', by: 'go', tickets: ids });
     return { file: waveFile, ids, humans, warnings, skipped };
   });
+}
+
+// A ticket the runner makes from a failing check (smoke or preview hook). Next free id below T-9000; the approval is not touched (origin 'ci').
+export async function addCiFixTicket(root, partial) {
+  // Same lock as a wave start; a few short retries, then the ticket is skipped (the caller warns).
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try { return await withLock(root, () => addCiFixTicketLocked(root, partial)); }
+    catch (error) { if (error.code !== 'scope-busy' || attempt === 4) throw error; await new Promise(resolve => setTimeout(resolve, 300)); }
+  }
+  return null;
+}
+
+async function addCiFixTicketLocked(root, partial) {
+  const ledger = await readLedger(root);
+  if (!ledger) return null;
+  const wasApproved = isApproved(ledger);
+  const used = ledger.tickets.map(t => Number(t.id.slice(2))).filter(n => n < 9000);
+  const next = Math.max(0, ...used) + 1;
+  if (next >= 9000) return null;
+  const ticket = { ...partial, id: `T-${String(next).padStart(4, '0')}` };
+  const checked = validateTicket(ticket);
+  if (!checked.ok) throw fail('ticket-invalid', checked.errors[0]);
+  ledger.tickets.push(ticket);
+  ledger.updatedAt = new Date().toISOString();
+  // The owner's approval stays valid for this runner-made ticket only if it was valid just before: it is resealed over the new ticket set,
+  // and the seal records which tickets were added this way. Any other writer of tickets still loses the approval.
+  if (wasApproved) {
+    const prev = ledger.approved;
+    ledger.approved = { ...approveLedger(ledger, { by: prev.by }).approved, at: prev.at, ciTickets: [...(prev.ciTickets ?? []), ticket.id] };
+  }
+  await writeLedger(root, ledger);
+  await appendLog(root, { event: 'ci-fix-ticket', id: ticket.id, resealed: wasApproved });
+  return ticket.id;
 }
 
 export async function ticketProgress(root) {

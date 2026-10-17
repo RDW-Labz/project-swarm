@@ -191,3 +191,11 @@ test('lessons mine prints clusters without writing, then writes proposals once a
   assert.match(await fs.readFile(file, 'utf8'), /hand edit/);
   assert.equal((await runLessonsCommand(root, 'lessons', ['mine', '--min', '1'])).exitCode, 1);
 });
+
+test('profile ci block: valid hooks pass, unknown keys, bad argv and production previews are refused', async () => {
+  const { validateProfile } = await import('../tools/init-profile.mjs');
+  assert.deepEqual(validateProfile({ ci: { smoke: { argv: ['npx', 'playwright', 'test'] }, preview: { argv: ['vercel', 'deploy'], everyBatches: 2 } } }).errors, []);
+  assert.match(validateProfile({ ci: { other: 1 } }).errors[0], /profile\.ci/);
+  assert.match(validateProfile({ ci: { smoke: { argv: ['/abs/bin'] } } }).errors[0], /profile\.ci/);
+  assert.match(validateProfile({ ci: { preview: { argv: ['vercel', 'deploy', '--prod'] } } }).errors[0], /profile\.ci/);
+});

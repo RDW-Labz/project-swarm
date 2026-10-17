@@ -95,7 +95,7 @@ export function checkTicketTree({ scope, tickets = [], sizeBudget } = {}) {
     const good = refs.filter((r) => reqIds.has(r));
     for (const r of good) covered.add(r);
     for (const r of refs) if (!reqIds.has(r)) badRefs.push({ ticket: t.id, ref: r });
-    if (!NO_REF_TYPES.has(t.type) && good.length === 0) untraced.push(t.id);
+    if (!NO_REF_TYPES.has(t.type) && t.origin !== 'ci' && good.length === 0) untraced.push(t.id);
     if (NEEDS_ACCEPTANCE.has(t.type) && !(Array.isArray(t.acceptance) && t.acceptance.some((x) => typeof x === 'string' && x.trim()))) missingAcceptance.push(t.id);
     for (const d of Array.isArray(t.dependsOn) ? t.dependsOn : []) if (!allIds.has(d)) unknownDeps.push({ ticket: t.id, dep: d });
     if (!['S', 'M'].includes(t.size)) oversize.push(t.id);

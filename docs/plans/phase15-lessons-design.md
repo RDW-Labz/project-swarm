@@ -148,3 +148,42 @@ Changes to `selectAffectedTests` and `expandAffectedArgv` (the options object ga
 - Reasons are strings that start with the code (`unknown-file: path`, `test-helper: path`, `truncated-graph: path`).
 
 Wiring (by hand): bisected halves always run the normal argv; the map is used only when `mapIsFresh` holds at the start of the pass; tests added or changed by earlier batches of the same pass are always added to a later selection, and a file an earlier batch of the pass changed forces a full run; after the loop, if the tree has not had a passing full run since the last affected-only batch, one full run of the checks is made, and a failure marks the queue `final-check-failed`.
+
+## 10. Skeleton first, continuous integration tests, preview deploys (plan Phase 15, speed multipliers 4)
+
+Generic, owner-configured hooks. The swarm does not choose or contact any service itself: it runs the commands the owner puts in the project profile. Nothing here deploys to production, and nothing runs unless the profile says so.
+
+### Profile block `ci` (validated like the other blocks)
+
+```
+ci: { smoke?:   { argv: [string] (1 to 20 items, argv[0] a program name or a relative path), timeoutSec: 30 to 1800 (default 600), everyBatches: 1 to 50 (default 1) },
+      preview?: { argv: [string] (same rules), timeoutSec: 30 to 1800 (default 600), everyBatches: 1 to 50 (default 1) } }
+```
+
+Unknown keys are errors. A `preview` argv that contains any item matching `--prod`, `--production`, `promote`, `--target=production` or exactly `prod` or `production` (case-insensitive) is an error: previews only.
+
+### `tools/ci-hooks.mjs`
+
+- `validateCiConfig(raw)` returns `{ config, errors }` (`config` has defaults filled; `undefined` raw gives `{}`), rules as above.
+- `isProductionArgv(argv)` returns true for the forbidden preview items above.
+- `shouldRun(everyBatches, batchNumber)` is true when `batchNumber % everyBatches === 0` (batch numbers start at 1).
+- `extractPreviewUrl(text)` returns the first `https://` URL found in the text (host letters, digits, dots, hyphens; path characters limited; trailing punctuation removed) or `null`; a URL with user info (`user:pass@`) is never returned.
+- `async runHook(kind, hook, { cwd, env, run, timeoutMs })` runs `hook.argv` with no shell, `cwd`, a copy of `env` without any key whose name matches `TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE` (case-insensitive) unless the key is listed in `hook.env` (not part of this version: always filtered), a timeout (`hook.timeoutSec`, kill the process group), and returns `{ kind, status: 'passed' | 'failed' | 'timeout' | 'cannot-run', exitCode, durationMs, tail (the last 1500 characters of output with secrets, emails and home paths redacted using `redactText` from the lesson schema), url }` where `url` is set for a passed `preview` hook only. `run` is injectable like in the eval module: `(command, args, options) => Promise<{ code, stdout, stderr, timedOut? }>`; the default uses `node:child_process` spawn.
+- `fixTicketFromFailure({ kind, batchNumber, jobs, files, tail, summary })` returns a ticket object (without an id) for the ledger: title `Fix <kind> failure after batch <n>` (140 characters at most), `type: 'build'`, `stage: 'S0'`, `epic: 'E-99 Continuous integration'`, `scopeRefs: []`, `acceptance: ['The <kind> check passes again on the batch's files.']`, `files: []`, `context: files (at most 10, repo relative)`, `contracts: []`, `dependsOn: []`, `size: 'M'`, `risk: 'high'`, `sensitive: true`, `status: 'todo'`, `origin: 'ci'`, `notes` (summary or tail, at most 600 characters, redacted).
+
+### Wiring (by hand)
+
+- In `integrate --queue`, after each batch that passed its checks, the `smoke` hook runs when `shouldRun(everyBatches, batch number)`; then the `preview` hook the same way. A hook failure never rolls the batch back: it is recorded in `mergeQueue.ci` (`{ batch, kind, status, exitCode, durationMs, tail, url?, ticket? }`), warned about, and, when the project has a ticket ledger, added as a fix ticket (next free `T-` id below 9000, status `todo`, `origin: 'ci'`). A ticket with `origin: 'ci'` is made by the runner from a check log, not by a worker, so it is left out of the ticket-set hash that approval covers (the owner's approval stays valid) and `swarm go --scope` runs it like any ticket; its prompt gets a `Failure summary:` line (the notes, flat text, at most 600 characters). The summary is made by the local brain (`digest`, kind tests) when it answers, else it is the redacted tail. The brain is optional: any error uses the tail.
+- Skeleton first: a ticket may carry `skeleton: true` (the thin vertical slice, database to API to screen to test). While any skeleton ticket is not `done`, `swarm go --scope` runs only skeleton tickets (and nothing else); `--skip-skeleton` overrides it for one run. The split prompt asks each stage's ticket list to mark the thin vertical slice of the first stage; `scope check` of the ticket tree warns (not an error) when a ledger of 30 or more tickets has no skeleton ticket. `skeleton` is part of the ticket-set hash that approval covers.
+
+### 10b. Review fixes (Opus review of section 10)
+
+`tools/ci-hooks.mjs` changes (the exported names stay):
+
+- **Environment allowlist:** `runHook` passes only these variables from the given env: `PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TERM`, `TZ`, `CI`, `NODE_ENV`, `PORT`, `TMPDIR`, `SWARM_PORT_BASE`, `FORCE_COLOR`, `NO_COLOR`. Nothing else (so no `SSH_AUTH_SOCK`, no tokens, no `DATABASE_URL`).
+- **Production refusal:** `isProductionArgv(argv)` splits every item on `=`, whitespace, `:` and `,`, lower-cases the parts, and refuses when any part is `--prod`, `--production`, `prod`, `production`, `promote`, `-p`, `--target`'s value `production` or `prod` (that is: a part `production` or `prod` anywhere), or when argv[0] is a shell (`sh`, `bash`, `zsh`, `dash`, `fish`, `cmd`, `powershell`, `pwsh`) or any item is `-c` (shell wrappers hide flags). It is a safety net, not a guarantee, and the docs say so: tools that deploy to production by default (for example `fly deploy`, `firebase deploy`) must be wrapped by the owner in a preview-only command.
+- **Only valid hooks:** `validateCiConfig` returns a hook in `config` only when it has no errors, and returns `config: {}` when anything failed; `runHook` re-checks `isProductionArgv` for `preview` and the argv shape, and returns `status: 'cannot-run'` with an error tail when the hook is invalid.
+- **No hang:** `runHook` finishes on the child's `exit` event, not on `close`: after `exit` it kills the whole process group (so background children do not outlive the hook), waits at most 2 seconds for the pipes to drain, then destroys the streams and finishes; on timeout it kills the group (SIGTERM, then SIGKILL after 2 seconds) and finishes at most 5 seconds later no matter what. Output is read with `setEncoding('utf8')` and only the last 64 KB are kept (a rolling buffer), so the tail is the end of the output.
+- **Redaction:** any `findUnsafeText` finding in the tail (not only secrets) makes `runHook` run `redactText` on it; a tail that still has a finding after redaction is replaced by `[output withheld: it held private data]`. A preview URL is returned only if it has no unsafe-text finding, and the last `https://` URL in the output is used (not the first).
+
+Wiring changes (by hand): tickets made by the runner (`origin: 'ci'`) are now inside the ticket-set hash; adding one reseals the approval under the ledger lock (the previous approval must still have been valid; the seal records `ciTickets`), so any other writer of tickets still loses the approval. The fix ticket keeps `files` = the batch's files (a worker needs declared outputs to fix anything) and the design accepts that. The files a hook argv names (and `package.json` for npm, pnpm, yarn, npx, bun) are added to the profile's protected paths automatically, and a hook is skipped (with a warning) when the batch changed one of them. The brain summary is made only when the project profile says `sensitive: false`; otherwise the redacted tail is used. The failure summary in a ticket prompt is labelled untrusted log text. The skeleton gate still lets runner-made fix tickets through (a failing smoke test of the skeleton itself must be fixable), and tells the owner to run `scope sync` when skeleton tickets are only waiting in review. Hook errors never skip saving the run state.

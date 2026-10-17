@@ -146,3 +146,8 @@ One row per plan phase, built with the swarm itself. Rules (from Braden): worker
 
 - 4 swarm jobs (2 modules, 2 test files; all complete first try; one hand fix to a test fixture with a single test, which tripped the too-wide rule) + 2 swarm jobs for the review fixes; the queue wiring in swarm.mjs by hand (core runner, 615 KB file, not given to workers) and its integration tests.
 - Opus review ($0.65): 5 high, 6 medium, 2 low. The most serious: bisected halves of a failed full run ran the narrowed check and could integrate a failure only the full run catches; a pass could end with no passing full run; a stale or outdated repo map; a path starting with a dash could become a flag in the check command. All fixed with tests; the review changed the design (section 9b).
+
+## Phase 15 skeleton first, smoke and preview hooks (1.86.0)
+
+- 2 swarm jobs (hooks module and its tests) + 2 for the review fixes, all complete first try; hand work: the queue and ticket wiring, profile block, skeleton gate, docs, and fixes to two test fixtures (a real parent process cannot exit while it holds a child; the tail test used a hex-looking run that the redactor correctly replaced).
+- Opus review ($0.91): 4 high, 6 medium, 6 low. Worst: `origin: ci` tickets were left out of the approval hash with nothing tying them to the runner (an approval bypass: now they are inside the hash and the runner reseals under the ledger lock); hook scripts a worker could edit run with the owner's rights (now protected paths); a hook with a detached child holding the pipes could hang the queue; the production-flag refusal missed many forms (now broader and documented as a safety net only). Real behavior check: a job writing a hook script is refused at run start as a protected path.
