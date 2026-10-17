@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "mg-guard",
+      "type": "build",
+      "prompt": "Write tools/merge-guard.mjs: checkRollup, assertMergeable, parsePrArgument and runMerge. runMerge takes (root, args, { exec = real exec through node:child_process execFile with promisify, now }) and is fully testable with a fake exec. Keep it under 12000 characters.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes, reasons and the refusal of every other flag are fixed.",
+      "context": [
+        "docs/plans/merge-guard-design.md"
+      ],
+      "outputs": [
+        "tools/merge-guard.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "mg-guard-test",
+      "type": "build",
+      "prompt": "Write the test file for the merge guard module (module written at the same time; use exactly the names in the design). Use a fake exec that records every command. Cover: checkRollup with all green, a failure, a cancelled older run replaced by a newer success, a newer failure after an older success, pending runs, status contexts, neutral and skipped, empty and non-array rollups; assertMergeable for every reason; parsePrArgument forms; runMerge happy path (the exact gh arguments, squash, delete-branch, match-head-commit, then the local pull), a red check (no merge call is ever made), a pending check, no checks, stacked PRs open, a non-default base, every refused flag, a merge failure, a state not MERGED after the call, and a dirty work tree skipping the local update without failing the merge.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes, reasons and the refusal of every other flag are fixed.",
+      "context": [
+        "docs/plans/merge-guard-design.md"
+      ],
+      "outputs": [
+        "tests/merge-guard.test.mjs"
+      ]
+    }
+  ]
+}

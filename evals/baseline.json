@@ -1,6 +1,6 @@
 {
   "anthropic/claude-haiku-5-5": {
-    "passed": 10,
+    "passed": 12,
     "total": 12
   }
 }

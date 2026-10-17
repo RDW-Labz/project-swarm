@@ -82,17 +82,16 @@ async function ship9001(t, changes = {}) {
 }
 
 describe('T81 required-context CI', () => {
-  test('T81 required checks merge while optional checks run', async t => {
+  test('T81 required checks do not merge while an optional check is still pending (the merge guard)', async t => {
     const { result, calls, clock } = await ship9001(t, {
       options: { waitRequiredOnly: true },
       protection: response(JSON.stringify({ contexts: ['required9001', 'required9001'], checks: [{ context: 'required9001' }] })),
     });
-    assert.equal(result.status, 'merged');
+    assert.equal(result.status, 'ci-pending');
+    assert.match(result.reason, /checks not green: optional9002 \(pending\)/);
     assert.deepEqual(result.requiredContexts, ['required9001']);
-    assert.deepEqual(result.pendingAtMerge, ['optional9002']);
-    assert.equal(result.waitedForRequiredOnly, true);
-    assert.equal(clock.now(), 0); // Optional work never settles, even if the mutant polls forever.
-    assert(calls.some(call => call.args[1] === 'merge'));
+    assert(clock.now() > 0); // The required checks were enough to start; the guard then waited for the optional one until the timeout.
+    assert(!calls.some(call => call.args[1] === 'merge'));
     assert(!calls.some(call => call.file === 'gh' && call.args[0] === 'run'));
     assert(calls.some(call => call.args[1] === 'repos/9001/9002/branches/9002%2F9003/protection/required_status_checks'));
   });
@@ -130,13 +129,21 @@ describe('T81 required-context CI', () => {
     }
   });
 
-  test('required failure blocks, optional failure does not, neutral and skipped pass', async t => {
+  test('a failing required or optional check blocks the merge; neutral and skipped pass', async t => {
     for (const conclusion of ['SUCCESS', 'NEUTRAL', 'SKIPPED', 'FAILURE']) {
       const { result } = await ship9001(t, { options: { waitRequiredOnly: true }, view: () => ({
         headRefOid: sha9001, statusCheckRollup: [{ ...required9001, conclusion }, { ...optional9002, status: 'COMPLETED', conclusion: 'FAILURE' }],
       }) });
-      assert.equal(result.status, conclusion === 'FAILURE' ? 'ci-failed' : 'merged');
+      // the optional check fails in every round, so nothing merges (the merge guard); a required failure is reported as before
+      assert.equal(result.status, 'ci-failed');
       if (conclusion === 'FAILURE') assert.deepEqual(result.ci.failed, ['required9001']);
+      else assert.match(result.reason, /checks not green: optional9002 \(failing\)/);
+    }
+    for (const conclusion of ['SUCCESS', 'NEUTRAL', 'SKIPPED']) {
+      const { result } = await ship9001(t, { options: { waitRequiredOnly: true }, view: () => ({
+        headRefOid: sha9001, statusCheckRollup: [{ ...required9001, conclusion }, { ...optional9002, status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      }) });
+      assert.equal(result.status, 'merged');
     }
   });
 
@@ -195,9 +202,10 @@ describe('T81 ship refusals', () => {
     const report = await preflightReport({ ...options, root, body, payloadBase: '9002', requireSections: ['Mutation check'] });
     assert.equal(report.ok, false);
     assert.equal(report.failures[0].code, 'stub-section');
-    const positive = await ship9001(t, { body: body.replace('<!-- swarm:stub mutation -->', '9003'), options: { requireSections: ['Mutation check'], waitRequiredOnly: true } });
+    const allGreen = () => ({ headRefOid: sha9001, statusCheckRollup: [required9001] });
+    const positive = await ship9001(t, { body: body.replace('<!-- swarm:stub mutation -->', '9003'), options: { requireSections: ['Mutation check'] }, view: allGreen });
     assert.equal(positive.result.status, 'merged');
-    const unrelated = await ship9001(t, { body, options: { requireSections: ['Checks'], waitRequiredOnly: true } });
+    const unrelated = await ship9001(t, { body, options: { requireSections: ['Checks'] }, view: allGreen });
     assert.equal(unrelated.result.status, 'merged');
   });
 });

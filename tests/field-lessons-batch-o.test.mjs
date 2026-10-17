@@ -439,6 +439,7 @@ test('#228: ship returns macCheckLine naming the repo, merge sha and an ISO time
     shipOk('[]'), // pr list (none existing)
     shipOk(JSON.stringify({ number: 7, html_url: 'https://example.com/pr/7' })), // pr create
     shipOk(JSON.stringify({ state: 'OPEN', headRefOid: 'sha123', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }] })), // pr view (ci settled)
+    shipOk(JSON.stringify({ state: 'OPEN', headRefOid: 'sha123', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }] })), // pr view (merge guard)
     shipOk(''), // pr merge
     shipOk(JSON.stringify({ state: 'MERGED', mergeCommit: { oid: 'mergedsha123' } })), // post-merge view
   ]);
