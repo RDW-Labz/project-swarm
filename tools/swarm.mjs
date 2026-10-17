@@ -8027,7 +8027,7 @@ async function mainInner() {
   }
   // integrate's checks/mutants flags are read-only selection of whether/how checks run; strip
   // them here so the generic argument-count check below still fails on anything else.
-  let noChecks=false,requireChecks=false,acceptFailedChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag,acceptBlocked=false,salvage=false,acceptDeviation=false,acceptResultShape=false,acceptDropped=false,salvageDropped=false,integrateJobs,queue=false,adaptive=false,batchSize=10,maxRequeues=2;
+  let noChecks=false,requireChecks=false,acceptFailedChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag,acceptBlocked=false,salvage=false,acceptDeviation=false,acceptResultShape=false,acceptDropped=false,salvageDropped=false,approveManifests=[],integrateJobs,queue=false,adaptive=false,batchSize=10,maxRequeues=2;
   if(command==='integrate'){
     const flags=[...(argument === undefined ? [] : [argument]),...rest.splice(0,rest.length)];
     argument=undefined;
@@ -8061,6 +8061,8 @@ async function mainInner() {
       // integrate unless one of these is passed — proceed without it, or apply it from where it
       // was saved the moment it was detected.
       if(flag==='--accept-dropped'){acceptDropped=true;continue;}
+      // Lesson 14: the owner reviewed a dependency or workflow file by hand and lets the security gate pass it for this run only.
+      if(flag==='--approve-manifest'){const file=flags[++index];if(typeof file!=='string'||!file||file.length>200||file.startsWith('-')||file.startsWith('/')||file.split('/').includes('..')||file.includes('\0'))fail('--approve-manifest needs a repo-relative file path');approveManifests.push(file);continue;}
       if(flag==='--salvage-dropped'){salvageDropped=true;continue;}
       rest.push(flag);
     }
@@ -8362,7 +8364,16 @@ async function mainInner() {
       ship: (goRoot,id,goShipFlags)=>shipRun(goRoot,id,goShipFlags),
     });
   }
-  else result=await (queue?integrateQueue:integrateRun)(root,argument,{batchSize,adaptive,maxRequeues,noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
+  else {
+    // The approval is for this run only and is recorded as a decision (who, which file, which run).
+    let approvedGate;
+    if(command==='integrate'&&approveManifests.length){
+      const profile=await projectProfile(root);
+      approvedGate={policy:{...(profile?.security??{}),allowUnparsedManifests:[...(profile?.security?.allowUnparsedManifests??[]),...approveManifests]}};
+      for(const file of approveManifests)await appendEvent(root,{kind:'decision',id:`approve-manifest-${argument}-${file}`,text:`owner reviewed ${file} by hand and approved it past the security gate for run ${argument}`,confirm:true,confirmed:true,by:'owner'},{best:true}).catch(()=>{});
+    }
+    result=await (queue?integrateQueue:integrateRun)(root,argument,{...(approvedGate?{securityGate:approvedGate}:{}),batchSize,adaptive,maxRequeues,noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
+  }
   // Field lesson #203: a failed check at integrate used to be a quiet field (`status: "integrated"`,
   // exit 0) unless the coordinator remembered --require-checks; refusing (or, with the escape
   // hatch, at least saying so loudly) is now the default. --require-checks stays an accepted no-op

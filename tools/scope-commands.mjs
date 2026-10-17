@@ -40,6 +40,7 @@ export const SCOPE_USAGE = [
   '       swarm scope sync RUN [--integrated]',
   '       swarm scope contracts OPENAPI.json',
   '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high] [--set STATUS] [--note TEXT] [--json]',
+  '       swarm tickets ID --files a,b [--context c,d] [--tests t] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
   '       swarm tickets --mark-deps [ID...] [--yes]     (one time, older ledgers: mark blocked tickets with no reason as dependency-blocked so they unlock)',
   '       swarm change "reason" [FILE] [--yes]',
   '       swarm go --scope [--max-jobs N] [go options]',
@@ -52,7 +53,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--set', '--note', '--max-jobs']);
+const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--set', '--note', '--max-jobs', '--files', '--context', '--tests']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const out = (text, exitCode = 0) => ({ stdout: text.endsWith('\n') ? text : `${text}\n`, exitCode });
@@ -697,6 +698,15 @@ async function cmdSync(root, { rest, flags }) {
       qualityResults.set(t.id, quality);
       if (quality.failed) { failCounts.set(quality.check, (failCounts.get(quality.check) ?? 0) + 1); sharedFailures += quality.shared ? 1 : 0; }
     }
+    // The same for a failed tests check: back to the worker with the failure, unless it hit many tickets (then it is the base or the setup).
+    const testResults = new Map();
+    let sharedTestFailures = 0;
+    if (profile?.verify) for (const t of ledger.tickets.filter(x => x.status === 'review' && finished.has(x.id) && (x.runId === undefined || x.runId === rest[0]))) {
+      if (!ticketTests(t).length || failedChecks.has(t.id) || (integrated && !integrated.has(t.id))) continue;
+      const evidence = doneEvidence(state, t.id);
+      testResults.set(t.id, evidence);
+      if (evidence.failed) { failCounts.set('tests', (failCounts.get('tests') ?? 0) + 1); sharedTestFailures += evidence.shared ? 1 : 0; }
+    }
     const done = [], unverified = [], retried = [], blocked = [], notIntegrated = [];
     let uiResults = null, uiTree = null;
     for (const t of ledger.tickets.filter(x => x.status === 'review' && finished.has(x.id) && (x.runId === undefined || x.runId === rest[0]))) {
@@ -714,7 +724,14 @@ async function cmdSync(root, { rest, flags }) {
       if (integrated && !integrated.has(t.id)) { notIntegrated.push(t.id); continue; }
       // A ticket with tests is done only when the runner itself saw them pass (a worker's own report is not evidence).
       if (profile?.verify && ticketTests(t).length) {
-        const evidence = doneEvidence(state, t.id);
+        const evidence = testResults.get(t.id) ?? doneEvidence(state, t.id);
+        if (evidence.failed && systemic('tests')) { unverified.push(`${t.id} (the tests check failed for ${failCounts.get('tests')} tickets of this run, so the base or the setup is likely at fault; fix it and run sync again; not retried)`); continue; }
+        if (evidence.failed && evidence.shared && sharedTestFailures > 1 && !mentionsFiles(t, evidence.tail) && !ticketTests(t).some(f => String(evidence.tail).includes(f))) { unverified.push(`${t.id} (the tests check failed for the whole run and its output does not name this ticket's files; fix it, then run sync again; not retried)`); continue; }
+        if (evidence.failed) {
+          const result = await applyRetry(root, t.id, `failed checks: tests${evidence.tail ? `; ${String(evidence.tail).slice(-500)}` : ''}`, rest[0]);
+          (result === 'blocked' ? blocked : retried).push(t.id);
+          continue;
+        }
         if (!evidence.ok) { unverified.push(`${t.id} (${evidence.reason})`); continue; }
       }
       // A build ticket is done only when the project's typecheck and lint (and build, when the profile asks) passed on the batch that integrated it.
@@ -849,11 +866,49 @@ async function markDepsCommand(root, ledger, ids, flags) {
   return out('another swarm go --scope is starting a wave; try again in a minute', 1);
 }
 
+// Lesson 17: the file lists of a ticket can be changed by a command. Your --yes is the approval: an approved ledger is sealed again over the new lists.
+async function editTicketFiles(root, ledger, rest, flags) {
+  if (rest.length !== 1) return bad('tickets --files/--context/--tests needs one ticket id');
+  const list = v => String(v).split(',').map(x => x.trim()).filter(Boolean);
+  const changes = {};
+  for (const key of ['files', 'context', 'tests']) if (flags[key] !== undefined) changes[key] = list(flags[key]);
+  return withLock(root, async () => {
+    const fresh = await readLedger(root);
+    const ticket = fresh.tickets.find(x => x.id === rest[0]);
+    if (!ticket) return out(`no ticket ${rest[0]}`, 1);
+    if (!['todo', 'ready', 'blocked', 'review'].includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}; only a todo, ready, blocked or review ticket can change its files`, 1);
+    const next = { ...ticket, ...changes };
+    const v = validateTicket(next);
+    if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
+    const problems = [];
+    for (const f of next.files ?? []) {
+      const base = f.split('/').pop();
+      if (base.startsWith('.env')) problems.push(`${f} is a reserved name; use env.example.txt for an env template`);
+      else if (!f.includes('/') && !ROOT_FILE_OK.test(f)) problems.push(`${f} has no folder; give it its real path`);
+      const owner = fresh.tickets.find(x => x.id !== ticket.id && x.status !== 'cancelled' && (x.files ?? []).includes(f));
+      if (owner) problems.push(`${f} is already written by ${owner.id}`);
+    }
+    if (next.integration === true && !(next.tests ?? []).length) problems.push('an integration ticket needs a route-level test');
+    if (problems.length) return out(`refused:\n${problems.map(x => `  ${x}`).join('\n')}`, 1);
+    const summary = Object.keys(changes).map(k => `  ${k}: ${(ticket[k] ?? []).join(', ') || 'none'}  ->  ${next[k].join(', ') || 'none'}`).join('\n');
+    if (flags.yes !== true) return out(`${ticket.id}:\n${summary}\nRerun with --yes to apply${isApproved(fresh) ? ' (the approval is renewed over the new lists)' : ''}.`);
+    const wasApproved = isApproved(fresh);
+    fresh.tickets = fresh.tickets.map(x => (x.id === ticket.id ? next : x));
+    const saved = wasApproved ? approveLedger(fresh, { by: 'owner' }) : fresh;
+    saved.updatedAt = new Date().toISOString();
+    await writeLedger(root, saved);
+    await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields: Object.keys(changes), reapproved: wasApproved });
+    await refreshPlan(root);
+    return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the new lists).' : ''}`);
+  });
+}
+
 export async function runTicketsCommand(root, args) {
   const { flags, rest } = parseArgs(args);
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
   if (flags['mark-deps']) return markDepsCommand(root, ledger, rest, flags);
+  if (flags.files !== undefined || flags.context !== undefined || flags.tests !== undefined) return editTicketFiles(root, ledger, rest, flags);
   if (flags.set !== undefined) {
     if (rest.length !== 1) return bad('tickets --set needs one ticket id');
     if (!STATUSES.includes(flags.set)) return out(`status must be one of: ${STATUSES.join(', ')}`, 1);

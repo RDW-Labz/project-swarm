@@ -207,3 +207,6 @@ Lesson 35 (parts app): one new requirement (R-037) by change order made the spli
 ### Lesson 37 (1.93.2): the --wire flow
 
 Hand-written (small core wiring). Evals 37.1 to 37.4 in tests/lesson-37-eval.test.mjs reproduce the parts-app failure (done S1 re-wired, two integration tickets on one router file, .env.example refused, nameless conflict error).
+### Batch A (1.94.0): lessons 17, 14 and the failed-test retry
+
+Hand-written (core-runner wiring). Evals 36.1 (failed test goes back), 36.2 (swarm tickets files edit), 36.3 (approve-manifest) in tests/batch-a-eval.test.mjs. No release tag until the owner says the parts app is between stages.
