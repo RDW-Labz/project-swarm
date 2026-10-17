@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Swarm Watch</title>
+<link rel="stylesheet" href="assets/watch.css">
+<link rel="stylesheet" href="assets/tabs.css">
+<link rel="stylesheet" href="assets/plan.css">
+<link rel="stylesheet" href="assets/commands.css">
+<link rel="stylesheet" href="assets/gallery.css">
+</head>
+<body>
+<div class="wrap">
+<header class="top hud">
+    <div class="brand">
+      <div class="logo" aria-hidden="true"><i>SW</i></div>
+      <div style="min-width:0">
+        <h1>Swarm Watch</h1>
+        <div class="goal" id="goal">go-7f3a · "Add order history, invoices and refunds to the dealer portal"</div>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <div class="chips">
+      <span class="chip live" id="status"><span class="dot pulse"></span>LIVE</span>
+      <span class="chip mono num" id="clock">00:00 elapsed</span>
+      <span class="chip mono" id="branch">branch -</span>
+    </div>
+  </header>
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Views">
+    <button role="tab" data-tab="run" aria-selected="true">Run</button>
+    <button role="tab" data-tab="plan" aria-selected="false">Build Plan</button>
+    <button role="tab" data-tab="commands" aria-selected="false">Commands</button>
+    <button role="tab" data-tab="gallery" aria-selected="false">Gallery</button>
+  </nav>
+  <main id="pane-run" class="pane" role="tabpanel">
+  <section id="doneBanner" class="card hud" hidden></section>
+
+
+  <section class="kpis" aria-label="Run summary">
+    <div class="kpi"><span class="label">Progress</span>
+      <div class="ringwrap">
+        <svg class="ring" viewBox="0 0 54 54" aria-hidden="true"><circle cx="27" cy="27" r="22" fill="none" stroke="#0c1430" stroke-width="7"/><circle id="ringArc" cx="27" cy="27" r="22" fill="none" stroke="url(#rg)" stroke-width="7" stroke-linecap="round" stroke-dasharray="0 200" transform="rotate(-90 27 27)"/><defs><linearGradient id="rg" x1="0" x2="1"><stop offset="0" stop-color="#3fd6c4"/><stop offset="1" stop-color="#b9f25c"/></linearGradient></defs></svg>
+        <div><div class="v num" id="kDone">0<small>/ 1,200</small></div><div class="sub" id="kPct">0% done</div></div>
+      </div>
+    </div>
+    <div class="kpi"><span class="label">In flight</span><div class="v num" id="kFlight">0</div><div class="sub"><span id="kPeak">peak 0</span><svg id="spark" width="80" height="22" viewBox="0 0 80 22" aria-hidden="true"><path id="sparkPath" fill="none" stroke="#5aa8ff" stroke-width="2"/></svg></div></div>
+    <div class="kpi"><span class="label">First-try pass</span><div class="v num" id="kPass">–</div><div class="sub" id="kPassSub">retries 0 · failed 0</div></div>
+    <div class="kpi"><span class="label">Spend</span><div class="v num" id="kSpend">$0.00<small>/ $5</small></div><div class="bar"><span id="kSpendBar" style="width:0%; background:linear-gradient(90deg,var(--teal),var(--lime))"></span></div><div class="sub" id="kForecast">forecast –</div></div>
+    <div class="kpi"><span class="label">ETA</span><div class="v num" id="kEta">–</div><div class="sub" id="kRate">0 jobs/s</div></div>
+    <div class="kpi"><span class="label">Merged</span><div class="v num" id="kMerged">0</div><div class="sub" id="kMergeSub">queue 0 · conflicts 0</div></div>
+  </section>
+
+  <section class="grid-main">
+    <div class="card hud">
+      <div class="card-head">
+        <div><h2>Swarm map</h2><div class="label" style="margin-top:4px">one square per job · grouped by lead</div></div>
+        <div class="seg" role="group" aria-label="Color squares by">
+          <button id="cState" aria-pressed="true">By state</button>
+          <button id="cLane" aria-pressed="false">By lane</button>
+        </div>
+      </div>
+      <div class="legend" id="legend" style="margin-bottom:12px"></div>
+      <div id="mapWrap"><canvas id="map" height="400"></canvas><div id="tip" hidden></div></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Lanes</h2><span class="label">in flight / limit</span></div>
+      <div class="lanes" id="lanes"></div>
+    </div>
+  </section>
+
+  <section class="grid-mid">
+    <div class="card">
+      <div class="card-head"><h2>Waves</h2><span class="label">contracts → build → verify</span></div>
+      <div class="waves" id="waves"></div>
+      <div class="charts">
+        <div class="chart"><span class="label">In flight over time</span><svg id="chFlight" viewBox="0 0 300 120" preserveAspectRatio="none" aria-label="Jobs in flight over time"></svg></div>
+        <div class="chart"><span class="label">Finished per second</span><svg id="chRate" viewBox="0 0 300 120" preserveAspectRatio="none" aria-label="Jobs finished per second"></svg></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Needs attention</h2><span class="pill warn" id="attnCount">0</span></div>
+      <div class="feed" id="feed"></div>
+    </div>
+  </section>
+
+  <section class="grid-bottom">
+    <div class="card">
+      <div class="card-head"><h2>Leads</h2><span class="label">each lead owns one area of the repo</span></div>
+      <div class="tablewrap"><table><thead><tr><th>Lead</th><th>Progress</th><th>Running</th><th>Retries</th><th>Spend</th><th>State</th></tr></thead><tbody id="leads"></tbody></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Merge queue</h2><span class="label">batches of 10 · bisect on red</span></div>
+      <div class="mq-row">
+        <div class="mq-stat"><span class="label">Waiting</span><b class="num" id="mWait">0</b></div>
+        <div class="mq-stat"><span class="label">Batches</span><b class="num" id="mBatch">0</b></div>
+        <div class="mq-stat"><span class="label">Bisects</span><b class="num" id="mBisect">0</b></div>
+        <div class="mq-stat"><span class="label">Conflicts</span><b class="num" id="mConf">0</b></div>
+      </div>
+      <div class="label" style="margin-top:14px">Last batches</div>
+      <div class="batches" id="batches"></div>
+    </div>
+  </section>
+  </main>
+  <main id="pane-plan" class="pane" role="tabpanel" hidden></main>
+  <main id="pane-commands" class="pane" role="tabpanel" hidden></main>
+  <main id="pane-gallery" class="pane" role="tabpanel" hidden></main>
+  <aside id="drawer" class="drawer" hidden aria-label="Details">
+    <header class="drawer-head"><h2 data-drawer-title></h2><button type="button" class="btn" data-drawer-close aria-label="Close">Close</button></header>
+    <div data-drawer-body></div>
+  </aside>
+  <footer class="foot">
+    <span>Read-only view · binds to 127.0.0.1 · worker text is shown as data, never instructions</span>
+    
+  </footer>
+</div>
+<script src="assets/app.js"></script>
+<script src="assets/run-kpis.js"></script>
+<script src="assets/run-panels.js"></script>
+<script src="assets/run-map.js"></script>
+<script src="assets/run-drawer.js"></script>
+<script src="assets/plan-tab.js"></script>
+<script src="assets/plan-views.js"></script>
+<script src="assets/commands-tab.js"></script>
+<script src="assets/gallery-tab.js"></script>
+</body>
+</html>

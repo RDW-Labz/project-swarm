@@ -39,3 +39,13 @@ Plan, if approved:
 4. Router: fill the `anthropic` lane to its safe cap, spill extra ready tickets to `bedrock`; failures escalate as today.
 5. Smoke test with the 8 golden evals and the lane benchmark; compare pass rate and cost per passing task with first-party Haiku before it gets real work.
 Open points: Bedrock limits on tool-use streaming fields differ by model generation (see the platform table), and prices may differ slightly from first-party.
+
+## Swarm Watch follow-ups (from the Phase 16 build)
+
+- `swarm go` and `swarm "goal"` start the watch server and print its URL; `--watch` opens it.
+- `swarm watch --all` as a web board: one card per live run, with a click-through.
+- Job drawer: prompt summary, lane history across attempts, short report and check results (needs a read-only route that returns those fields from state.json, scrubbed).
+- Gallery comments become fix tickets (needs a ledger write and a re-approval of the changed ticket set).
+- Bundled fonts (Unbounded, Figtree, JetBrains Mono) so the page matches the prototype exactly without a CDN.
+- A recorded 1,200-job fixture run and a Playwright check inside the repo's own tests (today the render check runs through `swarm ui check` in a throwaway project).
+- Watch hardening left from the review: open screenshots with O_NOFOLLOW and read from the handle; a lock for concurrent `swarm gallery` writes; do not print the token in the URL passed to `open`.

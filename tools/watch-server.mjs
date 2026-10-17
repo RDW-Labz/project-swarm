@@ -1,0 +1,277 @@
+// SPDX-License-Identifier: Apache-2.0
+import http from 'node:http';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { readdir, readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { diffSnapshots, createThrottle } from './watch-delta.mjs';
+import { screenshotPath } from './watch-gallery.mjs';
+
+const TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+};
+
+const SECURITY = {
+  'Content-Security-Policy': `default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Cache-Control': 'no-store',
+};
+
+const IDLE_FINISHED_MS = 10000;
+const MAX_STREAMS = 8;
+const MAX_SLOW_WRITES = 2;
+
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a), 'utf8');
+  const y = Buffer.from(String(b), 'utf8');
+  if (x.length !== y.length) return false;
+  return timingSafeEqual(x, y);
+}
+
+function send(res, method, status, headers, body) {
+  res.writeHead(status, { ...SECURITY, ...headers });
+  res.end(method === 'HEAD' ? undefined : body);
+}
+
+function sendText(res, method, status, msg) {
+  send(res, method, status, { 'Content-Type': 'text/plain; charset=utf-8' }, msg);
+}
+
+function sendJson(res, method, obj) {
+  send(res, method, 200, { 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify(obj));
+}
+
+function sse(event, data) {
+  return 'event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n';
+}
+
+export function createWatchServer(opts) {
+  const {
+    root,
+    getRunSnapshot,
+    getPlanSnapshot,
+    getGallery,
+    commandList,
+    contextCommands,
+    assetDir,
+    deltaFile,
+    idleMs = 1800000,
+    now = Date.now,
+  } = opts;
+
+  const token = randomBytes(24).toString('hex');
+  const assets = new Map();
+  const streams = new Set();
+  let server = null;
+  let port = 0;
+  let url = null;
+  let timer = null;
+  let ticking = false;
+  let closed = false;
+  let streamEverClosed = false;
+  let resolveDone;
+  const done = new Promise((resolve) => { resolveDone = resolve; });
+  let lastActivity = now();
+  let noStreamSince = now();
+
+  async function loadAssets() {
+    assets.clear();
+    const entries = await readdir(assetDir, { withFileTypes: true });
+    for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      if (!entry.isFile()) continue;
+      const ext = path.extname(entry.name);
+      if (!Object.hasOwn(TYPES, ext)) continue;
+      const body = await readFile(path.join(assetDir, entry.name));
+      assets.set(entry.name, { type: TYPES[ext], body });
+    }
+    const delta = await readFile(deltaFile);
+    assets.set('watch-delta.mjs', { type: TYPES['.js'], body: delta });
+  }
+
+  function sendAsset(res, method, name) {
+    const a = Object.hasOwn(Object.fromEntries(assets), name) ? assets.get(name) : undefined;
+    if (!a) return sendText(res, method, 404, 'not found');
+    send(res, method, 200, { 'Content-Type': a.type, 'Content-Length': a.body.length }, a.body);
+  }
+
+  async function payload() {
+    const run = (await getRunSnapshot()) ?? null;
+    const plan = (await getPlanSnapshot()) ?? { present: false };
+    const gallery = (await getGallery()) ?? { schema: 1, screens: [] };
+    const ctx = await contextCommands(run, plan);
+    return { run, plan, gallery, commands: commandList, contextCommands: ctx };
+  }
+
+  async function sendShot(res, method, id, kind) {
+    const file = await screenshotPath(root, id, kind);
+    if (!file) return sendText(res, method, 404, 'not found');
+    const body = await readFile(file);
+    send(res, method, 200, { 'Content-Type': 'image/png', 'Content-Length': body.length }, body);
+  }
+
+  function dropStream(s) {
+    streams.delete(s);
+    streamEverClosed = true;
+  }
+
+  async function openEvents(res, method) {
+    if (method === 'HEAD') {
+      return send(res, method, 200, { 'Content-Type': 'text/event-stream; charset=utf-8' }, '');
+    }
+    if (closed) return sendText(res, method, 503, 'shutting down');
+    const run = (await getRunSnapshot()) ?? null;
+    if (streams.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
+    res.writeHead(200, { ...SECURITY, 'Content-Type': 'text/event-stream; charset=utf-8' });
+    res.write(sse('snapshot', run));
+    const stream = { res, prev: run, throttle: createThrottle(250, now), slow: 0 };
+    streams.add(stream);
+    res.on('close', () => {
+      dropStream(stream);
+      lastActivity = now();
+      if (streams.size === 0) noStreamSince = now();
+    });
+  }
+
+  async function pushUpdates() {
+    const next = (await getRunSnapshot()) ?? null;
+    for (const s of [...streams]) {
+      if (JSON.stringify(s.prev) === JSON.stringify(next)) continue;
+      if (!s.throttle.shouldSend()) continue;
+      try {
+        const line = (s.prev === null || next === null)
+          ? sse('snapshot', next)
+          : sse('delta', diffSnapshots(s.prev, next));
+        const ok = s.res.write(line);
+        s.prev = next;
+        s.slow = ok ? 0 : s.slow + 1;
+        if (s.slow >= MAX_SLOW_WRITES) {
+          dropStream(s);
+          try {
+            s.res.end();
+          } catch {
+            // already closed
+          }
+        }
+      } catch {
+        dropStream(s);
+      }
+    }
+  }
+
+  async function handle(req, res) {
+    const method = req.method;
+    if (method !== 'GET' && method !== 'HEAD') {
+      return send(res, method, 405, { Allow: 'GET, HEAD', 'Content-Type': 'text/plain; charset=utf-8' }, 'method not allowed');
+    }
+    if (!server) return sendText(res, method, 421, 'misdirected request');
+    const host = req.headers.host;
+    if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
+      return sendText(res, method, 421, 'misdirected request');
+    }
+    const u = new URL(req.url || '/', 'http://127.0.0.1');
+    const pathname = u.pathname;
+    if (pathname.startsWith('/assets/')) {
+      lastActivity = now();
+      return sendAsset(res, method, pathname.slice('/assets/'.length));
+    }
+    const parts = pathname.split('/');
+    const isShot = parts.length === 4 && parts[1] === 'shot' && (parts[3] === 'mockup' || parts[3] === 'page');
+    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot) return sendText(res, method, 404, 'not found');
+    const q = u.searchParams.get('t');
+    const h = req.headers['x-watch-token'];
+    const ok = (typeof q === 'string' && safeEqual(q, token)) || (typeof h === 'string' && safeEqual(h, token));
+    if (!ok) {
+      return sendText(res, method, 403, 'forbidden');
+    }
+    lastActivity = now();
+    if (pathname === '/') return sendAsset(res, method, 'index.html');
+    if (pathname === '/api/snapshot') return sendJson(res, method, await payload());
+    if (pathname === '/events') return openEvents(res, method);
+    return sendShot(res, method, parts[2], parts[3]);
+  }
+
+  async function close() {
+    if (closed && !server) return;
+    closed = true;
+    if (timer) clearInterval(timer);
+    timer = null;
+    for (const s of [...streams]) {
+      try {
+        s.res.end();
+      } catch {
+        // already closed
+      }
+    }
+    streams.clear();
+    if (server && server.listening) {
+      await new Promise((resolve) => {
+        server.close(() => resolve());
+        if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+      });
+    }
+    resolveDone();
+  }
+
+  async function tick() {
+    if (ticking || closed) return;
+    ticking = true;
+    try {
+      const t = now();
+      if (streams.size > 0) {
+        await pushUpdates();
+      } else {
+        if (t - lastActivity >= idleMs) {
+          await close();
+          return;
+        }
+        const run = (await getRunSnapshot()) ?? null;
+        const finished = !!run && (run.status === 'complete' || run.status === 'failed');
+        if (finished && streamEverClosed && t - noStreamSince >= IDLE_FINISHED_MS) {
+          await close();
+          return;
+        }
+      }
+    } catch {
+      // keep polling; a failed read is retried on the next tick
+    } finally {
+      ticking = false;
+    }
+  }
+
+  async function listen() {
+    await loadAssets();
+    server = http.createServer((req, res) => {
+      handle(req, res).catch(() => {
+        if (!res.headersSent) sendText(res, req.method, 500, 'error');
+        else res.end();
+      });
+    });
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => resolve());
+    });
+    port = server.address().port;
+    url = `http://127.0.0.1:${port}/?t=${token}`;
+    closed = false;
+    streamEverClosed = false;
+    lastActivity = now();
+    noStreamSince = now();
+    timer = setInterval(() => {
+      tick();
+    }, 1000);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+    return { url, port };
+  }
+
+  return {
+    listen,
+    close,
+    done,
+    token,
+    get url() {
+      return url;
+    },
+  };
+}
