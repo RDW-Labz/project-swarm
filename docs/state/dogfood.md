@@ -137,3 +137,7 @@ One row per plan phase, built with the swarm itself. Rules (from Braden): worker
 ## Follow-ups after Phase 15 part 1 (1.83.0)
 
 - Small core-runner changes written by hand (output normalization, 4096 default with one length retry, concurrency 64, cached contract prefix): allowed by the rule for core wiring and small fixes. The Opus review ($0.51, after one rerun when the network dropped mid-review) found a real high bug the tests missed: the retry's cap check added a number to the `{job, today, total}` object, so every cap compared `NaN` and always passed; plus the first call was written to the ledger only after the second. Both fixed with tests that place the spend right at the job cap.
+
+## Phase 15 lessons mine (1.84.0)
+
+- 2 swarm jobs (module, test file), both complete on the first try; one hand fix (a test looked for a line starting with "Example" while the module writes a heading); command glue and wiring by hand. No Opus review: no spend, secret or sensitive-routing change (it only writes proposal files, never over an existing one). Real data: 33 of 231 lessons still have only a proposed guard; one cluster (ci, 5 lessons) became `proposals/ci.md`.

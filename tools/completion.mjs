@@ -47,7 +47,7 @@ export const COMMANDS = [
   command('scope', 'Scope file: template, check, split into tickets, approve, sync.', 'none', '--out --stage --ingest --merge --yes --integrated'),
   command('tickets', 'List or show scope tickets and their status.', 'none', '--stage --status --type --risk --set --note --json'),
   command('change', 'Record a scope change order.', 'none', '--yes'),
-  command('lessons', 'Structured lessons: list, show, add, check, stats, backfill, notes.', 'none', '--stage --tag --caught-by --text --what --rule --fix --lane-model --ticket --requirement --guard-kind --guard-text --retries --minutes --usd --file --project --json --dry-run'),
+  command('lessons', 'Structured lessons: list, show, add, check, stats, backfill, mine, notes.', 'none', '--stage --tag --caught-by --text --what --rule --fix --lane-model --ticket --requirement --guard-kind --guard-text --retries --minutes --usd --file --project --json --dry-run --min --include-guarded --write'),
   command('eval', 'Golden eval set: list, validate, manifest, score, gate.', 'none', '--all --agent --model --out --record --update-baseline --reset-baseline'),
   command('onboard', 'Set up project onboarding.'),
   command('lesson', 'Manage recorded project lessons.', 'none', '--area --evidence --rule --fix --public --queued --shipped --older-than --status --version --test --agent --model --tier --stale-days --installed --from --dry-run --verbose --file --private-names'),

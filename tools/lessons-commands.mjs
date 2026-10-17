@@ -6,6 +6,7 @@ import path from 'node:path';
 import { listLessons, readLessons, nextLessonId, writeLesson, filterLessons, lessonStats } from './lesson-store.mjs';
 import { normalizeLesson, STAGES, CAUGHT_BY, GUARD_KINDS } from './lesson-schema.mjs';
 import { backfill } from './lesson-backfill.mjs';
+import { mine } from './lesson-mine.mjs';
 import { queryFromTicket, selectNotes, renderNotes } from './lesson-notes.mjs';
 import { listEvals, validateEval, evalManifest, scoreRun, compareBaseline } from './evals.mjs';
 import { randomBytes } from 'node:crypto';
@@ -15,12 +16,12 @@ export const LESSONS_USAGE = [
   'Usage: swarm lessons list [--stage S] [--tag T] [--caught-by C] [--text T] [--json]',
   '       swarm lessons show ID',
   '       swarm lessons add --stage S --what TEXT --rule TEXT [--fix TEXT] [--caught-by C] [--tag T]... [--lane-model M] [--ticket T-0001] [--requirement R-001] [--guard-kind K] [--guard-text TEXT] [--retries N] [--minutes N] [--usd N]',
-  '       swarm lessons check | stats [--json] | backfill [--dry-run]',
+  '       swarm lessons check | stats [--json] | backfill [--dry-run] | mine [--min N] [--include-guarded] [--write] [--json]',
   '       swarm lessons notes "TEXT" [--file PATH]...',
   '       swarm eval list | validate [ID | --all] | manifest [ID... | --all] [--agent A] [--model M] [--out FILE] | score RUN [--record] | gate RUN [--update-baseline]',
   ''].join('\n');
 
-const VALUE_FLAGS = new Set(['--stage', '--tag', '--caught-by', '--text', '--what', '--rule', '--fix', '--lane-model', '--ticket', '--requirement', '--guard-kind', '--guard-text', '--retries', '--minutes', '--usd', '--file', '--agent', '--model', '--out', '--project']);
+const VALUE_FLAGS = new Set(['--stage', '--tag', '--min', '--caught-by', '--text', '--what', '--rule', '--fix', '--lane-model', '--ticket', '--requirement', '--guard-kind', '--guard-text', '--retries', '--minutes', '--usd', '--file', '--agent', '--model', '--out', '--project']);
 const REPEATABLE = new Set(['--tag', '--file']);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const out = (text, exitCode = 0) => ({ stdout: text.endsWith('\n') ? text : `${text}\n`, exitCode });
@@ -112,6 +113,16 @@ async function lessonsCommand(root, verb, args, { installRoot }) {
     });
     const file = await writeLesson(root, lesson);
     return out(`wrote ${file}`);
+  }
+  if (verb === 'mine') {
+    const min = flags.min === undefined ? 3 : Number(flags.min);
+    if (!Number.isInteger(min) || min < 2 || min > 50) return out('--min must be a whole number from 2 to 50', 1);
+    const r = await mine(root, { min, includeGuarded: flags['include-guarded'] === true, write: flags.write === true });
+    if (flags.json) return out(JSON.stringify(r));
+    const lines = [`${r.lessonCount} lessons, ${r.considered} without a built guard, ${r.clusters.length} cluster(s) of at least ${min}`, ...r.clusters.map(c => `  ${c.key}: ${c.size} lessons -> ${c.kind}`)];
+    if (flags.write === true) lines.push(`${r.written.length} proposal(s) written${r.written.length ? `: ${r.written.join(', ')}` : ''}${r.skipped.length ? `; ${r.skipped.length} already existed` : ''}`, 'Review each one, build it with a test, and open a PR; nothing is merged automatically.');
+    else if (r.clusters.length) lines.push('Nothing written. Add --write to create the proposal files.');
+    return out(lines.join('\n'));
   }
   if (verb === 'notes') {
     if (rest.length !== 1) return bad('lessons notes needs the ticket text in quotes');

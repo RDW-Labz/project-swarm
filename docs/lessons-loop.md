@@ -17,6 +17,10 @@ swarm lessons backfill [--dry-run]
 
 Lessons from other projects come back here as lesson files only (see CLAUDE.md): run `swarm lessons add` in that project, then copy the file into this repo's `lessons/<project>/`.
 
+## Mining lessons into guards
+
+`swarm lessons mine [--min N] [--include-guarded] [--write] [--json]` groups lessons that share a specific tag (at least 3 by default, only lessons whose guard is still `proposed`) and proposes one guard per group: a scope-check rule, a lint check, a test template, a contract test, a router rule, a review checklist item or a prompt rule, chosen by fixed rules (no model). With `--write` each proposal becomes `proposals/<name>.md` naming the lessons it comes from and where to build it; existing files are never overwritten. A person builds the guard with a test and opens a PR. Nothing is merged automatically.
+
 ## Watch-out notes
 
 When `swarm go --scope` builds a ticket's job, it adds up to three short "Watch out for" lines from the most similar lessons (by tags, files and words), at the end of the prompt so the shared start stays cached. Nothing is added when nothing matches. Lessons come from the project's own `lessons/` and the installed swarm's `lessons/`. Try it: `swarm lessons notes "ticket text" [--file PATH]...`.
