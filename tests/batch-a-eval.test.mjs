@@ -12,6 +12,8 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { readLedger, writeLedger, createLedger, approveLedger, isApproved } from '../tools/tickets.mjs';
 import { runManifest } from '../tools/swarm.mjs';
+import { runSecurityGate } from '../tools/security-gate.mjs';
+import { createHash } from 'node:crypto';
 import { readJournal } from '../tools/journal.mjs';
 
 const exec = promisify(execFile);
@@ -123,7 +125,7 @@ test('eval 36.3: integrate --approve-manifest lets one reviewed manifest pass th
   assert.equal(await fs.readFile(path.join(root, 'pnpm-workspace.yaml'), 'utf8'), 'packages: []\n');
   const decisions = (await readJournal(root, { kinds: ['decision'], limit: Infinity })).filter(e => /approve-manifest-.*pnpm-workspace/.test(String(e.id)));
   assert.equal(decisions.length, 1);
-  assert.match(decisions[0].text, /pnpm-workspace\.yaml.*approved it past the security gate for run/);
+  assert.match(decisions[0].text, /pnpm-workspace\.yaml \(sha256 [0-9a-f]{12}\).*approved exactly that content past the security gate for run/);
   // It was for that run only: a later run changing the same file is blocked again.
   await fs.rm(path.join(root, 'pnpm-workspace.yaml'));
   await exec('git', ['-C', root, 'checkout', '-q', '--', '.']).catch(() => {});
@@ -135,4 +137,20 @@ test('eval 36.3: integrate --approve-manifest lets one reviewed manifest pass th
   assert.equal(await fs.readFile(path.join(root, 'pnpm-workspace.yaml'), 'utf8'), 'packages: []\n');
   // A path outside the project is refused.
   assert.match((await cli('integrate', second, '--no-checks', '--approve-manifest', '../x')).out, /repo-relative/);
+});
+
+test('eval 36.4: an approved manifest is tied to its exact content: a changed file needs a new approval', async () => {
+  const good = Buffer.from('packages: []\n');
+  const changed = Buffer.from('packages: [evil]\n');
+  const sha = createHash('sha256').update(good).digest('hex');
+  const gate = (bytes, policy) => runSecurityGate({ changes: [{ file: 'pnpm-workspace.yaml', bytes, previous: null }], policy: { codeScan: 'off', requireVulnerabilityScan: false, ...policy }, cwd: os.tmpdir(), exec: async () => ({ code: 0, stdout: '', stderr: '' }), fetchImpl: async () => { throw new Error('offline'); } });
+  // Old behavior: the approval was by path, so any later content for the same file passed.
+  assert.equal((await gate(good, {})).blocks.some(b => b.check === 'unsupported-manifest'), true);
+  assert.equal((await gate(good, { approvedManifests: [{ file: 'pnpm-workspace.yaml', sha256: sha }] })).blocks.some(b => b.check === 'unsupported-manifest'), false);
+  const after = await gate(changed, { approvedManifests: [{ file: 'pnpm-workspace.yaml', sha256: sha }] });
+  const block = after.blocks.find(b => b.check === 'unsupported-manifest');
+  assert.ok(block);
+  assert.match(block.message, /changed after you approved it \(approved [0-9a-f]{12}, now [0-9a-f]{12}\); review it again/);
+  // A malformed approval (no hash) approves nothing.
+  assert.equal((await gate(good, { approvedManifests: [{ file: 'pnpm-workspace.yaml' }] })).blocks.some(b => b.check === 'unsupported-manifest'), true);
 });

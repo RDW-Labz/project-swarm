@@ -62,3 +62,7 @@ Open points: Bedrock limits on tool-use streaming fields differ by model generat
 - A later split that adds a module to an already-wired requirement does not add it to the existing integration ticket's dependencies (`--wire` only helps requirements with none): flag it.
 - Cancelling a ticket now drops it from dependents and reseals the approval (asked for by the owner); a stricter option would block dependents for a look first.
 
+## Batch A review notes (2026-10-17)
+- Tests systemic-failure guard: `failCounts.get('tests')` counts only tickets with tests; compare it with the number of tickets that have test evidence, not the quality-checked total.
+- One retry, two failures: a ticket whose tests and lint both failed uses one retry for the tests and a second for the lint; combine them into one retry note.
+- The retry note carries the last 500 characters of check output as is (same as the lint path); strip control characters and wrap it as data.
