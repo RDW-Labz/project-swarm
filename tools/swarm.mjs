@@ -6529,11 +6529,11 @@ async function installNewRelease(root,home){
  try{return JSON.parse(stdout.trim().split('\n').at(-1));}catch{return {status:'installed'};}
 }
 
-// The owner's --approve-manifest files are added to the security policy that is already in force; a disabled gate stays disabled.
+// The owner's --approve-manifest approvals (file and content hash) are added to the security policy that is already in force; a disabled gate stays disabled.
 function withApprovedManifests(policy,files){
   if(!files?.length||policy?.enabled===false)return policy;
   const base=policy&&typeof policy==='object'&&!Array.isArray(policy)?policy:{};
-  return {...base,allowUnparsedManifests:[...(Array.isArray(base.allowUnparsedManifests)?base.allowUnparsedManifests:[]),...files]};
+  return {...base,approvedManifests:[...(Array.isArray(base.approvedManifests)?base.approvedManifests:[]),...files]};
 }
 
 export async function updateInstall(root,{home,doctorAllImpl=doctorAll}={}){
@@ -8375,13 +8375,22 @@ async function mainInner() {
     // The approval is for this run only and is recorded as a decision (who, which file, which run).
     let approvedGate;
     if(command==='integrate'&&approveManifests.length){
-      // Only a file this run really changes can be approved, so the record names a real review. The record is written before integrate (a failed write stops it).
-      const state=await readState(await fs.realpath(root),argument);
-      const changed=new Set((state.jobs??[]).flatMap(job=>Array.isArray(job.outputs)?job.outputs:[]));
-      const unknown=approveManifests.filter(file=>!changed.has(file));
-      if(unknown.length)fail(`approve-manifest-unknown: run ${argument} does not change ${unknown.join(', ')}`,'approve-manifest-unknown');
-      approvedGate={approveManifests:[...new Set(approveManifests)]};
-      for(const file of approvedGate.approveManifests)await appendEvent(root,{kind:'decision',id:`approve-manifest-${argument}-${file}-${Date.now()}`,text:`owner reviewed ${file} by hand and approved it past the security gate for run ${argument}`,confirm:true,confirmed:true,by:'owner'});
+      // Only a file this run really changes can be approved, and the approval is for the exact bytes the workers proposed (a changed file needs a new approval).
+      // The record is written before integrate (a failed write stops it).
+      const realRoot=await fs.realpath(root);
+      const state=await readState(realRoot,argument);
+      const entries=[];
+      for(const file of new Set(approveManifests)){
+        const jobs=(state.jobs??[]).filter(job=>Array.isArray(job.outputs)&&job.outputs.includes(file));
+        if(!jobs.length)fail(`approve-manifest-unknown: run ${argument} does not change ${file}`,'approve-manifest-unknown');
+        for(const job of jobs){
+          let bytes;
+          try{bytes=await fs.readFile(path.join(realRoot,String(job.workspace??''),file));}catch{fail(`approve-manifest-unreadable: cannot read ${file} from job ${job.id}; nothing approved`,'approve-manifest-unreadable');}
+          entries.push({file,sha256:crypto.createHash('sha256').update(bytes).digest('hex')});
+        }
+      }
+      approvedGate={approveManifests:entries};
+      for(const entry of entries)await appendEvent(root,{kind:'decision',id:`approve-manifest-${argument}-${entry.file}-${entry.sha256.slice(0,12)}`,text:`owner reviewed ${entry.file} (sha256 ${entry.sha256.slice(0,12)}) by hand and approved exactly that content past the security gate for run ${argument}`,confirm:true,confirmed:true,by:'owner'});
     }
     result=await (queue?integrateQueue:integrateRun)(root,argument,{...(approvedGate?{securityGate:approvedGate}:{}),batchSize,adaptive,maxRequeues,noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
   }

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.94.1
+
+- `swarm integrate --approve-manifest FILE` is now tied to the file's exact content: swarm takes the sha256 of the bytes the workers proposed, the gate lets only that content through, and a later change to the same file is blocked again with "changed after you approved it (approved X, now Y)". The decision record names the hash.
+
 ## 1.94.0
 
 - A failed tests check at done-check goes back to the worker with the failure, like lint and typecheck (one job in the batch: that job; a run-wide failure: only the ticket the output names; many tickets: base or setup, no paid retries).
