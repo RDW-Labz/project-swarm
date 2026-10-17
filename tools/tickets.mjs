@@ -5,13 +5,14 @@ import path from 'node:path';
 import { safeWritableDir, assertRegularOrMissing, appendEvent } from './journal.mjs';
 import { wiringGaps } from './wiring.mjs';
 import { isExampleFile } from './init-profile.mjs';
+import { isSensitivePath } from './sensitive-paths.mjs';
 
 export const STATUSES = ['todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled'];
 export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'contract', 'human'];
 const RISKS = ['low', 'medium', 'high'];
 const SIZES = ['S', 'M'];
 const NEEDS_ACCEPTANCE = ['build', 'test', 'migration'];
-const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps', 'skeleton', 'tests', 'screens', 'integration'];
+const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps', 'skeleton', 'tests', 'screens', 'integration', 'deletes'];
 const RESERVED_FIRST = ['.git', '.swarm', '.github-hooks-free'];
 // Build output anywhere in a path, and any dot-env file, are never ticket files.
 const BUILD_DIRS = ['.next', 'node_modules', 'dist'];
@@ -74,7 +75,11 @@ export function validateTicket(t) {
   if (t.size === 'L') errors.push('size L: split this ticket');
   else if (!SIZES.includes(t.size)) errors.push(`bad size: ${t.size}`);
   if (!RISKS.includes(t.risk)) errors.push(`bad risk: ${t.risk}`);
-  for (const k of ['dependsOn', 'files', 'context', 'contracts', 'tests']) if (t[k] !== undefined && !isStrArr(t[k])) errors.push(`${k} must be an array of strings`);
+  for (const k of ['dependsOn', 'files', 'context', 'contracts', 'tests', 'deletes']) if (t[k] !== undefined && !isStrArr(t[k])) errors.push(`${k} must be an array of strings`);
+  if (isStrArr(t.deletes)) {
+    if (t.deletes.length > 20) errors.push('deletes: at most 20 files');
+    for (const p of t.deletes) { if (badPath(p) || p.endsWith('/') || p.includes('*')) errors.push(`deletes path not allowed: ${p} (one real file, no folder, no glob)`); else if (isSensitivePath(p)) errors.push(`deletes path not allowed: ${p} is a manifest, lockfile, workflow, hook or profile file: delete it by hand`); if (isStrArr(t.files) && t.files.includes(p)) errors.push(`${p} is both written and deleted`); }
+  }
   for (const k of ['files', 'context', 'contracts', 'tests']) if (isStrArr(t[k])) for (const p of t[k]) if (badPath(p, k === 'context')) errors.push(`${k} path not allowed: ${p}`);
   if (isStrArr(t.tests) && t.tests.some(p => p.startsWith('-'))) errors.push('tests path must not start with a dash');
   if (!STATUSES.includes(t.status)) errors.push(`bad status: ${t.status}`);

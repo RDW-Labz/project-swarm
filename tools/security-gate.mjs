@@ -6,6 +6,7 @@ import {existsSync,readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync} from
 import {createHash} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import {isSensitivePath} from './sensitive-paths.mjs';
 import {fileURLToPath} from 'node:url';
 
 export const SEMGREP_RULES_SHA256='3ad961b22a3ac752a1ba8815a4ea234feb8b605ede0a4026397ad31cc5e07da2';
@@ -26,7 +27,7 @@ for(const k of NUM)if(Number.isFinite(r[k])&&r[k]>=0)p[k]=r[k];
 for(const k of BOOL)if(typeof r[k]==='boolean')p[k]=r[k];
 for(const k of ARR)if(Array.isArray(r[k])&&r[k].every(x=>typeof x==='string'))p[k]=[...r[k]];
 // Owner approvals of one exact file content: { file, sha256 }. A changed file needs a new approval.
-p.approvedManifests=Array.isArray(r.approvedManifests)?r.approvedManifests.filter(a=>a&&typeof a.file==='string'&&typeof a.sha256==='string'&&/^[0-9a-f]{64}$/.test(a.sha256)).slice(0,50).map(a=>({file:a.file,sha256:a.sha256})):[];
+p.approvedManifests=Array.isArray(r.approvedManifests)?r.approvedManifests.filter(a=>a&&typeof a.file==='string'&&typeof a.sha256==='string'&&(/^[0-9a-f]{64}$/.test(a.sha256)||a.sha256==='deleted')).slice(0,50).map(a=>({file:a.file,sha256:a.sha256})):[];
 if(r.codeScan==='auto'||r.codeScan==='off'||r.codeScan==='local')p.codeScan=r.codeScan;
 // Accepted advisories: { package, id?, reason, reviewBy: YYYY-MM-DD }. Malformed entries are dropped (the block stays).
 const realDate=d=>typeof d==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(d)&&Number.isFinite(Date.parse(d+'T00:00:00Z'))&&new Date(d+'T00:00:00Z').toISOString().slice(0,10)===d;
@@ -198,10 +199,18 @@ const unparsed=changes.map(c=>({c,eco:unparsedEcosystem(c.file)})).filter(x=>x.e
 if(unparsed.length)checked.push('unsupported-manifest');
 for(const {c,eco} of unparsed){if(allowedUnparsed(c.file,pol.allowUnparsedManifests))continue;
 const mine=(pol.approvedManifests||[]).filter(a=>normPath(a.file)===normPath(c.file));
-const sha=c.bytes==null?null:createHash('sha256').update(c.bytes).digest('hex');
-if(sha&&mine.some(a=>a.sha256===sha))continue;
-if(mine.length){blocks.push({check:'unsupported-manifest',severity:'high',message:`${c.file} changed after you approved it (approved ${mine[0].sha256.slice(0,12)}, now ${sha?sha.slice(0,12):'a deletion'}); review it again and rerun integrate with --approve-manifest`});continue;}
+const sha=c.bytes==null?'deleted':createHash('sha256').update(c.bytes).digest('hex');
+if(mine.some(a=>a.sha256===sha))continue;
+if(mine.length){blocks.push({check:'unsupported-manifest',severity:'high',message:`${c.file} changed after you approved it (approved ${mine[0].sha256.slice(0,12)}, now ${sha==='deleted'?'a deletion':sha.slice(0,12)}); review it again and rerun integrate with --approve-manifest`});continue;}
 blocks.push({check:'unsupported-manifest',severity:'high',message:`${c.file} changed: ${eco} dependencies are not parsed yet; the owner must review it, ${/^[A-Za-z0-9_@+.\/-]+$/.test(c.file)?`then rerun integrate with --approve-manifest ${c.file}`:'then approve it by hand'}`});}
+// Lesson 39: a deletion goes through the gate. Deleting a dependency manifest, a lockfile, a workflow, a hook or the profile needs the owner's review like changing it does.
+// Fail closed: bytes==null is a deletion unless the file is known to be absent in the base. Only an approval of the deletion itself waives it.
+const deletions=changes.filter(c=>c&&c.bytes==null&&c.previous!==null&&!unparsedEcosystem(c.file));
+for(const c of deletions.filter(c=>isSensitivePath(c.file))){
+if(!checked.includes('manifest-delete'))checked.push('manifest-delete');
+if((pol.approvedManifests||[]).some(a=>normPath(a.file)===normPath(c.file)&&a.sha256==='deleted'))continue;
+blocks.push({check:'manifest-delete',severity:'high',message:`${c.file} is deleted; the owner must review it${/^[A-Za-z0-9_@+.\/-]+$/.test(c.file)?`, then rerun integrate with --approve-manifest ${c.file}`:''}`});
+}
 
 const policyFiles=changes.filter(c=>normPath(c.file)===POLICY_FILE);
 if(policyFiles.length)checked.push('policy-change');

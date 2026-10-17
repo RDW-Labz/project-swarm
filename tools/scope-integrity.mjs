@@ -52,8 +52,8 @@ function findConflicts(active, waves) {
     const ts = wave.map((id) => byId.get(id)).filter(Boolean);
     for (let i = 0; i < ts.length; i++) {
       for (let j = i + 1; j < ts.length; j++) {
-        for (const fa of ts[i].files || []) {
-          for (const fb of ts[j].files || []) {
+        for (const fa of [...(ts[i].files || []), ...(ts[i].deletes || [])]) {
+          for (const fb of [...(ts[j].files || []), ...(ts[j].deletes || [])]) {
             let file = null;
             if (fa === fb) file = fa;
             else if (isFolder(fa) && fb.startsWith(fa)) file = fa;
