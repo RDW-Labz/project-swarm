@@ -45,7 +45,7 @@ export const COMMANDS = [
   command('squash', 'Squash a branch.', 'none', '--branch --base'),
   command('clean-branch', 'Clean changes from a branch.', 'none', '--from --exclude'),
   command('scope', 'Scope file: template, check, split into tickets, approve, sync.', 'none', '--out --stage --ingest --merge --yes --integrated'),
-  command('tickets', 'List or show scope tickets and their status.', 'none', '--stage --status --type --risk --set --note --json'),
+  command('tickets', 'List or show scope tickets and their status.', 'none', '--stage --status --type --risk --set --note --json --mark-deps --yes'),
   command('change', 'Record a scope change order.', 'none', '--yes'),
   command('ui', 'Render design screens and compare them with the mockups.', 'none', '--base-url --json'),
   command('watch', 'Open the read-only dashboard for a run (Run, Build Plan, Commands, Gallery).', 'run', '--all --tui --open --json'),

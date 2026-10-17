@@ -49,3 +49,9 @@ Open points: Bedrock limits on tool-use streaming fields differ by model generat
 - Bundled fonts (Unbounded, Figtree, JetBrains Mono) so the page matches the prototype exactly without a CDN.
 - A recorded 1,200-job fixture run and a Playwright check inside the repo's own tests (today the render check runs through `swarm ui check` in a throwaway project).
 - Watch hardening left from the review: open screenshots with O_NOFOLLOW and read from the handle; a lock for concurrent `swarm gallery` writes; do not print the token in the URL passed to `open`.
+
+## Left from the lessons 28-32 review (1.91.0)
+
+- `autopilot` `retry-failed` reruns a failed job at the same level while `scope sync` also escalates the ticket; the extra paid attempt is not counted by the ladder. Make retry-failed skip jobs of scope tickets (sync owns them) or count it.
+- A change-order reopen sets a ticket back to todo but keeps its `escalation` level, so a reopened ticket may start at Codex or Claude. Reset `escalation`, `attempts` and `retryNote` when a change order reopens a ticket.
+
