@@ -91,7 +91,7 @@ test('eval 39.2: a ticket can delete files; the worker is told, the gate checks 
   const { manifest } = ticketsToManifest([tk('T-0001', { status: 'ready', deletes: ['src/old.ts'] })], { ledger: { tickets: [] }, scope: parseScope(SCOPE), ready: true, contextEnv });
   const job = manifest.jobs[0];
   assert.deepEqual(job.deletes, ['src/old.ts']);
-  assert.ok(job.context.includes('src/old.ts'));
+  assert.ok(job.outputs.includes('src/old.ts'), 'the deleted file is an output too, so integrate sees the deletion');
   assert.equal(job.agent, 'claude');
   assert.equal(job.shell, true);
   validateManifest(JSON.parse(JSON.stringify(manifest)));

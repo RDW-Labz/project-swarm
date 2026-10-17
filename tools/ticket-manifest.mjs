@@ -125,7 +125,9 @@ export function ticketsToManifest(tickets,opts={}){
     const shared=[...new Set([...autoShared,...(t.contracts||[]),...(contract?[contract]:[])])].filter(p=>context.includes(p)).sort().slice(0,10);
     // Lesson 39: a ticket may delete exactly the files it names; the worker must be able to delete in place and must see them.
     const deletes=(t.deletes||[]).filter(f=>typeof f==='string'&&f&&!f.endsWith('/'));
-    if(deletes.length)context=[...new Set([...context,...deletes])];
+    // The engine integrates a deletion only for a path that is both an output and in `deletes`: the worker's copy holds the file, the worker removes it, integrate removes it from the project.
+    for(const f of deletes)if(!outputs.includes(f))outputs.push(f);
+    context=context.filter(p=>!deletes.includes(p));
     const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:isSensitiveJob(t,scope,reqs),prompt:promptFor(t,reqs,lessons,{envLine:['build','migration','contract'].includes(t.type)?contextEnv?.envLine:undefined,promptLine:vfields?.promptLine,kind,hasPackageJson:context.includes('package.json'),packageManager}),context,outputs,acceptance:t.acceptance||[],timeoutMs:600000};
     if(deletes.length)job.deletes=deletes;
     if(shared.length)job.cacheContext=shared;

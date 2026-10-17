@@ -136,7 +136,8 @@ else if(scan.licenseBlocked(r.license,{allowCopyleft:pol.allowCopyleft,approved:
 }
 }
 
-if(changes.some(c=>isDepFile(c.file))){
+// A deletion alone adds no dependency to audit (its own review is the manifest-delete rule above); only a written manifest or lockfile is scanned.
+if(changes.some(c=>c.bytes!=null&&isDepFile(c.file))){
 checked.push('vulnerability');
 const exists=typeof fileExists==='function'?fileExists:(p=>existsSync(p));
 const hasNpmLock=changes.some(c=>NPM_LOCKS.includes(lbase(c.file)))||NPM_LOCKS.some(f=>exists(path.join(cwd||'.',f)));
@@ -202,14 +203,14 @@ const mine=(pol.approvedManifests||[]).filter(a=>normPath(a.file)===normPath(c.f
 const sha=c.bytes==null?'deleted':createHash('sha256').update(c.bytes).digest('hex');
 if(mine.some(a=>a.sha256===sha))continue;
 if(mine.length){blocks.push({check:'unsupported-manifest',severity:'high',message:`${c.file} changed after you approved it (approved ${mine[0].sha256.slice(0,12)}, now ${sha==='deleted'?'a deletion':sha.slice(0,12)}); review it again and rerun integrate with --approve-manifest`});continue;}
-blocks.push({check:'unsupported-manifest',severity:'high',message:`${c.file} changed: ${eco} dependencies are not parsed yet; the owner must review it, ${/^[A-Za-z0-9_@+.\/-]+$/.test(c.file)?`then rerun integrate with --approve-manifest ${c.file}`:'then approve it by hand'}`});}
+blocks.push({check:'unsupported-manifest',severity:'high',message:`${c.file} changed: ${eco} dependencies are not parsed yet; the owner must review it, ${/^[A-Za-z0-9_@+.\/-]+$/.test(c.file)?`then rerun integrate with --approve-manifest ${c.file} (after a --queue block the run is finished: run the job again and integrate the new run)`:'then approve it by hand'}`});}
 // Lesson 39: a deletion goes through the gate. Deleting a dependency manifest, a lockfile, a workflow, a hook or the profile needs the owner's review like changing it does.
 // Fail closed: bytes==null is a deletion unless the file is known to be absent in the base. Only an approval of the deletion itself waives it.
 const deletions=changes.filter(c=>c&&c.bytes==null&&c.previous!==null&&!unparsedEcosystem(c.file));
 for(const c of deletions.filter(c=>isSensitivePath(c.file))){
 if(!checked.includes('manifest-delete'))checked.push('manifest-delete');
 if((pol.approvedManifests||[]).some(a=>normPath(a.file)===normPath(c.file)&&a.sha256==='deleted'))continue;
-blocks.push({check:'manifest-delete',severity:'high',message:`${c.file} is deleted; the owner must review it${/^[A-Za-z0-9_@+.\/-]+$/.test(c.file)?`, then rerun integrate with --approve-manifest ${c.file}`:''}`});
+blocks.push({check:'manifest-delete',severity:'high',message:`${c.file} is deleted; the owner must review it${/^[A-Za-z0-9_@+.\/-]+$/.test(c.file)?`, then rerun integrate with --approve-manifest ${c.file} (after a --queue block the run is finished: run the job again and integrate the new run)`:''}`});
 }
 
 const policyFiles=changes.filter(c=>normPath(c.file)===POLICY_FILE);

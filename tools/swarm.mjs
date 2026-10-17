@@ -8398,15 +8398,15 @@ async function mainInner() {
       let runManifest_;try{runManifest_=JSON.parse(await fs.readFile(path.join(realRoot,'.swarm','runs',String(argument),'manifest.json'),'utf8'));}catch{runManifest_=null;}
       const deleting=new Set((runManifest_?.jobs??[]).flatMap(job=>Array.isArray(job.deletes)?job.deletes:[]));
       for(const file of new Set(approveManifests)){
-        const jobs=(state.jobs??[]).filter(job=>Array.isArray(job.outputs)&&job.outputs.includes(file));
-        if(!jobs.length&&deleting.has(file)){
-          // The deletion is approved only when the file is still in the project and the declaring job's workspace really lacks it.
+        if(deleting.has(file)){
+          // A file the run is to delete is approved as a deletion, only when it is still in the project and every declaring job's result lacks it.
           const declaring=(runManifest_?.jobs??[]).filter(job=>Array.isArray(job.deletes)&&job.deletes.includes(file)).map(job=>(state.jobs??[]).find(record=>record.id===job.id)).filter(Boolean);
           const present=await fs.lstat(path.join(realRoot,file)).then(()=>true,()=>false);
           const removed=declaring.length>0&&await Promise.all(declaring.map(record=>typeof record.workspace==='string'&&record.workspace?fs.lstat(path.join(realRoot,record.workspace,file)).then(()=>false,()=>true):false)).then(list=>list.every(Boolean));
           if(!present||!removed)fail(`approve-manifest-unreadable: ${file} is not a real deletion in run ${argument} (it must exist in the project and be absent in the job's result); nothing approved`,'approve-manifest-unreadable');
           entries.push({file,sha256:'deleted'});continue;
         }
+        const jobs=(state.jobs??[]).filter(job=>Array.isArray(job.outputs)&&job.outputs.includes(file));
         if(!jobs.length)fail(`approve-manifest-unknown: run ${argument} does not change ${file}`,'approve-manifest-unknown');
         for(const job of jobs){
           let bytes;
