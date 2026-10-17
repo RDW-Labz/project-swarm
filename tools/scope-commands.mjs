@@ -7,8 +7,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText, isSensitiveText } from './scope.mjs';
-import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, approveLedger, isApproved, validateTicket, STATUSES } from './tickets.mjs';
+import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, STATUSES } from './tickets.mjs';
 import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
+import { isSecretLooking } from './ignored-artifacts.mjs';
 import { diffScopes, impactAnalysis, nextChangeOrderId, applyChangeOrder } from './change-orders.mjs';
 import { day0Checklist, checklistToTickets } from './day0.mjs';
 import { validateApprovalPolicy, needsHuman } from './approval-policy.mjs';
@@ -277,7 +278,7 @@ const readRunState = async (root, runId) => {
   return state;
 };
 
-function splitPrompt(scope, stage, only, layout = '', wire = null) {
+function splitPrompt(scope, stage, only, layout = '', wire = null, existing = null) {
   const reqs = scope.requirements.filter(r => r.stage === stage.id && (!only || only.has(r.id)));
   const lines = [
     `Split the requirements of stage ${stage.id} (${stage.title || 'no title'}) of "${scope.name}" into small build tickets.`,
@@ -295,6 +296,12 @@ function splitPrompt(scope, stage, only, layout = '', wire = null) {
     WIRING_PROMPT,
     ...(wire ? [WIRE_ONLY_PROMPT, ...wire.filter(w => w.stage === stage.id).map(w => `Existing module tickets of ${w.req}: ${w.modules.map(m => `${m.id} ${m.title} (${(m.files ?? []).join(', ')})`).join('; ')}`)] : []),
     ...(layout ? ['Project layout (use these folders):', layout] : []),
+    ...(existing ? [
+      'This is a change to a project that already has tickets. Write tickets ONLY for the requirements listed below; never repeat, rewrite or replace an existing ticket, and never write a file an existing ticket already owns.',
+      'Use real paths: take them from the file list below, and put a new file next to the files it belongs with.',
+      ...(existing.files.length ? ['Files in the repository:', ...existing.files] : []),
+      ...(existing.tickets.length ? ['Existing tickets (read-only; depend on them by writing their id in context, not dependsOn):', ...existing.tickets] : []),
+    ] : []),
     'Work only from the requirements below.',
     '',
     ...reqs.flatMap(r => [`${r.id}: ${hideSecretMentions(r.text)}`, ...r.acceptance.map(a => `  - ${hideSecretMentions(a)}`)]),
@@ -303,7 +310,7 @@ function splitPrompt(scope, stage, only, layout = '', wire = null) {
   return lines.join('\n');
 }
 
-export function buildSplitManifest(scope, { stage, only, layout = '', wire = null } = {}) {
+export function buildSplitManifest(scope, { stage, only, layout = '', wire = null, existing = null } = {}) {
   const stages = scope.stages.filter(s => (!stage || s.id === stage) && scope.requirements.some(r => r.stage === s.id && (!only || only.has(r.id))));
   if (!stages.length) throw fail('scope-stage', stage ? `stage ${stage} has no requirements` : 'the scope has no stages with requirements');
   return {
@@ -315,7 +322,7 @@ export function buildSplitManifest(scope, { stage, only, layout = '', wire = nul
       agent: 'auto',
       sensitive: true,
       maxOutputTokens: 32000,
-      prompt: splitPrompt(scope, s, only, layout, wire),
+      prompt: splitPrompt(scope, s, only, layout, wire, existing),
       context: [],
       outputs: [`${SPLIT_DIR}/${s.id}.json`],
       timeoutMs: 900000,
@@ -352,6 +359,21 @@ async function projectLayout(root, scope, profile) {
   const stack = (profile?.stack ?? []).map(entry => (entry.packageManager ? `${entry.name} (${entry.packageManager})` : entry.name));
   if (stack.length) lines.push(`Stack: ${stack.join(', ')}`);
   return lines.join('\n');
+}
+
+// The requirements that still need tickets: none of their tickets is alive. A merge adds tickets for these and nothing else.
+const pendingRequirements = (scope, tickets) => new Set(scope.requirements.filter(r => !tickets.some(t => t.status !== 'cancelled' && t.scopeRefs.includes(r.id))).map(r => r.id));
+
+// What a split worker of a change order needs to see: the real tracked files (not a guess from two folder levels) and the tickets already there.
+async function changeContext(root, tickets) {
+  let files = [];
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', root, 'ls-files'], { maxBuffer: 16 * 1024 * 1024 });
+    files = stdout.split('\n').filter(f => f && !f.startsWith('.') && !f.startsWith('node_modules/') && !isSecretLooking(f)).slice(0, 400).map(f => `- ${hideSecretMentions(f)}`);
+  } catch { /* not a git project: only the tickets are listed */ }
+  const list = tickets.filter(t => t.status !== 'cancelled' && t.type !== 'human').slice(0, 300)
+    .map(t => `- ${t.id} ${hideSecretMentions(t.title)} [${t.scopeRefs.join(',')}] writes ${(t.files ?? []).map(hideSecretMentions).join(', ') || 'nothing'}`);
+  return { files, tickets: list };
 }
 
 const ARRAY_FIELDS = ['scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'tests', 'screens', 'dependsOn', 'steps'];
@@ -481,9 +503,9 @@ async function cmdSplit(root, { rest, flags }) {
       await writeFileSafe(root, `${SPLIT_DIR}/manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`);
       return out(`wire manifest: integration tickets for ${reqs.length} requirement(s) (${reqs.slice(0, 8).join(', ')}) written to ${SPLIT_DIR}/manifest.json\nNext: swarm run ${SPLIT_DIR}/manifest.json, then swarm scope split --ingest RUN --merge --wire`);
     }
-    const only = led ? new Set(scope.requirements.filter(r => !led.tickets.some(t => t.status !== 'cancelled' && t.scopeRefs.includes(r.id))).map(r => r.id)) : null;
+    const only = led ? pendingRequirements(scope, led.tickets) : null;
     if (only && !only.size) return out('every requirement already has tickets; nothing to split', 1);
-    const manifest = buildSplitManifest(scope, { stage: flags.stage, only, layout: await projectLayout(root, scope, await readProfile(root)) });
+    const manifest = buildSplitManifest(scope, { stage: flags.stage, only, layout: await projectLayout(root, scope, await readProfile(root)), existing: led ? await changeContext(root, led.tickets) : null });
     await writeFileSafe(root, `${SPLIT_DIR}/manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`);
     return out(`split manifest: ${manifest.jobs.length} job(s) written to ${SPLIT_DIR}/manifest.json\nNext: swarm run ${SPLIT_DIR}/manifest.json, then swarm scope split --ingest RUN${led ? ' --merge' : ''}`);
   }
@@ -500,6 +522,12 @@ async function cmdSplit(root, { rest, flags }) {
   if (all.length) return out(`split refused; fix and rerun the failed stages:\n${all.slice(0, 15).map(e => `  ${e}`).join('\n')}`, 1);
   // Integration tickets wait for the module tickets of their requirements; a requirement with modules and no integration ticket is refused.
   if (flags.wire && built.tickets.some(t => t.integration !== true)) return out(`split refused: --wire takes integration tickets only; these are not: ${built.tickets.filter(t => t.integration !== true).map(t => t.title).slice(0, 5).join('; ')}`, 1);
+  // A merge adds tickets for the requirements that have none. A worker that rewrites a requirement that is already built is refused whole.
+  if (existing && !flags.wire) {
+    const pending = pendingRequirements(scope, existing.tickets);
+    const stray = built.tickets.filter(t => t.scopeRefs.some(r => !pending.has(r)));
+    if (stray.length) return out(`split refused; a change order may only add tickets for requirements that have none (${[...pending].slice(0, 8).join(', ') || 'none'}). These tickets touch other requirements:\n${stray.slice(0, 10).map(t => `  ${t.title} (${t.scopeRefs.join(', ')})`).join('\n')}\nNothing was written; rerun the split job.`, 1);
+  }
   addWiringDeps(built.tickets, existing?.tickets ?? []);
   const touched = [...new Set(built.tickets.filter(t => t.type === 'build').flatMap(t => t.scopeRefs))];
   const unwired = wiringGaps([...(existing?.tickets ?? []), ...built.tickets], touched);
@@ -925,7 +953,7 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
     const scope = parseScope(snapshot);
     // A ticket that was blocked only by dependencies becomes ready as soon as they are done.
     const prune = pruneCancelledDeps(ledger);
-    if (prune.pruned.length) await appendLog(root, { event: 'prune-deps', by: 'go', tickets: prune.pruned.map(p => p.id) });
+    await logPrune(root, prune.pruned, { by: 'go' });
     const unlock = unlockReady(ledger);
     if (unlock.unlocked.length) { ledger.tickets = unlock.ledger.tickets; await appendLog(root, { event: 'unlock', by: 'go', tickets: unlock.unlocked }); }
     // The root tickets of an approved stage (and anything else whose dependencies are done) are released without a hand move.
@@ -990,7 +1018,7 @@ export async function unlockLedger(root) {
         if (!unlocked.length && !released.length && !pruned.length) return [];
         next.updatedAt = new Date().toISOString();
         await writeLedger(root, next);
-        if (pruned.length) await appendLog(root, { event: 'prune-deps', by: 'autopilot', tickets: pruned.map(p => p.id) });
+        await logPrune(root, pruned, { by: 'autopilot' });
         if (released.length) await appendLog(root, { event: 'release', by: 'autopilot', tickets: released });
         if (unlocked.length) await appendLog(root, { event: 'unlock', by: 'autopilot', tickets: unlocked });
         return [...unlocked, ...released];

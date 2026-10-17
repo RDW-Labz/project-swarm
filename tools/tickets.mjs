@@ -2,7 +2,7 @@
 import fs from 'node:fs/promises';
 import { randomBytes, createHash } from 'node:crypto';
 import path from 'node:path';
-import { safeWritableDir, assertRegularOrMissing } from './journal.mjs';
+import { safeWritableDir, assertRegularOrMissing, appendEvent } from './journal.mjs';
 import { wiringGaps } from './wiring.mjs';
 
 export const STATUSES = ['todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled'];
@@ -158,8 +158,18 @@ export async function transition(root, id, to, { by = 'system', note, now = Date
   ledger.updatedAt = new Date(now).toISOString();
   await writeLedger(root, ledger);
   await appendLog(root, { event: 'transition', id, from, to, by, note: note ?? null });
-  if (pruned.length) await appendLog(root, { event: 'prune-deps', cancelled: id, tickets: pruned.map(p => p.id) });
+  await logPrune(root, pruned, { cancelled: id, by }, now);
   return ticket;
+}
+
+// Logs a prune and leaves a non-blocking note in the inbox naming the tickets that lost a dependency (close it with swarm done ID).
+export async function logPrune(root, pruned, { cancelled, by } = {}, now = Date.now()) {
+  if (!pruned.length) return;
+  await appendLog(root, { event: 'prune-deps', ...(cancelled ? { cancelled } : {}), ...(by ? { by } : {}), tickets: pruned.map(p => p.id) });
+  const list = pruned.map(p => `${p.id} (no longer waits on ${p.removed.join(', ')})`).join('; ');
+  try {
+    await appendEvent(root, { kind: 'human', id: `prune-${pruned[0].id}-${now}`, title: `FYI, no action needed: a cancelled ticket was dropped as a dependency of ${list}`, steps: [], unblocks: 0 }, { now: () => now });
+  } catch { /* the note is a courtesy; the prune and its log line already happened */ }
 }
 
 // Takes every cancelled ticket out of the dependsOn of the others (in place). The owner's approval stays valid when it was valid just
