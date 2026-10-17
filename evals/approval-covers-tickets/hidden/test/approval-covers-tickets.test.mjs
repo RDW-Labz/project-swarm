@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { approve, isApproved } from '../src/approval.mjs';
+import { approve, isApproved } from '../src/approval-covers-tickets.mjs';
 
 function hashOf(tickets) {
   const sorted = [...tickets]

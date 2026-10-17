@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { resolveInside } from '../src/inside.mjs';
+import { resolveInside } from '../src/path-inside-root.mjs';
 
 const root = path.resolve('/work/proj');
 const outside = { code: 'outside' };

@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 import { validateApprovalPolicy } from './approval-policy.mjs';
 import { validateCiConfig } from './ci-hooks.mjs';
+import { validateVerifyConfig } from './verify-config.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { sanitizeText } from './journal.mjs';
 
 export const DEFAULT_PROFILE_BUDGET = Object.freeze({ maxUsd: 5, maxTokens: 2000000 });
 const STATUSES = ['green', 'red', 'skipped', 'none'];
-const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci'];
+const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci', 'verify', 'context'];
 const REQUIRED_KEYS = ['sensitive', 'protectedPaths', 'budget', 'baseCheck'];
 const BASE_KEYS = ['status', 'ranAt', 'head', 'checks'];
 // The pointer (profile) and the checks file decide what later runs may do and execute, so no job may rewrite them.
@@ -35,6 +36,13 @@ function secretEntries(file) {
     if (SECRET_FOLDERS.includes(part.toLowerCase())) found.push(`${parts.slice(0, index + 1).join('/')}/`);
   });
   return found;
+}
+
+// True when a repo path names a secret: any .env file (env.example.txt is a template and is fine), keys, certificates, secret folders.
+export function isSecretPath(file) {
+  const parts = String(file).split('\\').join('/').split('/');
+  if (parts.some(part => /^\.env(?:$|\.)/i.test(part))) return true;
+  return secretEntries(parts.join('/')).length > 0;
 }
 
 export async function detectProtectedPaths(root, { list }) {
@@ -108,6 +116,22 @@ export function validateProfile(profile) {
   if (stack) out.stack = stack;
   const security = profile.security === undefined ? null : validateSecurity(profile.security, errors);
   if (security) out.security = security;
+  if (profile.verify !== undefined) {
+    const checked = validateVerifyConfig(profile.verify);
+    for (const message of checked.errors) errors.push(`profile.${message.replace(/^verify\./, 'verify.')}`);
+    if (checked.ok && checked.value) {
+      out.verify = checked.value;
+      // The scripts a setup or test command runs, and package.json for package runners, are protected like a ci hook's files.
+      for (const argv of [...(checked.value.setup ?? []), checked.value.command]) for (const entry of hookFiles(argv)) {
+        try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch { /* not a usable path */ }
+      }
+    }
+  }
+  if (profile.context !== undefined) {
+    const checked = validateContextBlock(profile.context);
+    for (const message of checked.errors) errors.push(`profile.context: ${message}`);
+    if (checked.value) out.context = checked.value;
+  }
   if (profile.ci !== undefined) {
     const checked = validateCiConfig(profile.ci);
     for (const message of checked.errors) errors.push(`profile.ci: ${message}`);
@@ -129,7 +153,35 @@ const PACKAGE_RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'npx', 'bun', 'bunx']);
 export function hookFiles(argv) {
   if (!Array.isArray(argv)) return [];
   const files = argv.filter((item, index) => typeof item === 'string' && !item.startsWith('-') && (/\.(?:mjs|cjs|js|ts|py|sh|rb|pl)$/.test(item) || (index === 0 && item.includes('/'))) && !path.isAbsolute(item));
-  return PACKAGE_RUNNERS.has(String(argv[0]).split('/').pop()) ? [...files, 'package.json'] : files;
+  return files;
+}
+
+// The package.json scripts a package-runner command runs (npm run X, npm test, pnpm X, yarn X): a batch must not change them (the gate checks).
+export function hookScriptNames(profile) {
+  const names = new Set();
+  const argvs = [profile?.verify?.command, ...(profile?.verify?.setup ?? []), profile?.ci?.smoke?.argv, profile?.ci?.preview?.argv];
+  for (const argv of argvs) {
+    if (!Array.isArray(argv) || !PACKAGE_RUNNERS.has(String(argv[0]).split('/').pop())) continue;
+    const rest = argv.slice(1).filter(item => typeof item === 'string' && !item.startsWith('-'));
+    if (rest[0] === 'run' && rest[1]) names.add(rest[1]);
+    else if (rest[0] && !['install', 'ci', 'exec', 'dlx', 'x', 'add', 'run'].includes(rest[0])) names.add(rest[0]);
+  }
+  return [...names];
+}
+
+const CONTEXT_KINDS = ['shared', 'db', 'ui', 'api', 'test'];
+// profile.context: { shared, db, ui, api, test }, each an array of at most 20 repo paths that every ticket of that kind gets as context.
+function validateContextBlock(value) {
+  if (!isObject(value)) return { value: null, errors: ['must be an object'] };
+  const errors = Object.keys(value).filter(key => !CONTEXT_KINDS.includes(key)).map(key => `${key}: unknown key`);
+  const out = {};
+  for (const kind of CONTEXT_KINDS) {
+    if (value[kind] === undefined) continue;
+    const list = value[kind];
+    const ok = Array.isArray(list) && list.length <= 20 && list.every(entry => typeof entry === 'string' && entry.length > 0 && entry.length <= 200 && !entry.startsWith('/') && !entry.includes('\\') && !entry.split('/').some(part => part === '..' || part === '' || part === '.'));
+    if (ok) out[kind] = [...list]; else errors.push(`${kind}: array of at most 20 repo-relative paths`);
+  }
+  return { value: errors.length ? null : out, errors };
 }
 
 function validatePaths(value, errors) {
@@ -160,7 +212,7 @@ function validateStack(stack, errors) {
   return stack.map(({ name, packageManager }) => (packageManager === undefined ? { name } : { name, packageManager }));
 }
 
-const SECURITY_KEYS = ['enabled', 'minAgeDays', 'minWeeklyDownloads', 'blockSeverities', 'allowCopyleft', 'approvedLicenses', 'allowedSecretFingerprints', 'requireVulnerabilityScan', 'codeScan', 'codeScanSensitive', 'allowUnparsedManifests'];
+const SECURITY_KEYS = ['enabled', 'minAgeDays', 'minWeeklyDownloads', 'blockSeverities', 'allowCopyleft', 'approvedLicenses', 'allowedSecretFingerprints', 'requireVulnerabilityScan', 'codeScan', 'acceptedAdvisories', 'codeScanSensitive', 'allowUnparsedManifests'];
 const SECURITY_SEVERITIES = ['low', 'medium', 'high', 'critical'];
 
 function validateSecurity(value, errors) {
@@ -216,6 +268,15 @@ function validateSecurity(value, errors) {
     if (Array.isArray(value.allowUnparsedManifests) && value.allowUnparsedManifests.length <= 50
       && value.allowUnparsedManifests.every(entry => typeof entry === 'string' && entry.length <= 200)) out.allowUnparsedManifests = [...value.allowUnparsedManifests];
     else errors.push('profile.security.allowUnparsedManifests: array of at most 50 strings of at most 200 characters');
+  }
+  if (value.acceptedAdvisories !== undefined) {
+    const valid = entry => isObject(entry) && Object.keys(entry).every(key => ['package', 'id', 'reason', 'reviewBy'].includes(key))
+      && typeof entry.package === 'string' && entry.package.length > 0 && entry.package.length <= 214
+      && (entry.id === undefined || (typeof entry.id === 'string' && entry.id.length > 0 && entry.id.length <= 60))
+      && typeof entry.reason === 'string' && entry.reason.length >= 5 && entry.reason.length <= 300
+      && typeof entry.reviewBy === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(entry.reviewBy) && Number.isFinite(Date.parse(`${entry.reviewBy}T00:00:00Z`)) && new Date(`${entry.reviewBy}T00:00:00Z`).toISOString().slice(0, 10) === entry.reviewBy;
+    if (Array.isArray(value.acceptedAdvisories) && value.acceptedAdvisories.length <= 50 && value.acceptedAdvisories.every(valid)) out.acceptedAdvisories = value.acceptedAdvisories.map(entry => ({ ...entry }));
+    else errors.push('profile.security.acceptedAdvisories: array of at most 50 { package, id?, reason (5 to 300 characters), reviewBy (YYYY-MM-DD) }');
   }
   return out;
 }

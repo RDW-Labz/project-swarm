@@ -1,1 +1,25 @@
-{"version":1,"id":"duplicate-keys","title":"Ticket key intake","tags":["javascript","validation","duplicate-keys"],"prompt":"Write src/intake.mjs as an ES module that exports mapKeys(items, startAt). items is an array of ticket objects shaped like { key }, and startAt is the integer number the first id uses. mapKeys returns { ids, errors }: ids is a Map from each accepted key to its id, and errors is an array of human-readable strings. An id has the form T- followed by a four-digit number, zero-padded, counting up from startAt in item order, and only accepted items use a number. A key that is not a non-empty string gets an error and no id, and a key that has already been used in this call also gets an error and no id, while the first use keeps its id. Keys such as __proto__ and constructor are ordinary keys and must work like any other string. Do not change any other file.","context":["src/intake.mjs"],"outputs":["src/intake.mjs"],"check":{"argv":["node","--test","test/intake.test.mjs"],"timeoutSec":30}}
+{
+  "version": 1,
+  "id": "duplicate-keys",
+  "title": "Ticket key intake",
+  "tags": [
+    "javascript",
+    "validation",
+    "duplicate-keys"
+  ],
+  "prompt": "Write src/duplicate-keys.mjs as an ES module that exports mapKeys(items, startAt). items is an array of ticket objects shaped like { key }, and startAt is the integer number the first id uses. mapKeys returns { ids, errors }: ids is a Map from each accepted key to its id, and errors is an array of human-readable strings. An id has the form T- followed by a four-digit number, zero-padded, counting up from startAt in item order, and only accepted items use a number. A key that is not a non-empty string gets an error and no id, and a key that has already been used in this call also gets an error and no id, while the first use keeps its id. Keys such as __proto__ and constructor are ordinary keys and must work like any other string. Do not change any other file.",
+  "context": [
+    "src/duplicate-keys.mjs"
+  ],
+  "outputs": [
+    "src/duplicate-keys.mjs"
+  ],
+  "check": {
+    "argv": [
+      "node",
+      "--test",
+      "test/duplicate-keys.test.mjs"
+    ],
+    "timeoutSec": 30
+  }
+}

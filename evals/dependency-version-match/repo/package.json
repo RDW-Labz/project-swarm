@@ -1,0 +1,1 @@
+{"name":"dependency-version-match-repo","version":"0.1.0","private":true,"type":"module","scripts":{"build":"echo build","test":"node --test"},"dependencies":{"tailwindcss":"^3.4.17","postcss":"^8.4.0","autoprefixer":"^10.4.0"}}

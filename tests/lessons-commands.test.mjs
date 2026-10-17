@@ -106,7 +106,7 @@ async function fakeEvalProject(passes) {
   const runId = '1700000000000-abcdef12';
   await fs.mkdir(path.join(root, '.swarm/runs', runId), { recursive: true });
   const jobs = [];
-  for (const [name, mod] of [['hostname-check', 'src/host.mjs'], ['stale-lock', 'src/lock.mjs']]) {
+  for (const [name, mod] of [['hostname-check', 'src/hostname-check.mjs'], ['stale-lock', 'src/stale-lock.mjs']]) {
     const ws = `.swarm/workspaces/${runId}/eval-${name}`;
     const target = path.join(root, ws, 'evals', name, 'repo', mod);
     await fs.mkdir(path.dirname(target), { recursive: true });

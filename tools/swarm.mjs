@@ -26,8 +26,9 @@ import { summarizeMap, mapIsFresh, readRepoMap } from './repo-map.mjs';
 import { selectAffectedTests, expandAffectedArgv } from './affected.mjs';
 import { createBatchController } from './adaptive-batch.mjs';
 import { runHook, shouldRun, fixTicketFromFailure } from './ci-hooks.mjs';
+import { redactText } from './lesson-schema.mjs';
 import { addCiFixTicket } from './scope-commands.mjs';
-import { protectedViolations, protectedPathHit, formatBaseCheck, validateProfile, hookFiles } from './init-profile.mjs';
+import { protectedViolations, protectedPathHit, formatBaseCheck, validateProfile, hookFiles, hookScriptNames } from './init-profile.mjs';
 import { resolveCliHosts, sshInvocation, sshEnv, remoteExec, cliHostFailure } from './cli-host.mjs';
 import { isHumanJob, validateHumanJob, liftHumanJobs, addGroup, readStore as readHumanStore, humanGroupReady, updateGroup as updateHumanGroup } from './human-jobs.mjs';
 import { createBatchCollector, batchEligible, BATCH_LIMITS } from './batch.mjs';
@@ -4456,6 +4457,12 @@ const securityExec = async (argv, { cwd, timeoutMs = 120000, env } = {}) => {
   catch (error) { if (error.code === 'ENOENT') throw error; return { exitCode: typeof error.code === 'number' ? error.code : 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }; }
 };
 
+// The end of the first failing check's output, redacted and capped, so a retry can tell the worker what failed.
+function failureTail(checks) {
+  const bad = (checks ?? []).find(check => !['passed', 'skipped'].includes(check.status) && typeof check.tail === 'string' && check.tail.trim());
+  return bad ? redactText(bad.tail).slice(-600) : '';
+}
+
 async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, adaptive = false, conflicts, skipped, noChecks, noFlakeCheck, spawnImpl, warnings, releaseIntegrationLock, securityGate = {} }) {
   const queue = state.mergeQueue = { state: 'running', batchSize, ...(adaptive ? { adaptive: { sizes: [], steps: { up: 0, down: 0 } } } : {}), batches: [], integrated: [], conflicts, checkFailed: [], skipped, securityBlocked: [], securityTickets: [], securityNotes: [] };
   const securityProfile = await projectProfile(root);
@@ -4558,7 +4565,7 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, ad
           else await write(root, change.file, change.bytes, false, change.mode);
         });
       }
-      gate = await runSecurityGate({ changes: changes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: securityPolicy, exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: securitySensitive, fingerprintKey: securityKey, cache: securityCache });
+      gate = await runSecurityGate({ changes: changes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: securityPolicy, hookScripts: hookScriptNames(securityProfile), exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: securitySensitive, fingerprintKey: securityKey, cache: securityCache });
       // The gate runs BEFORE the project checks: a blocked batch never gets to execute its own code (tests, installs, postinstall scripts).
       if (gate.ok) {
         const changedFiles = changes.map(change => change.file);
@@ -4578,7 +4585,8 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, ad
       for (const note of [...(gate.skipped ?? []), ...(gate.warnings ?? [])]) if (!queue.securityNotes.includes(note)) queue.securityNotes.push(note);
     } catch (error) { await journal.rollback(); throw error; }
     const failed = result.checksPassed === false;
-    queue.batches.push({ jobs: batch.map(plan => plan.job), checks: noChecks && gate?.ok !== false ? 'skipped' : failed ? 'failed' : 'passed', security: gate ? (gate.ok ? 'passed' : 'blocked') : 'skipped', bisected: failed && batch.length > 1 });
+    const batchId = queue.batches.length + 1;
+    queue.batches.push({ id: batchId, jobs: batch.map(plan => plan.job), checks: noChecks && gate?.ok !== false ? 'skipped' : failed ? 'failed' : 'passed', security: gate ? (gate.ok ? 'passed' : 'blocked') : 'skipped', bisected: failed && batch.length > 1, checkResults: (result.checks ?? []).map(check => ({ name: check.name, status: check.status, mode: check.mode ?? 'full', ...(check.affectedTests !== undefined ? { tests: check.affectedTests } : {}) })) });
     warnings.push(...swarmCheckWarnings(result.checks));
     // Queue mode deliberately rolls failed batches back before bisecting. Plain integrate
     // retains its existing behavior: check failures never roll back its writes.
@@ -4588,10 +4596,12 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, ad
         queue.securityBlocked.push({ job: batch[0].job, blocks: gate.blocks });
         await recordGate({ root, runId: id, jobs: [batch[0].job], gate, appendEvent: (rootDir, event) => appendEvent(rootDir, event, { best: true }) });
       }
-      if (batch.length === 1) queue.checkFailed.push({ job: batch[0].job, checks: result.checks.filter(check => !['passed', 'skipped'].includes(check.status)).map(check => check.name) });
+      if (batch.length === 1) queue.checkFailed.push({ job: batch[0].job, checks: result.checks.filter(check => !['passed', 'skipped'].includes(check.status)).map(check => check.name), ...(failureTail(result.checks) ? { tail: failureTail(result.checks) } : {}) });
     } else {
       if (gate?.tickets?.length) queue.securityTickets.push(...gate.tickets.map(ticket => ({ ...ticket, jobs: batch.map(plan => plan.job) })));
       queue.integrated.push(...batch.map(plan => plan.job));
+      queue.integratedIn ??= {};
+      for (const plan of batch) queue.integratedIn[plan.job] = batchId;
       for (const change of changes) touched.add(change.file);
       if (affectedBatchModes.get(batch) === true) affectedSinceFull = true;
       else if (!noChecks && (manifest.checks ?? []).length) affectedSinceFull = false;
@@ -5093,7 +5103,7 @@ async function integrateRunLocked(root, id, options = {}) {
       }
       let plainGate;
       try {
-        plainGate = await runSecurityGate({ changes: writes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: securityGate.policy ?? profile?.security, exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: profile?.sensitive !== false, fingerprintKey: await securityFingerprintKey(root), cache: new Map() });
+        plainGate = await runSecurityGate({ changes: writes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: securityGate.policy ?? profile?.security, hookScripts: hookScriptNames(profile), exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: profile?.sensitive !== false, fingerprintKey: await securityFingerprintKey(root), cache: new Map() });
       } catch (error) {
         fail(`security-gate-error: the gate could not run (${String(error?.message ?? error).slice(0, 200)}). Nothing was written.`, 'security-gate-error');
       }
@@ -7393,7 +7403,7 @@ async function mainInner() {
     if(at!==-1)rest.splice(at,2);
     try{
       const {loadLessonsForNotes}=await import('./lessons-commands.mjs');
-      const prepared=await prepareScopeRun(root,{maxJobs,skipSkeleton,lessons:await loadLessonsForNotes(root,ownRoot)});
+      const prepared=await prepareScopeRun(root,{maxJobs,skipSkeleton,validate:async manifest=>{const copy=JSON.parse(JSON.stringify(manifest));validateManifest(copy);await validateProject(root,copy);},lessons:await loadLessonsForNotes(root,ownRoot)});
       process.stderr.write(`scope: ${prepared.ids.length} ticket(s) in this wave${prepared.humans?`; ${prepared.humans} human ticket(s) waiting`:''}. After the run: swarm scope sync RUN\n`);
       args.splice(1,args.length-1,prepared.file,...rest);
     }catch(error){fail(error.message,error.code);}

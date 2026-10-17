@@ -1,1 +1,4 @@
 {"at":"2026-10-16T16:12:17.523Z","run":"1792167116055-6f3fb035","agents":["anthropic"],"models":["claude-haiku-5-5"],"passed":6,"total":8,"costUsd":0.0034,"failed":["duplicate-keys","path-inside-root"]}
+{"at":"2026-10-17T01:09:56.886Z","run":"1792199371843-7ee37750","agents":["anthropic"],"models":["claude-haiku-5-5"],"passed":8,"total":8,"costUsd":0.004,"failed":[]}
+{"at":"2026-10-17T01:47:47.526Z","run":"1792201640315-dd341475","agents":["anthropic"],"models":["claude-haiku-5-5"],"passed":12,"total":12,"costUsd":0.0057,"failed":[]}
+{"at":"2026-10-17T01:50:11.879Z","run":"1792201787320-832b187f","agents":["anthropic"],"models":["claude-haiku-5-5"],"passed":10,"total":12,"costUsd":0.0057,"failed":["data-model-columns","ddl-only-migration"]}

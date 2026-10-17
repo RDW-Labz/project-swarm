@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0026",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "I ran pkill -f cat to stop a hung command and it also killed Docker Desktop (supabase containers went down mid-run)",
+  "rule": "Orchestrator must never pkill by loose pattern.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "track background task ids and use TaskStop",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "docker",
+    "orchestrator",
+    "processes"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 26"
+  }
+}

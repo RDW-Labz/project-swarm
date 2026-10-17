@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "df-eval-data-model-columns",
+      "type": "build",
+      "prompt": "Author one golden eval task in the format of section 5 of the design (an eval spec, a starting repo, a hidden test and a known-good solution). The eval id is data-model-columns. The spec has: version 1, id, title, tags (2 to 4), lesson (leave out), prompt (what the worker under test is told: 3 to 8 sentences, do not mention the hidden test, do not reveal the lesson), context (paths inside the starting repo the worker may read), outputs (the one file the worker must write, a path inside the repo), check {argv: [node, --test, test/data-model-columns.test.mjs], timeoutSec: 30}. The starting repo holds the context files only (the output file must not exist there). The hidden test is test/data-model-columns.test.mjs; it reads the output file from the repo root of the check folder with node:fs and asserts as described below. The solution folder holds a correct version of the output file at the same relative path. The hidden test must FAIL when the output file is missing and PASS with the solution. Real lesson: workers made database tables from acceptance text alone and invented columns, because the data model was not given to them. Here the data model IS in the context file docs/data-model.md of the starting repo; the task is to write the migration supabase/migrations/data-model-columns.sql that creates exactly those tables with those columns. The context file (write it in the starting repo) lists: shops(id uuid primary key, slug text unique not null, name text not null, phone text, notify_email text); staff_users(id uuid primary key, shop_id uuid references shops, auth_user_id uuid unique not null, role text check role in owner or staff); part_requests(id uuid primary key, shop_id uuid references shops, contact_name text not null, contact_phone text not null, vehicle_year integer, vehicle_make text, vehicle_model text, vin text, notes text, status text not null default 'new', created_at timestamptz not null default now()). The prompt tells the worker to create the first migration for the data model in the context file and to name no columns itself. The hidden test checks that each table has a create table statement, that every column name above appears inside its table body, that references shops appears in staff_users and part_requests, and that the file contains no DO block and no pgTAP plan call (DDL only). The starting repo files are: docs/data-model.md (put useful content in each; the output file itself is not in the starting repo).\nReturn each output file complete in files, never edits. Use only node built-ins in the hidden test (node:test, node:assert/strict, node:fs); no dependencies; deterministic and quick; no secrets.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "evals/data-model-columns/eval.json",
+        "evals/data-model-columns/hidden/test/data-model-columns.test.mjs",
+        "evals/data-model-columns/solution/supabase/migrations/data-model-columns.sql",
+        "evals/data-model-columns/repo/docs/data-model.md"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "df-eval-ddl-only-migration",
+      "type": "build",
+      "prompt": "Author one golden eval task in the format of section 5 of the design (an eval spec, a starting repo, a hidden test and a known-good solution). The eval id is ddl-only-migration. The spec has: version 1, id, title, tags (2 to 4), lesson (leave out), prompt (what the worker under test is told: 3 to 8 sentences, do not mention the hidden test, do not reveal the lesson), context (paths inside the starting repo the worker may read), outputs (the one file the worker must write, a path inside the repo), check {argv: [node, --test, test/ddl-only-migration.test.mjs], timeoutSec: 30}. The starting repo holds the context files only (the output file must not exist there). The hidden test is test/ddl-only-migration.test.mjs; it reads the output file from the repo root of the check folder with node:fs and asserts as described below. The solution folder holds a correct version of the output file at the same relative path. The hidden test must FAIL when the output file is missing and PASS with the solution. Real lesson: workers embedded fixture self-tests (DO blocks, pgTAP plan calls) inside migration files, which made migrations fail and non-DDL. The task: write supabase/migrations/ddl-only-migration.sql that creates a table notes(id uuid primary key, shop_id uuid not null, body text not null, created_at timestamptz not null default now()) and an index on notes(shop_id), and enables row level security on it with one policy allowing select to authenticated users. The prompt gives these requirements in plain words and adds the rule 'Migrations contain DDL only; tests live in a tests folder'. The hidden test checks create table notes with the four columns, create index, enable row level security, create policy, and that the file contains none of: a DO dollar-quote block, the words plan( or select * from finish, insert into, raise notice. The starting repo has an empty supabase/migrations folder marker file named .keep only if needed, otherwise just a docs file describing the table. The starting repo files are: docs/table.md (put useful content in each; the output file itself is not in the starting repo).\nReturn each output file complete in files, never edits. Use only node built-ins in the hidden test (node:test, node:assert/strict, node:fs); no dependencies; deterministic and quick; no secrets.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "evals/ddl-only-migration/eval.json",
+        "evals/ddl-only-migration/hidden/test/ddl-only-migration.test.mjs",
+        "evals/ddl-only-migration/solution/supabase/migrations/ddl-only-migration.sql",
+        "evals/ddl-only-migration/repo/docs/table.md"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "df-eval-openapi-contract-file",
+      "type": "build",
+      "prompt": "Author one golden eval task in the format of section 5 of the design (an eval spec, a starting repo, a hidden test and a known-good solution). The eval id is openapi-contract-file. The spec has: version 1, id, title, tags (2 to 4), lesson (leave out), prompt (what the worker under test is told: 3 to 8 sentences, do not mention the hidden test, do not reveal the lesson), context (paths inside the starting repo the worker may read), outputs (the one file the worker must write, a path inside the repo), check {argv: [node, --test, test/openapi-contract-file.test.mjs], timeoutSec: 30}. The starting repo holds the context files only (the output file must not exist there). The hidden test is test/openapi-contract-file.test.mjs; it reads the output file from the repo root of the check folder with node:fs and asserts as described below. The solution folder holds a correct version of the output file at the same relative path. The hidden test must FAIL when the output file is missing and PASS with the solution. Real lesson: a contract ticket produced TypeScript but the contract tooling accepts OpenAPI JSON only. The task: write contracts/api.json, an OpenAPI 3.0 JSON document with exactly two operations: GET /api/vin (operationId decodeVin, required query parameter vin of type string, 200 response with JSON schema ref VinResult) and POST /api/requests (operationId submitRequest, JSON request body ref SubmitInput, 200 response with JSON schema ref SubmitResult); components.schemas has VinResult {found boolean required, make string, model string}, SubmitInput {vin string, contactName string, contactPhone string; all required}, SubmitResult {ok boolean required, requestNumber integer minimum 1 required}. The prompt describes this in plain words and says: write one OpenAPI 3 JSON file using only paths with an operationId, components.schemas and local refs; no TypeScript. The hidden test parses the JSON, checks openapi starts with 3, both operations and operationIds, the query parameter, that every $ref resolves inside components.schemas, the required lists, that the POST response schema is SubmitResult and different from the request schema, and that there is no YAML or TypeScript text. The starting repo files are: docs/api-notes.md (put useful content in each; the output file itself is not in the starting repo).\nReturn each output file complete in files, never edits. Use only node built-ins in the hidden test (node:test, node:assert/strict, node:fs); no dependencies; deterministic and quick; no secrets.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "evals/openapi-contract-file/eval.json",
+        "evals/openapi-contract-file/hidden/test/openapi-contract-file.test.mjs",
+        "evals/openapi-contract-file/solution/contracts/api.json",
+        "evals/openapi-contract-file/repo/docs/api-notes.md"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "df-eval-dependency-version-match",
+      "type": "build",
+      "prompt": "Author one golden eval task in the format of section 5 of the design (an eval spec, a starting repo, a hidden test and a known-good solution). The eval id is dependency-version-match. The spec has: version 1, id, title, tags (2 to 4), lesson (leave out), prompt (what the worker under test is told: 3 to 8 sentences, do not mention the hidden test, do not reveal the lesson), context (paths inside the starting repo the worker may read), outputs (the one file the worker must write, a path inside the repo), check {argv: [node, --test, test/dependency-version-match.test.mjs], timeoutSec: 30}. The starting repo holds the context files only (the output file must not exist there). The hidden test is test/dependency-version-match.test.mjs; it reads the output file from the repo root of the check folder with node:fs and asserts as described below. The solution folder holds a correct version of the output file at the same relative path. The hidden test must FAIL when the output file is missing and PASS with the solution. Real lesson: workers wrote Tailwind v3 setup (the three tailwind directives and the tailwindcss plus autoprefixer postcss plugins) while package.json had Tailwind v4. Here package.json (in the starting repo and the context) has dependencies tailwindcss ^4.1.0 and @tailwindcss/postcss ^4.1.0 and no autoprefixer. The task: write src/app/dependency-version-match.css, the global stylesheet entry for this project. The prompt says: write the global stylesheet for the dependency versions in package.json, with one custom property --brand set to #0a7 on :root. The hidden test checks the file contains an import of tailwindcss (a line like @import \"tailwindcss\"; either quote style), contains --brand: #0a7 inside :root, and does NOT contain @tailwind base, @tailwind components or @tailwind utilities. The starting repo files are: package.json (put useful content in each; the output file itself is not in the starting repo).\nReturn each output file complete in files, never edits. Use only node built-ins in the hidden test (node:test, node:assert/strict, node:fs); no dependencies; deterministic and quick; no secrets.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "evals/dependency-version-match/eval.json",
+        "evals/dependency-version-match/hidden/test/dependency-version-match.test.mjs",
+        "evals/dependency-version-match/solution/src/app/dependency-version-match.css",
+        "evals/dependency-version-match/repo/package.json"
+      ]
+    }
+  ]
+}

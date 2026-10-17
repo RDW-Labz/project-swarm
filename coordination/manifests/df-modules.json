@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "concurrency": 6,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "df-ticket-context",
+      "type": "build",
+      "prompt": "Write tools/ticket-context.mjs: classifyTicket and buildTicketContext of section 2 of the design. Pure functions; paths use forward slashes; no file system access (exists and sizes are passed in). Keep it under 14000 characters.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes and rules are fixed.",
+      "context": [
+        "docs/plans/dogfood-fixes-design.md"
+      ],
+      "outputs": [
+        "tools/ticket-context.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "df-ticket-context-test",
+      "type": "build",
+      "prompt": "Write the test file for the ticket context module, section 2 of the design (module written at the same time; use exactly the names there). Cover every class and the order of classes, shared paths and cache order (sorted, at most 10), db, ui (screen word overlap, at most 2 screens), api and test additions, backticked paths from requirement text, missing files dropped, large files skipped with a warning, the file limit, de-duplication, and scope context entries by kind.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes and rules are fixed.",
+      "context": [
+        "docs/plans/dogfood-fixes-design.md"
+      ],
+      "outputs": [
+        "tests/ticket-context.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "df-verify-config",
+      "type": "build",
+      "prompt": "Write tools/verify-config.mjs: validateVerifyConfig, ticketTests, verifyJobFields, managedChecks and doneEvidence of section 1 of the design. verifyJobFields(ticket, verify) returns the job fields to merge ({ agent, model, shell, setup, testEnv, timeoutMs, promptLine } with only the keys that apply) or null when the ticket has no tests or agent is none. managedChecks(verify) returns { checks, preChecks }. Keep it under 14000 characters.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes and rules are fixed.",
+      "context": [
+        "docs/plans/dogfood-fixes-design.md"
+      ],
+      "outputs": [
+        "tools/verify-config.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "df-verify-config-test",
+      "type": "build",
+      "prompt": "Write the test file for the verify config module, section 1 of the design (module written at the same time; use exactly the names there). Cover config validation (defaults, bad argv, too many setup commands, env names with secret-like words, bad agent, timeouts), ticketTests for each ticket type with test-looking file names and an explicit tests list, the codex and claude job fields and the none case, managedChecks with and without the {tests} item, and doneEvidence for a queue pass (passed, failed, skipped, job in another batch, no tests check), for a plain integrate, and for no evidence.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes and rules are fixed.",
+      "context": [
+        "docs/plans/dogfood-fixes-design.md"
+      ],
+      "outputs": [
+        "tests/verify-config.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "df-gitignore",
+      "type": "build",
+      "prompt": "Write tools/gitignore-defaults.mjs: gitignoreBlock(stacks) and async ensureGitignore(root, stacks) of the build output item in section 5 of the design. gitignoreBlock returns the text of a block starting with a marker comment line '# project-swarm defaults' for the given stack names (node, python); ensureGitignore reads the root .gitignore (a missing file is empty; a symlink or non-regular file is refused with code gitignore-unsafe), appends the block only for lines that are not already present (compare trimmed lines), never removes or reorders existing lines, writes through a temp file opened with O_EXCL and O_NOFOLLOW then a rename, and returns { changed, added: [lines] }. Running it twice changes nothing the second time. Keep it under 7000 characters.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes and rules are fixed.",
+      "context": [
+        "docs/plans/dogfood-fixes-design.md"
+      ],
+      "outputs": [
+        "tools/gitignore-defaults.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "df-gitignore-test",
+      "type": "build",
+      "prompt": "Write the test file for the gitignore defaults module (module written at the same time; use exactly the names in section 5 of the design: gitignoreBlock(stacks) and ensureGitignore(root, stacks) returning { changed, added }). Use temp folders. Cover node and python blocks, an existing file kept intact, partial overlap adds only missing lines, idempotence, a missing file, and refusing a symlinked .gitignore.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes and rules are fixed.",
+      "context": [
+        "docs/plans/dogfood-fixes-design.md"
+      ],
+      "outputs": [
+        "tests/gitignore-defaults.test.mjs"
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toJob } from '../src/job.mjs';
+import { toJob } from '../src/ticket-after-empty.mjs';
 
 test('keeps dependencies that are in the set', () => {
   const ticket = { id: 'T1', title: 'Build', dependsOn: ['T0'] };

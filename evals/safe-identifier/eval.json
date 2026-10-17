@@ -1,1 +1,24 @@
-{"version":1,"id":"safe-identifier","title":"Validate schema names before generating module source","tags":["codegen","input-validation"],"prompt":"Fix src/gen.mjs so that validatorSource(names) is safe to use with untrusted schema names. It takes an array of strings and returns the source text of a JavaScript ES module. Before producing any text, it must check every name: each must match a letter or underscore followed by letters, digits or underscores. If any name fails (including non-string values or a non-array argument), it must throw an Error whose code property is 'bad-name', and produce no output at all. For each valid name the module must export one constant named validate followed by the name, equal to a small function that returns true, with one export per name in input order. An empty array returns a module with no exports. The returned text must contain nothing except these generated declarations, so no raw input text may appear other than the valid names. Keep it an ES module with no dependencies and keep the export name validatorSource.","context":["src/gen.mjs"],"outputs":["src/gen.mjs"],"check":{"argv":["node","--test","test/gen.test.mjs"],"timeoutSec":10}}
+{
+  "version": 1,
+  "id": "safe-identifier",
+  "title": "Validate schema names before generating module source",
+  "tags": [
+    "codegen",
+    "input-validation"
+  ],
+  "prompt": "Fix src/safe-identifier.mjs so that validatorSource(names) is safe to use with untrusted schema names. It takes an array of strings and returns the source text of a JavaScript ES module. Before producing any text, it must check every name: each must match a letter or underscore followed by letters, digits or underscores. If any name fails (including non-string values or a non-array argument), it must throw an Error whose code property is 'bad-name', and produce no output at all. For each valid name the module must export one constant named validate followed by the name, equal to a small function that returns true, with one export per name in input order. An empty array returns a module with no exports. The returned text must contain nothing except these generated declarations, so no raw input text may appear other than the valid names. Keep it an ES module with no dependencies and keep the export name validatorSource.",
+  "context": [
+    "src/safe-identifier.mjs"
+  ],
+  "outputs": [
+    "src/safe-identifier.mjs"
+  ],
+  "check": {
+    "argv": [
+      "node",
+      "--test",
+      "test/safe-identifier.test.mjs"
+    ],
+    "timeoutSec": 10
+  }
+}

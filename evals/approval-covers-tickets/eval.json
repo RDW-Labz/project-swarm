@@ -1,1 +1,25 @@
-{"version":1,"id":"approval-covers-tickets","title":"Approval must cover the current ticket set","tags":["approval","ledger","hashing"],"prompt":"Edit src/approval.mjs in this repo. It must export approve(ledger, now) and isApproved(ledger). approve returns a new ledger object without mutating the input, with approved set to an object containing at (the given now), scopeHash (copied from ledger.scopeHash) and ticketsHash. ticketsHash is the SHA-256 hex digest of JSON.stringify applied to an array of the tickets sorted by id ascending, where each ticket is reduced to exactly the fields acceptance, dependsOn, files, id and title, in that key order, and status or any other field is ignored. A missing tickets value counts as an empty list. isApproved(ledger) returns true only when ledger.approved exists, approved.scopeHash equals ledger.scopeHash, and approved.ticketsHash equals the ticketsHash computed from the current ledger.tickets; otherwise it returns false. Keep the existing export names and return shapes, use only node built-ins, and write the complete file.","context":["src/approval.mjs"],"outputs":["src/approval.mjs"],"check":{"argv":["node","--test","test/approval.test.mjs"],"timeoutSec":60}}
+{
+  "version": 1,
+  "id": "approval-covers-tickets",
+  "title": "Approval must cover the current ticket set",
+  "tags": [
+    "approval",
+    "ledger",
+    "hashing"
+  ],
+  "prompt": "Edit src/approval-covers-tickets.mjs in this repo. It must export approve(ledger, now) and isApproved(ledger). approve returns a new ledger object without mutating the input, with approved set to an object containing at (the given now), scopeHash (copied from ledger.scopeHash) and ticketsHash. ticketsHash is the SHA-256 hex digest of JSON.stringify applied to an array of the tickets sorted by id ascending, where each ticket is reduced to exactly the fields acceptance, dependsOn, files, id and title, in that key order, and status or any other field is ignored. A missing tickets value counts as an empty list. isApproved(ledger) returns true only when ledger.approved exists, approved.scopeHash equals ledger.scopeHash, and approved.ticketsHash equals the ticketsHash computed from the current ledger.tickets; otherwise it returns false. Keep the existing export names and return shapes, use only node built-ins, and write the complete file.",
+  "context": [
+    "src/approval-covers-tickets.mjs"
+  ],
+  "outputs": [
+    "src/approval-covers-tickets.mjs"
+  ],
+  "check": {
+    "argv": [
+      "node",
+      "--test",
+      "test/approval-covers-tickets.test.mjs"
+    ],
+    "timeoutSec": 60
+  }
+}

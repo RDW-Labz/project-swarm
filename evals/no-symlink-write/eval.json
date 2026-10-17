@@ -1,1 +1,25 @@
-{"version":1,"id":"no-symlink-write","title":"Atomic file write that refuses to write through symlinks","tags":["symlink","file-io","path-safety"],"prompt":"Write the ES module src/write.mjs so it exports an async function writeNoFollow(dir, name, text). It must write text to the file name inside the directory dir. If the path dir/name is already a symbolic link, even a dangling one, it must reject with an Error whose code property is 'symlink' and must not write to or change anything the link points at. Otherwise it must write atomically: create a temporary file inside dir, then rename it over dir/name so that an existing regular file is replaced. Do not leave temporary files behind on success or on failure. Use only Node built-in modules, with no package.json and no dependencies, and keep the export name and signature exactly as given.","context":["src/write.mjs"],"outputs":["src/write.mjs"],"check":{"argv":["node","--test","test/write.test.mjs"],"timeoutSec":30}}
+{
+  "version": 1,
+  "id": "no-symlink-write",
+  "title": "Atomic file write that refuses to write through symlinks",
+  "tags": [
+    "symlink",
+    "file-io",
+    "path-safety"
+  ],
+  "prompt": "Write the ES module src/no-symlink-write.mjs so it exports an async function writeNoFollow(dir, name, text). It must write text to the file name inside the directory dir. If the path dir/name is already a symbolic link, even a dangling one, it must reject with an Error whose code property is 'symlink' and must not write to or change anything the link points at. Otherwise it must write atomically: create a temporary file inside dir, then rename it over dir/name so that an existing regular file is replaced. Do not leave temporary files behind on success or on failure. Use only Node built-in modules, with no package.json and no dependencies, and keep the export name and signature exactly as given.",
+  "context": [
+    "src/no-symlink-write.mjs"
+  ],
+  "outputs": [
+    "src/no-symlink-write.mjs"
+  ],
+  "check": {
+    "argv": [
+      "node",
+      "--test",
+      "test/no-symlink-write.test.mjs"
+    ],
+    "timeoutSec": 30
+  }
+}

@@ -176,7 +176,20 @@ export function validateEnvelope(value, outputs) {
   if (Array.isArray(value.edits) && value.edits.some(droppable)) {
     const dropped = [...new Set(value.edits.filter(droppable).map(edit => edit.path))];
     value.edits = value.edits.filter(edit => !droppable(edit));
-    Object.defineProperty(value, 'normalized', { value: dropped.map(path => `edits-dropped-for-whole-file:${path}`), enumerable: false });
+    Object.defineProperty(value, 'normalized', { value: dropped.map(path => `edits-dropped-for-whole-file:${path}`), enumerable: false, configurable: true });
+  }
+  // An edit with an empty `find` cannot be applied to anything: it is a whole-file write (the worker is creating the file). When it is the
+  // only thing said about that declared path, it becomes a files entry; mixed with other edits or a whole file it still fails below.
+  if (Array.isArray(value.edits) && Array.isArray(value.files)) {
+    const perPath = new Map();
+    for (const edit of value.edits) if (typeof edit?.path === 'string') perPath.set(edit.path, (perPath.get(edit.path) ?? 0) + 1);
+    const creates = value.edits.filter(edit => exact(edit, ['path', 'find', 'replace']) && edit.find === '' && typeof edit.replace === 'string' && outputs.includes(edit.path) && perPath.get(edit.path) === 1 && !wholePaths.has(edit.path));
+    if (creates.length) {
+      value.files = [...value.files, ...creates.map(edit => ({ path: edit.path, content: edit.replace }))];
+      value.edits = value.edits.filter(edit => !creates.includes(edit));
+      const made = creates.map(edit => `empty-find-edit-as-file:${edit.path}`);
+      Object.defineProperty(value, 'normalized', { value: [...(value.normalized ?? []), ...made], enumerable: false, configurable: true });
+    }
   }
   const seen = new Set();
   const editPaths = new Set();

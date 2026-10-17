@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0021",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "supabase test db recurses into subfolders of supabase/tests and cannot \\ir files outside the mounted folder; dblink as non-superuser needs a password",
+  "rule": "Give workers the runner's constraints for DB tests.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "document pgTAP + extra-tests pattern in the db job prompt",
+  "guard": {
+    "kind": "prompt-rule",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "database",
+    "pgtap"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 21"
+  }
+}

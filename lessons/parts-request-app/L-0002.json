@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0002",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "deploy",
+  "what": "version --check said 1.81.0 updateAvailable true; swarm init minutes later wrote version 1.82.0 though I never ran update",
+  "rule": "Init must not change the shared install version silently.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "report the install version change in init output, or stay pinned until update is run",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "init",
+    "versioning"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 2"
+  }
+}

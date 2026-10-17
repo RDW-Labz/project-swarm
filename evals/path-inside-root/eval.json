@@ -1,1 +1,24 @@
-{"version":1,"id":"path-inside-root","title":"Reject paths that escape the root folder","tags":["path-safety","security"],"prompt":"Fix the ES module at src/inside.mjs so it exports resolveInside(root, file). It returns the absolute path of file resolved against root. The result must be root itself or a path below root; otherwise it must throw an Error whose code property is 'outside'. Paths that climb out with parent segments, absolute paths pointing elsewhere, and paths into a sibling folder whose name merely begins with the root's name are all outside. Resolve both root and file with path.resolve and compare path segments rather than raw string prefixes. Keep the export name, the return value and the error code exactly as stated. Use only node built-ins and do not add a package.json or any dependency.","context":["src/inside.mjs"],"outputs":["src/inside.mjs"],"check":{"argv":["node","--test","test/inside.test.mjs"],"timeoutSec":30}}
+{
+  "version": 1,
+  "id": "path-inside-root",
+  "title": "Reject paths that escape the root folder",
+  "tags": [
+    "path-safety",
+    "security"
+  ],
+  "prompt": "Fix the ES module at src/path-inside-root.mjs so it exports resolveInside(root, file). It returns the absolute path of file resolved against root. The result must be root itself or a path below root; otherwise it must throw an Error whose code property is 'outside'. Paths that climb out with parent segments, absolute paths pointing elsewhere, and paths into a sibling folder whose name merely begins with the root's name are all outside. Resolve both root and file with path.resolve and compare path segments rather than raw string prefixes. Keep the export name, the return value and the error code exactly as stated. Use only node built-ins and do not add a package.json or any dependency.",
+  "context": [
+    "src/path-inside-root.mjs"
+  ],
+  "outputs": [
+    "src/path-inside-root.mjs"
+  ],
+  "check": {
+    "argv": [
+      "node",
+      "--test",
+      "test/path-inside-root.test.mjs"
+    ],
+    "timeoutSec": 30
+  }
+}

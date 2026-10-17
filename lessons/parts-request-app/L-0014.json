@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0014",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "merge",
+  "what": "T-0047 ci.yml blocked by security gate 'unsupported-manifest ... owner must review' with no documented way to approve; I copied it by hand after reading it",
+  "rule": "Gate needs an owner-approve command for reviewed workflow files.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "add swarm integrate --approve-manifest FILE or decision record",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "security-gate",
+    "workflow-files"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 14"
+  }
+}

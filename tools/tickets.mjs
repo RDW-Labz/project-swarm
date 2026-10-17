@@ -9,11 +9,13 @@ export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'co
 const RISKS = ['low', 'medium', 'high'];
 const SIZES = ['S', 'M'];
 const NEEDS_ACCEPTANCE = ['build', 'test', 'migration'];
-const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps', 'skeleton'];
+const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps', 'skeleton', 'tests'];
 const RESERVED_FIRST = ['.git', '.swarm', '.github-hooks-free'];
+// Build output anywhere in a path, and any dot-env file, are never ticket files.
+const BUILD_DIRS = ['.next', 'node_modules', 'dist'];
 const SECRET_NAMES = ['.project-swarm.json', '.env'];
 const MOVES = {
-  todo: ['ready', 'blocked', 'cancelled'],
+  todo: ['ready', 'blocked', 'cancelled'],  // a human ticket may also go todo -> done (see HUMAN_MOVES)
   ready: ['running', 'blocked', 'cancelled'],
   running: ['review', 'ready', 'blocked', 'cancelled'],
   review: ['done', 'running', 'blocked', 'cancelled'],
@@ -21,6 +23,10 @@ const MOVES = {
   done: [],
   cancelled: [],
 };
+
+// Day 0 and other human tickets are done by a person, at any time.
+const HUMAN_MOVES = { todo: ['done'], ready: ['done'], running: ['done'], blocked: ['done'] };
+const legalMoves = ticket => [...(MOVES[ticket.status] ?? []), ...(ticket.type === 'human' ? HUMAN_MOVES[ticket.status] ?? [] : [])];
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const isStrArr = v => Array.isArray(v) && v.every(s => typeof s === 'string');
@@ -39,6 +45,8 @@ const badPath = p => {
     p.includes('\\') ||
     segs.some(s => s === '' || s === '.' || s === '..') ||
     RESERVED_FIRST.includes(segs[0]) ||
+    p.endsWith('.tsbuildinfo') ||
+    segs.some(s => BUILD_DIRS.includes(s) || /^\.env(?:$|\.)/i.test(s)) ||
     segs.some(s => SECRET_NAMES.includes(s.toLowerCase()));
 };
 
@@ -63,8 +71,9 @@ export function validateTicket(t) {
   if (t.size === 'L') errors.push('size L: split this ticket');
   else if (!SIZES.includes(t.size)) errors.push(`bad size: ${t.size}`);
   if (!RISKS.includes(t.risk)) errors.push(`bad risk: ${t.risk}`);
-  for (const k of ['dependsOn', 'files', 'context', 'contracts']) if (t[k] !== undefined && !isStrArr(t[k])) errors.push(`${k} must be an array of strings`);
-  for (const k of ['files', 'context', 'contracts']) if (isStrArr(t[k])) for (const p of t[k]) if (badPath(p)) errors.push(`${k} path not allowed: ${p}`);
+  for (const k of ['dependsOn', 'files', 'context', 'contracts', 'tests']) if (t[k] !== undefined && !isStrArr(t[k])) errors.push(`${k} must be an array of strings`);
+  for (const k of ['files', 'context', 'contracts', 'tests']) if (isStrArr(t[k])) for (const p of t[k]) if (badPath(p)) errors.push(`${k} path not allowed: ${p}`);
+  if (isStrArr(t.tests) && t.tests.some(p => p.startsWith('-'))) errors.push('tests path must not start with a dash');
   if (!STATUSES.includes(t.status)) errors.push(`bad status: ${t.status}`);
   if (t.sensitive !== undefined && typeof t.sensitive !== 'boolean') errors.push('sensitive must be a boolean');
   if (t.skeleton !== undefined && typeof t.skeleton !== 'boolean') errors.push('skeleton must be a boolean');
@@ -132,7 +141,7 @@ export async function transition(root, id, to, { by = 'system', note, now = Date
   if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
   const ticket = ledger.tickets.find(t => t.id === id);
   if (!ticket) throw fail('ticket-missing', `no ticket ${id}`);
-  if (!STATUSES.includes(to) || !(MOVES[ticket.status] ?? []).includes(to)) throw fail('ticket-transition', `${id}: ${ticket.status} -> ${to} is not allowed`);
+  if (!STATUSES.includes(to) || !legalMoves(ticket).includes(to)) throw fail('ticket-transition', `${id}: ${ticket.status} -> ${to} is not allowed; legal next statuses: ${legalMoves(ticket).join(', ') || 'none'}`);
   if (to === 'ready') {
     const waiting = (ticket.dependsOn ?? []).filter(d => ledger.tickets.find(x => x.id === d)?.status !== 'done');
     if (waiting.length) throw fail('ticket-deps', `${id} waits on ${waiting.join(', ')}`);

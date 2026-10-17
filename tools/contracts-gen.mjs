@@ -45,6 +45,9 @@ try{body=raw?JSON.parse(raw):undefined;}catch{return send(res,400,{errors:['body
 if(hit.req&&Object.hasOwn(VAL,hit.req)){const v=VAL[hit.req](body);if(!v.ok)return send(res,400,{errors:v.errors});}
 if(hit.status===204)return send(res,204);
 let out=body;
+// The answer is the response schema's own example (overlaid with request fields of the same name and type), never the request echoed back.
+const base=hit.data?rows(hit.data)[0]:undefined;
+if(base&&typeof base==='object'&&!Array.isArray(base)){const cand={...base};if(body&&typeof body==='object'&&!Array.isArray(body))for(const k of Object.keys(base))if(Object.hasOwn(body,k)&&typeof body[k]===typeof base[k])cand[k]=body[k];const vv=Object.hasOwn(VAL,hit.data)?VAL[hit.data](cand):{ok:true};out=vv.ok?cand:{...base};}
 if(hit.id&&out&&typeof out==='object'&&!Array.isArray(out))out={...out,id:out.id??params[hit.names.at(-1)]??globalThis.crypto.randomUUID()};
 return send(res,hit.status,out);}
 const key=hit.names.at(-1);

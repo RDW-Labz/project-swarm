@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0005",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "tickets --set done on a todo human ticket refuses 'todo -> done is not allowed' before and after scope approve; had to step ready,running,review,done. Allowed list only shown for unknown statuses",
+  "rule": "Day-0 human tickets should be closable at any time (todo -> done or cancelled directly).",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "allow todo->done for type human, and print legal next statuses in the transition error",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "human-tickets",
+    "tickets"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 5"
+  }
+}

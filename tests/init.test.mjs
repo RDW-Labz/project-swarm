@@ -50,3 +50,23 @@ test('init links a project, names the stack, copies checks, and ignores .swarm',
   assert.equal(again.checks.written, false);
   assert.deepEqual(again.ignores, []);
 });
+
+test('init adds the build output ignore lines and keeps the blocks the owner set by hand across a re-init', async t => {
+  const root = await project(t);
+  await initProject(root, { source });
+  const ignore = await fs.readFile(path.join(root, '.gitignore'), 'utf8');
+  for (const line of ['.next/', 'node_modules/', '*.tsbuildinfo', 'next-env.d.ts']) assert.ok(ignore.includes(line), line);
+  const pointerPath = path.join(root, '.project-swarm.json');
+  const pointer = JSON.parse(await fs.readFile(pointerPath, 'utf8'));
+  pointer.profile.verify = { command: ['npm', 'test'], agent: 'claude', model: 'sonnet-shell', setup: [], testEnv: {}, timeoutSec: 900 };
+  pointer.profile.security = { acceptedAdvisories: [{ package: 'glob', reason: 'dev only chain', reviewBy: '2026-12-31' }] };
+  pointer.profile.context = { db: ['docs/scope/scope-original.md'] };
+  await fs.writeFile(pointerPath, JSON.stringify(pointer, null, 2));
+  const beforeIgnore = await fs.readFile(path.join(root, '.gitignore'), 'utf8');
+  await initProject(root, { source });
+  const again = JSON.parse(await fs.readFile(pointerPath, 'utf8'));
+  assert.deepEqual(again.profile.verify.command, ['npm', 'test']);
+  assert.equal(again.profile.security.acceptedAdvisories[0].package, 'glob');
+  assert.deepEqual(again.profile.context.db, ['docs/scope/scope-original.md']);
+  assert.equal(await fs.readFile(path.join(root, '.gitignore'), 'utf8'), beforeIgnore);
+});

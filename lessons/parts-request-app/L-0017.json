@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0017",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "split",
+  "what": "swarm change only handles scope requirements; ticket file lists (files/context) cannot be edited via any command, I edited .swarm/project/tickets.json by hand and re-approved",
+  "rule": "Provide a supported way to edit ticket files and contracts.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "add swarm tickets ID --files a,b --context c and keep approval via re-approve",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "change-orders",
+    "tickets"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 17"
+  }
+}

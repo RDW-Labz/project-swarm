@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0019",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "T-0051 created tables from acceptance text alone and diverged from scope section 9: shops had no slug/phone/notify_email, staff_users no auth_user_id, part_requests no contact/vehicle/notes columns, notifications wrong columns; later tickets patched missing columns with ALTER ... IF NOT EXISTS and R-005 grants referenced them. Caught only when I ran submit_request; I rewrote 0002/0007",
+  "rule": "Tickets that implement a data model must carry the exact schema from the scope as a contract.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": "anthropic/claude-haiku-5-5",
+  "fix": "put the data model section into a contract file given to every DB ticket; add a column-existence test generated from scope",
+  "guard": {
+    "kind": "prompt-rule",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "data-model",
+    "migration",
+    "prompt-context"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 19"
+  }
+}

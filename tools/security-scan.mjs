@@ -127,11 +127,14 @@ const arr = (x) => (Array.isArray(x) ? x : []);
 const lc = (x) => (typeof x === 'string' ? x.toLowerCase() : '');
 const sevNorm = (x) => { const s = lc(x); return s === 'moderate' ? 'medium' : s; };
 const isObj = (x) => !!x && typeof x === 'object';
+// Advisory ids (GHSA-...) found in the urls of a vulnerability's via entries.
+const advisoryIds = v => [...new Set(arr(v?.via).flatMap(x => (isObj(x) && typeof x.url === 'string' ? [...x.url.matchAll(/GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}/gi)].map(m => m[0]) : [])))];
+
 export function parseNpmAudit(input) {
   const j = parseJson(input);
   if (!isObj(j)) return [];
   const out = [];
-  if (isObj(j.vulnerabilities)) for (const [name, v] of Object.entries(j.vulnerabilities)) out.push({ name, severity: sevNorm(v?.severity), source: 'npm' });
+  if (isObj(j.vulnerabilities)) for (const [name, v] of Object.entries(j.vulnerabilities)) out.push({ name, severity: sevNorm(v?.severity), ids: advisoryIds(v), source: 'npm' });
   else if (isObj(j.advisories)) for (const a of Object.values(j.advisories)) out.push({ name: a?.module_name, severity: sevNorm(a?.severity), source: 'npm' });
   return out;
 }

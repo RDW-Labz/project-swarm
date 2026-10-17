@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isHost } from '../src/host.mjs';
+import { isHost } from '../src/hostname-check.mjs';
 
 test('matches the exact hostname', () => {
   assert.equal(isHost('https://example.com/path', 'example.com'), true);

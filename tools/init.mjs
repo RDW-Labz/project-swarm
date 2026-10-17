@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // One command that links a project to the shared install, names the stack, copies checks,
 // keeps .swarm/ out of git and out of lint or test runs, and seeds coordination/.
+import { ensureGitignore } from './gitignore-defaults.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -224,6 +225,8 @@ export async function initProject(root, { source = installSource(), install = in
   const collected = await collectChecks(root, stack);
   const checksFile = collected.checks.length ? await writeChecks(root, collected.checks) : null;
   const ignores = await ensureToolIgnores(root);
+  // Build output must never be committed: a stack-aware block is added to .gitignore (nothing is removed).
+  const gitignoreResult = stack.length ? await ensureGitignore(root, stack.map(entry => entry.name)).catch(error => ({ changed: false, error })) : { changed: false, added: [] };
   const pointerPath = path.join(root, '.project-swarm.json');
   const pointer = await fs.readFile(pointerPath, 'utf8').then(text => JSON.parse(text), () => { throw Object.assign(new Error('init-pointer-invalid: .project-swarm.json is not valid JSON'), { code: 'init-pointer-invalid' }); });
   const prior = priorPointer?.profile && typeof priorPointer.profile === 'object' ? priorPointer.profile : {};
@@ -242,6 +245,8 @@ export async function initProject(root, { source = installSource(), install = in
     sensitive: answer !== false,
     protectedPaths: [...new Set([...(prior.protectedPaths ?? []), ...detected, ...protect.map(normalizeProtectedPath)])].sort(),
     budget: { ...DEFAULT_PROFILE_BUDGET, ...(prior.budget ?? {}), ...(maxUsd !== undefined ? { maxUsd } : {}), ...(maxTokens !== undefined ? { maxTokens } : {}) },
+    // Blocks the owner set by hand (security policy, approval, ci hooks, verify, context) survive a re-init.
+    ...Object.fromEntries(['security', 'approval', 'ci', 'verify', 'context'].filter(key => prior[key] !== undefined).map(key => [key, prior[key]])),
     baseCheck: runBase
       ? await runBaseChecks(root, checksToRun, { run, head: await gitHead(root), now })
       : (prior.baseCheck ?? { status: 'skipped', ranAt: new Date(now()).toISOString(), head: await gitHead(root), checks: [] }),
@@ -251,6 +256,8 @@ export async function initProject(root, { source = installSource(), install = in
   pointer.profile = valid;
   await writeFileSafe(pointerPath, `${JSON.stringify(pointer, null, 2)}\n`);
   const warnings = [...ignores.warnings];
+  if (gitignoreResult.error) warnings.push(`gitignore-defaults-skipped: ${String(gitignoreResult.error.message).slice(0, 120)}`);
+  else if (gitignoreResult.changed) warnings.push(`gitignore-defaults-added: ${gitignoreResult.added.length} line(s) for ${stack.map(entry => entry.name).join(', ')}`);
   for (const skip of collected.skipped) warnings.push(`checks-from-ci-skipped (${skip.reason}): ${skip.raw}`);
   if (valid.baseCheck.status === 'red') warnings.push(`base-red: checks already fail before any change: ${valid.baseCheck.checks.filter(check => !check.ok).map(check => check.name).join(', ')}`);
   if (!runBase && baseCheck !== false && checksToRun.length) warnings.push('base-check-skipped: pass --base-check to run the project\'s own checks and record whether they already fail');
