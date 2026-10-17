@@ -869,18 +869,19 @@ async function markDepsCommand(root, ledger, ids, flags) {
 // Lesson 17: the file lists of a ticket can be changed by a command. Your --yes is the approval: an approved ledger is sealed again over the new lists.
 async function editTicketFiles(root, ledger, rest, flags) {
   if (rest.length !== 1) return bad('tickets --files/--context/--tests needs one ticket id');
-  const list = v => String(v).split(',').map(x => x.trim()).filter(Boolean);
+  const list = v => [...new Set(String(v).split(',').map(x => x.trim()).filter(Boolean))];
   const changes = {};
   for (const key of ['files', 'context', 'tests']) if (flags[key] !== undefined) changes[key] = list(flags[key]);
-  return withLock(root, async () => {
+  try { return await withLock(root, async () => {
     const fresh = await readLedger(root);
     const ticket = fresh.tickets.find(x => x.id === rest[0]);
     if (!ticket) return out(`no ticket ${rest[0]}`, 1);
-    if (!['todo', 'ready', 'blocked', 'review'].includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}; only a todo, ready, blocked or review ticket can change its files`, 1);
+    if (!['todo', 'ready', 'blocked'].includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}; only a todo, ready or blocked ticket can change its files (send a review ticket back with swarm tickets ${ticket.id} --set todo first)`, 1);
     const next = { ...ticket, ...changes };
     const v = validateTicket(next);
     if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
     const problems = [];
+    for (const key of ['context', 'tests']) for (const f of next[key] ?? []) if (f.split('/').pop().startsWith('.env') && !(key === 'context' && isExampleFile(f))) problems.push(`${f} is a reserved name and cannot be in ${key}`);
     for (const f of next.files ?? []) {
       const base = f.split('/').pop();
       if (base.startsWith('.env')) problems.push(`${f} is a reserved name; use env.example.txt for an env template`);
@@ -897,10 +898,10 @@ async function editTicketFiles(root, ledger, rest, flags) {
     const saved = wasApproved ? approveLedger(fresh, { by: 'owner' }) : fresh;
     saved.updatedAt = new Date().toISOString();
     await writeLedger(root, saved);
-    await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields: Object.keys(changes), reapproved: wasApproved });
+    await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields: Object.keys(changes), before: Object.fromEntries(Object.keys(changes).map(k => [k, ticket[k] ?? []])), after: changes, reapproved: wasApproved });
     await refreshPlan(root);
     return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the new lists).' : ''}`);
-  });
+  }); } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
 }
 
 export async function runTicketsCommand(root, args) {

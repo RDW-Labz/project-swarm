@@ -75,6 +75,12 @@ test('eval 36.2: swarm tickets ID --files/--context edits the lists and keeps an
   assert.match((await run(['T-0001', '--files', '../x.ts', '--yes'])).stdout, /refused/);
   assert.match((await run(['T-0001', '--files', 'src/.env', '--yes'])).stdout, /not allowed/);
   assert.deepEqual((await readLedger(root)).tickets[0].files, ['src/a.ts', 'src/b.ts']);
+  // Review tickets cannot change their lists (a cleared tests list would skip the done-check); .env cannot be context or tests.
+  await edit(root, l => { l.tickets[0].status = 'review'; });
+  assert.match((await run(['T-0001', '--tests', '', '--yes'])).stdout, /only a todo, ready or blocked ticket/);
+  await edit(root, l => { l.tickets[0].status = 'todo'; });
+  assert.match((await run(['T-0001', '--context', '.env', '--yes'])).stdout, /context path not allowed: \.env/);
+  assert.equal((await run(['T-0001', '--context', '.env.example', '--yes'])).exitCode, 0);
   // A ledger that was not approved stays not approved.
   await edit(root, l => { l.approved = null; });
   assert.equal((await run(['T-0001', '--tests', 'tests/new.test.ts', '--yes'])).exitCode, 0);
@@ -104,8 +110,13 @@ test('eval 36.3: integrate --approve-manifest lets one reviewed manifest pass th
   assert.match(blocked.out, /unsupported-manifest/);
   assert.match(blocked.out, /--approve-manifest pnpm-workspace\.yaml/);
   await assert.rejects(fs.access(path.join(root, 'pnpm-workspace.yaml')));
-  // An approval for another file does nothing.
-  assert.notEqual((await cli('integrate', first, '--no-checks', '--approve-manifest', 'other.mod')).code, 0);
+  // A file the run does not change cannot be approved, and leaves no decision record.
+  const other = await cli('integrate', first, '--no-checks', '--approve-manifest', 'other.mod');
+  assert.notEqual(other.code, 0);
+  assert.match(other.out, /does not change other\.mod/);
+  assert.equal((await readJournal(root, { kinds: ['decision'], limit: Infinity })).filter(e => /other\.mod/.test(String(e.id))).length, 0);
+  // No glob, folder or odd path.
+  for (const bad of ['*', 'dir/', './pnpm-workspace.yaml', 'a b']) assert.match((await cli('integrate', first, '--no-checks', '--approve-manifest', bad)).out, /exact repo-relative file path/);
   // The named file passes, and the decision is recorded.
   const ok = await cli('integrate', first, '--no-checks', '--approve-manifest', 'pnpm-workspace.yaml');
   assert.equal(ok.code, 0, ok.out);
@@ -118,6 +129,10 @@ test('eval 36.3: integrate --approve-manifest lets one reviewed manifest pass th
   await exec('git', ['-C', root, 'checkout', '-q', '--', '.']).catch(() => {});
   const second = await make();
   assert.notEqual((await cli('integrate', second, '--no-checks')).code, 0);
+  // The queue path honors it too.
+  const queued = await cli('integrate', second, '--queue', '--no-checks', '--approve-manifest', 'pnpm-workspace.yaml');
+  assert.equal(queued.code, 0, queued.out);
+  assert.equal(await fs.readFile(path.join(root, 'pnpm-workspace.yaml'), 'utf8'), 'packages: []\n');
   // A path outside the project is refused.
   assert.match((await cli('integrate', second, '--no-checks', '--approve-manifest', '../x')).out, /repo-relative/);
 });

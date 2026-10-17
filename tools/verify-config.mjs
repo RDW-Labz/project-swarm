@@ -151,7 +151,7 @@ export function doneEvidence(state, jobId) {
   if (batch) {
     const r = (batch.checkResults ?? []).find((c) => c.name === 'tests');
     // A test failure in a batch of one job is that job's failure: it goes back to the worker with the output (a larger batch cannot say whose it is).
-    if (r?.status === 'failed' && (batch.jobs ?? batch.jobIds ?? []).length === 1) return { ok: false, failed: true, check: 'tests', tail: String(r.tail ?? ''), reason: `tests check failed in batch ${batch.id ?? '?'}` };
+    if (r?.status === 'failed' && batch.security !== 'blocked' && (batch.jobs ?? batch.jobIds ?? []).length === 1) return { ok: false, failed: true, check: 'tests', tail: String(r.tail ?? ''), reason: `tests check failed in batch ${batch.id ?? '?'}` };
     if (batch.checks !== 'passed' || batch.security === 'blocked') return { ok: false, reason: `batch ${batch.id ?? '?'} did not pass (checks ${batch.checks}, security ${batch.security ?? 'unknown'})` };
     if (r?.status === 'passed' && (r.mode !== 'affected' || (r.tests ?? 0) > 0)) return { ok: true, reason: `tests check passed in batch ${batch.id}` };
     if (r?.status === 'passed') return { ok: false, reason: `tests check ran no test in batch ${batch.id}` };

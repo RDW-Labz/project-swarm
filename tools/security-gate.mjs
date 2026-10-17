@@ -194,7 +194,7 @@ blocks.push({check:'vulnerability',severity:clean(v.severity),message:`${clean(v
 
 const unparsed=changes.map(c=>({c,eco:unparsedEcosystem(c.file)})).filter(x=>x.eco);
 if(unparsed.length)checked.push('unsupported-manifest');
-for(const {c,eco} of unparsed){if(allowedUnparsed(c.file,pol.allowUnparsedManifests))continue;blocks.push({check:'unsupported-manifest',severity:'high',message:`${c.file} changed: ${eco} dependencies are not parsed yet; the owner must review it, then rerun integrate with --approve-manifest ${c.file}`});}
+for(const {c,eco} of unparsed){if(allowedUnparsed(c.file,pol.allowUnparsedManifests))continue;blocks.push({check:'unsupported-manifest',severity:'high',message:`${c.file} changed: ${eco} dependencies are not parsed yet; the owner must review it, ${/^[A-Za-z0-9_@+.\/-]+$/.test(c.file)?`then rerun integrate with --approve-manifest ${c.file}`:'then approve it by hand'}`});}
 
 const policyFiles=changes.filter(c=>normPath(c.file)===POLICY_FILE);
 if(policyFiles.length)checked.push('policy-change');
