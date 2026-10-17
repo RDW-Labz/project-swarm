@@ -9,7 +9,7 @@ export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'co
 const RISKS = ['low', 'medium', 'high'];
 const SIZES = ['S', 'M'];
 const NEEDS_ACCEPTANCE = ['build', 'test', 'migration'];
-const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps', 'skeleton', 'tests'];
+const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps', 'skeleton', 'tests', 'screens'];
 const RESERVED_FIRST = ['.git', '.swarm', '.github-hooks-free'];
 // Build output anywhere in a path, and any dot-env file, are never ticket files.
 const BUILD_DIRS = ['.next', 'node_modules', 'dist'];
@@ -77,6 +77,7 @@ export function validateTicket(t) {
   if (!STATUSES.includes(t.status)) errors.push(`bad status: ${t.status}`);
   if (t.sensitive !== undefined && typeof t.sensitive !== 'boolean') errors.push('sensitive must be a boolean');
   if (t.skeleton !== undefined && typeof t.skeleton !== 'boolean') errors.push('skeleton must be a boolean');
+  if (t.screens !== undefined && !(isStrArr(t.screens) && t.screens.length <= 5 && t.screens.every(id => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id) && id.length >= 2 && id.length <= 40))) errors.push('screens must be up to 5 kebab-case screen ids');
   if (t.origin !== undefined && t.origin !== 'ci') errors.push('origin must be ci when set');
   if (t.type === 'human' && !(isStrArr(t.steps) && t.steps.length >= 1 && t.steps.length <= 30)) errors.push('human tickets need 1 to 30 steps');
   return { ok: errors.length === 0, errors };

@@ -18,6 +18,7 @@ import { validateOpenApi, contractFiles } from './contracts.mjs';
 import { verifyContracts } from './contracts-verify.mjs';
 import { validateProfile, protectedPathHit, isSecretPath } from './init-profile.mjs';
 import { ensureGitignore } from './gitignore-defaults.mjs';
+import { workTreeFingerprint } from './work-tree.mjs';
 import { otherManagerLockfile } from './ticket-manifest.mjs';
 import { doneEvidence, ticketTests } from './verify-config.mjs';
 import { execFile } from 'node:child_process';
@@ -120,9 +121,9 @@ export function contextEnvFor(root, profile) {
   try { realRoot = realpathSync(root); } catch { /* the root exists; keep it as given */ }
   const rejected = [];
   // A context file is a regular file reached without any symlink, inside the project, that is neither protected nor a secret.
-  const usable = p => {
+  const usable = (p, allowProtected = false) => {
     if (!safe(p)) return false;
-    if (isSecretPath(p) || (profile && protectedPathHit(profile, p))) { if (!rejected.includes(p)) rejected.push(p); return false; }
+    if (isSecretPath(p) || (!allowProtected && profile && protectedPathHit(profile, p))) { if (!rejected.includes(p)) rejected.push(p); return false; }
     try {
       let current = root;
       for (const part of p.split('/')) { current = path.join(current, part); if (lstatSync(current).isSymbolicLink()) return false; }
@@ -132,11 +133,14 @@ export function contextEnvFor(root, profile) {
     } catch { return false; }
   };
   return {
-    exists: usable,
+    exists: p => usable(p),
+    // A design mockup is protected from edits (a worker cannot change what it is compared with) but may be read: still never a secret or a symlink.
+    existsMockup: p => usable(p, true),
     rejected,
     sizes: new Proxy({}, { get: (_, p) => { try { return safe(String(p)) ? statSync(path.join(root, String(p))).size : undefined; } catch { return undefined; } } }),
     listFiles: prefix => { const out = []; if (safe(prefix)) walk(prefix, out); return out.filter(usable); },
     profileContext: profile?.context ?? {},
+    screenMockups: Object.fromEntries((profile?.ui?.screens ?? []).map(screen => [screen.id, screen.mockup])),
   };
 }
 
@@ -209,7 +213,7 @@ function splitPrompt(scope, stage, only, layout = '') {
     'Each ticket object has these fields:',
     'key (short unique name in this file), title (under 140 characters), type (build, test, docs, migration, design, contract or human),',
     'epic (a feature group name), scopeRefs (requirement ids, at least one for build, test, docs, migration), acceptance (1 to 5 observable checks; required for build, test, migration),',
-    'files (the files this ticket writes: repo-relative paths WITH their folders, for example src/app/page.tsx or supabase/migrations/0001_init.sql, never a bare file name unless the file really lives at the repo root; never a folder, never an absolute path, never a dot-env file: use env.example.txt for an env template), context (files it reads), contracts (contract files it uses), tests (the test files that prove this ticket: a build ticket lists the test files owned by its test ticket and depends on that test ticket; a test ticket lists its own), dependsOn (keys of other tickets in this file),',
+    'files (the files this ticket writes: repo-relative paths WITH their folders, for example src/app/page.tsx or supabase/migrations/0001_init.sql, never a bare file name unless the file really lives at the repo root; never a folder, never an absolute path, never a dot-env file: use env.example.txt for an env template), context (files it reads), contracts (contract files it uses), tests (the test files that prove this ticket: a build ticket lists the test files owned by its test ticket and depends on that test ticket; a test ticket lists its own), screens (only on UI tickets: the ids of the design screens the ticket renders, from the profile ui screens), dependsOn (keys of other tickets in this file),',
     'size (S or M; never larger: split instead), risk (low, medium or high), sensitive (true for payments, auth or customer data), steps (only for human tickets: 1 to 30 short imperative steps), skeleton (true only on the tickets of the thinnest vertical slice of the first stage: database, API, screen and test, the smallest path through the product; omit it elsewhere).',
     'Rules: every requirement is covered by at least one ticket; every ticket traces to a requirement; two tickets that can run at the same time never write the same file;',
     'put shared types or contracts first and make the tickets that use them depend on them; add a test ticket for each requirement group.',
@@ -275,7 +279,7 @@ async function projectLayout(root, scope, profile) {
   return lines.join('\n');
 }
 
-const ARRAY_FIELDS = ['scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'tests', 'dependsOn', 'steps'];
+const ARRAY_FIELDS = ['scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'tests', 'screens', 'dependsOn', 'steps'];
 const isStrings = v => Array.isArray(v) && v.every(x => typeof x === 'string');
 const strings = v => (isStrings(v) ? v : []);
 
@@ -307,7 +311,7 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
     const t = {
       id, title: String(raw.title ?? ''), type: raw.type, stage, epic: String(raw.epic ?? 'E-00'),
       scopeRefs: strings(raw.scopeRefs), acceptance: strings(raw.acceptance), files: strings(raw.files),
-      context: strings(raw.context), contracts: strings(raw.contracts), tests: strings(raw.tests), dependsOn: deps,
+      context: strings(raw.context), contracts: strings(raw.contracts), tests: strings(raw.tests), ...(strings(raw.screens).length ? { screens: strings(raw.screens) } : {}), dependsOn: deps,
       size: raw.size, risk: raw.risk, sensitive: raw.sensitive === true || isSensitiveText(scope, text),
       status: 'todo',
     };
@@ -430,6 +434,11 @@ async function cmdApprove(root, { rest, flags }) {
   if (ledger.scope?.hash !== hash) return out('the scope file changed after the split; record it with swarm change "reason" (or re-split)', 1);
   const { tree, lines } = treeReport(scope, ledger.tickets);
   if (!tree.ok) return out(`not approvable:\n${lines.join('\n')}`, 1);
+  const uiProfile = await readProfile(root);
+  const knownScreens = new Set((uiProfile?.ui?.screens ?? []).map(screen => screen.id));
+  const unknownScreens = ledger.tickets.flatMap(t => (t.screens ?? []).filter(id => !knownScreens.has(id)).map(id => `${t.id}: ${id}`));
+  if (unknownScreens.length) return out(`not approvable: tickets name screens that are not in the profile ui block: ${unknownScreens.slice(0, 8).join(', ')}`, 1);
+  const uiNoScreens = uiProfile?.ui ? ledger.tickets.filter(t => !(t.screens ?? []).length && (t.files ?? []).some(f => /\.(?:tsx|jsx|css|html|vue|svelte)$/.test(f))).length : 0;
   const summary = formatSummary(summarizeTree({ scope, tickets: ledger.tickets }));
   const policy = await readApprovalPolicy(root);
   if (needsHuman(policy, { kind: 'scope' }) && flags.yes !== true) return out(`${summary}\n\nThis needs your approval. Review it, then: swarm scope approve --yes`);
@@ -450,7 +459,7 @@ async function cmdApprove(root, { rest, flags }) {
   if (/\b(python|django|fastapi|flask)\b/i.test(`${scope.overview}`)) stacks.add('python');
   const ignored = stacks.size ? await ensureGitignore(root, [...stacks].filter(s => ['node', 'python'].includes(s))).catch(() => ({ changed: false })) : { changed: false };
   await appendLog(root, { event: 'approve', by, scopeHash: hash, ticketsHash: next.approved.ticketsHash });
-  return out([summary, '', 'approved. Build plan: docs/scope/build-plan.md', `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : ['warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)']), 'Next: swarm go --scope'].join('\n'));
+  return out([summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : ['warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)']), 'Next: swarm go --scope'].join('\n'));
 }
 
 // A failed test run sends the ticket back to ready once with the failure; the second failure blocks it. One locked ledger write.
@@ -477,6 +486,16 @@ async function applyRetry(root, id, note, runId) {
   return 'skipped';
 }
 
+// results.json is evidence: read it once, never through a symlink, and never trust a huge or unreadable one.
+async function readUiResultsGuarded(root) {
+  try {
+    const file = path.join(root, '.swarm', 'ui', 'results.json');
+    const stat = await fs.lstat(file);
+    if (!stat.isFile() || stat.size > 1_000_000) return null;
+    return JSON.parse(await fs.readFile(file, 'utf8'));
+  } catch { return null; }
+}
+
 async function cmdSync(root, { rest, flags }) {
   if (rest.length !== 1) return bad('scope sync needs a run id');
   const ledger = await readLedger(root);
@@ -496,6 +515,7 @@ async function cmdSync(root, { rest, flags }) {
       return out(`the profile has a verify block but the profile is invalid, so tests cannot be checked: ${errors[0] ?? 'unknown error'}`, 1);
     }
     const done = [], unverified = [], retried = [], blocked = [], notIntegrated = [];
+    let uiResults = null, uiTree = null;
     for (const t of ledger.tickets.filter(x => x.status === 'review' && finished.has(x.id) && (x.runId === undefined || x.runId === rest[0]))) {
       const failed = failedChecks.get(t.id);
       if (failed) {
@@ -510,6 +530,19 @@ async function cmdSync(root, { rest, flags }) {
       if (profile?.verify && ticketTests(t).length) {
         const evidence = doneEvidence(state, t.id);
         if (!evidence.ok) { unverified.push(`${t.id} (${evidence.reason})`); continue; }
+      }
+      // A UI ticket is done only when the rendered check passed for each of its screens after this run was integrated.
+      if ((t.screens ?? []).length) {
+        uiResults ??= await readUiResultsGuarded(root);
+        uiTree ??= await workTreeFingerprint(root);
+        // The verdict must be about exactly the code that is there now (tree), made after the integration, by a server this check started
+        // (when the profile has a start command), and not dated in the future.
+        const stale = t.screens.filter(id => {
+          const r = uiResults?.screens?.[id];
+          const at = Date.parse(r?.at);
+          return !(profile?.ui && r?.pass === true && Number.isFinite(at) && at >= Date.parse(state.integratedAt) && at <= Date.now() + 60000 && r.tree === uiTree && (r.serverStarted === true || !profile.ui.start));
+        });
+        if (stale.length) { unverified.push(`${t.id} (${profile?.ui ? `the rendered check has not passed for ${stale.join(', ')} on the current code since the integration: run swarm ui check` : 'it names screens but the profile has no ui block'})`); continue; }
       }
       await transition(root, t.id, 'done', { by: 'sync', note: `integrated ${rest[0]}` });
       done.push(t.id);

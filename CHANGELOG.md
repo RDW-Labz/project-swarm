@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.89.0
+
+- Lesson 27, a rendered check for UI tickets: `swarm ui check [SCREEN_ID...]` renders each configured design screen (the mockup file and the real page at `baseUrl + route`) with the project's own Playwright, takes screenshots, and compares them: fonts the mockup uses must be on the page, the page must not look unstyled, no horizontal overflow, the mockup's words and colors must appear, and a coarse screenshot comparison (ink structure plus colors) must reach `minScore`. Profile block `ui` (base url on this machine only, optional dev server command, screens); reports in `.swarm/ui/`; tickets may carry `screens` (their mockups go into the job context, a prompt line asks for wired styles) and `scope sync --integrated` marks them done only after the check passed since the integration. On the parts app's real pages it flags the font variables that were never loaded. A Claude Opus review (2 high, 7 medium, 9 low) was fixed before release: the verdict is bound to the exact code state, the start of the check's own server and the time; mockups are protected paths that only the jobs rendering them may read; the browser cannot navigate off this machine; PNG decompression bombs are refused; the check cleans up on Ctrl-C. See docs/ui-check.md and docs/plans/ui-check-design.md.
+
 ## 1.88.1
 
 - Code scanning cleanup: the nine old CodeQL alerts (tests that built `-e` scripts and preload modules by splicing values into code now pass them as arguments or environment variables) and two alerts from the last releases. One was a real bug: the production-word check in `ci` preview hooks split an argument on the letter `s` instead of on whitespace (`'[=:,\\s]+'` in a string), so `stage production` was not caught; now fixed with a test.
