@@ -14,11 +14,13 @@
         "total": 100000,
         "perFile": 60000
       },
-      "ignoreTests": [],
+      "ignoreTests": [
+        "tests/evals.test.mjs"
+      ],
       "timeoutMs": 900000,
       "id": "p15fix-evals",
       "type": "build",
-      "prompt": "Apply the eval items of section 7 of the design to the eval module: argv rules, no symlinks (listEvals, copyTree, output copy; lstat every path part, O_NOFOLLOW reads), skipping dot folders and non-folders in listEvals, scoreRun workspace checks and agents and models only from scored eval jobs, validateBaseline, compareBaseline with ok and reasons, redaction through redactText imported from the lesson schema module (use exactly that name; it exists), and the agent and lane refusal in evalManifest. Keep the file under 24000 characters.\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design section 7 does not change. Keep the code style of the file. Tests use node:test and node:assert/strict; build any secret-looking test value at run time from pieces; compare URLs by parsed hostname, never with includes.",
+      "prompt": "Apply the eval items of section 7 of the design to the eval module: argv rules, no symlinks (listEvals, copyTree, output copy; lstat every path part, O_NOFOLLOW reads), skipping dot folders and non-folders in listEvals, scoreRun workspace checks and agents and models only from scored eval jobs, validateBaseline, compareBaseline with ok and reasons, redaction through redactText imported from the lesson schema module (use exactly that name; it exists), and the agent and lane refusal in evalManifest. Keep the file under 24000 characters.\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design section 7 does not change. Keep the code style of the file. Tests use node:test and node:assert/strict; build any secret-looking test value at run time from pieces; compare URLs by parsed hostname, never with includes.\nignoreTests: tests/evals.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.",
       "context": [
         "docs/plans/phase15-lessons-design.md",
         "tools/evals.mjs",
@@ -60,11 +62,15 @@
         "total": 100000,
         "perFile": 60000
       },
-      "ignoreTests": [],
+      "ignoreTests": [
+        "tests/lesson-backfill.test.mjs",
+        "tests/lesson-schema.test.mjs",
+        "tests/lesson-store.test.mjs"
+      ],
       "timeoutMs": 900000,
       "id": "p15fix-schema",
       "type": "build",
-      "prompt": "Apply the lesson schema items of section 7 of the design to the schema module.\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design section 7 does not change. Keep the code style of the file. Tests use node:test and node:assert/strict; build any secret-looking test value at run time from pieces; compare URLs by parsed hostname, never with includes.",
+      "prompt": "Apply the lesson schema items of section 7 of the design to the schema module.\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design section 7 does not change. Keep the code style of the file. Tests use node:test and node:assert/strict; build any secret-looking test value at run time from pieces; compare URLs by parsed hostname, never with includes.\nignoreTests: tests/lesson-backfill.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/lesson-schema.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/lesson-store.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.",
       "context": [
         "docs/plans/phase15-lessons-design.md",
         "tools/lesson-schema.mjs"
@@ -129,11 +135,14 @@
         "total": 100000,
         "perFile": 60000
       },
-      "ignoreTests": [],
+      "ignoreTests": [
+        "tests/lesson-backfill.test.mjs",
+        "tests/lesson-mine.test.mjs"
+      ],
       "timeoutMs": 900000,
       "id": "p15fix-store",
       "type": "build",
-      "prompt": "Apply the store items of section 7 of the design to the store module and update its test file (add tests for a symlink swapped in, an oversize file, id and project mismatches).\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design section 7 does not change. Keep the code style of the file. Tests use node:test and node:assert/strict; build any secret-looking test value at run time from pieces; compare URLs by parsed hostname, never with includes.",
+      "prompt": "Apply the store items of section 7 of the design to the store module and update its test file (add tests for a symlink swapped in, an oversize file, id and project mismatches).\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design section 7 does not change. Keep the code style of the file. Tests use node:test and node:assert/strict; build any secret-looking test value at run time from pieces; compare URLs by parsed hostname, never with includes.\nignoreTests: tests/lesson-backfill.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/lesson-mine.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.",
       "context": [
         "docs/plans/phase15-lessons-design.md",
         "tools/lesson-store.mjs",

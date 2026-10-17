@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.85.0
+
+- Phase 15, affected-only tests and adaptive batches: a manifest check may carry `affectedArgv` (with an `{affected}` item) and `fullEvery`; in queue integration each batch runs only the tests the repo map says its files affect, with a full run every `fullEvery`-th batch, on the last batch and whenever anything is unknown (no map, non-code or config file, too wide). the --adaptive flag of queue integration grows batches 10 to 25 to 50 after passing batches and shrinks after a failed one; bisect stays. A Claude Opus review (5 high, 6 medium, 2 low) was fixed before release: bisected halves always run the full checks, a final full run covers affected-only batches when the last batch cannot, a stale map is ignored, paths can never become flags, test helpers, fixtures, non-code files, deleted files and truncated import graphs force a full run. See docs/merge-queue.md and docs/plans/phase15-lessons-design.md sections 9 and 9b.
+
 ## 1.84.0
 
 - Phase 15, lessons mine: `swarm lessons mine [--min N] [--include-guarded] [--write] [--json]` clusters lessons whose guard is still only proposed and writes one proposal per cluster (scope rule, lint, test template, contract test, router rule, review item or prompt rule) under `proposals/`, naming the lessons it comes from; deterministic, never overwrites, never merges. First proposal: `proposals/ci.md`. Design: docs/plans/phase15-lessons-design.md section 8.

@@ -18,7 +18,7 @@ export const COMMANDS = [
   command('wait', 'Wait for a run to finish.', 'run', '--timeout'),
   command('inspect', 'Inspect run details.', 'run', '--results'),
   command('rollup', 'Summarize run results.', 'run', '--text --top'),
-  command('integrate', 'Integrate completed job outputs.', 'run', '--queue --batch-size --max-requeues --jobs --no-checks --require-checks --accept-failed-checks --mutants --mutants-file --mutant-check --no-flake-check --accept-blocked --salvage --accept-deviation --accept-result-shape'),
+  command('integrate', 'Integrate completed job outputs.', 'run', '--queue --adaptive --batch-size --max-requeues --jobs --no-checks --require-checks --accept-failed-checks --mutants --mutants-file --mutant-check --no-flake-check --accept-blocked --salvage --accept-deviation --accept-result-shape'),
   command('mutants', 'Run mutation checks.', 'none', '--mutants-file --mutant-check --dry-run'),
   command('env', 'Show the swarm environment.', 'none', '--print'),
   command('redcheck', 'Check a failing test against a baseline.', 'run', '--base --commit --test'),

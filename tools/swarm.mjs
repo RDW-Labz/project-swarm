@@ -23,6 +23,8 @@ import { resolveLanes, LaneScheduler, classifyProviderOutcome, lanesDir } from '
 import { resolveHosts, enabledHosts, createHostPool, defaultHostTransport, remoteEnv, checkPulled, isSecretPath } from './executors.mjs';
 import { initProject, checkProject, refreshRepoMap } from './init.mjs';
 import { summarizeMap, mapIsFresh, readRepoMap } from './repo-map.mjs';
+import { selectAffectedTests, expandAffectedArgv } from './affected.mjs';
+import { createBatchController } from './adaptive-batch.mjs';
 import { protectedViolations, protectedPathHit, formatBaseCheck, validateProfile } from './init-profile.mjs';
 import { resolveCliHosts, sshInvocation, sshEnv, remoteExec, cliHostFailure } from './cli-host.mjs';
 import { isHumanJob, validateHumanJob, liftHumanJobs, addGroup, readStore as readHumanStore, humanGroupReady, updateGroup as updateHumanGroup } from './human-jobs.mjs';
@@ -1240,13 +1242,16 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     if (!Array.isArray(manifest.checks) || manifest.checks.length > 10) fail('checks must be an array of at most 10 checks');
     for (const check of manifest.checks) {
       if (!check || typeof check !== 'object') fail('Invalid check');
-      for (const key of Object.keys(check)) if (!['name', 'argv', 'timeoutMs', 'repeat', 'flakeRuns', 'integrateOnly'].includes(key)) fail(`Unknown check field: ${key}`);
+      for (const key of Object.keys(check)) if (!['name', 'argv', 'timeoutMs', 'repeat', 'flakeRuns', 'integrateOnly', 'affectedArgv', 'fullEvery'].includes(key)) fail(`Unknown check field: ${key}`);
       if (typeof check.name !== 'string' || !CHECK_NAME.test(check.name)) fail(`Invalid check name: ${check?.name}`);
       if (!Array.isArray(check.argv) || !check.argv.length) fail(`Check argv must be a non-empty array: ${check.name}`);
       if (check.argv.some(item => typeof item !== 'string')) fail(`Check argv items must be strings: ${check.name}`);
       if (check.timeoutMs !== undefined && (!Number.isInteger(check.timeoutMs) || check.timeoutMs < 1000 || check.timeoutMs > 1800000)) fail(`Check timeoutMs must be 1000–1800000: ${check.name}`);
       if (check.flakeRuns !== undefined && (!Number.isSafeInteger(check.flakeRuns) || check.flakeRuns < 1)) fail(`Check flakeRuns must be a positive integer: ${check.name}`);
       if (check.repeat !== undefined && (!Number.isInteger(check.repeat) || check.repeat < 1 || check.repeat > 20)) fail(`Check repeat must be 1–20: ${check.name}`);
+      // Phase 15: a check may run only the tests a batch affects (queue mode); the normal argv still runs every fullEvery-th batch and on the last one.
+      if (check.affectedArgv !== undefined && (!Array.isArray(check.affectedArgv) || check.affectedArgv.some(item => typeof item !== 'string') || check.affectedArgv.filter(item => item === '{affected}').length !== 1 || check.affectedArgv[0] === '{affected}')) fail(`Check affectedArgv must be an array of strings with exactly one {affected} item: ${check.name}`);
+      if (check.fullEvery !== undefined && (check.affectedArgv === undefined || !Number.isInteger(check.fullEvery) || check.fullEvery < 1 || check.fullEvery > 100)) fail(`Check fullEvery must be 1–100 and needs affectedArgv: ${check.name}`);
       // Field lesson #238: a check that only ever runs outside the sandbox (needs network the
       // shell worker never gets) is skipped there and reported skipped-integrate-only, never a fail.
       if (check.integrateOnly !== undefined && typeof check.integrateOnly !== 'boolean') fail(`Check integrateOnly must be true or false: ${check.name}`);
@@ -4051,7 +4056,7 @@ async function originForCheck(root, baseCommit, check, integratedFiles, newFiles
     await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
   }
 }
-async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { baseCommit, noFlakeCheck = false, portBase, preChecks = [], extraEnv = {}, env: parentEnv = process.env, gitImpl = git } = {}) {
+async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { baseCommit, noFlakeCheck = false, portBase, preChecks = [], extraEnv = {}, env: parentEnv = process.env, gitImpl = git, affected = null } = {}) {
   // Field lesson #160: the root's .swarm/env.json (extraEnv) reaches every check, never PATH/HOME.
   const env = portBase != null || Object.keys(extraEnv).length ? { ...parentEnv, ...extraEnv, ...(portBase != null ? { SWARM_PORT_BASE: String(portBase) } : {}) } : parentEnv;
   const results = [];
@@ -4068,7 +4073,16 @@ async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { b
     return preChecksRetryPromise;
   };
   for (const check of checks) {
-    const { argv, empty } = expandCheckArgv(check.argv, integratedFiles, newFiles, root);
+    // Affected-only: this check's own affectedArgv runs when the batch's selection is `affected` and the check is not due for a full run.
+    let affectedMode = null;
+    let sourceArgv = check.argv;
+    if (check.affectedArgv && affected && affected.selection.mode === 'affected' && !affected.useFull(check)) {
+      const expanded = expandAffectedArgv(check.affectedArgv, affected.selection);
+      if (expanded.empty) { results.push({ name: check.name, status: 'skipped', exitCode: null, durationMs: 0, tail: '', runs: 0, mode: 'affected', affectedTests: 0 }); continue; }
+      sourceArgv = expanded.argv;
+      affectedMode = { tests: affected.selection.tests.length };
+    }
+    const { argv, empty } = expandCheckArgv(sourceArgv, integratedFiles, newFiles, root);
     if (empty) { results.push({ name: check.name, status: 'skipped', exitCode: null, durationMs: 0, tail: '', runs: 0 }); continue; }
     // Field lesson #175: a bare check argv[0] (e.g. "uv") is not reliably on PATH when it lives
     // only in the swarm's own toolchains dir; resolved here the same way the uv lock check already
@@ -4105,6 +4119,7 @@ async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { b
       swarmLineCount += result.swarmLineCount ?? 0;
     }
     if (swarmLineCount) result.swarmLineCount = swarmLineCount;
+    if (affectedMode) { result.mode = 'affected'; result.affectedTests = affectedMode.tests; }
     // Field lesson #239: the orchestrator's own run outside the sandbox is the truth — a check
     // whose output shows it never really ran (macOS denying a nested sandbox_apply call) is tagged
     // sandbox-only rather than folded into a real failure count.
@@ -4439,8 +4454,8 @@ const securityExec = async (argv, { cwd, timeoutMs = 120000, env } = {}) => {
   catch (error) { if (error.code === 'ENOENT') throw error; return { exitCode: typeof error.code === 'number' ? error.code : 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }; }
 };
 
-async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, conflicts, skipped, noChecks, noFlakeCheck, spawnImpl, warnings, releaseIntegrationLock, securityGate = {} }) {
-  const queue = state.mergeQueue = { state: 'running', batchSize, batches: [], integrated: [], conflicts, checkFailed: [], skipped, securityBlocked: [], securityTickets: [], securityNotes: [] };
+async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, adaptive = false, conflicts, skipped, noChecks, noFlakeCheck, spawnImpl, warnings, releaseIntegrationLock, securityGate = {} }) {
+  const queue = state.mergeQueue = { state: 'running', batchSize, ...(adaptive ? { adaptive: { sizes: [], steps: { up: 0, down: 0 } } } : {}), batches: [], integrated: [], conflicts, checkFailed: [], skipped, securityBlocked: [], securityTickets: [], securityNotes: [] };
   const securityProfile = await projectProfile(root);
   const securityPolicy = securityGate.policy ?? securityProfile?.security;
   const securitySensitive = securityProfile?.sensitive !== false;
@@ -4462,7 +4477,17 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, co
     if (broken) { await persist(); fail(`checks-not-runnable: preCheck ${broken.name} ${broken.status}`); }
     if (!manifest.preChecks?.length && plans.some(plan => plan.writes.some(change => ENV_RESYNC_TRIGGER_NAMES.has(path.basename(change.file))))) warnings.push('lockfile changed, env not synced');
   }
-  const applyBatch = async batch => {
+  // Phase 15: affected-only tests. Needs the repo map and at least one check with affectedArgv; any doubt runs the normal check.
+  // The map is used only when it was built at the current HEAD; otherwise every batch runs the normal checks.
+  const wantsAffected = (manifest.checks ?? []).some(check => check.affectedArgv);
+  const candidateMap = wantsAffected ? await readRepoMap(root) : null;
+  const repoMap = candidateMap && mapIsFresh(candidateMap, await git(root, ['rev-parse', 'HEAD']).then(value => value.trim(), () => null)) ? candidateMap : null;
+  if (wantsAffected && !repoMap) warnings.push('affected-map-missing-or-stale: every batch runs the full checks');
+  const sinceFull = new Map();
+  const touched = new Set();           // files integrated earlier in this pass: the map does not know their new imports
+  let affectedSinceFull = false;       // true when the tree has only had affected-only checks since the last full run
+  const affectedBatchModes = new WeakMap();
+  const applyBatch = async (batch, { last = false, forceFull = false } = {}) => {
     const ready = [];
     for (const plan of batch) {
       const files = [];
@@ -4502,7 +4527,17 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, co
       gate = await runSecurityGate({ changes: changes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: securityPolicy, exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: securitySensitive, fingerprintKey: securityKey, cache: securityCache });
       // The gate runs BEFORE the project checks: a blocked batch never gets to execute its own code (tests, installs, postinstall scripts).
       if (gate.ok) {
-        result = noChecks ? { checks: [], checksPassed: true } : await runChecks(root, manifest.checks ?? [], changes.map(change => change.file), changes.filter(change => change.previous === null).map(change => change.file), spawnImpl, { baseCommit: state.baseCommit, noFlakeCheck, portBase, extraEnv: swarmEnv });
+        const changedFiles = changes.map(change => change.file);
+        let selection = repoMap && !last && !forceFull ? selectAffectedTests(repoMap, changedFiles, { deleted: changes.filter(change => change.bytes === null).map(change => change.file) }) : null;
+        // A file an earlier batch of this pass changed has stale map data: run everything. Tests those batches added or changed always run again.
+        if (selection?.mode === 'affected') {
+          if (changedFiles.some(file => touched.has(file))) selection = { mode: 'full', tests: [], reasons: ['touched-earlier'] };
+          else selection = { ...selection, tests: [...new Set([...selection.tests, ...[...touched].filter(file => /\.(?:test|spec)\.|_test\.|(?:^|\/)test_[^/]*\.py$/.test(file))])].sort() };
+        }
+        const usedAffected = { value: false };
+        const affected = selection ? { selection, useFull: check => { const n = (sinceFull.get(check.name) ?? 0) + 1; if (n >= (check.fullEvery ?? 5)) { sinceFull.set(check.name, 0); return true; } sinceFull.set(check.name, n); return false; } } : null;
+        result = noChecks ? { checks: [], checksPassed: true } : await runChecks(root, manifest.checks ?? [], changedFiles, changes.filter(change => change.previous === null).map(change => change.file), spawnImpl, { baseCommit: state.baseCommit, noFlakeCheck, portBase, extraEnv: swarmEnv, affected });
+        affectedBatchModes.set(batch, result.checks.some(check => check.mode === 'affected'));
       } else {
         result = { checks: [{ name: 'security-gate', status: 'failed', blocks: gate.blocks }], checksPassed: false };
       }
@@ -4523,6 +4558,9 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, co
     } else {
       if (gate?.tickets?.length) queue.securityTickets.push(...gate.tickets.map(ticket => ({ ...ticket, jobs: batch.map(plan => plan.job) })));
       queue.integrated.push(...batch.map(plan => plan.job));
+      for (const change of changes) touched.add(change.file);
+      if (affectedBatchModes.get(batch) === true) affectedSinceFull = true;
+      else if (!noChecks && (manifest.checks ?? []).length) affectedSinceFull = false;
       state.integratedFiles.push(...changes.map(change => change.file));
       state.integratedNewFiles.push(...changes.filter(change => change.previous === null).map(change => change.file));
     }
@@ -4530,12 +4568,36 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, co
     await persist();
     if (failed && batch.length > 1) {
       const middle = Math.ceil(batch.length / 2);
-      await applyBatch(batch.slice(0, middle));
-      await applyBatch(batch.slice(middle));
+      // Halves of a failed batch always run the normal checks: a failure only the full run caught must not be narrowed away.
+      await applyBatch(batch.slice(0, middle), { last, forceFull: true });
+      await applyBatch(batch.slice(middle), { last, forceFull: true });
     }
+    return !failed;
   };
-  for (let index = 0; index < plans.length; index += batchSize) await applyBatch(plans.slice(index, index + batchSize));
-  queue.state = 'done';
+  // --adaptive: the batch size grows after passing batches and shrinks after a failed one; bisect stays the safety net.
+  const controller = adaptive ? createBatchController({ start: batchSize }) : null;
+  for (let index = 0; index < plans.length;) {
+    const size = controller ? controller.size : batchSize;
+    const slice = plans.slice(index, index + size);
+    index += slice.length;
+    const passed = await applyBatch(slice, { last: index >= plans.length });
+    if (controller && passed !== undefined) {
+      controller.record(passed);
+      queue.adaptive.sizes = [...controller.history];
+      queue.adaptive.steps = controller.state().steps;
+    }
+  }
+  // Affected-only batches are covered by one full run of the checks when no passing full run came after them.
+  if (affectedSinceFull && !noChecks && state.integratedFiles.length) {
+    const finalResult = await runChecks(root, manifest.checks ?? [], state.integratedFiles, state.integratedNewFiles, spawnImpl, { baseCommit: state.baseCommit, noFlakeCheck, portBase, extraEnv: swarmEnv });
+    queue.finalCheck = { passed: finalResult.checksPassed !== false, checks: finalResult.checks.map(check => ({ name: check.name, status: check.status })) };
+    warnings.push(...swarmCheckWarnings(finalResult.checks));
+    if (finalResult.checksPassed === false) {
+      queue.checkFailed.push({ job: '(final full check)', checks: finalResult.checks.filter(check => !['passed', 'skipped'].includes(check.status)).map(check => check.name) });
+      queue.state = 'final-check-failed';
+    }
+  }
+  if (queue.state !== 'final-check-failed') queue.state = 'done';
   state.integratedAt = new Date().toISOString();
   state.integrationStatus = 'queued';
   await persist();
@@ -4708,7 +4770,7 @@ export async function integrateRun(root, id, options = {}) {
 }
 
 async function integrateRunLocked(root, id, options = {}) {
-  const { releaseIntegrationLock, securityGate = {}, noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, salvage = false, acceptDeviation = false, acceptResultShape = false, acceptDropped = false, salvageDropped = false, jobs = undefined, privateNamesFile = undefined, queue = false, batchSize = 10 } = options;
+  const { releaseIntegrationLock, securityGate = {}, noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, salvage = false, acceptDeviation = false, acceptResultShape = false, acceptDropped = false, salvageDropped = false, jobs = undefined, privateNamesFile = undefined, queue = false, batchSize = 10, adaptive = false } = options;
   if (queue) validateQueueOptions({ batchSize, jobs, salvage, mutants: mutants || mutantsFile !== undefined || mutantCheck !== undefined });
   root = await fs.realpath(root);
   // Field lesson #202: a job's own timed-out worker declares nothing missing — it simply never got
@@ -4981,7 +5043,7 @@ async function integrateRunLocked(root, id, options = {}) {
     if (queue) {
       if (acceptedDeviations.length) state.acceptedDeviations = acceptedDeviations;
       if (resultShapeWarnings.length) state.resultShapeWarnings = resultShapeWarnings;
-      const result = await applyQueuePlans(root, id, state, manifest, queuePlans, { batchSize, conflicts: queueConflicts, skipped: queueSkipped, noChecks, noFlakeCheck, spawnImpl, releaseIntegrationLock, securityGate, warnings: [...designWarnings, ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)] });
+      const result = await applyQueuePlans(root, id, state, manifest, queuePlans, { batchSize, adaptive, conflicts: queueConflicts, skipped: queueSkipped, noChecks, noFlakeCheck, spawnImpl, releaseIntegrationLock, securityGate, warnings: [...designWarnings, ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)] });
       return { ...result, ...(children.length ? { children } : {}) };
     }
     // Plain integrate has no rollback, so the security gate (same policy, same checks as the queue's) runs on the planned writes BEFORE the first one:
@@ -7468,7 +7530,7 @@ async function mainInner() {
   // `swarm "goal sentence"` is shorthand for `swarm go "goal sentence"`. Only one argument with
   // whitespace counts, so a mistyped one-word command never starts a paid run.
   if(!args[0].startsWith('-')&&/\s/.test(args[0])&&isGoalArgument(args[0]))args.unshift('go');
-  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | change "REASON" [FILE] [--yes] | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | change "REASON" [FILE] [--yes] | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
@@ -7886,13 +7948,14 @@ async function mainInner() {
   }
   // integrate's checks/mutants flags are read-only selection of whether/how checks run; strip
   // them here so the generic argument-count check below still fails on anything else.
-  let noChecks=false,requireChecks=false,acceptFailedChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag,acceptBlocked=false,salvage=false,acceptDeviation=false,acceptResultShape=false,acceptDropped=false,salvageDropped=false,integrateJobs,queue=false,batchSize=10,maxRequeues=2;
+  let noChecks=false,requireChecks=false,acceptFailedChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag,acceptBlocked=false,salvage=false,acceptDeviation=false,acceptResultShape=false,acceptDropped=false,salvageDropped=false,integrateJobs,queue=false,adaptive=false,batchSize=10,maxRequeues=2;
   if(command==='integrate'){
     const flags=[...(argument === undefined ? [] : [argument]),...rest.splice(0,rest.length)];
     argument=undefined;
     for(let index=0;index<flags.length;index++){
       const flag=flags[index];
       if(flag==='--queue'){queue=true;continue;}
+      if(flag==='--adaptive'){adaptive=true;continue;}
       if(flag==='--batch-size'){batchSize=Number(flags[++index]);continue;}
       if(flag==='--max-requeues'){maxRequeues=Number(flags[++index]);continue;}
       if(flag==='--jobs'||flag.startsWith('--jobs=')){
@@ -7923,7 +7986,7 @@ async function mainInner() {
       rest.push(flag);
     }
     argument=rest.shift();
-    if(!queue&&flags.some(flag=>['--batch-size','--max-requeues'].includes(flag)))fail('Invalid arguments; use --help');
+    if(!queue&&flags.some(flag=>['--batch-size','--max-requeues','--adaptive'].includes(flag)))fail('Invalid arguments; use --help');
     if(queue)validateQueueOptions({batchSize,maxRequeues,jobs:integrateJobs,salvage,mutants:useMutants||mutantsFileFlag!==undefined||mutantCheckFlag!==undefined});
     if(acceptDropped&&salvageDropped)fail('--accept-dropped and --salvage-dropped cannot be combined');
     if(noChecks&&requireChecks)fail('--no-checks and --require-checks cannot be combined');
@@ -8220,7 +8283,7 @@ async function mainInner() {
       ship: (goRoot,id,goShipFlags)=>shipRun(goRoot,id,goShipFlags),
     });
   }
-  else result=await (queue?integrateQueue:integrateRun)(root,argument,{batchSize,maxRequeues,noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
+  else result=await (queue?integrateQueue:integrateRun)(root,argument,{batchSize,adaptive,maxRequeues,noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
   // Field lesson #203: a failed check at integrate used to be a quiet field (`status: "integrated"`,
   // exit 0) unless the coordinator remembered --require-checks; refusing (or, with the escape
   // hatch, at least saying so loudly) is now the default. --require-checks stays an accepted no-op
