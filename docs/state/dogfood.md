@@ -224,3 +224,9 @@ Batch B/C Opus review (claude opus, about $0.5): 14 findings. B fixed: tool-conf
 ### Batch C (1.96.0): lesson 34 leftovers
 
 Hand-written (small additions in tools/wiring.mjs). Evals 38.1 and 38.2 in tests/batch-c-eval.test.mjs. No release tag until the owner says the parts app is between stages.
+
+### Parts-app S6 report (1.97.0)
+
+Hand fixes S4 14, S5 8, S6 9. Hand-written core wiring (sync done-gate, ticket outcome, help guard, release command). Evals 39.1 and 38.1 to 38.5 in tests/lesson-38-eval.test.mjs. Opus review of the done-gate change before merge. Owner: no merge until S6 is done.
+
+S6 Opus review (about $0.5): 12 findings. Fixed: a run-level check after a passing batch and timeout/crash statuses now block; the owner's way out for a base failure (--accept-failed-check NAME --yes, logged); output-already-in-tree is hardened (workspace under .swarm/workspaces, no symlinks, not the project) and reported as not re-verified; the not-own-failure patterns no longer match stack line numbers or test text and are judged on the first error line; the infra counter is incremented under the lock and reset on escalation; the help guard ignores -h as a flag value or after --; release refuses todo on an unapproved ledger, warns on review, exits 1 on any refusal. Not changed: dropped dependsOn keys of other stages (a stage-local worker cannot name them); a one-job batch whose check also fails on the base is still retried (no base comparison yet: use --accept-failed-check).

@@ -170,3 +170,22 @@ export function doneEvidence(state, jobId) {
   if (c?.status === 'failed') return { ok: false, failed: true, shared: true, check: 'tests', tail: String(c.tail ?? ''), reason: 'tests check is failed' };
   return { ok: false, reason: c ? `tests check is ${c.status}` : 'no tests check ran' };
 }
+
+// Every check that failed on the batch that integrated this job, or on the run (a plain integrate, or a check recorded for the whole run),
+// whatever its name (tests, typecheck, lint, an env check, a log lint). A ticket in a run with a failed check is not done, even with no tests of its own.
+const BAD_STATUS = new Set(['failed', 'error', 'timeout', 'cancelled', 'crashed']);
+export function failedRunChecks(state, jobId, { accepted = [] } = {}) {
+  const skip = new Set(accepted.map(String));
+  const holding = (Array.isArray(state?.mergeQueue?.batches) ? state.mergeQueue.batches : []).filter((b) => (b.jobs ?? b.jobIds ?? []).some((j) => idOf(j) === jobId));
+  const integratedId = state?.mergeQueue?.integratedIn?.[jobId];
+  const batch = integratedId !== undefined ? holding.find((b) => b.id === integratedId) : (holding.find((b) => b.checks === 'passed' && b.security !== 'blocked') ?? holding.at(-1));
+  const bad = (list) => (Array.isArray(list) ? list : []).filter((c) => c && BAD_STATUS.has(c.status) && !skip.has(String(c.name)));
+  const fromBatch = batch ? bad(batch.checkResults) : [];
+  const batchFailed = batch && fromBatch.length === 0 && BAD_STATUS.has(batch.checks) && !skip.has('checks');
+  const fromRun = bad(state?.checks);
+  if (!fromBatch.length && !batchFailed && !fromRun.length) return null;
+  const first = fromBatch[0] ?? fromRun[0];
+  const names = [...new Set([...fromBatch.map((c) => String(c.name)), ...(batchFailed ? ['checks'] : []), ...fromRun.map((c) => String(c.name))])];
+  const single = Boolean(batch) && (batch.jobs ?? batch.jobIds ?? []).length === 1 && fromRun.length === 0;
+  return { names, tail: String(first?.tail ?? ''), single, shared: !batch || (fromBatch.length === 0 && !batchFailed) };
+}
