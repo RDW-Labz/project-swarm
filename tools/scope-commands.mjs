@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto';
 import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText, isSensitiveText } from './scope.mjs';
 import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, STATUSES } from './tickets.mjs';
 import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
-import { missingToolConfigs, toolConfigLines, projectFileList, existsIn } from './tool-config.mjs';
+import { missingToolConfigs, toolConfigLines, projectFileList, existsIn, e2eSpecWarnings } from './tool-config.mjs';
 import { isSecretLooking } from './ignored-artifacts.mjs';
 import { diffScopes, impactAnalysis, nextChangeOrderId, applyChangeOrder } from './change-orders.mjs';
 import { day0Checklist, checklistToTickets } from './day0.mjs';
@@ -41,7 +41,7 @@ export const SCOPE_USAGE = [
   '       swarm scope sync RUN [--integrated]',
   '       swarm scope contracts OPENAPI.json',
   '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high] [--set STATUS] [--note TEXT] [--json]',
-  '       swarm tickets ID --files a,b [--context c,d] [--tests t] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
+  '       swarm tickets ID --files a,b [--take-from TICKET] [--deletes x,y] [--context c,d] [--tests t] [--acceptance "one || two"] [--add-acceptance TEXT] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
   '       swarm tickets ID... --release [--note TEXT]     (clean release of held tickets: blocked, todo or review go back to ready with attempts, escalation and retry notes cleared)',
   '       swarm tickets --mark-deps [ID...] [--yes]     (one time, older ledgers: mark blocked tickets with no reason as dependency-blocked so they unlock)',
   '       swarm change "reason" [FILE] [--yes]',
@@ -55,7 +55,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check']);
+const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--deletes', '--acceptance', '--add-acceptance', '--take-from']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const out = (text, exitCode = 0) => ({ stdout: text.endsWith('\n') ? text : `${text}\n`, exitCode });
@@ -314,7 +314,7 @@ function splitPrompt(scope, stage, only, layout = '', wire = null, existing = nu
     'Each ticket object has these fields:',
     'key (short unique name in this file), title (under 140 characters), type (build, test, docs, migration, design, contract or human),',
     'epic (a feature group name), scopeRefs (requirement ids, at least one for build, test, docs, migration), acceptance (1 to 5 observable checks; required for build, test, migration),',
-    'files (the files this ticket writes: repo-relative paths WITH their folders, for example src/app/page.tsx or supabase/migrations/0001_init.sql, never a bare file name unless the file really lives at the repo root; never a folder, never an absolute path, never a dot-env file: use env.example.txt for an env template), context (files it reads), contracts (contract files it uses), tests (the test files that prove this ticket: a build ticket lists the test files owned by its test ticket and depends on that test ticket; a test ticket lists its own), screens (only on UI tickets: the ids of the design screens the ticket renders, from the profile ui screens), dependsOn (keys of other tickets in this file),',
+    'files (the files this ticket writes: repo-relative paths WITH their folders, for example src/app/page.tsx or supabase/migrations/0001_init.sql, never a bare file name unless the file really lives at the repo root; never a folder, never an absolute path, never a dot-env file: use env.example.txt for an env template), deletes (existing files this ticket must delete, each named exactly; omit when none), context (files it reads), contracts (contract files it uses), tests (the test files that prove this ticket: a build ticket lists the test files owned by its test ticket and depends on that test ticket; a test ticket lists its own), screens (only on UI tickets: the ids of the design screens the ticket renders, from the profile ui screens), dependsOn (keys of other tickets in this file),',
     'size (S or M; never larger: split instead), risk (low, medium or high), sensitive (true for payments, auth or customer data), steps (only for human tickets: 1 to 30 short imperative steps), skeleton (true only on the tickets of the thinnest vertical slice of the first stage: database, API, screen and test, the smallest path through the product; omit it elsewhere).',
     'Rules: every requirement is covered by at least one ticket; every ticket traces to a requirement; two tickets that can run at the same time never write the same file;',
     'put shared types or contracts first and make the tickets that use them depend on them; add a test ticket for each requirement group.',
@@ -405,7 +405,7 @@ async function changeContext(root, tickets) {
   return { files, tickets: list };
 }
 
-const ARRAY_FIELDS = ['scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'tests', 'screens', 'dependsOn', 'steps'];
+const ARRAY_FIELDS = ['scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'tests', 'screens', 'dependsOn', 'steps', 'deletes'];
 const isStrings = v => Array.isArray(v) && v.every(x => typeof x === 'string');
 const strings = v => (isStrings(v) ? v : []);
 
@@ -447,6 +447,7 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
     if (raw.hard === true) t.hard = true;
     if (raw.skeleton === true) t.skeleton = true;
     if (raw.integration === true) t.integration = true;
+    if (strings(raw.deletes).length) t.deletes = strings(raw.deletes);
     const v = validateTicket(t);
     if (!v.ok) errors.push(`${id}: ${v.errors[0]}`);
     // Format rules the dogfood run needed (contract format, real paths, env template, one package manager).
@@ -503,7 +504,36 @@ function treeReport(scope, tickets) {
 
 // Warnings for acceptance checks that run a tool nobody configured (lesson 16).
 async function toolConfigWarnings(root, tickets) {
-  return toolConfigLines(missingToolConfigs(tickets, await projectFileList(root, execFileAsync), existsIn(root)));
+  const lines = toolConfigLines(missingToolConfigs(tickets, await projectFileList(root, execFileAsync), existsIn(root)));
+  // Lesson 39: the e2e specs that tickets name must be run by the project's e2e command (the nearest package.json and the config it names).
+  const cache = new Map();
+  const near = file => {
+    let dir = path.posix.dirname(file);
+    const key = dir;
+    if (cache.has(key)) return cache.get(key);
+    let found = null;
+    for (;;) {
+      try { if (existsSync(path.join(root, dir, 'package.json'))) { found = dir; break; } } catch { /* keep walking */ }
+      if (dir === '.' || dir === '') break;
+      dir = path.posix.dirname(dir);
+    }
+    cache.set(key, found);
+    return found;
+  };
+  const infoFor = new Map();
+  const scriptsFor = file => {
+    const dir = near(file) ?? '.';
+    if (infoFor.has(dir)) return infoFor.get(dir);
+    let scripts = {}, configText = '';
+    try { scripts = JSON.parse(readFileSync(path.join(root, dir, 'package.json'), 'utf8')).scripts ?? {}; } catch { /* no package.json */ }
+    const names = ['playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs', 'cypress.config.ts', 'cypress.config.js'];
+    for (const value of Object.values(scripts)) for (const m of String(value).matchAll(/--config[ =]+(\S+)/g)) names.push(m[1].replace(/^['"]|['"]$/g, ''));
+    for (const name of names) { try { configText += `${readFileSync(path.join(root, dir, name), 'utf8')}\n`; } catch { /* absent */ } }
+    const value = { scripts, configText };
+    infoFor.set(dir, value);
+    return value;
+  };
+  return [...lines, ...e2eSpecWarnings(tickets, { scriptsFor })];
 }
 
 async function cmdTemplate(root, { flags }) {
@@ -1012,40 +1042,74 @@ async function markDepsCommand(root, ledger, ids, flags) {
 
 // Lesson 17: the file lists of a ticket can be changed by a command. Your --yes is the approval: an approved ledger is sealed again over the new lists.
 async function editTicketFiles(root, ledger, rest, flags) {
-  if (rest.length !== 1) return bad('tickets --files/--context/--tests needs one ticket id');
+  if (rest.length !== 1) return bad('tickets --files/--context/--tests/--deletes/--acceptance needs one ticket id');
   const list = v => [...new Set(String(v).split(',').map(x => x.trim()).filter(Boolean))];
+  const lines = v => String(v).split(/\n| ;; /).map(x => x.trim()).filter(Boolean);
   const changes = {};
-  for (const key of ['files', 'context', 'tests']) if (flags[key] !== undefined) changes[key] = list(flags[key]);
-  try { return await withLock(root, async () => {
-    const fresh = await readLedger(root);
-    const ticket = fresh.tickets.find(x => x.id === rest[0]);
-    if (!ticket) return out(`no ticket ${rest[0]}`, 1);
-    if (!['todo', 'ready', 'blocked'].includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}; only a todo, ready or blocked ticket can change its files (send a review ticket back with swarm tickets ${ticket.id} --set todo first)`, 1);
-    const next = { ...ticket, ...changes };
-    const v = validateTicket(next);
-    if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
-    const problems = [];
-    for (const key of ['context', 'tests']) for (const f of next[key] ?? []) if (f.split('/').pop().startsWith('.env') && !(key === 'context' && isExampleFile(f))) problems.push(`${f} is a reserved name and cannot be in ${key}`);
-    for (const f of next.files ?? []) {
-      const base = f.split('/').pop();
-      if (base.startsWith('.env')) problems.push(`${f} is a reserved name; use env.example.txt for an env template`);
-      else if (!f.includes('/') && !ROOT_FILE_OK.test(f)) problems.push(`${f} has no folder; give it its real path`);
-      const owner = fresh.tickets.find(x => x.id !== ticket.id && x.status !== 'cancelled' && (x.files ?? []).includes(f));
-      if (owner) problems.push(`${f} is already written by ${owner.id}`);
-    }
-    if (next.integration === true && !(next.tests ?? []).some(looksLikeTestFile)) problems.push('an integration ticket needs a route-level test file (in a tests folder, or ending in .test or .spec)');
-    if (problems.length) return out(`refused:\n${problems.map(x => `  ${x}`).join('\n')}`, 1);
-    const summary = Object.keys(changes).map(k => `  ${k}: ${(ticket[k] ?? []).join(', ') || 'none'}  ->  ${next[k].join(', ') || 'none'}`).join('\n');
-    if (flags.yes !== true) return out(`${ticket.id}:\n${summary}\nRerun with --yes to apply${isApproved(fresh) ? ' (the approval is renewed over the new lists)' : ''}.`);
-    const wasApproved = isApproved(fresh);
-    fresh.tickets = fresh.tickets.map(x => (x.id === ticket.id ? next : x));
-    const saved = wasApproved ? approveLedger(fresh, { by: 'owner' }) : fresh;
-    saved.updatedAt = new Date().toISOString();
-    await writeLedger(root, saved);
-    await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields: Object.keys(changes), before: Object.fromEntries(Object.keys(changes).map(k => [k, ticket[k] ?? []])), after: changes, reapproved: wasApproved });
-    await refreshPlan(root);
-    return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the new lists).' : ''}`);
-  }); } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
+  for (const key of ['files', 'context', 'tests', 'deletes']) if (flags[key] !== undefined) changes[key] = list(flags[key]);
+  const acceptanceEdit = flags.acceptance !== undefined || flags['add-acceptance'] !== undefined;
+  const takeFrom = flags['take-from'] === undefined ? null : String(flags['take-from']);
+  if (takeFrom && changes.files === undefined) return bad('tickets --take-from needs --files (the files to move to this ticket)');
+  try {
+    return await withLock(root, async () => {
+      const fresh = await readLedger(root);
+      const ticket = fresh.tickets.find(x => x.id === rest[0]);
+      if (!ticket) return out(`no ticket ${rest[0]}`, 1);
+      const listsEdit = Object.keys(changes).length > 0;
+      // The file lists only change before the work runs; a review or done ticket may only add acceptance lines (see below).
+      const allowed = listsEdit ? ['todo', 'ready', 'blocked'] : ['todo', 'ready', 'blocked', 'review', 'done'];
+      if (!allowed.includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}; ${listsEdit ? `only a todo, ready or blocked ticket can change its files (send a review ticket back with swarm tickets ${ticket.id} --set todo first)` : 'only a todo, ready, blocked, review or done ticket can change its acceptance'}`, 1);
+      // Acceptance is run as checks: a review or done ticket may only add lines (a replace could weaken what the work is judged against).
+      if (flags.acceptance !== undefined && !['todo', 'ready', 'blocked'].includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}: its acceptance can only be added to (--add-acceptance), not replaced`, 1);
+      const next = { ...ticket, ...changes };
+      if (flags.acceptance !== undefined) next.acceptance = lines(flags.acceptance);
+      if (flags['add-acceptance'] !== undefined) next.acceptance = [...(next.acceptance ?? []), ...lines(flags['add-acceptance'])];
+      const v = validateTicket(next);
+      if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
+      const problems = [];
+      const moved = [];
+      let source = null;
+      if (takeFrom) {
+        source = fresh.tickets.find(x => x.id === takeFrom);
+        if (!source || source.id === ticket.id) problems.push(`--take-from ${takeFrom}: no such other ticket`);
+        else if (['running', 'review', 'cancelled'].includes(source.status)) problems.push(`${source.id} is ${source.status}; its files cannot move`);
+      }
+      for (const key of ['context', 'tests']) for (const f of next[key] ?? []) if (f.split('/').pop().startsWith('.env') && !(key === 'context' && isExampleFile(f))) problems.push(`${f} is a reserved name and cannot be in ${key}`);
+      for (const key of ['files', 'deletes']) for (const f of next[key] ?? []) {
+        const base = f.split('/').pop();
+        if (key === 'files' && base.startsWith('.env')) problems.push(`${f} is a reserved name; use env.example.txt for an env template`);
+        else if (key === 'files' && !f.includes('/') && !ROOT_FILE_OK.test(f)) problems.push(`${f} has no folder; give it its real path`);
+        if ((ticket[key] ?? []).includes(f)) continue;
+        const owners = fresh.tickets.filter(x => x.id !== ticket.id && x.status !== 'cancelled' && ((x.files ?? []).includes(f) || (x.deletes ?? []).includes(f)));
+        if (!owners.length) continue;
+        // A file can move only when the named source is its one owner and writes it (not deletes it).
+        if (source && key === 'files' && owners.length === 1 && owners[0].id === source.id && (source.files ?? []).includes(f) && !(source.deletes ?? []).includes(f)) { moved.push(f); continue; }
+        const first = owners[0];
+        const writes = (first.files ?? []).includes(f);
+        problems.push(`${f} is already ${writes ? 'written' : 'deleted'} by ${owners.map(o => o.id).join(', ')}${takeFrom ? ` (not ${takeFrom} alone)` : writes && owners.length === 1 && key === 'files' ? `; to move it use --take-from ${first.id}` : ''}`);
+      }
+      if (takeFrom && source && !moved.length && !problems.length) problems.push(`${source.id} does not own any of the files named in --files`);
+      if (source && moved.length) { const left = validateTicket({ ...source, files: (source.files ?? []).filter(f => !moved.includes(f)) }); if (!left.ok) problems.push(`${source.id} would no longer be valid without ${moved.join(', ')}: ${left.errors[0]}`); }
+      if (next.integration === true && !(next.tests ?? []).some(looksLikeTestFile)) problems.push('an integration ticket needs a route-level test file (in a tests folder, or ending in .test or .spec)');
+      if (problems.length) return out(`refused:\n${problems.map(x => `  ${x}`).join('\n')}`, 1);
+      const summary = [...Object.keys(changes), ...(acceptanceEdit ? ['acceptance'] : [])].map(k => `  ${k}: ${(ticket[k] ?? []).join(k === 'acceptance' ? ' | ' : ', ') || 'none'}  ->  ${(next[k] ?? []).join(k === 'acceptance' ? ' | ' : ', ') || 'none'}`).join('\n') + (moved.length ? `\n  moves from ${takeFrom}: ${moved.join(', ')} (${takeFrom} no longer writes ${moved.length > 1 ? 'them' : 'it'}${source.status === 'done' ? `; ${takeFrom} is done and its tests are not re-run for ${moved.length > 1 ? 'them' : 'it'}` : ''})` : '');
+      if (flags.yes !== true) return out(`${ticket.id}:\n${summary}\nRerun with --yes to apply${isApproved(fresh) ? ' (the approval is renewed over the new lists)' : ''}.`);
+      const wasApproved = isApproved(fresh);
+      fresh.tickets = fresh.tickets.map(x => {
+        if (x.id === ticket.id) return next;
+        if (source && x.id === source.id && moved.length) return { ...x, files: (x.files ?? []).filter(f => !moved.includes(f)) };
+        return x;
+      });
+      const saved = wasApproved ? approveLedger(fresh, { by: 'owner' }) : fresh;
+      saved.updatedAt = new Date().toISOString();
+      await writeLedger(root, saved);
+      const touched = [...Object.keys(changes), ...(acceptanceEdit ? ['acceptance'] : [])];
+      await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields: touched, before: Object.fromEntries(touched.map(k => [k, ticket[k] ?? []])), after: Object.fromEntries(touched.map(k => [k, next[k] ?? []])), reapproved: wasApproved });
+      if (moved.length) await appendLog(root, { event: 'file-move', by: 'owner', from: takeFrom, to: ticket.id, files: moved, fromStatus: source.status, reapproved: wasApproved });
+      await refreshPlan(root);
+      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the new lists).' : ''}`);
+    });
+  } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
 }
 
 // A clean release of held tickets: back to ready with the failure history cleared, so the next wave starts them from the first level.
@@ -1083,7 +1147,7 @@ export async function runTicketsCommand(root, args) {
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
   if (flags['mark-deps']) return markDepsCommand(root, ledger, rest, flags);
   if (flags.release === true) return releaseTickets(root, rest, flags);
-  if (flags.files !== undefined || flags.context !== undefined || flags.tests !== undefined) return editTicketFiles(root, ledger, rest, flags);
+  if (['files', 'context', 'tests', 'deletes', 'acceptance', 'add-acceptance', 'take-from'].some(k => flags[k] !== undefined)) return editTicketFiles(root, ledger, rest, flags);
   if (flags.set !== undefined) {
     if (rest.length !== 1) return bad('tickets --set needs one ticket id');
     if (!STATUSES.includes(flags.set)) return out(`status must be one of: ${STATUSES.join(', ')}`, 1);

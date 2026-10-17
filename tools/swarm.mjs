@@ -8390,10 +8390,22 @@ async function mainInner() {
     if(command==='integrate'&&approveManifests.length){
       // Only a file this run really changes can be approved, and the approval is for the exact bytes the workers proposed (a changed file needs a new approval).
       // The record is written before integrate (a failed write stops it).
+      if(!/^[A-Za-z0-9._-]+$/.test(String(argument)))fail('approve-manifest needs a run id');
       const realRoot=await fs.realpath(root);
       const state=await readState(realRoot,argument);
       const entries=[];
+      // A file the run deletes is approved as a deletion (its manifest names it in `deletes`).
+      let runManifest_;try{runManifest_=JSON.parse(await fs.readFile(path.join(realRoot,'.swarm','runs',String(argument),'manifest.json'),'utf8'));}catch{runManifest_=null;}
+      const deleting=new Set((runManifest_?.jobs??[]).flatMap(job=>Array.isArray(job.deletes)?job.deletes:[]));
       for(const file of new Set(approveManifests)){
+        if(deleting.has(file)){
+          // A file the run is to delete is approved as a deletion, only when it is still in the project and every declaring job's result lacks it.
+          const declaring=(runManifest_?.jobs??[]).filter(job=>Array.isArray(job.deletes)&&job.deletes.includes(file)).map(job=>(state.jobs??[]).find(record=>record.id===job.id)).filter(Boolean);
+          const present=await fs.lstat(path.join(realRoot,file)).then(()=>true,()=>false);
+          const removed=declaring.length>0&&await Promise.all(declaring.map(record=>typeof record.workspace==='string'&&record.workspace?fs.lstat(path.join(realRoot,record.workspace,file)).then(()=>false,()=>true):false)).then(list=>list.every(Boolean));
+          if(!present||!removed)fail(`approve-manifest-unreadable: ${file} is not a real deletion in run ${argument} (it must exist in the project and be absent in the job's result); nothing approved`,'approve-manifest-unreadable');
+          entries.push({file,sha256:'deleted'});continue;
+        }
         const jobs=(state.jobs??[]).filter(job=>Array.isArray(job.outputs)&&job.outputs.includes(file));
         if(!jobs.length)fail(`approve-manifest-unknown: run ${argument} does not change ${file}`,'approve-manifest-unknown');
         for(const job of jobs){
@@ -8403,7 +8415,7 @@ async function mainInner() {
         }
       }
       approvedGate={approveManifests:entries};
-      for(const entry of entries)await appendEvent(root,{kind:'decision',id:`approve-manifest-${argument}-${entry.file}-${entry.sha256.slice(0,12)}`,text:`owner reviewed ${entry.file} (sha256 ${entry.sha256.slice(0,12)}) by hand and approved exactly that content past the security gate for run ${argument}`,confirm:true,confirmed:true,by:'owner'});
+      for(const entry of entries)await appendEvent(root,{kind:'decision',id:`approve-manifest-${argument}-${entry.file}-${entry.sha256.slice(0,12)}`,text:entry.sha256==='deleted'?`owner reviewed the deletion of ${entry.file} by hand and approved it past the security gate for run ${argument}`:`owner reviewed ${entry.file} (sha256 ${entry.sha256.slice(0,12)}) by hand and approved exactly that content past the security gate for run ${argument}`,confirm:true,confirmed:true,by:'owner'});
     }
     result=await (queue?integrateQueue:integrateRun)(root,argument,{...(approvedGate?{securityGate:approvedGate}:{}),batchSize,adaptive,maxRequeues,noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
   }

@@ -75,3 +75,10 @@ The route-level test of an integration ticket must be a test file (a tests, e2e 
 - Invented `dependsOn` keys from a split worker are dropped with a note.
 - `--help` never acts. A failure that is not the ticket's own (credit, rate limit, host or network down, run stopped) returns the ticket to ready at the same level (three times at most). Output that already matches the tree does not need integration evidence.
 - `swarm tickets T-0007 T-0008 --release` is the clean release of held tickets (attempts, escalation and retry notes cleared).
+
+## Moving files, deleting files, editing acceptance (lesson 39)
+
+- `swarm tickets T-0091 --files src/a.ts,src/useShops.ts --take-from T-0090 --yes` moves `src/useShops.ts` from T-0090 (even if it is done) to T-0091; logged as `file-move`.
+- A ticket may list `deletes`; the worker deletes exactly those files. Deleting a manifest, lockfile, workflow or the profile is blocked by the security gate until `swarm integrate RUN --approve-manifest FILE`.
+- `swarm tickets T-0007 --acceptance "check one ;; check two"` (todo, ready, blocked) or `--add-acceptance "check three"` (any status but running).
+- A ticket's e2e spec must be run by the project's e2e command; `scope check` warns when it would not be.

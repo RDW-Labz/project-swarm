@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.98.0
+
+Parts-app S6 lessons (lesson 39):
+- `swarm tickets ID --files a,b --take-from OTHER [--yes]` moves ownership of files from another ticket, even a done one: the other ticket's `files` lose them, this ticket's gain them, the ledger stays approved (sealed again), and a `file-move` line is logged. Only files OTHER writes (and is the only owner of) move; a running, review or cancelled source is refused; the output says when OTHER is done and its tests are not re-run. Without `--take-from` the refusal now names the owner and the flag.
+- Tickets can declare `deletes` (existing files to delete, named exactly, no folder or glob, not also written). The split prompt asks for it, the job declares exactly those files and runs on a shell Claude worker that sees them and can delete in place. The job lists a deleted file in both `outputs` and `deletes` (the engine only integrates a deletion for such a path; a real integrate test found that ticket deletes were never applied before this). A delete counts as a write for file-ownership conflicts, and the security gate looks at deletions (fail closed): deleting a manifest, lockfile, workflow or action, hook, `.gitignore`, `.npmrc`, CODEOWNERS or the profile needs `--approve-manifest FILE`, which is accepted only when the file exists and is really absent in the job's result (a worker that kept the file is refused). A deletion alone no longer triggers the vulnerability scan (nothing is added to audit); after a `--queue` block the run is finished, so run the job again and integrate the new run with the approval. A ticket cannot declare the deletion of those files (delete them by hand).
+- `swarm tickets ID --acceptance "one ;; two"` replaces the acceptance text (lines split on a newline or ` ;; `, so a shell check with `||` stays whole) on todo, ready or blocked tickets; `--add-acceptance TEXT` appends one line and also works on review and done tickets (a replace there could weaken what the work is judged against). The approval is sealed again.
+- `scope check`, `split` and `approve` warn when a ticket names an e2e spec (`e2e/`, `*.e2e.ts`, `cypress/e2e`) and the project's e2e command would not run it: no e2e script in package.json, a command or config (`testDir`, `specPattern`, `--config`) limited to another folder, a playwright spec that does not end in `.spec` or `.test`, or a cypress spec that does not end in `.cy`. The nearest package.json decides in a monorepo; python and other non-JS specs are not judged.
+
 ## 1.97.0
 
 Parts-app S6 report (9 hand fixes):
