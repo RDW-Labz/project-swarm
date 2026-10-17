@@ -134,15 +134,17 @@ test('refusals: no ui block, a remote base url, an unknown screen, a symlinked m
   await assert.rejects(runUiCheck(root, { deps: { fetchImpl: up } }), /symlink|not an allowed project file/);
 });
 
-test('the dev server from the profile is started when nothing answers, and stopped afterwards', async t => {
+test('the dev server from the profile is started on its own free port, and stopped afterwards', async t => {
   const free = await new Promise(resolve => { const s = net.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
   const root = await project(t, { baseUrl: `http://127.0.0.1:${free}`, timeoutSec: 30, start: ['node', '-e', "require('http').createServer((q,r)=>r.end('ok')).listen(Number(process.env.PORT),'127.0.0.1')"], screens: [{ id: 'form-contact', route: '/', mockup: 'docs/design/screens/Contact.dc.html' }] });
-  let sawServer = false;
-  const browser = async args => { sawServer = (await fetch(`http://127.0.0.1:${free}/`)).ok; return browserOf(metrics(), metrics())(args); };
+  let sawServer = false, pageUrl = '';
+  const browser = async args => { pageUrl = args.screens[0].pageUrl; sawServer = (await fetch(pageUrl)).ok; return browserOf(metrics(), metrics())(args); };
   const result = await runUiCheck(root, { deps: { browser } });
   assert.equal(sawServer, true);
+  assert.notEqual(new URL(pageUrl).port, String(free), 'the check used a port of its own, not the configured one');
   assert.equal(result.ok, true);
-  await assert.rejects(fetch(`http://127.0.0.1:${free}/`, { signal: AbortSignal.timeout(1500) }));
+  assert.equal(result.results.screens['form-contact'].serverStarted, true);
+  await assert.rejects(fetch(pageUrl, { signal: AbortSignal.timeout(1500) }));
 });
 
 test('the command prints a line per screen, exits 1 on a failure, and only checks the screens it is given', async t => {

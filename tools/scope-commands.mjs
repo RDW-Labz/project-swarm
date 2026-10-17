@@ -21,8 +21,13 @@ import { ensureGitignore } from './gitignore-defaults.mjs';
 import { workTreeFingerprint } from './work-tree.mjs';
 import { otherManagerLockfile } from './ticket-manifest.mjs';
 import { doneEvidence, ticketTests } from './verify-config.mjs';
+import { deriveQualityChecks, qualityEvidence } from './quality-checks.mjs';
+import { nextStep, sizeTicket } from './escalation.mjs';
+import { unlockReady } from './ticket-unlock.mjs';
+import { parseEnvNames, envNamesLine } from './env-names.mjs';
+import { detectTestCommand } from './zero-tests.mjs';
 import { execFile } from 'node:child_process';
-import { existsSync, statSync, lstatSync, realpathSync, readdirSync } from 'node:fs';
+import { existsSync, statSync, lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 
 export const SCOPE_USAGE = [
@@ -141,7 +146,67 @@ export function contextEnvFor(root, profile) {
     listFiles: prefix => { const out = []; if (safe(prefix)) walk(prefix, out); return out.filter(usable); },
     profileContext: profile?.context ?? {},
     screenMockups: Object.fromEntries((profile?.ui?.screens ?? []).map(screen => [screen.id, screen.mockup])),
+    envLine: envLineFor(root),
   };
+}
+
+// Variable names (never values) from the project's example env file: a regular file, no symlink, small.
+function envLineFor(root) {
+  try {
+    const file = path.join(root, '.env.example');
+    const info = lstatSync(file);
+    if (!info.isFile() || info.size > 20000) return '';
+    return envNamesLine(parseEnvNames(readFileSync(file, 'utf8')));
+  } catch { return ''; }
+}
+
+// The quality checks (typecheck, lint, optional build) this project's profile and package.json give.
+export async function qualityFor(root, profile) {
+  let pkg = null;
+  try { pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); } catch { /* no package.json */ }
+  return deriveQualityChecks({ pkg, hasTsconfig: existsSync(path.join(root, 'tsconfig.json')), manager: packageManagerOf(profile) ?? 'npm', config: profile?.quality ?? {} });
+}
+
+// Check output and job errors go back into a worker prompt (and, when a ticket escalates, to another vendor): credentials are removed first.
+export function redactNote(text) {
+  return String(text ?? '')
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s@]+@/gi, '$1***@')
+    .replace(/eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g, '***')
+    .replace(/\b([A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|AUTH|CREDENTIAL)[A-Za-z0-9_]*)(\s*[=:]\s*)\S+/gi, '$1$2***')
+    .replace(/\b[A-Za-z0-9+/_-]{32,}={0,2}/g, '***');
+}
+
+// Ticket moves share the wave lock, so an owner command, a wave start and a sync cannot overwrite each other.
+async function lockedTransition(root, id, to, options) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try { return await withLock(root, () => transition(root, id, to, options)); }
+    catch (error) { if (error.code !== 'scope-busy' || attempt === 4) throw error; await new Promise(resolve => setTimeout(resolve, 300)); }
+  }
+  return null;
+}
+
+// The quality checks the run itself was built with (its manifest), so a tsconfig or lint script added by a ticket of the same run
+// cannot demand checks the merge batches never ran.
+async function runQualityNames(root, runId) {
+  try {
+    const manifest = JSON.parse(await fs.readFile(path.join(root, '.swarm', 'runs', runId, 'manifest.json'), 'utf8'));
+    return (manifest.checks ?? []).map(c => c.name).filter(name => ['typecheck', 'lint', 'build'].includes(name));
+  } catch { return []; }
+}
+
+// Evidence that a build ticket's quality checks passed: the merge batch that integrated it, else the run's own checks.
+function qualityOk(state, id, names) {
+  const result = qualityEvidence(state, id, names);
+  if (result.ok || !/no merge batch/.test(result.reason)) return result;
+  // Without a merge queue the run-level checks of the integrate count, but only for a job whose files were all integrated, and never when the queue named a batch.
+  if (state.mergeQueue?.integratedIn?.[id] !== undefined) return result;
+  const job = (Array.isArray(state.jobs) ? state.jobs : []).find(j => j.id === id);
+  const files = Array.isArray(job?.outputs) ? job.outputs : [];
+  const integratedFiles = new Set(state.integratedFiles ?? []);
+  if (files.length && !files.every(f => integratedFiles.has(f))) return { ok: false, reason: 'job files are not in the integrated files' };
+  const checks = Array.isArray(state.checks) ? state.checks : [];
+  const bad = names.find(name => checks.find(c => c.name === name)?.status !== 'passed');
+  return bad ? { ok: false, reason: `no ${bad} check passed on integrate` } : { ok: true, reason: 'quality checks passed on integrate' };
 }
 
 // Reference sections of the scope become two context files every ticket can be given: the overview, and the data model.
@@ -219,6 +284,7 @@ function splitPrompt(scope, stage, only, layout = '') {
     'put shared types or contracts first and make the tickets that use them depend on them; add a test ticket for each requirement group.',
     'A ticket of type contract writes exactly one OpenAPI 3 JSON file under contracts/ (for example contracts/api.json) using only paths (get, post, put, patch, delete, each with an operationId), components.schemas and local $ref; TypeScript, SQL and YAML types belong in build tickets that depend on the contract ticket.',
     'Migration tickets write DDL only; their tests are separate tickets in a tests folder.',
+    'Keep every ticket small enough for one worker answer: at most 4 files, each file under about 12 KB when written; split a bigger feature into several tickets (the output of one worker is capped at about 15 KB per file).',
     ...(layout ? ['Project layout (use these folders):', layout] : []),
     'Work only from the requirements below.',
     '',
@@ -438,6 +504,8 @@ async function cmdApprove(root, { rest, flags }) {
   const knownScreens = new Set((uiProfile?.ui?.screens ?? []).map(screen => screen.id));
   const unknownScreens = ledger.tickets.flatMap(t => (t.screens ?? []).filter(id => !knownScreens.has(id)).map(id => `${t.id}: ${id}`));
   if (unknownScreens.length) return out(`not approvable: tickets name screens that are not in the profile ui block: ${unknownScreens.slice(0, 8).join(', ')}`, 1);
+  const sizes = contextEnvFor(root, uiProfile).sizes;
+  const bigTickets = ledger.tickets.filter(t => t.status !== 'cancelled' && t.type !== 'human' && !sizeTicket(t, { sizes }).ok).map(t => t.id);
   const uiNoScreens = uiProfile?.ui ? ledger.tickets.filter(t => !(t.screens ?? []).length && (t.files ?? []).some(f => /\.(?:tsx|jsx|css|html|vue|svelte)$/.test(f))).length : 0;
   const summary = formatSummary(summarizeTree({ scope, tickets: ledger.tickets }));
   const policy = await readApprovalPolicy(root);
@@ -459,10 +527,10 @@ async function cmdApprove(root, { rest, flags }) {
   if (/\b(python|django|fastapi|flask)\b/i.test(`${scope.overview}`)) stacks.add('python');
   const ignored = stacks.size ? await ensureGitignore(root, [...stacks].filter(s => ['node', 'python'].includes(s))).catch(() => ({ changed: false })) : { changed: false };
   await appendLog(root, { event: 'approve', by, scopeHash: hash, ticketsHash: next.approved.ticketsHash });
-  return out([summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : ['warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)']), 'Next: swarm go --scope'].join('\n'));
+  return out([summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
 }
 
-// A failed test run sends the ticket back to ready once with the failure; the second failure blocks it. One locked ledger write.
+// A failed run or check sends the ticket back to ready one level higher (bigger output, then Codex, then Claude); only after the last level does it block. One locked ledger write.
 async function applyRetry(root, id, note, runId) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
@@ -471,14 +539,55 @@ async function applyRetry(root, id, note, runId) {
         const ticket = ledger.tickets.find(x => x.id === id);
         if (!ticket || ticket.status !== 'review') return 'skipped';
         const attempts = (ticket.attempts ?? 0) + 1;
+        const verifyBound = Boolean((await readProfile(root))?.verify) && ticketTests(ticket).length > 0;
+        const step = nextStep(ticket, { error: note, ...(verifyBound ? { maxLevel: 1 } : {}) });
         ticket.attempts = attempts;
-        ticket.retryNote = note.slice(0, 600);
-        ticket.retryHistory = [...(ticket.retryHistory ?? []), { run: runId, note: note.slice(0, 200) }].slice(-5);
-        ticket.status = attempts >= 2 ? 'blocked' : 'ready';
+        ticket.escalation = step.level;
+        const safeNote = redactNote(note);
+        ticket.retryNote = safeNote.slice(0, 600);
+        ticket.retryHistory = [...(ticket.retryHistory ?? []), { run: runId, note: safeNote.slice(0, 200), level: step.level }].slice(-5);
+        ticket.status = step.status;
+        if (step.status === 'blocked') ticket.blockReason = 'failure';
         delete ticket.runId;
         ledger.updatedAt = new Date().toISOString();
         await writeLedger(root, ledger);
-        await appendLog(root, { event: 'retry', id, attempts, to: ticket.status, run: runId, by: 'sync' });
+        await appendLog(root, { event: 'retry', id, attempts, level: step.level, kind: step.kind, to: ticket.status, run: runId, by: 'sync' });
+        return ticket.status;
+      });
+    } catch (error) { if (error.code !== 'scope-busy' || attempt === 4) throw error; await new Promise(resolve => setTimeout(resolve, 300)); }
+  }
+  return 'skipped';
+}
+
+// The test command the project's own package.json points to, as a hint for the profile's verify block.
+async function detectedTestHint(root) {
+  try {
+    const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+    const found = detectTestCommand({ pkg, files: existsSync(path.join(root, 'pyproject.toml')) ? ['pyproject.toml'] : [] });
+    return found ? `; detected ${found.runner}: verify.command ${JSON.stringify(found.command)}` : '';
+  } catch { return ''; }
+}
+
+// A job that failed or was cut off goes back to ready one level higher; after the last level it blocks. Same lock and write as applyRetry.
+async function applyEscalation(root, id, note, runId) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await withLock(root, async () => {
+        const ledger = await readLedger(root);
+        const ticket = ledger.tickets.find(x => x.id === id);
+        if (!ticket || ticket.status !== 'running') return 'skipped';
+        const verifyBound = Boolean((await readProfile(root))?.verify) && ticketTests(ticket).length > 0;
+        const step = nextStep(ticket, { error: note, ...(verifyBound ? { maxLevel: 1 } : {}) });
+        ticket.attempts = (ticket.attempts ?? 0) + 1;
+        ticket.escalation = step.level;
+        const safeNote = redactNote(note);
+        ticket.retryNote = safeNote.slice(0, 600);
+        ticket.retryHistory = [...(ticket.retryHistory ?? []), { run: runId, note: safeNote.slice(0, 200), level: step.level }].slice(-5);
+        ticket.status = step.status;
+        if (step.status === 'blocked') ticket.blockReason = 'failure';
+        ledger.updatedAt = new Date().toISOString();
+        await writeLedger(root, ledger);
+        await appendLog(root, { event: 'escalate', id, level: step.level, kind: step.kind, to: ticket.status, run: runId, by: 'sync' });
         return ticket.status;
       });
     } catch (error) { if (error.code !== 'scope-busy' || attempt === 4) throw error; await new Promise(resolve => setTimeout(resolve, 300)); }
@@ -514,10 +623,20 @@ async function cmdSync(root, { rest, flags }) {
       const { errors } = validateProfile(rawPointer.profile);
       return out(`the profile has a verify block but the profile is invalid, so tests cannot be checked: ${errors[0] ?? 'unknown error'}`, 1);
     }
+    const qualityNames = await runQualityNames(root, rest[0]);
+    const profileQuality = (await qualityFor(root, profile)).map(check => check.name).filter(name => !qualityNames.includes(name));
+    // A check that fails for many tickets of the same run is the base or the setup, not the tickets: no paid retries for it.
+    const reviewCount = ledger.tickets.filter(x => x.status === 'review' && finished.has(x.id)).length;
+    const failCounts = new Map();
+    for (const entry of failedChecks.values()) for (const name of entry.checks ?? []) failCounts.set(name, (failCounts.get(name) ?? 0) + 1);
+    const systemic = name => (failCounts.get(name) ?? 0) >= Math.max(3, Math.ceil(reviewCount / 2));
     const done = [], unverified = [], retried = [], blocked = [], notIntegrated = [];
     let uiResults = null, uiTree = null;
     for (const t of ledger.tickets.filter(x => x.status === 'review' && finished.has(x.id) && (x.runId === undefined || x.runId === rest[0]))) {
       const failed = failedChecks.get(t.id);
+      if (failed && /no-tests:/.test(String(failed.tail ?? ''))) { unverified.push(`${t.id} (the tests check ran 0 tests: fix verify.command, then run sync again; not retried)`); continue; }
+      const common = failed ? (failed.checks ?? []).find(systemic) : null;
+      if (failed && common) { unverified.push(`${t.id} (the ${common} check failed for ${failCounts.get(common)} tickets of this run, so the base or the setup is likely at fault; fix it and run sync again; not retried)`); continue; }
       if (failed) {
         // The merge queue rolled this ticket back because its tests failed: it goes back to ready once with the failure, then blocks.
         const note = `failed checks: ${(failed.checks ?? []).join(', ') || 'unknown'}${failed.tail ? `; ${String(failed.tail).slice(0, 500)}` : ''}`;
@@ -530,6 +649,11 @@ async function cmdSync(root, { rest, flags }) {
       if (profile?.verify && ticketTests(t).length) {
         const evidence = doneEvidence(state, t.id);
         if (!evidence.ok) { unverified.push(`${t.id} (${evidence.reason})`); continue; }
+      }
+      // A build ticket is done only when the project's typecheck and lint (and build, when the profile asks) passed on the batch that integrated it.
+      if (qualityNames.length && ['build', 'migration', 'contract'].includes(t.type)) {
+        const quality = qualityOk(state, t.id, qualityNames);
+        if (!quality.ok) { unverified.push(`${t.id} (${quality.reason})`); continue; }
       }
       // A UI ticket is done only when the rendered check passed for each of its screens after this run was integrated.
       if ((t.screens ?? []).length) {
@@ -544,19 +668,30 @@ async function cmdSync(root, { rest, flags }) {
         });
         if (stale.length) { unverified.push(`${t.id} (${profile?.ui ? `the rendered check has not passed for ${stale.join(', ')} on the current code since the integration: run swarm ui check` : 'it names screens but the profile has no ui block'})`); continue; }
       }
-      await transition(root, t.id, 'done', { by: 'sync', note: `integrated ${rest[0]}` });
+      await lockedTransition(root, t.id, 'done', { by: 'sync', note: `integrated ${rest[0]}` });
       done.push(t.id);
     }
     await refreshPlan(root);
     return out([`${done.length} ticket(s) marked done`,
-      ...(retried.length ? [`${retried.length} ticket(s) back to ready after failed tests: ${retried.join(', ')}`] : []),
-      ...(blocked.length ? [`${blocked.length} ticket(s) blocked after 2 failed attempts: ${blocked.join(', ')}`] : []),
+      ...(retried.length ? [`${retried.length} ticket(s) back to ready, one level higher, after failed checks: ${retried.join(', ')}`] : []),
+      ...(blocked.length ? [`${blocked.length} ticket(s) blocked after every escalation level failed: ${blocked.join(', ')}`] : []),
       ...(unverified.length ? [`${unverified.length} ticket(s) stay in review: their tests were not seen passing: ${unverified.join('; ')}`] : []),
       ...(notIntegrated.length ? [`${notIntegrated.length} ticket(s) stay in review: not integrated by this run: ${notIntegrated.join(', ')}`] : []),
+      ...(profileQuality.length ? [`warning: the profile now asks for ${profileQuality.join(', ')}, which this run's batches did not run`] : []),
       ...(!profile?.verify && ledger.tickets.some(x => ticketTests(x).length) ? ['warning: the profile has no verify block, so tickets with tests were marked done without test evidence'] : [])].join('\n'));
   }
-  const moves = ticketOutcome(state.jobs ?? [], ledger).filter(m => ledger.tickets.find(t => t.id === m.id)?.status === 'running');
-  for (const m of moves) await transition(root, m.id, m.to, { by: 'sync', note: m.note });
+  // Only the run a ticket was handed to may move it: an older run synced again must not touch a ticket that a newer wave is running.
+  const fromThisRun = t => !t.waveAt || !state.startedAt || Date.parse(state.startedAt) >= Date.parse(t.waveAt) - 2000;
+  const moves = ticketOutcome(state.jobs ?? [], ledger).filter(m => { const t = ledger.tickets.find(x => x.id === m.id); return t?.status === 'running' && fromThisRun(t); });
+  const escalated = [], stuck = [];
+  for (const m of moves) {
+    if (m.to === 'blocked' && m.reason === 'deps') await lockedTransition(root, m.id, 'blocked', { by: 'sync', note: m.note, reason: 'deps' });
+    else if (m.to === 'blocked') {
+      // A failed or truncated job goes back up the ladder instead of waiting for a person.
+      const result = await applyEscalation(root, m.id, m.note, rest[0]);
+      (result === 'blocked' ? stuck : escalated).push(m.id);
+    } else await lockedTransition(root, m.id, m.to, { by: 'sync', note: m.note });
+  }
   if (moves.some(m => m.to === 'review')) {
     // The ticket remembers which run handed it in, so an older run cannot decide it later.
     const fresh = await readLedger(root);
@@ -565,7 +700,7 @@ async function cmdSync(root, { rest, flags }) {
   }
   await refreshPlan(root);
   const review = moves.filter(m => m.to === 'review').length;
-  return out(`${review} ticket(s) in review, ${moves.length - review} blocked. After swarm integrate ${rest[0]}: swarm scope sync ${rest[0]} --integrated`);
+  return out(`${review} ticket(s) in review${escalated.length ? `, ${escalated.length} sent back to ready one level higher (${escalated.join(', ')})` : ''}${stuck.length ? `, ${stuck.length} blocked after every level failed (${stuck.join(', ')})` : ''}. After swarm integrate ${rest[0]}: swarm scope sync ${rest[0]} --integrated`);
 }
 
 // The OpenAPI file a contract ticket wrote: contracts/api.json or contracts/openapi.json, else the only .json a contract ticket names.
@@ -615,7 +750,7 @@ export async function runTicketsCommand(root, args) {
   if (flags.set !== undefined) {
     if (rest.length !== 1) return bad('tickets --set needs one ticket id');
     if (!STATUSES.includes(flags.set)) return out(`status must be one of: ${STATUSES.join(', ')}`, 1);
-    const t = await transition(root, rest[0], flags.set, { by: 'owner', note: flags.note });
+    const t = await lockedTransition(root, rest[0], flags.set, { by: 'owner', note: flags.note });
     await refreshPlan(root);
     return out(`${t.id} is now ${t.status}`);
   }
@@ -714,6 +849,9 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
     const snapshot = await readText(path.join(root, ...SNAPSHOT));
     if (snapshot === null || scopeHash(snapshot) !== ledger.scope.hash) throw fail('scope-snapshot', 'the approved scope snapshot is missing or does not match; run swarm scope approve --yes again');
     const scope = parseScope(snapshot);
+    // A ticket that was blocked only by dependencies becomes ready as soon as they are done.
+    const unlock = unlockReady(ledger);
+    if (unlock.unlocked.length) { ledger.tickets = unlock.ledger.tickets; await appendLog(root, { event: 'unlock', by: 'go', tickets: unlock.unlocked }); }
     let ready = readyTickets(ledger.tickets);
     // Skeleton first: while a skeleton ticket is open, only the skeleton (and what it depends on, and runner-made fix tickets) runs.
     const open = ledger.tickets.filter(t => t.skeleton && !['done', 'cancelled'].includes(t.status));
@@ -727,7 +865,7 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
     }
     const humans = ready.filter(t => t.type === 'human').length;
     const profile = await readProfile(root);
-    const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: false, maxJobs, lessons, verify: profile?.verify, packageManager: packageManagerOf(profile), contextEnv: contextEnvFor(root, profile) });
+    const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: false, maxJobs, lessons, verify: profile?.verify, quality: await qualityFor(root, profile), packageManager: packageManagerOf(profile), contextEnv: contextEnvFor(root, profile) });
     manifest.jobs = manifest.jobs.filter(j => j.type !== 'human');
     const ids = manifest.jobs.map(j => j.id);
     if (!ids.length) throw fail('scope-nothing', humans ? `only ${humans} human ticket(s) are ready; finish them with swarm tickets ID --set done` : 'no ready tickets');
@@ -743,7 +881,8 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
       }
     }
     const before = new Map(ids.map(id => [id, ledger.tickets.find(t => t.id === id).status]));
-    for (const id of ids) ledger.tickets.find(t => t.id === id).status = 'running';
+    const waveAt = new Date(now()).toISOString();
+    for (const id of ids) { const started = ledger.tickets.find(t => t.id === id); started.status = 'running'; started.waveAt = waveAt; }
     ledger.updatedAt = new Date(now()).toISOString();
     const waveFile = `docs/scope/waves/wave-${now().toString(36)}.json`;
     await writeLedger(root, ledger);
@@ -757,6 +896,25 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
     await appendLog(root, { event: 'wave', by: 'go', tickets: ids });
     return { file: waveFile, ids, humans, warnings, skipped };
   });
+}
+
+// Blocked-by-dependency tickets whose dependencies are all done become ready. Used by go --scope and autopilot; one locked write.
+export async function unlockLedger(root) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await withLock(root, async () => {
+        const ledger = await readLedger(root);
+        if (!ledger) return [];
+        const { ledger: next, unlocked } = unlockReady(ledger);
+        if (!unlocked.length) return [];
+        next.updatedAt = new Date().toISOString();
+        await writeLedger(root, next);
+        await appendLog(root, { event: 'unlock', by: 'autopilot', tickets: unlocked });
+        return unlocked;
+      });
+    } catch (error) { if (error.code !== 'scope-busy' || attempt === 4) return []; await new Promise(resolve => setTimeout(resolve, 300)); }
+  }
+  return [];
 }
 
 // A ticket the runner makes from a failing check (smoke or preview hook). Next free id below T-9000; the approval is not touched (origin 'ci').

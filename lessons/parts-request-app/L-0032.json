@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0032",
+  "project": "parts-request-app",
+  "date": "2026-10-17",
+  "stage": "test",
+  "what": "The runner ran a test command that did not match the files (node:test for vitest files): it reported 0 tests and passed, a false green",
+  "rule": "The runner must use the project real test command and fail a test check that ran zero tests.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "detect the runner from package.json, and fail a passed test check whose output shows 0 tests",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "false-green",
+    "node-test",
+    "vitest",
+    "zero-tests"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app S4 report, lesson 32"
+  }
+}

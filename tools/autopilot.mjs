@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-export const ACTIONS = ['integrate', 'resume', 'retry-failed', 'start-wave', 'start-deferred', 'start-backlog'];
+export const ACTIONS = ['integrate', 'resume', 'retry-failed', 'start-wave', 'start-deferred', 'start-backlog', 'unlock-tickets'];
 
 const MINUTE = 60_000;
 const MAX_ACTIONS_PER_RUN = 3;
@@ -157,6 +157,15 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
   const actions = [];
   const blocked = [];
   const perRun = new Map();
+  // Tickets that were only waiting on dependencies become ready again, whatever else happens this pass.
+  if (typeof deps.unlockTickets === 'function') {
+    const unlocked = await safe(() => deps.unlockTickets(root), []);
+    if (Array.isArray(unlocked) && unlocked.length) {
+      const result = `${unlocked.length} ticket(s) ready: ${unlocked.slice(0, 8).join(', ')}`;
+      await write({ kind: 'action', action: 'unlock-tickets', reason: 'dependencies are done', result });
+      actions.push({ action: 'unlock-tickets', ok: true, result });
+    }
+  }
 
   async function write(event) {
     try { await deps.appendEvent(root, event); }

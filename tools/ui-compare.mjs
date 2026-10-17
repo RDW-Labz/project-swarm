@@ -1,3 +1,4 @@
+import { mockupUrlSuffix, validWaitFor } from './ui-server.mjs';
 export const UI_DEFAULTS = Object.freeze({
   baseUrl: 'http://127.0.0.1:3000',
   readyPath: '/',
@@ -8,7 +9,7 @@ export const UI_DEFAULTS = Object.freeze({
 });
 
 const TOP_KEYS = ['baseUrl', 'start', 'readyPath', 'timeoutSec', 'viewport', 'screens'];
-const SCREEN_KEYS = ['id', 'route', 'mockup', 'viewport', 'minScore', 'text'];
+const SCREEN_KEYS = ['id', 'route', 'mockup', 'viewport', 'minScore', 'text', 'mockupQuery', 'waitFor'];
 const GENERIC_FONTS = new Set(['arial', 'helvetica', 'times', 'serif', 'sans-serif', 'monospace', 'system-ui', '-apple-system', 'segoe ui', 'roboto', 'ui-sans-serif', 'ui-serif', 'ui-monospace']);
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -117,7 +118,15 @@ export function validateUiConfig(raw) {
         if (inRange(s.text, 0, 1, false)) text = s.text;
         else errors.push(`${p}.text must be 0 to 1`);
       }
-      config.screens.push({ id, route: s.route, mockup: s.mockup, viewport, minScore, text });
+      // Another state of the same mockup file (a query on the file url) and a selector to wait for before the screenshot.
+      const extra = {};
+      if (s.mockupQuery !== undefined) {
+        try { mockupUrlSuffix({ mockupQuery: s.mockupQuery }); extra.mockupQuery = s.mockupQuery; } catch { errors.push(`${p}.mockupQuery must be letters, digits and _ = & . - (1 to 100 characters)`); }
+      }
+      if (s.waitFor !== undefined) {
+        if (validWaitFor(s.waitFor)) extra.waitFor = s.waitFor; else errors.push(`${p}.waitFor must be a simple selector (1 to 100 characters)`);
+      }
+      config.screens.push({ id, route: s.route, mockup: s.mockup, viewport, minScore, text, ...extra });
     });
   }
   if (errors.length) return { config: {}, errors };

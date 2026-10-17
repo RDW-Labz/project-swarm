@@ -9,7 +9,7 @@ import { sanitizeText } from './journal.mjs';
 
 export const DEFAULT_PROFILE_BUDGET = Object.freeze({ maxUsd: 5, maxTokens: 2000000 });
 const STATUSES = ['green', 'red', 'skipped', 'none'];
-const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci', 'verify', 'context', 'ui'];
+const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality'];
 const REQUIRED_KEYS = ['sensitive', 'protectedPaths', 'budget', 'baseCheck'];
 const BASE_KEYS = ['status', 'ranAt', 'head', 'checks'];
 // The pointer (profile) and the checks file decide what later runs may do and execute, so no job may rewrite them.
@@ -104,6 +104,20 @@ export function protectedViolations(profile, jobs) {
   return out;
 }
 
+// quality: which checks a build ticket must pass before it is done. Each entry is an argv array, true (the package script) or false (off).
+function validateQuality(raw) {
+  if (!isObject(raw)) return { errors: ['must be an object'], value: null };
+  const errors = [], value = {};
+  for (const key of Object.keys(raw)) {
+    if (!['typecheck', 'lint', 'build'].includes(key)) { errors.push(`${key}: unknown key`); continue; }
+    const entry = raw[key];
+    if (typeof entry === 'boolean') value[key] = entry;
+    else if (Array.isArray(entry) && entry.length > 0 && entry.length <= 12 && entry.every(a => typeof a === 'string' && a.length > 0 && a.length <= 300)) value[key] = [...entry];
+    else errors.push(`${key}: must be true, false or an argv array of 1 to 12 strings`);
+  }
+  return { errors, value };
+}
+
 export function validateProfile(profile) {
   if (!isObject(profile)) return { profile: null, errors: ['profile: not an object'] };
   const errors = Object.keys(profile).filter(key => !PROFILE_KEYS.includes(key)).map(key => `profile.${key}: unknown key`);
@@ -127,6 +141,11 @@ export function validateProfile(profile) {
         try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch { /* not a usable path */ }
       }
     }
+  }
+  if (profile.quality !== undefined) {
+    const checked = validateQuality(profile.quality);
+    for (const message of checked.errors) errors.push(`profile.quality: ${message}`);
+    if (!checked.errors.length) out.quality = checked.value;
   }
   if (profile.context !== undefined) {
     const checked = validateContextBlock(profile.context);

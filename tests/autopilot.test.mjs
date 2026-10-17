@@ -46,7 +46,7 @@ function callsNamed(deps, name) {
 }
 
 test('ACTIONS lists the autopilot actions', () => {
-  assert.deepEqual(ACTIONS, ['integrate', 'resume', 'retry-failed', 'start-wave', 'start-deferred', 'start-backlog']);
+  assert.deepEqual(ACTIONS, ['integrate', 'resume', 'retry-failed', 'start-wave', 'start-deferred', 'start-backlog', 'unlock-tickets']);
 });
 
 test('decide integrates a complete run that is not integrated', () => {
