@@ -203,3 +203,15 @@ test('ticketSetHash is stable across key order and ignores status', () => {
   assert.equal(T.ticketSetHash([ticket('T-0001')]), T.ticketSetHash([ticket('T-0001', { status: 'done', notes: 'x' })]));
   assert.match(T.ticketSetHash(a), /^[0-9a-f]{64}$/);
 });
+
+test('origin ci tickets are valid without a requirement and count in the approval hash; skeleton too', async () => {
+  const { ticketSetHash, validateTicket } = await import('../tools/tickets.mjs');
+  const base = { id: 'T-0001', title: 'A', type: 'build', stage: 'S1', epic: 'E', scopeRefs: ['R-001'], acceptance: ['x'], files: ['a.mjs'], context: [], contracts: [], dependsOn: [], size: 'S', risk: 'low', sensitive: false, status: 'todo' };
+  const fix = { ...base, id: 'T-0002', scopeRefs: [], origin: 'ci', notes: 'boom' };
+  assert.equal(validateTicket(fix).ok, true);
+  assert.equal(validateTicket({ ...fix, origin: undefined }).ok, false);
+  assert.equal(validateTicket({ ...base, origin: 'worker' }).ok, false);
+  assert.notEqual(ticketSetHash([base]), ticketSetHash([base, fix]));
+  assert.notEqual(ticketSetHash([base]), ticketSetHash([{ ...base, skeleton: true }]));
+  assert.equal(validateTicket({ ...base, skeleton: 'yes' }).ok, false);
+});

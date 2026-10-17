@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15fix-ci-hooks",
+      "type": "build",
+      "prompt": "Apply section 10b of the design to the ci hooks module. Keep it under 20000 characters.\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that section 10b does not change. ES modules, node:test, no secrets in code or tests (build secret-looking values at run time from pieces). Follow sections 10 and 10b of the design exactly.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/ci-hooks.mjs",
+        "tools/lesson-schema.mjs"
+      ],
+      "outputs": [
+        "tools/ci-hooks.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15fix-ci-hooks-test",
+      "type": "build",
+      "prompt": "Update the test file of the ci hooks module for section 10b of the design (the module is changed by another job at the same time; use exactly the names and rules there). Keep tests that still apply. Add tests for: the env allowlist (SSH_AUTH_SOCK, DATABASE_URL, MY_KEY and PASSWORD-like names absent; PATH, HOME, CI present), every production refusal form (--prod=true, --target=prod, environment=production, -p, sh -c wrapper, bash, a lone prod item, upper case) and that a plain deploy passes, only valid hooks returned and config empty on any error, runHook refusing an invalid or production preview with cannot-run, finishing when a fake run reports exit while pipes stay open, the tail being the end of long output, withheld private data, the URL rule (last match, unsafe URL refused).\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that section 10b does not change. ES modules, node:test, no secrets in code or tests (build secret-looking values at run time from pieces). Follow sections 10 and 10b of the design exactly.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/ci-hooks.mjs",
+        "tests/ci-hooks.test.mjs"
+      ],
+      "outputs": [
+        "tests/ci-hooks.test.mjs"
+      ]
+    }
+  ]
+}

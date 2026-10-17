@@ -228,3 +228,36 @@ test('writes never follow a symlink at the target file', async () => {
   assert.equal(r.exitCode, 1);
   await assert.rejects(fs.access(path.join(root, 'nowhere.md')));
 });
+
+test('skeleton first: only the skeleton (and its dependencies) runs until it is done, --skip-skeleton overrides', async () => {
+  const root = await project();
+  const stage = [
+    { key: 'api', title: 'Contract', type: 'contract', scopeRefs: ['R-001', 'R-002'], files: ['contracts/api.json'], size: 'S', risk: 'low' },
+    { key: 'create', title: 'Create endpoint', type: 'build', scopeRefs: ['R-001'], acceptance: ['201'], files: ['src/create.mjs'], dependsOn: ['api'], size: 'S', risk: 'medium', skeleton: true },
+    { key: 'list', title: 'List endpoint', type: 'build', scopeRefs: ['R-002'], acceptance: ['50 rows'], files: ['src/list.mjs'], dependsOn: ['api'], size: 'S', risk: 'low' },
+  ];
+  await fakeRun(root, 'r1', stage);
+  await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
+  await runScopeCommand(root, 'scope', ['approve', '--yes']);
+  const first = await prepareScopeRun(root, {});
+  assert.deepEqual(first.ids, ['T-0001']);
+  const ledgerFile = path.join(root, '.swarm/project/tickets.json');
+  const ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8'));
+  ledger.tickets.find(t => t.id === 'T-0001').status = 'done';
+  await fs.writeFile(ledgerFile, JSON.stringify(ledger));
+  const second = await prepareScopeRun(root, {});
+  assert.deepEqual(second.ids, ['T-0002']);
+  const again = JSON.parse(await fs.readFile(ledgerFile, 'utf8'));
+  again.tickets.find(t => t.id === 'T-0002').status = 'todo';
+  await fs.writeFile(ledgerFile, JSON.stringify(again));
+  const skipped = await prepareScopeRun(root, { skipSkeleton: true });
+  assert.deepEqual(skipped.ids.sort(), ['T-0002', 'T-0003']);
+});
+
+test('a ledger of 30 or more tickets without a skeleton gets a warning', async () => {
+  const root = await project();
+  const items = Array.from({ length: 31 }, (_, i) => ({ key: `k${i}`, title: `Ticket ${i}`, type: 'build', scopeRefs: ['R-001', 'R-002'][i % 2] ? [['R-001', 'R-002'][i % 2]] : [], acceptance: ['ok'], files: [`src/f${i}.mjs`], size: 'S', risk: 'low' }));
+  await fakeRun(root, 'r1', items);
+  const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
+  assert.match(result.stdout, /warning: no skeleton tickets/);
+});

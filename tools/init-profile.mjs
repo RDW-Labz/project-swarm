@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 import { validateApprovalPolicy } from './approval-policy.mjs';
+import { validateCiConfig } from './ci-hooks.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { sanitizeText } from './journal.mjs';
 
 export const DEFAULT_PROFILE_BUDGET = Object.freeze({ maxUsd: 5, maxTokens: 2000000 });
 const STATUSES = ['green', 'red', 'skipped', 'none'];
-const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval'];
+const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci'];
 const REQUIRED_KEYS = ['sensitive', 'protectedPaths', 'budget', 'baseCheck'];
 const BASE_KEYS = ['status', 'ranAt', 'head', 'checks'];
 // The pointer (profile) and the checks file decide what later runs may do and execute, so no job may rewrite them.
@@ -107,12 +108,28 @@ export function validateProfile(profile) {
   if (stack) out.stack = stack;
   const security = profile.security === undefined ? null : validateSecurity(profile.security, errors);
   if (security) out.security = security;
+  if (profile.ci !== undefined) {
+    const checked = validateCiConfig(profile.ci);
+    for (const message of checked.errors) errors.push(`profile.ci: ${message}`);
+    if (checked.config) out.ci = checked.config;
+    // The files a hook runs (a script path in its argv, package.json for package runners) become protected paths, so a batch cannot edit what runs with the owner's rights.
+    for (const hook of Object.values(checked.config ?? {})) for (const entry of hookFiles(hook.argv)) {
+      try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch { /* not a usable path */ }
+    }
+  }
   if (profile.approval !== undefined) {
     const checked = validateApprovalPolicy(profile.approval);
     for (const message of checked.errors) errors.push(`profile.approval: ${message}`);
     if (checked.policy) out.approval = checked.policy;
   }
   return { profile: out, errors };
+}
+
+const PACKAGE_RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'npx', 'bun', 'bunx']);
+export function hookFiles(argv) {
+  if (!Array.isArray(argv)) return [];
+  const files = argv.filter((item, index) => typeof item === 'string' && !item.startsWith('-') && (/\.(?:mjs|cjs|js|ts|py|sh|rb|pl)$/.test(item) || (index === 0 && item.includes('/'))) && !path.isAbsolute(item));
+  return PACKAGE_RUNNERS.has(String(argv[0]).split('/').pop()) ? [...files, 'package.json'] : files;
 }
 
 function validatePaths(value, errors) {

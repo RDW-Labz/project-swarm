@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-ci-hooks",
+      "type": "build",
+      "prompt": "Write the ci hooks module, the ci-hooks.mjs part of section 10 of the design (validateCiConfig, isProductionArgv, shouldRun, extractPreviewUrl, runHook, fixTicketFromFailure). It imports redactText from the lesson schema module (it exists; see the context). Keep it under 14000 characters.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests (build secret-looking values at run time from pieces). Follow section 10 of the design exactly.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/lesson-schema.mjs"
+      ],
+      "outputs": [
+        "tools/ci-hooks.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-ci-hooks-test",
+      "type": "build",
+      "prompt": "Write the test file for the ci hooks module, section 10 of the design (module written at the same time; use exactly the names there). Use a fake run function. Cover: config validation (defaults, unknown keys, bad argv, bad numbers, production words in a preview argv and that smoke may use them), shouldRun, URL extraction (first url, user info refused, trailing punctuation, none), runHook statuses (passed, failed, timeout, cannot-run, env filtering of secret-looking keys, redacted tail capped at 1500, url only for a passed preview), fixTicketFromFailure shape and limits.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests (build secret-looking values at run time from pieces). Follow section 10 of the design exactly.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "tests/ci-hooks.test.mjs"
+      ]
+    }
+  ]
+}

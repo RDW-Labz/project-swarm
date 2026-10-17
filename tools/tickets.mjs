@@ -9,7 +9,7 @@ export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'co
 const RISKS = ['low', 'medium', 'high'];
 const SIZES = ['S', 'M'];
 const NEEDS_ACCEPTANCE = ['build', 'test', 'migration'];
-const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps'];
+const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps', 'skeleton'];
 const RESERVED_FIRST = ['.git', '.swarm', '.github-hooks-free'];
 const SECRET_NAMES = ['.project-swarm.json', '.env'];
 const MOVES = {
@@ -56,7 +56,7 @@ export function validateTicket(t) {
   if (!Array.isArray(t.scopeRefs)) errors.push('scopeRefs must be an array');
   else {
     if (!t.scopeRefs.every(r => /^R-[0-9]{3,}$/.test(r))) errors.push('scopeRefs must contain R- ids');
-    if (t.scopeRefs.length === 0 && !['human', 'contract'].includes(t.type)) errors.push('scopeRefs must name at least one requirement');
+    if (t.scopeRefs.length === 0 && t.origin !== 'ci' && !['human', 'contract'].includes(t.type)) errors.push('scopeRefs must name at least one requirement');
   }
   if (t.acceptance !== undefined && !isStrArr(t.acceptance)) errors.push('acceptance must be an array of strings');
   if (NEEDS_ACCEPTANCE.includes(t.type) && !(isStrArr(t.acceptance) && t.acceptance.length > 0)) errors.push('acceptance is required for build, test and migration tickets');
@@ -67,6 +67,8 @@ export function validateTicket(t) {
   for (const k of ['files', 'context', 'contracts']) if (isStrArr(t[k])) for (const p of t[k]) if (badPath(p)) errors.push(`${k} path not allowed: ${p}`);
   if (!STATUSES.includes(t.status)) errors.push(`bad status: ${t.status}`);
   if (t.sensitive !== undefined && typeof t.sensitive !== 'boolean') errors.push('sensitive must be a boolean');
+  if (t.skeleton !== undefined && typeof t.skeleton !== 'boolean') errors.push('skeleton must be a boolean');
+  if (t.origin !== undefined && t.origin !== 'ci') errors.push('origin must be ci when set');
   if (t.type === 'human' && !(isStrArr(t.steps) && t.steps.length >= 1 && t.steps.length <= 30)) errors.push('human tickets need 1 to 30 steps');
   return { ok: errors.length === 0, errors };
 }
