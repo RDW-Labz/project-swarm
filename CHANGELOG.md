@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.88.1
+
+- Code scanning cleanup: the nine old CodeQL alerts (tests that built `-e` scripts and preload modules by splicing values into code now pass them as arguments or environment variables) and two alerts from the last releases. One was a real bug: the production-word check in `ci` preview hooks split an argument on the letter `s` instead of on whitespace (`'[=:,\\s]+'` in a string), so `stage production` was not caught; now fixed with a test.
+
 ## 1.88.0
 
 - Merge guard: `swarm merge PR [--repo OWNER/NAME]` squash-merges only when every check of the PR head is green (a rerun replaces an older failed run; failing, pending, cancelled or missing checks refuse), the PR is open, mergeable and based on the default branch, and no other open PR is stacked on its branch; there is no flag to skip it. `swarm ship` now reads the PR again right before merging and refuses with any failing or pending check, required or not (`--wait-required-only` only limits what it waits for first; pending ones are waited for, `ci-pending` on timeout). An Opus review (2 high, 5 medium, 6 low) was fixed before release: every check item counts on its own, required checks that have not reported are pending, `mergeable` must be known, the local update only runs in the merged repository. Doc: docs/merge-guard.md, design docs/plans/merge-guard-design.md.
