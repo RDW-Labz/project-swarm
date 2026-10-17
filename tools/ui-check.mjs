@@ -12,6 +12,7 @@ import { pathToFileURL } from 'node:url';
 import { decodePng, gridSignature, compareSignatures } from './png-signature.mjs';
 import { compareScreen, UI_DEFAULTS } from './ui-compare.mjs';
 import { readProfile, contextEnvFor } from './scope-commands.mjs';
+import { freePort, expandStart, startEnv, mockupUrlSuffix } from './ui-server.mjs';
 import { workTreeFingerprint } from './work-tree.mjs';
 import { safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 
@@ -83,6 +84,7 @@ try {
       const page = await context.newPage();
       try {
         await page.goto(screen[side + 'Url'], { waitUntil: 'load', timeout: spec.timeoutMs });
+        if (screen.waitFor) { try { await page.waitForSelector(screen.waitFor, { timeout: 15000 }); } catch (waitError) { /* the metrics show what is missing */ } }
         await page.waitForTimeout(600);
         const file = path.join(spec.out, screen.id, side + '.png');
         fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -145,15 +147,20 @@ async function answers(url, fetchImpl, timeoutMs = 2000) {
 }
 
 // Starts the profile's dev server when nothing answers at the base url. Returns { stop, started }.
-async function ensureServer(config, baseUrl, fetchImpl, { cwd, log }) {
+async function ensureServer(config, baseUrl, fetchImpl, { cwd, log, explicitBase = false }) {
+  // With a start command the check runs its own server on a free port: the owner's dev server (which may serve other code) is never used.
+  // An explicit --base-url, or a profile without a start command, uses what answers there.
+  const own = Boolean(config.start) && !explicitBase;
+  const port = own ? String(await freePort()) : new URL(baseUrl).port;
+  if (own) baseUrl = `http://127.0.0.1:${port}`;
   const ready = baseUrl + config.readyPath;
-  if (await answers(ready, fetchImpl)) return { stop: async () => {}, started: false };
+  if (!own && await answers(ready, fetchImpl)) return { stop: async () => {}, started: false, base: baseUrl };
   if (!config.start) throw fail('ui-server', `nothing answers at ${ready} and the profile has no ui.start command`);
-  const port = new URL(baseUrl).port;
   const logDir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-ui-server-'));
   const logFile = path.join(logDir, 'server.log');
   const handle = await fs.open(logFile, 'wx');
-  const child = spawn(config.start[0], config.start.slice(1), { cwd, shell: false, detached: true, stdio: ['ignore', handle.fd, handle.fd], env: allowedEnv(port ? { PORT: port } : {}) });
+  const startArgv = own ? expandStart(config.start, Number(port)) : config.start;
+  const child = spawn(startArgv[0], startArgv.slice(1), { cwd, shell: false, detached: true, stdio: ['ignore', handle.fd, handle.fd], env: allowedEnv(own ? startEnv(Number(port)) : (port ? { PORT: port } : {})) });
   live.add(child.pid);
   let exited = false;
   child.on('error', () => { exited = true; });
@@ -161,7 +168,7 @@ async function ensureServer(config, baseUrl, fetchImpl, { cwd, log }) {
   const stop = async () => { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } live.delete(child.pid); await handle.close().catch(() => {}); await fs.rm(logDir, { recursive: true, force: true }); };
   const deadline = Date.now() + config.timeoutSec * 1000;
   while (Date.now() < deadline && !exited) {
-    if (await answers(ready, fetchImpl)) { log?.(`dev server started: ${config.start.join(' ')}`); return { stop, started: true }; }
+    if (await answers(ready, fetchImpl)) { log?.(`dev server started: ${startArgv.join(' ')}`); return { stop, started: true, base: baseUrl }; }
     await new Promise(resolve => setTimeout(resolve, 500));
   }
   const tail = (await fs.readFile(logFile, 'utf8').catch(() => '')).slice(-400);
@@ -218,13 +225,14 @@ async function runUiCheckInner(root, { ids, baseUrl: override, deps }) {
   const checkMockups = () => { for (const screen of chosen) if (!env.existsMockup(screen.mockup)) throw fail('ui-mockup', `the mockup of ${screen.id} (${screen.mockup}) is missing, a symlink, or not an allowed project file`); };
   checkMockups();
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const server = await ensureServer(config, base, fetchImpl, { cwd: root });
+  const server = await ensureServer(config, base, fetchImpl, { cwd: root, explicitBase: override !== undefined });
+  const pageBase = server.base ?? base;
   const shotsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-ui-shots-'));
   let shots;
   try {
     // The dev server runs project code: the mockups are checked again right before the browser opens them.
     checkMockups();
-    const specScreens = chosen.map(screen => ({ id: screen.id, viewport: screen.viewport ?? config.viewport, mockupUrl: pathToFileURL(path.join(realRoot, screen.mockup)).href, pageUrl: base + screen.route }));
+    const specScreens = chosen.map(screen => ({ id: screen.id, viewport: screen.viewport ?? config.viewport, mockupUrl: pathToFileURL(path.join(realRoot, screen.mockup)).href + mockupUrlSuffix(screen), pageUrl: pageBase + screen.route, ...(screen.waitFor ? { waitFor: screen.waitFor } : {}) }));
     shots = await (deps.browser ?? runBrowser)({ root: realRoot, screens: specScreens, out: shotsDir, timeoutMs: config.timeoutSec * 1000 });
     const tree = deps.tree !== undefined ? deps.tree : await workTreeFingerprint(root);
     return await finishUiCheck(root, { chosen, shots, shotsDir, tree, serverStarted: server.started, deps });

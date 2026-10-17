@@ -202,3 +202,7 @@ New `tools/session-metrics.mjs` writes and reads a small state.json-compatible `
   flow; ordinary integration still refuses failed runs.
 - Pin install snapshots used by live runs before promising safety across many
   successive upgrades.
+
+## Zero tests is a failure
+
+A check named `test`, `tests` or `test:...` that exits 0 but whose output shows no test ran (node:test `# tests 0`, vitest `No test files found`, jest `No tests found`, pytest `no tests ran`, go `no test files`) is reported as failed with `no-tests` and a note about the wrong runner. This closes the false green of running `node --test` on vitest files. `swarm scope approve` suggests the project's real command for the profile's `verify.command`.

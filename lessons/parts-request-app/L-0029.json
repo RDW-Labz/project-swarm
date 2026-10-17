@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0029",
+  "project": "parts-request-app",
+  "date": "2026-10-17",
+  "stage": "build",
+  "what": "A worker answer cut off at max_tokens, or a ticket that failed twice, was left blocked for a person to write by hand",
+  "rule": "A cut-off or repeatedly failing ticket must climb to a bigger output, then Codex, then Claude on its own; a person is the last step, not the first.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "escalation ladder per ticket (bigger output, hard to Codex, expensive tier to Claude) and ticket sizing at split so one answer fits",
+  "guard": {
+    "kind": "router-rule",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "escalation",
+    "max-tokens",
+    "ticket-size",
+    "truncation"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app S4 report, lesson 29"
+  }
+}

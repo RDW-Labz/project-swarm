@@ -49,6 +49,7 @@ import { runAutopilot } from './autopilot.mjs';
 import { acquireAutopilotLock } from './autopilot-lock.mjs';
 import { appendEvent, readJournal, safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 import { loadRuns } from './brief.mjs';
+import { zeroTestGuard } from './zero-tests.mjs';
 import { projectStatus, formatStatus } from './status.mjs';
 import { zshCompletion, completeRuns } from './completion.mjs';
 import { checkSwarmCommand } from './swarm-bin.mjs';
@@ -4059,7 +4060,7 @@ async function originForCheck(root, baseCommit, check, integratedFiles, newFiles
     await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
   }
 }
-async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { baseCommit, noFlakeCheck = false, portBase, preChecks = [], extraEnv = {}, env: parentEnv = process.env, gitImpl = git, affected = null } = {}) {
+export async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { baseCommit, noFlakeCheck = false, portBase, preChecks = [], extraEnv = {}, env: parentEnv = process.env, gitImpl = git, affected = null } = {}) {
   // Field lesson #160: the root's .swarm/env.json (extraEnv) reaches every check, never PATH/HOME.
   const env = portBase != null || Object.keys(extraEnv).length ? { ...parentEnv, ...extraEnv, ...(portBase != null ? { SWARM_PORT_BASE: String(portBase) } : {}) } : parentEnv;
   const results = [];
@@ -4122,6 +4123,8 @@ async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { b
       swarmLineCount += result.swarmLineCount ?? 0;
     }
     if (swarmLineCount) result.swarmLineCount = swarmLineCount;
+    // A test check that passed but ran no test is a failure (the wrong runner for these files looks green).
+    result = zeroTestGuard(check, result);
     if (affectedMode) { result.mode = 'affected'; result.affectedTests = affectedMode.tests; }
     // Field lesson #239: the orchestrator's own run outside the sandbox is the truth — a check
     // whose output shows it never really ran (macOS denying a nested sandbox_apply call) is tagged
@@ -7108,6 +7111,7 @@ function autopilotDeps() {
   };
   return {
     loadRuns: root => loadRuns(root),
+    unlockTickets: async root => (await import('./scope-commands.mjs')).unlockLedger(root),
     readJournal: root => readJournal(root),
     appendEvent: (root, event) => appendEvent(root, event, { best: true }),
     readPlan,
@@ -7607,8 +7611,9 @@ async function mainInner() {
     }catch(error){
       const lessonFailure = error.lessonError ?? {status:'error',code:'lesson-io',field:'command'};
       if (lessonFailure.code === 'lesson-area-invalid') {
-        const allowedValues = ['tool', 'process', 'security', 'data', 'release', 'docs', 'operations', 'product'];
-        process.stderr.write(`${JSON.stringify({ ...lessonFailure, message: `allowed values: ${allowedValues.join(', ')}`, allowedValues })}\n`);
+        const { lessonAreas } = await import('./lessons.mjs');
+        const allowedValues = await lessonAreas(root).catch(() => ['tool', 'gotchas']);
+        process.stderr.write(`${JSON.stringify({ ...lessonFailure, message: `area must be one of: ${allowedValues.join(', ')} (a skill area needs coordination/skills/<area>/SKILL.md)`, allowedValues })}\n`);
       } else process.stderr.write(`${JSON.stringify(lessonFailure)}\n`);
       process.exitCode=1;
     }

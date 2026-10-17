@@ -3,6 +3,8 @@ import * as scopeModule from './scope.mjs';
 import { queryFromTicket, selectNotes, renderNotes } from './lesson-notes.mjs';
 import { buildTicketContext } from './ticket-context.mjs';
 import { verifyJobFields, managedChecks } from './verify-config.mjs';
+import { qualityChecksForJobs } from './quality-checks.mjs';
+import { routingFor } from './escalation.mjs';
 
 // Lockfiles by package manager: a ticket that writes another manager's lockfile is refused.
 const LOCKFILES={npm:['package-lock.json','npm-shrinkwrap.json'],pnpm:['pnpm-lock.yaml'],yarn:['yarn.lock'],bun:['bun.lockb','bun.lock']};
@@ -56,6 +58,7 @@ function promptFor(t,reqs,lessons,extra={}){
   if(extra.promptLine)lines.push(extra.promptLine);
   if(extra.kind==='db')lines.push('Migrations contain DDL only; tests live in a tests folder, never inside a migration file.');
   if(extra.kind==='ui')lines.push('Import your styles in the app entry (the layout) and use the design tokens; the runner renders the page and compares it with the mockup: fonts, colors, text and layout must match.');
+  if(extra.envLine)lines.push(extra.envLine);
   if(extra.hasPackageJson)lines.push('Use the dependency versions in package.json; do not assume other major versions.');
   if(extra.packageManager)lines.push('Package manager: '+extra.packageManager+'; use only it (no other lockfile).');
   // Notes sit after the ticket text and before the job rule, so the job rule stays last.
@@ -69,7 +72,7 @@ function promptFor(t,reqs,lessons,extra={}){
 }
 
 export function ticketsToManifest(tickets,opts={}){
-  const {ledger,scope,ready=true,contract,maxJobs,lessons,verify,packageManager,contextEnv}=opts;
+  const {ledger,scope,ready=true,contract,maxJobs,lessons,verify,packageManager,contextEnv,quality}=opts;
   if(maxJobs!==undefined&&!(Number.isSafeInteger(maxJobs)&&maxJobs>0)){
     const e=new Error('maxJobs must be a positive safe integer');
     e.code='ticket-max-jobs';
@@ -115,13 +118,15 @@ export function ticketsToManifest(tickets,opts={}){
     const mockupReason=mockupAdded?'design mockup for the ticket screens':null;
     // The contract files are shared by every ticket of a project: ask the Anthropic lane to cache them as the shared prefix.
     const shared=[...new Set([...autoShared,...(t.contracts||[]),...(contract?[contract]:[])])].filter(p=>context.includes(p)).sort().slice(0,10);
-    const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:isSensitiveJob(t,scope,reqs),prompt:promptFor(t,reqs,lessons,{promptLine:vfields?.promptLine,kind,hasPackageJson:context.includes('package.json'),packageManager}),context,outputs,acceptance:t.acceptance||[],timeoutMs:600000};
+    const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:isSensitiveJob(t,scope,reqs),prompt:promptFor(t,reqs,lessons,{envLine:contextEnv?.envLine,promptLine:vfields?.promptLine,kind,hasPackageJson:context.includes('package.json'),packageManager}),context,outputs,acceptance:t.acceptance||[],timeoutMs:600000};
     if(shared.length)job.cacheContext=shared;
     // The mockups are protected paths (workers cannot change them); this job may read them, nothing else protected.
     if(mockupReason)job.allowProtectedContext=mockupReason;
     const deps=(t.dependsOn||[]).filter(d=>inSet.has(d));
     if(deps.length)job.after=deps;
     if(t.risk==='high')job.hard=true;
+    // A ticket that failed before is routed up: a bigger output, then Codex (edits in place), then Claude.
+    if(!vfields)Object.assign(job,routingFor(t.escalation||0,{maxOutputTokens:job.maxOutputTokens}));
     // A worker that can run the ticket's tests (a shell-capable lane) with the project's setup commands and test environment.
     if(vfields){
       job.agent=vfields.agent;job.model=vfields.model;
@@ -139,6 +144,9 @@ export function ticketsToManifest(tickets,opts={}){
   manifest.jobs=jobs;
   // The same tests run on every merge-queue batch, so a ticket is only done when the runner saw them pass.
   if(verify){const m=managedChecks(verify);if(m.checks.length)manifest.checks=m.checks;if(m.preChecks.length)manifest.preChecks=m.preChecks;}
+  // Typecheck, lint (and build when the profile opts in) run on every merge batch that holds a build ticket.
+  const qc=qualityChecksForJobs(jobs,quality||[]);
+  if(qc.length)manifest.checks=[...(manifest.checks||[]),...qc].slice(0,10);
   return {manifest,warnings,skipped};
 }
 
@@ -152,6 +160,9 @@ export function ticketOutcome(state,ledger){
     const error=s?.error;
     if(st==='complete')moves.push({id,to:'review',note:'run complete'});
     else if(st==='failed'||st==='timeout')moves.push({id,to:'blocked',note:String(error||st)});
+    // A job skipped because one it waits on failed is blocked by dependencies (it unlocks by itself); a cancelled run just frees the ticket.
+    else if(st==='skipped')moves.push({id,to:'blocked',note:String(error||st),reason:'deps'});
+    else if(st==='cancelled')moves.push({id,to:'ready',note:'run cancelled'});
   }
   return moves;
 }

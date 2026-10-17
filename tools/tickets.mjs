@@ -137,7 +137,7 @@ export function createLedger({ scope, tickets = [], now = Date.now() } = {}) {
   return { version: 1, scope, tickets, changeOrders: [], approved: null, createdAt: at, updatedAt: at };
 }
 
-export async function transition(root, id, to, { by = 'system', note, now = Date.now() } = {}) {
+export async function transition(root, id, to, { by = 'system', note, now = Date.now(), reason } = {}) {
   const ledger = await readLedger(root);
   if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
   const ticket = ledger.tickets.find(t => t.id === id);
@@ -149,6 +149,8 @@ export async function transition(root, id, to, { by = 'system', note, now = Date
   }
   const from = ticket.status;
   ticket.status = to;
+  // Why a ticket is blocked decides whether it may unlock by itself: only a dependency block does.
+  if (to === 'blocked') ticket.blockReason = reason ?? 'manual'; else delete ticket.blockReason;
   ledger.updatedAt = new Date(now).toISOString();
   await writeLedger(root, ledger);
   await appendLog(root, { event: 'transition', id, from, to, by, note: note ?? null });

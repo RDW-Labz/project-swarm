@@ -29,3 +29,13 @@ The profile in `.project-swarm.json` may carry an `approval` block: `autoMergeTo
 ## Safety
 
 The split jobs are `sensitive: true` (they see your whole scope), so they never go to a rented, OpenRouter, OpenAI, Gemini or Lambda lane. Tickets are sensitive when the worker says so or their text names something in the scope's Sensitive list. Put no secrets or customer data in the scope file.
+
+## Done means checked (lessons 28 to 32)
+
+Design: [plans/lessons-28-32-design.md](plans/lessons-28-32-design.md).
+
+- **Quality gate.** Every merge batch that holds a build ticket also runs the project's typecheck and lint (found in `package.json` scripts `typecheck` or `type-check` and `lint`, or `tsc --noEmit` when there is a `tsconfig.json`). `build` is off unless you opt in. Profile block `quality`: `{ "typecheck": ["npx","tsc","--noEmit"], "lint": false, "build": true }` (an argv replaces the detected command, `false` turns it off, `true` means the package script). `scope sync --integrated` keeps a build ticket in review until those checks passed on the batch that integrated it. No test is needed for this.
+- **Escalation instead of a person.** A job that fails, or whose answer was cut off (`max_tokens`, `output-cap-exceeded`), sends its ticket back to ready one level higher: level 1 a bigger output (up to 32768 tokens), level 2 Codex first (it edits in place, no output cap), level 3 Claude (`expensive`). A cut-off answer starts at level 2. Only when level 3 fails does the ticket block (`blockReason: failure`). `swarm scope split` tells the worker to keep tickets to 4 files and about 12 KB each, and `scope approve` warns about tickets that look too big.
+- **Auto-unlock.** A ticket blocked only by dependencies (its job was skipped because one it waits on failed) becomes ready when all of them are done: `swarm go --scope` and `autopilot` both do it. Tickets blocked by failure or by hand (`swarm tickets ID --set blocked`) stay blocked.
+- **Real test commands.** A test check that passes but ran 0 tests (wrong runner for the files, for example `node --test` on vitest files) now fails with `no-tests`. `scope approve` prints the test command detected from `package.json` (vitest, jest, playwright, node:test, pytest) when the profile has no `verify` block.
+- **Example env names.** The variable names (never values) in `.env.example` are added to every ticket prompt.

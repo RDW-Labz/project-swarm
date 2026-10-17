@@ -18,7 +18,7 @@ const argsError = field => lessonError('lesson-args', { field });
 const ioError = field => lessonError('lesson-io', { field });
 
 export const LESSON_USAGE = `Usage: swarm [--root PROJECT] lesson COMMAND [options]
-  add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT]
+  add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT]   (AREA: tool, gotchas, or a skill folder in coordination/skills/)
   list [--queued|--shipped] [--area AREA] [--older-than DAYS]
   set ID --status queued|built|shipped|dropped [--version V] [--test PATH]
   manifest ID --agent A --model M [--tier cheap|mid|expensive]
@@ -399,6 +399,19 @@ export async function lessonQueueWarnings(root, options = {}) {
   const oldest = queued[0];
   await assertLessonPrivateSafe(root, { id: oldest.id, date: oldest.date, status: oldest.status }, options);
   return [`lesson-queue: ${queued.length} queued, oldest #${oldest.id} (${lessonAgeDays(oldest.date, options.now ?? Date.now)} days)`];
+}
+
+// The areas `lesson add` accepts in this project: the tool itself, the gotchas file, or a skill folder under coordination/skills/.
+export async function lessonAreas(root) {
+  const areas = ['tool', 'gotchas'];
+  try {
+    const entries = await fs.readdir(path.join(root, 'coordination', 'skills'), { withFileTypes: true });
+    for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      if (!entry.isDirectory() || !AREA.test(entry.name) || areas.includes(entry.name)) continue;
+      try { if ((await fs.lstat(path.join(root, 'coordination', 'skills', entry.name, 'SKILL.md'))).isFile()) areas.push(entry.name); } catch { /* no skill file */ }
+    }
+  } catch { /* no skills folder */ }
+  return areas;
 }
 
 async function routeFor(root, row) {
