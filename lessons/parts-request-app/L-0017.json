@@ -17,7 +17,7 @@
   "guard": {
     "kind": "lint",
     "text": "",
-    "status": "proposed"
+    "status": "built"
   },
   "tags": [
     "change-orders",

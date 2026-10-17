@@ -216,3 +216,8 @@ Batch A Opus review (claude opus, about $0.5): 17 findings. Fixed: the approve-m
 ### approve-manifest content hash (1.94.1)
 
 Follow-up from the batch A review: the approval names the file and the sha256 of the proposed bytes. Eval 36.4 (gate unit) and 36.3 (CLI). The other three review notes are in docs/plans/ideas.md.
+### Batch B (1.95.0): lessons 16, 21, 26 (and 2 closed)
+
+Hand-written (core-runner wiring and small modules: tools/tool-config.mjs, tools/process-guard.mjs). Evals 37.1 to 37.4 in tests/batch-b-eval.test.mjs. Lesson 2 needed no code: the fresh-process installer shipped in 1.66.0 with a test. No release tag until the owner says the parts app is between stages.
+
+Batch B/C Opus review (claude opus, about $0.5): 14 findings. B fixed: tool-config matches only commands of tools that cannot run without a config (supabase, cypress, prisma, drizzle-kit; dropped vitest, jest, playwright, eslint, whose defaults or other config places made warnings false), config found at any depth or on disk; loose-kill allows pkill -P/-F, pid-file kills and grep/echo of the word, and now catches /usr/bin/pkill, lsof/pidof-fed kills, fuser -k, kill-port; Array.isArray guards; DB rules only for supabase/tests files or a test ticket naming pgTAP; scope check survives an unreadable ledger. No opt-out for the loose-kill refusal (a pid-based command is allowed instead). C fixed on its branch: test file names.

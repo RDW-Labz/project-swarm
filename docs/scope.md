@@ -59,3 +59,8 @@ Design: [plans/lessons-28-32-design.md](plans/lessons-28-32-design.md).
 - When the security gate blocks a dependency or workflow file ("the owner must review it"), read it, then run `swarm integrate RUN --approve-manifest FILE`. It is for that run only and is written to the journal as a decision.
 
 `--approve-manifest FILE` approves the exact content the workers proposed (its sha256 is in the decision record). If the file changes afterwards, the gate blocks it again until you approve it again.
+## Tool config files and database tests
+
+- `scope split`, `scope approve` and `scope check` warn when an acceptance check runs a tool command (supabase, cypress, prisma, drizzle-kit) and no ticket writes its config file (for example `supabase/config.toml`) and the project has none.
+- A ticket that writes or runs database tests gets the runner rules in its prompt (pgTAP: every .sql under the tests folder runs; `\ir` stays inside the mounted folder; no dblink as a non-superuser).
+- A manifest command that stops processes by a loose pattern (`pkill`, `killall`, `kill $(pgrep ...)`) is refused with `loose-kill`.
