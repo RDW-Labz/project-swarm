@@ -48,6 +48,7 @@ import { pendingNotifications, macNotify } from './notify.mjs';
 import { resolveDefaultRoot, INSTALL_COMMANDS, runBriefCommand, runHandoffCommand, runCheckpointCommand, journalAfterCommand } from './project-commands.mjs';
 import { runAutopilot } from './autopilot.mjs';
 import { acquireAutopilotLock } from './autopilot-lock.mjs';
+import { looseKillCommands, LOOSE_KILL_RULE } from './process-guard.mjs';
 import { appendEvent, readJournal, safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 import { loadRuns } from './brief.mjs';
 import { zeroTestGuard } from './zero-tests.mjs';
@@ -1222,6 +1223,8 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     if (manifest.jobs.some(job => job.outputs?.includes(manifest.ledger.path))) fail('ledger-is-output: ledger path is a job output', 'ledger-is-output');
   }
   for (const value of [manifest, ...manifest.jobs]) if (value?.report !== undefined && value.report !== 'short') fail('report must be "short"', 'report-invalid-mode');
+  // Lesson 26: a command that stops processes by a loose pattern is refused.
+  { const loose = looseKillCommands(manifest); if (loose.length) fail(`loose-kill: ${loose[0]}; stop only a process you started, by its id (pkill -f and killall can kill programs that are not yours)`, 'loose-kill'); }
   // Field lesson #221: an empty context file (0 bytes, or whitespace only) is always a mistake —
   // ask/validate/run refuse it by path — unless the manifest names it here as a deliberate
   // exception (e.g. a placeholder a job is meant to fill in).

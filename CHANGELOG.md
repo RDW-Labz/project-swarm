@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.95.0
+
+- Lesson 16: `scope split --ingest`, `scope approve` and `scope check` warn when an acceptance check runs supabase, playwright, vitest, jest, cypress, prisma, drizzle or eslint and no ticket writes its config file and the project has none. The split prompt asks for that ticket.
+- Lesson 21: a ticket that writes or runs database tests (supabase/tests, pgTAP, `supabase test db`) gets the runner rules in its prompt: every .sql under the tests folder runs, `\ir` stays inside the mounted folder, no dblink as a non-superuser.
+- Lesson 26: a manifest check, preCheck or job setup that stops processes by a loose pattern (`pkill`, `killall`, `kill $(pgrep ...)`) is refused (`loose-kill`). Shell workers and the agent pointer files (AGENTS.md, CLAUDE.md, GEMINI.md, cursor rule) carry the rule.
+- Lesson 2: closed. The updater has run the new release's installer in a fresh process since 1.66.0 (test: tests/update.test.mjs). The lesson records now say so; lessons 14, 16, 17, 21 and 26 are marked built.
+
 ## 1.94.1
 
 - `swarm integrate --approve-manifest FILE` is now tied to the file's exact content: swarm takes the sha256 of the bytes the workers proposed, the gate lets only that content through, and a later change to the same file is blocked again with "changed after you approved it (approved X, now Y)". The decision record names the hash.
