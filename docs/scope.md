@@ -64,3 +64,7 @@ Design: [plans/lessons-28-32-design.md](plans/lessons-28-32-design.md).
 - `scope split`, `scope approve` and `scope check` warn when an acceptance check runs a tool command (supabase, cypress, prisma, drizzle-kit) and no ticket writes its config file (for example `supabase/config.toml`) and the project has none.
 - A ticket that writes or runs database tests gets the runner rules in its prompt (pgTAP: every .sql under the tests folder runs; `\ir` stays inside the mounted folder; no dblink as a non-superuser).
 - A manifest command that stops processes by a loose pattern (`pkill`, `killall`, `kill $(pgrep ...)`) is refused with `loose-kill`.
+
+## Integration test path and shared files
+
+The route-level test of an integration ticket must be a test file (a tests, e2e or spec folder, or a `.test` or `.spec` file). Integration tickets that write the same file are chained by the runner, the later one after the earlier.

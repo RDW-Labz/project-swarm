@@ -26,7 +26,7 @@ import { doneEvidence, ticketTests } from './verify-config.mjs';
 import { deriveQualityChecks, qualityEvidence } from './quality-checks.mjs';
 import { nextStep, sizeTicket } from './escalation.mjs';
 import { unlockReady, releaseReady } from './ticket-unlock.mjs';
-import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, chainSharedFiles, builtRequirements, unwiredRequirements, moduleTickets } from './wiring.mjs';
+import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets } from './wiring.mjs';
 import { parseEnvNames, envNamesLine } from './env-names.mjs';
 import { detectTestCommand } from './zero-tests.mjs';
 import { execFile } from 'node:child_process';
@@ -898,7 +898,7 @@ async function editTicketFiles(root, ledger, rest, flags) {
       const owner = fresh.tickets.find(x => x.id !== ticket.id && x.status !== 'cancelled' && (x.files ?? []).includes(f));
       if (owner) problems.push(`${f} is already written by ${owner.id}`);
     }
-    if (next.integration === true && !(next.tests ?? []).length) problems.push('an integration ticket needs a route-level test');
+    if (next.integration === true && !(next.tests ?? []).some(looksLikeTestFile)) problems.push('an integration ticket needs a route-level test file (in a tests folder, or ending in .test or .spec)');
     if (problems.length) return out(`refused:\n${problems.map(x => `  ${x}`).join('\n')}`, 1);
     const summary = Object.keys(changes).map(k => `  ${k}: ${(ticket[k] ?? []).join(', ') || 'none'}  ->  ${next[k].join(', ') || 'none'}`).join('\n');
     if (flags.yes !== true) return out(`${ticket.id}:\n${summary}\nRerun with --yes to apply${isApproved(fresh) ? ' (the approval is renewed over the new lists)' : ''}.`);

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.96.0
+
+- The route-level test of an integration ticket must be a test file (a tests, e2e or spec folder with a source file that is not a helper, fixture, support file or page; a `.test` or `.spec` file; `tests.py`, `test_*.py`, `*_test.go`, `*_test.ts`); a page or module file named as the test is refused at split. `swarm tickets --tests` applies the same rule to integration tickets.
+- Lesson 1 and the strict-cancel option are parked in docs/plans/ideas.md.
+
 ## 1.95.0
 
 - Lesson 16: `scope split --ingest`, `scope approve` and `scope check` warn when an acceptance check runs a supabase, cypress, prisma or drizzle-kit command and no ticket writes its config file and the project has none. The split prompt asks for that ticket.
