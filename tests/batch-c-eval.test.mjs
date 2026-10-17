@@ -37,8 +37,8 @@ test('eval 38.1: the route-level test of an integration ticket must be a real te
   assert.equal(refused.exitCode, 1);
   assert.match(refused.stdout, /R-001: the route-level test of its integration ticket is not a test file \(src\/app\/page\.tsx\)/);
   assert.equal(await readLedger(root), null, 'nothing written');
-  for (const ok of ['tests/routes.test.mjs', 'src/a.spec.ts', 'e2e/list.ts', 'tests/test_routes.py', 'pkg/routes_test.go', 'supabase/tests/r1.sql']) assert.equal(looksLikeTestFile(ok), true, ok);
-  for (const bad of ['src/app/page.tsx', 'src/routes/list.mjs', 'tests/', '', undefined]) assert.equal(looksLikeTestFile(bad), false, String(bad));
+  for (const ok of ['tests/routes.test.mjs', 'src/a.spec.ts', 'e2e/list.ts', 'tests/test_routes.py', 'pkg/routes_test.go', 'supabase/tests/r1.sql', 'polls/tests.py', 'routes_test.ts']) assert.equal(looksLikeTestFile(ok), true, ok);
+  for (const bad of ['src/app/page.tsx', 'src/routes/list.mjs', 'tests/', '', undefined, 'cypress/support/commands.ts', 'tests/fixtures/data.json', 'src/app/test/page.tsx', 'tests/helpers/db.ts', 'e2e/notes.md']) assert.equal(looksLikeTestFile(bad), false, String(bad));
   await fakeRun(root, 'r2', [item('a', ['R-001']), mount('m1', 'R-001'), item('b', ['R-002']), mount('m2', 'R-002', { files: ['src/routes/m2.mjs'] })]);
   assert.equal((await runScopeCommand(root, 'scope', ['split', '--ingest', 'r2'])).exitCode, 0);
 });

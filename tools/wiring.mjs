@@ -13,8 +13,11 @@ export const WIRE_ONLY_PROMPT = 'Write ONLY integration tickets (every ticket ha
 
 // A test path must look like a test: a test folder, a .test/.spec file, or a python/go test file. A page or module file is not a route-level test.
 const TEST_DIR_RE = /(^|\/)(tests?|__tests__|e2e|spec|specs|cypress|playwright)\//i;
-const TEST_FILE_RE = /\.(test|spec)\.[A-Za-z0-9]+$|(^|\/)test_[^/]+\.py$|_test\.(py|go)$/i;
-export const looksLikeTestFile = p => typeof p === 'string' && (TEST_FILE_RE.test(p) || TEST_DIR_RE.test(p)) && !/\/$/.test(p);
+const TEST_FILE_RE = /\.(test|spec)\.[A-Za-z0-9]+$|(^|\/)tests\.py$|(^|\/)test_[^/]+\.py$|_test\.(py|go|[cm]?[jt]sx?)$/i;
+// In a test folder the file must still be a source or test file, not a helper, fixture, support file, data file or a page.
+const CODE_EXT_RE = /\.(?:[cm]?[jt]sx?|py|go|rb|java|kt|rs|sql|feature)$/i;
+const NOT_A_TEST_RE = /(^|\/)(support|fixtures?|__fixtures__|__mocks__|mocks?|helpers?)\/|(^|\/)(page|route|layout)\.[A-Za-z0-9]+$/i;
+export const looksLikeTestFile = p => typeof p === 'string' && !/\/$/.test(p) && (TEST_FILE_RE.test(p) || (TEST_DIR_RE.test(p) && CODE_EXT_RE.test(p) && !NOT_A_TEST_RE.test(p)));
 
 const buildOf = t => t && t.type === 'build' && t.status !== 'cancelled';
 
