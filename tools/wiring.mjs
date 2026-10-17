@@ -56,6 +56,35 @@ export function addWiringDeps(added, existing = []) {
   return added;
 }
 
+// Two integration tickets that write the same file (router, navigation, layout), in any stages, cannot run in the same wave: the later one (by id)
+// waits for the earlier, unless they are already ordered. Mutates the tickets of `added` and returns them.
+export function chainSharedFiles(added, existing = []) {
+  const all = [...existing, ...added];
+  const reaches = (from, target, seen = new Set()) => {
+    if (seen.has(from.id)) return false;
+    seen.add(from.id);
+    return (from.dependsOn ?? []).some(d => d === target || reaches(all.find(x => x.id === d) ?? { id: d }, target, seen));
+  };
+  const integ = all.filter(t => buildOf(t) && t.integration === true).sort((a, b) => (a.id < b.id ? -1 : 1));
+  const newIds = new Set(added.map(t => t.id));
+  for (let i = 0; i < integ.length; i += 1) for (let j = 0; j < i; j += 1) {
+    const early = integ[j], late = integ[i];
+    if (!newIds.has(late.id)) continue;
+    if (!(late.files ?? []).some(f => (early.files ?? []).includes(f))) continue;
+    if (reaches(late, early.id) || reaches(early, late.id)) continue;
+    late.dependsOn = [...new Set([...(late.dependsOn ?? []), early.id])];
+  }
+  return added;
+}
+
+// Requirements whose build tickets are all done: already built, so `--wire` leaves them alone unless asked (--all).
+export function builtRequirements(tickets, reqIds) {
+  return reqIds.filter(req => {
+    const mine = (tickets ?? []).filter(t => buildOf(t) && (t.scopeRefs ?? []).includes(req));
+    return mine.length > 0 && mine.every(t => t.status === 'done');
+  });
+}
+
 // For `scope split --wire`: the requirements that have module tickets but no integration ticket.
 export function unwiredRequirements(tickets) {
   const list = tickets ?? [];

@@ -203,3 +203,7 @@ One row per plan phase, built with the swarm itself. Rules (from Braden): worker
 Owner asked for a visible trace when a cancel drops a dependency: one non-blocking inbox note per prune, listing the affected tickets. Covered by eval 34.3. Hand-written (small core-runner wiring).
 
 Lesson 35 (parts app): one new requirement (R-037) by change order made the split worker rewrite the whole S5 stage with guessed paths; the merge was refused and the ticket was hand-written. Fixed in 1.93.1: the split prompt carries the real file list and existing tickets, and a merge ingest refuses any ticket outside the requirements that have none. Eval: tests/lesson-35-eval.test.mjs.
+
+### Lesson 37 (1.93.2): the --wire flow
+
+Hand-written (small core wiring). Evals 37.1 to 37.4 in tests/lesson-37-eval.test.mjs reproduce the parts-app failure (done S1 re-wired, two integration tickets on one router file, .env.example refused, nameless conflict error).

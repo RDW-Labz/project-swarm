@@ -128,7 +128,12 @@ export function checkTicketTree({ scope, tickets = [], sizeBudget } = {}) {
   if (missingAcceptance.length) errors.push({ code: 'missing-acceptance', message: `${missingAcceptance.length} ticket(s) lack acceptance criteria: ${listOf(missingAcceptance)}`, ids: missingAcceptance });
   if (unknownDeps.length) errors.push({ code: 'unknown-dep', message: `${unknownDeps.length} dependency reference(s) to unknown tickets`, deps: unknownDeps });
   if (cycles.length) errors.push({ code: 'cycle', message: `dependency cycle among: ${listOf(cycles[0])}`, ids: cycles[0] });
-  if (conflicts.length) errors.push({ code: 'conflict', message: `${conflicts.length} file ownership conflict(s) within a wave`, conflicts });
+  if (conflicts.length) {
+    // Name the exact tickets and file, so the fix is one dependsOn (or one file move), not a search.
+    const title = id => { const t = active.find(x => x.id === id); return t ? `${id} "${String(t.title ?? '').slice(0, 50)}"` : id; };
+    const detail = conflicts.slice(0, 6).map(c => `${c.tickets.map(title).join(' and ')} both write ${c.file} (wave ${c.wave + 1})`);
+    errors.push({ code: 'conflict', message: `${conflicts.length} file ownership conflict(s) within a wave: ${detail.join('; ')}${conflicts.length > 6 ? `; and ${conflicts.length - 6} more` : ''}. Make one wait for the other (dependsOn) or give them different files.`, conflicts });
+  }
   if (oversize.length) errors.push({ code: 'oversize', message: `${oversize.length} ticket(s) over the size budget or not S/M: ${listOf(oversize)}`, ids: oversize });
 
   return { ok: errors.length === 0, errors, warnings, coveragePct, uncovered, untraced, missingAcceptance, badRefs, unknownDeps, cycles, conflicts, oversize };

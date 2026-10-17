@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.93.2
+
+- Lesson 37 (the `--wire` flow failed on the parts app):
+  - Integration tickets that write the same file (router, navigation, layout), even in different stages, are chained by code at ingest: the later one waits for the earlier, so they never share a wave.
+  - `scope split --wire` skips requirements whose build tickets are all done (S1) and says so; `--all` includes them.
+  - `.env.example` and other names-only templates (`.env.local.example`, `config.example.json`) are allowed as read-only context. They are still refused as outputs, and a real `.env` is still refused everywhere.
+  - A file ownership conflict at ingest now names the tickets and the file ("T-0001 \"Create list page\" and T-0002 \"Add list filters\" both write src/pages/list.tsx (wave 1)") and says how to fix it.
+
 ## 1.93.1
 
 - A cancel that drops a dependency now leaves one non-blocking note in `swarm inbox` naming the tickets that no longer wait (`FYI, no action needed`). It never pauses a run; close it with `swarm done ID`. Covers cancel, `go --scope` and autopilot.

@@ -39,6 +39,13 @@ function secretEntries(file) {
   return found;
 }
 
+// A template that holds names, not values (.env.example, .env.sample, config.example.json, terraform.tfvars.example): safe to READ as context.
+// It is still protected from writes, and a file that merely sits next to a secret is not an example.
+export function isExampleFile(file) {
+  const name = String(file).split('\\').join('/').split('/').pop().toLowerCase();
+  return /^\.env(?:\.[a-z0-9_-]+)*\.(?:example|sample|template|dist)$/.test(name) || /^[a-z0-9_.-]+\.(?:example|sample|template)(?:\.[a-z0-9]+)?$|^[a-z0-9_.-]+\.(?:example|sample|template)$/.test(name) && !/^\.env/.test(name) && !/(?:^|[._-])(?:id_rsa|id_dsa|id_ed25519|credentials|secrets?)(?:[._-]|$)/.test(name);
+}
+
 // True when a repo path names a secret: any .env file (env.example.txt is a template and is fine), keys, certificates, secret folders.
 export function isSecretPath(file) {
   const parts = String(file).split('\\').join('/').split('/');
