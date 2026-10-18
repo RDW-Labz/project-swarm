@@ -250,3 +250,7 @@ Lesson 39 real integration tests (tests/lesson-39-integrate.test.mjs): a ticket 
 ### Lessons import (1.101.0)
 
 Hand-written glue (about 90 lines over the existing backfill mapping), not a swarm job: too small and too tied to existing helpers to be worth a worker. Imported parts-request-app lessons 33-47 (15 new; 32 skipped as already here).
+
+### Security review retry (1.102.0)
+
+Hand-written (priority fix from parts-app S9; small, in the scope command and the review gate). Tests: tests/review-retry.test.mjs (one per rule) plus the changed eval 40.4.

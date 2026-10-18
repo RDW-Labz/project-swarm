@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.102.0
+
+Security review that cannot be skipped by accident (parts-app S9: five tickets were closed with `--accept-unreviewed` because the Opus reviews had no `reviews` array):
+- A review answer with no `{"reviews":[...]}` result is asked again once with a format reminder (`scope security-review`, one extra Opus run capped at $1.5, at most once per review; the second answer is checked like the first: right job, opus, complete).
+- If it is still unusable the tickets are **review-blocked**: they stay in review (never done), with the reason on the ticket (`securityReview`), in the log (`review-blocked`), in the sync output and in swarm watch. A later verdict clears the mark.
+- `--accept-unreviewed` needs `--reason TEXT` (at least 8 characters) as well as `--yes`; the reason goes to the log, to the ticket (`securityReview: accepted-unreviewed`) and to swarm watch.
+- An Opus review (6 medium, 5 low) was fixed: the second ask runs only the single read-only Opus job sync wrote, a rerun reads the earlier second answer instead of paying again, an empty `reviews` list counts as no answer, a blocked ticket needs a verdict newer than the block, `--accept-unreviewed` never overrides a failing review or marks a ticket whose review passed and logs only real skips, and both accept flags are checked before anything is logged.
+
 ## 1.101.0
 
 - `swarm lessons import <project-path> [--project NAME] [--dry-run]`: reads another project's `coordination/swarm-lessons.jsonl` (read only: a regular file, 2 MB cap, no symlink) and writes the lessons it does not have yet to `lessons/<NAME>/`, redacted, with stage and tags from the text; running it again skips what exists. First use: the parts-request-app lessons 33 to 47 (the earlier 32 were already here). An Opus review (2 high, 3 medium, 4 low) was fixed: no symlink on the way and one open handle with the size checked on it, a bad date fails only its row, text is redacted before it is cut, an existing id with another rule is a conflict, ids must be whole numbers, inherited object keys are ignored. Doc: docs/lessons-loop.md.

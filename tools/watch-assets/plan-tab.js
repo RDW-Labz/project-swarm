@@ -143,6 +143,7 @@
     meta.appendChild(pill(t.status || 'unknown', statusKind(t.status)));
     if (t.risk) meta.appendChild(pill('risk ' + t.risk, t.risk === 'high' ? 'bad' : t.risk === 'med' || t.risk === 'medium' ? 'warn' : 'good'));
     if (t.sensitive) meta.appendChild(pill('sensitive', 'lav'));
+    if (t.securityReview) meta.appendChild(pill(t.securityReview.state === 'blocked' ? 'review-blocked' : 'unreviewed', t.securityReview.state === 'blocked' ? 'bad' : 'warn'));
     meta.appendChild(el('span', 'pl-lane', t.lane || 'no lane'));
     card.appendChild(meta);
     return card;
