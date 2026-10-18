@@ -192,3 +192,15 @@ export async function addComment(root, id, body, { now = Date.now() } = {}) {
   await writeGallery(root, stored);
   return comment;
 }
+
+// Records which ticket a comment became (matched by time and text, only while it has none).
+export async function linkCommentTicket(root, id, comment, ticketId) {
+  const { results, stored } = await loadForWrite(root);
+  requireScreen(results, id);
+  const entry = stored.get(id);
+  const target = entry?.comments.find(c => c.ticket === null && c.at === comment.at && c.text === comment.text);
+  if (!target) return false;
+  target.ticket = text(ticketId, 200);
+  await writeGallery(root, stored);
+  return true;
+}

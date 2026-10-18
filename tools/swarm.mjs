@@ -7131,12 +7131,13 @@ const GO_FLAGS_WITH_VALUE = new Set(['--commit-message', '--repo', '--pr', '--re
 
 // Pure CLI-flag parsing for `go`, kept separate from go() execution so it is directly testable.
 export function parseGoFlags(flags) {
-  let commitMessage, repo, payloadPath, mergeMethod, timeoutMs, tagTimeoutMs, noFlakeCheck, mutants = false, batch = false, leads, maxJobs, concurrency, maxUsd, maxTokens;
+  let commitMessage, repo, payloadPath, mergeMethod, timeoutMs, tagTimeoutMs, noFlakeCheck, noWatch = false, mutants = false, batch = false, leads, maxJobs, concurrency, maxUsd, maxTokens;
   const requireSections = [], exemptions = [];
   for (let index = 0; index < flags.length; index++) {
     const flag = flags[index];
     if (flag === '--mutants') { mutants = true; continue; }
     if (flag === '--batch') { batch = true; continue; }
+    if (flag === '--no-watch') { noWatch = true; continue; }
     if (flag === '--no-flake-check') { noFlakeCheck = true; continue; }
     if (!GO_FLAGS_WITH_VALUE.has(flag)) fail(`Unknown flag: ${flag}`);
     const value = flags[++index];
@@ -7172,7 +7173,7 @@ export function parseGoFlags(flags) {
     }
   }
   if (repo && !payloadPath) fail('go requires --pr with --repo');
-  return { commitMessage, repo, payloadPath, requireSections, mergeMethod, timeoutMs, mutants, ...(batch ? { batch } : {}), ...(tagTimeoutMs !== undefined ? { tagTimeoutMs } : {}), ...(noFlakeCheck ? { noFlakeCheck } : {}), ...(exemptions.length ? { exemptions } : {}), ...(leads !== undefined ? { leads } : {}), ...(maxJobs !== undefined ? { maxJobs } : {}), ...(concurrency !== undefined ? { concurrency } : {}), ...(maxUsd !== undefined ? { maxUsd } : {}), ...(maxTokens !== undefined ? { maxTokens } : {}) };
+  return { commitMessage, repo, payloadPath, requireSections, mergeMethod, timeoutMs, mutants, ...(batch ? { batch } : {}), ...(tagTimeoutMs !== undefined ? { tagTimeoutMs } : {}), ...(noFlakeCheck ? { noFlakeCheck } : {}), ...(noWatch ? { noWatch } : {}), ...(exemptions.length ? { exemptions } : {}), ...(leads !== undefined ? { leads } : {}), ...(maxJobs !== undefined ? { maxJobs } : {}), ...(concurrency !== undefined ? { concurrency } : {}), ...(maxUsd !== undefined ? { maxUsd } : {}), ...(maxTokens !== undefined ? { maxTokens } : {}) };
 }
 
 // Run through current/, this file's realpath is a snapshot under <install>/versions/<v>/, which
@@ -8609,7 +8610,14 @@ async function mainInner() {
     result=await go(root,argument,goFlags,{
       run: async (goRoot,manifestPath)=>{
         const bytes=await bytesAt(goRoot,manifestPath);if(!bytes)fail(`Missing manifest: ${manifestPath}`);
-        const state=await runManifestChecked(goRoot,JSON.parse(bytes));
+        // Swarm Watch starts with the run when a person is at the terminal (never in CI or a pipe; --no-watch or SWARM_NO_WATCH turns it off).
+        const announce=async runId=>{
+          const {shouldAutoWatch,startWatchBackground}=await import('./watch-cli.mjs');
+          if(!shouldAutoWatch({noWatch:goFlags.noWatch,env:process.env}))return;
+          const url=await startWatchBackground(goRoot,runId);
+          if(url)process.stderr.write(`watch: ${url}\n`);
+        };
+        const state=await runManifestChecked(goRoot,JSON.parse(bytes),started=>{announce(started.id).catch(()=>{});});
         return {id:state.id};
       },
       wait: (goRoot,id)=>waitRun(goRoot,id),

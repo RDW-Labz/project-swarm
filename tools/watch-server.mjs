@@ -53,6 +53,9 @@ export function createWatchServer(opts) {
     getRunSnapshot,
     getPlanSnapshot,
     getGallery,
+    getJobReport,
+    getBoard,
+    indexName = 'index.html',
     commandList,
     contextCommands,
     assetDir,
@@ -177,8 +180,10 @@ export function createWatchServer(opts) {
       return sendAsset(res, method, pathname.slice('/assets/'.length));
     }
     const parts = pathname.split('/');
+    const isJob = parts.length === 3 && parts[1] === 'job' && typeof getJobReport === 'function';
+    const isBoard = pathname === '/board' && typeof getBoard === 'function';
     const isShot = parts.length === 4 && parts[1] === 'shot' && (parts[3] === 'mockup' || parts[3] === 'page');
-    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot) return sendText(res, method, 404, 'not found');
+    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard) return sendText(res, method, 404, 'not found');
     const q = u.searchParams.get('t');
     const h = req.headers['x-watch-token'];
     const ok = (typeof q === 'string' && safeEqual(q, token)) || (typeof h === 'string' && safeEqual(h, token));
@@ -186,9 +191,14 @@ export function createWatchServer(opts) {
       return sendText(res, method, 403, 'forbidden');
     }
     lastActivity = now();
-    if (pathname === '/') return sendAsset(res, method, 'index.html');
+    if (pathname === '/') return sendAsset(res, method, indexName);
     if (pathname === '/api/snapshot') return sendJson(res, method, await payload());
     if (pathname === '/events') return openEvents(res, method);
+    if (isBoard) return sendJson(res, method, (await getBoard()) ?? { runs: [] });
+    if (isJob) {
+      const report = await getJobReport(decodeURIComponent(parts[2]));
+      return report ? sendJson(res, method, report) : sendText(res, method, 404, 'not found');
+    }
     return sendShot(res, method, parts[2], parts[3]);
   }
 

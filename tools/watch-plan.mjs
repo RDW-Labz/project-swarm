@@ -6,7 +6,7 @@ const txt = (v, max = 200) => (v === undefined || v === null ? null : sanitizeWo
 const strs = v => (Array.isArray(v) ? v.filter(x => x !== undefined && x !== null).map(x => sanitizeWorkerText(x, 200)) : []);
 const pick = v => (typeof v === 'number' ? v : typeof v === 'string' ? txt(v) : null);
 const isDone = t => t.status === 'done';
-const isLive = t => t.status !== 'cancelled';
+const isLive = t => t.status !== 'cancelled' && t.status !== 'proposed';
 const cmpId = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const addedCount = v => (Array.isArray(v) ? v.length : Number(v) || 0);
 

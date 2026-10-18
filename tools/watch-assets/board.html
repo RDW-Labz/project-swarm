@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Swarm Watch: all runs</title>
+<link rel="stylesheet" href="assets/watch.css">
+<link rel="stylesheet" href="assets/board.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top hud">
+    <div class="brand"><div class="logo" aria-hidden="true"><i>SW</i></div><div><h1>Swarm Watch</h1><div class="goal">Every live run on this machine</div></div></div>
+    <div class="spacer"></div>
+    <div class="chips"><span class="chip mono num" id="count">0 runs</span><span class="chip mono" id="updated">-</span></div>
+  </header>
+  <main class="pane">
+    <section class="card hud"><div id="runs" class="board-list" aria-live="polite"></div>
+    <p class="board-note">Read-only. Each run has its own page: copy the command for the run you want and run it in a terminal.</p></section>
+  </main>
+</div>
+<script src="assets/board.js"></script>
+</body>
+</html>

@@ -61,7 +61,7 @@ test('--lane pins the ticket lane: validated, hashed, and used by the manifest',
 
 test('only a todo, ready or blocked ticket changes; an unapproved ledger stays unapproved; bad values are refused', async t => {
   const root = await project(t, [tk('T-0001', { status: 'done' }), tk('T-0002', { status: 'todo' })], false);
-  assert.match((await run(root, ['T-0001', '--risk', 'high', '--yes'])).stdout, /is done; only a todo/);
+  assert.match((await run(root, ['T-0001', '--risk', 'high', '--yes'])).stdout, /is done; only a (proposed, )?todo/);
   assert.match((await run(root, ['T-0002', '--risk', 'extreme', '--yes'])).stdout, /risk must be/);
   assert.equal((await run(root, ['T-0002', '--lane', 'codex', '--yes'])).exitCode ?? 0, 0);
   assert.equal(isApproved(await readLedger(root)), false);

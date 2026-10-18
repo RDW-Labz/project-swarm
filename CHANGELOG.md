@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.110.0
+
+Swarm Watch leftovers:
+- `swarm go` starts Swarm Watch for its run when you are at a terminal and prints `watch: URL` (never in CI or a pipe; `--no-watch` / `SWARM_NO_WATCH=1` turn it off). It never holds the run back.
+- `swarm watch --all` is a web board of every live run on the machine (read-only, token-protected, no `innerHTML`); `--all --text` is the old text list, `--all --json` is data.
+- The job drawer shows the worker's report (summary, files, risks, follow-ups), fetched on open from a token-protected `/job/ID` route as sanitised, capped text under the untrusted-worker-data label.
+- Gallery comments become fix tickets, as proposals: new ticket status `proposed`. A comment is untrusted text: the title and acceptance are fixed words, the comment is kept only in `notes` (a worker sees it quoted as data), and the ticket is outside the plan and the approval hash: never ready, never a job, not movable by `--set` (except cancel). `swarm tickets ID --approve [--yes]` (after `--files`) is the owner's approval; it logs `proposed-approved` and seals an approved ledger again. `swarm gallery comment` proposes one at once; `swarm gallery tickets` backfills older comments.
+- Tests: `tests/gallery-tickets.test.mjs`, `tests/watch-leftovers.test.mjs`.
+
 ## 1.109.0
 
 `swarm go --scope` is now the whole loop (the S8 gap: the orchestrator drove every wave by hand):

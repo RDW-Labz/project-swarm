@@ -148,7 +148,7 @@ test('--max-waves bounds the loop', async () => {
 
 test('summary and idle classification', () => {
   const s = ledgerSummary({ tickets: [tk('a', 'done'), tk('b', 'cancelled'), tk('c', 'review'), tk('d', 'ready', { type: 'human' })] });
-  assert.deepEqual(s, { total: 3, done: 1, ready: 1, running: 0, review: 1, blocked: 0, humans: 1 });
+  assert.deepEqual(s, { total: 3, done: 1, ready: 1, running: 0, review: 1, blocked: 0, humans: 1, proposed: 0 });
   assert.equal(classifyIdle({ total: 2, done: 2, ready: 0, running: 0, review: 0, blocked: 0, humans: 0 }).status, 'complete');
   assert.equal(classifyIdle({ total: 2, done: 1, ready: 0, running: 0, review: 0, blocked: 0, humans: 1 }).status, 'waiting-human');
 });

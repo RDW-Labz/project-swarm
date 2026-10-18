@@ -6,7 +6,7 @@ const LARGE_WAVE = 200;
 const NEEDS_ACCEPTANCE = new Set(['build', 'test', 'migration']);
 const NO_REF_TYPES = new Set(['human', 'contract']);
 const isFolder = (f) => typeof f === 'string' && f.endsWith('/');
-const activeOf = (tickets) => tickets.filter((t) => t && t.status !== 'cancelled');
+const activeOf = (tickets) => tickets.filter((t) => t && t.status !== 'cancelled' && t.status !== 'proposed');
 const listOf = (ids, n = 10) => ids.slice(0, n).join(', ') + (ids.length > n ? ` and ${ids.length - n} more` : '');
 const countsOf = (items, key) => items.reduce((acc, t) => { const k = t[key] ?? 'none'; acc[k] = (acc[k] || 0) + 1; return acc; }, {});
 
