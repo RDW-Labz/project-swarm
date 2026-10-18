@@ -55,7 +55,9 @@ test('ticket manifests get shared context first, kind context, tests, and a lane
   const { manifest } = ticketsToManifest([db], { ledger: { tickets: [] }, scope, ready: false, verify, contextEnv, packageManager: 'npm' });
   const job = manifest.jobs[0];
   assert.deepEqual(job.context.slice(0, 3), ['contracts/api.json', 'docs/scope/context/overview.md', 'package.json'].sort((a, b) => 0) && job.context.slice(0, 3));
-  for (const p of ['docs/scope/context/overview.md', 'docs/scope/context/data-model.md', 'package.json', 'tests/db/r004.test.sql']) assert.ok(job.context.includes(p), p);
+  for (const p of ['docs/scope/context/overview.md', 'docs/scope/context/data-model.md', 'package.json']) assert.ok(job.context.includes(p), p);
+  // Lesson 41: the ticket's own test file is an output the worker writes, not only context.
+  assert.ok(job.outputs.includes('tests/db/r004.test.sql'));
   assert.equal(job.agent, 'claude');
   assert.equal(job.shell, true);
   assert.deepEqual(job.setup, [['supabase', 'start']]);
@@ -156,6 +158,8 @@ async function writeState(root, state) {
 
 test('sync --integrated marks a ticket with tests done only when the runner saw them pass', async t => {
   const root = await project(t);
+  await fs.mkdir(path.join(root, 'tests'), { recursive: true });
+  await fs.writeFile(path.join(root, 'tests/a.test.ts'), 'test');
   const withTests = ticket({ files: ['src/a.ts', 'tests/a.test.ts'], status: 'review' });
   await approvedWith(root, { profile: { verify: { command: ['npm', 'test'] } }, tickets: [withTests, ticket({ id: 'T-0002', files: ['src/b.ts'], status: 'review' })] });
   const queue = (checks, extra = {}) => ({ state: 'done', integrated: ['T-0001', 'T-0002'], integratedIn: { 'T-0001': 1, 'T-0002': 1 }, checkFailed: [], batches: [{ id: 1, jobs: ['T-0001', 'T-0002'], checks, checkResults: [{ name: 'tests', status: checks === 'passed' ? 'passed' : 'skipped', mode: 'full' }] }], ...extra });

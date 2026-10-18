@@ -79,6 +79,10 @@ The route-level test of an integration ticket must be a test file (a tests, e2e 
 ## Moving files, deleting files, editing acceptance (lesson 39)
 
 - `swarm tickets T-0091 --files src/a.ts,src/useShops.ts --take-from T-0090 --yes` moves `src/useShops.ts` from T-0090 (even if it is done) to T-0091; logged as `file-move`.
+- `--take-from T-0090,T-0091` names several tickets: a file with two owners moves when both are named, and the moved files may be written (`--files`) or deleted (`--deletes`) by this ticket in one step.
+- `dependencies` on a ticket (`--dependencies zod,zod@^3`) are npm packages the runner installs: `integrate --queue` builds the new `package.json` and lockfile with no install scripts, the security gate audits them, and `npm install --ignore-scripts` adds them after the gate passed.
+- A ticket that touches auth, an API route, a migration or policy, or a sensitive path stays in review at `scope sync --integrated` until an Opus review passed: run `.swarm/security-reviews/RUN.json`, record it with `swarm scope security-review REVIEWRUN`, sync again. `--accept-unreviewed T --yes` is the logged way out.
+- The build check runs on every batch when `package.json` has a `build` script (`quality: {build: false}` turns it off). A ticket's named test files must exist before done.
 - A ticket may list `deletes`; the worker deletes exactly those files. Deleting a manifest, lockfile, workflow or the profile is blocked by the security gate until `swarm integrate RUN --approve-manifest FILE`.
 - `swarm tickets T-0007 --acceptance "check one ;; check two"` (todo, ready, blocked) or `--add-acceptance "check three"` (any status but running).
 - A ticket's e2e spec must be run by the project's e2e command; `scope check` warns when it would not be.

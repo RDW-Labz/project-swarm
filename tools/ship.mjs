@@ -2,6 +2,7 @@
 // Ships a reviewed run's integrated tree: push the branch, open or update a PR, wait for CI,
 // and merge when everything is green and nobody has asked for a human to look first. No shell:
 // git and gh are invoked through the injected `exec` with an argv array.
+import { runCiLocal } from './ci-local.mjs';
 import { checkRollup } from './merge-guard.mjs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -1920,6 +1921,13 @@ export async function ship(options) {
         return { ...base, status: 'refused', reason: `${lockCheck.name} failed: ${firstStderrLine(lockRes.stderr || lockRes.stdout)}` };
       }
     }
+  }
+
+  // Every command of the project's pull-request CI workflows runs here first, in CI order: a step nobody ran locally must not be the first run of it.
+  if (options.ciLocal !== false) {
+    const ci = await runCiLocal({ root, exec, env: checkEnv });
+    base.ciLocal = { ran: ci.ran, skipped: ci.skipped };
+    if (!ci.ok) return { ...base, status: 'refused', reason: `ci-local-failed: ${ci.failed} (${ci.command}) failed locally, so no PR was opened: ${ci.tail}` };
   }
 
   let pushRes = await exec('git', ['push', 'origin', `HEAD:refs/heads/${payload.head}`], { cwd: root });

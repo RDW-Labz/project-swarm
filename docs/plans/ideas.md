@@ -69,3 +69,12 @@ Open points: Bedrock limits on tool-use streaming fields differ by model generat
 - Lesson 1: remote hosts (ssh/sandbox) send no command, so remote jobs hang; fix needs a test against a real host (dev2). Low while only local lanes are used.
 - Strict cancel: block dependents of a cancelled ticket for a look instead of dropping the dependency and resealing the approval.
 
+
+## Parked after the lessons 40-41 review
+
+- Security review records (`.swarm/security-reviews/records.json`) are plain JSON in the project tree: project code run as a check could write a pass. Sign each record with the runner's security key or keep verdicts only in the append-only log.
+- Dependencies of several tickets in one run all ride on the first declaring job's merge batch; if that batch rolls back the others lose theirs, and `node_modules` is not reinstalled from the restored lockfile. Give each declaring job's batch its own change.
+- The local CI run executes in the owner's working copy. Run it in a temporary worktree of HEAD (a `git clean` or a database reset in a step would otherwise hit real files), and support `services:`/`container:` jobs.
+- The build check is on by default; a build script that needs CI-only environment values fails every stage until the profile says `build: false`. Report that first failure as a setup problem.
+- A deleted file is not in the security review context (the reviewer sees only its name). Add its pre-delete content.
+- `--take-from` leaves the source ticket's `tests` and `dependsOn` as they were, and a ready source already in an active run's manifest still writes the moved file.

@@ -65,6 +65,15 @@ const manifest = (jobs, overrides = {}) => ({ version: 1, concurrency: 2, jobs: 
 function fake(script) {
   return (_command, _args, options) => spawn(process.execPath, ['--input-type=module', '-e', `import fs from 'node:fs';\n${script}`], options);
 }
+// A fake CLI that cannot hang the suite: it kills itself after `ms`, and spawn also kills it from outside.
+function fakeBounded(script, ms = 15000) {
+  return (_command, _args, options) => spawn(process.execPath, ['--input-type=module', '-e', `import fs from 'node:fs';\nsetTimeout(() => process.exit(124), ${ms}).unref();\n${script}`], { ...options, timeout: ms + 5000, killSignal: 'SIGKILL' });
+}
+// The test fails with a clear message when the runner does not settle, instead of waiting for the suite to be killed.
+function within(ms, promise, what) {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} did not settle within ${ms}ms`)), ms); })]).finally(() => clearTimeout(timer));
+}
 const done = result => `console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:${JSON.stringify(result)}}));`;
 const update = fake(`fs.writeFileSync('input.txt','updated'); ${done('Worker complete')}`);
 
@@ -243,12 +252,12 @@ describe('#286: a worker CLI\'s own quota/limit message is a provider outage, no
     assert.equal(detectClaudeQuotaLimit('some other stdout'), null);
   });
 
-  test('(286b) a plain claude job whose CLI prints a quota message (no stream-json) resolves status provider-limit and persists the reset marker', async t => {
+  test('(286b) a plain claude job whose CLI prints a quota message (no stream-json) resolves status provider-limit and persists the reset marker', { timeout: 60000 }, async t => {
     const root = await gitFixture(t);
     // process.exitCode (not process.exit(1)) so the event loop drains and the console.log write
     // to stdout is guaranteed to flush before the process actually exits.
     const script = `console.log("You have hit your weekly limit; it resets Oct 12 at 5pm"); process.exitCode = 1;`;
-    const state = await runManifest(root, manifest([job()]), { spawnImpl: fake(script) });
+    const state = await within(30000, runManifest(root, manifest([job({ timeoutMs: 20000 })]), { spawnImpl: fakeBounded(script) }), 'runManifest');
     assert.equal(state.jobs[0].status, 'provider-limit');
     assert.match(state.jobs[0].error, /provider-limit: resets Oct 12 at 5pm/);
     const marker = await claudeProviderLimitGuard(root);
@@ -356,14 +365,14 @@ describe('#288: a codex job\'s own repo AGENTS.md names required reads the promp
 });
 
 // ---------------------------------------------------------------------------------------------
-describe('release: 1.98.0', () => {
-  test('package.json and package-lock.json are both at 1.98.0', async () => {
+describe('release: 1.99.0', () => {
+  test('package.json and package-lock.json are both at 1.99.0', async () => {
     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
     const lock = JSON.parse(await fs.readFile(path.join(root, 'package-lock.json'), 'utf8'));
-    assert.equal(pkg.version, '1.98.0');
-    assert.equal(lock.version, '1.98.0');
-    assert.equal(lock.packages[''].version, '1.98.0');
+    assert.equal(pkg.version, '1.99.0');
+    assert.equal(lock.version, '1.99.0');
+    assert.equal(lock.packages[''].version, '1.99.0');
   });
 
   test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {

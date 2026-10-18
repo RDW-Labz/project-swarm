@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { looksLikeTestFile } from './wiring.mjs';
 import * as scopeModule from './scope.mjs';
 import { queryFromTicket, selectNotes, renderNotes } from './lesson-notes.mjs';
 import { buildTicketContext } from './ticket-context.mjs';
@@ -14,7 +15,7 @@ export function otherManagerLockfile(files,manager){
   for(const f of files||[]){const b=String(f).split('/').pop();for(const [m,list] of Object.entries(LOCKFILES))if(m!==manager&&list.includes(b)&&!mine.has(b))return {file:f,manager:m};}
   return null;
 }
-const TYPE_MAP={build:'build',migration:'build',contract:'build',test:'test',docs:'docs'};
+const TYPE_MAP={build:'build',migration:'build',contract:'build',test:'test',docs:'docs',design:'docs'};
 const RULE='Work only on the files you own; report the ticket id.';
 
 function byIdMap(list){return new Map(list.map(t=>[t.id,t]));}
@@ -89,7 +90,6 @@ export function ticketsToManifest(tickets,opts={}){
   list=list.slice().sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
   const selected=[];
   for(const t of list){
-    if(t.type==='design'){skipped.push(t.id);continue;}
     if(maxJobs&&selected.length>=maxJobs){skipped.push(t.id);warnings.push(t.id+': over maxJobs, skipped');continue;}
     selected.push(t);
   }
@@ -123,6 +123,13 @@ export function ticketsToManifest(tickets,opts={}){
     const mockupReason=mockupAdded?'design mockup for the ticket screens':null;
     // The contract files are shared by every ticket of a project: ask the Anthropic lane to cache them as the shared prefix.
     const shared=[...new Set([...autoShared,...(t.contracts||[]),...(contract?[contract]:[])])].filter(p=>context.includes(p)).sort().slice(0,10);
+    // Lesson 41: the test files a ticket names are its to write unless another ticket owns them (a build ticket lists its test ticket's files and only reads them).
+    for(const f of t.tests||[]){
+      if(typeof f!=='string'||!looksLikeTestFile(f)||outputs.includes(f))continue;
+      if([...byId.values()].some(o=>o.id!==t.id&&o.status!=='cancelled'&&((o.files||[]).includes(f)||(o.deletes||[]).includes(f)||(o.type==='test'&&(o.tests||[]).includes(f)))))continue;
+      outputs.push(f);
+    }
+    context=context.filter(p=>!outputs.includes(p));
     // Lesson 39: a ticket may delete exactly the files it names; the worker must be able to delete in place and must see them.
     const deletes=(t.deletes||[]).filter(f=>typeof f==='string'&&f&&!f.endsWith('/'));
     // The engine integrates a deletion only for a path that is both an output and in `deletes`: the worker's copy holds the file, the worker removes it, integrate removes it from the project.
@@ -130,6 +137,7 @@ export function ticketsToManifest(tickets,opts={}){
     context=context.filter(p=>!deletes.includes(p));
     const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:isSensitiveJob(t,scope,reqs),prompt:promptFor(t,reqs,lessons,{envLine:['build','migration','contract'].includes(t.type)?contextEnv?.envLine:undefined,promptLine:vfields?.promptLine,kind,hasPackageJson:context.includes('package.json'),packageManager}),context,outputs,acceptance:t.acceptance||[],timeoutMs:600000};
     if(deletes.length)job.deletes=deletes;
+    if((t.dependencies||[]).length)job.dependencies=[...t.dependencies];
     if(shared.length)job.cacheContext=shared;
     // The mockups are protected paths (workers cannot change them); this job may read them, nothing else protected.
     if(mockupReason)job.allowProtectedContext=mockupReason;

@@ -22,10 +22,13 @@ const swarm = path.join(path.dirname(fileURLToPath(import.meta.url)), '../tools/
 const tmp = async (t, prefix) => { const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix))); t.after(() => fs.rm(root, { recursive: true, force: true })); return root; };
 const tk = (id, extra = {}) => ({ id, title: id, type: 'build', epic: 'E', scopeRefs: ['R-001'], acceptance: ['ok'], files: [`src/${id}.ts`], tests: [`tests/${id}.test.ts`], context: [], contracts: [], dependsOn: [], size: 'S', risk: 'low', sensitive: false, status: 'review', stage: 'S1', ...extra });
 const runState = (root, state) => fs.mkdir(path.join(root, '.swarm/runs/r9'), { recursive: true }).then(() => fs.writeFile(path.join(root, '.swarm/runs/r9/state.json'), JSON.stringify(state)));
+const writeTests = async (root, tickets) => { for (const f of tickets.flatMap(x => x.tests ?? [])) { await fs.mkdir(path.dirname(path.join(root, f)), { recursive: true }); await fs.writeFile(path.join(root, f), 'test'); } };
 async function withLedger(t, tickets) {
   const root = await tmp(t, 'ba-');
   await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'app' }));
   await writeLedger(root, createLedger({ scope: { name: 'P', version: 1, hash: 'a'.repeat(64) }, tickets }));
+  // The test files the tickets name exist in the tree (a ticket whose named tests are missing is not done).
+  for (const f of tickets.flatMap(x => x.tests ?? [])) { await fs.mkdir(path.dirname(path.join(root, f)), { recursive: true }); await fs.writeFile(path.join(root, f), 'test'); }
   await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, protectedPaths: [], budget: { maxUsd: 5 }, verify: { command: ['npm', 'test'] }, baseCheck: { status: 'none', ranAt: null, head: null, checks: [] } } }));
   return root;
 }
@@ -42,6 +45,7 @@ test('eval 36.1: a failed test at done-check goes back to the worker with the fa
   assert.match(after.retryNote, /failed checks: tests; FAIL tests\/T-0001\.test\.ts expected 201 got 500/);
   // A plain integrate (no merge queue): same result for a ticket whose files the output names; the other ticket stays in review.
   await writeLedger(root, createLedger({ scope: { name: 'P', version: 1, hash: 'a'.repeat(64) }, tickets: [tk('T-0001', { runId: 'r9' }), tk('T-0002', { runId: 'r9' })] }));
+  await writeTests(root, [tk('T-0002')]);
   await runState(root, { id: 'r9', integratedAt: 'now', integratedFiles: ['src/T-0001.ts', 'src/T-0002.ts'], jobs: [{ id: 'T-0001', status: 'complete', outputs: ['src/T-0001.ts'] }, { id: 'T-0002', status: 'complete', outputs: ['src/T-0002.ts'] }], checks: [{ name: 'tests', status: 'failed', tail: 'FAIL tests/T-0001.test.ts' }] });
   const shared = await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated']);
   assert.match(shared.stdout, /T-0002 \(the tests check failed for the whole run and its output does not name this ticket's files/);
@@ -51,6 +55,7 @@ test('eval 36.1: a failed test at done-check goes back to the worker with the fa
   // A test that failed for many tickets is the base or the setup: nobody is retried.
   const many = ['T-0001', 'T-0002', 'T-0003'].map(id => tk(id, { runId: 'r9' }));
   await writeLedger(root, createLedger({ scope: { name: 'P', version: 1, hash: 'a'.repeat(64) }, tickets: many }));
+  await writeTests(root, many);
   await runState(root, { id: 'r9', integratedAt: 'now', integratedFiles: many.flatMap(x => x.files), jobs: many.map(x => ({ id: x.id, status: 'complete', outputs: x.files })), checks: [{ name: 'tests', status: 'failed', tail: 'FAIL T-0001 T-0002 T-0003 src/T-0001.ts src/T-0002.ts src/T-0003.ts' }] });
   assert.match((await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated'])).stdout, /the tests check failed for 3 tickets of this run, so the base or the setup is likely at fault/);
   assert.ok((await readLedger(root)).tickets.every(x => x.status === 'review'));

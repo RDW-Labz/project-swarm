@@ -33,7 +33,8 @@ export function deriveQualityChecks({ pkg, hasTsconfig, manager = 'npm', config 
   let build = null;
   if (Array.isArray(cfg.build)) {
     build = cfg.build.slice();
-  } else if (cfg.build === true && scripts.build) {
+  } else if (cfg.build !== false && scripts.build) {
+    // A project with a build script builds on every stage; only an explicit `build: false` in the profile turns it off.
     build = run('build');
   }
   if (build) out.push({ name: 'build', argv: build });
@@ -44,10 +45,12 @@ export function deriveQualityChecks({ pkg, hasTsconfig, manager = 'npm', config 
 export function qualityChecksForJobs(jobs, derived, { timeoutMs = 600000 } = {}) {
   const list = Array.isArray(jobs) ? jobs : [];
   if (!list.some((job) => job && job.type === 'build')) return [];
+  // A framework's generated type files (.next/types) can name pages that no longer exist: the runner clears them before the typecheck.
   return (derived || []).map((check) => ({
     name: check.name,
     argv: [...check.argv],
     timeoutMs,
+    ...(check.name === 'typecheck' ? { cleanDirs: ['.next/types'] } : {}),
   }));
 }
 

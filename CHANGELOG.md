@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.99.0
+
+Parts-app S7 lessons (40-41):
+- The build check is on by default: a project with a `build` script runs it on every merge batch. `quality: {build: false}` in the profile turns it off.
+- A ticket's named `tests` files are its own outputs unless another ticket owns them, so the worker may write them. A ticket whose named test files are not in the tree is sent back to the worker, not marked done.
+- Tickets can declare `dependencies` (npm packages, registry names with an optional version; `--dependencies` on `swarm tickets`). The runner builds the new `package.json` and lockfile with no install scripts, they go through the security gate (manifest and lockfile audit) as part of `integrate --queue`, and `npm install --ignore-scripts` adds them to node_modules only after the gate passed.
+- Automatic security review: a ticket that touches auth, an API route, a migration or database policy, or a sensitive path stays in review at `scope sync --integrated` until an Opus review passed on the code in the tree now. Sync writes `.swarm/security-reviews/RUN.json`; run it, then `swarm scope security-review REVIEWRUN` records the verdicts. A failed review sends the findings back to the worker. `--accept-unreviewed T-0001 --yes` is the logged way out.
+- `go --scope` runs design tickets (as docs jobs) instead of skipping them.
+- The worker prompt no longer says "Do not delete files" when the ticket declares `deletes`; it names the files it may delete.
+- `swarm tickets ID --take-from A,B` takes files from several tickets (a file with two owners moves when both are named), and files move by role: a file the other ticket writes moves into `--files`, one it deletes moves into `--deletes` (a deletion is never turned into a write; eval 39.1 caught that).
+- The typecheck check clears stale `.next/types` first (a check may declare `cleanDirs`, limited to that folder).
+- Opus review fixes: dependencies install with `npm install --ignore-scripts` (never `npm ci`, which would wipe `node_modules`), only the named packages may change `package.json`, workspaces and private-registry scopes are refused; the security review counts only the Opus job of a manifest sync wrote, only for the tickets it listed, against the code hash taken when it was requested (a fail beats a pass, only the last JSON line counts); a build ticket waits (no retry) for a test ticket that owns its named test file; the local CI run uses a minimal environment and skips jobs with an `environment`, `services` or `container`, branch-gated jobs, steps that use a secret, run after failure or continue on error, and `pull_request_target` workflows.
+- `ship` runs every command of the project's pull-request CI workflows (`.github/workflows`, in file and step order) before it pushes or opens a PR, and refuses (`ci-local-failed`, naming the step) if one fails. Steps that need secrets or `${{ }}` values, run only on push, or publish and deploy are listed as skipped, not run. `--no-ci-local` turns it off.
+- Test fixes: the build-by-default and `cleanDirs` tests expect the new behavior (`build: false` is the opt-out); eval 38.4 now has the real test file its ticket names; test 286b has hard timeouts (a self-killing fake CLI, a spawn kill timer, a bounded wait and a test timeout) so a stuck child fails fast, and it is no longer skipped.
+
 ## 1.98.0
 
 Parts-app S6 lessons (lesson 39):
