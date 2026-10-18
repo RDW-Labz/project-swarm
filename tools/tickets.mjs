@@ -8,6 +8,9 @@ import { wiringGaps } from './wiring.mjs';
 import { isExampleFile } from './init-profile.mjs';
 import { isSensitivePath } from './sensitive-paths.mjs';
 
+// Tickets made from outside text (a gallery comment, a production error) are proposals: no worker runs one until the owner approves it.
+export const PROPOSAL_ORIGINS = ['comment', 'error'];
+const unapprovedProposal = t => PROPOSAL_ORIGINS.includes(t?.origin) && t.approvedBy !== 'owner';
 export const STATUSES = ['proposed', 'todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled'];
 export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'contract', 'human'];
 const RISKS = ['low', 'medium', 'high'];
@@ -71,7 +74,7 @@ const badPath = (p, readOnly = false) => {
 
 export function ticketSetHash(tickets) {
   // Proposed tickets, and comment tickets the owner has not approved (cancelled or hand-edited), are outside what was approved.
-  const picked = [...tickets].filter(t => t.status !== 'proposed' && !(t.origin === 'comment' && t.approvedBy !== 'owner')).sort(byId).map(t => Object.fromEntries(HASH_FIELDS.map(k => [k, t[k]])));
+  const picked = [...tickets].filter(t => t.status !== 'proposed' && !unapprovedProposal(t)).sort(byId).map(t => Object.fromEntries(HASH_FIELDS.map(k => [k, t[k]])));
   return createHash('sha256').update(canon(picked)).digest('hex');
 }
 
@@ -84,7 +87,7 @@ export function validateTicket(t) {
   if (!Array.isArray(t.scopeRefs)) errors.push('scopeRefs must be an array');
   else {
     if (!t.scopeRefs.every(r => /^R-[0-9]{3,}$/.test(r))) errors.push('scopeRefs must contain R- ids');
-    if (t.scopeRefs.length === 0 && !['ci', 'comment'].includes(t.origin) && !['human', 'contract'].includes(t.type)) errors.push('scopeRefs must name at least one requirement');
+    if (t.scopeRefs.length === 0 && !['ci', ...PROPOSAL_ORIGINS].includes(t.origin) && !['human', 'contract'].includes(t.type)) errors.push('scopeRefs must name at least one requirement');
   }
   if (t.acceptance !== undefined && !isStrArr(t.acceptance)) errors.push('acceptance must be an array of strings');
   if (NEEDS_ACCEPTANCE.includes(t.type) && !(isStrArr(t.acceptance) && t.acceptance.length > 0)) errors.push('acceptance is required for build, test and migration tickets');
@@ -125,8 +128,8 @@ export function validateTicket(t) {
     const list = t.acceptanceResults;
     if (!Array.isArray(list) || list.length > 100 || !list.every(r => r && typeof r === 'object' && Number.isInteger(r.n) && r.n >= 1 && r.n <= 200 && ['test', 'review', 'owner'].includes(r.by) && ['pass', 'fail', 'pending', 'missing', 'accepted'].includes(r.verdict) && (r.line === undefined || (typeof r.line === 'string' && r.line.length <= 200)) && (r.evidence === undefined || (typeof r.evidence === 'string' && r.evidence.length <= 300)))) errors.push('acceptanceResults must be a list of {n, line, by, verdict, evidence} (verdict pass, fail, pending, missing or accepted)');
   }
-  if (t.origin !== undefined && !['ci', 'comment'].includes(t.origin)) errors.push('origin must be ci or comment when set');
-  if (t.origin === 'comment' && t.status !== 'proposed' && t.status !== 'cancelled' && !(t.approvedBy === 'owner')) errors.push('a ticket from a comment needs the owner approval record (approvedBy)');
+  if (t.origin !== undefined && !['ci', ...PROPOSAL_ORIGINS].includes(t.origin)) errors.push('origin must be ci, comment or error when set');
+  if (PROPOSAL_ORIGINS.includes(t.origin) && t.status !== 'proposed' && t.status !== 'cancelled' && !(t.approvedBy === 'owner')) errors.push('a ticket made from a comment or an error needs the owner approval record (approvedBy)');
   if (t.type === 'human' && !(isStrArr(t.steps) && t.steps.length >= 1 && t.steps.length <= 30)) errors.push('human tickets need 1 to 30 steps');
   return { ok: errors.length === 0, errors };
 }
@@ -191,7 +194,7 @@ export async function transition(root, id, to, { by = 'system', note, now = Date
   const ticket = ledger.tickets.find(t => t.id === id);
   if (!ticket) throw fail('ticket-missing', `no ticket ${id}`);
   if (!STATUSES.includes(to) || !legalMoves(ticket).includes(to)) throw fail('ticket-transition', `${id}: ${ticket.status} -> ${to} is not allowed; legal next statuses: ${legalMoves(ticket).join(', ') || 'none'}`);
-  if (ticket.origin === 'comment' && ticket.approvedBy !== 'owner' && ['todo', 'ready', 'running'].includes(to)) throw fail('ticket-unapproved', `${id} came from a gallery comment; the owner approves it with swarm tickets ${id} --approve`);
+  if (unapprovedProposal(ticket) && ['todo', 'ready', 'running'].includes(to)) throw fail('ticket-unapproved', `${id} came from outside text (a gallery comment or a production error); the owner approves it with swarm tickets ${id} --approve`);
   if (to === 'ready') {
     const waiting = (ticket.dependsOn ?? []).filter(d => ledger.tickets.find(x => x.id === d)?.status !== 'done');
     if (waiting.length) throw fail('ticket-deps', `${id} waits on ${waiting.join(', ')}`);
@@ -242,7 +245,7 @@ export function pruneCancelledDeps(ledger) {
 export function readyTickets(tickets) {
   const done = new Set(tickets.filter(t => t.status === 'done').map(t => t.id));
   return tickets
-    .filter(t => (t.status === 'todo' || t.status === 'ready') && !(t.origin === 'comment' && t.approvedBy !== 'owner') && (t.dependsOn ?? []).every(d => done.has(d)))
+    .filter(t => (t.status === 'todo' || t.status === 'ready') && !unapprovedProposal(t) && (t.dependsOn ?? []).every(d => done.has(d)))
     .sort(byId);
 }
 
