@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1.2
+  },
+  "jobs": [
+    {
+      "id": "review-scope-loop-2",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "an unattended loop that spends money and commits code",
+      "type": "review",
+      "prompt": "Second review of coordination/review/scope-loop.diff (the loop in tools/scope-loop.mjs and its wiring in tools/swarm.mjs). A first review found: cancelled runs salvaged and reviewed, no per-run caps on waves and reviews, unhandled step errors, commit sweeping the index and committing on main, salvage skipping mutants, no loop-wide lock, empty-commit stop, text-based cap labels, runId lost when wait throws, review path parsed from text, repeated commit messages, max-waves exit code. All were changed in this diff. Check each fix is correct and complete, and look for NEW problems the fixes introduced: the SIGINT handler (process.once) vs runManifestChecked's own SIGINT handling; the lock release on every exit path including thrown errors and process.exitCode paths; autopilotCaps usage; withProfileDefaults; the branch guard (unborn branch, worktrees); commitWave staged-file check (files given relative? staged names are repo-relative: does the comparison hold when root is a subdirectory of the git repo); go.mjs base.runId change effect on other callers and existing tests; autopilot-lock name parameter effect on autopilot. Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete failing scenario, and say what you checked that is fine. Do not edit files.",
+      "context": [
+        "tools/scope-loop.mjs",
+        "tools/swarm.mjs",
+        "tools/scope-commands.mjs",
+        "tools/go.mjs",
+        "tests/scope-loop.test.mjs",
+        "coordination/review/scope-loop.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}

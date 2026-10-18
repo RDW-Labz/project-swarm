@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.109.0
+
+`swarm go --scope` is now the whole loop (the S8 gap: the orchestrator drove every wave by hand):
+- It repeats: build the wave from the ready tickets, run it, integrate and commit it on the current branch, `scope sync RUN`, `scope sync RUN --integrated`, and the security / acceptance reviews that sync asks for (recorded, then the sync repeated, up to three rounds). It stops with a named reason: `complete`, `waiting-human`, `stuck`, `cap`, `stopped`, `paused`, `failed`, `no-progress` or `max-waves` (`--max-waves N`, default 50). Exit 0 for complete and waiting-human, 75 for paused, 1 otherwise; the last stdout line is JSON.
+- A wave that cannot start (the project cap or a spend cap, a stop marker) no longer leaves its tickets marked running: they go back to ready. A wave where some jobs failed integrates and commits the finished ones; the failed tickets go up the escalation ladder as before. A failed integrate stops the loop. It never ships a pull request and never uses the owner's overrides (`--accept-unreviewed`, `--accept-unmet`, `--accept-failed-check`, `tickets --set done`).
+- Unattended safety: each wave and review run gets the per-run cap (`--max-usd`/`--max-tokens`, else the profile budget, else the `swarm go` default); it refuses `main`/`master`/detached HEAD unless `--allow-main-branch`; one loop per project (a lock); a wave commits only its own files and refuses when something else is staged; the stop marker is checked before every wave, salvage and paid review, Ctrl-C ends the loop, and a cancelled run is never synced, salvaged or reviewed; a step that fails (a refused sync, a review that hits a cap) ends the loop with the summary; the salvage path runs the same mutant and flake gates as a normal integrate; `max-waves` exits 75. The last wave finishing every ticket reports `complete`; the loop never ends without the final JSON. Two Opus reviews (2 high, 5 medium, 5 low, then 3 medium, 8 low) were fixed before release.
+- `swarm go --scope --wave` is the old single wave (still the way to ship one wave with `--pr`).
+- Test: `tests/scope-loop.test.mjs` (the loop with fakes, plus the CLI against a real approved ledger with the project cap reached).
+
 ## 1.108.0
 
 A lane at its daily cap no longer stops the run (the S8 gap: "cap refusal escalates to Codex instead of aborting"):

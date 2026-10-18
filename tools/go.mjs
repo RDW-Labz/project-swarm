@@ -50,9 +50,10 @@ export async function go(root, target, flags, deps) {
     let started, waited;
     try {
       started = await run(root, target);
+      base.runId = started.id;
       waited = await wait(root, started.id);
     } catch (error) {
-      return { status: 'failed', stage: 'run', ...base, reason: error.message };
+      return { status: 'failed', stage: 'run', ...base, reason: error.message, ...(error.code ? { code: error.code } : {}) };
     }
     base.runId = started.id; base.cost = waited.costUsd ?? null; base.warnings = waited.warnings ?? [];
     if (waited.status !== 'complete') return { status: 'failed', stage: 'run', ...base, reason: `run ${waited.status}` };

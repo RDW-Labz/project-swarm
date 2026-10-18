@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.2 },
+  "jobs": [
+    {
+      "id": "review-scope-loop",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "an unattended loop that spends money and commits code",
+      "type": "review",
+      "prompt": "Review coordination/review/scope-loop.diff (swarm go --scope now loops waves: tools/scope-loop.mjs plus the wiring in tools/swarm.mjs before the old single-wave branch, plus revertWave in scope-commands.mjs). Rules: (1) it must never do more than the owner could do by hand: no use of --accept-unreviewed/--accept-unmet/--accept-failed-check, no tickets --set done, no PR/ship, no raising of caps; it must stop on project cap, spend cap, stop marker, paused run; check that stopGuard is rechecked per wave and that the cap/stop classification (regexes on the reason text) cannot misfire into an endless loop or hide a real failure; (2) unattended spend: each wave is a run under the per-run cap; confirm the loop cannot start a wave over the project cap, that --max-waves and the no-progress guard bound the spend, and tell me the worst case; (3) tickets must never be left marked running after a wave that did not start (revertWave) and never reverted for a run that did start; check the salvage path (integrate --jobs of complete jobs then commit): does integrateRun accept a subset with failed jobs, does `scope sync --integrated` then behave (state.integratedAt, mergeQueue), could it integrate files twice or commit unrelated files; (4) commit safety: the default commit message, commits to the current branch (could be main), only integrated.files are committed; any chance of committing secrets or untracked debris; (5) the review rounds: the regexp that finds `swarm run .swarm/(security|acceptance)-reviews/X.json` in sync output, running review manifests via runManifestChecked and waitRun, recording verdicts via runScopeCommand security-review / acceptance-review: look for a path-injection (the id comes from sync output) and for a loop that could run reviews forever; (6) the old --wave branch must behave exactly as before; (7) wave numbering and commit message uniqueness; exit codes. Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete failing scenario, and say what you checked that is fine. Do not edit files.",
+      "context": ["tools/scope-loop.mjs", "tools/swarm.mjs", "tools/scope-commands.mjs", "tools/go.mjs", "tests/scope-loop.test.mjs", "coordination/review/scope-loop.diff"],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}

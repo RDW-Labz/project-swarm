@@ -1738,6 +1738,18 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
   });
 }
 
+// The wave builder marked these tickets running; the run never started (a cap, a stop, a refusal), so they go back to ready. Only a still-running ticket moves.
+export async function revertWave(root, ids) {
+  const back = [];
+  for (const id of ids) {
+    const ledger = await readLedger(root);
+    if (ledger?.tickets.find(t => t.id === id)?.status !== 'running') continue;
+    try { await lockedTransition(root, id, 'ready', { by: 'go', note: 'the wave did not start' }); back.push(id); } catch { /* a ticket that cannot move stays for the owner */ }
+  }
+  if (back.length) await refreshPlan(root);
+  return back;
+}
+
 // Blocked-by-dependency tickets whose dependencies are all done become ready. Used by go --scope and autopilot; one locked write.
 export async function unlockLedger(root) {
   for (let attempt = 0; attempt < 5; attempt += 1) {

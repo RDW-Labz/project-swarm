@@ -8,9 +8,9 @@ const alive = pid => {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
 };
 
-export async function acquireAutopilotLock(root, { pid = process.pid, isAlive = alive } = {}) {
+export async function acquireAutopilotLock(root, { pid = process.pid, isAlive = alive, name = 'autopilot' } = {}) {
   const dir = await safeWritableDir(root, ['.swarm', 'project']);
-  const file = path.join(dir, 'autopilot.lock');
+  const file = path.join(dir, `${name}.lock`);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     await assertRegularOrMissing(file);
     try {
@@ -31,10 +31,10 @@ export async function acquireAutopilotLock(root, { pid = process.pid, isAlive = 
     let owner = null;
     try { owner = JSON.parse(await fs.readFile(file, 'utf8')); } catch { owner = null; }
     if (Number.isInteger(owner?.pid) && owner.pid > 0 && owner.pid !== pid && isAlive(owner.pid)) {
-      throw Object.assign(new Error(`autopilot-running: pid ${owner.pid} already runs autopilot for this project`), { code: 'autopilot-running' });
+      throw Object.assign(new Error(`${name}-running: pid ${owner.pid} already runs ${name} for this project`), { code: `${name}-running` });
     }
     // Dead owner or unreadable lock: clear it and try again.
     await fs.rm(file, { force: true });
   }
-  throw Object.assign(new Error('autopilot-lock-busy: could not take the lock'), { code: 'autopilot-running' });
+  throw Object.assign(new Error(`${name}-lock-busy: could not take the lock`), { code: `${name}-running` });
 }
