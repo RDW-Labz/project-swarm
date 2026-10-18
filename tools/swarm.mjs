@@ -7538,11 +7538,129 @@ async function mainInner() {
     if(res.exitCode)process.exitCode=res.exitCode;
     return;
   }
+  // `go --scope` runs wave after wave until the tickets are done or something needs you; `--wave` is one wave (build it, run it, integrate), as before.
+  if(args[0]==='go'&&args.includes('--scope')&&!args.includes('--wave')){
+    root=await fs.realpath(root);
+    const rest=args.slice(1).filter(a=>a!=='--scope');
+    let maxWaves;
+    const at=rest.indexOf('--max-waves');
+    if(at!==-1){maxWaves=Number(rest[at+1]);if(!(Number.isSafeInteger(maxWaves)&&maxWaves>0&&maxWaves<=500))fail('--max-waves must be a whole number from 1 to 500');rest.splice(at,2);}
+    const skipSkeleton=rest.includes('--skip-skeleton');
+    const goArgs=rest.filter(a=>a!=='--skip-skeleton');
+    const jobsAt=goArgs.indexOf('--max-jobs');
+    const maxJobs=jobsAt!==-1?Number(goArgs[jobsAt+1]):undefined;
+    if(jobsAt!==-1&&!(Number.isSafeInteger(maxJobs)&&maxJobs>0))fail('--max-jobs must be a positive whole number');
+    if(jobsAt!==-1)goArgs.splice(jobsAt,2);
+    const unused=['--leads','--concurrency','--batch','--timeout','--merge-method','--tag-timeout','--require-section','--exempt'].find(flag=>goArgs.includes(flag));
+    if(unused)fail(`${unused} has no effect on go --scope (waves are built from the tickets); use swarm go --scope --wave if you need it`);
+    const allowMain=goArgs.includes('--allow-main-branch');
+    const loopFlags=parseGoFlags(goArgs.filter(a=>a!=='--allow-main-branch'));
+    if(loopFlags.payloadPath||loopFlags.repo)fail('go --scope builds on this branch and commits each wave; to ship each wave as its own pull request use go --scope --wave --pr FILE');
+    { const noCap=await noCapWarning(root).catch(()=>null); if(noCap)process.stderr.write(`${noCap}\n`); }
+    // Waves are committed on the current branch: never main or master (or a detached HEAD) unless the owner says so.
+    const gitOut=(...gitArgs)=>execFileAsync('git',gitArgs,{cwd:root}).then(r=>r.stdout.trim(),()=>null);
+    if(await gitOut('rev-parse','--is-inside-work-tree')!=='true')fail('go --scope commits each wave, and this folder is not a git repository');
+    const currentBranch=()=>gitOut('symbolic-ref','--quiet','--short','HEAD');
+    const branch=await currentBranch();
+    if(!branch)fail('go --scope commits each wave on the current branch, and HEAD is detached; check out a branch first');
+    const defaultBranch=(await gitOut('symbolic-ref','--quiet','--short','refs/remotes/origin/HEAD'))?.replace(/^origin\//,'');
+    if((['main','master'].includes(branch)||branch===defaultBranch)&&!allowMain)fail(`go --scope commits every wave; you are on ${branch}. Switch to a work branch (git switch -c build), or pass --allow-main-branch`);
+    const {scopeLoop,loopExitCode}=await import('./scope-loop.mjs');
+    const {prepareScopeRun,runScopeCommand,revertWave}=await import('./scope-commands.mjs');
+    const {loadLessonsForNotes}=await import('./lessons-commands.mjs');
+    const {readLedger}=await import('./tickets.mjs');
+    const {stopGuard}=await import('./stop-all.mjs');
+    const {acquireAutopilotLock}=await import('./autopilot-lock.mjs');
+    // One loop per project, and never beside autopilot: two would double the spend and race on the git index.
+    const releases=[];
+    try{for(const name of ['scope-loop','autopilot'])releases.push(await acquireAutopilotLock(root,{name}));}
+    catch(error){for(const release of releases)await release();fail(error.message,error.code);}
+    let interrupted=false,presses=0;
+    const onSigint=()=>{interrupted=true;presses+=1;if(presses>1)process.exit(130);};
+    process.on('SIGINT',onSigint);
+    let outcome;
+    try{
+    const profile=await projectProfile(root);
+    const perRun=withProfileDefaults(loopFlags,profile);
+    let waveNumber=0,waveIds=[];
+    const capsFor=manifest=>autopilotCaps({maxUsd:perRun.maxUsd,maxTokens:perRun.maxTokens},manifest?.budget);
+    const integrateWith=async(goRoot,id,opts)=>{
+      const manifest=validateManifest(JSON.parse(await bytesAt(goRoot,`.swarm/runs/${id}/manifest.json`,true)));
+      return integrateRun(goRoot,id,{mutants:Boolean(opts.mutants)||Boolean(manifest.mutants?.length),...(loopFlags.noFlakeCheck?{noFlakeCheck:true}:{}),...(opts.jobs?{jobs:opts.jobs}:{})});
+    };
+    // Commits only the wave's own files, and refuses when something else is already staged (it would ride along in the commit).
+    const commitWave=async(goRoot,files,message)=>{
+      if(!files?.length)return {status:'committed',empty:true};
+      if(await currentBranch()!==branch)return {status:'failed',reason:`the branch changed during the loop (it started on ${branch}); nothing was committed`};
+      const prefix=await gitOut('rev-parse','--show-prefix');
+      const staged=await execFileAsync('git',['-c','core.quotepath=off','diff','--cached','--name-only','-z'],{cwd:goRoot}).then(r=>r.stdout.split('\0').filter(Boolean),()=>null);
+      if(prefix===null||staged===null)return {status:'failed',reason:'git could not say what is staged; nothing was committed'};
+      const own=new Set(files.map(file=>`${prefix}${file}`));
+      const foreign=staged.filter(file=>!own.has(file));
+      if(foreign.length)return {status:'failed',reason:`the index has staged changes that are not this wave's (${foreign.slice(0,3).join(', ')}); commit or unstage them`};
+      return commitOutputs(goRoot,files,message);
+    };
+    const waveMessage=()=>loopFlags.commitMessage??`Scope wave ${waveNumber}: ${waveIds.slice(0,5).join(', ')}${waveIds.length>5?` and ${waveIds.length-5} more`:''}`;
+    const goDeps={
+      run:async(goRoot,manifestPath)=>{
+        // Ctrl-C or the stop marker while the wave was being built: nothing is started.
+        const halted=interrupted?'interrupted (Ctrl-C)':(await stopGuard(goRoot))?.message;
+        if(halted)fail(`stopped: ${halted}`,'stopped');
+        const bytes=await bytesAt(goRoot,manifestPath);if(!bytes)fail(`Missing manifest: ${manifestPath}`);const manifest=JSON.parse(bytes);const state=await runManifestChecked(goRoot,manifest,undefined,capsFor(manifest));return {id:state.id};},
+      wait:(goRoot,id)=>waitRun(goRoot,id),
+      integrate:integrateWith,
+      commit:commitWave,
+      ship:(goRoot,id,flags)=>shipRun(goRoot,id,flags),
+    };
+    const say=text=>process.stderr.write(`scope: ${text}\n`);
+    const checked=async(kind,fn)=>{const res=await fn();if(res.exitCode)throw new Error(String(res.stdout).trim().split('\n')[0]||`${kind} refused`);return res.stdout;};
+    const reviewRun=async(kind,file)=>{
+      const manifest=validateManifest(JSON.parse(await bytesAt(root,file,true)));
+      const state=await runManifestChecked(root,manifest,undefined,capsFor(manifest));
+      const waited=await waitRun(root,state.id);
+      if(waited.status==='cancelled')fail(`stopped: the ${kind} review run ${state.id} was cancelled`,'stopped');
+      if(waited.status==='paused')fail(`the ${kind} review run ${state.id} is paused; swarm resume ${state.id}`,'paused');
+      if(waited.status!=='complete')fail(`the ${kind} review run ${state.id} ${waited.status}`);
+      return {runId:state.id};
+    };
+    outcome=await scopeLoop({maxWaves,deps:{
+        prepare:async()=>{
+          const prepared=await prepareScopeRun(root,{maxJobs,skipSkeleton,validate:async manifest=>{const copy=JSON.parse(JSON.stringify(manifest));validateManifest(copy);await validateProject(root,copy);},lessons:await loadLessonsForNotes(root,ownRoot)});
+          waveNumber+=1;waveIds=prepared.ids;
+          return prepared;
+        },
+        runWave:async file=>go(root,file,{...loopFlags,commitMessage:waveMessage()},goDeps),
+        sync:(runId,{integrated})=>checked('sync',()=>runScopeCommand(root,'scope',['sync',runId,...(integrated?['--integrated']:[])])),
+        salvage:async runId=>{
+          const state=await readState(root,runId);
+          const jobs=(state.jobs??[]).filter(job=>job.status==='complete').map(job=>job.id);
+          if(!jobs.length)return {integrated:false,jobs:0};
+          const result=await integrateWith(root,runId,{jobs,mutants:loopFlags.mutants});
+          if(result.checksPassed===false)fail('checks failed on the finished jobs');
+          if(result.mutantsPassed===false)fail('mutants survived or errored on the finished jobs');
+          const committed=await commitWave(root,result.files,waveMessage());
+          if(committed.status!=='committed')fail(committed.reason??'commit failed');
+          return {integrated:true,jobs:jobs.length};
+        },
+        review:reviewRun,
+        record:(kind,runId)=>checked(kind,()=>runScopeCommand(root,'scope',[kind==='security'?'security-review':'acceptance-review',runId])),
+        ledger:()=>readLedger(root),
+        revert:ids=>revertWave(root,ids),
+        stopped:async()=>interrupted?'interrupted (Ctrl-C); nothing more starts':(await stopGuard(root))?.message??null,
+        log:say,
+      }});
+    }finally{for(const release of releases.reverse())await release();process.off('SIGINT',onSigint);}
+    process.stdout.write(`${JSON.stringify({status:outcome.status,reason:outcome.reason,summary:outcome.summary,waves:outcome.waves.map(w=>({n:w.n,tickets:w.ids.length,run:w.runId,status:w.status,done:w.done??null,reviews:w.reviews}))})}\n`);
+    say(`${outcome.status}: ${outcome.reason}`);
+    const code=loopExitCode(outcome.status);
+    if(code)process.exitCode=code;
+    return;
+  }
   if(args[0]==='go'&&args.includes('--scope')){
     root=await fs.realpath(root);
     const {prepareScopeRun}=await import('./scope-commands.mjs');
     const skipSkeleton=args.includes('--skip-skeleton');
-    const rest=args.slice(1).filter(a=>a!=='--scope'&&a!=='--skip-skeleton');
+    const rest=args.slice(1).filter(a=>a!=='--scope'&&a!=='--skip-skeleton'&&a!=='--wave');
     const at=rest.indexOf('--max-jobs');
     const maxJobs=at!==-1?Number(rest[at+1]):undefined;
     if(at!==-1&&!(Number.isSafeInteger(maxJobs)&&maxJobs>0))fail('--max-jobs must be a positive whole number');

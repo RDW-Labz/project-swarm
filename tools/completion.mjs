@@ -32,7 +32,7 @@ export const COMMANDS = [
   command('init', 'Initialize a project: profile, base check, repo map.', 'none', '--check --json --sensitive --not-sensitive --protect --max-usd --max-tokens --base-check --no-base-check --no-map'),
   command('map', 'Build or refresh the repo map.', 'none', '--json'),
   command('scale', 'Run stub jobs to measure scale.', 'none', '--jobs --concurrency'),
-  command('go', 'Complete a manifest or goal.', 'goal', '--scope --skip-skeleton --leads --max-jobs --concurrency --max-usd --max-tokens --commit-message --repo --pr --require-section --mutants --merge-method --timeout --tag-timeout --no-flake-check --exempt --yes --plan --accept-stale --batch'),
+  command('go', 'Complete a manifest or goal.', 'goal', '--scope --wave --max-waves --allow-main-branch --skip-skeleton --leads --max-jobs --concurrency --max-usd --max-tokens --commit-message --repo --pr --require-section --mutants --merge-method --timeout --tag-timeout --no-flake-check --exempt --yes --plan --accept-stale --batch'),
   command('plan', 'Preview a goal: leads, cost, time and risks. Nothing runs.', 'goal', '--leads --max-jobs --concurrency --max-usd --max-tokens --json --batch'),
   command('note', 'Add a note to the task or handoff file.', 'goal', '--file'),
   command('ask', 'Ask an agent a question.', 'goal', '--model --agent --tier --context --timeout --not-sensitive'),

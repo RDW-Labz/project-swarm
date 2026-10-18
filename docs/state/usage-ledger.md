@@ -133,6 +133,8 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-18 | - | review-down-dir: Reviewed down-dir diff, migration-gate, migration-queue, safety-commands and the do | claude | opus | pass | 73,843 | $0.46 |
 | 2026-10-18 | - | review-lane-risk: No high-severity issues. Old ledgers still verify (canon drops undefined); re-appr | claude | opus | pass | 372,241 | $0.72 |
 | 2026-10-18 | - | review-cap-reroute: Caps are not bypassed (rerouted job re-runs admission/reserveSpend; run-cap and | claude | opus | pass | 355,570 | $0.62 |
+| 2026-10-18 | - | review-scope-loop: Reviewed the go --scope loop. 2 HIGH: Ctrl-C (SIGINT swallowed by runManifestChec | claude | opus | pass | 1,798,301 | $1.73 |
+| 2026-10-18 | - | review-scope-loop-2: No high findings. Three medium: Ctrl-C outside the agent run can be ignored (a | claude | opus | pass | 965,324 | $1.39 |
 
 ## Daily summary
 
@@ -145,5 +147,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-16 | anthropic | 52 | 48 | 4 | 1,336,255 | $0.48 (incl. estimates) |
 | 2026-10-16 | claude | 1 | 0 | 1 | 46,296 | $0.42 |
 | 2026-10-16 | codex | 2 | 2 | 0 | 31,624 | subscription |
-| 2026-10-18 | claude | 5 | 5 | 0 | 934,253 | $2.81 |
-| **total** | all | 129 | 114 | 15 | 6,110,412 | $7.74 (incl. estimates) |
+| 2026-10-18 | claude | 7 | 7 | 0 | 3,697,878 | $5.93 |
+| **total** | all | 131 | 116 | 15 | 8,874,037 | $10.86 (incl. estimates) |
