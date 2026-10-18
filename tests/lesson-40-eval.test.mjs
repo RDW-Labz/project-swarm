@@ -154,7 +154,8 @@ test('eval 40.4: a ticket that touches auth, an API route, a migration or a sens
   await writeLedger(root, createLedger({ scope: SCOPE_HASH, tickets: [tk('T-0001', { files: ['src/app/api/retry/route.ts'], runId: 'r9', status: 'review' })] }));
   await fs.rm(path.join(root, '.swarm/security-reviews/records.json'));
   assert.equal((await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated', '--accept-unreviewed', 'T-0001'])).exitCode, 1);
-  assert.match((await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated', '--accept-unreviewed', 'T-0001', '--yes'])).stdout, /1 ticket\(s\) marked done/);
+  assert.match((await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated', '--accept-unreviewed', 'T-0001', '--yes'])).stdout, /needs --reason/);
+  assert.match((await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated', '--accept-unreviewed', 'T-0001', '--reason', 'Opus is down today', '--yes'])).stdout, /1 ticket\(s\) marked done/);
   assert.match(await fs.readFile(path.join(root, '.swarm/project/tickets.log'), 'utf8'), /"event":"accept-unreviewed"/);
 });
 

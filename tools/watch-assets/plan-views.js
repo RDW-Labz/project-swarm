@@ -78,7 +78,9 @@
     head.appendChild(el('span', 'pill info', txt(t.status)));
     if (t.risk) head.appendChild(el('span', 'pill warn', 'risk ' + t.risk));
     if (t.sensitive) head.appendChild(el('span', 'pill bad', 'sensitive'));
+    if (t.securityReview) head.appendChild(el('span', t.securityReview.state === 'blocked' ? 'pill bad' : 'pill warn', t.securityReview.state === 'blocked' ? 'review-blocked' : 'accepted without security review'));
     root.appendChild(head);
+    if (t.securityReview) root.appendChild(section('Security review', el('p', null, txt(t.securityReview.reason) + (t.securityReview.at ? ' (' + txt(t.securityReview.at) + ')' : ''))));
     root.appendChild(section('Scope', chipList(t.scopeRefs, null)));
     var ac = el('ol', 'pl-ac');
     listOf(t.acceptance).forEach(function (a) { ac.appendChild(el('li', null, String(a))); });

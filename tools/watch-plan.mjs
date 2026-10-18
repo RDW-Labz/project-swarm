@@ -21,7 +21,7 @@ const group = (list, key) => {
 };
 
 function card(t) {
-  return { id: txt(t.id), title: txt(t.title), type: txt(t.type), status: txt(t.status), risk: txt(t.risk), sensitive: t.sensitive ?? null, lane: txt(t.lane) };
+  return { id: txt(t.id), title: txt(t.title), type: txt(t.type), status: txt(t.status), risk: txt(t.risk), sensitive: t.sensitive ?? null, lane: txt(t.lane), ...(t.securityReview && typeof t.securityReview === 'object' ? { securityReview: { state: txt(t.securityReview.state, 40) } } : {}) };
 }
 
 export function buildPlanSnapshot(ledger, { now = Date.now() } = {}) {
@@ -115,6 +115,8 @@ export function buildPlanSnapshot(ledger, { now = Date.now() } = {}) {
     costUsd: typeof t.costUsd === 'number' ? t.costUsd : null,
     pr: pick(t.pr),
     review: pick(t.review),
+    // The security review state (blocked, or accepted without a review with the owner's reason).
+    securityReview: t.securityReview && typeof t.securityReview === 'object' ? { state: txt(t.securityReview.state, 40), reason: txt(t.securityReview.reason, 400), at: txt(t.securityReview.at, 40), run: txt(t.securityReview.run, 80) } : null,
     drift: strs(t.drift),
   }]));
 

@@ -39,7 +39,7 @@ export const SCOPE_USAGE = [
   '       swarm scope check [FILE]',
   '       swarm scope split [FILE] [--stage S1] | scope split --wire [--all] | scope split --ingest RUN [--merge] [--wire]',
   '       swarm scope approve [FILE] [--yes]',
-  '       swarm scope sync RUN [--integrated] [--accept-unreviewed T-0001 --yes]',
+  '       swarm scope sync RUN [--integrated] [--accept-unreviewed T-0001 --reason TEXT --yes]',
   '       swarm scope security-review RUN     (records the verdicts of an Opus security review run)',
   '       swarm scope contracts OPENAPI.json',
   '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high] [--set STATUS] [--note TEXT] [--json]',
@@ -57,7 +57,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from']);
+const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const out = (text, exitCode = 0) => ({ stdout: text.endsWith('\n') ? text : `${text}\n`, exitCode });
@@ -189,6 +189,15 @@ export function redactNote(text) {
 async function lockedTransition(root, id, to, options) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try { return await withLock(root, () => transition(root, id, to, options)); }
+    catch (error) { if (error.code !== 'scope-busy' || attempt === 4) throw error; await new Promise(resolve => setTimeout(resolve, 300)); }
+  }
+  return null;
+}
+
+// A ledger update under the wave lock, retried while another command holds it.
+async function lockedUpdate(root, fn) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try { return await withLock(root, fn); }
     catch (error) { if (error.code !== 'scope-busy' || attempt === 4) throw error; await new Promise(resolve => setTimeout(resolve, 300)); }
   }
   return null;
@@ -781,37 +790,140 @@ async function readUiResultsGuarded(root) {
   } catch { return null; }
 }
 
+// The reminder a second ask carries: the same review again, with the output format spelled out.
+export const REVIEW_FORMAT_REMINDER = 'FORMAT REMINDER: your last answer had no result line. Finish with exactly one JSON line and nothing after it: {"reviews":[{"ticket":"T-0001","verdict":"pass","findings":[]}]} with one entry for every ticket listed above; verdict is pass or fail; each finding is {"severity":"high|medium|low","file":"...","line":0,"issue":"...","fix":"..."}.';
+
+// The response of a finished security review run, checked the same way every time: right job, right model, complete.
+async function loadReviewResponse(root, runId) {
+  const state = await readRunState(root, runId);
+  const job = (state.jobs ?? []).find(j => /^sec-review-/.test(j.id));
+  if (!job) return { error: `run ${runId} has no security review job` };
+  if (job.model !== 'opus') return { error: `the security review job ran on ${job.model ?? 'an unknown model'}, not opus; run the manifest that sync wrote` };
+  if (job.status !== 'complete') return { error: `the security review job is ${job.status}, not complete; run it again` };
+  let text = '';
+  try { text = await fs.readFile(path.join(root, '.swarm', 'runs', runId, job.id, 'response.txt'), 'utf8'); } catch { return { error: 'the review has no response to read' }; }
+  return { job, text };
+}
+
+// Ask the same review once more with the format reminder. Paid, so it is guarded: the manifest is checked first, a marker is written before the
+// run, a source review is asked again at most once, and the marker keeps the second run's id so a rerun reads that answer instead of paying again.
+async function reAskReview(root, sourceRun, deps) {
+  if (!RUN_ID.test(sourceRun)) return { asked: false, error: `bad review run id ${sourceRun}` };
+  const dir = path.join(root, '.swarm', 'security-reviews');
+  const marker = path.join(dir, `${sourceRun}.retried`);
+  let manifest;
+  try { manifest = JSON.parse(await fs.readFile(path.join(dir, `${sourceRun}.json`), 'utf8')); } catch { return { asked: false, error: `the review manifest .swarm/security-reviews/${sourceRun}.json cannot be read` }; }
+  // Exactly the one read-only Opus review job sync wrote; anything else would be paid for before it could be checked.
+  const jobs = Array.isArray(manifest?.jobs) ? manifest.jobs : [];
+  const only = jobs[0];
+  if (jobs.length !== 1 || only?.id !== `sec-review-${sourceRun}`.slice(0, 60) || only.agent !== 'claude' || only.model !== 'opus' || only.type !== 'review' || (only.outputs ?? []).length !== 0 || typeof only.prompt !== 'string') return { asked: false, error: 'the review manifest is not the single read-only Opus review job sync wrote' };
+  try { await fs.writeFile(marker, `${JSON.stringify({ at: new Date().toISOString() })}\n`, { flag: 'wx' }); }
+  catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    // Already asked once: the run it started is read, never started again.
+    let earlier = null;
+    try { earlier = JSON.parse(await fs.readFile(marker, 'utf8')).run ?? null; } catch { earlier = null; }
+    return { asked: false, runId: typeof earlier === 'string' && RUN_ID.test(earlier) ? earlier : null };
+  }
+  only.prompt = `${only.prompt}\n\n${REVIEW_FORMAT_REMINDER}`;
+  const run = await (deps.runReview ?? defaultRunReview)(root, manifest);
+  const runId = typeof run?.id === 'string' && RUN_ID.test(run.id) ? run.id : null;
+  if (runId) await fs.writeFile(marker, `${JSON.stringify({ at: new Date().toISOString(), run: runId })}\n`);
+  return { asked: true, runId };
+}
+
+async function defaultRunReview(root, manifest) {
+  const { runManifestChecked } = await import('./swarm.mjs');
+  // A hard cap on the second ask (an Opus review of a few files costs well under this).
+  return runManifestChecked(root, manifest, () => {}, { maxUsd: 1.5 });
+}
+
+async function setSecurityReview(root, id, value) {
+  await lockedUpdate(root, async () => {
+    const ledger = await readLedger(root);
+    const t = ledger?.tickets.find(x => x.id === id);
+    if (!t) return;
+    if (value === undefined) delete t.securityReview; else t.securityReview = value;
+    await writeLedger(root, ledger);
+  });
+}
+
+// Marks the tickets of a review that gave no result "review-blocked": they stay in review (never done), and say why, in the ledger, the log and Swarm Watch.
+// Tickets that already hold a verdict for the code they have now are left alone, and an older verdict can no longer carry a blocked ticket to done.
+async function markReviewBlocked(root, requested, reason, run) {
+  const marked = [];
+  const records = await readReviewRecords(root);
+  await lockedUpdate(root, async () => {
+    const ledger = await readLedger(root);
+    if (!ledger) return;
+    for (const id of Object.keys(requested)) {
+      const t = ledger.tickets.find(x => x.id === id);
+      if (!t || t.status !== 'review') continue;
+      const record = records.tickets[id];
+      if (record && record.filesHash === requested[id]) continue;
+      t.securityReview = { state: 'blocked', reason, at: new Date().toISOString(), run };
+      marked.push(id);
+    }
+    ledger.updatedAt = new Date().toISOString();
+    await writeLedger(root, ledger);
+  });
+  for (const id of marked) await appendLog(root, { event: 'review-blocked', id, reason, run, by: 'system' });
+  return marked;
+}
+
 // Records the verdicts of a finished security review run, against the code that is in the tree now.
-async function cmdSecurityReview(root, { rest }) {
+// A response with no {"reviews":[...]} result is asked for once more with a format reminder; if that is also unusable the tickets are review-blocked.
+async function cmdSecurityReview(root, { rest }, deps = {}) {
   if (rest.length !== 1) return bad('scope security-review needs the id of the finished review run');
   if (!/^[A-Za-z0-9._-]{1,80}$/.test(rest[0])) return bad('scope security-review: bad run id');
-  const state = await readRunState(root, rest[0]);
-  const job = (state.jobs ?? []).find(j => /^sec-review-/.test(j.id));
-  if (!job) return out(`run ${rest[0]} has no security review job`, 1);
-  if (job.model !== 'opus') return out(`the security review job ran on ${job.model ?? 'an unknown model'}, not opus; run the manifest that sync wrote`, 1);
+  const first = await loadReviewResponse(root, rest[0]);
+  if (first.error) return out(first.error, 1);
+  const job = first.job;
   // The review must be of a manifest sync wrote: its ticket list and the code hashes taken then.
   const sourceRun = job.id.slice('sec-review-'.length);
   let requested;
-  try { requested = JSON.parse(await fs.readFile(path.join(root, '.swarm', 'security-reviews', `${sourceRun}.hashes.json`), 'utf8')); } catch { return out(`no review was requested for run ${sourceRun} (sync writes .swarm/security-reviews/${sourceRun}.json); run that manifest`, 1); }
-  if (job.status !== 'complete') return out(`the security review job is ${job.status}, not complete; run it again`, 1);
-  let text = '';
-  try { text = await fs.readFile(path.join(root, '.swarm', 'runs', rest[0], job.id, 'response.txt'), 'utf8'); } catch { return out('the review has no response to read', 1); }
-  const verdicts = parseReviewVerdicts(text);
-  if (!verdicts) return out('the review response has no {"reviews":[...]} result; run it again', 1);
+  try { requested = JSON.parse(await fs.readFile(path.join(root, '.swarm', 'security-reviews', `${sourceRun}.hashes.json`), 'utf8')); } catch { return out(`no review was requested for run ${sourceRun} (sync writes .swarm/security-reviews/${sourceRun}.json); run that manifest first`, 1); }
+  // An empty list names no ticket: it is as unusable as no list.
+  const usable = text => { const v = parseReviewVerdicts(text); return v && v.length ? v : null; };
+  let verdicts = usable(first.text);
+  const notes = [];
+  let reviewRun = rest[0];
+  if (!verdicts) {
+    const again = await reAskReview(root, sourceRun, deps);
+    if (again.error) notes.push(again.error);
+    else if (again.asked || again.runId) {
+      notes.push(again.asked ? 'the first answer had no {"reviews":[...]} result: asked once more with the format reminder' : 'the first answer had no {"reviews":[...]} result; the second ask made earlier is read (never asked a third time)');
+      const second = again.runId ? await loadReviewResponse(root, again.runId) : { error: 'the second review did not start' };
+      if (second.error) notes.push(`second ask: ${second.error}`);
+      else if (second.job.id.slice('sec-review-'.length) !== sourceRun) notes.push('second ask: it is not the review of the same source run');
+      else { verdicts = usable(second.text); reviewRun = again.runId; }
+    }
+  }
+  if (!verdicts) {
+    const reason = 'the security review gave no {"reviews":[...]} result, also when asked again; run the review again (swarm scope sync RUN --integrated writes a new one) or accept the risk with --accept-unreviewed T-0001 --reason TEXT --yes';
+    const marked = await markReviewBlocked(root, requested, reason, rest[0]);
+    return out([...notes, marked.length ? `review-blocked (not done): ${marked.join(', ')}` : 'no ticket of this review is waiting in review', reason].join('\n'), 1);
+  }
   const ledger = await readLedger(root);
   const records = await readReviewRecords(root);
-  const lines = [];
+  const lines = [...notes];
   // One entry per ticket, and a fail anywhere wins over a pass.
   const merged = new Map();
   for (const v of verdicts) { const old = merged.get(v.ticket); merged.set(v.ticket, old ? { ticket: v.ticket, verdict: old.verdict === 'fail' || v.verdict === 'fail' ? 'fail' : 'pass', findings: [...old.findings, ...v.findings].slice(0, 10) } : v); }
+  const cleared = [];
   for (const v of merged.values()) {
     const t = ledger?.tickets.find(x => x.id === v.ticket);
     if (!t || !Object.hasOwn(requested, t.id)) continue;
-    records.tickets[t.id] = { verdict: v.verdict, findings: v.findings, run: rest[0], at: new Date().toISOString(), filesHash: requested[t.id] };
+    records.tickets[t.id] = { verdict: v.verdict, findings: v.findings, run: reviewRun, at: new Date().toISOString(), filesHash: requested[t.id] };
     lines.push(`${t.id}: ${v.verdict}${v.findings.length ? ` (${v.findings.length} finding${v.findings.length > 1 ? 's' : ''})` : ''}`);
-    await appendLog(root, { event: 'security-review', id: t.id, verdict: v.verdict, findings: v.findings.length, run: rest[0], by: 'owner' });
+    await appendLog(root, { event: 'security-review', id: t.id, verdict: v.verdict, findings: v.findings.length, run: reviewRun, by: 'owner' });
+    if (t.securityReview?.state === 'blocked') cleared.push(t.id);
   }
   await writeReviewRecords(root, records);
+  const unnamed = Object.keys(requested).filter(id => !merged.has(id) && ledger?.tickets.find(x => x.id === id)?.status === 'review');
+  if (unnamed.length) lines.push(`no verdict for: ${unnamed.join(', ')} (they stay in review; sync writes a new review for them)`);
+  // A ticket that now has a verdict is no longer blocked on a missing one.
+  if (cleared.length) await lockedUpdate(root, async () => { const l = await readLedger(root); if (!l) return; for (const id of cleared) { const x = l.tickets.find(y => y.id === id); if (x?.securityReview?.state === 'blocked') delete x.securityReview; } await writeLedger(root, l); });
   return out(lines.length ? `security review recorded:\n${lines.map(x => `  ${x}`).join('\n')}\nRun swarm scope sync RUN --integrated to move the passed tickets to done and send the failed ones back.` : 'the review named none of the tickets in this ledger', 0);
 }
 
@@ -833,18 +945,20 @@ async function cmdSync(root, { rest, flags }) {
       const { errors } = validateProfile(rawPointer.profile);
       return out(`the profile has a verify block but the profile is invalid, so tests cannot be checked: ${errors[0] ?? 'unknown error'}`, 1);
     }
-    // The owner's way out of a check that fails for a reason that is not the tickets' (it was already failing on the base): named, confirmed with --yes, logged.
+    // The owner's ways out are all checked before anything is logged or changed: named, confirmed with --yes, logged.
+    // A check that fails for a reason that is not the tickets' (it was already failing on the base):
     const accepted = new Set(String(flags['accept-failed-check'] ?? '').split(',').map(x => x.trim()).filter(Boolean));
-    if (accepted.size) {
-      if (flags.yes !== true) return out(`--accept-failed-check ${[...accepted].join(',')} lets tickets reach done while that check fails on run ${rest[0]}. Rerun with --yes to confirm; it is logged.`, 1);
-      await appendLog(root, { event: 'accept-failed-check', by: 'owner', run: rest[0], checks: [...accepted], note: flags.note ?? null });
-    }
-    // The owner's way out of a security review (Opus unavailable, or the review is judged unneeded): named, confirmed with --yes, logged.
+    // A security review (Opus unavailable, or the review is judged unneeded). The reason is required and recorded: in the log, on each ticket, and in Swarm Watch.
     const unreviewedOk = new Set(String(flags['accept-unreviewed'] ?? '').split(',').map(x => x.trim()).filter(Boolean));
+    const unreviewedReason = typeof flags.reason === 'string' ? Array.from(flags.reason.replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim()).slice(0, 400).join('') : '';
+    if (accepted.size && flags.yes !== true) return out(`--accept-failed-check ${[...accepted].join(',')} lets tickets reach done while that check fails on run ${rest[0]}. Rerun with --yes to confirm; it is logged.`, 1);
     if (unreviewedOk.size) {
-      if (flags.yes !== true) return out(`--accept-unreviewed ${[...unreviewedOk].join(',')} lets those tickets reach done without a security review. Rerun with --yes to confirm; it is logged.`, 1);
-      await appendLog(root, { event: 'accept-unreviewed', by: 'owner', run: rest[0], tickets: [...unreviewedOk], note: flags.note ?? null });
+      if (Array.from(unreviewedReason).length < 8) return out(`--accept-unreviewed ${[...unreviewedOk].join(',')} needs --reason TEXT (at least 8 characters: why these tickets may reach done without a security review). Nothing was changed.`, 1);
+      if (flags.yes !== true) return out(`--accept-unreviewed ${[...unreviewedOk].join(',')} lets those tickets reach done without a security review (reason: ${unreviewedReason}). Rerun with --yes to confirm; it is logged and shown in swarm watch. A failing review on the current code is never overridden.`, 1);
     }
+    if (accepted.size) await appendLog(root, { event: 'accept-failed-check', by: 'owner', run: rest[0], checks: [...accepted], note: flags.note ?? null });
+    // The tickets that really skipped a review they needed (filled below); only those are logged and marked.
+    const skippedReview = [];
     const reviewRecords = await readReviewRecords(root);
     const needReview = [];
     const qualityNames = await runQualityNames(root, rest[0]);
@@ -977,10 +1091,20 @@ async function cmdSync(root, { rest, flags }) {
         continue;
       }
       // A ticket that touches auth, an API route, a migration, a policy or a sensitive path is done only after an Opus review passed on the code that is in the tree now.
-      const reviewReason = unreviewedOk.has(t.id) ? null : securityReviewReason(t);
+      let reviewReason = securityReviewReason(t);
+      if (reviewReason && unreviewedOk.has(t.id)) {
+        // The owner's word skips a missing review, never a failing one on this code, and never one that already passed.
+        const record = reviewRecords.tickets[t.id];
+        const now = await filesHash(root, [...(t.files ?? []), ...(t.deletes ?? [])]);
+        const failing = record?.verdict === 'fail' && record.filesHash === now;
+        const passed = record?.verdict === 'pass' && record.filesHash === now;
+        if (!failing && !passed) { skippedReview.push(t.id); reviewReason = null; }
+      }
       if (reviewReason) {
         const record = reviewRecords.tickets[t.id];
         const now = await filesHash(root, [...(t.files ?? []), ...(t.deletes ?? [])]);
+        // A ticket whose review gave no result stays blocked until a verdict newer than the block arrives (an older pass cannot carry it to done).
+        if (t.securityReview?.state === 'blocked' && !(record && Date.parse(record.at) > Date.parse(t.securityReview.at))) { needReview.push({ ticket: t, reason: reviewReason }); continue; }
         if (record?.verdict === 'fail' && record.filesHash === now) {
           const found = (record.findings ?? []).map(f => `${f.severity} ${f.file}${f.line ? `:${f.line}` : ''} ${f.issue}${f.fix ? ` (fix: ${f.fix})` : ''}`).join('; ').slice(0, 500);
           delete reviewRecords.tickets[t.id];
@@ -1006,7 +1130,14 @@ async function cmdSync(root, { rest, flags }) {
       }
       await lockedTransition(root, t.id, 'done', { by: 'sync', note: inTree.has(t.id) ? `output already in the tree; not re-verified by ${rest[0]}` : `integrated ${rest[0]}` });
       done.push(t.id);
+      // A ticket that skipped its security review by the owner's word keeps that fact (and the reason) on the ticket.
+      if (skippedReview.includes(t.id)) await setSecurityReview(root, t.id, { state: 'accepted-unreviewed', reason: unreviewedReason, at: new Date().toISOString(), run: rest[0] });
+      else if (t.securityReview?.state === 'blocked') await setSecurityReview(root, t.id, undefined);
     }
+    // Logged once, after the fact, and only for the tickets that really skipped a review they needed and reached done.
+    const acceptedNow = skippedReview.filter(id => done.includes(id));
+    if (acceptedNow.length) await appendLog(root, { event: 'accept-unreviewed', by: 'owner', run: rest[0], tickets: acceptedNow, reason: unreviewedReason, note: flags.note ?? null });
+    const notAccepted = [...unreviewedOk].filter(id => !acceptedNow.includes(id));
     let reviewLine = null;
     if (needReview.length) {
       const manifest = await securityReviewManifest(root, rest[0], needReview);
@@ -1017,10 +1148,11 @@ async function cmdSync(root, { rest, flags }) {
       const hashes = {};
       for (const { ticket } of needReview) hashes[ticket.id] = await filesHash(root, [...(ticket.files ?? []), ...(ticket.deletes ?? [])]);
       await fs.writeFile(path.join(root, `.swarm/security-reviews/${rest[0]}.hashes.json`), `${JSON.stringify(hashes)}\n`);
-      reviewLine = `${needReview.length} ticket(s) stay in review until an Opus security review passes: ${needReview.map(x => `${x.ticket.id} (${x.reason})`).join('; ')}. Run: swarm run ${file}; then swarm scope security-review <that run id>; then swarm scope sync ${rest[0]} --integrated`;
+      reviewLine = `${needReview.length} ticket(s) stay in review until an Opus security review passes: ${needReview.map(x => `${x.ticket.id} (${x.reason}${x.ticket.securityReview?.state === 'blocked' ? '; review-blocked: the last review gave no result' : ''})`).join('; ')}. Run: swarm run ${file}; then swarm scope security-review <that run id>; then swarm scope sync ${rest[0]} --integrated`;
     }
     await refreshPlan(root);
     return out([`${done.length} ticket(s) marked done`,
+      ...(notAccepted.length ? [`--accept-unreviewed: ${notAccepted.join(', ')} did not skip a review (not in this run, not done, no review needed, a review already passed, or a failing review on this code: that one is never overridden)`] : []),
       ...(reviewLine ? [reviewLine] : []),
       ...(inTree.size ? [`${[...inTree].filter(id => done.includes(id)).length} of them on output that was already in the tree (not re-verified by this run): ${[...inTree].filter(id => done.includes(id)).join(', ')}`] : []),
       ...(retried.length ? [`${retried.length} ticket(s) back to ready, one level higher, after failed checks: ${retried.join(', ')}`] : []),
@@ -1291,7 +1423,7 @@ async function cmdChange(root, { rest, flags }) {
   return out(`${summary}\nrecorded ${id}.${need}`);
 }
 
-export async function runScopeCommand(root, command, args) {
+export async function runScopeCommand(root, command, args, deps = {}) {
   try {
     const parsed = parseArgs(args);
     if (command === 'tickets') return await runTicketsCommand(root, args);
@@ -1303,7 +1435,7 @@ export async function runScopeCommand(root, command, args) {
     if (verb === 'split') return await cmdSplit(root, sub);
     if (verb === 'approve') return await cmdApprove(root, sub);
     if (verb === 'sync') return await cmdSync(root, sub);
-    if (verb === 'security-review') return await cmdSecurityReview(root, sub);
+    if (verb === 'security-review') return await cmdSecurityReview(root, sub, deps);
     if (verb === 'contracts') return await cmdContracts(root, sub);
     return bad(verb ? `unknown scope command: ${verb}` : 'scope needs a command');
   } catch (error) {

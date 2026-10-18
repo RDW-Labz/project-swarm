@@ -92,6 +92,10 @@ export function validateTicket(t) {
   if (t.skeleton !== undefined && typeof t.skeleton !== 'boolean') errors.push('skeleton must be a boolean');
   if (t.integration !== undefined && typeof t.integration !== 'boolean') errors.push('integration must be a boolean');
   if (t.screens !== undefined && !(isStrArr(t.screens) && t.screens.length <= 5 && t.screens.every(id => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id) && id.length >= 2 && id.length <= 40))) errors.push('screens must be up to 5 kebab-case screen ids');
+  if (t.securityReview !== undefined) {
+    const r = t.securityReview;
+    if (!r || typeof r !== 'object' || Array.isArray(r) || !['blocked', 'accepted-unreviewed'].includes(r.state) || typeof r.reason !== 'string' || r.reason.length < 1 || r.reason.length > 400) errors.push('securityReview must be {state: blocked or accepted-unreviewed, reason}');
+  }
   if (t.origin !== undefined && t.origin !== 'ci') errors.push('origin must be ci when set');
   if (t.type === 'human' && !(isStrArr(t.steps) && t.steps.length >= 1 && t.steps.length <= 30)) errors.push('human tickets need 1 to 30 steps');
   return { ok: errors.length === 0, errors };
