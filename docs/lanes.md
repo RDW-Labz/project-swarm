@@ -60,6 +60,14 @@ Claude resolves to concurrency 2, base backoff 4000 ms, maximum backoff 300000 m
 
 Unknown agents and fields refuse with `lanes-invalid`. Concurrency must be an integer 1–2048; `requestsPerMinute` is `null` or an integer 1–100000. Backoff `baseMs` is 1–600000, `maxMs` is at least `baseMs` and at most 3600000, and `maxRetries` is 0–20. Both pause fields are integers 1–86400000 ms. A lane model is `null` or matches `/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,119}$/`.
 
+## A machine-wide worker limit, shared fairly between projects
+
+Several projects can run at once. Each lane already has a machine-wide limit (every run on the machine counts against the same lane file). `machineConcurrency` in the local config adds one more: the most workers, in all lanes together, that the machine runs at once (a whole number 1 to 2048; leave it out for no limit, which is the default; anything else is refused).
+
+- **Fair share:** a project's guaranteed share is the limit divided by the active projects (those holding workers or waiting for some), at least 1. A project may borrow what the others are not using, but not what another active project is still entitled to and is waiting for. So one project cannot starve another, and an idle project's share is not wasted. When a project finishes or its run closes, its share is free again at once. With more projects than workers, a freed worker goes to the project that has waited longest. What a project waits for is written per run and lane, refreshed on every poll and forgotten after 5 seconds without one, so a stalled run does not keep a share for ever. Every run on the machine should read the same config: the limit is each claimer's own `machineConcurrency`.
+- **Separate:** each project's spend caps (`projectMaxUsd`, `--max-usd`, lane daily caps) and its own `--concurrency` stay as they were; the machine limit only adds a ceiling and the sharing. A project is told apart by the id of its folder (the same id the Swarm Watch board uses).
+- **See it:** the Swarm Watch board shows "Workers held": how many of the limit are in use, which project holds how many and in which lane, and which projects are waiting ([watch.md](watch.md)).
+
 ## Rate limits and quota pauses
 
 Lane limits are machine-wide. Every run on this machine shares one lane file next to the shared install: `~/.project-swarm/lanes/lanes.json`, or `SWARM_LANES_DIR` when that is set. The file holds each lane's in-flight count and any rate-limit or quota pause. A lock keeps the counts exact, and a slot whose process has died is cleared on the next claim. A 429 or a quota pause in one run pauses that lane for every other run, including a lead's child runs and runs in other repositories. Deleting a project's `.swarm/` does not reset it. A run's own `concurrency` is still only that run's global cap.

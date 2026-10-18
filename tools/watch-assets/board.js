@@ -48,6 +48,15 @@
     var c = m.cost;
     grid.appendChild(tile('Spend today', usd(c.todayUsd), 'last 7 days ' + usd(c.weekUsd)));
     grid.appendChild(tile('Spend, all time', usd(c.allUsd), 'billed per use ' + usd(c.paidUsd) + ' (of which estimated ' + usd(c.paidEstimatedUsd) + ') | flat-rate lanes (Codex, Cursor, Claude subscription), list value only, not billed ' + usd(c.flatRateListUsd)));
+    var w = m.workers;
+    if (w) {
+      var holders = {};
+      Object.keys(w.byProject).forEach(function (id) { var h = w.byProject[id]; holders[names[id] || (id === 'unknown' ? 'unknown project' : id)] = h.total + ' (' + pairs(h.byLane, String) + ')'; });
+      var waiting = {};
+      Object.keys(w.demand || {}).forEach(function (id) { waiting[names[id] || id] = w.demand[id]; });
+      var limit = w.invalid ? w.total + ' in use, LIMIT INVALID (fix machineConcurrency; runs will not start)' : w.max ? w.total + ' of ' + w.max + ' in use' : w.total + ' in use, no machine limit';
+      grid.appendChild(tile('Workers held', limit, 'who holds them: ' + (Object.keys(holders).length ? Object.keys(holders).sort().map(function (k) { return k + ' ' + holders[k]; }).join(' | ') : 'nobody') + (Object.keys(waiting).length ? ' | waiting: ' + pairs(waiting, String) : '') + (w.max ? ' | shared fairly between active projects' : '')));
+    }
     var per = {};
     Object.keys(c.byProject).forEach(function (id) { per[c.byProject[id].name || id] = usd(c.byProject[id].allUsd); });
     grid.appendChild(tile('By project', String(Object.keys(per).length), Object.keys(per).sort().map(function (k) { return k + ' ' + per[k]; }).join(', ') || 'none'));

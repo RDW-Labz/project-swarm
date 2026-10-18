@@ -139,6 +139,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-18 | - | review-s11-fixes: Template-context: whole file contents sent with no value guard and override of exp | claude | opus | pass | 208,304 | $0.74 |
 | 2026-10-18 | - | review-budgets-models: Reviewed A2 budgets and B3 model watch from the diff plus ci-hooks/init-profi | claude | opus | pass | 336,492 | $1.00 |
 | 2026-10-18 | - | review-board-1: Board review. Routes are safe: token, GET/HEAD-only and Host checks hold, projects a | claude | opus | pass | 468,460 | $1.10 |
+| 2026-10-18 | - | review-board-2: Reviewed machine-wide fair sharing in tools/lanes.mjs plus wiring in swarm.mjs, boar | claude | opus | pass | 209,756 | $0.74 |
 
 ## Daily summary
 
@@ -151,5 +152,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-16 | anthropic | 52 | 48 | 4 | 1,336,255 | $0.48 (incl. estimates) |
 | 2026-10-16 | claude | 1 | 0 | 1 | 46,296 | $0.42 |
 | 2026-10-16 | codex | 2 | 2 | 0 | 31,624 | subscription |
-| 2026-10-18 | claude | 11 | 11 | 0 | 6,259,511 | $10.52 |
-| **total** | all | 135 | 120 | 15 | 11,435,670 | $15.45 (incl. estimates) |
+| 2026-10-18 | claude | 12 | 12 | 0 | 6,469,267 | $11.26 |
+| **total** | all | 136 | 121 | 15 | 11,645,426 | $16.19 (incl. estimates) |

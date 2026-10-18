@@ -20,7 +20,9 @@ import { readLedger } from './tickets.mjs';
 import { boardSummary, listLiveRuns } from './board.mjs';
 import { listProjects, projectsFile } from './projects.mjs';
 import { readHistory, historyCsv, historyFile } from './history.mjs';
-import { boardSnapshot, projectDetail } from './board-data.mjs';
+import { boardSnapshot, projectDetail, workersHeld } from './board-data.mjs';
+import { lanesDir, machineConcurrency } from './lanes.mjs';
+import { loadLocalConfig } from './local-config.mjs';
 import { backfillHistory } from './board-commands.mjs';
 import { projectSummary } from './project-spend.mjs';
 
@@ -205,7 +207,11 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
     // One snapshot at a time: requests that arrive while one is being built share it.
     snapshot() {
       if (cached && now() - cached.at < cacheMs) return cached.promise;
-      const promise = (async () => boardSnapshot({ projects: await listProjects({ file: projectsFile(env) }), liveRuns: await live(), now: now() }))();
+      const promise = (async () => {
+        let max = null, invalid = false;
+        try { max = machineConcurrency(loadLocalConfig({ env })); } catch { invalid = true; /* the runs that read it refuse to start; the board says so */ }
+        return boardSnapshot({ projects: await listProjects({ file: projectsFile(env) }), liveRuns: await live(), now: now(), workers: await workersHeld({ dir: lanesDir(env), max, invalid }) });
+      })();
       cached = { at: now(), promise };
       promise.catch(() => { if (cached?.promise === promise) cached = null; });
       return promise;
