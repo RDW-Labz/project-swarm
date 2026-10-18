@@ -20,3 +20,11 @@
 .board-entry .when{opacity:.7;font-size:12px}
 .board-entry .kind{font-size:12px;text-transform:uppercase;opacity:.8}
 .board-link{color:inherit;text-decoration:underline}
+
+.crumbs{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 0;font-size:13px}
+.crumbs[hidden]{display:none}
+.crumbs a{color:inherit}
+.crumbs .back{padding:4px 10px;border-radius:999px;border:1px solid rgba(128,128,128,.4);text-decoration:none}
+.crumbs .back:hover{background:rgba(128,128,128,.12)}
+.crumbs .sep{opacity:.5}
+.crumbs .here{opacity:.8;overflow-wrap:anywhere}

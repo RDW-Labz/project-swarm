@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.116.0
+
+Swarm Watch: back to the board. Every run page and project page has a "← All projects" link and a breadcrumb (All projects › project › run); plain links, so Back works. From a run page the link finds the running board (its address and token are kept in `~/.project-swarm/board.json`, mode 0600, used only if it is a loopback address that answers) or starts one, then redirects there with the board's own token; a run page opened directly works the same way. The run page's own token is needed for every nav route (the board's token is refused there). An Opus review (4 medium, 4 low) was fixed before release: only our own board is reused (its reply shape is checked, a redirect is never followed, a foreign local service never receives the token, a process that is not ours does not count as alive); one start at a time per process; the board file is private, written atomically under a random name and rebuilt to origin plus token; a board that ends closes the run pages it opened and removes its own file entry; Ctrl-C closes a board the run page started. Tests: `tests/board-nav.test.mjs`.
+
 ## 1.115.0
 
 The Swarm Watch board, part 2: a machine-wide worker limit shared fairly between projects.

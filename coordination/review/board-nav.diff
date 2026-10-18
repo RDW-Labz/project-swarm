@@ -1,0 +1,531 @@
+diff --git a/tests/board-nav.test.mjs b/tests/board-nav.test.mjs
+new file mode 100644
+index 0000000..3dcda45
+--- /dev/null
++++ b/tests/board-nav.test.mjs
+@@ -0,0 +1,179 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import http from 'node:http';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++import { createWatchServer } from '../tools/watch-server.mjs';
++import { createBoardApi, makeRunServer, runNav, ensureBoard, startBoardServer, readBoardFile, writeBoardFile, boardFile, boardProjectUrl } from '../tools/watch-cli.mjs';
++import { projectId } from '../tools/projects.mjs';
++
++const deltaFile = fileURLToPath(new URL('../tools/watch-delta.mjs', import.meta.url));
++const realAssets = fileURLToPath(new URL('../tools/watch-assets', import.meta.url));
++const tmp = async t => { const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'nav-'))); t.after(() => fs.rm(d, { recursive: true, force: true })); return d; };
++const get = (port, pathname, { method = 'GET', host } = {}) => new Promise((resolve, reject) => {
++  const req = http.request({ hostname: '127.0.0.1', port, path: pathname, method, headers: { Host: host ?? `127.0.0.1:${port}` } }, res => {
++    const chunks = []; res.on('data', c => chunks.push(c)); res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8'), headers: res.headers }));
++  });
++  req.on('error', reject); req.end();
++});
++const portOf = url => Number(new URL(url).port);
++const tokenOf = url => new URL(url).searchParams.get('t');
++
++async function setup(t) {
++  const home = await tmp(t);
++  const root = path.join(home, 'parts-app'); await fs.mkdir(path.join(root, '.swarm/runs/run-1'), { recursive: true });
++  await fs.writeFile(path.join(root, '.swarm/runs/run-1/state.json'), JSON.stringify({ id: 'run-1', status: 'running', startedAt: new Date().toISOString(), jobs: [{ id: 'a', status: 'running', agent: 'codex' }] }));
++  const real = await fs.realpath(root);
++  const env = { SWARM_PROJECTS_FILE: path.join(home, 'projects.json'), SWARM_HISTORY_FILE: path.join(home, 'h.ndjson'), SWARM_BOARD_FILE: path.join(home, 'board.json'), SWARM_CONFIG: path.join(home, 'none.json') };
++  await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({ version: 1, projects: [{ id: projectId(real), root: real, name: 'parts-app', addedAt: 'x', lastSeen: 'x' }] }));
++  return { home, root: real, env, id: projectId(real) };
++}
++
++test('run page opened FROM the board: its nav says where it is, and the links lead back to the board and to the project, each needing the run page\'s own token', async t => {
++  const { env, id } = await setup(t);
++  const board = await startBoardServer({ env, root: env.SWARM_BOARD_FILE });
++  t.after(async () => { await board.server.close(); await board.api.close(); });
++  const boardPort = portOf(board.url), boardToken = tokenOf(board.url);
++  const open = await get(boardPort, `/open/run?id=${id}&run=run-1&t=${boardToken}`);
++  assert.equal(open.status, 302);
++  const runUrl = open.headers.location, runPort = portOf(runUrl), runToken = tokenOf(runUrl);
++  // the page carries the nav element and script
++  const page = await get(runPort, `/?t=${runToken}`);
++  assert.match(page.body, /id="crumbs"/);
++  assert.match(page.body, /assets\/nav\.js/);
++  // without the run page's token nothing works; the board's token is not the run page's token
++  for (const route of ['/api/nav', '/nav/board', '/nav/project']) {
++    assert.equal((await get(runPort, route)).status, 403, `${route} without a token`);
++    assert.equal((await get(runPort, `${route}?t=${boardToken}`)).status, 403, `${route} with the board's token`);
++  }
++  assert.equal((await get(runPort, `/api/nav?t=${runToken}`, { method: 'POST' })).status, 405);
++  assert.equal((await get(runPort, `/api/nav?t=${runToken}`, { host: 'evil.example:80' })).status, 421);
++  const nav = JSON.parse((await get(runPort, `/api/nav?t=${runToken}`)).body);
++  assert.deepEqual(nav.project, { id, name: 'parts-app' });
++  assert.equal(nav.run, 'run-1');
++  // back to the board: a redirect to the board's address with the board's token (so Back works, no copy and paste)
++  const back = await get(runPort, `/nav/board?t=${runToken}`);
++  assert.equal(back.status, 302);
++  assert.equal(back.headers.location, board.url);
++  assert.equal((await get(boardPort, new URL(back.headers.location).pathname + new URL(back.headers.location).search)).status, 200);
++  // to the project page on the board
++  const project = await get(runPort, `/nav/project?t=${runToken}`);
++  assert.equal(project.status, 302);
++  assert.equal(project.headers.location, boardProjectUrl(board.url, id));
++  const projectPage = await get(boardPort, new URL(project.headers.location).pathname + new URL(project.headers.location).search);
++  assert.equal(projectPage.status, 200);
++  assert.match(projectPage.body, /id="crumbs"/);
++  assert.match(projectPage.body, /All projects/);
++});
++
++test('the nav script and the project page use plain links with the token (no history tricks), and show All projects > project > run', async () => {
++  const nav = await fs.readFile(path.join(realAssets, 'nav.js'), 'utf8');
++  assert.match(nav, /'\/nav\/board\?t=' \+ T/);
++  assert.match(nav, /'\/nav\/project\?t=' \+ T/);
++  assert.match(nav, /← All projects/);
++  assert.match(nav, /›/, 'the separator of the breadcrumb');
++  assert.match(nav, /nav\.run/, 'the run is the last crumb');
++  for (const name of ['nav.js', 'project.js', 'board.js']) assert.doesNotMatch(await fs.readFile(path.join(realAssets, name), 'utf8'), /history\.(push|replace)State|location\.replace|innerHTML/, `${name}: nothing that breaks the Back button or injects markup`);
++  const project = await fs.readFile(path.join(realAssets, 'project.html'), 'utf8');
++  assert.match(project, /id="crumbBack"/);
++  assert.match(project, /id="crumbProject"/);
++  const js = await fs.readFile(path.join(realAssets, 'project.js'), 'utf8');
++  assert.match(js, /crumbBack'\)\.href = '\/\?t=' \+ T/);
++  assert.match(js, /crumbProject'\)\.textContent = p\.name/);
++});
++
++test('a run page opened DIRECTLY finds a running board, or starts one, and a second click reuses it', async t => {
++  const { env, root, id } = await setup(t);
++  // no board yet: the link starts one (here, in this process) and records its address
++  const closers = [];
++  t.after(async () => { for (const c of closers) await c(); });
++  let started = 0;
++  const start = async args => { started += 1; const b = await startBoardServer(args); closers.push(async () => { await b.server.close(); await b.api.close(); }); return b; };
++  const nav = runNav({ root, runId: 'run-1', env });
++  nav.openBoard = async pid => { const url = await ensureBoard({ env, root, start }); return pid ? boardProjectUrl(url, pid) : url; };
++  const runServer = makeRunServer(root, 'run-1', { nav });
++  await runServer.listen();
++  t.after(() => runServer.close());
++  const runPort = portOf(runServer.url), runToken = runServer.token;
++  assert.equal(await readBoardFile({ env }), null, 'no board is running');
++  const first = await get(runPort, `/nav/board?t=${runToken}`);
++  assert.equal(first.status, 302);
++  assert.equal(started, 1);
++  const boardUrl = first.headers.location;
++  assert.equal(await readBoardFile({ env }), boardUrl, 'its address is recorded for others');
++  assert.equal((await get(portOf(boardUrl), `/api/board?t=${tokenOf(boardUrl)}`)).status, 200, 'the board answers');
++  assert.equal((await get(runPort, `/nav/board?t=${runToken}`)).headers.location, boardUrl, 'a second click reuses it');
++  assert.equal((await get(runPort, `/nav/project?t=${runToken}`)).headers.location, boardProjectUrl(boardUrl, id));
++  assert.equal(started, 1, 'started once');
++  // another process's board (found through the file) is reused without starting one
++  const second = createWatchServer({ root, assetDir: realAssets, deltaFile, getRunSnapshot: async () => null, getPlanSnapshot: async () => ({ present: false }), getGallery: async () => ({ schema: 1, screens: [] }), nav: runNav({ root, runId: 'run-1', env, openBoard: async () => ensureBoard({ env, root, start }) }), commandList: [], contextCommands: () => [] });
++  await second.listen();
++  t.after(() => second.close());
++  assert.equal((await get(portOf(second.url), `/nav/board?t=${second.token}`)).headers.location, boardUrl);
++  assert.equal(started, 1);
++  // a stale file (the board is gone) starts a fresh one
++  await closers.pop()();
++  assert.equal(await readBoardFile({ env }), null, 'a closed board is not offered');
++  const again = await get(runPort, `/nav/board?t=${runToken}`);
++  assert.equal(again.status, 302);
++  assert.equal(started, 2);
++  assert.notEqual(again.headers.location, boardUrl);
++});
++
++test('the board file is private, only a loopback board that answers is reused, and a run page without nav has no nav routes', async t => {
++  const { env, root } = await setup(t);
++  await writeBoardFile('http://127.0.0.1:1/?t=abc', { env });
++  assert.equal((await fs.stat(boardFile(env))).mode & 0o777, 0o600);
++  assert.equal(await readBoardFile({ env }), null, 'nothing listens there');
++  await writeBoardFile('http://example.com:80/?t=abc', { env });
++  assert.equal(await readBoardFile({ env, fetchImpl: async () => ({ ok: true }) }), null, 'only a loopback address is ever used');
++  await fs.writeFile(boardFile(env), '{ not json');
++  assert.equal(await readBoardFile({ env }), null);
++  const plain = makeRunServer(root, 'run-1');
++  await plain.listen();
++  t.after(() => plain.close());
++  assert.equal((await get(portOf(plain.url), `/api/nav?t=${plain.token}`)).status, 404);
++  assert.equal((await get(portOf(plain.url), `/nav/board?t=${plain.token}`)).status, 404);
++});
++
++test('review fixes: only our own board is reused (shape checked, redirects not followed, a foreign local service gets no token), one start at a time, and a closed board is not pointed at', async t => {
++  const { env, root, id } = await setup(t);
++  // a foreign local service on a port that answers 200 to anything, and one that redirects
++  const seen = [];
++  const foreign = http.createServer((req, res) => { seen.push(req.url); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"hello":"world"}'); });
++  const redirecting = http.createServer((req, res) => { seen.push(`redirect ${req.url}`); res.writeHead(302, { Location: 'http://127.0.0.1:9/steal' }); res.end(); });
++  await Promise.all([foreign, redirecting].map(s => new Promise(r => s.listen(0, '127.0.0.1', r))));
++  t.after(() => { foreign.close(); redirecting.close(); });
++  await writeBoardFile(`http://127.0.0.1:${foreign.address().port}/?t=secret`, { env });
++  assert.equal(await readBoardFile({ env }), null, 'a service that is not our board is refused');
++  await writeBoardFile(`http://127.0.0.1:${redirecting.address().port}/?t=secret`, { env });
++  assert.equal(await readBoardFile({ env }), null, 'a redirect is not followed');
++  // pid 0 / not ours
++  await fs.writeFile(boardFile(env), JSON.stringify({ pid: 0, url: 'http://127.0.0.1:1/?t=x' }));
++  assert.equal(await readBoardFile({ env }), null);
++  // single flight: two clicks at once start one board
++  let started = 0;
++  const closers = [];
++  t.after(async () => { for (const c of closers) await c(); });
++  const start = async args => { started += 1; await new Promise(r => setTimeout(r, 50)); const b = await startBoardServer(args); closers.push(async () => { await b.server.close(); await b.api.close(); }); return b; };
++  await fs.rm(boardFile(env), { force: true });
++  const [one, two] = await Promise.all([ensureBoard({ env, root, start }), ensureBoard({ env, root, start })]);
++  assert.equal(one, two);
++  assert.equal(started, 1);
++  // the file is rebuilt from the origin and the token only
++  await fs.writeFile(boardFile(env), JSON.stringify({ pid: process.pid, url: `${new URL(one).origin}/evil/path?x=1&t=${tokenOf(one)}#frag` }));
++  assert.equal(await readBoardFile({ env }), one);
++  // when the board ends, the run pages it opened stop pointing at it
++  const board = await startBoardServer({ env, root });
++  const open = await get(portOf(board.url), `/open/run?id=${id}&run=run-1&t=${tokenOf(board.url)}`);
++  const runUrl = open.headers.location;
++  assert.equal((await get(portOf(runUrl), `/nav/board?t=${tokenOf(runUrl)}`)).status, 302);
++  await board.server.close();
++  await new Promise(r => setTimeout(r, 100));
++  await assert.rejects(get(portOf(runUrl), `/nav/board?t=${tokenOf(runUrl)}`), { code: 'ECONNREFUSED' }, 'the run pages a board opened close with it, so none points at a dead board');
++  assert.equal(await fs.readFile(boardFile(env), 'utf8').then(text => JSON.parse(text).url !== board.url, () => true), true, 'its file entry is not left behind');
++});
+diff --git a/tools/watch-assets/board.css b/tools/watch-assets/board.css
+index d1b7bba..0351da7 100644
+--- a/tools/watch-assets/board.css
++++ b/tools/watch-assets/board.css
+@@ -20,3 +20,11 @@
+ .board-entry .when{opacity:.7;font-size:12px}
+ .board-entry .kind{font-size:12px;text-transform:uppercase;opacity:.8}
+ .board-link{color:inherit;text-decoration:underline}
++
++.crumbs{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 0;font-size:13px}
++.crumbs[hidden]{display:none}
++.crumbs a{color:inherit}
++.crumbs .back{padding:4px 10px;border-radius:999px;border:1px solid rgba(128,128,128,.4);text-decoration:none}
++.crumbs .back:hover{background:rgba(128,128,128,.12)}
++.crumbs .sep{opacity:.5}
++.crumbs .here{opacity:.8;overflow-wrap:anywhere}
+diff --git a/tools/watch-assets/index.html b/tools/watch-assets/index.html
+index 88520f9..81cfed0 100644
+--- a/tools/watch-assets/index.html
++++ b/tools/watch-assets/index.html
+@@ -9,9 +9,11 @@
+ <link rel="stylesheet" href="assets/plan.css">
+ <link rel="stylesheet" href="assets/commands.css">
+ <link rel="stylesheet" href="assets/gallery.css">
++<link rel="stylesheet" href="assets/board.css">
+ </head>
+ <body>
+ <div class="wrap">
++<nav id="crumbs" class="crumbs" aria-label="Breadcrumb" hidden></nav>
+ <header class="top hud">
+     <div class="brand">
+       <div class="logo" aria-hidden="true"><i>SW</i></div>
+@@ -123,5 +125,6 @@
+ <script src="assets/plan-views.js"></script>
+ <script src="assets/commands-tab.js"></script>
+ <script src="assets/gallery-tab.js"></script>
++<script src="assets/nav.js"></script>
+ </body>
+ </html>
+diff --git a/tools/watch-assets/nav.js b/tools/watch-assets/nav.js
+new file mode 100644
+index 0000000..6989329
+--- /dev/null
++++ b/tools/watch-assets/nav.js
+@@ -0,0 +1,32 @@
++// SPDX-License-Identifier: Apache-2.0
++// Navigation on a run page: "← All projects" and the breadcrumb All projects > project > run. The links are plain addresses on this page's own server
++// (with this page's token); that server finds the board, or starts one, and sends the browser there, so the Back button keeps working.
++(function () {
++  'use strict';
++  var TOKEN = new URLSearchParams(location.search).get('t') || '';
++  var T = encodeURIComponent(TOKEN);
++  var box = document.getElementById('crumbs');
++  if (!box) { return; }
++
++  function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined) { n.textContent = text; } return n; }
++  function link(href, cls, text) { var a = el('a', cls, text); a.href = href; return a; }
++
++  fetch('/api/nav?t=' + T, { headers: { 'x-watch-token': TOKEN } })
++    .then(function (r) { return r.ok ? r.json() : null; })
++    .then(function (nav) {
++      if (!nav) { return; }
++      box.textContent = '';
++      box.appendChild(link('/nav/board?t=' + T, 'back', '← All projects'));
++      box.appendChild(link('/nav/board?t=' + T, '', 'All projects'));
++      if (nav.project) {
++        box.appendChild(el('span', 'sep', '›'));
++        box.appendChild(link('/nav/project?t=' + T, '', nav.project.name));
++      }
++      if (nav.run) {
++        box.appendChild(el('span', 'sep', '›'));
++        box.appendChild(el('span', 'here mono', nav.run));
++      }
++      box.hidden = false;
++    })
++    .catch(function () {});
++})();
+diff --git a/tools/watch-assets/project.html b/tools/watch-assets/project.html
+index 3f7ab11..348c8ce 100644
+--- a/tools/watch-assets/project.html
++++ b/tools/watch-assets/project.html
+@@ -9,6 +9,7 @@
+ </head>
+ <body>
+ <div class="wrap">
++  <nav id="crumbs" class="crumbs" aria-label="Breadcrumb"><a id="crumbBack" class="back" href="#">← All projects</a><a id="crumbAll" href="#">All projects</a><span class="sep">›</span><span id="crumbProject" class="here">project</span></nav>
+   <header class="top hud">
+     <div class="brand"><div class="logo" aria-hidden="true"><i>SW</i></div><div><h1 id="title">Project</h1><div class="goal" id="root">-</div></div></div>
+     <div class="spacer"></div>
+diff --git a/tools/watch-assets/project.js b/tools/watch-assets/project.js
+index 620655a..22aca80 100644
+--- a/tools/watch-assets/project.js
++++ b/tools/watch-assets/project.js
+@@ -10,9 +10,12 @@
+   function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
+   function when(iso) { return iso ? String(iso).slice(0, 16).replace('T', ' ') : '-'; }
+   $('back').href = '/?t=' + T;
++  $('crumbBack').href = '/?t=' + T;
++  $('crumbAll').href = '/?t=' + T;
+ 
+   function render(p) {
+     $('title').textContent = p.name;
++    $('crumbProject').textContent = p.name;
+     $('root').textContent = p.root;
+     var s = $('spend'); s.textContent = '';
+     [['Today', usd(p.spend.todayUsd)], ['Last 7 days', usd(p.spend.weekUsd)], ['All time', usd(p.spend.allUsd)], ['Flat-rate lanes (list value, not billed)', usd(p.spend.flatRateListUsd)]].forEach(function (pair) {
+diff --git a/tools/watch-cli.mjs b/tools/watch-cli.mjs
+index aa0e614..080fe39 100644
+--- a/tools/watch-cli.mjs
++++ b/tools/watch-cli.mjs
+@@ -18,7 +18,9 @@ import { buildCommandList, contextCommands } from './watch-command-meta.mjs';
+ import { COMMANDS } from './completion.mjs';
+ import { readLedger } from './tickets.mjs';
+ import { boardSummary, listLiveRuns } from './board.mjs';
+-import { listProjects, projectsFile } from './projects.mjs';
++import { listProjects, projectsFile, projectId } from './projects.mjs';
++import os from 'node:os';
++import { randomBytes } from 'node:crypto';
+ import { readHistory, historyCsv, historyFile } from './history.mjs';
+ import { boardSnapshot, projectDetail, workersHeld } from './board-data.mjs';
+ import { lanesDir, machineConcurrency } from './lanes.mjs';
+@@ -196,11 +198,76 @@ export function makeRunServer(root, runId, extra = {}) {
+ 
+ // What the board server calls. Every lookup goes through the machine's project list: a project is named by its id, never by a path the page could send,
+ // and a project's runs, tickets and files are only ever read under its own root.
++// Finding the board from anywhere. A running board writes its address (it holds the board's own token) to a file only the user can read; a run page that wants to
++// go back to it reads that file, checks the board still answers, and otherwise starts one in its own process.
++export const boardFile = (env = process.env, home = os.homedir()) => env.SWARM_BOARD_FILE || path.join(home, '.project-swarm', 'board.json');
++// A board of ours belongs to this user: a process that exists but is not ours (EPERM) is not one.
++const pidAlive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
++
++async function boardAnswers(url, fetchImpl = fetch) {
++  try {
++    const u = new URL(url);
++    if (u.hostname !== '127.0.0.1') return false;
++    // Only our own board answers with the board's shape; a redirect is never followed (the token goes to this address and nowhere else).
++    const res = await fetchImpl(`${u.origin}/api/board?t=${encodeURIComponent(u.searchParams.get('t') ?? '')}`, { redirect: 'manual', signal: AbortSignal.timeout?.(2000) });
++    if (!res.ok) return false;
++    const body = typeof res.json === 'function' ? await res.json() : null;
++    return Boolean(body) && typeof body === 'object' && Array.isArray(body.projects) && Boolean(body.machine);
++  } catch { return false; }
++}
++
++export async function writeBoardFile(url, { env = process.env } = {}) {
++  const file = boardFile(env);
++  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
++  const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
++  await fs.writeFile(tmp, `${JSON.stringify({ pid: process.pid, url, startedAt: new Date().toISOString() })}\n`, { mode: 0o600, flag: 'wx' });
++  await fs.rename(tmp, file);
++}
++
++export async function readBoardFile({ env = process.env, fetchImpl = fetch } = {}) {
++  try {
++    const data = JSON.parse(await fs.readFile(boardFile(env), 'utf8'));
++    if (data && pidAlive(data.pid) && typeof data.url === 'string' && await boardAnswers(data.url, fetchImpl)) { const u = new URL(data.url); return `${u.origin}/?t=${encodeURIComponent(u.searchParams.get('t') ?? '')}`; }
++  } catch { /* no board, or a stale file */ }
++  return null;
++}
++
++// The board's own project page address, from the board's address: same server, same token.
++export function boardProjectUrl(boardUrl, projectId) {
++  const u = new URL(boardUrl);
++  return `${u.origin}/project?id=${encodeURIComponent(projectId)}&t=${encodeURIComponent(u.searchParams.get('t') ?? '')}`;
++}
++
++let ownedBoard = null;   // a board this process started for a run page that was opened directly
++export function ownedBoardDone() { return ownedBoard?.server.done ?? Promise.resolve(); }
++export async function closeOwnedBoard() { if (ownedBoard) { const b = ownedBoard; ownedBoard = null; await b.server.close().catch(() => {}); await b.api.close().catch(() => {}); } }
++
++// The board that exists, or a new one started here. `start` is injectable for tests.
++let pendingBoard = null;
++export function ensureBoard({ env = process.env, root, fetchImpl = fetch, start = startBoardServer } = {}) {
++  // One lookup-or-start at a time in this process: two clicks at once share it, so only one board is ever started here.
++  pendingBoard ??= (async () => {
++    const found = await readBoardFile({ env, fetchImpl });
++    if (found) return found;
++    if (ownedBoard && await boardAnswers(ownedBoard.url, fetchImpl)) return ownedBoard.url;
++    ownedBoard = await start({ env, root });
++    return ownedBoard.url;
++  })().finally(() => { pendingBoard = null; });
++  return pendingBoard;
++}
++
++// The run page's navigation: where it sits and how to get back to the board (or to this project's page on it).
++export function runNav({ root, runId, env = process.env, openBoard }) {
++  const project = { id: projectId(root), name: path.basename(root).slice(0, 80) };
++  return { project, runId, openBoard: openBoard ?? (async pid => { const board = await ensureBoard({ env, root }); return pid ? boardProjectUrl(board, pid) : board; }) };
++}
++
+ const MAX_WATCHERS = 6;
+ const BOARD_RUN_IDLE_MS = 10 * 60 * 1000;
+ 
+ export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000 } = {}) {
+   const watchers = new Map();                // `${projectId}/${runId}` -> { server, url, closed }
++  let boardUrl = null;
+   let cached = null;
+   const find = async id => (await listProjects({ file: projectsFile(env) })).find(p => p.id === id) ?? null;
+   const api = {
+@@ -242,7 +309,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
+       entry.pending = (async () => {
+         const open = [...watchers.entries()].filter(([, w]) => !w.closed);
+         while (open.length >= MAX_WATCHERS) { const [oldKey, old] = open.shift(); old.closed = true; watchers.delete(oldKey); await old.server?.close().catch(() => {}); }
+-        entry.server = runServer(project.root, runId, { idleMs: BOARD_RUN_IDLE_MS });
++        entry.server = runServer(project.root, runId, { idleMs: BOARD_RUN_IDLE_MS, nav: { project: { id: project.id, name: project.name }, runId, openBoard: async pid => (boardUrl ? (pid ? boardProjectUrl(boardUrl, pid) : boardUrl) : null) } });
+         const { url } = await entry.server.listen();
+         entry.server.done.then(() => { entry.closed = true; });
+         return url;
+@@ -251,12 +318,43 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
+       entry.pending.catch(() => { entry.closed = true; watchers.delete(key); });
+       return entry.pending;
+     },
++    // The board tells the api its own address once it is listening: the run pages it opens link back to it.
++    setBoardUrl(url) { boardUrl = url; },
+     watcherCount: () => [...watchers.values()].filter(w => !w.closed).length,
+     async close() { for (const w of watchers.values()) if (!w.closed) await w.server?.close().catch(() => {}); watchers.clear(); },
+   };
+   return api;
+ }
+ 
++// Starts the board server in this process and records its address for run pages that want to go back to it.
++export async function startBoardServer({ env = process.env, root }) {
++  const api = createBoardApi({ env });
++  backfillHistory({ env }).catch(() => {});
++  const server = createWatchServer({
++    root,
++    getRunSnapshot: async () => null,
++    getPlanSnapshot: async () => ({ present: false }),
++    getGallery: async () => ({ schema: 1, screens: [] }),
++    getBoard: () => safeBoard(),
++    board: api,
++    indexName: 'board.html',
++    commandList: buildCommandList(COMMANDS),
++    contextCommands,
++    assetDir: path.join(here, 'watch-assets'),
++    deltaFile: path.join(here, 'watch-delta.mjs'),
++  });
++  const { url } = await server.listen();
++  api.setBoardUrl(url);
++  await writeBoardFile(url, { env }).catch(() => {});
++  server.done.then(async () => {
++    // The run pages this board opened must not point back at a board that is gone, and they close with it.
++    api.setBoardUrl(null);
++    await api.close().catch(() => {});
++    try { const data = JSON.parse(await fs.readFile(boardFile(env), 'utf8')); if (data.pid === process.pid && data.url === url) await fs.rm(boardFile(env), { force: true }); } catch { /* already gone */ }
++  });
++  return { server, api, url };
++}
++
+ export async function runWatchCommand(root, args, { write = text => process.stdout.write(text) } = {}) {
+   const opts = parseWatchArgs(args);
+   if (opts.error) return { stdout: `${opts.error}\n${WATCH_USAGE}`, exitCode: 2 };
+@@ -264,29 +362,14 @@ export async function runWatchCommand(root, args, { write = text => process.stdo
+   if (opts.all && (opts.text || opts.tui)) return { stdout: await boardText(), exitCode: 0 };
+   if (opts.all) {
+     // The web board: a lane per project on this machine, the machine's agents and spend on top, the history, and a click-through to any run's own page.
+-    const api = createBoardApi({ env: process.env });
+-    backfillHistory({ env: process.env }).catch(() => {});
+-    const server = createWatchServer({
+-      root,
+-      getRunSnapshot: async () => null,
+-      getPlanSnapshot: async () => ({ present: false }),
+-      getGallery: async () => ({ schema: 1, screens: [] }),
+-      getBoard: () => safeBoard(),
+-      board: api,
+-      indexName: 'board.html',
+-      commandList: buildCommandList(COMMANDS),
+-      contextCommands,
+-      assetDir: path.join(here, 'watch-assets'),
+-      deltaFile: path.join(here, 'watch-delta.mjs'),
+-    });
+-    const { url } = await server.listen();
+-    write(`Swarm Watch board (every project on this machine)\n${url}\nRead-only, on this machine only. Opening a run starts that run's own page. Stops after 30 minutes idle. Ctrl-C stops it now. (swarm watch --all --text prints the live runs instead.)\n`);
+-    if (opts.open) openUrl(url);
+-    const stop = () => { server.close(); api.close(); };
++    const board = await startBoardServer({ env: process.env, root });
++    write(`Swarm Watch board (every project on this machine)\n${board.url}\nRead-only, on this machine only. Opening a run starts that run's own page. Stops after 30 minutes idle. Ctrl-C stops it now. (swarm watch --all --text prints the live runs instead.)\n`);
++    if (opts.open) openUrl(board.url);
++    const stop = () => { board.server.close(); board.api.close(); };
+     process.once('SIGINT', stop);
+     process.once('SIGTERM', stop);
+-    await server.done;
+-    await api.close();
++    await board.server.done;
++    await board.api.close();
+     return { stdout: '', exitCode: 0 };
+   }
+   const runId = await findRunId(root, opts.run);
+@@ -295,14 +378,18 @@ export async function runWatchCommand(root, args, { write = text => process.stdo
+     return { stdout: `${JSON.stringify({ run: await runSnapshotLoader(root, runId)(), plan: await planLoader(root)() }, null, 2)}\n`, exitCode: 0 };
+   }
+   if (opts.tui) { await tuiLoop(root, runId, write); return { stdout: '', exitCode: 0 }; }
+-  const server = makeRunServer(root, runId);
++  const realRoot = await fs.realpath(root).catch(() => root);
++  const server = makeRunServer(realRoot, runId, { nav: runNav({ root: realRoot, runId, env: process.env }) });
+   const { url } = await server.listen();
+   write(`Swarm Watch for run ${runId}\n${url}\nRead-only, on this machine only. Stops after 30 minutes idle, or when the run is done and the page is closed. Ctrl-C stops it now.\n`);
+   if (opts.open) openUrl(url);
+-  const stop = () => { server.close(); };
++  let signalled = false;
++  const stop = () => { signalled = true; server.close(); closeOwnedBoard(); };
+   process.once('SIGINT', stop);
+   process.once('SIGTERM', stop);
+   await server.done;
++  // A board started from this run's page lives as long as this process (the person may still be on it), unless the person stopped it with Ctrl-C.
++  if (!signalled) await ownedBoardDone();
+   return { stdout: '', exitCode: 0 };
+ }
+ 
+diff --git a/tools/watch-server.mjs b/tools/watch-server.mjs
+index ff9437c..ac0b95c 100644
+--- a/tools/watch-server.mjs
++++ b/tools/watch-server.mjs
+@@ -56,6 +56,7 @@ export function createWatchServer(opts) {
+     getJobReport,
+     getBoard,
+     board,
++    nav,
+     indexName = 'index.html',
+     commandList,
+     contextCommands,
+@@ -186,8 +187,10 @@ export function createWatchServer(opts) {
+     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
+     const boardRoutes = board ? ['/api/board', '/api/project', '/api/history', '/history.csv', '/open/run', '/project'] : [];
+     const isBoardRoute = boardRoutes.includes(pathname);
++    // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
++    const isNav = Boolean(nav) && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
+     const isShot = parts.length === 4 && parts[1] === 'shot' && (parts[3] === 'mockup' || parts[3] === 'page');
+-    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute) return sendText(res, method, 404, 'not found');
++    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav) return sendText(res, method, 404, 'not found');
+     const q = u.searchParams.get('t');
+     const h = req.headers['x-watch-token'];
+     const ok = (typeof q === 'string' && safeEqual(q, token)) || (typeof h === 'string' && safeEqual(h, token));
+@@ -199,6 +202,13 @@ export function createWatchServer(opts) {
+     if (pathname === '/api/snapshot') return sendJson(res, method, await payload());
+     if (pathname === '/events') return openEvents(res, method);
+     if (isBoard) return sendJson(res, method, (await getBoard()) ?? { runs: [] });
++    if (isNav) {
++      if (pathname === '/api/nav') return sendJson(res, method, { project: nav.project ?? null, run: nav.runId ?? null, board: '/nav/board', projectPage: nav.project ? '/nav/project' : null });
++      // The board is found (already running, in this or another process) or started; the browser is sent there with the board's own token.
++      const target = await nav.openBoard(pathname === '/nav/project' ? nav.project?.id ?? null : null);
++      if (!target) return sendText(res, method, 404, 'not found');
++      return send(res, method, 302, { Location: target, 'Content-Type': 'text/plain; charset=utf-8' }, 'redirecting');
++    }
+     if (isBoardRoute) {
+       const q = Object.fromEntries(u.searchParams);
+       if (pathname === '/project') return sendAsset(res, method, 'project.html');
