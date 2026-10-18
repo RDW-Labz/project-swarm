@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.113.0
+
+Speed and accessibility budgets (A2) and the model watcher (B3):
+- **Budgets:** a `budgets` block in the profile (performance, accessibility, axe impacts, key screens, your Lighthouse and axe commands). When the preview hook passes, Lighthouse and axe run on each screen; a failing screen (or a tool that could not run) is recorded, gets one fix ticket for the batch's files, and `swarm ship` refuses with `budgets-failing` only for the PR that finishes the last stage. `swarm budgets check --url URL` / `status`. See `docs/budgets.md`. The default tool commands were not run against a real site.
+- **Model watch:** `swarm models watch` (weekly) finds new open coding models that fit our GPUs and new Anthropic API model versions and puts each new one in the inbox as a decision (default skip); the first run is a silent baseline. It never rents a GPU: the inbox item carries the `swarm gpu bakeoff` command and your pre-approved `modelWatch.evalCapUsd` (or says none is set). `swarm models compare A B` reports pass rate and cost from recorded eval runs. See `docs/models.md`.
+- An Opus review (3 high-impact and 12 smaller findings) was fixed before release: budgets measure an address from a deploy log only when its host is in `budgets.previewHosts`; empty or error reports and wrong pages are `cannot-run`; the gate looks only at screens the profile lists, treats never-measured screens as open, blocks only the run that holds a last-stage ticket, and has a logged way out (`swarm budgets accept`); the model watcher follows Hugging Face pages to the age limit, counts packed weights at full width, baselines only on a real answer, caps inbox decisions per run and gives distinct ids.
+- Tests: `tests/budgets.test.mjs`, `tests/model-watch.test.mjs`.
+
 ## 1.112.0
 
 Two parts-app S11 review bugs:
