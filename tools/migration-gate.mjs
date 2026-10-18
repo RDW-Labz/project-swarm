@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 const NL = String.fromCharCode(10);
 const SQ = String.fromCharCode(39);
@@ -284,4 +284,18 @@ export async function addApproval(root, { file, sha256: hash, note = '', now = D
   await writeFile(tmp, JSON.stringify(list, null, 2) + NL);
   await rename(tmp, target);
   return entry;
+}
+
+// Where a project keeps SQL migrations, from the folders the common tools create (Supabase, Prisma, Drizzle, plain db/migrations).
+// Returns the repo-relative folder, or null. Used by swarm init to turn the migration check on for a new project.
+const MIGRATION_DIRS = ['supabase/migrations', 'prisma/migrations', 'drizzle', 'db/migrations'];
+export async function detectMigrationsDir(root) {
+  for (const dir of MIGRATION_DIRS) {
+    try {
+      if ((await stat(join(root, dir))).isDirectory()) return dir;
+    } catch {
+      // not there
+    }
+  }
+  return null;
 }

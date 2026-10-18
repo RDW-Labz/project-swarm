@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 import { randomBytes } from 'node:crypto';
 import { assertRegularOrMissing } from './journal.mjs';
 import { loadChecksFromCi, DEFAULT_CI_PATH } from './checks-from-ci.mjs';
+import { detectMigrationsDir } from './migration-gate.mjs';
 import { DEFAULT_PROFILE_BUDGET, detectProtectedPaths, normalizeProtectedPath, validateProfile, runBaseChecks, checkSetup } from './init-profile.mjs';
 import { buildRepoMap, readRepoMap, writeRepoMap, summarizeMap } from './repo-map.mjs';
 import { trackedFiles } from './goal.mjs';
@@ -240,13 +241,16 @@ export async function initProject(root, { source = installSource(), install = in
   let runBase = baseCheck === true;
   if (baseCheck === undefined && checksToRun.length && confirmBase) runBase = await confirmBase(checksToRun);
   const detected = await detectProtectedPaths(root, { list: listForDetection });
+  const migrationsDir = await detectMigrationsDir(root);
   const profile = {
     stack,
     sensitive: answer !== false,
     protectedPaths: [...new Set([...(prior.protectedPaths ?? []), ...detected, ...protect.map(normalizeProtectedPath)])].sort(),
     budget: { ...DEFAULT_PROFILE_BUDGET, ...(prior.budget ?? {}), ...(maxUsd !== undefined ? { maxUsd } : {}), ...(maxTokens !== undefined ? { maxTokens } : {}) },
     // Blocks the owner set by hand (security policy, approval, ci hooks, verify, context) survive a re-init.
-    ...Object.fromEntries(['security', 'approval', 'ci', 'verify', 'context'].filter(key => prior[key] !== undefined).map(key => [key, prior[key]])),
+    ...Object.fromEntries(['security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality', 'migrations'].filter(key => prior[key] !== undefined).map(key => [key, prior[key]])),
+    // A NEW project (no profile yet) that already has a migrations folder gets the migration check on; an existing profile keeps what it has.
+    ...(priorPointer?.profile === undefined && prior.migrations === undefined && migrationsDir ? { migrations: { dir: migrationsDir, down: 'sibling' } } : {}),
     baseCheck: runBase
       ? await runBaseChecks(root, checksToRun, { run, head: await gitHead(root), now })
       : (prior.baseCheck ?? { status: 'skipped', ranAt: new Date(now()).toISOString(), head: await gitHead(root), checks: [] }),
@@ -258,6 +262,7 @@ export async function initProject(root, { source = installSource(), install = in
   const warnings = [...ignores.warnings];
   if (gitignoreResult.error) warnings.push(`gitignore-defaults-skipped: ${String(gitignoreResult.error.message).slice(0, 120)}`);
   else if (gitignoreResult.changed) warnings.push(`gitignore-defaults-added: ${gitignoreResult.added.length} line(s) for ${stack.map(entry => entry.name).join(', ')}`);
+  if (valid.migrations && priorPointer?.profile === undefined) warnings.push(`migrations-check-on: ${valid.migrations.dir} has migrations, so every changed migration needs a down step and destructive SQL needs swarm migrations approve (see docs/safety.md; remove the profile.migrations block to turn it off)`);
   for (const skip of collected.skipped) warnings.push(`checks-from-ci-skipped (${skip.reason}): ${skip.raw}`);
   if (valid.baseCheck.status === 'red') warnings.push(`base-red: checks already fail before any change: ${valid.baseCheck.checks.filter(check => !check.ok).map(check => check.name).join(', ')}`);
   if (!runBase && baseCheck !== false && checksToRun.length) warnings.push('base-check-skipped: pass --base-check to run the project\'s own checks and record whether they already fail');

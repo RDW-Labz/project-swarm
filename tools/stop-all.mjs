@@ -2,6 +2,9 @@ import { mkdir, writeFile, rename, readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const STOP_FILE = '.swarm/stop.json';
+// A run in any of these states could still start work: running ones are cancelled by their runner, the others are cancelled in place.
+export const ACTIVE_RUN_STATUSES = Object.freeze(['running', 'paused', 'queued', 'pending', 'held']);
+const isActive = (run) => run != null && ACTIVE_RUN_STATUSES.includes(run.status);
 
 const GPU_ATTEMPTS = 3;
 const GPU_RETRY_MS = 1000;
@@ -84,8 +87,8 @@ async function runsStep(root, deps, opts) {
   } catch (e) {
     return { name, status: 'failed', detail: `cannot list runs: ${errText(e)}` };
   }
-  const running = listed.filter((r) => r.status === 'running').map((r) => r.id);
-  if (running.length === 0) return { name, status: 'nothing', detail: 'no running runs' };
+  const running = listed.filter(isActive).map((r) => r.id);
+  if (running.length === 0) return { name, status: 'nothing', detail: 'no active runs' };
   const notes = [];
   for (const id of running) {
     try {
@@ -99,7 +102,7 @@ async function runsStep(root, deps, opts) {
     try {
       const now = await deps.listRuns(root);
       if (!Array.isArray(now)) throw new Error('the run list is not an array');
-      stillIds = now.filter((r) => r.status === 'running').map((r) => r.id);
+      stillIds = now.filter(isActive).map((r) => r.id);
     } catch (e) {
       notes.push(`poll: ${errText(e)}`);
     }

@@ -79,9 +79,32 @@ test('a stop marker blocks run, go and autopilot but not help or stop', async t 
   assert.match(cleared.stdout, /removed/);
 });
 
+test('swarm stop --all with real run states: running gets the cancel file, paused and queued runs are cancelled in place, finished runs are untouched', async t => {
+  const root = await tmp(t);
+  const state = (id, status, jobs) => put(root, `.swarm/runs/${id}/state.json`, JSON.stringify({ version: 1, id, root, status, jobs }));
+  const A = '1792000000001-aaaaaaaa', B = '1792000000002-bbbbbbbb', C = '1792000000003-cccccccc', D = '1792000000004-dddddddd';
+  await state(A, 'paused', [{ id: 'j1', status: 'held', heldReason: 'quota', heldUntil: '2099-01-01T00:00:00Z' }, { id: 'j2', status: 'queued' }, { id: 'j3', status: 'complete' }]);
+  await state(B, 'running', [{ id: 'j1', status: 'running' }]);
+  await state(C, 'complete', [{ id: 'j1', status: 'complete' }]);
+  await state(D, 'queued', [{ id: 'j1', status: 'queued' }]);
+  const deps = realStopDeps(root, { env: { ...process.env, HOME: root } });
+  const res = await runSafetyCommand(root, 'stop', ['--all'], { stop: { ...deps, waitMs: 5, pollMs: 1, sleep: async () => {}, backup: async () => ({ id: 'b' }) } });
+  const read = async id => JSON.parse(await fs.readFile(path.join(root, `.swarm/runs/${id}/state.json`), 'utf8'));
+  const a = await read(A);
+  assert.equal(a.status, 'cancelled');
+  assert.deepEqual(a.jobs.map(j => j.status), ['cancelled', 'cancelled', 'complete']);
+  assert.equal(a.pause, undefined);
+  assert.equal(a.jobs[0].heldReason, undefined);
+  assert.equal((await read(D)).status, 'cancelled');
+  assert.equal((await read(C)).status, 'complete', 'a finished run is untouched');
+  assert.equal(await fs.readFile(path.join(root, `.swarm/runs/${B}/cancel`), 'utf8'), 'cancel\n', 'the running one gets the cancel file');
+  assert.match(res.stdout, /runs: failed - still running: 1792000000002-bbbbbbbb/, 'no runner here to honour the cancel file, so it is reported');
+  assert.equal(res.exitCode, 2);
+});
+
 test('realStopDeps: an unreachable rented node is a failure, never a verified stop', async t => {
   const root = await tmp(t);
-  const deps = await realStopDeps(root, { env: { ...process.env, HOME: root } });
+  const deps = realStopDeps(root, { env: { ...process.env, HOME: root } });
   assert.equal(await deps.readAutopilotPid(), null);
   assert.deepEqual(await deps.listRuns(), []);
   assert.equal(await deps.gpuSession(), null);

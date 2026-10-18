@@ -249,3 +249,27 @@ test('a non-array run list is a failed step and does not skip the later steps; N
     assert.deepEqual(res.steps.map((s) => s.name), ['marker', 'autopilot', 'runs', 'gpu', 'backup']);
   });
 });
+
+test('paused, queued, pending and held runs are cancelled too; finished runs are left alone', async () => {
+  await withRoot(async (root) => {
+    const cancelled = [];
+    let phase = 0;
+    const runs = [
+      { id: 'r-running', status: 'running' }, { id: 'r-paused', status: 'paused' }, { id: 'r-queued', status: 'queued' },
+      { id: 'r-pending', status: 'pending' }, { id: 'r-held', status: 'held' },
+      { id: 'r-done', status: 'complete' }, { id: 'r-failed', status: 'failed' }, { id: 'r-cancelled', status: 'cancelled' },
+    ];
+    const { deps } = makeDeps({
+      listRuns: async () => (phase === 0 ? runs : runs.map((r) => (cancelled.includes(r.id) ? { ...r, status: 'cancelled' } : r))),
+      cancelRun: async (_root, id) => { phase = 1; cancelled.push(id); },
+    });
+    const res = await runStopAll(root, deps);
+    assert.deepEqual(cancelled.sort(), ['r-held', 'r-paused', 'r-pending', 'r-queued', 'r-running']);
+    assert.equal(stepOf(res, 'runs').status, 'done');
+    assert.match(stepOf(res, 'runs').detail, /stopped 5 run/);
+    const stuck = makeDeps({ listRuns: async () => [{ id: 'r-paused', status: 'paused' }], cancelRun: async () => {}, waitMs: 1, pollMs: 1 });
+    const res2 = await runStopAll(root, stuck.deps);
+    assert.equal(stepOf(res2, 'runs').status, 'failed');
+    assert.match(stepOf(res2, 'runs').detail, /still running: r-paused/);
+  });
+});

@@ -3703,6 +3703,28 @@ export async function cancelRun(root, id) {
   return { id, status: 'cancellation-requested' };
 }
 
+// A run that is not running but could still start work (paused, queued, pending or held) is cancelled in place: its unfinished jobs become
+// cancelled, the pause is cleared and the run ends as cancelled, so a later resume has nothing left to start. Used by swarm stop --all.
+const INACTIVE_RUN = ['paused', 'queued', 'pending', 'held'];
+const UNFINISHED_JOB = ['queued', 'pending', 'held', 'running'];
+export async function cancelInactiveRun(root, id) {
+  const state = await readState(root, id);
+  if (!INACTIVE_RUN.includes(state.status)) fail(`Run is ${state.status}, not paused or queued`);
+  const now = new Date().toISOString();
+  const cancelled = [];
+  for (const job of state.jobs ?? []) {
+    if (!UNFINISHED_JOB.includes(job.status)) continue;
+    job.status = 'cancelled'; job.finishedAt = job.finishedAt ?? now;
+    for (const key of ['heldReason', 'heldUntil']) delete job[key];
+    cancelled.push(job.id);
+  }
+  delete state.pause;
+  state.status = 'cancelled';
+  state.cancelledAt = now;
+  await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
+  return { id, status: 'cancelled', cancelledJobs: cancelled };
+}
+
 // T86: list-only report of scratch worktree dirs no run's state.json records; never deletes.
 export async function listOrphanWorktrees(root, { env = process.env } = {}) {
   const realRoot = await fs.realpath(root);

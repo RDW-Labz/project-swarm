@@ -57,7 +57,12 @@ export function realStopDeps(root, { env = process.env, reason } = {}) {
       for (const id of ids) { try { runs.push({ id, status: (await (await swarm()).readState(root, id)).status }); } catch { /* not a run */ } }
       return runs;
     },
-    cancelRun: async (r, id) => (await swarm()).cancelRun(r, id),
+    // A running run gets the cancel file (its runner stops the jobs); a paused, queued, pending or held one is cancelled in place.
+    cancelRun: async (r, id) => {
+      const mod = await swarm();
+      const status = (await mod.readState(r, id)).status;
+      return status === 'running' ? mod.cancelRun(r, id) : mod.cancelInactiveRun(r, id);
+    },
     // No lock file: nothing to stop. A lock that cannot be read or has no usable pid is a failure to report, not a silent nothing.
     readAutopilotPid: async () => {
       let text;

@@ -6,7 +6,7 @@ Acts at once: no confirmation and no flag to skip a step. In this order, each st
 
 1. Writes `.swarm/stop.json` first (before anything else is loaded). While it exists `swarm run`, `go`, `autopilot`, `resume`, `sweep`, `scout`, `ship`, `merge`, `integrate`, `gpu up` and `gpu bakeoff` refuse (`stopped`), and a running autopilot loop stops at its next step; help (`swarm run --help`), `status`, `cancel`, `stop`, `backup` and `restore` still work.
 2. Stops the autopilot (first, so it cannot start a new run in the gap) by the exact PID in its lock: SIGTERM, then one SIGKILL. The PID is signalled only when `ps` shows it is a swarm autopilot; a lock with a dead PID is a stale lock (nothing to do); a live PID that is not an autopilot, or a lock with no usable PID, is a failed step and nothing is signalled. Never by a process-name pattern.
-3. Cancels every running run and waits (up to 15 s) until none is `running`.
+3. Cancels every run that could still start work and waits (up to 15 s) until none is left. A `running` run gets the cancel file (its runner stops the jobs); a `paused`, `queued`, `pending` or `held` run is cancelled in place (its unfinished jobs become `cancelled`, the pause is cleared, so a later resume has nothing to start). Finished runs are left alone.
 4. If a rented GPU session exists: `swarm gpu down` (three tries), then checks the session is gone. A node that could not be reached over ssh is a **failed** step (the session record is removed either way, so this is checked from the down result). swarm never rents, so the output always says to terminate the instance in the provider console (powering off does not stop billing). A failed step prints `BILLING RISK`.
 5. Takes a state backup (reason `stop --all`).
 
@@ -20,9 +20,11 @@ Exit 0 when every step is ok or had nothing to do; exit 2 when any step failed. 
 - Each backup is `.swarm/backups/<id>/` with a `manifest.json` of SHA-256 hashes; `swarm backup verify` re-hashes it. The newest 20 are kept. One is taken at every `swarm scope approve` and by `swarm stop --all`.
 - `swarm restore ID` shows the plan; with `--yes` it verifies the backup, takes a `pre-restore` backup of the current state (so a restore can be undone with `swarm restore <that id> --yes`), then writes the files back. Only swarm's own state can be restored (a planted backup naming `tools/x.mjs` or `package.json` is refused, also in the plan), the files are read and hash-checked into memory before anything is written, and the backup being restored is never pruned by the pre-restore backup. Files that are not in the backup are left alone.
 
-## Safe migrations (opt-in)
+## Safe migrations
 
-Add a `migrations` block to the project profile (`"migrations": {}` turns on the defaults):
+`swarm init` turns the check on for a **new** project (no profile yet) that already has a migrations folder (`supabase/migrations`, `prisma/migrations`, `drizzle` or `db/migrations`): it writes `"migrations": {"dir": ..., "down": "sibling"}` to the profile and says so (`migrations-check-on`). An existing project keeps what it has: without the block it only gets a note when migration files change, and the owner turns it on by hand. To turn it off, remove the block. Hand-set `ui`, `quality` and `migrations` blocks survive a re-init.
+
+To set it up by hand, add a `migrations` block to the project profile (`"migrations": {}` turns on the defaults):
 
 ```json
 "migrations": { "dir": "supabase/migrations", "down": "sibling", "commands": { "up": ["npm","run","db:up"], "down": ["npm","run","db:down"], "seed": ["npm","run","db:seed"] } }
