@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1.5
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "type": "build",
+      "id": "acc-code",
+      "context": [
+        "docs/plans/acceptance-design.md"
+      ],
+      "outputs": [
+        "tools/acceptance.mjs"
+      ],
+      "prompt": "Write tools/acceptance.mjs: the whole design (all exports). Keep it under 9000 characters.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes and rules are fixed. Write backslashes in strings as String.fromCharCode(92) or avoid them (use character classes and RegExp built with new RegExp from strings that have no backslash); never write a lone backslash literal. Keep code readable with real line breaks, one statement per line."
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "type": "build",
+      "id": "acc-tests",
+      "context": [
+        "docs/plans/acceptance-design.md"
+      ],
+      "outputs": [
+        "tests/acceptance.test.mjs"
+      ],
+      "prompt": "Write tests/acceptance.test.mjs for the design in docs/plans/acceptance-design.md (the module is written by someone else at tools/acceptance.mjs; import its exports exactly as named). Tests cover: tag matching (AC1 vs AC12, BAC1, ac-1, [AC 3]), skipped tests and comments not counting, python and go titles, coverage with no tests, evaluate for every state including accepted and failing, validRecord, reviewManifest shape (one job, outputs empty, context limits, env paths dropped, data as JSON), parseAcceptanceVerdicts (last line only, invalid verdicts dropped, null cases). Keep it under 9000 characters.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes and rules are fixed. Write backslashes in strings as String.fromCharCode(92) or avoid them (use character classes and RegExp built with new RegExp from strings that have no backslash); never write a lone backslash literal. Keep code readable with real line breaks, one statement per line."
+    }
+  ]
+}

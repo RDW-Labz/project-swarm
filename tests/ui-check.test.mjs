@@ -37,7 +37,7 @@ async function project(t, ui) {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, 'docs/design/screens'), { recursive: true });
   await fs.writeFile(path.join(root, 'docs/design/screens/Contact.dc.html'), '<html></html>');
-  const profile = { sensitive: true, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none', ranAt: null, head: null, checks: [] }, ui: ui ?? { screens: [{ id: 'form-contact', route: '/r/shop', mockup: 'docs/design/screens/Contact.dc.html' }] } };
+  const profile = { sensitive: true, acceptance: { enforce: false }, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none', ranAt: null, head: null, checks: [] }, ui: ui ?? { screens: [{ id: 'form-contact', route: '/r/shop', mockup: 'docs/design/screens/Contact.dc.html' }] } };
   await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile }));
   return root;
 }
@@ -196,7 +196,7 @@ test('sync marks a UI ticket done only when the rendered check passed on this co
   await write({ at: '2999-01-01T00:00:00.000Z', tree });                    // dated in the future
   assert.match((await sync()).stdout, /0 ticket\(s\) marked done/);
   await write({ at: new Date(Date.now() - 600000).toISOString(), tree, serverStarted: false }); // a server that was already running
-  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none', ranAt: null, head: null, checks: [] }, ui: { start: ['npm', 'run', 'dev'], screens: [{ id: 'form-contact', route: '/r/shop', mockup: 'docs/design/screens/Contact.dc.html' }] } } }));
+  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, acceptance: { enforce: false }, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none', ranAt: null, head: null, checks: [] }, ui: { start: ['npm', 'run', 'dev'], screens: [{ id: 'form-contact', route: '/r/shop', mockup: 'docs/design/screens/Contact.dc.html' }] } } }));
   assert.match((await sync()).stdout, /0 ticket\(s\) marked done/);
   await write({ at: new Date(Date.now() - 600000).toISOString(), tree });
   assert.match((await sync()).stdout, /1 ticket\(s\) marked done/);

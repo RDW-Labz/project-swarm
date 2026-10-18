@@ -254,3 +254,7 @@ Hand-written glue (about 90 lines over the existing backfill mapping), not a swa
 ### Security review retry (1.102.0)
 
 Hand-written (priority fix from parts-app S9; small, in the scope command and the review gate). Tests: tests/review-retry.test.mjs (one per rule) plus the changed eval 40.4.
+
+### Acceptance enforcement (1.103.0)
+
+Module `tools/acceptance.mjs` and its 32 tests written by Haiku on the swarm (the first try, one job for both files, was cut off at the output limit; split into a code job and a tests job, $0.017 together, all 32 tests green first time). One slip: the worker imported node:test and node:assert in the production module (removed by hand). Sync wiring, the review command, profile block, watch drawer and docs by hand.

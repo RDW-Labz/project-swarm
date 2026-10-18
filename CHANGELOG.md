@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.103.0
+
+Acceptance lines are enforced (parts-app S8: T-0168 had "validate + encode reply links" and "thin page under 8 KB" in its acceptance and went done without either):
+- Before done, every acceptance line of a build, test, migration or contract ticket is covered by a passing test (its tag `ACn` in a test title; worker prompts now list the lines as AC1, AC2, ... and ask for it) or checked by an acceptance review job (pass or fail per line, with a reason). `tools/acceptance.mjs` (tag matching, coverage, evaluation, review manifest and verdict parsing; written on the swarm).
+- A ticket with an unmet line stays in review; a failing line goes back to the worker with the line and the reason. `swarm scope sync` writes `.swarm/acceptance-reviews/RUN.json` for the lines no test covers; `swarm scope acceptance-review REVIEWRUN` records the verdicts (valid only for the code they were made on), with the same one re-ask and the same blocked state as the security review (`acceptance-blocked`).
+- An Opus review (6 high, 6 medium, 6 low) was fixed before release: enforcement cannot be switched off by an invalid or unreadable profile (sync refuses instead), only tests the runner itself saw pass count (not an owner-accepted failure, not output already in the tree), only real test files the tests check runs for the ticket can cover a line, a file that can switch tests off (`describe.skip`, `skip:`/`todo:` options, `.only`, `skipIf`, pytest and Go skips) counts no titles, a title with two tags covers nothing, a declaration inside a string does not count, comment stripping is one pass (no quadratic hang), a review counts only when it was made from the manifest of the latest sync (a review token in the prompt) and each verdict follows the hash of its line's text; the production module no longer carries test code.
+- The per-line results are on the ticket (`acceptanceResults`), in the sync output and in the swarm watch ticket drawer. `--accept-unmet T-0001 --reason TEXT --yes` is the logged way out (never for a failing line). Profile `acceptance: {enforce, model}`; a project without a profile is not enforced. Doc: docs/scope.md, design: docs/plans/acceptance-design.md.
+
 ## 1.102.0
 
 Security review that cannot be skipped by accident (parts-app S9: five tickets were closed with `--accept-unreviewed` because the Opus reviews had no `reviews` array):

@@ -96,6 +96,14 @@ export function validateTicket(t) {
     const r = t.securityReview;
     if (!r || typeof r !== 'object' || Array.isArray(r) || !['blocked', 'accepted-unreviewed'].includes(r.state) || typeof r.reason !== 'string' || r.reason.length < 1 || r.reason.length > 400) errors.push('securityReview must be {state: blocked or accepted-unreviewed, reason}');
   }
+  if (t.acceptanceBlocked !== undefined) {
+    const r = t.acceptanceBlocked;
+    if (!r || typeof r !== 'object' || Array.isArray(r) || typeof r.reason !== 'string' || r.reason.length < 1 || r.reason.length > 600) errors.push('acceptanceBlocked must be {reason, at, run}');
+  }
+  if (t.acceptanceResults !== undefined) {
+    const list = t.acceptanceResults;
+    if (!Array.isArray(list) || list.length > 100 || !list.every(r => r && typeof r === 'object' && Number.isInteger(r.n) && r.n >= 1 && r.n <= 200 && ['test', 'review', 'owner'].includes(r.by) && ['pass', 'fail', 'pending', 'missing', 'accepted'].includes(r.verdict) && (r.line === undefined || (typeof r.line === 'string' && r.line.length <= 200)) && (r.evidence === undefined || (typeof r.evidence === 'string' && r.evidence.length <= 300)))) errors.push('acceptanceResults must be a list of {n, line, by, verdict, evidence} (verdict pass, fail, pending, missing or accepted)');
+  }
   if (t.origin !== undefined && t.origin !== 'ci') errors.push('origin must be ci when set');
   if (t.type === 'human' && !(isStrArr(t.steps) && t.steps.length >= 1 && t.steps.length <= 30)) errors.push('human tickets need 1 to 30 steps');
   return { ok: errors.length === 0, errors };
