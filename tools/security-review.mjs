@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // A ticket that touches auth, an API route, a migration or row-level security, or a sensitive path is not done until an Opus review
 // of its files passed on the code that is in the tree now. Sync writes the review manifest; `swarm scope security-review RUN` records the verdicts.
+import { verdictLine } from './review-text.mjs';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -63,8 +64,8 @@ export async function securityReviewManifest(root, runId, items) {
 
 // The last {"reviews":[...]} object in a review's response.
 export function parseReviewVerdicts(text) {
-  // Only the last non-empty line counts: an object quoted from the reviewed code can never win.
-  const last = String(text ?? '').split('\n').map(x => x.trim()).filter(Boolean).pop() ?? '';
+  // Only the last line that is not the worker's status line counts: an object quoted from the reviewed code can never win.
+  const last = verdictLine(text);
   {
     try { const parsed = JSON.parse(last); if (Array.isArray(parsed.reviews)) return parsed.reviews.filter(r => r && /^T-[0-9]{4,}$/.test(r.ticket)).map(r => ({ ticket: r.ticket, verdict: r.verdict === 'pass' && !(r.findings ?? []).some(f => ['high', 'medium'].includes(String(f?.severity).toLowerCase())) ? 'pass' : 'fail', findings: (Array.isArray(r.findings) ? r.findings : []).slice(0, 10).map(f => ({ file: String(f?.file ?? '').slice(0, 200), line: Number.isFinite(f?.line) ? f.line : null, severity: String(f?.severity ?? 'medium').slice(0, 10), issue: String(f?.issue ?? '').slice(0, 300), fix: String(f?.fix ?? '').slice(0, 300) })) })); } catch { /* try an earlier object */ }
   }

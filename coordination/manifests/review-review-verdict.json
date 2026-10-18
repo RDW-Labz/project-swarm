@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 0.8 },
+  "jobs": [
+    {
+      "id": "review-review-verdict",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "touches the rule that stops a quoted verdict from winning",
+      "type": "review",
+      "prompt": "Review coordination/review/review-verdict.diff (tools/review-text.mjs verdictLine, used by parseAcceptanceVerdicts and parseReviewVerdicts; the acceptance review tier changed from standard to mid). Rule: only the verdict line at the END of a review answer counts, so an object quoted from reviewed code can never win; the new code skips up to two trailing runner status lines ({status: complete|blocked|failed, no reviews/acceptance array}). Look for ways an attacker-controlled reviewed file (text the model might echo) can now forge or hide a verdict: a status-looking line crafted to precede a forged verdict, a status line carrying its own acceptance/reviews array, status lines that are not really the runner's, order of two status lines, JSON with duplicate keys, whitespace tricks, very long lines. Also check the tier value is accepted by validateManifest and any other manifest builder still using a tier not in TIERS. Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete scenario, and say what you checked that is fine. Do not edit files.",
+      "context": ["tools/review-text.mjs", "tools/acceptance.mjs", "tools/security-review.mjs", "tests/acceptance-sync.test.mjs", "coordination/review/review-verdict.diff"],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}
