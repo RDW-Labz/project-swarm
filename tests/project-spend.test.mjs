@@ -99,7 +99,7 @@ test('project summary for swarm watch shows the total, the cap and whether it is
   assert.equal(summary.reached, true);
   const frame = renderTui({ runId: 'r', status: 'running', kpi: {}, lanes: [], project: summary }, { width: 120, color: false });
   assert.match(frame, /project total \$4\.50 over 2 runs {2}cap \$4\.00 {2}CAP REACHED: no new runs/);
-  assert.match(renderTui({ runId: 'r', status: 'running', kpi: {}, lanes: [], project: { spendUsd: 1, runs: 1, capUsd: null } }, { width: 120, color: false }), /project total \$1\.00 over 1 runs {2}NO CAP/);
+  assert.match(renderTui({ runId: 'r', status: 'running', kpi: {}, lanes: [], project: { spendUsd: 1, runs: 1, capUsd: null, noCap: true } }, { width: 120, color: false }), /project total \$1\.00 over 1 runs {2}NO CAP/);
 });
 
 const attempt = (id, cost, agent = 'anthropic', task = 'build a thing') => ({ id, agent, model: 'm', status: 'complete', costUsd: cost, usage: { total_tokens: 1000 }, report: { summary: task }, attempts: [{ status: 'complete', finishedAt: '2026-10-18T10:00:00Z' }] });
@@ -225,4 +225,11 @@ test('swarm go prints the NO CAP warning on stderr for a project without a cap',
   await fs.writeFile(path.join(fx.root, 'dirty.txt'), 'x'); // a dirty tree is refused by go itself before any model is called
   const result = await exec(process.execPath, [swarm, 'go', 'noop goal'], { cwd: fx.root, env: fx.env }).catch(error => error);
   assert.match(String(result.stderr), /warning: NO CAP: this project has no project-wide spend cap/);
+});
+
+test('swarm watch tells an invalid cap from no cap', () => {
+  const frame = project => renderTui({ runId: 'r', status: 'running', kpi: {}, lanes: [], project }, { width: 120, color: false });
+  assert.match(frame({ spendUsd: 1, runs: 1, capUsd: null, noCap: false, capError: 'project-cap-invalid: x' }), /CAP INVALID/);
+  assert.doesNotMatch(frame({ spendUsd: 1, runs: 1, capUsd: null, noCap: false, capError: 'x' }), /NO CAP/);
+  assert.match(frame({ spendUsd: 1, runs: 1, capUsd: null, noCap: true }), /NO CAP/);
 });

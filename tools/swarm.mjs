@@ -63,6 +63,7 @@ import { routeJob, rentedContractProblem } from './router.mjs';
 import { anthropicPrice, assertOpusTier as assertAnthropicModel, readAnthropicKey, ANTHROPIC_ENDPOINT } from './anthropic.mjs';
 import { loadRentedConfig, createRentalMeter, rentalDecision, rentedSensitiveOk, RENTED_DEFAULTS } from './rented.mjs';
 import { checkProjectCap, noCapWarning } from './project-spend.mjs';
+import { isCheckOnlyBlock, allOutputsWritten, deferredCheckWarnings, safeReason } from './central-checks.mjs';
 import { accrueSpend, resolveBudget, runTotals, jobSpend, spendDir, withSpendStore, laneDayTotals, estimateReservation, reserveSpend, settleSpend, releaseSpend, finalCost, PAID_LANES, capDecision, ledgerRows, mergeLedger, validateIdleItems, runIdleMenu } from './spend.mjs';
 import { JOB_TYPES, applyJobType, jobTypeOutputViolations } from './job-types.mjs';
 import { validateLeadArea, validateParentLeads, validateChildManifest, leadPromptBlock, leadRollup } from './leads.mjs';
@@ -3356,7 +3357,15 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
           await write(root, `${directory}/${job.id}/response-invalid.txt`, result.invalidResponseText, true);
           if (!result.error) result.error = `Invalid structured output envelope; raw response saved to ${directory}/${job.id}/response-invalid.txt`;
         }
-        if (finalMessage?.status === 'blocked' && (job.report !== 'short' || validateReport(finalMessage, { outputs: job.outputs }).report)) {
+        if (finalMessage?.status === 'blocked' && ['complete', 'blocked'].includes(result.status) && (!result.error || String(result.error).startsWith('blocked:')) && !result.invalidResponseText
+          && (manifest.checks ?? []).length && (job.report !== 'short' || validateReport(finalMessage, { outputs: job.outputs }).report)
+          && isCheckOnlyBlock(finalMessage) && await allOutputsWritten(workspaceRoot, job.outputs, record.baseHashes)) {
+          // Lesson 52: the files are written and the worker only could not run a check. The job is finished; the swarm runs the manifest checks centrally at integrate
+          // (only when the manifest has checks: without any, nothing would verify the files, so the block stays).
+          result.status = 'complete';
+          result.error = null;
+          record.checksDeferred = { reason: safeReason(finalMessage.summary) };
+        } else if (finalMessage?.status === 'blocked' && (job.report !== 'short' || validateReport(finalMessage, { outputs: job.outputs }).report)) {
           result.status = 'blocked';
           const summary = typeof finalMessage.summary === 'string' && finalMessage.summary.trim() ? finalMessage.summary.trim()
             : typeof finalMessage.file === 'string' && finalMessage.file.trim() ? `needs ${finalMessage.file.trim()}` : 'no summary given';
@@ -4893,7 +4902,7 @@ async function integrateRunLocked(root, id, options = {}) {
   const state = await readState(root, id);
   if (state.root !== root || state.id !== id) fail('Run belongs to another repository');
   const manifest = validateManifest(JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true)), { outputJobIds: jobs ?? null });
-  const designWarnings = [];
+  const designWarnings = deferredCheckWarnings({ state, manifest, noChecks, jobs });
   for (const job of manifest.jobs) {
     const warning = designOnlyBlockedOnTestWarning(job, await jobFinalJson(root, id, job.id));
     if (warning) designWarnings.push(warning);
