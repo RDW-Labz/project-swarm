@@ -75,10 +75,11 @@ test('init turns the migration check on for a NEW project that has a migrations 
   const fresh = await project(t);
   await fs.mkdir(path.join(fresh, 'supabase/migrations'), { recursive: true });
   const first = await initProject(fresh, { source });
-  assert.deepEqual(first.profile.migrations, { dir: 'supabase/migrations', down: 'sibling' });
+  // Supabase reads every .sql in its migrations folder, so a Supabase project gets down files in a separate folder the CLI never reads.
+  assert.deepEqual(first.profile.migrations, { dir: 'supabase/migrations', down: 'dir', downDir: 'supabase/migrations_down' });
   assert.ok(first.warnings.some(w => w.startsWith('migrations-check-on:')));
   const second = await initProject(fresh, { source });
-  assert.deepEqual(second.profile.migrations, { dir: 'supabase/migrations', down: 'sibling' }, 'kept on a re-init');
+  assert.deepEqual(second.profile.migrations, { dir: 'supabase/migrations', down: 'dir', downDir: 'supabase/migrations_down' }, 'kept on a re-init');
   assert.ok(!second.warnings.some(w => w.startsWith('migrations-check-on:')), 'announced once, when it is added');
 
   // An existing project (a profile already there) does not get the block added; the owner turns it on by hand.
@@ -87,6 +88,10 @@ test('init turns the migration check on for a NEW project that has a migrations 
   await fs.mkdir(path.join(old, 'prisma/migrations'), { recursive: true });
   const again = await initProject(old, { source });
   assert.equal(again.profile.migrations, undefined);
+  // A non-Supabase new project keeps the sibling default.
+  const prismaProject = await project(t);
+  await fs.mkdir(path.join(prismaProject, 'prisma/migrations'), { recursive: true });
+  assert.deepEqual((await initProject(prismaProject, { source })).profile.migrations, { dir: 'prisma/migrations', down: 'sibling' });
 
   // No migrations folder: nothing added. Other folders are found too.
   const none = await project(t);
