@@ -11,6 +11,8 @@ The Swarm Watch board, part 1 (data and page). `swarm watch --all` is now the bo
 - Part 2 (a machine-wide worker limit so projects share workers fairly) follows.
 - Tests: `tests/board-page.test.mjs`.
 
+## 1.113.0
+
 Speed and accessibility budgets (A2) and the model watcher (B3):
 - **Budgets:** a `budgets` block in the profile (performance, accessibility, axe impacts, key screens, your Lighthouse and axe commands). When the preview hook passes, Lighthouse and axe run on each screen; a failing screen (or a tool that could not run) is recorded, gets one fix ticket for the batch's files, and `swarm ship` refuses with `budgets-failing` only for the PR that finishes the last stage. `swarm budgets check --url URL` / `status`. See `docs/budgets.md`. The default tool commands were not run against a real site.
 - **Model watch:** `swarm models watch` (weekly) finds new open coding models that fit our GPUs and new Anthropic API model versions and puts each new one in the inbox as a decision (default skip); the first run is a silent baseline. It never rents a GPU: the inbox item carries the `swarm gpu bakeoff` command and your pre-approved `modelWatch.evalCapUsd` (or says none is set). `swarm models compare A B` reports pass rate and cost from recorded eval runs. See `docs/models.md`.
