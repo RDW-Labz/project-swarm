@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { validateBudgetsConfig, parseLighthouse, parseAxe, evaluateBudgets, runBudgets, recordBudgetResults, readBudgetState, openFailures, finishesLastStage, budgetShipGate, checkBaseUrl } from '../tools/budgets.mjs';
+import { hostAllowed, acceptBudgetFailures, validateBudgetsConfig, parseLighthouse, parseAxe, evaluateBudgets, runBudgets, recordBudgetResults, readBudgetState, openFailures, finishesLastStage, budgetShipGate, checkBaseUrl } from '../tools/budgets.mjs';
 import { runBudgetsCommand } from '../tools/budgets-commands.mjs';
 import { validateProfile } from '../tools/init-profile.mjs';
 import { shipRun } from '../tools/swarm.mjs';
@@ -67,7 +67,8 @@ test('runBudgets: per screen results; a tool that crashes or hangs is cannot-run
   assert.match(hang[0].failures[0].message, /timed out/);
   await assert.rejects(runBudgets({ root, baseUrl: 'http://example.com', config, run }), { code: 'budgets-url' });
   assert.equal(checkBaseUrl('https://user:pw@x.dev'), null);
-  assert.equal(checkBaseUrl('https://x.dev/path?q=1'), 'https://x.dev');
+  assert.equal(checkBaseUrl('https://x.dev/path/?q=1'), 'https://x.dev/path', 'a sub-path preview keeps its path');
+  assert.equal(checkBaseUrl('https://x.dev/'), 'https://x.dev');
   assert.deepEqual(await fs.readdir(path.join(root, '.swarm/budgets-tmp')), [], 'temporary reports are removed');
 });
 
@@ -84,12 +85,19 @@ test('the gate blocks only the PR that finishes the last stage, and only while a
   const midway = { tickets: [t('1', 'S1', 'done'), t('2', 'S2', 'running')] };
   const finishing = { tickets: [t('1', 'S1', 'done'), t('2', 'S2', 'review'), t('3', 'S0', 'running'), t('4', 'S2', 'proposed')] };
   const failing = { screens: { home: { status: 'failed', failures: [{ message: 'performance 60 is below the budget 85' }], ticket: 'T-0009' } } };
-  const budgets = {};
+  const budgets = { screens: [{ id: 'home', path: '/' }] };
   assert.equal(finishesLastStage(midway), false);
   assert.equal(finishesLastStage(finishing), true, 'fix tickets (S0) and proposals are not part of a stage');
   assert.equal(budgetShipGate({ budgets, state: failing, ledger: midway }), null, 'an earlier PR is never blocked');
-  assert.match(budgetShipGate({ budgets, state: failing, ledger: finishing }).message, /budgets-failing: this PR finishes the last stage.*performance 60.*T-0009/);
+  assert.match(budgetShipGate({ budgets, state: failing, ledger: finishing, runJobIds: ['2'] }).message, /budgets-failing: this PR finishes the last stage.*performance 60.*T-0009/);
   assert.equal(budgetShipGate({ budgets, state: { screens: { home: { status: 'passed' } } }, ledger: finishing }), null);
+  // Only the PR that holds a last-stage ticket is THE PR that finishes it: a later hotfix or the fix-ticket PR passes.
+  assert.equal(budgetShipGate({ budgets, state: failing, ledger: finishing, runJobIds: ['3'] }), null);
+  // A screen the profile no longer lists cannot block; a screen never measured can; an accepted failure does not.
+  const renamed = { screens: { 'old-name': { status: 'failed', failures: [{ message: 'x' }] }, home: { status: 'passed' } } };
+  assert.equal(budgetShipGate({ budgets, state: renamed, ledger: finishing }), null);
+  assert.match(budgetShipGate({ budgets, state: { screens: {} }, ledger: finishing }).message, /never measured: home/);
+  assert.equal(budgetShipGate({ budgets, state: { screens: { home: { status: 'failed', failures: [], accepted: { at: 'a', reason: 'owner knows' } } } }, ledger: finishing }), null);
   assert.equal(budgetShipGate({ budgets: undefined, state: failing, ledger: finishing }), null, 'no budgets in the profile: no gate');
   assert.equal(budgetShipGate({ budgets, state: failing, ledger: null }), null);
 });
@@ -123,7 +131,7 @@ test('shipRun refuses the last-stage PR while a screen fails its budget, and doe
   const root = await tmp(t);
   await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none' }, budgets: {} } }));
   await fs.mkdir(path.join(root, '.swarm/runs/r1'), { recursive: true });
-  await fs.writeFile(path.join(root, '.swarm/runs/r1/state.json'), JSON.stringify({ id: 'r1', root, status: 'complete', integratedAt: 'now', jobs: [] }));
+  await fs.writeFile(path.join(root, '.swarm/runs/r1/state.json'), JSON.stringify({ id: 'r1', root, status: 'complete', integratedAt: 'now', jobs: [{ id: 'T-0002' }] }));
   const tk = (id, stage, status) => ({ id, title: id, type: 'build', epic: 'E', scopeRefs: ['R-001'], acceptance: ['ok'], files: [`src/${id}.ts`], context: [], contracts: [], dependsOn: [], size: 'S', risk: 'low', sensitive: false, status, stage });
   await writeLedger(root, createLedger({ scope: { name: 'P', version: 1, hash: 'a'.repeat(64) }, tickets: [tk('T-0001', 'S1', 'done'), tk('T-0002', 'S2', 'review')] }));
   await recordBudgetResults(root, [{ id: 'home', url: 'u', at: 'a', status: 'failed', failures: [{ message: 'accessibility 80 is below the budget 95' }] }]);
@@ -131,4 +139,41 @@ test('shipRun refuses the last-stage PR while a screen fails its budget, and doe
   await assert.rejects(shipRun(root, 'r1', { payloadPath: 'x.json' }, { exec }), { code: 'budgets-failing' });
   await writeLedger(root, createLedger({ scope: { name: 'P', version: 1, hash: 'a'.repeat(64) }, tickets: [tk('T-0001', 'S1', 'done'), tk('T-0002', 'S2', 'running')] }));
   await assert.rejects(shipRun(root, 'r1', { payloadPath: 'x.json' }, { exec }), error => error.code !== 'budgets-failing');
+});
+
+test('review fixes: previewHosts, empty or error reports are never a pass, accept with a reason, newer results win', async t => {
+  assert.equal(validateBudgetsConfig({ previewHosts: ['*.vercel.app', 'app.example.com'] }).ok, true);
+  assert.match(validateBudgetsConfig({ previewHosts: ['https://x'] }).errors.join(), /previewHosts/);
+  assert.equal(hostAllowed('https://app-git-x.vercel.app/p', ['*.vercel.app']), true);
+  assert.equal(hostAllowed('https://vercel.app', ['*.vercel.app']), false);
+  assert.equal(hostAllowed('https://evilvercel.app', ['*.vercel.app']), false);
+  assert.equal(hostAllowed('https://fast.example', ['*.vercel.app']), false);
+  const root = await tmp(t);
+  const { config } = cfg({ screens: [{ id: 'home', path: '/' }] });
+  const base = { 'lighthouse /': lh(0.99, 0.99) };
+  for (const [label, table, re] of [
+    ['empty axe', { ...base, 'axe /': [] }, /axe wrote no results/],
+    ['axe object without violations', { ...base, 'axe /': {} }, /axe wrote no results/],
+    ['lighthouse runtime error', { 'lighthouse /': { runtimeError: { code: 'NO_FCP', message: 'no paint' } }, 'axe /': axeFile([]) }, /Lighthouse reported an error: no paint/],
+    ['error status page', { 'lighthouse /': { ...lh(0.99, 0.99), audits: { 'http-status-code': { score: 0 } } }, 'axe /': axeFile([]) }, /error status/],
+    ['redirect off host', { 'lighthouse /': { ...lh(0.99, 0.99), finalDisplayedUrl: 'https://login.other.example/' }, 'axe /': axeFile([]) }, /redirected to another host/],
+  ]) {
+    const [r] = await runBudgets({ root, baseUrl: 'https://x.dev', config, run: fakeRun(table) });
+    assert.equal(r.status, 'cannot-run', label);
+    assert.match(r.failures[0].message, re, label);
+  }
+  const [ok] = await runBudgets({ root, baseUrl: 'https://x.dev', config, run: fakeRun({ ...base, 'axe /': axeFile([]) }) });
+  assert.equal(ok.status, 'passed');
+  // accept: only failing screens, until the next measurement
+  await recordBudgetResults(root, [{ id: 'home', url: 'u', at: '2026-01-02T00:00:00.000Z', status: 'failed', failures: [{ message: 'm' }] }]);
+  assert.deepEqual(await acceptBudgetFailures(root, ['home', 'nope'], { reason: 'known and tracked' }), ['home']);
+  assert.deepEqual(openFailures(await readBudgetState(root)), []);
+  await recordBudgetResults(root, [{ id: 'home', url: 'u', at: '2026-01-03T00:00:00.000Z', status: 'failed', failures: [{ message: 'again' }] }]);
+  assert.equal(openFailures(await readBudgetState(root)).length, 1, 'a new measurement clears the acceptance');
+  // an older result never replaces a newer one, in any order of arrival
+  await Promise.all([recordBudgetResults(root, [{ id: 'home', url: 'u', at: '2026-01-05T00:00:00.000Z', status: 'passed', failures: [] }]), recordBudgetResults(root, [{ id: 'home', url: 'u', at: '2026-01-04T00:00:00.000Z', status: 'failed', failures: [{ message: 'old' }] }])]);
+  assert.equal((await readBudgetState(root)).screens.home.status, 'passed');
+  const cmd = await runBudgetsCommand(root, ['accept', 'home', '--reason', 'short']);
+  assert.equal(cmd.exitCode, 2);
+  assert.equal((await runBudgetsCommand(root, ['accept', 'home', '--reason', 'long enough reason'])).exitCode, 1, 'needs --yes');
 });

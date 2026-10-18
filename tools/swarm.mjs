@@ -4608,7 +4608,10 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, ad
       // A preview that came up is measured: Lighthouse and axe on the key screens, against the profile's budgets.
       if (kind === 'preview' && res.status === 'passed' && res.url && securityProfile?.budgets) {
         try {
-          const { runBudgets, recordBudgetResults } = await import('./budgets.mjs');
+          const { runBudgets, recordBudgetResults, hostAllowed } = await import('./budgets.mjs');
+          // The address comes from a deploy log, which build code can write: it is measured only when its host is one the owner listed.
+          if (!securityProfile.budgets.previewHosts) { warnings.push('budgets-skipped: set budgets.previewHosts (for example *.vercel.app) so a preview address from the deploy log can be trusted; swarm budgets check --url measures by hand'); continue; }
+          if (!hostAllowed(res.url, securityProfile.budgets.previewHosts)) { warnings.push(`budgets-skipped: the preview address host is not in budgets.previewHosts`); continue; }
           const results = await runBudgets({ root, baseUrl: res.url, config: securityProfile.budgets, env: portEnv });
           await recordBudgetResults(root, results);
           for (const failed of results.filter(r => !r.pass)) {
@@ -7066,7 +7069,7 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
     const profile = await projectProfile(root);
     if (profile?.budgets) {
       const { budgetShipGate, readBudgetState } = await import('./budgets.mjs');
-      const gate = budgetShipGate({ budgets: profile.budgets, state: await readBudgetState(root), ledger: await (await import('./tickets.mjs')).readLedger(root).catch(() => null) });
+      const gate = budgetShipGate({ budgets: profile.budgets, state: await readBudgetState(root), ledger: await (await import('./tickets.mjs')).readLedger(root).catch(() => null), runJobIds: (state.jobs ?? []).map(job => job.id) });
       if (gate) fail(gate.message, 'budgets-failing');
     }
   }

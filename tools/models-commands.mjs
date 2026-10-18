@@ -2,7 +2,7 @@
 // swarm models watch [--force] [--json] | list | compare CURRENT CANDIDATE   (spec B3)
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { watchModels, fetchOpenCandidates, fetchApiModels, readState, watchConfig, compareModels, evalAdvice } from './model-watch.mjs';
+import { watchModels, fetchOpenCandidates, fetchApiModels, readState, watchConfig, compareModels } from './model-watch.mjs';
 import { loadLocalConfig } from './local-config.mjs';
 import { readAnthropicKey } from './anthropic.mjs';
 
@@ -28,7 +28,7 @@ export async function runModelsCommand(root, args, { fetchImpl, env = process.en
     const lines = [result.baseline ? `First check: recorded ${result.seen} model(s) as the baseline. Only models that appear after this are reported.` : `${result.newOpen.length} new open coding model(s), ${result.newApi.length} new API model(s).`];
     for (const c of result.newOpen) lines.push(`  ${c.id}  ${c.weightGb ?? '?'} GB  ${c.fits === false ? 'too big for our GPUs' : c.fits ? 'fits' : 'fit unknown'}  ${c.downloads} downloads`);
     for (const id of result.newApi) lines.push(`  ${id}  (Anthropic API)`);
-    if (result.decisions.length) lines.push(`${result.decisions.length} decision(s) in your inbox (swarm inbox). ${evalAdvice('MODEL', result.config).replace('MODEL', 'the model')}`);
+    if (result.decisions.length) lines.push(`${result.decisions.length} decision(s) in your inbox (swarm inbox). The inbox item names the command to evaluate it; ${result.config.evalCapUsd ? `your pre-approved cap is $${result.config.evalCapUsd}` : 'no eval cap is pre-approved'}, and nothing was rented.`);
     for (const note of result.notes) lines.push(`note: ${note}`);
     return out(lines.join('\n'));
   }

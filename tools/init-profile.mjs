@@ -257,7 +257,7 @@ export function hookFiles(argv) {
 // The package.json scripts a package-runner command runs (npm run X, npm test, pnpm X, yarn X): a batch must not change them (the gate checks).
 export function hookScriptNames(profile) {
   const names = new Set();
-  const argvs = [profile?.verify?.command, ...(profile?.verify?.setup ?? []), profile?.ci?.smoke?.argv, profile?.ci?.preview?.argv, profile?.ui?.start, ...Object.values(profile?.migrations?.commands ?? {})];
+  const argvs = [profile?.verify?.command, ...(profile?.verify?.setup ?? []), profile?.ci?.smoke?.argv, profile?.ci?.preview?.argv, profile?.budgets?.lighthouse?.argv, profile?.budgets?.axe?.argv, profile?.ui?.start, ...Object.values(profile?.migrations?.commands ?? {})];
   for (const argv of argvs) {
     if (!Array.isArray(argv) || !PACKAGE_RUNNERS.has(String(argv[0]).split('/').pop())) continue;
     const rest = argv.slice(1).filter(item => typeof item === 'string' && !item.startsWith('-'));

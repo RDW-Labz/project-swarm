@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { weightBytes, fitsGpu, normalizeHf, watchModels, watchConfig, compareModels, isDue, fetchOpenCandidates, fetchApiModels, WATCH_DEFAULTS } from '../tools/model-watch.mjs';
+import { readState, weightBytes, fitsGpu, normalizeHf, watchModels, watchConfig, compareModels, isDue, fetchOpenCandidates, fetchApiModels, WATCH_DEFAULTS } from '../tools/model-watch.mjs';
 import { runModelsCommand } from '../tools/models-commands.mjs';
 import { readJournal } from '../tools/journal.mjs';
 import { collectInbox } from '../tools/inbox.mjs';
@@ -64,15 +64,17 @@ test('the first pass is a silent baseline; later passes put each NEW model that 
   assert.equal(second.ran, true);
   assert.deepEqual(second.newOpen.map(c => c.id), ['acme/b-coder', 'acme/huge-coder']);
   assert.deepEqual(second.tooBig, ['acme/huge-coder']);
-  assert.deepEqual(second.decisions, ['model-acme-b-coder', 'model-api-claude-haiku-5-6']);
+  assert.equal(second.decisions.length, 2);
+  assert.match(second.decisions[0], /^model-hf-acme-b-coder-[0-9a-f]{8}$/);
+  assert.match(second.decisions[1], /^model-api-claude-haiku-5-6-[0-9a-f]{8}$/);
   const events = (await readJournal(root, { limit: Infinity })).filter(e => e.kind === 'decision');
-  const bcoder = events.find(e => e.id === 'model-acme-b-coder');
+  const bcoder = events.find(e => e.id === second.decisions[0]);
   assert.match(bcoder.text, /acme\/b-coder.*fits 1 GPU/);
   assert.match(bcoder.text, /cap you pre-approved: \$3.*swarm gpu bakeoff --models acme\/b-coder --max-usd 3.*Nothing was rented/);
   assert.equal(bcoder.choice, 'skip', 'the default is to do nothing');
   assert.deepEqual(bcoder.options, ['evaluate', 'skip']);
   const items = await collectInbox([root], { listRuns: async () => [], readState: async () => null, readJournal, now: () => NOW });
-  assert.ok(items.some(i => i.id === 'model-acme-b-coder'), 'it shows in swarm inbox');
+  assert.ok(items.some(i => i.id === second.decisions[0]), 'it shows in swarm inbox');
   // The same models are never reported twice.
   const third = await run({ at: 20 * DAY });
   assert.deepEqual([third.newOpen, third.newApi, third.decisions], [[], [], []]);
@@ -81,13 +83,14 @@ test('the first pass is a silent baseline; later passes put each NEW model that 
 test('without a pre-approved cap the advice says nothing was rented and how to set one; a failing source is a note, not a crash', async t => {
   const root = await tmp(t), home = await tmp(t);
   const env = { SWARM_MODELS_DIR: path.join(home, 'models') };
-  let rows = [];
+  const baseModel = normalizeHf(hf('acme/base-coder'), config, NOW);
+  let rows = [baseModel];
   const sources = { open: async () => rows, api: async () => { throw new Error('offline'); } };
   await watchModels({ root, sources, env, home, now: () => NOW });
-  rows = [normalizeHf(hf('acme/c-coder'), config, NOW)];
+  rows = [baseModel, normalizeHf(hf('acme/c-coder'), config, NOW)];
   const r = await watchModels({ root, sources, env, home, now: () => NOW + 9 * DAY });
   assert.match(r.notes.join(), /API models not checked: offline/);
-  const text = (await readJournal(root, { limit: Infinity })).find(e => e.id === 'model-acme-c-coder').text;
+  const text = (await readJournal(root, { limit: Infinity })).find(e => /^model-hf-acme-c-coder-/.test(e.id)).text;
   assert.match(text, /no cap is pre-approved \(set modelWatch\.evalCapUsd.*nothing was rented/);
   assert.equal(watchConfig({ modelWatch: { evalCapUsd: -5, gpus: 'x' } }).evalCapUsd, null);
   assert.equal(watchConfig({}).gpuMemGb, WATCH_DEFAULTS.gpuMemGb);
@@ -122,4 +125,49 @@ test('swarm models: watch (first run baseline), list, compare, usage', async t =
   assert.match((await runModelsCommand(root, ['compare', 'a', 'b'], { env })).stdout, /b beats a by 40 points/);
   assert.equal((await runModelsCommand(root, ['compare', 'a'], { env })).exitCode, 2);
   assert.equal((await runModelsCommand(root, [], { env })).exitCode, 2);
+});
+
+test('review fixes: pagination to the age limit, packed dtypes, baseline only on a real answer, a decision cap, lastRunAt only after a real check, distinct ids, safe compare', async t => {
+  // pages are followed until the models are older than maxAgeDays
+  const page = (rows, next) => async url => ({ ok: true, status: 200, headers: { get: h => (h === 'link' && next ? `<${next}>; rel="next"` : null) }, json: async () => rows });
+  const calls = [];
+  const fetchImpl = async url => {
+    calls.push(String(url));
+    if (calls.length === 1) return page([hf('acme/new-coder', { downloads: 10 })], 'https://huggingface.co/api/models?cursor=2')(url);
+    if (calls.length === 2) return page([hf('acme/popular-coder', { downloads: 9000, createdAt: new Date(NOW - 100 * DAY).toISOString() }), hf('acme/ancient-coder', { createdAt: new Date(NOW - 900 * DAY).toISOString() })], 'https://huggingface.co/api/models?cursor=3')(url);
+    return page([], null)(url);
+  };
+  const found = await fetchOpenCandidates({ fetchImpl, config, now: NOW });
+  assert.deepEqual(found.map(c => c.id), ['acme/popular-coder'], 'a model that gained downloads after its upload is found; the new low-download one is not');
+  assert.equal(calls.length, 2, 'stops once a page reaches models older than maxAgeDays');
+  assert.equal(weightBytes({ parameters: { I32: 25e9 } }).bytes, 100e9, 'packed 4-bit weights count at their stored width');
+  assert.equal(fitsGpu(weightBytes({ parameters: { I32: 25e9 } }).bytes, config), false);
+  assert.equal(weightBytes({ parameters: { WEIRD: 10e9 } }).bytes, 40e9, 'an unknown dtype is counted wide, not narrow');
+  const root = await tmp(t), home = await tmp(t);
+  const env = { SWARM_MODELS_DIR: path.join(home, 'models') };
+  // an empty first answer baselines nothing; a total outage does not start the week
+  let rows = [], fail = false;
+  const sources = { open: async () => { if (fail) throw new Error('down'); return rows; }, api: async () => ({ ids: [], skipped: null }) };
+  await watchModels({ root, sources, env, home, now: () => NOW });
+  rows = [normalizeHf(hf('acme/a-coder'), config, NOW)];
+  const second = await watchModels({ root, sources, env, home, now: () => NOW + 8 * DAY });
+  assert.equal(second.baseline, true, 'the first non-empty answer is the baseline, not a flood of decisions');
+  assert.deepEqual(second.decisions, []);
+  fail = true;
+  const outage = await watchModels({ root, sources: { open: sources.open, api: async () => { throw new Error('down too'); } }, env, home, now: () => NOW + 20 * DAY });
+  assert.equal(outage.ran, true);
+  const after = await readState(env, home);
+  assert.equal(after.lastRunAt, new Date(NOW + 8 * DAY).toISOString(), 'a pass where nothing answered is not a check');
+  // at most five decisions per run; ids that differ only by case or punctuation stay distinct
+  fail = false;
+  rows = [...rows, ...Array.from({ length: 8 }, (_, n) => normalizeHf(hf(`acme/m${n}-coder`), config, NOW)), normalizeHf(hf('acme/B_Coder'), config, NOW), normalizeHf(hf('acme/b-coder'), config, NOW)];
+  const flood = await watchModels({ root, sources, env, home, now: () => NOW + 40 * DAY });
+  assert.equal(flood.decisions.length, 5);
+  assert.match(flood.notes.join(), /5 more new model\(s\) fit but only 5 were put in the inbox/);
+  const { default: crypto } = await import('node:crypto');
+  const slugOf = id => `${id.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)}-${crypto.createHash('sha256').update(id).digest('hex').slice(0, 8)}`;
+  assert.notEqual(slugOf('acme/B_Coder'), slugOf('acme/b-coder'));
+  // compare ignores malformed rows
+  const rowsC = [{ models: ['x'], passed: 'many', total: 10, costUsd: 0 }, { models: ['x'], passed: 20, total: 10, costUsd: 0 }, { models: ['x'], passed: 5, total: 10, costUsd: 0.01 }, { models: ['y'], passed: 9, total: 10, costUsd: 0.01 }];
+  assert.equal(compareModels(rowsC, 'x', 'y').points, 40, 'only the well-formed x row counts');
 });

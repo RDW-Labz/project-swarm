@@ -2,7 +2,8 @@
 // swarm budgets check [--url URL] [--screens a,b] | status   (spec A2: speed and accessibility budgets)
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { runBudgets, recordBudgetResults, readBudgetState, openFailures, validateBudgetsConfig, finishesLastStage, checkBaseUrl } from './budgets.mjs';
+import { runBudgets, recordBudgetResults, readBudgetState, openFailures, validateBudgetsConfig, finishesLastStage, checkBaseUrl, acceptBudgetFailures } from './budgets.mjs';
+import { appendLog } from './tickets.mjs';
 import { readLedger } from './tickets.mjs';
 
 export const BUDGETS_USAGE = 'Usage: swarm budgets check [--url PREVIEW_URL] [--screens home,cart]\n       swarm budgets status\nThe budgets live in the project profile (budgets: {performance, accessibility, axeBlock, screens, lighthouse, axe}); see docs/budgets.md.\n';
@@ -20,11 +21,22 @@ const line = r => `${r.id}  ${r.status}  ${r.scores ? Object.entries(r.scores).f
 
 export async function runBudgetsCommand(root, args, { run, now, onFailure } = {}) {
   const [verb, ...rest] = args;
+  if (verb === 'accept') {
+    const flags = {}, ids = [];
+    for (let i = 0; i < rest.length; i += 1) { if (rest[i] === '--reason') flags.reason = rest[++i]; else if (rest[i] === '--yes') flags.yes = true; else ids.push(rest[i]); }
+    if (!ids.length) return out(`name at least one screen\n${BUDGETS_USAGE}`, 2);
+    if (Array.from(String(flags.reason ?? '').trim()).length < 8) return out('--reason TEXT is required (at least 8 characters: why this screen may ship over its budget)', 2);
+    if (flags.yes !== true) return out(`This lets ${ids.join(', ')} ship over its budget until its next measurement (reason: ${flags.reason}). Rerun with --yes to confirm; it is logged.`, 1);
+    const accepted = await acceptBudgetFailures(root, ids, { reason: flags.reason });
+    if (accepted.length) await appendLog(root, { event: 'budget-accepted', by: 'owner', screens: accepted, reason: String(flags.reason).slice(0, 300) });
+    return out(accepted.length ? `accepted: ${accepted.join(', ')} (until the next measurement)` : 'nothing to accept: those screens are not failing', accepted.length ? 0 : 1);
+  }
   if (verb === 'status') {
     const state = await readBudgetState(root);
     const ids = Object.keys(state.screens);
     if (!ids.length) return out('No budget runs yet. swarm budgets check --url PREVIEW_URL');
-    const open = openFailures(state);
+    const { config: profileConfig } = await profileBudgets(root);
+    const open = openFailures(state, profileConfig ?? null);
     const ledger = await readLedger(root).catch(() => null);
     return out([...ids.sort().map(id => line({ id, ...state.screens[id] })), open.length ? `${open.length} screen(s) failing${finishesLastStage(ledger) ? ': the last stage is finished, so shipping is blocked until they pass' : ' (they block only the PR that finishes the last stage)'}` : 'all screens within budget'].join('\n'), open.length ? 1 : 0);
   }

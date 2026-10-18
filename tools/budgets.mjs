@@ -9,11 +9,12 @@ import { isProductionArgv, defaultRun, filterEnv } from './ci-hooks.mjs';
 import { sanitizeWorkerText } from './worker-text.mjs';
 
 export const BUDGET_STATE = '.swarm/project/budgets.json';
-export const DEFAULT_LIGHTHOUSE = Object.freeze(['npx', 'lighthouse', '{url}', '--output=json', '--output-path={out}', '--quiet', '--chrome-flags=--headless']);
-export const DEFAULT_AXE = Object.freeze(['npx', '@axe-core/cli', '{url}', '--save', '{out}']);
+export const DEFAULT_LIGHTHOUSE = Object.freeze(['npx', 'lighthouse@12', '{url}', '--output=json', '--output-path={out}', '--quiet', '--chrome-flags=--headless']);
+export const DEFAULT_AXE = Object.freeze(['npx', '@axe-core/cli@4', '{url}', '--save', '{out}']);
 const IMPACTS = ['minor', 'moderate', 'serious', 'critical'];
 const SCORES = ['performance', 'accessibility', 'bestPractices', 'seo'];
-const KEYS = [...SCORES, 'axeBlock', 'screens', 'lighthouse', 'axe'];
+const KEYS = [...SCORES, 'axeBlock', 'screens', 'lighthouse', 'axe', 'previewHosts'];
+const HOST_RE = /^(?:\*\.)?[a-z0-9](?:[a-z0-9.-]{0,120}[a-z0-9])?$/;
 const TOOL_KEYS = ['argv', 'timeoutSec'];
 const PROGRAM_RE = /^[A-Za-z0-9][A-Za-z0-9._@/-]*$/;
 const SCREEN_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -60,6 +61,12 @@ export function validateBudgetsConfig(raw) {
     }
     config.screens = screens.map(s => ({ id: s?.id, path: s?.path }));
   }
+  // The hosts a preview URL taken from a deploy log may have (for example *.vercel.app). Without it the automatic run after a preview does not measure anything:
+  // a log is text a worker's build code can write, so its address is not trusted by default. A hand `swarm budgets check --url` is not held to this.
+  if (raw.previewHosts !== undefined) {
+    if (!Array.isArray(raw.previewHosts) || raw.previewHosts.length < 1 || raw.previewHosts.length > 10 || !raw.previewHosts.every(h => typeof h === 'string' && HOST_RE.test(h))) errors.push('budgets.previewHosts must list 1 to 10 hosts like app.example.com or *.vercel.app');
+    else config.previewHosts = [...new Set(raw.previewHosts)];
+  }
   config.lighthouse = checkTool('lighthouse', raw.lighthouse, errors);
   config.axe = checkTool('axe', raw.axe, errors);
   return errors.length ? { ok: false, config: null, errors } : { ok: true, config, errors };
@@ -75,6 +82,7 @@ export function parseLighthouse(json) {
 export function parseAxe(json) {
   const results = Array.isArray(json) ? json : [json];
   const out = [];
+  out.ran = results.some(r => isObj(r) && Array.isArray(r.violations));
   for (const result of results) {
     for (const v of isObj(result) && Array.isArray(result.violations) ? result.violations : []) {
       if (!isObj(v)) continue;
@@ -97,13 +105,19 @@ export function evaluateBudgets({ lighthouse, axe }, config) {
 }
 
 // The base address a budget run may use: a preview (https) or a local server. No credentials in it.
+export function hostAllowed(url, hosts) {
+  let u;
+  try { u = new URL(String(url)); } catch { return false; }
+  return (hosts ?? []).some(h => (h.startsWith('*.') ? u.hostname.endsWith(h.slice(1)) && u.hostname.length > h.length - 1 : u.hostname === h));
+}
+
 export function checkBaseUrl(value) {
   let u;
   try { u = new URL(String(value)); } catch { return null; }
   if (u.username || u.password || u.hash) return null;
   const local = ['127.0.0.1', 'localhost'].includes(u.hostname);
   if (!(u.protocol === 'https:' || (u.protocol === 'http:' && local))) return null;
-  return `${u.protocol}//${u.host}`;
+  return `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, '')}`;
 }
 
 async function runTool(tool, url, out, { cwd, env, run }) {
@@ -125,11 +139,20 @@ export async function runBudgets({ root, baseUrl, config, screens = null, env = 
   for (const screen of config.screens.filter(s => !screens || screens.includes(s.id))) {
     const url = `${base}${screen.path}`;
     const stem = path.join(dir, `${screen.id}-${randomBytes(4).toString('hex')}`);
-    const lh = await runTool(config.lighthouse, url, `${stem}.lighthouse.json`, { cwd: root, env, run });
-    const ax = await runTool(config.axe, url, `${stem}.axe.json`, { cwd: root, env, run });
-    await fs.rm(`${stem}.lighthouse.json`, { force: true }); await fs.rm(`${stem}.axe.json`, { force: true });
+    let lh, ax;
+    try {
+      lh = await runTool(config.lighthouse, url, `${stem}.lighthouse.json`, { cwd: root, env, run });
+      ax = await runTool(config.axe, url, `${stem}.axe.json`, { cwd: root, env, run });
+    } finally { await fs.rm(`${stem}.lighthouse.json`, { force: true }); await fs.rm(`${stem}.axe.json`, { force: true }); }
     const at = new Date(now()).toISOString();
-    if (!lh.ok || !ax.ok) { results.push({ id: screen.id, url, at, status: 'cannot-run', pass: false, failures: [{ kind: 'tool', metric: !lh.ok ? 'lighthouse' : 'axe', message: `${!lh.ok ? 'Lighthouse' : 'axe'} could not run: ${!lh.ok ? lh.reason : ax.reason}` }] }); continue; }
+    const cannot = reason => results.push({ id: screen.id, url, at, status: 'cannot-run', pass: false, failures: [{ kind: 'tool', metric: 'report', message: reason }] });
+    if (!lh.ok || !ax.ok) { cannot(`${!lh.ok ? 'Lighthouse' : 'axe'} could not run: ${!lh.ok ? lh.reason : ax.reason}`); continue; }
+    // An empty or error report is not a pass: axe must have looked at a page, Lighthouse must have scored the page we asked for (not a 404 or another host).
+    if (!parseAxe(ax.json).ran) { cannot('axe wrote no results (no violations list)'); continue; }
+    if (isObj(lh.json) && lh.json.runtimeError) { cannot(`Lighthouse reported an error: ${sanitizeWorkerText(lh.json.runtimeError.message ?? lh.json.runtimeError.code ?? 'runtime error', 120)}`); continue; }
+    if (isObj(lh.json) && lh.json.audits?.['http-status-code']?.score === 0) { cannot('the page answered with an error status (Lighthouse http-status-code)'); continue; }
+    const finalUrl = isObj(lh.json) ? lh.json.finalDisplayedUrl ?? lh.json.finalUrl : null;
+    if (typeof finalUrl === 'string') { try { if (new URL(finalUrl).host !== new URL(url).host) { cannot('the page redirected to another host'); continue; } } catch { /* an unreadable address is not a reason to refuse */ } }
     const scores = parseLighthouse(lh.json);
     const verdict = evaluateBudgets({ lighthouse: scores, axe: parseAxe(ax.json) }, config);
     results.push({ id: screen.id, url, at, status: verdict.pass ? 'passed' : 'failed', pass: verdict.pass, scores, failures: verdict.failures.slice(0, 20) });
@@ -150,37 +173,79 @@ export async function readBudgetState(root) {
   catch { return { version: 1, screens: {} }; }
 }
 
-// The latest result of each screen replaces the one before it; a passing run clears the screen.
-export async function recordBudgetResults(root, results) {
-  const state = await readBudgetState(root);
-  for (const r of results) state.screens[r.id] = { at: r.at, url: r.url, status: r.status, scores: r.scores ?? null, failures: r.failures, ticket: r.status === 'passed' ? null : state.screens[r.id]?.ticket ?? null };
-  await writeState(root, state);
-  return state;
+// Writers in this process go one after another, and a result only replaces an older one (by `at`), so a slow manual check
+// can never put an old failure over a newer pass (or the reverse).
+let queue = Promise.resolve();
+const serial = fn => { const run = queue.then(fn, fn); queue = run.catch(() => {}); return run; };
+
+export function recordBudgetResults(root, results) {
+  return serial(async () => {
+    const state = await readBudgetState(root);
+    for (const r of results) {
+      const before = state.screens[r.id];
+      if (before && Date.parse(before.at) > Date.parse(r.at)) continue;
+      state.screens[r.id] = { at: r.at, url: r.url, status: r.status, scores: r.scores ?? null, failures: r.failures, ticket: r.status === 'passed' ? null : before?.ticket ?? null };
+    }
+    await writeState(root, state);
+    return state;
+  });
 }
 
-export async function linkBudgetTicket(root, id, ticket) {
-  const state = await readBudgetState(root);
-  if (!state.screens[id]) return;
-  state.screens[id].ticket = ticket;
-  await writeState(root, state);
+export function linkBudgetTicket(root, id, ticket) {
+  return serial(async () => {
+    const state = await readBudgetState(root);
+    if (!state.screens[id]) return;
+    state.screens[id].ticket = ticket;
+    await writeState(root, state);
+  });
 }
 
-export const openFailures = state => Object.entries(state.screens ?? {}).filter(([, s]) => s.status !== 'passed').map(([id, s]) => ({ id, ...s }));
+// The owner's way out: a failing screen is accepted, with a reason, until its next measurement. Journaled by the caller.
+export function acceptBudgetFailures(root, ids, { reason, now = Date.now }) {
+  return serial(async () => {
+    const state = await readBudgetState(root);
+    const accepted = [];
+    for (const id of ids) {
+      const entry = state.screens[id];
+      if (!entry || entry.status === 'passed') continue;
+      entry.accepted = { at: new Date(now()).toISOString(), reason: sanitizeWorkerText(reason, 300) };
+      accepted.push(id);
+    }
+    await writeState(root, state);
+    return accepted;
+  });
+}
+
+// Only the screens the profile lists count (a renamed or removed screen cannot block anything), and an accepted failure does not block.
+export function openFailures(state, config = null) {
+  const listed = config ? new Set(config.screens.map(s => s.id)) : null;
+  return Object.entries(state.screens ?? {}).filter(([id, s]) => (!listed || listed.has(id)) && s.status !== 'passed' && !s.accepted).map(([id, s]) => ({ id, ...s }));
+}
 
 // The stage number of a ticket: S1 < S2 < ... Fix tickets (S0) and cancelled or proposed tickets are not part of a stage.
 const stageNumber = stage => { const m = /^S(\d+)$/.exec(String(stage ?? '')); return m ? Number(m[1]) : null; };
-export function finishesLastStage(ledger) {
+function lastStageTickets(ledger) {
   const live = (ledger?.tickets ?? []).filter(t => !['cancelled', 'proposed'].includes(t.status) && stageNumber(t.stage) > 0);
-  if (!live.length) return false;
+  if (!live.length) return [];
   const last = Math.max(...live.map(t => stageNumber(t.stage)));
-  return live.filter(t => stageNumber(t.stage) === last).every(t => ['done', 'review'].includes(t.status));
+  return live.filter(t => stageNumber(t.stage) === last);
 }
 
-// Blocks only the PR that finishes the last stage, and only while a screen's latest budget run is failing (or could not run).
-export function budgetShipGate({ budgets, state, ledger }) {
+// The stage is finished (every ticket done or in review). With `runJobIds`, also: this run holds one of its tickets, so it is THE PR that finishes it.
+export function finishesLastStage(ledger, runJobIds = null) {
+  const last = lastStageTickets(ledger);
+  if (!last.length || !last.every(t => ['done', 'review'].includes(t.status))) return false;
+  return !runJobIds || last.some(t => runJobIds.includes(t.id));
+}
+
+// Blocks only the PR that finishes the last stage: while a listed screen's latest result is failing (or could not run) and not accepted,
+// or a listed screen was never measured at all (a project that configured budgets and never measured must not ship its last stage unmeasured).
+export function budgetShipGate({ budgets, state, ledger, runJobIds = null }) {
   if (!budgets) return null;
-  const open = openFailures(state);
-  if (!open.length || !finishesLastStage(ledger)) return null;
-  const first = open[0];
-  return { message: `budgets-failing: this PR finishes the last stage and ${open.length} screen(s) fail their speed or accessibility budget (${open.slice(0, 3).map(o => `${o.id}: ${o.failures?.[0]?.message ?? o.status}`).join('; ')}). Fix them (fix ticket ${first.ticket ?? 'none yet'}), then swarm budgets check --url PREVIEW_URL` };
+  if (!finishesLastStage(ledger, runJobIds)) return null;
+  const open = openFailures(state, budgets);
+  const unmeasured = (budgets.screens ?? []).filter(s => !state.screens?.[s.id]).map(s => s.id);
+  if (!open.length && !unmeasured.length) return null;
+  const parts = [...open.slice(0, 3).map(o => `${o.id}: ${o.failures?.[0]?.message ?? o.status}`), ...(unmeasured.length ? [`never measured: ${unmeasured.slice(0, 5).join(', ')}`] : [])];
+  return { message: `budgets-failing: this PR finishes the last stage and ${open.length + unmeasured.length} screen(s) are over their speed or accessibility budget or were never measured (${parts.join('; ')}). Fix them${open[0]?.ticket ? ` (fix ticket ${open[0].ticket})` : ''}, then swarm budgets check --url PREVIEW_URL; or accept a failure with a reason: swarm budgets accept SCREEN --reason TEXT --yes` };
 }
