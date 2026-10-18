@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.100.0
+
+Safety group (docs/safety.md, design docs/plans/safety-design.md):
+- `swarm stop --all`: the panic button. Writes a stop marker first (run, go, autopilot and resume refuse until `swarm stop --clear`), cancels running runs, stops the autopilot by exact PID, ends a rented GPU session and says to terminate the instance (an unreachable node is a failed step with a billing warning, exit 2), then takes a backup.
+- State backups: `swarm backup`, `backup list`, `backup verify`, `swarm restore ID [--yes]` (hash-checked, never secrets or symlinks, a restore takes a pre-restore backup so it can be undone, newest 20 kept, automatic at `scope approve`).
+- Safe migrations (profile `migrations` block, opt-in): every changed migration needs a down step, a destructive one needs `swarm migrations approve` (bound to the file hash, opens an inbox item), and up, seed, down, up must run clean, all in the merge queue before the tests.
+- An Opus review (7 high, 8 medium, 8 low) was fixed before release: an unreachable rented node is a failed step, the autopilot PID is signalled only when it really is an autopilot, the stop guard also covers sweep, scout, ship, merge, integrate and gpu up (and a flag value cannot switch it off), quoted identifiers, dollar-quoted bodies, E strings, `DROP` without `COLUMN`, CTE deletes and privileged calls are all caught, restore cannot prune its own source or write outside swarm state, secret names match case-insensitively, migration commands get a short environment.
+
 ## 1.99.0
 
 Parts-app S7 lessons (40-41):

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { stopGuard } from './stop-all.mjs';
 export const ACTIONS = ['integrate', 'resume', 'retry-failed', 'start-wave', 'start-deferred', 'start-backlog', 'unlock-tickets'];
 
 const MINUTE = 60_000;
@@ -354,6 +355,8 @@ export async function runAutopilot(root, deps, { intervalMs = 30000, once = fals
   const memory = new Set();
   const wait = Math.max(MIN_INTERVAL_MS, Number(intervalMs) || MIN_INTERVAL_MS);
   while (!signal?.aborted && results.length < maxSteps) {
+    // The panic button (swarm stop --all): a loop that is still alive stops at the next step instead of starting more work.
+    if (await stopGuard(root).catch(() => null)) { results.push({ action: 'stopped', note: 'stopped: swarm stop --all marker present' }); break; }
     const step = await autopilotStep(root, deps, { now, memory });
     results.push(step);
     // A broken journal ends the loop: nothing it does could be remembered across steps by anyone else.

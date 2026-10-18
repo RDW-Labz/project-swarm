@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1.5
+  },
+  "jobs": [
+    {
+      "id": "review-safety",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "review of the panic button (kills processes, ends a rented GPU session), state restore (writes files back) and a merge-queue gate",
+      "type": "review",
+      "prompt": "Review tools/stop-all.mjs, tools/state-backup.mjs, tools/migration-gate.mjs, tools/migration-queue.mjs, tools/safety-commands.mjs and coordination/review/safety.diff against docs/plans/safety-design.md and docs/safety.md. Rules that must hold: (1) the panic button: the marker is written first and run/go/autopilot/resume really refuse while it exists (check every entry point that can start work, including `swarm go --scope`, integrate/ship, and commands that start runs without those verbs); each step catches its own errors and never skips the next; kills use the exact PID from the lock (could a stale or recycled PID, a pid of 0/1/negative, or a lock written by someone else make it kill the wrong process? process groups?); a rented GPU node that could not be reached is never reported as stopped; exit codes are right; (2) backups: no secret is ever copied (names, nested dirs, case, symlinked dirs, .env in a subfolder), no path traversal on create or restore (ids, manifest paths, symlinks in the target tree, a malicious manifest), restore verifies hashes first and takes a pre-restore backup, atomic writes, retention only deletes inside .swarm/backups, size caps; (3) migrations: down-step rule, destructive detection (false negatives matter most: comments, strings, dollar-quoted bodies, mixed case, schema-qualified names, ALTER TABLE ... DROP without the word COLUMN, DROP INDEX is fine, `delete from t using`, CTEs, multiple statements on one line), approvals bound to the file hash and file name, the approval file cannot be written by a worker (is .swarm protected from job writes?), the round trip runs only profile commands with no shell and a sane environment, seed-looks-real; (4) the queue wiring in tools/swarm.mjs: it runs after the batch is written and before tests, a blocked batch is reported like the other gate blocks, a deleted migration is skipped, a rename or a new file in a subfolder; (5) the profile block and protected paths. Find real bugs with file and line evidence, rank high, medium, low, and say how to fix each. Do not edit files.",
+      "context": [
+        "tools/stop-all.mjs",
+        "tools/state-backup.mjs",
+        "tools/migration-gate.mjs",
+        "tools/migration-queue.mjs",
+        "tools/safety-commands.mjs",
+        "docs/plans/safety-design.md",
+        "docs/safety.md",
+        "coordination/review/safety.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}
