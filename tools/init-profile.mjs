@@ -352,11 +352,15 @@ function validateBudget(budget, errors) {
     return out;
   }
   for (const key of Object.keys(budget)) {
-    if (!Object.hasOwn(DEFAULT_PROFILE_BUDGET, key)) errors.push(`profile.budget.${key}: unknown key`);
+    if (!Object.hasOwn(DEFAULT_PROFILE_BUDGET, key) && key !== 'projectMaxUsd') errors.push(`profile.budget.${key}: unknown key`);
   }
   if (budget.maxUsd !== undefined) {
     if (typeof budget.maxUsd === 'number' && Number.isFinite(budget.maxUsd) && budget.maxUsd > 0) out.maxUsd = budget.maxUsd;
     else errors.push('profile.budget.maxUsd: must be a number above 0');
+  }
+  if (budget.projectMaxUsd !== undefined) {
+    if (typeof budget.projectMaxUsd === 'number' && Number.isFinite(budget.projectMaxUsd) && budget.projectMaxUsd > 0) out.projectMaxUsd = budget.projectMaxUsd;
+    else errors.push('profile.budget.projectMaxUsd: must be a number above 0');
   }
   if (budget.maxTokens !== undefined) {
     if (Number.isInteger(budget.maxTokens) && budget.maxTokens > 0) out.maxTokens = budget.maxTokens;

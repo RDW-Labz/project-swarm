@@ -833,7 +833,13 @@ async function reAskReview(root, sourceRun, deps, kind = SEC_KIND) {
     return { asked: false, runId: typeof earlier === 'string' && RUN_ID.test(earlier) ? earlier : null };
   }
   only.prompt = `${only.prompt}\n\n${kind.reminder}`;
-  const run = await (deps.runReview ?? defaultRunReview)(root, manifest);
+  let run;
+  try { run = await (deps.runReview ?? defaultRunReview)(root, manifest); }
+  catch (error) {
+    // The project cap refused the re-ask: nothing was asked, so the one allowed re-ask is not used up. The owner raises the cap and syncs again.
+    if (['project-cap', 'project-cap-invalid', 'spend-store-locked'].includes(error?.code)) { await fs.rm(marker, { force: true }); return { asked: false, error: error.message }; }
+    throw error;
+  }
   const runId = typeof run?.id === 'string' && RUN_ID.test(run.id) ? run.id : null;
   if (runId) await fs.writeFile(marker, `${JSON.stringify({ at: new Date().toISOString(), run: runId })}\n`);
   return { asked: true, runId };

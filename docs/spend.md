@@ -147,3 +147,9 @@ Only the last attempt carries the job record's token count and reported dollar c
 The `Daily summary` groups all ledger rows by UTC date and worker (the `tier` column), with calls, passes, failures/blocked attempts, summed numeric tokens, and rough cost. Numeric dollar costs are summed when present; otherwise the group shows `subscription` if present, or `unknown`. Content following the summary table is preserved.
 
 `swarm ledger <run>` writes any missing rows for an existing run and prints `{path, added}`. Repeating it adds no duplicate rows.
+
+## Project-wide spend cap
+
+`--max-usd` and `budget.maxUsd` cap one run. To cap everything a project spends, set `budget.projectMaxUsd` in the profile (`.project-swarm.json`) or `spend.projectMaxUsd` in the local config (the lower one wins). The swarm adds up every run in `.swarm/runs/*/state.json`; once the total has reached the cap, a new run is refused with `project-cap` before any worker is called. A review re-ask is a run and counts. If the cap refuses a re-ask, its one retry is kept for after the owner raises the cap. Runs still going count with what their own `--max-usd` lets them spend, so runs started together cannot all slip under the cap. `swarm resume` is refused over the cap too (it starts paid jobs again). A run state or pointer file that cannot be read refuses new runs (the total or the cap would be unknown) instead of counting as zero. There is no default cap, and raising one is the owner's call. swarm watch shows the total, the cap and `CAP REACHED` (refreshed every few seconds).
+
+The usage ledger's daily summary ends with a total row. A detail row with extra cells is read from the right; a row that cannot be read is reported under the summary.

@@ -32,7 +32,8 @@ export function resolveBudget({ config = {}, manifest = {}, cli = {}, raises = [
   // A rented server's day cap defaults to one run's maximum rental (hourlyUsd x maxHoursPerRun) unless the config sets it.
   const rentedDefault = config.rentedGpu ? validateRentedConfig(config.rentedGpu).config?.dailyUsd : undefined;
   if (rentedDefault > 0) budget.lanes.rented.dailyUsd = rentedDefault;
-  if (config.spend !== undefined) fields(config.spend, ['lanes', 'rates'], 'spend');
+  if (config.spend !== undefined) fields(config.spend, ['lanes', 'rates', 'projectMaxUsd'], 'spend');
+  if (config.spend?.projectMaxUsd !== undefined) cap(config.spend.projectMaxUsd, 'spend.projectMaxUsd');
   validateRates(config.spend?.rates);
   if (manifest.budget !== undefined) fields(manifest.budget, ['maxUsd', 'maxTokens', 'lanes'], 'budget');
   for (const key of ['maxUsd', 'maxTokens']) {
@@ -305,6 +306,16 @@ export function ledgerRows(state, { phase = '-' } = {}) {
 const ledgerHeader = '| date | phase | task | worker | model | result | tokens | rough cost |';
 const divider = '| --- | --- | --- | --- | --- | --- | --- | --- |';
 const rowText = row => `| ${['date', 'phase', 'task', 'worker', 'model', 'result', 'tokens', 'cost'].map(key => clean(row[key])).join(' | ')} |`;
+// A detail row has 8 cells. A row with MORE cells (a stray pipe inside the task text, written by an older version or by hand) is read from
+// the right: cost, tokens, result, model and worker are the last five cells, so a shifted row is still counted under the right day and tier.
+export function parseLedgerRow(line) {
+  const cells = String(line).trim().split('|').slice(1, -1).map(cell => cell.trim());
+  if (cells.length < 8) return null;
+  const tail = cells.slice(-5);
+  const [worker, , result, tokens, cost] = tail;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cells[0]) && cells[0] !== '-') return null;
+  return { date: cells[0], worker, result, tokens, cost };
+}
 export function mergeLedger(text, rows) {
   let lines = String(text ?? '').split('\n');
   let start = lines.findIndex(line => line.trim() === ledgerHeader);
@@ -317,10 +328,12 @@ export function mergeLedger(text, rows) {
   lines.splice(end, 0, ...rows.map(rowText));
   end += rows.length;
   const groups = new Map();
+  let uncounted = 0;
   for (const line of lines.slice(start + 2, end)) {
-    const cells = line.trim().split('|').slice(1, -1).map(cell => cell.trim());
-    if (cells.length !== 8) continue;
-    const [date, , , worker, , result, tokens, cost] = cells;
+    if (/^\|[\s|:-]*\|$/.test(line.trim()) || /^\|\s*date\s*\|/.test(line.trim())) continue; // a repeated divider or header is not a data row
+    const cells = parseLedgerRow(line);
+    if (!cells) { uncounted++; continue; }
+    const { date, worker, result, tokens, cost } = cells;
     const key = `${date}\0${worker}`;
     const group = groups.get(key) ?? { date, worker, calls: 0, pass: 0, tokens: 0, usd: 0, paid: false, subscription: false, estimated: false };
     group.calls++;
@@ -331,13 +344,21 @@ export function mergeLedger(text, rows) {
     if (cost === 'subscription') group.subscription = true;
     groups.set(key, group);
   }
-  const summary = ['## Daily summary', '', '| date | tier | calls | pass | fail/blocked | tokens | rough cost |', '| --- | --- | --- | --- | --- | --- | --- |', ...[...groups.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, g]) => `| ${g.date} | ${g.worker} | ${g.calls} | ${g.pass} | ${g.calls - g.pass} | ${g.tokens.toLocaleString('en-US')} | ${g.paid ? `$${g.usd.toFixed(2)}${g.estimated ? ' (incl. estimates)' : ''}` : g.subscription ? 'subscription' : 'unknown'} |`)];
+  const all = [...groups.values()].reduce((sum, g) => ({ calls: sum.calls + g.calls, pass: sum.pass + g.pass, tokens: sum.tokens + g.tokens, usd: sum.usd + g.usd, paid: sum.paid || g.paid }), { calls: 0, pass: 0, tokens: 0, usd: 0, paid: false });
+  const anyEstimate = [...groups.values()].some(g => g.estimated), anySubscription = [...groups.values()].some(g => g.subscription);
+  const summary = ['## Daily summary', '', '| date | tier | calls | pass | fail/blocked | tokens | rough cost |', '| --- | --- | --- | --- | --- | --- | --- |', ...[...groups.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, g]) => `| ${g.date} | ${g.worker} | ${g.calls} | ${g.pass} | ${g.calls - g.pass} | ${g.tokens.toLocaleString('en-US')} | ${g.paid ? `$${g.usd.toFixed(2)}${g.estimated ? ' (incl. estimates)' : ''}` : g.subscription ? 'subscription' : 'unknown'} |`),
+    ...(groups.size ? [`| **total** | all | ${all.calls} | ${all.pass} | ${all.calls - all.pass} | ${all.tokens.toLocaleString('en-US')} | ${all.paid ? `$${all.usd.toFixed(2)}${anyEstimate ? ' (incl. estimates)' : ''}` : anySubscription ? 'subscription' : 'unknown'} |`] : []),
+    ...(uncounted ? ['', `${uncounted} ledger row${uncounted === 1 ? ' that' : 's that'} could not be read ${uncounted === 1 ? 'is' : 'are'} not in these totals.`] : [])];
   const summaryStart = lines.findIndex(line => line.trim() === '## Daily summary');
   if (summaryStart < 0) lines.push('', ...summary, '');
   else {
     let summaryEnd = summaryStart + 1;
     while (summaryEnd < lines.length && !lines[summaryEnd].trim()) summaryEnd++;
     if (lines[summaryEnd]?.trim().startsWith('|')) while (lines[summaryEnd]?.trim().startsWith('|')) summaryEnd++;
+    // The note a previous merge wrote under the table is replaced too, so it neither repeats nor outlives the bad row.
+    let probe = summaryEnd;
+    while (probe < lines.length && !lines[probe].trim()) probe++;
+    if (/^\d+ ledger rows? that could not be read /.test(lines[probe] ?? '')) summaryEnd = probe + 1;
     lines.splice(summaryStart, summaryEnd - summaryStart, ...summary);
   }
   return lines.join('\n');

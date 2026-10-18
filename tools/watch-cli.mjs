@@ -15,6 +15,7 @@ import { buildCommandList, contextCommands } from './watch-command-meta.mjs';
 import { COMMANDS } from './completion.mjs';
 import { readLedger } from './tickets.mjs';
 import { boardSummary } from './board.mjs';
+import { projectSummary } from './project-spend.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -48,7 +49,9 @@ export function runSnapshotLoader(root, runId) {
     const state = await readJson(path.join(dir, 'state.json'));
     if (!state) return null;
     const manifest = await readJson(path.join(dir, 'manifest.json'));
-    return buildRunSnapshot(state, { manifest, now: Date.now() });
+    const snapshot = buildRunSnapshot(state, { manifest, now: Date.now() });
+    snapshot.project = await projectSummary(root).catch(() => null);
+    return snapshot;
   };
 }
 

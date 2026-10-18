@@ -258,3 +258,7 @@ Hand-written (priority fix from parts-app S9; small, in the scope command and th
 ### Acceptance enforcement (1.103.0)
 
 Module `tools/acceptance.mjs` and its 32 tests written by Haiku on the swarm (the first try, one job for both files, was cut off at the output limit; split into a code job and a tests job, $0.017 together, all 32 tests green first time). One slip: the worker imported node:test and node:assert in the production module (removed by hand). Sync wiring, the review command, profile block, watch drawer and docs by hand.
+
+## Spend cap and ledger (1.104.0)
+
+- Parts-app lesson 50: the usage ledger there (`.swarm/usage-ledger.md`, read-only) has 365 detail rows that sum to $14.51 and a daily summary that matches. The $25.61 figure is not from that file. Candidates still open: `swarm board` reports `todaySpendUsd`, which adds every registered project's runs started today (machine-wide, not per project), and the old `spend.dailyCapUsd` guard uses the same sum. The project total in swarm watch now sums only this project's runs.

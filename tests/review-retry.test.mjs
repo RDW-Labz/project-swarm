@@ -225,3 +225,24 @@ test('review findings: --accept-unreviewed never overrides a failing review, is 
   assert.equal(bad.exitCode, 1);
   assert.match(bad.stdout, /needs --reason/);
 });
+
+test('a re-ask refused by the project spend cap is reported, and the one re-ask is not used up', async t => {
+  const root = await setup(t);
+  await reviewRunFile(root, 'rv', BAD);
+  const capped = async () => { throw Object.assign(new Error('project-cap: this project has spent $5.00 across 2 runs >= the project cap $5.00; no new run starts.'), { code: 'project-cap' }); };
+  const res = await runScopeCommand(root, 'scope', ['security-review', 'rv'], { runReview: capped });
+  assert.match(res.stdout, /project-cap: this project has spent/);
+  await assert.rejects(fs.stat(path.join(root, '.swarm/security-reviews/rv.retried')), { code: 'ENOENT' }, 'no retried marker');
+  // The owner raised the cap: the same review is asked again, once.
+  let asked = 0;
+  const ok = await runScopeCommand(root, 'scope', ['security-review', 'rv'], { runReview: async r => { asked += 1; await reviewRunFile(r, 'rv2', GOOD('T-0001')); return { id: 'rv2' }; } });
+  assert.equal(asked, 1);
+  assert.equal(ok.exitCode, 0, ok.stdout);
+});
+
+test('a re-ask that fails before a review run exists because the cap setting is invalid also keeps its retry', async t => {
+  const root = await setup(t);
+  await reviewRunFile(root, 'rv', BAD);
+  await runScopeCommand(root, 'scope', ['security-review', 'rv'], { runReview: async () => { throw Object.assign(new Error('project-cap-invalid: profile budget.projectMaxUsd must be a number above 0'), { code: 'project-cap-invalid' }); } });
+  await assert.rejects(fs.stat(path.join(root, '.swarm/security-reviews/rv.retried')), { code: 'ENOENT' });
+});
