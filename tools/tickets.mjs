@@ -12,8 +12,20 @@ export const STATUSES = ['todo', 'ready', 'running', 'review', 'done', 'blocked'
 export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'contract', 'human'];
 const RISKS = ['low', 'medium', 'high'];
 const SIZES = ['S', 'M'];
+// A ticket may pin its lane (agent, or agent:model). 'auto' is the default and is stored as no lane at all.
+export const TICKET_LANE_AGENTS = ['claude', 'codex', 'cursor', 'anthropic'];
+const WORKTREE_LANES = ['claude', 'codex', 'cursor'];
+export function parseLane(value) {
+  if (typeof value !== 'string') return null;
+  const m = /^([a-z]+)(?::([A-Za-z0-9][A-Za-z0-9._-]{0,63}))?$/.exec(value.trim());
+  if (!m || !TICKET_LANE_AGENTS.includes(m[1])) return null;
+  return { agent: m[1], ...(m[2] ? { model: m[2] } : {}) };
+}
+export const laneText = lane => (lane ? `${lane.agent}${lane.model ? `:${lane.model}` : ''}` : null);
+// A sensitive ticket may only go to a lane that stays with a known provider: cursor routes to whatever model is named, so it only counts without one.
+export const laneOkForSensitive = lane => Boolean(lane) && (lane.agent !== 'cursor' || !lane.model);
 const NEEDS_ACCEPTANCE = ['build', 'test', 'migration'];
-const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps', 'skeleton', 'tests', 'screens', 'integration', 'deletes', 'dependencies'];
+const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'lane', 'sensitive', 'hard', 'steps', 'skeleton', 'tests', 'screens', 'integration', 'deletes', 'dependencies'];
 const RESERVED_FIRST = ['.git', '.swarm', '.github-hooks-free'];
 // Build output anywhere in a path, and any dot-env file, are never ticket files.
 const BUILD_DIRS = ['.next', 'node_modules', 'dist'];
@@ -76,6 +88,12 @@ export function validateTicket(t) {
   if (t.size === 'L') errors.push('size L: split this ticket');
   else if (!SIZES.includes(t.size)) errors.push(`bad size: ${t.size}`);
   if (!RISKS.includes(t.risk)) errors.push(`bad risk: ${t.risk}`);
+  if (t.lane !== undefined) {
+    const lane = parseLane(t.lane);
+    if (!lane) errors.push(`bad lane: ${t.lane} (one of ${TICKET_LANE_AGENTS.join(', ')}, optionally agent:model; or leave it unset for auto)`);
+    else if (t.sensitive === true && !laneOkForSensitive(lane)) errors.push(`lane ${t.lane} is not allowed for a sensitive ticket (cursor only without a model)`);
+    else if (!WORKTREE_LANES.includes(lane.agent) && ((t.tests ?? []).length || (t.deletes ?? []).length)) errors.push(`lane ${lane.agent} cannot run tests or delete files; use claude, codex or cursor for this ticket`);
+  }
   for (const k of ['dependsOn', 'files', 'context', 'contracts', 'tests', 'deletes', 'dependencies']) if (t[k] !== undefined && !isStrArr(t[k])) errors.push(`${k} must be an array of strings`);
   if (isStrArr(t.dependencies)) {
     if (t.dependencies.length > 10) errors.push('dependencies: at most 10 packages');

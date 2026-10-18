@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { parseLane, laneOkForSensitive } from './tickets.mjs';
 import { looksLikeTestFile } from './wiring.mjs';
 import * as scopeModule from './scope.mjs';
 import { queryFromTicket, selectNotes, renderNotes } from './lesson-notes.mjs';
@@ -162,6 +163,19 @@ export function ticketsToManifest(tickets,opts={}){
     }else if(deletes.length){
       // Only a worker that edits in place can delete: a shell Claude job, like the test-running lane.
       Object.assign(job,{agent:'claude',model:'sonnet',shell:true});delete job.cacheContext;
+    }
+    // The owner pinned this ticket's lane (swarm tickets ID --lane): it wins over routing and the profile's verify lane.
+    const lane=parseLane(t.lane);
+    if(lane){
+      const prev=job.agent;
+      const editsInPlace=['claude','codex','cursor'].includes(lane.agent);
+      if(job.sensitive===true&&!laneOkForSensitive(lane))warnings.push(t.id+': lane '+t.lane+' ignored: this ticket is sensitive');
+      else if(!editsInPlace&&(vfields||deletes.length||job.shell))warnings.push(t.id+': lane '+t.lane+' ignored: this ticket needs a worker that runs commands or deletes files');
+      else{
+        job.agent=lane.agent;
+        if(lane.model)job.model=lane.model;else if(lane.agent!==prev)delete job.model;
+        if(vfields){if(lane.agent==='codex')delete job.after;else if(deps.length)job.after=deps;}
+      }
     }
     return job;
   }).filter(Boolean);
