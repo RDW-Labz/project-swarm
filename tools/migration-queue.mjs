@@ -12,7 +12,9 @@ export async function migrationQueueCheck({ root, changes, profile, exec }) {
   if (!checked.ok) return { blocks: [{ check: 'migration', severity: 'high', message: `profile.migrations is invalid: ${checked.errors.join('; ')}` }], notes: [], needsApproval: [] };
   const config = checked.config;
   // Up files and down files both count: an edit of a down file re-checks its migration.
-  const touched = changes.filter(change => change.bytes !== null && (change.file.startsWith(`${config.dir}/`) || (config.downDir && change.file.startsWith(`${config.downDir}/`))) && /[.]sql$/i.test(change.file)).map(change => change.file);
+  // A deleted down file counts too: removing supabase/migrations_down/0009_a.sql takes the down step away from 0009 (a deleted migration needs no check).
+  const lowerDir = `${config.dir}/`.toLowerCase(), lowerDown = config.downDir ? `${config.downDir}/`.toLowerCase() : null;
+  const touched = changes.filter(change => /[.]sql$/i.test(change.file) && ((change.bytes !== null && change.file.toLowerCase().startsWith(lowerDir)) || (lowerDown && change.file.toLowerCase().startsWith(lowerDown)))).map(change => change.file);
   if (!touched.length) return { blocks: [], notes: [], needsApproval: [] };
   if (!profile?.migrations) {
     return { blocks: [], notes: [`migrations: ${touched.length} migration file(s) changed but the profile has no migrations block, so no down-step or destructive-change check ran (add "migrations": {} to the profile)`], needsApproval: [] };
@@ -20,7 +22,10 @@ export async function migrationQueueCheck({ root, changes, profile, exec }) {
   // The bytes the batch is about to merge are the ones checked and hashed; other files (a down file) are read from the tree.
   const batch = new Map(changes.filter(change => change.bytes).map(change => [change.file, change.bytes]));
   const read = async file => batch.get(file) ?? fs.readFile(path.join(root, file));
-  const exists = file => (batch.has(file) ? Promise.resolve(true) : fs.stat(path.join(root, file)).then(stat => stat.isFile(), () => false));
+  // A file counts only when it is a real file at its own path: a symlink (to the migration itself, or a down folder that is a link) is not a down step.
+  const realRoot = await fs.realpath(root);
+  const realFile = async file => { const full = path.join(root, file); const stat = await fs.lstat(full); return stat.isFile() && (await fs.realpath(full)) === path.join(realRoot, file); };
+  const exists = file => (batch.has(file) ? Promise.resolve(true) : realFile(file).catch(() => false));
   let result;
   try {
     result = await checkMigrations({ files: touched, config, read, exists, approvals: await readApprovals(root) });

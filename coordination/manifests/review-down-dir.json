@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.2 },
+  "jobs": [
+    {
+      "id": "review-down-dir",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "the migration gate protects databases; new down modes must not weaken it",
+      "type": "review",
+      "prompt": "Review coordination/review/down-dir.diff and tools/migration-gate.mjs (new migrations down modes: \"dir\" with downDir, a separate folder for down files the Supabase CLI ignores, and \"none\", which skips only the down check; swarm init picks dir for supabase/migrations). Rules: (1) with dir, a down file is only valid at the mirrored path in downDir; a sibling .down.sql, a file outside downDir, a path with .. or a symlink must not satisfy the check; downDir can never be (or sit inside, or contain) the migrations dir; (2) none skips ONLY the down check: the destructive/privileged scan and the hash-bound approval must still run for every changed migration, in every path (check, queue check, approve command, round trip); (3) a change to a file in downDir must re-check its migration (and a deleted down file must not slip through); (4) isMigrationFile must never treat a down-folder file as a migration, and never treat a file in downDir as approved-by-proxy; (5) validateMigrationsConfig rejects bad combinations; init-profile validation keeps downDir; a profile written by older versions (sibling) still works; (6) path traversal / case-insensitive filesystem / Windows separators in downFileFor and upFileFor; (7) the test that models the Supabase CLI file rule is honest about being a model. Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete failing scenario, and say what you checked that is fine. Do not edit files.",
+      "context": ["tools/migration-gate.mjs", "tools/migration-queue.mjs", "tools/safety-commands.mjs", "tests/migration-down-dir.test.mjs", "coordination/review/down-dir.diff"],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

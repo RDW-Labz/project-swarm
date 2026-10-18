@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.106.0
+
+Migrations: `down: "dir"` and `down: "none"` (parts-app: with Supabase, `down: "sibling"` breaks the CLI, which reads `0009_x.down.sql` as a second migration with version 0009, and `down: "section"` runs the down right after the up):
+- `down: "dir"`: down files live in a separate folder (`downDir`, default `<dir>_down`, e.g. `supabase/migrations_down/0009_x.sql`, same file name, mirrored path) that the Supabase CLI never reads. The folder must not be, sit inside or contain the migrations folder (case-insensitive; `/` separators only). Editing or deleting a down file re-checks its migration. `swarm init` now writes `down: "dir"` for a new project with `supabase/migrations`; other tools keep `sibling`.
+- `down: "none"` (parts-app lesson 53): skips only the down check. The destructive and privileged SQL scan and `swarm migrations approve` (bound to the file hash) still run.
+- In every mode except `sibling`, a stray `*.down.sql` inside the migrations folder is flagged (`down-in-migrations-dir`) and scanned like a migration, because the tool applies it. Paths are matched case-insensitively; a down file that is a symlink is not a down step; `migrations.env` now survives profile validation. A profile with `dir` or `none` is rejected by older swarm versions (update first).
+- Test: `tests/migration-down-dir.test.mjs`. The Supabase CLI file rule is modelled (the real `supabase db push` needs Docker and a database and was not run). An Opus review (2 high, 4 medium, 5 low) was fixed before release.
+
 ## 1.105.0
 
 NO CAP warning, and a worker that could not run a check is no longer blocked (parts-app lesson 52):

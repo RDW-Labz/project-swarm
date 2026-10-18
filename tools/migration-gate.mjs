@@ -86,8 +86,8 @@ export function validateMigrationsConfig(raw) {
   for (const k of Object.keys(raw)) if (!CONFIG_KEYS.includes(k)) errors.push('unknown key: ' + k);
   const rawDir = raw.dir ?? MIGRATION_DEFAULTS.dir;
   const segments = typeof rawDir === 'string' ? rawDir.split('/').filter((part) => part !== '' && part !== '.') : [];
-  if (typeof rawDir !== 'string' || rawDir.startsWith('/') || segments.length === 0 || segments.includes('..'))
-    errors.push('dir must be a relative path without ..');
+  if (typeof rawDir !== 'string' || rawDir.startsWith('/') || /[\\]|^[a-zA-Z]:/.test(rawDir) || segments.length === 0 || segments.includes('..'))
+    errors.push('dir must be a relative path without .. (use / separators)');
   const dir = segments.join('/');
   let envNames = [];
   if (raw.env !== undefined) {
@@ -101,12 +101,13 @@ export function validateMigrationsConfig(raw) {
   let downDir = null;
   if (raw.downDir !== undefined && down !== 'dir') errors.push('downDir needs down: "dir"');
   if (down === 'dir') {
-    const rawDown = raw.downDir ?? (segments.length ? segments.join('/') + '_down' : '');
+    const rawDown = raw.downDir === undefined ? (segments.length ? segments.join('/') + '_down' : '') : raw.downDir;
     const parts = typeof rawDown === 'string' ? rawDown.split('/').filter((part) => part !== '' && part !== '.') : [];
-    if (typeof rawDown !== 'string' || rawDown.startsWith('/') || parts.length === 0 || parts.includes('..')) errors.push('downDir must be a relative path without ..');
+    if (typeof rawDown !== 'string' || rawDown.startsWith('/') || /[\\]|^[a-zA-Z]:/.test(rawDown) || parts.length === 0 || parts.includes('..')) errors.push('downDir must be a relative path without .. (use / separators)');
     else {
       downDir = parts.join('/');
-      const nested = (a, b) => a === b || a.startsWith(b + '/');
+      // Compared in lower case: on macOS and Windows, Supabase/Migrations is the migrations folder.
+      const nested = (a, b) => { a = a.toLowerCase(); b = b.toLowerCase(); return a === b || a.startsWith(b + '/'); };
       if (nested(downDir, dir) || nested(dir, downDir)) errors.push('downDir must be a separate folder, not the migrations folder or inside it (the migration tool would read the down files)');
     }
   }
@@ -125,20 +126,26 @@ export function validateMigrationsConfig(raw) {
   if (errors.length > 0) return { ok: false, config: null, errors };
   return { ok: true, config: { dir, down, ...(downDir ? { downDir } : {}), commands, env: envNames, commandTimeoutMs: MIGRATION_DEFAULTS.commandTimeoutMs }, errors: [] };
 }
+// Paths are matched in lower case: on a case-insensitive filesystem supabase/Migrations/x.sql is the same file as supabase/migrations/x.sql.
+const inside = (file, dir) => file.toLowerCase().startsWith(dir.toLowerCase() + '/');
+const cleanPath = (file) => typeof file === 'string' && !file.split('/').some((part) => part === '..' || part === '.') && !/[\\]/.test(file);
 export function isMigrationFile(file, config) {
-  if (typeof file !== 'string' || !config) return false;
-  const prefix = config.dir + '/';
+  if (typeof file !== 'string' || !config || !cleanPath(file)) return false;
   const lower = file.toLowerCase();
-  return file.startsWith(prefix) && lower.endsWith('.sql') && !lower.endsWith('.down.sql') && !file.split('/').includes('..');
+  // Only in sibling mode is X.down.sql a down file. In every other mode the migration tool applies it, so it is scanned like any migration.
+  return inside(file, config.dir) && lower.endsWith('.sql') && !(config.down === 'sibling' && lower.endsWith('.down.sql'));
 }
 export function downFileFor(file, config) {
-  if (config?.down === 'dir' && config.downDir && file.startsWith(config.dir + '/')) return config.downDir + '/' + file.slice(config.dir.length + 1);
+  if (config?.down === 'dir' && config.downDir) {
+    if (!cleanPath(file) || !inside(file, config.dir)) return null;
+    return config.downDir + '/' + file.slice(config.dir.length + 1);
+  }
   return file.replace(/[.]sql$/i, '.down.sql');
 }
-// The migration a down file belongs to, or null (a sibling X.down.sql, or a file in the down folder).
+// The migration a down file belongs to, or null (a sibling X.down.sql in sibling mode, or a file in the down folder in dir mode).
 export function upFileFor(file, config) {
-  if (config?.down === 'dir' && config.downDir && file.startsWith(config.downDir + '/') && /[.]sql$/i.test(file) && !file.split('/').includes('..')) return config.dir + '/' + file.slice(config.downDir.length + 1);
-  if (config?.down !== 'dir' && /[.]down[.]sql$/i.test(file)) return file.replace(/[.]down[.]sql$/i, '.sql');
+  if (config?.down === 'dir' && config.downDir && cleanPath(file) && inside(file, config.downDir) && /[.]sql$/i.test(file)) return config.dir + '/' + file.slice(config.downDir.length + 1);
+  if (config?.down === 'sibling' && /[.]down[.]sql$/i.test(file)) return file.replace(/[.]down[.]sql$/i, '.sql');
   return null;
 }
 // The marker only counts as a line comment in real code (not inside a block comment or a string).
@@ -223,7 +230,10 @@ export async function checkMigrations({ files = [], config, read, exists, approv
     if (!isMigrationFile(file, config)) continue;
     const bytes = await read(file);
     const sql = Buffer.from(bytes).toString('utf8');
-    if (config.down === 'none') {
+    if (config.down !== 'sibling' && /[.]down[.]sql$/i.test(file)) {
+      // The migration tool applies every .sql in this folder, so a down file here would run as a migration of its own.
+      problems.push({ file, check: 'down-in-migrations-dir', message: file + ' is named like a down file but sits in the migrations folder, where the migration tool applies it' + (config.down === 'dir' ? ' (move it to ' + config.downDir + '/ with the migration\'s name)' : '') });
+    } else if (config.down === 'none') {
       // down: "none": no down step is required (the destructive/privileged SQL scan below still runs, and approvals still bind to the file hash).
     } else if (config.down === 'sibling' || config.down === 'dir') {
       const df = downFileFor(file, config);
