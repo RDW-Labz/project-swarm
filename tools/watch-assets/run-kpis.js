@@ -122,7 +122,8 @@
     var spendRate = elapsedMin > 0 ? (k.spendUsd || 0) / elapsedMin : 0;
     var bar = $('kSpendBar');
     if (bar && bar.parentNode) bar.parentNode.hidden = true;
-    setText('kForecast', 'rate ' + fmt$(spendRate) + '/min');
+    var pj = run.project;
+    setText('kForecast', (pj ? 'project ' + fmt$(pj.spendUsd) + (pj.capUsd ? ' / ' + fmt$(pj.capUsd) + (pj.reached ? ' CAP REACHED' : '') : '') + ' · ' : '') + 'rate ' + fmt$(spendRate) + '/min');
     setText('kEta', run.status === 'complete' ? 'done' : (k.etaMs == null ? '–' : fmtT(k.etaMs)));
     setText('kRate', (k.jobsPerSec || 0).toFixed(1) + ' jobs/s');
     var mq = run.mergeQueue;

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.104.0
+
+Project-wide spend cap and a ledger that adds up (parts-app lesson 50):
+- `budget.projectMaxUsd` in the project profile (and `spend.projectMaxUsd` in the local config; the lower one wins) caps the total of ALL runs in the project. A new run is refused once the total has reached it (`project-cap`), before any worker is called. `--max-usd` stays per run. A review re-ask is a run, so it counts; a re-ask refused by the cap does not use up its one retry. Resume is refused over the cap too; runs still going count with their own `--max-usd`; an unreadable run state or pointer file refuses new runs instead of counting as zero. An Opus review (2 high, 6 medium, 4 low) was fixed before release. No cap is set by default. `tools/project-spend.mjs` (`projectSpend`, `projectCap`, `projectSummary`).
+- swarm watch shows the project total (TUI line and the web Spend tile), its cap, and `CAP REACHED` when new runs are refused.
+- Usage ledger: the daily summary ends with a **total** row; a detail row with extra cells (a stray pipe in the task, an older writer, a hand edit) is read from the right so it is counted under the right day and tier; a row that cannot be read is reported under the summary instead of silently dropped. Tests added. The parts-app ledger (365 rows, $14.51) adds up to its summary; the $25.61 figure did not come from that file (see docs/state/dogfood.md).
+
 ## 1.103.0
 
 Acceptance lines are enforced (parts-app S8: T-0168 had "validate + encode reply links" and "thin page under 8 KB" in its acceptance and went done without either):

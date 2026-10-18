@@ -62,6 +62,7 @@ import { SCALE_DEFAULT_CONCURRENCY, SCALE_DEFAULT_JOBS, prepareScaleRepo, scaleS
 import { routeJob, rentedContractProblem } from './router.mjs';
 import { anthropicPrice, assertOpusTier as assertAnthropicModel, readAnthropicKey, ANTHROPIC_ENDPOINT } from './anthropic.mjs';
 import { loadRentedConfig, createRentalMeter, rentalDecision, rentedSensitiveOk, RENTED_DEFAULTS } from './rented.mjs';
+import { checkProjectCap } from './project-spend.mjs';
 import { accrueSpend, resolveBudget, runTotals, jobSpend, spendDir, withSpendStore, laneDayTotals, estimateReservation, reserveSpend, settleSpend, releaseSpend, finalCost, PAID_LANES, capDecision, ledgerRows, mergeLedger, validateIdleItems, runIdleMenu } from './spend.mjs';
 import { JOB_TYPES, applyJobType, jobTypeOutputViolations } from './job-types.mjs';
 import { validateLeadArea, validateParentLeads, validateChildManifest, leadPromptBlock, leadRollup } from './leads.mjs';
@@ -2584,6 +2585,8 @@ async function runManifestMain(root, manifest, options = {}) {
   const { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks, checkBase = false, acceptRedBase = false, reason, baseChecks = {}, sync = false, acceptCoveredRedBase = true, jobs = null, maxUsd, maxTokens, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), resumeState = null, parentRun, leadJob, hostTransport = null, heartbeatMs = null, batch: batchFlag = false, batchLimits } = options;
   root = await fs.realpath(root);
   validateManifest(manifest);
+  // The project-wide cap (profile budget.projectMaxUsd, config spend.projectMaxUsd) refuses a new run once every run together reached it.
+  if (!resumeState) { const capped = await checkProjectCap(root, { env }); if (capped) fail(capped.message, 'project-cap'); }
   const appliedTypes = await applyManifestJobTypes(root, manifest, { env });
   manifest = appliedTypes.manifest;
   manifest = selectRunManifest(manifest, jobs);
@@ -3623,6 +3626,7 @@ export async function resumeRun(root, id, { raises = [], reason, wait = false, n
   const state = await readState(root, id);
   if (state.status !== 'paused') fail('resume-not-paused: run must be paused', 'resume-not-paused');
   if (state.root !== root || state.id !== id) fail('Run belongs to another repository');
+  { const capped = await checkProjectCap(root, { env: runOptions.env ?? process.env }); if (capped) fail(`resume-over-cap: ${capped.message}`, 'project-cap'); }
   if (raises.length && !(typeof reason === 'string' && reason.trim())) fail('budget-raise-reason: --raise requires --reason', 'budget-raise-reason');
   const manifest = validateManifest(JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true)));
   const budgetRaises = [...(state.budgetRaises ?? []), ...raises.map(raise => ({ ...raise, reason, at: new Date(now()).toISOString() }))];

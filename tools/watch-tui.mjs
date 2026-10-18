@@ -87,6 +87,11 @@ export function renderTui(snapshot, opts = {}) {
   const eta = k.etaMs == null ? '-' : formatDuration(k.etaMs);
   out.push(cut('running ' + (k.running || 0) + '  queued ' + (k.queued || 0) + '  failed ' + (k.failed || 0) + '  retries ' + (k.retries || 0) + '  spend ' + money(k.spendUsd) + '  eta ' + eta + '  peak ' + (k.peakInFlight || 0), W));
 
+  if (snapshot.project) {
+    const pr = snapshot.project;
+    out.push(cut('project total ' + money(pr.spendUsd) + ' over ' + (pr.runs || 0) + ' runs' + (pr.capUsd ? '  cap ' + money(pr.capUsd) + (pr.reached ? '  CAP REACHED: no new runs' : '') : '  (no project cap set)'), W));
+  }
+
   out.push('');
   out.push('LANES');
   const lanes = Array.isArray(snapshot.lanes) ? snapshot.lanes : [];
