@@ -248,7 +248,7 @@ export async function initProject(root, { source = installSource(), install = in
     protectedPaths: [...new Set([...(prior.protectedPaths ?? []), ...detected, ...protect.map(normalizeProtectedPath)])].sort(),
     budget: { ...DEFAULT_PROFILE_BUDGET, ...(prior.budget ?? {}), ...(maxUsd !== undefined ? { maxUsd } : {}), ...(maxTokens !== undefined ? { maxTokens } : {}) },
     // Blocks the owner set by hand (security policy, approval, ci hooks, verify, context) survive a re-init.
-    ...Object.fromEntries(['security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality', 'migrations'].filter(key => prior[key] !== undefined).map(key => [key, prior[key]])),
+    ...Object.fromEntries(['security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality', 'migrations', 'acceptance'].filter(key => prior[key] !== undefined).map(key => [key, prior[key]])),
     // A NEW project (no profile yet) that already has a migrations folder gets the migration check on; an existing profile keeps what it has.
     ...(priorPointer?.profile === undefined && prior.migrations === undefined && migrationsDir ? { migrations: { dir: migrationsDir, down: 'sibling' } } : {}),
     baseCheck: runBase

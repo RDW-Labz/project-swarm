@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1.2
+  },
+  "jobs": [
+    {
+      "id": "review-acceptance",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "changes the done gate for every ticket and adds a second paid review job",
+      "type": "review",
+      "prompt": "Review tools/acceptance.mjs and coordination/review/acceptance.diff (acceptance enforcement at scope sync, the acceptance-review command, the profile block, ticket fields, watch changes) against docs/plans/acceptance-design.md. Rules that must hold: (1) a build/test/migration/contract ticket with acceptance lines is NEVER marked done unless every line is met: covered by a non-skipped test whose title carries ACn AND tests seen passing, or a valid review pass for the current code hash, or the owner's --accept-unmet with a reason and --yes; look for every way around it (tag matching: AC1 vs AC12/AC10, tag in a comment or in a string that is not a test title, tests listed in the ticket but not existing, test files that are huge, a worker that writes test titles with all tags without real tests, ticket.tests vs ticketTests, stale records with the same hash, records written for lines never asked, a verdict for a line number the ticket does not have, blank acceptance lines consuming numbers, the order of gates in cmdSync so a ticket cannot skip the gate with continue paths, tickets that reach done through another path than this loop); (2) the review command: same safety as the security review (one re-ask, marker, single read-only job, model check sonnet/opus, hashes file from sync, only requested lines taken, a fail beats a pass, partial answers leave lines missing); (3) --accept-unmet: reason and --yes before any log, a failing line never overridden, only real skips logged and marked; (4) the profile block validation and that a project with no profile or enforce false is not enforced (is that safe? what if the profile file is unreadable or invalid: does enforcement silently turn off?); (5) the production module has no test imports and handles hostile input (very long titles/regex backtracking in testTitles, huge sources, odd ticket shapes, prototype keys); (6) the ledger fields acceptanceResults and acceptanceBlocked: validation, size limits, and that the approval hash is unaffected; (7) the worker prompt change in tools/ticket-manifest.mjs. Find real bugs with file and line evidence, rank high, medium, low, and say how to fix each. Do not edit files.",
+      "context": [
+        "tools/acceptance.mjs",
+        "tools/scope-commands.mjs",
+        "tools/ticket-manifest.mjs",
+        "tools/tickets.mjs",
+        "tools/init-profile.mjs",
+        "docs/plans/acceptance-design.md",
+        "docs/scope.md",
+        "tests/acceptance-sync.test.mjs",
+        "coordination/review/acceptance.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

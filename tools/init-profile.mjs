@@ -10,7 +10,7 @@ import { sanitizeText } from './journal.mjs';
 
 export const DEFAULT_PROFILE_BUDGET = Object.freeze({ maxUsd: 5, maxTokens: 2000000 });
 const STATUSES = ['green', 'red', 'skipped', 'none'];
-const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality', 'migrations'];
+const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality', 'migrations', 'acceptance'];
 const REQUIRED_KEYS = ['sensitive', 'protectedPaths', 'budget', 'baseCheck'];
 const BASE_KEYS = ['status', 'ranAt', 'head', 'checks'];
 // The pointer (profile) and the checks file decide what later runs may do and execute, so no job may rewrite them.
@@ -159,6 +159,16 @@ export function validateProfile(profile) {
     const checked = validateContextBlock(profile.context);
     for (const message of checked.errors) errors.push(`profile.context: ${message}`);
     if (checked.value) out.context = checked.value;
+  }
+  if (profile.acceptance !== undefined) {
+    const a = profile.acceptance;
+    if (!a || typeof a !== 'object' || Array.isArray(a)) errors.push('profile.acceptance: must be an object');
+    else {
+      for (const key of Object.keys(a)) if (!['enforce', 'model'].includes(key)) errors.push(`profile.acceptance: unknown key ${key}`);
+      if (a.enforce !== undefined && typeof a.enforce !== 'boolean') errors.push('profile.acceptance.enforce: must be true or false');
+      if (a.model !== undefined && !(typeof a.model === 'string' && /^(sonnet|opus)$/.test(a.model))) errors.push('profile.acceptance.model: must be sonnet or opus');
+      if (!errors.some(e => e.startsWith('profile.acceptance'))) out.acceptance = { ...(a.enforce !== undefined ? { enforce: a.enforce } : {}), ...(a.model !== undefined ? { model: a.model } : {}) };
+    }
   }
   if (profile.migrations !== undefined) {
     const checked = validateMigrationsConfig(profile.migrations);

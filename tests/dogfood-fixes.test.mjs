@@ -148,7 +148,7 @@ test('approve writes the context files and the build output ignore lines', async
 async function approvedWith(root, { profile, tickets }) {
   const ledger = createLedger({ scope: { name: 'Parts', version: 1, hash: 'a'.repeat(64) }, tickets });
   await writeLedger(root, ledger);
-  if (profile) await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none', ranAt: null, head: null, checks: [] }, ...profile } }));
+  if (profile) await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, acceptance: { enforce: false }, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none', ranAt: null, head: null, checks: [] }, ...profile } }));
 }
 const stateOf = (over = {}) => ({ id: 'r9', integratedAt: 'now', jobs: [{ id: 'T-0001', status: 'complete', outputs: ['src/a.ts', 'tests/a.test.ts'] }, { id: 'T-0002', status: 'complete', outputs: ['src/b.ts'] }], ...over });
 async function writeState(root, state) {

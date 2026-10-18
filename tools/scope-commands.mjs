@@ -5,7 +5,7 @@
 // a manifest for `swarm run`.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText, isSensitiveText } from './scope.mjs';
 import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, STATUSES } from './tickets.mjs';
 import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
@@ -32,6 +32,7 @@ import { detectTestCommand } from './zero-tests.mjs';
 import { execFile } from 'node:child_process';
 import { existsSync, statSync, lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
+import { acceptanceLines, coverage, evaluate, reviewManifest as acceptanceManifest, parseAcceptanceVerdicts, readAcceptanceRecords, writeAcceptanceRecords } from './acceptance.mjs';
 import { securityReviewReason, securityReviewManifest, parseReviewVerdicts, filesHash, readReviewRecords, writeReviewRecords } from './security-review.mjs';
 
 export const SCOPE_USAGE = [
@@ -39,8 +40,9 @@ export const SCOPE_USAGE = [
   '       swarm scope check [FILE]',
   '       swarm scope split [FILE] [--stage S1] | scope split --wire [--all] | scope split --ingest RUN [--merge] [--wire]',
   '       swarm scope approve [FILE] [--yes]',
-  '       swarm scope sync RUN [--integrated] [--accept-unreviewed T-0001 --reason TEXT --yes]',
+  '       swarm scope sync RUN [--integrated] [--accept-unreviewed T-0001 --reason TEXT --yes] [--accept-unmet T-0001 --reason TEXT --yes]',
   '       swarm scope security-review RUN     (records the verdicts of an Opus security review run)',
+  '       swarm scope acceptance-review RUN   (records the per-line verdicts of an acceptance review run)',
   '       swarm scope contracts OPENAPI.json',
   '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high] [--set STATUS] [--note TEXT] [--json]',
   '       swarm tickets ID --files a,b [--take-from TICKET] [--deletes x,y] [--dependencies pkg,pkg@^1] [--context c,d] [--tests t] [--acceptance "one || two"] [--add-acceptance TEXT] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
@@ -57,7 +59,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from']);
+const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const out = (text, exitCode = 0) => ({ stdout: text.endsWith('\n') ? text : `${text}\n`, exitCode });
@@ -792,14 +794,19 @@ async function readUiResultsGuarded(root) {
 
 // The reminder a second ask carries: the same review again, with the output format spelled out.
 export const REVIEW_FORMAT_REMINDER = 'FORMAT REMINDER: your last answer had no result line. Finish with exactly one JSON line and nothing after it: {"reviews":[{"ticket":"T-0001","verdict":"pass","findings":[]}]} with one entry for every ticket listed above; verdict is pass or fail; each finding is {"severity":"high|medium|low","file":"...","line":0,"issue":"...","fix":"..."}.';
+export const ACCEPTANCE_FORMAT_REMINDER = 'FORMAT REMINDER: your last answer had no result line. Finish with exactly one JSON line and nothing after it: {"acceptance":[{"ticket":"T-0001","lines":[{"n":1,"verdict":"pass","evidence":"short reason with file and line"}]}]} with an entry for every listed line; verdict is pass or fail.';
 
-// The response of a finished security review run, checked the same way every time: right job, right model, complete.
-async function loadReviewResponse(root, runId) {
+// The two review kinds share the machinery: where the manifest lives, the job id prefix, which models count, and the reminder for a second ask.
+const SEC_KIND = { dir: 'security-reviews', prefix: 'sec-review-', label: 'security review', models: /^opus$/, reminder: REVIEW_FORMAT_REMINDER, parse: parseReviewVerdicts };
+const ACC_KIND = { dir: 'acceptance-reviews', prefix: 'acc-review-', label: 'acceptance review', models: /^(sonnet|opus)$/, reminder: ACCEPTANCE_FORMAT_REMINDER, parse: parseAcceptanceVerdicts };
+
+// The response of a finished review run, checked the same way every time: right job, right model, complete.
+async function loadReviewResponse(root, runId, kind = SEC_KIND) {
   const state = await readRunState(root, runId);
-  const job = (state.jobs ?? []).find(j => /^sec-review-/.test(j.id));
-  if (!job) return { error: `run ${runId} has no security review job` };
-  if (job.model !== 'opus') return { error: `the security review job ran on ${job.model ?? 'an unknown model'}, not opus; run the manifest that sync wrote` };
-  if (job.status !== 'complete') return { error: `the security review job is ${job.status}, not complete; run it again` };
+  const job = (state.jobs ?? []).find(j => typeof j.id === 'string' && j.id.startsWith(kind.prefix));
+  if (!job) return { error: `run ${runId} has no ${kind.label} job` };
+  if (!kind.models.test(String(job.model))) return { error: `the ${kind.label} job ran on ${job.model ?? 'an unknown model'}, not ${kind === SEC_KIND ? 'opus' : 'sonnet or opus'}; run the manifest that sync wrote` };
+  if (job.status !== 'complete') return { error: `the ${kind.label} job is ${job.status}, not complete; run it again` };
   let text = '';
   try { text = await fs.readFile(path.join(root, '.swarm', 'runs', runId, job.id, 'response.txt'), 'utf8'); } catch { return { error: 'the review has no response to read' }; }
   return { job, text };
@@ -807,16 +814,16 @@ async function loadReviewResponse(root, runId) {
 
 // Ask the same review once more with the format reminder. Paid, so it is guarded: the manifest is checked first, a marker is written before the
 // run, a source review is asked again at most once, and the marker keeps the second run's id so a rerun reads that answer instead of paying again.
-async function reAskReview(root, sourceRun, deps) {
+async function reAskReview(root, sourceRun, deps, kind = SEC_KIND) {
   if (!RUN_ID.test(sourceRun)) return { asked: false, error: `bad review run id ${sourceRun}` };
-  const dir = path.join(root, '.swarm', 'security-reviews');
+  const dir = path.join(root, '.swarm', kind.dir);
   const marker = path.join(dir, `${sourceRun}.retried`);
   let manifest;
-  try { manifest = JSON.parse(await fs.readFile(path.join(dir, `${sourceRun}.json`), 'utf8')); } catch { return { asked: false, error: `the review manifest .swarm/security-reviews/${sourceRun}.json cannot be read` }; }
-  // Exactly the one read-only Opus review job sync wrote; anything else would be paid for before it could be checked.
+  try { manifest = JSON.parse(await fs.readFile(path.join(dir, `${sourceRun}.json`), 'utf8')); } catch { return { asked: false, error: `the review manifest .swarm/${kind.dir}/${sourceRun}.json cannot be read` }; }
+  // Exactly the one read-only review job sync wrote; anything else would be paid for before it could be checked.
   const jobs = Array.isArray(manifest?.jobs) ? manifest.jobs : [];
   const only = jobs[0];
-  if (jobs.length !== 1 || only?.id !== `sec-review-${sourceRun}`.slice(0, 60) || only.agent !== 'claude' || only.model !== 'opus' || only.type !== 'review' || (only.outputs ?? []).length !== 0 || typeof only.prompt !== 'string') return { asked: false, error: 'the review manifest is not the single read-only Opus review job sync wrote' };
+  if (jobs.length !== 1 || only?.id !== `${kind.prefix}${sourceRun}`.slice(0, 60) || only.agent !== 'claude' || !kind.models.test(String(only.model)) || only.type !== 'review' || (only.outputs ?? []).length !== 0 || typeof only.prompt !== 'string') return { asked: false, error: `the review manifest is not the single read-only ${kind === SEC_KIND ? 'Opus' : 'Sonnet or Opus'} review job sync wrote` };
   try { await fs.writeFile(marker, `${JSON.stringify({ at: new Date().toISOString() })}\n`, { flag: 'wx' }); }
   catch (error) {
     if (error.code !== 'EEXIST') throw error;
@@ -825,7 +832,7 @@ async function reAskReview(root, sourceRun, deps) {
     try { earlier = JSON.parse(await fs.readFile(marker, 'utf8')).run ?? null; } catch { earlier = null; }
     return { asked: false, runId: typeof earlier === 'string' && RUN_ID.test(earlier) ? earlier : null };
   }
-  only.prompt = `${only.prompt}\n\n${REVIEW_FORMAT_REMINDER}`;
+  only.prompt = `${only.prompt}\n\n${kind.reminder}`;
   const run = await (deps.runReview ?? defaultRunReview)(root, manifest);
   const runId = typeof run?.id === 'string' && RUN_ID.test(run.id) ? run.id : null;
   if (runId) await fs.writeFile(marker, `${JSON.stringify({ at: new Date().toISOString(), run: runId })}\n`);
@@ -838,15 +845,18 @@ async function defaultRunReview(root, manifest) {
   return runManifestChecked(root, manifest, () => {}, { maxUsd: 1.5 });
 }
 
-async function setSecurityReview(root, id, value) {
+const sha256Text = text => createHash('sha256').update(text).digest('hex');
+
+async function setTicketField(root, id, key, value) {
   await lockedUpdate(root, async () => {
     const ledger = await readLedger(root);
     const t = ledger?.tickets.find(x => x.id === id);
     if (!t) return;
-    if (value === undefined) delete t.securityReview; else t.securityReview = value;
+    if (value === undefined) delete t[key]; else t[key] = value;
     await writeLedger(root, ledger);
   });
 }
+const setSecurityReview = (root, id, value) => setTicketField(root, id, 'securityReview', value);
 
 // Marks the tickets of a review that gave no result "review-blocked": they stay in review (never done), and say why, in the ledger, the log and Swarm Watch.
 // Tickets that already hold a verdict for the code they have now are left alone, and an older verdict can no longer carry a blocked ticket to done.
@@ -927,6 +937,82 @@ async function cmdSecurityReview(root, { rest }, deps = {}) {
   return out(lines.length ? `security review recorded:\n${lines.map(x => `  ${x}`).join('\n')}\nRun swarm scope sync RUN --integrated to move the passed tickets to done and send the failed ones back.` : 'the review named none of the tickets in this ledger', 0);
 }
 
+// Records the per-line verdicts of a finished acceptance review run, against the code that is in the tree now.
+// Same shape as the security review: an answer with no {"acceptance":[...]} result is asked for once more, then the tickets stay in review, marked acceptance-blocked.
+async function cmdAcceptanceReview(root, { rest }, deps = {}) {
+  if (rest.length !== 1) return bad('scope acceptance-review needs the id of the finished review run');
+  if (!/^[A-Za-z0-9._-]{1,80}$/.test(rest[0])) return bad('scope acceptance-review: bad run id');
+  const first = await loadReviewResponse(root, rest[0], ACC_KIND);
+  if (first.error) return out(first.error, 1);
+  const sourceRun = first.job.id.slice(ACC_KIND.prefix.length);
+  let request;
+  try { request = JSON.parse(await fs.readFile(path.join(root, '.swarm', 'acceptance-reviews', `${sourceRun}.hashes.json`), 'utf8')); } catch { return out(`no acceptance review was requested for run ${sourceRun} (sync writes .swarm/acceptance-reviews/${sourceRun}.json); run that manifest first`, 1); }
+  const requested = request?.tickets && typeof request.tickets === 'object' ? request.tickets : {};
+  // The review must come from the manifest of the latest sync (its token is in the review prompt): a later sync may have changed the code and the hashes.
+  let ranManifest = '';
+  try { ranManifest = await fs.readFile(path.join(root, '.swarm', 'runs', rest[0], 'manifest.json'), 'utf8'); } catch { ranManifest = ''; }
+  if (typeof request?.nonce !== 'string' || !request.nonce || !ranManifest.includes(request.nonce)) return out(`run ${rest[0]} was not made from the latest manifest that sync wrote for run ${sourceRun} (the review token does not match), so its verdicts could be about older code; run .swarm/acceptance-reviews/${sourceRun}.json again`, 1);
+  const usable = text => { const v = parseAcceptanceVerdicts(text); return v && v.length ? v : null; };
+  let verdicts = usable(first.text);
+  const notes = [];
+  let reviewRun = rest[0];
+  if (!verdicts) {
+    const again = await reAskReview(root, sourceRun, deps, ACC_KIND);
+    if (again.error) notes.push(again.error);
+    else if (again.asked || again.runId) {
+      notes.push(again.asked ? 'the first answer had no {"acceptance":[...]} result: asked once more with the format reminder' : 'the first answer had no {"acceptance":[...]} result; the second ask made earlier is read (never asked a third time)');
+      const second = again.runId ? await loadReviewResponse(root, again.runId, ACC_KIND) : { error: 'the second review did not start' };
+      if (second.error) notes.push(`second ask: ${second.error}`);
+      else if (second.job.id.slice(ACC_KIND.prefix.length) !== sourceRun) notes.push('second ask: it is not the review of the same source run');
+      else { verdicts = usable(second.text); reviewRun = again.runId; }
+    }
+  }
+  const ledger = await readLedger(root);
+  const records = await readAcceptanceRecords(root);
+  if (!verdicts) {
+    const reason = 'the acceptance review gave no {"acceptance":[...]} result, also when asked again; run the review again (swarm scope sync RUN --integrated writes a new one) or accept the unmet lines with --accept-unmet T-0001 --reason TEXT --yes';
+    const marked = [];
+    await lockedUpdate(root, async () => {
+      const l = await readLedger(root);
+      if (!l) return;
+      for (const id of Object.keys(requested)) {
+        const x = l.tickets.find(y => y.id === id);
+        if (!x || x.status !== 'review') continue;
+        x.acceptanceBlocked = { reason, at: new Date().toISOString(), run: rest[0] };
+        marked.push(id);
+      }
+      await writeLedger(root, l);
+    });
+    for (const id of marked) await appendLog(root, { event: 'acceptance-blocked', id, reason, run: rest[0], by: 'system' });
+    return out([...notes, marked.length ? `acceptance-blocked (not done): ${marked.join(', ')}` : 'no ticket of this review is waiting in review', reason].join('\n'), 1);
+  }
+  const lines = [...notes];
+  const cleared = [];
+  for (const entry of verdicts) {
+    const t = ledger?.tickets.find(x => x.id === entry.ticket);
+    const asked = requested[entry.ticket];
+    if (!t || !asked) continue;
+    // Only the lines the review was asked about are taken, each once (a fail beats a pass for the same line).
+    const byLine = new Map();
+    for (const l of entry.lines) {
+      if (!asked.lines.includes(l.n)) continue;
+      const old = byLine.get(l.n);
+      byLine.set(l.n, old && (old.verdict === 'fail' || l.verdict === 'pass') ? old : l);
+    }
+    const kept = records.tickets[t.id]?.filesHash === asked.filesHash ? (records.tickets[t.id].lines ?? []).filter(l => !byLine.has(l.n)) : [];
+    // Each verdict carries the hash of the line text it judged (the text can be edited later).
+    records.tickets[t.id] = { filesHash: asked.filesHash, lines: [...kept, ...[...byLine.values()].map(l => ({ n: l.n, h: asked.lineHashes?.[l.n] ?? '', verdict: l.verdict, evidence: l.evidence }))].sort((a, b) => a.n - b.n), run: reviewRun, at: new Date().toISOString() };
+    const pass = [...byLine.values()].filter(l => l.verdict === 'pass').length;
+    const fail = byLine.size - pass;
+    lines.push(`${t.id}: ${pass} line(s) pass${fail ? `, ${fail} fail` : ''}${asked.lines.length > byLine.size ? `, ${asked.lines.length - byLine.size} not answered` : ''}`);
+    await appendLog(root, { event: 'acceptance-review', id: t.id, pass, fail, run: reviewRun, by: 'owner' });
+    if (t.acceptanceBlocked) cleared.push(t.id);
+  }
+  await writeAcceptanceRecords(root, records);
+  if (cleared.length) await lockedUpdate(root, async () => { const l = await readLedger(root); if (!l) return; for (const id of cleared) { const x = l.tickets.find(y => y.id === id); if (x) delete x.acceptanceBlocked; } await writeLedger(root, l); });
+  return out(lines.length ? `acceptance review recorded:\n${lines.map(x => `  ${x}`).join('\n')}\nRun swarm scope sync RUN --integrated to move the tickets whose lines all pass to done and send the failed ones back.` : 'the review named none of the tickets in this ledger', 0);
+}
+
 async function cmdSync(root, { rest, flags }) {
   if (rest.length !== 1) return bad('scope sync needs a run id');
   const ledger = await readLedger(root);
@@ -945,6 +1031,13 @@ async function cmdSync(root, { rest, flags }) {
       const { errors } = validateProfile(rawPointer.profile);
       return out(`the profile has a verify block but the profile is invalid, so tests cannot be checked: ${errors[0] ?? 'unknown error'}`, 1);
     }
+    // Acceptance is enforced for any project with a profile unless it says enforce:false exactly. A profile that exists but does not validate
+    // refuses the sync (it must never switch the gate off); a project with no profile at all (never initialised) is not enforced.
+    if (rawPointer?.profile && !profile) {
+      const { errors } = validateProfile(rawPointer.profile);
+      return out(`the project profile does not validate, so acceptance lines cannot be checked: ${errors[0] ?? 'unknown error'}`, 1);
+    }
+    const acceptanceOn = Boolean(rawPointer?.profile) && rawPointer.profile.acceptance?.enforce !== false;
     // The owner's ways out are all checked before anything is logged or changed: named, confirmed with --yes, logged.
     // A check that fails for a reason that is not the tickets' (it was already failing on the base):
     const accepted = new Set(String(flags['accept-failed-check'] ?? '').split(',').map(x => x.trim()).filter(Boolean));
@@ -956,9 +1049,22 @@ async function cmdSync(root, { rest, flags }) {
       if (Array.from(unreviewedReason).length < 8) return out(`--accept-unreviewed ${[...unreviewedOk].join(',')} needs --reason TEXT (at least 8 characters: why these tickets may reach done without a security review). Nothing was changed.`, 1);
       if (flags.yes !== true) return out(`--accept-unreviewed ${[...unreviewedOk].join(',')} lets those tickets reach done without a security review (reason: ${unreviewedReason}). Rerun with --yes to confirm; it is logged and shown in swarm watch. A failing review on the current code is never overridden.`, 1);
     }
+    // The same for acceptance lines no test covers and no review passed.
+    const unmetOk = new Set(String(flags['accept-unmet'] ?? '').split(',').map(x => x.trim()).filter(Boolean));
+    if (unmetOk.size) {
+      if (Array.from(unreviewedReason).length < 8) return out(`--accept-unmet ${[...unmetOk].join(',')} needs --reason TEXT (at least 8 characters: why these tickets may reach done with acceptance lines unchecked). Nothing was changed.`, 1);
+      if (flags.yes !== true) return out(`--accept-unmet ${[...unmetOk].join(',')} lets those tickets reach done with acceptance lines that no passing test covers and no review passed (reason: ${unreviewedReason}). Rerun with --yes to confirm; it is logged. A failing line is never overridden.`, 1);
+    }
     if (accepted.size) await appendLog(root, { event: 'accept-failed-check', by: 'owner', run: rest[0], checks: [...accepted], note: flags.note ?? null });
     // The tickets that really skipped a review they needed (filled below); only those are logged and marked.
     const skippedReview = [];
+    // Acceptance: every line is covered by a passing test (its tag in a test title) or passed the acceptance review.
+    const accRecords = await readAcceptanceRecords(root);
+    const accNeed = [];
+    const accResults = new Map();
+    // Tickets whose tests the runner itself saw pass (not an owner-accepted failure, not output already in the tree).
+    const testsSeen = new Set();
+    const accSkipped = [];
     const reviewRecords = await readReviewRecords(root);
     const needReview = [];
     const qualityNames = await runQualityNames(root, rest[0]);
@@ -1053,7 +1159,8 @@ async function cmdSync(root, { rest, flags }) {
       // A ticket with tests is done only when the runner itself saw them pass (a worker's own report is not evidence).
       if (profile?.verify && ticketTests(t).length) {
         let evidence = testResults.get(t.id) ?? doneEvidence(state, t.id);
-        if (evidence.failed && accepted.has('tests')) evidence = { ok: true, reason: 'failed tests check accepted by the owner' };
+        let acceptedFailure = false;
+        if (evidence.failed && accepted.has('tests')) { evidence = { ok: true, reason: 'failed tests check accepted by the owner' }; acceptedFailure = true; }
         if (evidence.failed && systemic('tests')) { unverified.push(`${t.id} (the tests check failed for ${failCounts.get('tests')} tickets of this run, so the base or the setup is likely at fault; fix it and run sync again; not retried)`); continue; }
         if (evidence.failed && evidence.shared && sharedTestFailures > 1 && !mentionsFiles(t, evidence.tail) && !ticketTests(t).some(f => String(evidence.tail).includes(f))) { unverified.push(`${t.id} (the tests check failed for the whole run and its output does not name this ticket's files; fix it, then run sync again; not retried)`); continue; }
         if (evidence.failed) {
@@ -1063,6 +1170,7 @@ async function cmdSync(root, { rest, flags }) {
           continue;
         }
         if (!evidence.ok && !(/not in the integrated files|no merge batch|job not found/.test(String(evidence.reason)) && await outputsMatchTree(root, state, t.id) && inTree.add(t.id))) { unverified.push(`${t.id} (${evidence.reason})`); continue; }
+        if (evidence.ok === true && !acceptedFailure) testsSeen.add(t.id);
       }
       // A build ticket is done only when the project's typecheck and lint (and build, when the profile asks) passed on the batch that integrated it.
       if (qualityNames.length && ['build', 'migration', 'contract'].includes(t.type)) {
@@ -1115,6 +1223,32 @@ async function cmdSync(root, { rest, flags }) {
         }
         if (!(record?.verdict === 'pass' && record.filesHash === now)) { needReview.push({ ticket: t, reason: reviewReason }); continue; }
       }
+      // Acceptance: each line of a build, test, migration or contract ticket is covered by a passing test (ACn in a test title) or checked by the acceptance review.
+      if (acceptanceOn && ['build', 'test', 'migration', 'contract'].includes(t.type) && t.origin !== 'ci' && acceptanceLines(t).length) {
+        // Only real test files (a regular file, no symlink, at most 1 MB) that the tests check runs for this ticket can cover a line.
+        const tests = ticketTests(t).filter(f => looksLikeTestFile(f) && !/[*?]|\/$/.test(f));
+        const hashTests = [...new Set([...(t.tests ?? []), ...tests])];
+        const sources = new Map();
+        for (const f of tests) { try { const full = path.join(root, f); const info = lstatSync(full); if (info.isFile() && info.size <= 1_000_000) sources.set(f, readFileSync(full, 'utf8')); } catch { /* missing: nothing covered by it */ } }
+        const cov = coverage({ ...t, tests }, sources);
+        const hash = await filesHash(root, [...(t.files ?? []), ...(t.deletes ?? []), ...hashTests]);
+        // A verdict belongs to the text of the line it judged: after the acceptance text was edited an old verdict for the same number is dropped.
+        const lineHash = n => sha256Text(String(t.acceptance?.[n - 1] ?? ''));
+        const rec = accRecords.tickets[t.id];
+        const record = rec ? { ...rec, lines: (rec.lines ?? []).filter(l => l.h === lineHash(l.n)) } : undefined;
+        const ev = evaluate({ ticket: t, cov, record, filesHash: hash, testsPassed: testsSeen.has(t.id), accepted: unmetOk.has(t.id) });
+        if (ev.state === 'failed') {
+          const found = ev.lines.filter(l => l.verdict === 'fail').map(l => `line ${l.n} "${String(l.line).slice(0, 80)}": ${String(l.evidence).slice(0, 160)}`).join('; ').slice(0, 500);
+          delete accRecords.tickets[t.id];
+          await writeAcceptanceRecords(root, accRecords);
+          const result = await applyRetry(root, t.id, `failed checks: acceptance not met; ${found}`, rest[0]);
+          (result === 'blocked' ? blocked : retried).push(t.id);
+          continue;
+        }
+        if (ev.state === 'review') { accNeed.push({ ticket: t, lines: ev.missing, hash, blocked: Boolean(t.acceptanceBlocked) }); continue; }
+        accResults.set(t.id, ev.lines);
+        if (unmetOk.has(t.id) && ev.lines.some(l => l.verdict === 'missing' || l.verdict === 'pending')) accSkipped.push(t.id);
+      }
       // A UI ticket is done only when the rendered check passed for each of its screens after this run was integrated.
       if ((t.screens ?? []).length) {
         uiResults ??= await readUiResultsGuarded(root);
@@ -1131,13 +1265,35 @@ async function cmdSync(root, { rest, flags }) {
       await lockedTransition(root, t.id, 'done', { by: 'sync', note: inTree.has(t.id) ? `output already in the tree; not re-verified by ${rest[0]}` : `integrated ${rest[0]}` });
       done.push(t.id);
       // A ticket that skipped its security review by the owner's word keeps that fact (and the reason) on the ticket.
+      if (accResults.has(t.id)) {
+        const results = accResults.get(t.id).map(l => (accSkipped.includes(t.id) && (l.verdict === 'missing' || l.verdict === 'pending') ? { ...l, by: 'owner', verdict: 'accepted', evidence: unreviewedReason } : l));
+        await setTicketField(root, t.id, 'acceptanceResults', results.map(l => ({ n: l.n, line: String(l.line).slice(0, 200), by: l.by, verdict: l.verdict, evidence: String(l.evidence ?? '').slice(0, 300) })));
+        if (t.acceptanceBlocked) await setTicketField(root, t.id, 'acceptanceBlocked', undefined);
+      }
       if (skippedReview.includes(t.id)) await setSecurityReview(root, t.id, { state: 'accepted-unreviewed', reason: unreviewedReason, at: new Date().toISOString(), run: rest[0] });
       else if (t.securityReview?.state === 'blocked') await setSecurityReview(root, t.id, undefined);
+    }
+    const unmetNow = accSkipped.filter(id => done.includes(id));
+    if (unmetNow.length) await appendLog(root, { event: 'accept-unmet', by: 'owner', run: rest[0], tickets: unmetNow, reason: unreviewedReason, note: flags.note ?? null });
+    const accReport = [...accResults.entries()].filter(([id]) => done.includes(id)).map(([id, ls]) => `${id} ${ls.map(l => `AC${l.n} ${l.verdict === 'pass' ? `pass (${l.by})` : l.verdict}`).join(', ')}`).join('; ');
+    let accLine = null;
+    if (accNeed.length) {
+      if (`acc-review-${rest[0]}`.length > 60) return out(`run id ${rest[0]} is too long for an acceptance review job id (at most ${60 - 'acc-review-'.length} characters)`, 1);
+      const manifest = acceptanceManifest(rest[0], accNeed.map(x => ({ ticket: x.ticket, uncovered: x.lines })), { model: profile?.acceptance?.model ?? 'sonnet' });
+      // A fresh token goes into the review prompt and the hashes file: a review run counts only for the sync that wrote this exact manifest.
+      const nonce = randomBytes(12).toString('hex');
+      for (const job of manifest.jobs) job.prompt = `${job.prompt}\n\nReview token (copy nothing, it only identifies this request): ${nonce}`;
+      const file = `.swarm/acceptance-reviews/${rest[0]}.json`;
+      await fs.mkdir(path.join(root, '.swarm', 'acceptance-reviews'), { recursive: true });
+      await fs.writeFile(path.join(root, file), `${JSON.stringify(manifest, null, 2)}\n`);
+      await fs.writeFile(path.join(root, `.swarm/acceptance-reviews/${rest[0]}.hashes.json`), `${JSON.stringify({ nonce, tickets: Object.fromEntries(accNeed.map(x => [x.ticket.id, { filesHash: x.hash, lines: x.lines, lineHashes: Object.fromEntries(x.lines.map(n => [n, sha256Text(String(x.ticket.acceptance?.[n - 1] ?? ''))])) }])) })}\n`);
+      accLine = `${accNeed.length} ticket(s) stay in review: acceptance lines no passing test covers (tag the test title with ACn) and no review has passed: ${accNeed.map(x => `${x.ticket.id} (line${x.lines.length > 1 ? 's' : ''} ${x.lines.join(', ')}${x.blocked ? '; acceptance-blocked: the last review gave no result' : ''})`).join('; ')}. Run: swarm run ${file}; then swarm scope acceptance-review <that run id>; then swarm scope sync ${rest[0]} --integrated`;
     }
     // Logged once, after the fact, and only for the tickets that really skipped a review they needed and reached done.
     const acceptedNow = skippedReview.filter(id => done.includes(id));
     if (acceptedNow.length) await appendLog(root, { event: 'accept-unreviewed', by: 'owner', run: rest[0], tickets: acceptedNow, reason: unreviewedReason, note: flags.note ?? null });
     const notAccepted = [...unreviewedOk].filter(id => !acceptedNow.includes(id));
+    const notUnmet = [...unmetOk].filter(id => !unmetNow.includes(id));
     let reviewLine = null;
     if (needReview.length) {
       const manifest = await securityReviewManifest(root, rest[0], needReview);
@@ -1152,8 +1308,11 @@ async function cmdSync(root, { rest, flags }) {
     }
     await refreshPlan(root);
     return out([`${done.length} ticket(s) marked done`,
+      ...(notUnmet.length ? [`--accept-unmet: ${notUnmet.join(', ')} had no unmet line to accept (not in this run, not done, no lines unmet, or a failing line, which is never overridden)`] : []),
       ...(notAccepted.length ? [`--accept-unreviewed: ${notAccepted.join(', ')} did not skip a review (not in this run, not done, no review needed, a review already passed, or a failing review on this code: that one is never overridden)`] : []),
       ...(reviewLine ? [reviewLine] : []),
+      ...(accLine ? [accLine] : []),
+      ...(accReport ? [`acceptance: ${accReport}`] : []),
       ...(inTree.size ? [`${[...inTree].filter(id => done.includes(id)).length} of them on output that was already in the tree (not re-verified by this run): ${[...inTree].filter(id => done.includes(id)).join(', ')}`] : []),
       ...(retried.length ? [`${retried.length} ticket(s) back to ready, one level higher, after failed checks: ${retried.join(', ')}`] : []),
       ...(blocked.length ? [`${blocked.length} ticket(s) blocked after every escalation level failed: ${blocked.join(', ')}`] : []),
@@ -1436,6 +1595,7 @@ export async function runScopeCommand(root, command, args, deps = {}) {
     if (verb === 'approve') return await cmdApprove(root, sub);
     if (verb === 'sync') return await cmdSync(root, sub);
     if (verb === 'security-review') return await cmdSecurityReview(root, sub, deps);
+    if (verb === 'acceptance-review') return await cmdAcceptanceReview(root, sub, deps);
     if (verb === 'contracts') return await cmdContracts(root, sub);
     return bad(verb ? `unknown scope command: ${verb}` : 'scope needs a command');
   } catch (error) {

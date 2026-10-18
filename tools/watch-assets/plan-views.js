@@ -86,6 +86,13 @@
     listOf(t.acceptance).forEach(function (a) { ac.appendChild(el('li', null, String(a))); });
     if (!ac.childNodes.length) ac.appendChild(el('li', 'label', 'no acceptance criteria'));
     root.appendChild(section('Acceptance', ac));
+    if (t.acceptanceBlocked) head.appendChild(el('span', 'pill bad', 'acceptance-blocked'));
+    var results = listOf(t.acceptanceResults);
+    if (results.length) {
+      var rl = el('ul', 'pl-ac');
+      results.forEach(function (r) { rl.appendChild(el('li', r.verdict === 'pass' ? null : 'label', 'AC' + r.n + ' ' + txt(r.verdict) + ' (' + txt(r.by) + ')' + (r.evidence ? ': ' + txt(r.evidence) : ''))); });
+      root.appendChild(section('Acceptance results', rl));
+    }
     root.appendChild(section('Files', chipList(t.files, null)));
     root.appendChild(section('Depends on', chipList(t.dependsOn, openTicketById)));
     var meta = el('div', 'pl-kvs');

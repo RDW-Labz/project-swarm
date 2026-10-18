@@ -36,7 +36,7 @@ async function project(t, { pkg = { name: 'app', scripts: { test: 'node --test',
 }
 async function withLedger(root, tickets, profile) {
   await writeLedger(root, createLedger({ scope: { name: 'Parts', version: 1, hash: 'a'.repeat(64) }, tickets }));
-  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none', ranAt: null, head: null, checks: [] }, ...profile } }));
+  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, acceptance: { enforce: false }, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none', ranAt: null, head: null, checks: [] }, ...profile } }));
 }
 async function writeState(root, state) {
   await fs.mkdir(path.join(root, '.swarm/runs/r9'), { recursive: true });
@@ -143,7 +143,7 @@ test('eval 31: ui check runs its own server on a free port, passes mockup state 
   await fs.writeFile(path.join(root, 'docs/design/screens/A.html'), '<html><body>a</body></html>');
   const start = ['node', '-e', "require('http').createServer((q,r)=>r.end('real')).listen(Number(process.argv[1]),'127.0.0.1')", '{port}'];
   const ui = { baseUrl: `http://127.0.0.1:${decoy.address().port}`, timeoutSec: 30, start, screens: [{ id: 'step-two', route: '/wizard?step=2', mockup: 'docs/design/screens/A.html', mockupQuery: 'step=2', waitFor: '#ready' }] };
-  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none', ranAt: null, head: null, checks: [] }, ui } }));
+  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, acceptance: { enforce: false }, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none', ranAt: null, head: null, checks: [] }, ui } }));
   let seen;
   const m = { viewportWidth: 390, scrollWidth: 390, bodyFont: 'x', bodyMargin: '0px', fonts: [], colors: ['#fff'], backgrounds: ['#000'], words: ['a'], styled: true };
   const browser = async args => { seen = args.screens[0]; return [{ id: 'step-two', mockup: { metrics: m, screenshot: null }, page: { metrics: m, screenshot: null } }]; };

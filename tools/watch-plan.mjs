@@ -117,6 +117,8 @@ export function buildPlanSnapshot(ledger, { now = Date.now() } = {}) {
     review: pick(t.review),
     // The security review state (blocked, or accepted without a review with the owner's reason).
     securityReview: t.securityReview && typeof t.securityReview === 'object' ? { state: txt(t.securityReview.state, 40), reason: txt(t.securityReview.reason, 400), at: txt(t.securityReview.at, 40), run: txt(t.securityReview.run, 80) } : null,
+    acceptanceBlocked: t.acceptanceBlocked && typeof t.acceptanceBlocked === 'object' ? { reason: txt(t.acceptanceBlocked.reason, 400), at: txt(t.acceptanceBlocked.at, 40) } : null,
+    acceptanceResults: Array.isArray(t.acceptanceResults) ? t.acceptanceResults.slice(0, 40).map(r => ({ n: Number(r?.n) || 0, line: txt(r?.line, 200), by: txt(r?.by, 20), verdict: txt(r?.verdict, 20), evidence: txt(r?.evidence, 300) })) : [],
     drift: strs(t.drift),
   }]));
 

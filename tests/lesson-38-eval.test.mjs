@@ -23,7 +23,7 @@ async function project(t, tickets, { verify = false } = {}) {
   const root = await tmp(t, 'l38-');
   await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'app' }));
   await writeLedger(root, createLedger({ scope: { name: 'P', version: 1, hash: 'a'.repeat(64) }, tickets }));
-  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, protectedPaths: [], budget: { maxUsd: 5 }, ...(verify ? { verify: { command: ['npm', 'test'] } } : {}), baseCheck: { status: 'none', ranAt: null, head: null, checks: [] } } }));
+  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, acceptance: { enforce: false }, protectedPaths: [], budget: { maxUsd: 5 }, ...(verify ? { verify: { command: ['npm', 'test'] } } : {}), baseCheck: { status: 'none', ranAt: null, head: null, checks: [] } } }));
   return root;
 }
 const statuses = async root => Object.fromEntries((await readLedger(root)).tickets.map(t => [t.id, t.status]));
