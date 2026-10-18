@@ -108,6 +108,38 @@
     return box;
   }
 
+  function listBlock(title, items) {
+    if (!items || !items.length) { return null; }
+    var wrap = el('div', 'report-list');
+    wrap.style.marginTop = '8px';
+    wrap.appendChild(el('div', 'label', title));
+    items.forEach(function (item) {
+      var line = el('div', 'mono', '- ' + item);
+      line.style.overflowWrap = 'anywhere';
+      wrap.appendChild(line);
+    });
+    return wrap;
+  }
+
+  function loadReport(id, body) {
+    var token = SW.token || '';
+    fetch('/job/' + encodeURIComponent(id) + '?t=' + encodeURIComponent(token), { headers: { 'x-watch-token': token } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        body.textContent = '';
+        if (!data) { body.textContent = 'No report for this job yet.'; return; }
+        var warn = el('div', 'label', txt(data.label));
+        warn.style.marginBottom = '6px';
+        body.appendChild(warn);
+        if (data.summary) { body.appendChild(el('div', '', data.summary)); }
+        else if (data.error) { body.appendChild(el('div', '', data.error)); }
+        else { body.appendChild(el('div', '', 'The worker left no summary.')); }
+        if (data.checksDeferred) { body.appendChild(el('div', 'label', 'Its checks could not run in the worker; the swarm runs them centrally at integrate.')); }
+        [listBlock('Files', data.files), listBlock('Risks', data.risks), listBlock('Follow-ups', data.followups)].forEach(function (block) { if (block) { body.appendChild(block); } });
+      })
+      .catch(function () { body.textContent = 'The report could not be loaded.'; });
+  }
+
   function buildNode(job) {
     var data = SW.data || {};
     var run = data.run || null;
@@ -135,6 +167,16 @@
     node.appendChild(row('File', job.file, true));
     node.appendChild(row('Cost', money(job.costUsd), true));
     node.appendChild(row('Time', secs(job.durationMs), true));
+
+    // The worker's own report, fetched when the drawer opens. It is worker text: shown as plain text, never as markup, under its warning label.
+    var reportBox = el('div', 'job-report');
+    reportBox.style.marginTop = '14px';
+    reportBox.appendChild(el('div', 'label', 'Worker report'));
+    var reportBody = el('div', 'job-report-body', 'Loading...');
+    reportBody.style.overflowWrap = 'anywhere';
+    reportBox.appendChild(reportBody);
+    node.appendChild(reportBox);
+    loadReport(job.id, reportBody);
 
     var section = el('div', 'job-commands');
     section.style.marginTop = '14px';

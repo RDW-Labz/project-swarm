@@ -14,7 +14,7 @@ export const WAVE_STOPS = Object.freeze(['complete', 'waiting-human', 'stuck', '
 const count = (tickets, status) => tickets.filter(t => t.status === status).length;
 export function ledgerSummary(ledger) {
   const tickets = ledger?.tickets ?? [];
-  const live = tickets.filter(t => t.status !== 'cancelled');
+  const live = tickets.filter(t => t.status !== 'cancelled' && t.status !== 'proposed');
   return {
     total: live.length,
     done: count(live, 'done'),
@@ -23,12 +23,13 @@ export function ledgerSummary(ledger) {
     review: count(live, 'review'),
     blocked: count(live, 'blocked'),
     humans: live.filter(t => t.type === 'human' && t.status !== 'done').length,
+    proposed: tickets.filter(t => t.status === 'proposed').length,
   };
 }
 
 // Why the loop cannot start another wave, read from the ledger and the error the wave builder gave.
 export function classifyIdle(summary, error) {
-  if (summary.total > 0 && summary.done === summary.total) return { status: 'complete', reason: `all ${summary.total} tickets are done` };
+  if (summary.total > 0 && summary.done === summary.total) return { status: 'complete', reason: `all ${summary.total} tickets are done${summary.proposed ? `; ${summary.proposed} proposed ticket(s) wait for your approval (swarm tickets --status proposed)` : ''}` };
   const code = error?.code;
   if (code === 'scope-skeleton') return { status: 'stuck', reason: error.message };
   if (summary.humans > 0 && summary.running === 0 && summary.review === 0) return { status: 'waiting-human', reason: `${summary.humans} human ticket(s) need you (swarm tickets ID --set done); everything else that can run is done` };

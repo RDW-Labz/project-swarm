@@ -1,0 +1,8 @@
+.board-list{display:grid;gap:10px}
+.board-run{display:grid;gap:6px;padding:10px 12px;border-radius:12px;border:1px solid rgba(128,128,128,.25)}
+.board-run .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.board-run .mono{overflow-wrap:anywhere}
+.board-bar{height:6px;border-radius:3px;background:rgba(128,128,128,.25);overflow:hidden}
+.board-bar>i{display:block;height:100%;background:currentColor;opacity:.7}
+.board-note{margin:12px 0 0;opacity:.7}
+.board-empty{padding:18px;text-align:center;opacity:.7}

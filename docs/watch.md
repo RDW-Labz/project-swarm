@@ -5,8 +5,10 @@ A read-only dashboard for a run. Design: [plans/watch-design.md](plans/watch-des
 ## Use
 
 - `swarm watch` starts the dashboard for the newest live run in this project (or the newest run) and prints a URL. `swarm watch RUN` picks a run. `--open` opens the browser.
-- `swarm watch --tui` draws the same data in the terminal (press `q` to leave). `swarm watch --json` prints the run and plan data once. `swarm watch --all` lists every live run on this machine with the command to watch each.
-- `swarm gallery list` shows the screens from `swarm ui check`. `swarm gallery approve ID...` approves them. `swarm gallery comment ID "text"` saves a comment.
+- `swarm watch --tui` draws the same data in the terminal (press `q` to leave). `swarm watch --json` prints the run and plan data once. `swarm watch --all` opens a web board of every live run on this machine (read-only, token-protected) with the command to watch each; `--all --text` prints that list and `--all --json` prints it as data.
+- `swarm go` starts Swarm Watch for its run when you are at a terminal and prints `watch: URL` (not in CI or a pipe; `--no-watch` or `SWARM_NO_WATCH=1` turns it off). It stops by itself when the run is done and the page is closed, or after 30 minutes idle. `go --scope` (the wave loop) does not start one: run `swarm watch` beside it.
+- `swarm gallery list` shows the screens from `swarm ui check`. `swarm gallery approve ID...` approves them. `swarm gallery comment ID "text"` saves a comment and, when a ticket ledger exists, proposes a fix ticket for it; `swarm gallery tickets [ID...]` does the same for older comments.
+- **Comments are untrusted text.** The ticket's title and acceptance are fixed words; the comment is kept only in `notes`, and a worker sees it only as quoted data. The ticket is `proposed`: outside the plan and the approval, never ready, never a job. You read it (`swarm tickets --status proposed`), name its files (`swarm tickets T-0042 --files a,b --yes`), and approve it (`swarm tickets T-0042 --approve --yes`); only then it is a todo ticket. `--set cancelled` drops it.
 
 ## What it shows
 
@@ -26,7 +28,5 @@ A read-only dashboard for a run. Design: [plans/watch-design.md](plans/watch-des
 
 ## Known limits
 
-- The job drawer shows what the run state holds per job (lane, model, attempts, cost, time), not the worker's report or check output.
-- `swarm go` does not start the server yet; run `swarm watch` in a second terminal.
-- `--all` is a text board, not a web board.
-- A gallery comment is saved, but does not create a fix ticket yet.
+- The job drawer fetches the worker's report (summary, files, risks, follow-ups) when it opens, as sanitised, capped text under an "untrusted worker data" label; it does not show check output.
+- The board lists runs; each run's page is its own server, so you copy the command for it.

@@ -44,6 +44,7 @@ export const SCOPE_USAGE = [
   '       swarm scope security-review RUN     (records the verdicts of an Opus security review run)',
   '       swarm scope acceptance-review RUN   (records the per-line verdicts of an acceptance review run)',
   '       swarm scope contracts OPENAPI.json',
+  '       swarm tickets ID --approve [--yes]     (a ticket made from a gallery comment is proposed: you read it, name its files, approve it; no worker runs it before)',
   '       swarm tickets ID --lane auto|claude|codex|cursor|anthropic[:MODEL] | --risk low|medium|high [--yes]   (logged; an approved ledger is sealed again)',
   '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high (filter; with an ID use the --risk line above)] [--set STATUS] [--note TEXT] [--json]',
   '       swarm tickets ID --files a,b [--take-from TICKET] [--deletes x,y] [--dependencies pkg,pkg@^1] [--context c,d] [--tests t] [--acceptance "one || two"] [--add-acceptance TEXT] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
@@ -1445,10 +1446,10 @@ async function editTicketFiles(root, ledger, rest, flags) {
       if (!ticket) return out(`no ticket ${rest[0]}`, 1);
       const listsEdit = Object.keys(changes).length > 0;
       // The file lists only change before the work runs; a review or done ticket may only add acceptance lines (see below).
-      const allowed = listsEdit ? ['todo', 'ready', 'blocked'] : ['todo', 'ready', 'blocked', 'review', 'done'];
+      const allowed = listsEdit ? ['proposed', 'todo', 'ready', 'blocked'] : ['proposed', 'todo', 'ready', 'blocked', 'review', 'done'];
       if (!allowed.includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}; ${listsEdit ? `only a todo, ready or blocked ticket can change its files (send a review ticket back with swarm tickets ${ticket.id} --set todo first)` : 'only a todo, ready, blocked, review or done ticket can change its acceptance'}`, 1);
       // Acceptance is run as checks: a review or done ticket may only add lines (a replace could weaken what the work is judged against).
-      if (flags.acceptance !== undefined && !['todo', 'ready', 'blocked'].includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}: its acceptance can only be added to (--add-acceptance), not replaced`, 1);
+      if (flags.acceptance !== undefined && !['proposed', 'todo', 'ready', 'blocked'].includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}: its acceptance can only be added to (--add-acceptance), not replaced`, 1);
       const next = { ...ticket, ...changes };
       if (flags.acceptance !== undefined) next.acceptance = lines(flags.acceptance);
       if (flags['add-acceptance'] !== undefined) next.acceptance = [...(next.acceptance ?? []), ...lines(flags['add-acceptance'])];
@@ -1519,7 +1520,7 @@ async function setTicketRoute(root, rest, flags) {
       const fresh = await readLedger(root);
       const ticket = fresh.tickets.find(x => x.id === rest[0]);
       if (!ticket) return out(`no ticket ${rest[0]}`, 1);
-      if (!['todo', 'ready', 'blocked'].includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}; only a todo, ready or blocked ticket can change its risk or lane (send it back with swarm tickets ${ticket.id} --set todo first)`, 1);
+      if (!['proposed', 'todo', 'ready', 'blocked'].includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}; only a proposed, todo, ready or blocked ticket can change its risk or lane (send it back with swarm tickets ${ticket.id} --set todo first)`, 1);
       if (lane !== undefined && lane !== 'auto' && ticket.sensitive === true && !laneOkForSensitive(parsedLane)) return out(`${ticket.id} is sensitive: lane ${lane} is not allowed (cursor only without a model)`, 1);
       const next = { ...ticket };
       if (risk !== undefined) next.risk = risk;
@@ -1578,11 +1579,13 @@ export async function runTicketsCommand(root, args) {
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
   if (flags['mark-deps']) return markDepsCommand(root, ledger, rest, flags);
   if (flags.release === true) return releaseTickets(root, rest, flags);
+  if (flags.approve === true) return approveProposed(root, rest, flags);
   if (flags.lane !== undefined || (flags.risk !== undefined && rest.length === 1 && flags.set === undefined)) return setTicketRoute(root, rest, flags);
   if (['files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from'].some(k => flags[k] !== undefined)) return editTicketFiles(root, ledger, rest, flags);
   if (flags.set !== undefined) {
     if (rest.length !== 1) return bad('tickets --set needs one ticket id');
     if (!STATUSES.includes(flags.set)) return out(`status must be one of: ${STATUSES.join(', ')}`, 1);
+    if (ledger.tickets.find(t => t.id === rest[0])?.status === 'proposed' && flags.set !== 'cancelled') return out(`${rest[0]} is proposed: approve it with swarm tickets ${rest[0]} --approve (or cancel it with --set cancelled)`, 1);
     const t = await lockedTransition(root, rest[0], flags.set, { by: 'owner', note: flags.note });
     await refreshPlan(root);
     return out(`${t.id} is now ${t.status}`);
@@ -1804,6 +1807,67 @@ async function addCiFixTicketLocked(root, partial) {
   await writeLedger(root, ledger);
   await appendLog(root, { event: 'ci-fix-ticket', id: ticket.id, resealed: wasApproved });
   return ticket.id;
+}
+
+// A ticket made from a gallery comment. It lands as `proposed`: outside the plan and the approval hash, never ready, never a job,
+// until the owner runs swarm tickets ID --approve. The comment text is untrusted and stays in `notes`; the title and acceptance are fixed text.
+export async function addProposedTicket(root, partial) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await withLock(root, async () => {
+        const ledger = await readLedger(root);
+        if (!ledger) return null;
+        const used = ledger.tickets.map(t => Number(t.id.slice(2))).filter(n => n < 9000);
+        const next = Math.max(0, ...used) + 1;
+        if (next >= 9000) throw fail('ticket-ids', 'no ticket ids are left below T-9000');
+        const ticket = { ...partial, id: `T-${String(next).padStart(4, '0')}`, status: 'proposed' };
+        const checked = validateTicket(ticket);
+        if (!checked.ok) throw fail('ticket-invalid', checked.errors[0]);
+        ledger.tickets.push(ticket);
+        ledger.updatedAt = new Date().toISOString();
+        await writeLedger(root, ledger);
+        await appendLog(root, { event: 'proposed-ticket', id: ticket.id, origin: ticket.origin, source: ticket.source ?? null });
+        return ticket.id;
+      });
+    } catch (error) { if (error.code !== 'scope-busy' || attempt === 4) throw error; await new Promise(resolve => setTimeout(resolve, 300)); }
+  }
+  return null;
+}
+
+// The owner approves a proposed ticket: it needs its files named, and then it is an ordinary todo ticket. Your --yes is the approval:
+// an approved ledger is sealed again over the new ticket (the ticket carries approvedBy: owner, which is part of the hash).
+async function approveProposed(root, rest, flags) {
+  if (rest.length !== 1) return bad('tickets --approve needs one ticket id');
+  try {
+    return await withLock(root, async () => {
+      const fresh = await readLedger(root);
+      const ticket = fresh.tickets.find(x => x.id === rest[0]);
+      if (!ticket) return out(`no ticket ${rest[0]}`, 1);
+      if (ticket.status !== 'proposed') return out(`${ticket.id} is ${ticket.status}, not proposed; only a proposed ticket is approved this way`, 1);
+      if (!(ticket.files ?? []).length) return out(`${ticket.id} names no files yet: swarm tickets ${ticket.id} --files a,b (and --context, --tests) first, so a worker knows where to write`, 1);
+      // A file another open ticket writes would put two writers in one wave; the owner chooses other files or takes them (swarm tickets ID --files ... --take-from T-x) first.
+      const clash = [];
+      for (const f of ticket.files) {
+        const owners = fresh.tickets.filter(x => x.id !== ticket.id && ['todo', 'ready', 'running', 'review', 'blocked'].includes(x.status) && ((x.files ?? []).includes(f) || (x.deletes ?? []).includes(f)));
+        if (owners.length) clash.push(`${f} (${owners.map(o => o.id).join(', ')})`);
+      }
+      if (clash.length) return out(`${ticket.id} writes files that open tickets also write: ${clash.join('; ')}; name other files, or wait until they are done`, 1);
+      const next = { ...ticket, status: 'todo', approvedBy: 'owner' };
+      const v = validateTicket(next);
+      if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
+      const shown = [`${ticket.id}: ${ticket.title}`, `  files: ${ticket.files.join(', ')}`, `  acceptance: ${(ticket.acceptance ?? []).join(' | ')}`, ...(ticket.notes ? [`  comment (untrusted text, shown for you to read; a worker gets it as data only): ${ticket.notes}`] : [])].join('\n');
+      const wasApproved = isApproved(fresh);
+      if (flags.yes !== true) return out(`${shown}\nRerun with --yes to approve it: it becomes a todo ticket and a worker may run it${wasApproved ? '; the ledger approval is renewed over it' : ''}.`);
+      fresh.tickets = fresh.tickets.map(x => (x.id === ticket.id ? next : x));
+      const prev = fresh.approved;
+      const saved = wasApproved ? { ...fresh, approved: { ...prev, ...approveLedger(fresh, { by: 'owner' }).approved, at: prev.at, ...(prev.ciTickets ? { ciTickets: prev.ciTickets } : {}) } } : fresh;
+      saved.updatedAt = new Date().toISOString();
+      await writeLedger(root, saved);
+      await appendLog(root, { event: 'proposed-approved', id: ticket.id, by: 'owner', note: flags.note ?? null, reapproved: wasApproved });
+      await refreshPlan(root);
+      return out(`${ticket.id} approved: now a todo ticket${wasApproved ? '; the ledger stays approved (sealed again)' : ' (approve the ledger with swarm scope approve --yes before go --scope)'}`);
+    });
+  } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
 }
 
 export async function ticketProgress(root) {
