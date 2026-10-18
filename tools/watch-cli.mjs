@@ -17,7 +17,11 @@ import { ticketComments } from './gallery-tickets.mjs';
 import { buildCommandList, contextCommands } from './watch-command-meta.mjs';
 import { COMMANDS } from './completion.mjs';
 import { readLedger } from './tickets.mjs';
-import { boardSummary } from './board.mjs';
+import { boardSummary, listLiveRuns } from './board.mjs';
+import { listProjects, projectsFile } from './projects.mjs';
+import { readHistory, historyCsv, historyFile } from './history.mjs';
+import { boardSnapshot, projectDetail } from './board-data.mjs';
+import { backfillHistory } from './board-commands.mjs';
 import { projectSummary } from './project-spend.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -172,19 +176,97 @@ async function tuiLoop(root, runId, write) {
   } finally { if (stdin.isTTY) { stdin.setRawMode(false); stdin.pause(); } }
 }
 
+// The Watch server of one run: its own port and its own token.
+export function makeRunServer(root, runId, extra = {}) {
+  return createWatchServer({
+    root,
+    getRunSnapshot: runSnapshotLoader(root, runId),
+    getPlanSnapshot: planLoader(root),
+    getGallery: () => readGallery(root),
+    getJobReport: jobReportLoader(root, runId),
+    commandList: buildCommandList(COMMANDS),
+    contextCommands,
+    assetDir: path.join(here, 'watch-assets'),
+    deltaFile: path.join(here, 'watch-delta.mjs'),
+    ...extra,
+  });
+}
+
+// What the board server calls. Every lookup goes through the machine's project list: a project is named by its id, never by a path the page could send,
+// and a project's runs, tickets and files are only ever read under its own root.
+const MAX_WATCHERS = 6;
+const BOARD_RUN_IDLE_MS = 10 * 60 * 1000;
+
+export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000 } = {}) {
+  const watchers = new Map();                // `${projectId}/${runId}` -> { server, url, closed }
+  let cached = null;
+  const find = async id => (await listProjects({ file: projectsFile(env) })).find(p => p.id === id) ?? null;
+  const api = {
+    // One snapshot at a time: requests that arrive while one is being built share it.
+    snapshot() {
+      if (cached && now() - cached.at < cacheMs) return cached.promise;
+      const promise = (async () => boardSnapshot({ projects: await listProjects({ file: projectsFile(env) }), liveRuns: await live(), now: now() }))();
+      cached = { at: now(), promise };
+      promise.catch(() => { if (cached?.promise === promise) cached = null; });
+      return promise;
+    },
+    async project(id) {
+      const project = await find(id);
+      if (!project) return null;
+      const liveRuns = (await live()).filter(r => r.root === project.root);
+      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)) });
+    },
+    async history(q = {}) {
+      return readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: Number(q.limit) || 100, offset: Number(q.offset) || 0 });
+    },
+    async historyCsv(q = {}) {
+      const { events } = await readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: 1e6, cap: 1e6 });
+      return historyCsv(events);
+    },
+    // Starts the run's own Watch server (or reuses the one already up) and returns its address, with that server's token. Null for anything not a run of a listed project.
+    async openRun(id, runId) {
+      const project = await find(id);
+      if (!project || !RUN_ID_RE.test(String(runId))) return null;
+      if (!(await findRunId(project.root, runId))) return null;
+      const key = `${project.id}/${runId}`;
+      const hit = watchers.get(key);
+      if (hit && !hit.closed) return hit.pending;
+      // The promise is stored before the server starts, so two clicks at once share one server; at most MAX_WATCHERS stay open (the oldest is closed).
+      const entry = { closed: false, server: null, pending: null };
+      entry.pending = (async () => {
+        const open = [...watchers.entries()].filter(([, w]) => !w.closed);
+        while (open.length >= MAX_WATCHERS) { const [oldKey, old] = open.shift(); old.closed = true; watchers.delete(oldKey); await old.server?.close().catch(() => {}); }
+        entry.server = runServer(project.root, runId, { idleMs: BOARD_RUN_IDLE_MS });
+        const { url } = await entry.server.listen();
+        entry.server.done.then(() => { entry.closed = true; });
+        return url;
+      })();
+      watchers.set(key, entry);
+      entry.pending.catch(() => { entry.closed = true; watchers.delete(key); });
+      return entry.pending;
+    },
+    watcherCount: () => [...watchers.values()].filter(w => !w.closed).length,
+    async close() { for (const w of watchers.values()) if (!w.closed) await w.server?.close().catch(() => {}); watchers.clear(); },
+  };
+  return api;
+}
+
 export async function runWatchCommand(root, args, { write = text => process.stdout.write(text) } = {}) {
   const opts = parseWatchArgs(args);
   if (opts.error) return { stdout: `${opts.error}\n${WATCH_USAGE}`, exitCode: 2 };
   if (opts.all && opts.json) return { stdout: `${JSON.stringify(await safeBoard(), null, 2)}\n`, exitCode: 0 };
   if (opts.all && (opts.text || opts.tui)) return { stdout: await boardText(), exitCode: 0 };
   if (opts.all) {
-    // The web board: every live run on this machine, read-only. Each run has its own page (its own server and token), so the board shows the command for it.
+    // The web board: a lane per project on this machine, the machine's agents and spend on top, the history, and a click-through to any run's own page.
+    const api = createBoardApi({ env: process.env });
+    backfillHistory({ env: process.env }).catch(() => {});
     const server = createWatchServer({
       root,
       getRunSnapshot: async () => null,
       getPlanSnapshot: async () => ({ present: false }),
       getGallery: async () => ({ schema: 1, screens: [] }),
       getBoard: () => safeBoard(),
+      board: api,
       indexName: 'board.html',
       commandList: buildCommandList(COMMANDS),
       contextCommands,
@@ -192,11 +274,13 @@ export async function runWatchCommand(root, args, { write = text => process.stdo
       deltaFile: path.join(here, 'watch-delta.mjs'),
     });
     const { url } = await server.listen();
-    write(`Swarm Watch board (every live run on this machine)\n${url}\nRead-only, on this machine only. Stops after 30 minutes idle. Ctrl-C stops it now. (swarm watch --all --text prints it instead.)\n`);
+    write(`Swarm Watch board (every project on this machine)\n${url}\nRead-only, on this machine only. Opening a run starts that run's own page. Stops after 30 minutes idle. Ctrl-C stops it now. (swarm watch --all --text prints the live runs instead.)\n`);
     if (opts.open) openUrl(url);
-    process.once('SIGINT', () => { server.close(); });
-    process.once('SIGTERM', () => { server.close(); });
+    const stop = () => { server.close(); api.close(); };
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
     await server.done;
+    await api.close();
     return { stdout: '', exitCode: 0 };
   }
   const runId = await findRunId(root, opts.run);
@@ -205,18 +289,7 @@ export async function runWatchCommand(root, args, { write = text => process.stdo
     return { stdout: `${JSON.stringify({ run: await runSnapshotLoader(root, runId)(), plan: await planLoader(root)() }, null, 2)}\n`, exitCode: 0 };
   }
   if (opts.tui) { await tuiLoop(root, runId, write); return { stdout: '', exitCode: 0 }; }
-  const commandList = buildCommandList(COMMANDS);
-  const server = createWatchServer({
-    root,
-    getRunSnapshot: runSnapshotLoader(root, runId),
-    getPlanSnapshot: planLoader(root),
-    getGallery: () => readGallery(root),
-    getJobReport: jobReportLoader(root, runId),
-    commandList,
-    contextCommands,
-    assetDir: path.join(here, 'watch-assets'),
-    deltaFile: path.join(here, 'watch-delta.mjs'),
-  });
+  const server = makeRunServer(root, runId);
   const { url } = await server.listen();
   write(`Swarm Watch for run ${runId}\n${url}\nRead-only, on this machine only. Stops after 30 minutes idle, or when the run is done and the page is closed. Ctrl-C stops it now.\n`);
   if (opts.open) openUrl(url);

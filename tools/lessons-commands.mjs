@@ -120,6 +120,7 @@ async function lessonsCommand(root, verb, args, { installRoot }) {
       tags: flags.tag?.length ? flags.tag : [flags.stage], source: { kind: 'manual' },
     });
     const file = await writeLesson(root, lesson);
+    await import('./history-hooks.mjs').then(hooks => hooks.recordLessonHistory(root, lesson)).catch(() => {});
     return out(`wrote ${file}`);
   }
   if (verb === 'mine') {

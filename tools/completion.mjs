@@ -54,6 +54,8 @@ export const COMMANDS = [
   command('stop', 'Panic button: swarm stop --all cancels runs, stops autopilot and ends a rented GPU session.', 'none', '--all --status --clear --reason'),
   command('backup', 'Snapshot swarm state (no secrets): backup, backup list, backup verify ID.', 'none', '--reason --json'),
   command('restore', 'Restore swarm state from a backup (shows the plan until --yes).', 'none', '--yes'),
+  command('projects', 'The projects on this machine (listed on the Swarm Watch board): list, add, remove.', 'none', ''),
+  command('history', 'The machine-wide history of projects, stages, runs, PRs, merges, lessons and spend: filter, search, CSV.', 'none', '--project --kind --q --from --to --limit --csv --backfill'),
   command('models', 'Model watch: new open coding models that fit our GPUs and new API versions, into the inbox; compare models from eval runs.', 'none', '--force --json'),
   command('budgets', 'Speed and accessibility budgets: check a preview with Lighthouse and axe, show status.', 'none', '--url --screens'),
   command('migrations', 'Check database migrations: down steps, destructive changes, up/down/up round trip.', 'none', '--yes --note'),

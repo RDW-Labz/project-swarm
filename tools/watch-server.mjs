@@ -55,6 +55,7 @@ export function createWatchServer(opts) {
     getGallery,
     getJobReport,
     getBoard,
+    board,
     indexName = 'index.html',
     commandList,
     contextCommands,
@@ -182,8 +183,11 @@ export function createWatchServer(opts) {
     const parts = pathname.split('/');
     const isJob = parts.length === 3 && parts[1] === 'job' && typeof getJobReport === 'function';
     const isBoard = pathname === '/board' && typeof getBoard === 'function';
+    // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
+    const boardRoutes = board ? ['/api/board', '/api/project', '/api/history', '/history.csv', '/open/run', '/project'] : [];
+    const isBoardRoute = boardRoutes.includes(pathname);
     const isShot = parts.length === 4 && parts[1] === 'shot' && (parts[3] === 'mockup' || parts[3] === 'page');
-    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard) return sendText(res, method, 404, 'not found');
+    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute) return sendText(res, method, 404, 'not found');
     const q = u.searchParams.get('t');
     const h = req.headers['x-watch-token'];
     const ok = (typeof q === 'string' && safeEqual(q, token)) || (typeof h === 'string' && safeEqual(h, token));
@@ -195,6 +199,18 @@ export function createWatchServer(opts) {
     if (pathname === '/api/snapshot') return sendJson(res, method, await payload());
     if (pathname === '/events') return openEvents(res, method);
     if (isBoard) return sendJson(res, method, (await getBoard()) ?? { runs: [] });
+    if (isBoardRoute) {
+      const q = Object.fromEntries(u.searchParams);
+      if (pathname === '/project') return sendAsset(res, method, 'project.html');
+      if (pathname === '/api/board') return sendJson(res, method, await board.snapshot());
+      if (pathname === '/api/project') { const detail = await board.project(String(q.id ?? '')); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
+      if (pathname === '/api/history') return sendJson(res, method, await board.history(q));
+      if (pathname === '/history.csv') return send(res, method, 200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="swarm-history.csv"' }, await board.historyCsv(q));
+      // /open/run?id=PROJECT&run=RUN: starts the run's own Watch server (or reuses it) and sends the browser to it. The target address carries that server's own token.
+      const target = await board.openRun(String(q.id ?? ''), String(q.run ?? ''));
+      if (!target) return sendText(res, method, 404, 'not found');
+      return send(res, method, 302, { Location: target, 'Content-Type': 'text/plain; charset=utf-8' }, 'redirecting');
+    }
     if (isJob) {
       const report = await getJobReport(decodeURIComponent(parts[2]));
       return report ? sendJson(res, method, report) : sendText(res, method, 404, 'not found');

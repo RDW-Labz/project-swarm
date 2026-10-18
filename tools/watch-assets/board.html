@@ -3,20 +3,32 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Swarm Watch: all runs</title>
+<title>Swarm Watch: all projects</title>
 <link rel="stylesheet" href="assets/watch.css">
 <link rel="stylesheet" href="assets/board.css">
 </head>
 <body>
 <div class="wrap">
   <header class="top hud">
-    <div class="brand"><div class="logo" aria-hidden="true"><i>SW</i></div><div><h1>Swarm Watch</h1><div class="goal">Every live run on this machine</div></div></div>
+    <div class="brand"><div class="logo" aria-hidden="true"><i>SW</i></div><div><h1>Swarm Watch</h1><div class="goal">Every project on this machine</div></div></div>
     <div class="spacer"></div>
-    <div class="chips"><span class="chip mono num" id="count">0 runs</span><span class="chip mono" id="updated">-</span></div>
+    <div class="chips"><span class="chip mono num" id="count">0 projects</span><span class="chip mono" id="updated">-</span></div>
   </header>
   <main class="pane">
-    <section class="card hud"><div id="runs" class="board-list" aria-live="polite"></div>
-    <p class="board-note">Read-only. Each run has its own page: copy the command for the run you want and run it in a terminal.</p></section>
+    <section class="card hud" id="machine" aria-label="Machine totals"></section>
+    <section class="card hud"><h2 class="board-h">Projects</h2><div id="lanes" class="board-list" aria-live="polite"></div>
+    <p class="board-note">Read-only. Open a project for its tickets, runs, spend and lessons; open a run for its full Watch page.</p></section>
+    <section class="card hud"><h2 class="board-h">History</h2>
+      <form id="filters" class="board-filters" autocomplete="off">
+        <input id="q" type="search" placeholder="Search" aria-label="Search history">
+        <select id="fproject" aria-label="Project"><option value="">All projects</option></select>
+        <select id="fkind" aria-label="Type"><option value="">All types</option><option>project</option><option>stage</option><option>run</option><option>pr</option><option>merge</option><option>lesson</option><option>spend</option></select>
+        <input id="ffrom" type="date" aria-label="From"><input id="fto" type="date" aria-label="To">
+        <a id="csv" class="copy" href="#">Export CSV</a>
+      </form>
+      <div id="history" class="board-list"></div>
+      <div class="board-note" id="historyNote"></div>
+    </section>
   </main>
 </div>
 <script src="assets/board.js"></script>
