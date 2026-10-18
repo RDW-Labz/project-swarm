@@ -26,7 +26,7 @@ import { doneEvidence, ticketTests, failedRunChecks } from './verify-config.mjs'
 import { deriveQualityChecks, qualityEvidence } from './quality-checks.mjs';
 import { nextStep, sizeTicket } from './escalation.mjs';
 import { unlockReady, releaseReady } from './ticket-unlock.mjs';
-import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets } from './wiring.mjs';
+import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, orderTestsAfterBuild, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets } from './wiring.mjs';
 import { parseEnvNames, envNamesLine } from './env-names.mjs';
 import { detectTestCommand } from './zero-tests.mjs';
 import { execFile } from 'node:child_process';
@@ -333,6 +333,7 @@ function splitPrompt(scope, stage, only, layout = '', wire = null, existing = nu
     'size (S or M; never larger: split instead), risk (low, medium or high), sensitive (true for payments, auth or customer data), steps (only for human tickets: 1 to 30 short imperative steps), skeleton (true only on the tickets of the thinnest vertical slice of the first stage: database, API, screen and test, the smallest path through the product; omit it elsewhere).',
     'Rules: every requirement is covered by at least one ticket; every ticket traces to a requirement; two tickets that can run at the same time never write the same file;',
     'put shared types or contracts first and make the tickets that use them depend on them; add a test ticket for each requirement group.',
+    'Every build, test and migration ticket has at least one acceptance line (copy the requirement\'s own acceptance line when you have nothing more exact). A test never runs before the module it imports exists: prefer listing a module\'s test files in that build ticket\'s "tests" field over a separate test ticket, and when a separate test ticket is needed it is written to run after the build tickets it tests (the runner orders it after them).',
     'A ticket of type contract writes exactly one OpenAPI 3 JSON file under contracts/ (for example contracts/api.json) using only paths (get, post, put, patch, delete, each with an operationId), components.schemas and local $ref; TypeScript, SQL and YAML types belong in build tickets that depend on the contract ticket.',
     'Migration tickets write DDL only; their tests are separate tickets in a tests folder.',
     'Keep every ticket small enough for one worker answer: at most 4 files, each file under about 12 KB when written; split a bigger feature into several tickets (the output of one worker is capped at about 15 KB per file).',
@@ -439,7 +440,7 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
     else keyToId.set(key, id);
   }
   n = startAt;
-  for (const { stage, items } of lists) for (const raw of items) {
+  for (const { stage, items } of lists) for (let raw of items) {
     const id = `T-${String(n).padStart(4, '0')}`;
     n += 1;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { errors.push(`${stage}: ticket ${id} is not an object`); continue; }
@@ -451,6 +452,13 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
     const unknown = strings(raw.dependsOn).filter(k => !keyToId.has(`${stage}/${k}`));
     // A worker sometimes invents dependency keys (a ticket that is not in its file): they are dropped and reported, the split is not refused.
     if (unknown.length) notes.push(`${id}: dropped dependsOn keys that name no ticket in the file: ${unknown.join(', ')}`);
+    // A worker (a small model especially) sometimes leaves a TEST ticket without acceptance lines (parts-app lesson 55): they are copied from its
+    // requirements' own acceptance, which is what a test checks. A build or migration ticket is not given them (the lines of a requirement are usually route-level
+    // and a module cannot meet them before it is wired): it is refused as before. With none to copy, the test ticket is refused too.
+    if (raw.type === 'test' && !strings(raw.acceptance).some(a => a.trim())) {
+      const copied = strings(raw.scopeRefs).flatMap(r => requirementText(scope, r)?.acceptance ?? []).slice(0, 5);
+      if (copied.length) { raw = { ...raw, acceptance: copied }; notes.push(`${id}: no acceptance lines from the worker; copied ${copied.length} from ${strings(raw.scopeRefs).join(', ')}`); }
+    }
     const t = {
       id, title: String(raw.title ?? ''), type: raw.type, stage, epic: String(raw.epic ?? 'E-00'),
       scopeRefs: strings(raw.scopeRefs), acceptance: strings(raw.acceptance), files: strings(raw.files),
@@ -616,10 +624,17 @@ async function cmdSplit(root, { rest, flags }) {
     if (stray.length) return out(`split refused; a change order may only add tickets for requirements that have none (${[...pending].slice(0, 8).join(', ') || 'none'}). These tickets touch other requirements:\n${stray.slice(0, 10).map(t => `  ${t.title} (${t.scopeRefs.join(', ')})`).join('\n')}\nNothing was written; rerun the split job.`, 1);
   }
   addWiringDeps(built.tickets, existing?.tickets ?? []);
+  const orderNotes = orderTestsAfterBuild(built.tickets, existing?.tickets ?? []);
   chainSharedFiles(built.tickets, existing?.tickets ?? []);
   const touched = [...new Set(built.tickets.filter(t => t.type === 'build').flatMap(t => t.scopeRefs))];
-  const unwired = wiringGaps([...(existing?.tickets ?? []), ...built.tickets], touched);
-  if (unwired.length) return out(`split refused; the features are not wired (add an integration ticket per requirement, then split these stages again):\n${unwired.slice(0, 15).map(g => `  ${g.reason}`).join('\n')}`, 1);
+  const allForWiring = [...(existing?.tickets ?? []), ...built.tickets];
+  const unwired = wiringGaps(allForWiring, touched);
+  // A requirement with modules and no integration ticket is the common miss of a small model: the split is kept (not thrown away) and the wire manifest is written,
+  // so one more run adds the integration tickets. The ledger cannot be approved until they exist. Other wiring gaps (a test missing on an integration ticket) still refuse.
+  const needsIntegration = new Set(unwiredRequirements(allForWiring).filter(r => touched.includes(r)));
+  // A merge into an APPROVED ledger keeps the old refusal: it would drop the approval of a build that may be running, for tickets that cannot be built yet.
+  const hardGaps = unwired.filter(g => !needsIntegration.has(g.req) || (existing && isApproved(existing)));
+  if (hardGaps.length) return out(`split refused; the features are not wired (add an integration ticket per requirement, then split these stages again):\n${hardGaps.slice(0, 15).map(g => `  ${g.reason}`).join('\n')}`, 1);
   let tickets = built.tickets;
   if (!existing) tickets = [...tickets, ...checklistToTickets(day0Checklist(scope))];
   const base = existing ?? createLedger({ scope: { name: scope.name, version: scope.version, hash, file }, tickets: [] });
@@ -631,7 +646,19 @@ async function cmdSplit(root, { rest, flags }) {
   await writeLedger(root, ledger);
   await appendLog(root, { event: flags.merge ? 'split-merge' : 'split', tickets: tickets.length, run: flags.ingest, ok: tree.ok });
   const gaps = tree.ok ? [] : ['Some requirements still have no tickets: run swarm scope split again (it splits only those), then --ingest RUN --merge.'];
-  return out([`ledger written: ${tickets.length} tickets added (not approved)`, ...notes.map(n => `note: ${n}`), ...built.notes.slice(0, 10).map(n => `note: ${n}`), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, tree.ok ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
+  // Requirements the worker left without an integration ticket: the wire manifest is written now, so the next step is one run and one ingest.
+  let wireLines = [];
+  const missing = [...needsIntegration].filter(r => unwiredRequirements(ledger.tickets).includes(r)).sort();
+  if (missing.length) {
+    const wire = missing.map(req => ({ req, stage: scope.requirements.find(r => r.id === req)?.stage, modules: moduleTickets(ledger.tickets, req) }));
+    const wireManifest = buildSplitManifest(scope, { only: new Set(missing), layout: await projectLayout(root, scope, profile), wire });
+    // Its own file: the split manifest the owner may still need is never overwritten.
+    await writeFileSafe(root, `${SPLIT_DIR}/wire-manifest.json`, `${JSON.stringify(wireManifest, null, 2)}\n`);
+    ledger.pendingWiring = missing;
+    await writeLedger(root, ledger);
+    wireLines = [`wiring: ${missing.length} requirement(s) have modules but no integration ticket (${missing.slice(0, 8).join(', ')}); the ledger cannot be approved until they do.`, `Next: swarm run ${SPLIT_DIR}/wire-manifest.json, then swarm scope split --ingest RUN --merge --wire`];
+  }
+  return out([`ledger written: ${tickets.length} tickets added (not approved)`, ...notes.map(n => `note: ${n}`), ...[...built.notes, ...orderNotes].slice(0, 12).map(n => `note: ${n}`), ...(built.notes.length + orderNotes.length > 12 ? [`note: ...and ${built.notes.length + orderNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`] : []), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, ...wireLines, tree.ok && !wireLines.length ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
 }
 
 async function cmdApprove(root, { rest, flags }) {
@@ -641,6 +668,12 @@ async function cmdApprove(root, { rest, flags }) {
   if (ledger.scope?.hash !== hash) return out('the scope file changed after the split; record it with swarm change "reason" (or re-split)', 1);
   const { tree, lines } = treeReport(scope, ledger.tickets);
   if (!tree.ok) return out(`not approvable:\n${lines.join('\n')}`, 1);
+  // A split that kept requirements without an integration ticket is held here, where it can still be fixed (swarm scope split --wire).
+  {
+    const unwiredNow = new Set(unwiredRequirements(ledger.tickets));
+    const open = [...new Set([...(ledger.wiring === true ? unwiredNow : []), ...(ledger.pendingWiring ?? []).filter(r => unwiredNow.has(r))])].filter(r => !builtRequirements(ledger.tickets, [r]).length).sort();
+    if (open.length) return out(`not approvable: ${open.length} requirement(s) have modules but no integration ticket (${open.slice(0, 8).join(', ')}). Run swarm scope split --wire, swarm run docs/scope/split/manifest.json, then swarm scope split --ingest RUN --merge --wire`, 1);
+  }
   const uiProfile = await readProfile(root);
   const knownScreens = new Set((uiProfile?.ui?.screens ?? []).map(screen => screen.id));
   const unknownScreens = ledger.tickets.flatMap(t => (t.screens ?? []).filter(id => !knownScreens.has(id)).map(id => `${t.id}: ${id}`));

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.111.0
+
+Two parts-app bugs (lessons 54 and 55):
+- **A wave could not start because of `.env.example`.** A names-only template (`.env.example`, `.env.sample`, ...) is listed as context in jobs, but the project profile protects it, so the manifest check refused it and no wave started. A template is now readable context everywhere the runner reads or copies context (the protected-path check, the snapshot, the copy into the worker's workspace); it is still never writable, and a real `.env`, or a file named like the template that is a symlink to one, is still refused. The exemption is narrow: the protected entry must be exactly that file (not a folder, not `.git/`/`.swarm/`), no secret folder may sit above it, a template word in front of a key extension (`server.example.pem`) is still a key, and a template that holds what looks like a real secret value is not handed to a worker. An Opus review (4 high, 7 medium, 6 low) was fixed before release.
+- **The splitter.** (1) A TEST ticket the split worker left without acceptance lines gets its requirement's own acceptance lines (a note says so); a build or migration ticket is not (the requirement's lines are route-level), and with none to copy a test ticket is refused as before. (2) A test ticket now waits for the module tickets of its requirements (a test that runs before the module it imports can only block); a test-first dependency the worker wrote is flipped, never a cycle; integration tickets and finished tickets are left alone. (3) A requirement with modules and no integration ticket no longer throws the whole split away: the ledger is written (`pendingWiring`), the wire manifest is written for you to `docs/scope/split/wire-manifest.json` (the split manifest is never overwritten), and `scope approve` refuses until the integration tickets exist. A merge into an approved ledger that would leave a requirement unwired is still refused, so a running build keeps its approval. (4) The split prompt asks for acceptance lines on every build, test and migration ticket and for tests to run after the modules (preferably listed in the build ticket's `tests`).
+- Tests: `tests/env-example-context.test.mjs`, `tests/splitter-lesson-55.test.mjs`; eval 34.1 now expects the kept split.
+
 ## 1.110.0
 
 Swarm Watch leftovers:

@@ -42,9 +42,31 @@ function secretEntries(file) {
 
 // A template that holds names, not values (.env.example, .env.sample, config.example.json, terraform.tfvars.example): safe to READ as context.
 // It is still protected from writes, and a file that merely sits next to a secret is not an example.
-export function isExampleFile(file) {
+function looksLikeExample(file) {
   const name = String(file).split('\\').join('/').split('/').pop().toLowerCase();
   return /^\.env(?:\.[a-z0-9_-]+)*\.(?:example|sample|template|dist)$/.test(name) || /^[a-z0-9_.-]+\.(?:example|sample|template)(?:\.[a-z0-9]+)?$|^[a-z0-9_.-]+\.(?:example|sample|template)$/.test(name) && !/^\.env/.test(name) && !/(?:^|[._-])(?:id_rsa|id_dsa|id_ed25519|credentials|secrets?)(?:[._-]|$)/.test(name);
+}
+
+export function isExampleFile(file) {
+  if (!looksLikeExample(file)) return false;
+  const name = String(file).split('\\').join('/').split('/').pop().toLowerCase();
+  if (name.startsWith('.env')) return true;
+  // server.example.pem, dev.sample.key: a template word in front of a key or certificate extension is still a key.
+  const stripped = name.replace(/\.(?:example|sample|template)(?=\.|$)/, '');
+  return !(SECRET_EXTENSIONS.includes(path.extname(name)) || SECRET_EXTENSIONS.includes(path.extname(stripped)) || SECRET_NAMES.includes(stripped));
+}
+
+// A names-only template that may be READ although the profile protects it: the protected entry must be exactly this file (never a folder, never
+// .git/ or .swarm/), and no folder above it may be a secret folder. Writes are never allowed by this.
+export function templateReadable(profile, file) {
+  const norm = path.posix.normalize(String(file).split('\\').join('/'));
+  if (!isExampleFile(norm)) return false;
+  const dir = path.posix.dirname(norm);
+  if (dir !== '.' && isSecretPath(`${dir}/x`)) return false;
+  const entry = protectedPathHit(profile, norm);
+  if (!entry) return true;
+  const key = entry.normalize('NFC').toLowerCase();
+  return !key.endsWith('/') && key === norm.normalize('NFC').toLowerCase();
 }
 
 // True when a repo path names a secret: any .env file (env.example.txt is a template and is fine), keys, certificates, secret folders.
@@ -104,6 +126,8 @@ export function protectedViolations(profile, jobs) {
       if (kind === 'context' && mayRead) continue;
       const files = Array.isArray(job?.[field]) ? job[field] : [];
       for (const file of files) {
+        // A names-only template (.env.example) is readable even when it is a protected path: protection is against writes, and the file holds no values.
+        if (kind === 'context' && typeof file === 'string' && templateReadable(profile, file)) continue;
         const entry = typeof file === 'string' ? protectedPathHit(profile, file) : null;
         if (entry) out.push({ job: id, path: file, entry, kind });
       }

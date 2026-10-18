@@ -136,6 +136,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-18 | - | review-scope-loop: Reviewed the go --scope loop. 2 HIGH: Ctrl-C (SIGINT swallowed by runManifestChec | claude | opus | pass | 1,798,301 | $1.73 |
 | 2026-10-18 | - | review-scope-loop-2: No high findings. Three medium: Ctrl-C outside the agent run can be ignored (a | claude | opus | pass | 965,324 | $1.39 |
 | 2026-10-18 | - | review-watch-leftovers: I made no edits. Fix-ticket gating holds on every status path I could read. | claude | opus | pass | 1,548,377 | $1.75 |
+| 2026-10-18 | - | review-s11-fixes: Template-context: whole file contents sent with no value guard and override of exp | claude | opus | pass | 208,304 | $0.74 |
 
 ## Daily summary
 
@@ -148,5 +149,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-16 | anthropic | 52 | 48 | 4 | 1,336,255 | $0.48 (incl. estimates) |
 | 2026-10-16 | claude | 1 | 0 | 1 | 46,296 | $0.42 |
 | 2026-10-16 | codex | 2 | 2 | 0 | 31,624 | subscription |
-| 2026-10-18 | claude | 8 | 8 | 0 | 5,246,255 | $7.68 |
-| **total** | all | 132 | 117 | 15 | 10,422,414 | $12.61 (incl. estimates) |
+| 2026-10-18 | claude | 9 | 9 | 0 | 5,454,559 | $8.42 |
+| **total** | all | 133 | 118 | 15 | 10,630,718 | $13.35 (incl. estimates) |
