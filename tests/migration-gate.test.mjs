@@ -273,3 +273,65 @@ test('runRoundTrip hands the commands a short environment', async () => {
   assert.deepEqual(migrationEnv([], { PATH: 'p', OPENAI_API_KEY: 'k', DATABASE_URL: 'db' }), { PATH: 'p' });
   assert.deepEqual(migrationEnv(['DATABASE_URL'], { PATH: 'p', DATABASE_URL: 'db' }), { PATH: 'p', DATABASE_URL: 'db' });
 });
+
+// ---- down: "dir" and down: "none" (parts-app: Supabase reads 0009.down.sql as a duplicate migration; "section" runs the down right after the up) ----
+const dirCfg = (over) => validateMigrationsConfig({ dir: 'supabase/migrations', down: 'dir', ...over });
+test('down dir: the default folder is <dir>_down, the down file has the same name, and the path is mirrored', () => {
+  const r = dirCfg({});
+  assert.equal(r.ok, true, r.errors.join('; '));
+  assert.equal(r.config.downDir, 'supabase/migrations_down');
+  assert.equal(downFileFor('supabase/migrations/0009_add_x.sql', r.config), 'supabase/migrations_down/0009_add_x.sql');
+  assert.equal(downFileFor('supabase/migrations/sub/0010_y.sql', r.config), 'supabase/migrations_down/sub/0010_y.sql');
+  assert.equal(dirCfg({ downDir: 'db/down' }).config.downDir, 'db/down');
+});
+test('down dir: the down folder must be separate (never the migrations folder, inside it, or containing it) and downDir needs down "dir"', () => {
+  for (const downDir of ['supabase/migrations', 'supabase/migrations/down', 'supabase', '../x', '/abs']) {
+    const r = dirCfg({ downDir });
+    assert.equal(r.ok, false, downDir);
+  }
+  assert.ok(validateMigrationsConfig({ dir: 'supabase/migrations', down: 'sibling', downDir: 'x' }).errors.some((e) => e.includes('downDir needs down')));
+  assert.ok(validateMigrationsConfig({ down: 'bogus' }).errors.some((e) => e.includes('sibling, section, dir or none')));
+});
+test('down dir: a missing or empty down file in the down folder is a problem naming the folder; a good one passes; a down-only edit re-checks its migration', async () => {
+  const c = dirCfg({}).config;
+  const up = 'supabase/migrations/0009_a.sql', down = 'supabase/migrations_down/0009_a.sql';
+  const files = new Map([[up, 'create table t (id int);']]);
+  const io = { read: async (f) => Buffer.from(files.get(f) ?? ''), exists: async (f) => files.has(f) };
+  const missing = await checkMigrations({ files: [up], config: c, ...io });
+  assert.equal(missing.problems[0].message, `migration ${up} has no down step (add ${down})`);
+  files.set(down, '-- nothing');
+  assert.equal((await checkMigrations({ files: [up], config: c, ...io })).problems[0].check, 'no-down', 'comment-only down file');
+  files.set(down, 'drop table t;');
+  assert.equal((await checkMigrations({ files: [up], config: c, ...io })).ok, true);
+  // A sibling-style .down.sql next to the migration does NOT count in dir mode.
+  files.delete(down); files.set('supabase/migrations/0009_a.down.sql', 'drop table t;');
+  assert.equal((await checkMigrations({ files: [up], config: c, ...io })).ok, false);
+  // Editing only the down file checks the migration again, and a bad edit is caught.
+  files.set(down, '');
+  assert.equal((await checkMigrations({ files: [down], config: c, ...io })).problems[0].file, up);
+});
+test('down dir: destructive SQL still needs approval, and the approval is bound to the file hash', async () => {
+  const c = dirCfg({}).config;
+  const up = 'supabase/migrations/0010_drop.sql', down = 'supabase/migrations_down/0010_drop.sql';
+  const bytes = Buffer.from('drop table old_things;');
+  const io = { read: async (f) => (f === up ? bytes : Buffer.from('create table old_things (id int);')), exists: async () => true };
+  const need = await checkMigrations({ files: [up], config: c, ...io });
+  assert.equal(need.needsApproval.length, 1);
+  assert.equal((await checkMigrations({ files: [up], config: c, ...io, approvals: [{ file: up, sha256: sha('drop table old_things;') }] })).ok, true);
+  assert.equal((await checkMigrations({ files: [up], config: c, ...io, approvals: [{ file: up, sha256: sha('other') }] })).ok, false);
+  assert.equal(isMigrationFile(down, c), false, 'a down file is never itself a migration');
+});
+test('down none: no down step is required, but the destructive scan and approval still apply', async () => {
+  const r = validateMigrationsConfig({ dir: 'supabase/migrations', down: 'none' });
+  assert.equal(r.ok, true);
+  assert.equal(r.config.downDir, undefined);
+  const up = 'supabase/migrations/0011_a.sql';
+  const safe = await checkMigrations({ files: [up], config: r.config, read: async () => Buffer.from('create table t (id int);'), exists: async () => false });
+  assert.equal(safe.ok, true, JSON.stringify(safe.problems));
+  const bad = await checkMigrations({ files: [up], config: r.config, read: async () => Buffer.from('drop table t;'), exists: async () => false });
+  assert.equal(bad.ok, false);
+  assert.deepEqual(bad.problems.map((p) => p.check), ['needs-approval']);
+  const priv = await checkMigrations({ files: [up], config: r.config, read: async () => Buffer.from('create extension pg_stat_statements;'), exists: async () => false });
+  assert.equal(priv.ok, false, 'privileged SQL still needs approval');
+  assert.equal((await checkMigrations({ files: [up], config: r.config, read: async () => Buffer.from('drop table t;'), exists: async () => false, approvals: [{ file: up, sha256: sha('drop table t;') }] })).ok, true);
+});

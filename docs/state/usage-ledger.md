@@ -130,6 +130,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-16 | - | p13t-ticket-manifest: Wrote tests/ticket-manifest.test.mjs with 15 node:test cases for ticketsToMani | anthropic | claude-haiku-5-5 | pass | 27,213 | $0.01 |
 | 2026-10-18 | - | review-spend-cap: Spend-cap review: 2 HIGH (resume skips the project cap and can raise per-run caps | claude | opus | pass | 89,523 | $0.61 |
 | 2026-10-18 | - | review-central-checks: Reviewed central-checks.mjs, project-spend.mjs, the test file and the diff (s | claude | opus | pass | 43,076 | $0.40 |
+| 2026-10-18 | - | review-down-dir: Reviewed down-dir diff, migration-gate, migration-queue, safety-commands and the do | claude | opus | pass | 73,843 | $0.46 |
 
 ## Daily summary
 
@@ -142,5 +143,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-16 | anthropic | 52 | 48 | 4 | 1,336,255 | $0.48 (incl. estimates) |
 | 2026-10-16 | claude | 1 | 0 | 1 | 46,296 | $0.42 |
 | 2026-10-16 | codex | 2 | 2 | 0 | 31,624 | subscription |
-| 2026-10-18 | claude | 2 | 2 | 0 | 132,599 | $1.01 |
-| **total** | all | 126 | 111 | 15 | 5,308,758 | $5.94 (incl. estimates) |
+| 2026-10-18 | claude | 3 | 3 | 0 | 206,442 | $1.47 |
+| **total** | all | 127 | 112 | 15 | 5,382,601 | $6.40 (incl. estimates) |

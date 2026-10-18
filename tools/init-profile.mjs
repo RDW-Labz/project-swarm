@@ -174,8 +174,8 @@ export function validateProfile(profile) {
     const checked = validateMigrationsConfig(profile.migrations);
     for (const message of checked.errors) errors.push(`profile.migrations: ${message}`);
     if (checked.ok) {
-      const { dir, down, commands } = checked.config;
-      out.migrations = { dir, down, ...(Object.keys(commands).length ? { commands } : {}) };
+      const { dir, down, downDir, commands, env: migrationEnvNames } = checked.config;
+      out.migrations = { dir, down, ...(downDir ? { downDir } : {}), ...(migrationEnvNames?.length ? { env: migrationEnvNames } : {}), ...(Object.keys(commands).length ? { commands } : {}) };
       // The scripts the migration commands run are protected like a ci hook's files.
       for (const argv of Object.values(commands)) for (const entry of hookFiles(argv)) {
         try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch { /* not a usable path */ }
