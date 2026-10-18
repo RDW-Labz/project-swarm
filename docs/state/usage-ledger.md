@@ -132,6 +132,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-18 | - | review-central-checks: Reviewed central-checks.mjs, project-spend.mjs, the test file and the diff (s | claude | opus | pass | 43,076 | $0.40 |
 | 2026-10-18 | - | review-down-dir: Reviewed down-dir diff, migration-gate, migration-queue, safety-commands and the do | claude | opus | pass | 73,843 | $0.46 |
 | 2026-10-18 | - | review-lane-risk: No high-severity issues. Old ledgers still verify (canon drops undefined); re-appr | claude | opus | pass | 372,241 | $0.72 |
+| 2026-10-18 | - | review-cap-reroute: Caps are not bypassed (rerouted job re-runs admission/reserveSpend; run-cap and | claude | opus | pass | 355,570 | $0.62 |
 
 ## Daily summary
 
@@ -144,5 +145,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-16 | anthropic | 52 | 48 | 4 | 1,336,255 | $0.48 (incl. estimates) |
 | 2026-10-16 | claude | 1 | 0 | 1 | 46,296 | $0.42 |
 | 2026-10-16 | codex | 2 | 2 | 0 | 31,624 | subscription |
-| 2026-10-18 | claude | 4 | 4 | 0 | 578,683 | $2.19 |
-| **total** | all | 128 | 113 | 15 | 5,754,842 | $7.12 (incl. estimates) |
+| 2026-10-18 | claude | 5 | 5 | 0 | 934,253 | $2.81 |
+| **total** | all | 129 | 114 | 15 | 6,110,412 | $7.74 (incl. estimates) |

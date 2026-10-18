@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.0 },
+  "jobs": [
+    {
+      "id": "review-cap-reroute",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "touches the spend admission path",
+      "type": "review",
+      "prompt": "Review coordination/review/cap-reroute.diff (tools/swarm.mjs runOne admission step: an auto job refused with reason lane-cap is requeued on the next lane instead of held; cappedLanes feeds routeHealth). Rules: (1) the spend caps must never be bypassed: the re-routed job still passes reserveSpend on its new lane; run-cap must still hold; a job with a named lane must still hold; (2) no infinite loop or lost job: each lane is added to cappedLanes once, the requeue path must leave record, lane slot (release), reservation and `remaining` accounting consistent (compare with the existing retry path at the finally block: it does not call settle, mine returns early from the try before the later try/finally: check that settle/remaining/dependents are not left wrong, that waitingJobs/scheduler counters are not leaked); (3) a sensitive job must never be rerouted to a lane that is not allowed for it (routeJob handles it; confirm); (4) cappedLanes is per runManifest call: resume behaviour; (5) the state fields capFallbacks and spendWarnings: are they persisted and shown; any consumer that would choke on the new field; (6) the test: does it prove the new path runs, is it flaky. Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete failing scenario, and say what you checked that is fine. Do not edit files.",
+      "context": ["tools/swarm.mjs", "tests/cap-reroute.test.mjs", "coordination/review/cap-reroute.diff"],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

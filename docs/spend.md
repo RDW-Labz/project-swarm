@@ -67,6 +67,10 @@ Explicit raises apply last, in order. Valid keys are `maxUsd`, `maxTokens`, `lan
 
 Caps must be `null` or finite positive numbers; token caps must be positive integers. Invalid cap values, unknown budget keys, and unknown lane agents refuse with `budget-invalid: <path> <reason>`.
 
+## A lane at its cap
+
+A job routed with `agent: "auto"` that is refused by its lane's daily cap is not held: the lane is skipped for that job and the next lane in the routing order (Cursor, then Codex, then the others) takes the job. The move is on the job as `capFallbacks` and in the run's `spendWarnings` as `lane-cap-reroute`. The per-run cap, a job that names its own lane, and a job no other lane can take still hold the run, as before. The caps themselves never change.
+
 ## Machine-wide daily spend
 
 Lane daily totals are machine-wide. Every project on the machine shares one store, `~/.project-swarm/spend/daily.json`, or `$SWARM_SPEND_DIR/daily.json` if that is set. Each read and write takes the `daily.lock` directory lock, and writes are atomic. Deleting a project's `.swarm/` does not reset the day. Entries are keyed by project, run, job and attempt, and are pruned after 31 days. A malformed store refuses with `spend-store-invalid` and is never overwritten. A lock held past 10 s refuses with `spend-store-locked`. A stale lock from a dead process on this host is cleared.

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.108.0
+
+A lane at its daily cap no longer stops the run (the S8 gap: "cap refusal escalates to Codex instead of aborting"):
+- When an auto-routed job is refused at admission by its lane's daily cap (two jobs pick the lane before either has reserved, so the second is refused), the job goes back to the queue and the lane is skipped for that job (other jobs may still fit it). The router then gives it to the next lane in the routing order: Cursor, then Codex (both subscriptions), then the others it already allows. The move is recorded on the job (`capFallbacks`: from, to, reason) and in the run's `spendWarnings` (`lane-cap-reroute`).
+- Unchanged on purpose: the per-run `--max-usd` / token cap still holds the run (it is the owner's limit on this run, not a lane's); a job that names its own lane (not `auto`) still holds, because its fields may not fit another lane; when no other lane can take the job it holds as before; the daily caps themselves are never raised.
+- Resuming an auto job that was held at a lane cap no longer refuses because the full lane is still full: the job is routed again, so only the run cap is checked. The retry check after a failed attempt also skips capped lanes. An Opus review (3 medium, 5 low) was fixed before release.
+- Test: `tests/cap-reroute.test.mjs` (fails on 1.107.0).
+
 ## 1.107.0
 
 `swarm tickets ID --risk low|medium|high` and `swarm tickets ID --lane auto|claude|codex|cursor|anthropic[:MODEL]` (the S8 gap: a ticket's route could only be changed by editing the ledger by hand):
