@@ -242,3 +242,7 @@ Lesson 39 real integration tests (tests/lesson-39-integrate.test.mjs): a ticket 
 ### Parts-app S7 (lessons 40-41, 1.99.0)
 
 ~12 hand fixes in S7. Hand-written (core wiring: quality checks, ticket manifest, sync done-gate, integrate dependency step, ship). Evals 40.1 to 40.9 in tests/lesson-40-eval.test.mjs. Opus review (dependencies through the gate, ship) before merge. The `ship` CI run is on by default; `--no-ci-local` is the way out.
+
+### Safety group (1.100.0)
+
+3 swarm jobs (stop-all, state-backup, migration-gate, each with tests; Haiku, one run, all 34 tests green first time; the migration-gate files came back as one line each and were formatted with prettier). Hand work: command layer, queue wiring, profile block, docs. Opus review ($0.7 or less): 7 high, 8 medium, 8 low, all but two low items fixed with tests (left: seed check does not read package.json script bodies; the stop step does not cancel statuses other than running). Notes: a worker module that takes `exec` results must be told the shape (`exitCode`), the design said `code`.

@@ -3,13 +3,14 @@ import { validateApprovalPolicy } from './approval-policy.mjs';
 import { validateCiConfig } from './ci-hooks.mjs';
 import { validateVerifyConfig } from './verify-config.mjs';
 import { validateUiConfig } from './ui-compare.mjs';
+import { validateMigrationsConfig } from './migration-gate.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { sanitizeText } from './journal.mjs';
 
 export const DEFAULT_PROFILE_BUDGET = Object.freeze({ maxUsd: 5, maxTokens: 2000000 });
 const STATUSES = ['green', 'red', 'skipped', 'none'];
-const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality'];
+const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality', 'migrations'];
 const REQUIRED_KEYS = ['sensitive', 'protectedPaths', 'budget', 'baseCheck'];
 const BASE_KEYS = ['status', 'ranAt', 'head', 'checks'];
 // The pointer (profile) and the checks file decide what later runs may do and execute, so no job may rewrite them.
@@ -159,6 +160,18 @@ export function validateProfile(profile) {
     for (const message of checked.errors) errors.push(`profile.context: ${message}`);
     if (checked.value) out.context = checked.value;
   }
+  if (profile.migrations !== undefined) {
+    const checked = validateMigrationsConfig(profile.migrations);
+    for (const message of checked.errors) errors.push(`profile.migrations: ${message}`);
+    if (checked.ok) {
+      const { dir, down, commands } = checked.config;
+      out.migrations = { dir, down, ...(Object.keys(commands).length ? { commands } : {}) };
+      // The scripts the migration commands run are protected like a ci hook's files.
+      for (const argv of Object.values(commands)) for (const entry of hookFiles(argv)) {
+        try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch { /* not a usable path */ }
+      }
+    }
+  }
   if (profile.ui !== undefined) {
     const checked = validateUiConfig(profile.ui);
     for (const message of checked.errors) errors.push(`profile.ui: ${message}`);
@@ -198,7 +211,7 @@ export function hookFiles(argv) {
 // The package.json scripts a package-runner command runs (npm run X, npm test, pnpm X, yarn X): a batch must not change them (the gate checks).
 export function hookScriptNames(profile) {
   const names = new Set();
-  const argvs = [profile?.verify?.command, ...(profile?.verify?.setup ?? []), profile?.ci?.smoke?.argv, profile?.ci?.preview?.argv, profile?.ui?.start];
+  const argvs = [profile?.verify?.command, ...(profile?.verify?.setup ?? []), profile?.ci?.smoke?.argv, profile?.ci?.preview?.argv, profile?.ui?.start, ...Object.values(profile?.migrations?.commands ?? {})];
   for (const argv of argvs) {
     if (!Array.isArray(argv) || !PACKAGE_RUNNERS.has(String(argv[0]).split('/').pop())) continue;
     const rest = argv.slice(1).filter(item => typeof item === 'string' && !item.startsWith('-'));

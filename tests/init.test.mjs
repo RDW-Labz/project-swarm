@@ -70,3 +70,40 @@ test('init adds the build output ignore lines and keeps the blocks the owner set
   assert.deepEqual(again.profile.context.db, ['docs/scope/scope-original.md']);
   assert.equal(await fs.readFile(path.join(root, '.gitignore'), 'utf8'), beforeIgnore);
 });
+
+test('init turns the migration check on for a NEW project that has a migrations folder; existing profiles keep what they have; ui, quality and migrations blocks survive a re-init', async t => {
+  const fresh = await project(t);
+  await fs.mkdir(path.join(fresh, 'supabase/migrations'), { recursive: true });
+  const first = await initProject(fresh, { source });
+  assert.deepEqual(first.profile.migrations, { dir: 'supabase/migrations', down: 'sibling' });
+  assert.ok(first.warnings.some(w => w.startsWith('migrations-check-on:')));
+  const second = await initProject(fresh, { source });
+  assert.deepEqual(second.profile.migrations, { dir: 'supabase/migrations', down: 'sibling' }, 'kept on a re-init');
+  assert.ok(!second.warnings.some(w => w.startsWith('migrations-check-on:')), 'announced once, when it is added');
+
+  // An existing project (a profile already there) does not get the block added; the owner turns it on by hand.
+  const old = await project(t);
+  await initProject(old, { source });
+  await fs.mkdir(path.join(old, 'prisma/migrations'), { recursive: true });
+  const again = await initProject(old, { source });
+  assert.equal(again.profile.migrations, undefined);
+
+  // No migrations folder: nothing added. Other folders are found too.
+  const none = await project(t);
+  assert.equal((await initProject(none, { source })).profile.migrations, undefined);
+  const prisma = await project(t);
+  await fs.mkdir(path.join(prisma, 'prisma/migrations'), { recursive: true });
+  assert.equal((await initProject(prisma, { source })).profile.migrations.dir, 'prisma/migrations');
+
+  // Hand-set ui, quality and migrations blocks survive.
+  const pointerPath = path.join(old, '.project-swarm.json');
+  const pointer = JSON.parse(await fs.readFile(pointerPath, 'utf8'));
+  pointer.profile.migrations = { dir: 'db/migrations', down: 'section' };
+  pointer.profile.quality = { build: false };
+  pointer.profile.ui = { baseUrl: 'http://127.0.0.1:3000', screens: [{ id: 'home', route: '/', mockup: 'design/home.html' }] };
+  await fs.writeFile(pointerPath, JSON.stringify(pointer));
+  const kept = await initProject(old, { source });
+  assert.deepEqual(kept.profile.migrations, { dir: 'db/migrations', down: 'section' });
+  assert.deepEqual(kept.profile.quality, { build: false });
+  assert.equal(kept.profile.ui.screens[0].id, 'home');
+});
