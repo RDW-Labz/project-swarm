@@ -105,7 +105,7 @@ test('swarm watch --all is a web board of every live run: token-protected, read-
   const board = JSON.parse((await get(port, `/board?t=${srv.token}`)).body);
   assert.equal(board.runs[0].runId, 'r-9');
   const page = await get(port, `/?t=${srv.token}`);
-  assert.match(page.body, /Every live run on this machine/);
+  assert.match(page.body, /Every project on this machine/);
   assert.match(page.body, /assets\/board\.js/);
   assert.match(page.headers['content-security-policy'], /script-src 'self'/);
   assert.equal((await get(port, '/assets/board.js')).status, 200);
@@ -125,7 +125,8 @@ test('review fixes: --no-watch is a go flag only, board commands quote run ids, 
   assert.equal(parseGoFlags([]).noWatch, undefined);
   assert.throws(() => parseShipFlags(['--no-watch']), /Unknown flag|--no-watch/);
   const js = fs.readFileSync(path.join(realAssets, 'board.js'), 'utf8');
-  assert.match(js, /shellQuote\(run\.runId\)/);
+  assert.match(js, /encodeURIComponent\(runId\)/, 'run links encode the run id');
+  assert.doesNotMatch(js, /shellQuote|copy\(/, 'the board links to runs now; there is nothing to copy');
   const root = await tmp(t);
   await fsp.mkdir(path.join(root, '.swarm/runs/run-9'), { recursive: true });
   await fsp.writeFile(path.join(root, 'target.txt'), 'keep me');

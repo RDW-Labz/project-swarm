@@ -1348,6 +1348,7 @@ async function cmdSync(root, { rest, flags }) {
       reviewLine = `${needReview.length} ticket(s) stay in review until an Opus security review passes: ${needReview.map(x => `${x.ticket.id} (${x.reason}${x.ticket.securityReview?.state === 'blocked' ? '; review-blocked: the last review gave no result' : ''})`).join('; ')}. Run: swarm run ${file}; then swarm scope security-review <that run id>; then swarm scope sync ${rest[0]} --integrated`;
     }
     await refreshPlan(root);
+    if (done.length) import('./history-hooks.mjs').then(async hooks => hooks.recordStageHistory(root, await readLedger(root))).catch(() => {});
     return out([`${done.length} ticket(s) marked done`,
       ...(notUnmet.length ? [`--accept-unmet: ${notUnmet.join(', ')} had no unmet line to accept (not in this run, not done, no lines unmet, or a failing line, which is never overridden)`] : []),
       ...(notAccepted.length ? [`--accept-unreviewed: ${notAccepted.join(', ')} did not skip a review (not in this run, not done, no review needed, a review already passed, or a failing review on this code: that one is never overridden)`] : []),

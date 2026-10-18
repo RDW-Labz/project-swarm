@@ -1,8 +1,22 @@
 .board-list{display:grid;gap:10px}
-.board-run{display:grid;gap:6px;padding:10px 12px;border-radius:12px;border:1px solid rgba(128,128,128,.25)}
-.board-run .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.board-run .mono{overflow-wrap:anywhere}
-.board-bar{height:6px;border-radius:3px;background:rgba(128,128,128,.25);overflow:hidden}
-.board-bar>i{display:block;height:100%;background:currentColor;opacity:.7}
+.board-h{margin:0 0 10px;font-size:15px}
 .board-note{margin:12px 0 0;opacity:.7}
 .board-empty{padding:18px;text-align:center;opacity:.7}
+.board-totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.board-totals .tile{padding:10px 12px;border-radius:12px;border:1px solid rgba(128,128,128,.25)}
+.board-totals .big{font-size:26px;font-weight:700}
+.board-totals .sub{opacity:.75;font-size:12px;overflow-wrap:anywhere}
+.board-lane{border:1px solid rgba(128,128,128,.25);border-radius:12px;padding:0}
+.board-lane>summary{cursor:pointer;padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.board-lane .lane-body{padding:6px 12px 12px;display:grid;gap:8px}
+.board-lane .name{font-weight:700}
+.board-run{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border-radius:10px;border:1px solid rgba(128,128,128,.25);text-decoration:none;color:inherit}
+.board-run:hover,.board-entry:hover{background:rgba(128,128,128,.12)}
+.board-bar{height:6px;border-radius:3px;background:rgba(128,128,128,.25);overflow:hidden;min-width:80px;flex:1}
+.board-bar>i{display:block;height:100%;background:currentColor;opacity:.7}
+.board-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.board-filters input,.board-filters select{padding:6px 8px;border-radius:8px;border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit}
+.board-entry{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;padding:6px 10px;border-radius:8px;border:1px solid rgba(128,128,128,.2);text-decoration:none;color:inherit}
+.board-entry .when{opacity:.7;font-size:12px}
+.board-entry .kind{font-size:12px;text-transform:uppercase;opacity:.8}
+.board-link{color:inherit;text-decoration:underline}
