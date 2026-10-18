@@ -95,7 +95,7 @@ export function validateMigrationsConfig(raw) {
     else envNames = [...raw.env];
   }
   const down = raw.down ?? MIGRATION_DEFAULTS.down;
-  if (down !== 'sibling' && down !== 'section' && down !== 'dir') errors.push('down must be sibling, section or dir');
+  if (!['sibling', 'section', 'dir', 'none'].includes(down)) errors.push('down must be sibling, section, dir or none');
   // down "dir": down files live in a separate folder the migration tool never reads (Supabase reads every .sql in its migrations folder, so a
   // down file next to its migration is run as a second migration with the same version). Same file name, mirrored path.
   let downDir = null;
@@ -223,7 +223,9 @@ export async function checkMigrations({ files = [], config, read, exists, approv
     if (!isMigrationFile(file, config)) continue;
     const bytes = await read(file);
     const sql = Buffer.from(bytes).toString('utf8');
-    if (config.down === 'sibling' || config.down === 'dir') {
+    if (config.down === 'none') {
+      // down: "none": no down step is required (the destructive/privileged SQL scan below still runs, and approvals still bind to the file hash).
+    } else if (config.down === 'sibling' || config.down === 'dir') {
       const df = downFileFor(file, config);
       const has = (await exists(df)) && stripNonCode(Buffer.from(await read(df)).toString('utf8')).trim().length > 0;
       if (!has) problems.push({ file, check: 'no-down', message: 'migration ' + file + ' has no down step (add ' + df + ')' });
