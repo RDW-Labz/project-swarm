@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.2 },
+  "jobs": [
+    {
+      "id": "review-board-2",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "changes the machine-wide slot store every run of every project uses",
+      "type": "review",
+      "prompt": "Review coordination/review/board-2.diff: machineConcurrency (local config) and fair sharing of workers between projects in tools/lanes.mjs (machineAllowance, claimLaneSlots machine param, store.demand, LaneScheduler close clearing demand, machineConcurrency validation), the wiring in tools/swarm.mjs (shared.machine with projectId of the real root), workersHeld in tools/board-data.mjs and the board JS tile. Rules: (1) with machineConcurrency unset, behaviour must be byte-for-byte what it was (lane limits only); old lanes.json files without demand/project must still validate and work; (2) the total of slots across all lanes and projects never exceeds the limit, even with concurrent claimers (the store is locked: confirm the demand write and the slot grant are one critical section), and slots of dead processes are cleaned (does demand of a dead pid get removed? does an unlimited-project's slot with no `project` field count toward the total and toward which project?); (3) fairness: can one project starve another? can the reservation logic deadlock (everyone waits, nobody holds)? what if a project is active but its demand is stale because its scheduler is stuck? what if max < number of projects? what if two schedulers of the SAME project (parent and child runs) claim: do they share one share (they should) and does closing one clear the other's demand (the key is the project id!)?; (4) scheduler polling cost: skipped lanes re-poll every 25 ms and each claim takes the file lock: with many waiting runs does this hammer the disk? (5) isolation: slot records carry only runId and project id; nothing else crosses projects; the board reads lanes.json with liveness checks; (6) an invalid config value must fail the run at start with a clear error. Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete scenario, and say what you checked that is fine. Do not edit files.",
+      "context": ["tools/lanes.mjs", "tools/board-data.mjs", "tests/machine-share.test.mjs", "coordination/review/board-2.diff"],
+      "outputs": [],
+      "timeoutMs": 1500000
+    }
+  ]
+}

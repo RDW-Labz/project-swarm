@@ -9,6 +9,7 @@ import { readLedger } from './tickets.mjs';
 import { projectSummary } from './project-spend.mjs';
 import { listLessons } from './lesson-store.mjs';
 import { sanitizeWorkerText } from './worker-text.mjs';
+import os from 'node:os';
 
 const DAY = 86400000;
 const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   // subscription lanes: not billed per use
@@ -129,7 +130,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
 }
 
 // The whole board: machine totals (sums of the project numbers) and one overview per registered project.
-export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary } = {}) {
+export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, workers = null } = {}) {
   const overviews = [];
   // A live run belongs to the project whose real root it ran in, however the path was spelled.
   const live = await Promise.all(liveRuns.map(async r => ({ ...r, root: await fs.realpath(r.root).catch(() => r.root) })));
@@ -147,6 +148,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
     machine.liveRuns += o.live.length;
   }
   for (const key of ['todayUsd', 'weekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] = Math.round(machine.cost[key] * 1e6) / 1e6;
+  machine.workers = workers;
   return { at: new Date(now).toISOString(), machine, projects: overviews };
 }
 
@@ -193,4 +195,32 @@ export async function historyEventsOf(project) {
   const { lessons } = await listLessons(project.root).catch(() => ({ lessons: [] }));
   for (const l of lessons) events.push({ ...base, kind: 'lesson', key: `lesson:${project.id}:${l.id}`, at: l.date ?? l.at ?? project.addedAt, ref: String(l.id), title: `Lesson ${l.id}: ${l.what ?? l.title ?? l.rule ?? ''}` });
   return events.filter(e => e.at);
+}
+
+// Who holds the machine's workers right now: the slots in the shared lane store, by project and lane (the project a slot was claimed for is recorded on it).
+// A slot whose process is gone is not counted. `max` is the machine-wide limit (null: none), `demand` what projects are waiting for.
+export async function workersHeld({ dir, max = null, invalid = false, isAlive: probe = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } } } = {}) {
+  const seen = new Map();
+  const isAlive = pid => { if (!seen.has(pid)) seen.set(pid, probe(pid)); return seen.get(pid); };
+  let store = null;
+  try { store = JSON.parse(await fs.readFile(path.join(dir, 'lanes.json'), 'utf8')); } catch { /* no workers have ever been claimed */ }
+  const host = os.hostname();
+  const byProject = {};
+  let total = 0;
+  for (const [agent, slots] of Object.entries(store?.slots ?? {})) {
+    for (const slot of Array.isArray(slots) ? slots : []) {
+      if (!slot || (slot.host === host && !isAlive(slot.pid))) continue;
+      const key = typeof slot.project === 'string' && slot.project ? slot.project : 'unknown';
+      const lane = agent === 'anthropic' ? 'Anthropic API' : laneLabel(agent, null);
+      const entry = byProject[key] ??= { total: 0, byLane: {} };
+      entry.total += 1; entry.byLane[lane] = (entry.byLane[lane] ?? 0) + 1; total += 1;
+    }
+  }
+  const demand = {};
+  // Waiting entries are per run and lane; the board shows them per project, and only the fresh ones (a waiting run refreshes its entry every poll).
+  for (const entry of Object.values(store?.demand ?? {})) {
+    if (!entry || typeof entry.project !== 'string' || !Number.isInteger(entry.count) || entry.count <= 0 || !(Date.now() - entry.at <= 5000) || (entry.host === host && !isAlive(entry.pid))) continue;
+    demand[entry.project] = (demand[entry.project] ?? 0) + entry.count;
+  }
+  return { max, ...(invalid ? { invalid: true } : {}), total, free: max ? Math.max(0, max - total) : null, byProject, demand };
 }

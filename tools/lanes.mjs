@@ -189,6 +189,14 @@ export async function withLaneStore(fn, { dir = lanesDir(), now = Date.now, isAl
       else delete store.slots[agent];
     }
     for (const [agent, pause] of Object.entries(store.pauses)) if (!(pause.until > now())) delete store.pauses[agent];
+    // The waiting list is advisory: a malformed one is reset (never an error that stops every run), dead or expired entries are dropped.
+    if (store.demand !== undefined) {
+      if (!store.demand || typeof store.demand !== 'object' || Array.isArray(store.demand)) store.demand = {};
+      for (const [key, entry] of Object.entries(store.demand)) {
+        const ok = entry && typeof entry === 'object' && Number.isInteger(entry.pid) && entry.pid > 0 && typeof entry.host === 'string' && entry.host && Number.isInteger(entry.count) && entry.count > 0 && typeof entry.project === 'string' && Number.isFinite(entry.at) && now() - entry.at <= DEMAND_TTL_MS * 4;
+        if (!ok || !slotLive(entry, host, isAlive)) delete store.demand[key];
+      }
+    }
     const result = await fn(store);
     if (JSON.stringify(store) !== before) {
       temp = path.join(dir, `.lanes-${process.pid}-${crypto.randomUUID()}.tmp`);
@@ -205,23 +213,98 @@ export async function withLaneStore(fn, { dir = lanesDir(), now = Date.now, isAl
   }
 }
 
+// The machine-wide worker limit from the local config (`machineConcurrency`): null (no limit, the default) or a whole number 1 to 2048. Anything else is an error, never "no limit".
+export function machineConcurrency(config) {
+  const value = config?.machineConcurrency;
+  if (value === undefined) return null;
+  if (!Number.isInteger(value) || value < 1 || value > 2048) throw Object.assign(new Error('lanes-invalid: machineConcurrency must be a whole number from 1 to 2048 (or left out for no limit)'), { code: 'lanes-invalid' });
+  return value;
+}
+
+// Fair sharing of a machine-wide worker limit between projects (the setting `machineConcurrency`).
+// A project's guaranteed share is the limit divided by the projects that are active (holding workers, or waiting for some), at least 1.
+// A project may borrow what the others are not using, but never what another active project is still entitled to and asking for:
+// capacity left for others = the sum, over the other projects, of min(their share not yet held, what they are waiting for).
+// Where there are more projects than workers (shares of 1), a freed worker goes to the project that has waited longest, not back to the one that freed it.
+// So one project cannot starve another, and an idle project's share is not wasted. Lane limits and spend caps are separate and unchanged.
+const DEMAND_TTL_MS = 5000;           // a waiting run refreshes its entry every poll; one that stops polling stops reserving
+const demandKey = (project, runId, agent) => `${project}|${runId}|${agent}`;
+
+// Waiting entries per project: counts added up, the oldest `since` kept; stale or malformed entries ignored.
+function waitingByProject(store, { time, host, isAlive, except = null }) {
+  const out = {};
+  for (const entry of Object.values(store.demand && typeof store.demand === 'object' && !Array.isArray(store.demand) ? store.demand : {})) {
+    if (!entry || typeof entry.project !== 'string' || entry.project === '' || entry.project === except || !Number.isInteger(entry.count) || entry.count <= 0) continue;
+    if (!(Number.isFinite(entry.at) && time - entry.at <= DEMAND_TTL_MS) || typeof entry.host !== 'string' || !slotLive({ host: entry.host, pid: entry.pid }, host, isAlive)) continue;
+    const have = out[entry.project] ??= { count: 0, since: Infinity };
+    have.count += entry.count;
+    have.since = Math.min(have.since, Number.isFinite(entry.since) ? entry.since : entry.at);
+  }
+  return out;
+}
+
+export function machineAllowance({ store, project, count, max, isAlive, time = Date.now(), host = os.hostname() }) {
+  const held = {};
+  let total = 0;
+  for (const slots of Object.values(store.slots)) for (const slot of slots) { const key = slot.project ?? ''; held[key] = (held[key] ?? 0) + 1; total += 1; }
+  const waiting = waitingByProject(store, { time, host, isAlive, except: project });
+  const mine = waitingByProject(store, { time, host, isAlive }) [project];
+  // Slots with no project (an older runner) count toward the total but are not a project that shares.
+  const active = new Set([project, ...Object.keys(held).filter(key => key !== '' && held[key] > 0), ...Object.keys(waiting)]);
+  const share = Math.max(1, Math.floor(max / active.size));
+  const entitled = key => Math.min(Math.max(0, share - (held[key] ?? 0)), waiting[key]?.count ?? 0);
+  const mySince = mine?.since ?? time;
+  let reserved = 0, reservedAhead = 0;
+  for (const key of Object.keys(waiting)) {
+    reserved += entitled(key);
+    if (waiting[key].since < mySince || (waiting[key].since === mySince && key < project)) reservedAhead += entitled(key);
+  }
+  const free = Math.max(0, max - total);
+  const guaranteed = Math.min(count, Math.max(0, share - (held[project] ?? 0)), Math.max(0, free - reservedAhead));
+  const borrowed = Math.min(count, Math.max(0, free - reserved));
+  return { allowed: Math.max(guaranteed, borrowed), share, held, total, free, reserved };
+}
+
 // One lock grants every slot this run can take. A per-job lock on a slow disk spaces
 // state writes past the coalesce window.
-export function claimLaneSlots({ dir, agent, concurrency, count, runId = '', now = Date.now, isAlive } = {}) {
+export function claimLaneSlots({ dir, agent, concurrency, count, runId = '', machine = null, now = Date.now, isAlive } = {}) {
   return withLaneStore(store => {
     const slots = store.slots[agent] ?? [];
     const pause = store.pauses[agent];
     if (pause && pause.until > now()) return { granted: [], reason: pause.state, state: pause.state, until: pause.until, consecutiveRateLimits: pause.consecutiveRateLimits, inFlight: slots.length };
-    const take = Math.min(Math.max(0, count), Math.max(0, concurrency - slots.length));
-    if (take === 0) return { granted: [], reason: 'full', inFlight: slots.length };
+    const laneRoom = Math.max(0, concurrency - slots.length);
+    let take = Math.min(Math.max(0, count), laneRoom);
+    let machineLimited = false;
+    if (machine?.max) {
+      const project = String(machine.project ?? '');
+      const time = now();
+      const { allowed } = machineAllowance({ store, project, count: take, max: machine.max, isAlive: isAlive ?? pidAlive, time });
+      if (allowed < take) machineLimited = true;
+      take = Math.min(take, allowed);
+      // What this run still waits for on this lane (not what the lane's own limit holds back) is written down, so the others leave its share for it.
+      store.demand = store.demand && typeof store.demand === 'object' && !Array.isArray(store.demand) ? store.demand : {};
+      const key = demandKey(project, runId, agent);
+      const waitingFor = Math.max(0, Math.min(count, laneRoom) - take);
+      if (waitingFor > 0 && project) store.demand[key] = { project, runId, agent, count: waitingFor, pid: process.pid, host: os.hostname(), since: store.demand[key]?.since ?? time, at: time };
+      else delete store.demand[key];
+    }
+    if (take === 0) return { granted: [], reason: machineLimited ? 'machine-full' : 'full', inFlight: slots.length };
     const granted = [];
     for (let n = 0; n < take; n += 1) {
-      const slot = { id: crypto.randomUUID(), pid: process.pid, host: os.hostname(), runId };
+      const slot = { id: crypto.randomUUID(), pid: process.pid, host: os.hostname(), runId, ...(machine?.project ? { project: String(machine.project) } : {}) };
       slots.push(slot);
       granted.push(slot.id);
     }
     store.slots[agent] = slots;
     return { granted, inFlight: slots.length };
+  }, { dir, now, isAlive });
+}
+
+// A run that closes no longer waits: its own waiting entries go, never a sibling run's of the same project.
+export function clearMachineDemand({ dir, project, runId, now = Date.now, isAlive } = {}) {
+  return withLaneStore(store => {
+    if (!store.demand || typeof store.demand !== 'object') return;
+    for (const [key, entry] of Object.entries(store.demand)) if (entry?.project === project && entry?.runId === runId) delete store.demand[key];
   }, { dir, now, isAlive });
 }
 
@@ -266,7 +349,7 @@ export class LaneScheduler {
     this.setTimer = setTimer;
     this.clearTimer = clearTimer;
     this.random = random;
-    this.shared = shared ? { dir: shared.dir, runId: shared.runId ?? '', isAlive: shared.isAlive ?? pidAlive, file: path.join(shared.dir, 'lanes.json') } : null;
+    this.shared = shared ? { dir: shared.dir, runId: shared.runId ?? '', isAlive: shared.isAlive ?? pidAlive, file: path.join(shared.dir, 'lanes.json'), machine: shared.machine?.max ? { max: shared.machine.max, project: shared.machine.project ?? '' } : null } : null;
     this.held = [];
     this.pendingReleases = [];
     this.releaseWaiters = [];
@@ -320,10 +403,12 @@ export class LaneScheduler {
     const host = os.hostname();
     const seen = new Map();
     const alive = pid => { if (!seen.has(pid)) seen.set(pid, this.shared.isAlive(pid)); return seen.get(pid); };
+    this.machineTotal = 0;
     for (const agent of LANE_AGENTS) {
       const lane = this.states[agent];
       const slots = store.slots[agent] ?? [];
       lane.machineInFlight = slots.filter(slot => slotLive(slot, host, alive)).length;
+      this.machineTotal += lane.machineInFlight;
       const pause = store.pauses[agent];
       if (!pause || !(pause.until > time)) continue;
       const keep = lane.state === 'paused' && lane.until !== null && lane.until >= pause.until && pause.state !== 'paused';
@@ -431,6 +516,8 @@ export class LaneScheduler {
         if (otherLimits.requestsPerMinute !== null && other.acquisitions.length >= otherLimits.requestsPerMinute) continue;
         otherEarliest = Math.min(otherEarliest, other.queue[0].arrival);
       }
+      // The machine is full and this run's waiting entry was written a moment ago: look again later without taking the file lock (the entry is refreshed at least every second).
+      if (this.shared.machine && Number.isFinite(this.machineTotal) && this.machineTotal >= this.shared.machine.max && time - (this.lastDemandAt ?? -Infinity) < 1000) { skipped.add(selected); continue; }
       const waiters = [];
       for (const waiter of lane.queue) {
         if (waiter.arrival > otherEarliest) break;
@@ -441,7 +528,7 @@ export class LaneScheduler {
       }
       if (!waiters.length) break;
       let claim;
-      try { claim = await claimLaneSlots({ dir: this.shared.dir, agent: selected, concurrency: this.limitOf(selected), count: waiters.length, runId: this.shared.runId, now: this.now, isAlive: this.shared.isAlive }); }
+      try { claim = await claimLaneSlots({ dir: this.shared.dir, agent: selected, concurrency: this.limitOf(selected), count: waiters.length, runId: this.shared.runId, machine: this.shared.machine, now: this.now, isAlive: this.shared.isAlive }); }
       catch (error) {
         for (const waiter of waiters) {
           const index = lane.queue.indexOf(waiter);
@@ -455,6 +542,7 @@ export class LaneScheduler {
       const grantCount = Math.min(pending.length, claim.granted.length);
       for (const slotId of claim.granted.slice(grantCount)) await releaseSlot(selected, slotId);
       if (this.closed) return;
+      if (claim.reason === 'machine-full') this.lastDemandAt = time;
       if (!claim.granted.length) {
         if (claim.state) {
           if (lane.state !== 'paused' || lane.until < claim.until) {
@@ -641,11 +729,13 @@ export class LaneScheduler {
     this.refillTimer = null;
     const leftover = [...this.held.splice(0), ...this.pendingReleases.splice(0)];
     const waiters = this.releaseWaiters.splice(0);
+    // A run that closes no longer waits for workers: the share it was asking for is freed for the others.
+    const clearDemand = this.shared?.machine ? clearMachineDemand({ dir: this.shared.dir, project: this.shared.machine.project, runId: this.shared.runId, now: this.now, isAlive: this.shared.isAlive }).catch(() => {}) : null;
     if (!this.shared || !leftover.length) {
       for (const resolve of waiters) resolve();
-      return;
+      return clearDemand ?? undefined;
     }
-    const done = releaseLaneSlots({ dir: this.shared.dir, slots: leftover, now: this.now, isAlive: this.shared.isAlive }).catch(() => {});
+    const done = Promise.all([clearDemand, releaseLaneSlots({ dir: this.shared.dir, slots: leftover, now: this.now, isAlive: this.shared.isAlive })]).catch(() => {});
     for (const resolve of waiters) done.then(resolve, resolve);
     return done;
   }

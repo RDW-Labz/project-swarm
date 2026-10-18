@@ -1,0 +1,619 @@
+diff --git a/docs/lanes.md b/docs/lanes.md
+index 7bc259b..410cffc 100644
+--- a/docs/lanes.md
++++ b/docs/lanes.md
+@@ -60,6 +60,14 @@ Claude resolves to concurrency 2, base backoff 4000 ms, maximum backoff 300000 m
+ 
+ Unknown agents and fields refuse with `lanes-invalid`. Concurrency must be an integer 1–2048; `requestsPerMinute` is `null` or an integer 1–100000. Backoff `baseMs` is 1–600000, `maxMs` is at least `baseMs` and at most 3600000, and `maxRetries` is 0–20. Both pause fields are integers 1–86400000 ms. A lane model is `null` or matches `/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,119}$/`.
+ 
++## A machine-wide worker limit, shared fairly between projects
++
++Several projects can run at once. Each lane already has a machine-wide limit (every run on the machine counts against the same lane file). `machineConcurrency` in the local config adds one more: the most workers, in all lanes together, that the machine runs at once (a whole number 1 to 2048; leave it out for no limit, which is the default; anything else is refused).
++
++- **Fair share:** a project's guaranteed share is the limit divided by the active projects (those holding workers or waiting for some), at least 1. A project may borrow what the others are not using, but not what another active project is still entitled to and is waiting for. So one project cannot starve another, and an idle project's share is not wasted. When a project finishes or its run closes, its share is free again at once. With more projects than workers, a freed worker goes to the project that has waited longest. What a project waits for is written per run and lane, refreshed on every poll and forgotten after 5 seconds without one, so a stalled run does not keep a share for ever. Every run on the machine should read the same config: the limit is each claimer's own `machineConcurrency`.
++- **Separate:** each project's spend caps (`projectMaxUsd`, `--max-usd`, lane daily caps) and its own `--concurrency` stay as they were; the machine limit only adds a ceiling and the sharing. A project is told apart by the id of its folder (the same id the Swarm Watch board uses).
++- **See it:** the Swarm Watch board shows "Workers held": how many of the limit are in use, which project holds how many and in which lane, and which projects are waiting ([watch.md](watch.md)).
++
+ ## Rate limits and quota pauses
+ 
+ Lane limits are machine-wide. Every run on this machine shares one lane file next to the shared install: `~/.project-swarm/lanes/lanes.json`, or `SWARM_LANES_DIR` when that is set. The file holds each lane's in-flight count and any rate-limit or quota pause. A lock keeps the counts exact, and a slot whose process has died is cleared on the next claim. A 429 or a quota pause in one run pauses that lane for every other run, including a lead's child runs and runs in other repositories. Deleting a project's `.swarm/` does not reset it. A run's own `concurrency` is still only that run's global cap.
+diff --git a/docs/state/usage-ledger.md b/docs/state/usage-ledger.md
+index 6649a67..5c9be7e 100644
+--- a/docs/state/usage-ledger.md
++++ b/docs/state/usage-ledger.md
+@@ -139,6 +139,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
+ | 2026-10-18 | - | review-s11-fixes: Template-context: whole file contents sent with no value guard and override of exp | claude | opus | pass | 208,304 | $0.74 |
+ | 2026-10-18 | - | review-budgets-models: Reviewed A2 budgets and B3 model watch from the diff plus ci-hooks/init-profi | claude | opus | pass | 336,492 | $1.00 |
+ | 2026-10-18 | - | review-board-1: Board review. Routes are safe: token, GET/HEAD-only and Host checks hold, projects a | claude | opus | pass | 468,460 | $1.10 |
++| 2026-10-18 | - | review-board-2: Reviewed machine-wide fair sharing in tools/lanes.mjs plus wiring in swarm.mjs, boar | claude | opus | pass | 209,756 | $0.74 |
+ 
+ ## Daily summary
+ 
+@@ -151,5 +152,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
+ | 2026-10-16 | anthropic | 52 | 48 | 4 | 1,336,255 | $0.48 (incl. estimates) |
+ | 2026-10-16 | claude | 1 | 0 | 1 | 46,296 | $0.42 |
+ | 2026-10-16 | codex | 2 | 2 | 0 | 31,624 | subscription |
+-| 2026-10-18 | claude | 11 | 11 | 0 | 6,259,511 | $10.52 |
+-| **total** | all | 135 | 120 | 15 | 11,435,670 | $15.45 (incl. estimates) |
++| 2026-10-18 | claude | 12 | 12 | 0 | 6,469,267 | $11.26 |
++| **total** | all | 136 | 121 | 15 | 11,645,426 | $16.19 (incl. estimates) |
+diff --git a/docs/watch.md b/docs/watch.md
+index 8ccbc0a..c375226 100644
+--- a/docs/watch.md
++++ b/docs/watch.md
+@@ -39,6 +39,7 @@ One page for the whole machine, read-only and behind a token like every Watch pa
+ - **A lane per project:** current stage, live runs, jobs running / queued / blocked, open and blocked tickets, spend against the cap (or **NO CAP**, **CAP INVALID**, **CAP REACHED**), last activity. Lanes with live runs are open; idle ones are collapsed (your choice is kept while the page is open).
+ - **Click a run** and its own full Watch page opens: the board starts that run's page server (or reuses it) and sends you there; the page has its own token. **Click a project** for its page: tickets by status, run history, spend by lane, lessons.
+ - **History:** a permanent, append-only log of every project, stage, run, PR, merge, lesson and spend, newest first, in `~/.project-swarm/history/history.ndjson`. Search it, filter by project, type and date, click an entry to open it (a run opens its page, a PR opens on GitHub), export it as CSV. It survives restarts; `swarm history --backfill` adds what is already on disk (runs, spend, finished stages, lessons), and running it again adds nothing.
++- **Workers held:** with a machine-wide worker limit (`machineConcurrency`, see [lanes.md](lanes.md)) the top bar shows how many workers are in use of the limit, which project holds how many (by lane), and which projects are waiting; without a limit it shows who holds what.
+ - **Limits:** the board reads at most the newest 5000 runs of a project and remembers parsed run states until they change; at most 6 per-run pages stay open from the board (the oldest is closed) and each closes after 10 idle minutes; the history log is read whole and is not rotated yet.
+ - **Which projects:** any swarm command run inside a folder lists it (`~/.project-swarm/projects.json`; scratch folders in the temp directory are not listed). `swarm projects`, `swarm projects add PATH`, `swarm projects remove ID` (removing only unlists it).
+ - **Isolation:** a project is named by an id from that list, never by a path the page sends. Its runs, tickets, lessons and files are read only under its own folder; two projects with the same run id are two different runs. `swarm history` (`--project`, `--kind`, `--q`, `--from`, `--to`, `--csv`) is the same log in the terminal.
+diff --git a/tests/machine-share.test.mjs b/tests/machine-share.test.mjs
+new file mode 100644
+index 0000000..4f0c75d
+--- /dev/null
++++ b/tests/machine-share.test.mjs
+@@ -0,0 +1,240 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { resolveLanes, LaneScheduler, claimLaneSlots, releaseLaneSlots, machineConcurrency, machineAllowance, withLaneStore, clearMachineDemand } from '../tools/lanes.mjs';
++import { workersHeld, boardSnapshot } from '../tools/board-data.mjs';
++import { createBoardApi } from '../tools/watch-cli.mjs';
++import { projectId } from '../tools/projects.mjs';
++
++const tmp = async t => { const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'share-'))); t.after(() => fs.rm(d, { recursive: true, force: true })); return d; };
++const claim = (dir, project, count, max = 4, agent = 'anthropic') => claimLaneSlots({ dir, agent, concurrency: 64, count, runId: `run-${project}`, machine: { max, project } });
++const held = async dir => { const s = JSON.parse(await fs.readFile(path.join(dir, 'lanes.json'), 'utf8')); const by = {}; for (const slots of Object.values(s.slots)) for (const slot of slots) by[slot.project] = (by[slot.project] ?? 0) + 1; return by; };
++
++test('machineConcurrency: no limit by default, a whole number 1 to 2048, anything else is an error (never "no limit")', () => {
++  assert.equal(machineConcurrency({}), null);
++  assert.equal(machineConcurrency({ machineConcurrency: 12 }), 12);
++  for (const bad of [0, -1, 1.5, '8', null, 5000, NaN]) assert.throws(() => machineConcurrency({ machineConcurrency: bad }), /machineConcurrency must be a whole number from 1 to 2048/, String(bad));
++});
++
++test('a lone project may use the whole machine limit (idle capacity is not wasted)', async t => {
++  const dir = await tmp(t);
++  assert.equal((await claim(dir, 'A', 10)).granted.length, 4);
++  assert.deepEqual(await held(dir), { A: 4 });
++});
++
++test('two projects at once share the limit fairly: each gets its half, neither can starve the other, and freed workers go to whoever is under its share', async t => {
++  const dir = await tmp(t);
++  // A takes everything while B is not there.
++  const a1 = await claim(dir, 'A', 10);
++  assert.equal(a1.granted.length, 4);
++  // B arrives and asks: nothing is free, but it is now waiting (its share is reserved).
++  const b1 = await claim(dir, 'B', 10);
++  assert.equal(b1.granted.length, 0);
++  assert.equal(b1.reason, 'machine-full');
++  // A frees two workers and asks again at once: B's reserved half is not A's to take.
++  await releaseLaneSlots({ dir, slots: a1.granted.slice(0, 2).map(slotId => ({ agent: 'anthropic', slotId })) });
++  const a2 = await claim(dir, 'A', 10);
++  assert.equal(a2.granted.length, 0, 'A already holds its half; the free workers are B\'s');
++  const b2 = await claim(dir, 'B', 10);
++  assert.equal(b2.granted.length, 2);
++  assert.deepEqual(await held(dir), { A: 2, B: 2 });
++  // B is done: its share is free to A again.
++  await releaseLaneSlots({ dir, slots: b2.granted.map(slotId => ({ agent: 'anthropic', slotId })) });
++  await clearMachineDemand({ dir, project: 'B', runId: 'run-B' });
++  assert.equal((await claim(dir, 'A', 10)).granted.length, 2);
++  assert.deepEqual(await held(dir), { A: 4 });
++});
++
++test('three projects: shares of the limit divided by the active ones, the total never above the limit, and nobody is starved', async t => {
++  const dir = await tmp(t);
++  const total = async () => Object.values(await held(dir)).reduce((sum, n) => sum + n, 0);
++  const first = await claim(dir, 'A', 10, 6);
++  assert.equal(first.granted.length, 6, 'a lone project may borrow it all');
++  assert.equal((await claim(dir, 'B', 10, 6)).granted.length, 0);
++  assert.equal((await claim(dir, 'C', 10, 6)).granted.length, 0);
++  // A gives four workers back and immediately asks for more; B and C are waiting, so the four are theirs.
++  await releaseLaneSlots({ dir, slots: first.granted.slice(0, 4).map(slotId => ({ agent: 'anthropic', slotId })) });
++  assert.equal((await claim(dir, 'A', 10, 6)).granted.length, 0);
++  assert.equal((await claim(dir, 'B', 10, 6)).granted.length, 2);
++  assert.equal((await claim(dir, 'C', 10, 6)).granted.length, 2);
++  assert.deepEqual(await held(dir), { A: 2, B: 2, C: 2 });
++  assert.equal(await total(), 6, 'never above the machine limit');
++  // a limit smaller than the number of projects: a project that holds nothing is still entitled to one
++  const tiny = await tmp(t);
++  assert.equal((await claim(tiny, 'A', 5, 1)).granted.length, 1);
++  assert.equal((await claim(tiny, 'B', 5, 1)).granted.length, 0);
++});
++
++test('without a machine limit nothing changes (the lane limits alone apply), and the lane limit still holds under a machine limit', async t => {
++  const dir = await tmp(t);
++  const free = await claimLaneSlots({ dir, agent: 'codex', concurrency: 64, count: 9, runId: 'r' });
++  assert.equal(free.granted.length, 9);
++  const dir2 = await tmp(t);
++  const capped = await claimLaneSlots({ dir: dir2, agent: 'codex', concurrency: 2, count: 9, runId: 'r', machine: { max: 100, project: 'A' } });
++  assert.equal(capped.granted.length, 2, 'the lane limit is separate and still applies');
++});
++
++test('machineAllowance: a dead process\'s or an expired waiting entry reserves nothing', () => {
++  const time = 1_000_000;
++  const slot = id => ({ id, pid: process.pid, host: os.hostname(), runId: 'r', project: 'A' });
++  const entry = extra => ({ project: 'B', runId: 'rb', agent: 'anthropic', count: 5, pid: 999999, host: os.hostname(), since: time - 100, at: time - 100, ...extra });
++  const store = demand => ({ slots: { anthropic: [slot('a'), slot('b')] }, pauses: {}, demand: { k: demand } });
++  assert.equal(machineAllowance({ store: store(entry()), project: 'A', count: 2, max: 4, isAlive: () => false, time }).allowed, 2, 'B\'s process is gone');
++  assert.equal(machineAllowance({ store: store(entry()), project: 'A', count: 2, max: 4, isAlive: () => true, time }).allowed, 0, 'B is alive and waiting: its share is kept for it');
++  assert.equal(machineAllowance({ store: store(entry({ at: time - 6000 })), project: 'A', count: 2, max: 4, isAlive: () => true, time }).allowed, 2, 'a run that stopped asking stops reserving (5 s)');
++  assert.equal(machineAllowance({ store: { slots: store(entry()).slots, pauses: {}, demand: [] }, project: 'A', count: 2, max: 4, isAlive: () => true, time }).allowed, 2, 'a malformed waiting list is ignored');
++});
++
++test('more projects than workers: a freed worker goes to the project that has waited longest, not back to the one that freed it', async t => {
++  const dir = await tmp(t);
++  const a = await claim(dir, 'A', 1, 2), b = await claim(dir, 'B', 1, 2);
++  assert.deepEqual([a.granted.length, b.granted.length], [1, 1]);
++  assert.equal((await claim(dir, 'C', 1, 2)).granted.length, 0, 'C waits (since now)');
++  await releaseLaneSlots({ dir, slots: a.granted.map(slotId => ({ agent: 'anthropic', slotId })) });
++  assert.equal((await claim(dir, 'A', 1, 2)).granted.length, 0, 'A freed it and asks again: C has waited longer');
++  assert.equal((await claim(dir, 'C', 1, 2)).granted.length, 1);
++  assert.deepEqual(await held(dir), { B: 1, C: 1 });
++});
++
++test('waiting entries are per run and lane: a sibling run of the same project is neither overwritten nor cleared by another\'s close', async t => {
++  const dir = await tmp(t);
++  await claim(dir, 'A', 10, 2);                        // A takes both
++  await claimLaneSlots({ dir, agent: 'anthropic', concurrency: 64, count: 4, runId: 'run-B1', machine: { max: 2, project: 'B' } });
++  await claimLaneSlots({ dir, agent: 'codex', concurrency: 64, count: 3, runId: 'run-B2', machine: { max: 2, project: 'B' } });
++  const store = JSON.parse(await fs.readFile(path.join(dir, 'lanes.json'), 'utf8'));
++  const ofB = Object.values(store.demand).filter(e => e.project === 'B');
++  assert.equal(ofB.length, 2, 'one entry per run and lane');
++  assert.deepEqual(ofB.map(e => e.count).sort(), [3, 4]);
++  await clearMachineDemand({ dir, project: 'B', runId: 'run-B1' });
++  const after = JSON.parse(await fs.readFile(path.join(dir, 'lanes.json'), 'utf8'));
++  assert.deepEqual(Object.values(after.demand).filter(e => e.project === 'B').map(e => e.runId), ['run-B2'], 'only the closing run\'s entry is cleared');
++});
++
++test('a lane pause, a full lane and a closed run do not leave a share reserved for ever (the entry is only for what the machine, not the lane, holds back)', async t => {
++  const dir = await tmp(t);
++  // The lane's own limit is 1; the job waits for the LANE, not for the machine: nothing is reserved.
++  await claimLaneSlots({ dir, agent: 'codex', concurrency: 1, count: 1, runId: 'r1', machine: { max: 4, project: 'A' } });
++  await claimLaneSlots({ dir, agent: 'codex', concurrency: 1, count: 3, runId: 'r1', machine: { max: 4, project: 'A' } });
++  const store = JSON.parse(await fs.readFile(path.join(dir, 'lanes.json'), 'utf8'));
++  assert.deepEqual(store.demand ?? {}, {}, 'lane-limited jobs are not a claim on the machine');
++});
++
++test('two schedulers (two projects) with the same machine limit never run more than the limit together, and both make progress', async t => {
++  const dir = await tmp(t);
++  const lanes = resolveLanes({ manifest: { lanes: { anthropic: { concurrency: 64 } } } });
++  const make = project => new LaneScheduler({ lanes, globalConcurrency: 16, shared: { dir, runId: `run-${project}`, machine: { max: 4, project } } });
++  const A = make('A'), B = make('B');
++  t.after(async () => { await A.close(); await B.close(); });
++  let running = 0, peak = 0;
++  const done = { A: 0, B: 0 };
++  const worker = async (scheduler, project) => {
++    const release = await scheduler.acquire('anthropic');
++    running += 1; peak = Math.max(peak, running);
++    await new Promise(r => setTimeout(r, 30));
++    running -= 1; done[project] += 1;
++    await release();
++  };
++  await Promise.all([...Array.from({ length: 10 }, () => worker(A, 'A')), ...Array.from({ length: 10 }, () => worker(B, 'B'))]);
++  assert.ok(peak <= 4, `peak ${peak}`);
++  assert.deepEqual(done, { A: 10, B: 10 });
++});
++
++test('which project holds which workers: from the shared store, by project and lane, live processes only', async t => {
++  const dir = await tmp(t);
++  await claim(dir, 'proj-a', 3, 10, 'anthropic');
++  await claim(dir, 'proj-a', 1, 10, 'codex');
++  await claim(dir, 'proj-b', 2, 10, 'cursor');
++  await claim(dir, 'proj-b', 4, 10, 'cursor');   // waits (demand recorded) only when it cannot take them; here it can
++  const held = await workersHeld({ dir, max: 10 });
++  assert.equal(held.total, 10);
++  assert.deepEqual(held.byProject['proj-a'], { total: 4, byLane: { 'Anthropic API': 3, Codex: 1 } });
++  assert.deepEqual(held.byProject['proj-b'], { total: 6, byLane: { Cursor: 6 } });
++  assert.equal(held.free, 0);
++  // a slot of a dead process is not counted
++  const gone = await workersHeld({ dir, max: 10, isAlive: () => false });
++  assert.equal(gone.total, 0);
++  // demand is shown while a project waits
++  await claim(dir, 'proj-c', 3, 10);
++  const waiting = await workersHeld({ dir, max: 10 });
++  assert.equal(waiting.demand['proj-c'], 3);
++  assert.deepEqual(await workersHeld({ dir: path.join(dir, 'nowhere') }), { max: null, total: 0, free: null, byProject: {}, demand: {} });
++});
++
++test('the board shows the machine limit and who holds the workers, and the numbers of one project never include another\'s', async t => {
++  const home = await tmp(t);
++  const lanesDirPath = path.join(home, 'lanes');
++  const A = path.join(home, 'app-a'), B = path.join(home, 'app-b');
++  for (const r of [A, B]) await fs.mkdir(r);
++  const [pa, pb] = [projectId(A), projectId(B)];
++  await claim(lanesDirPath, pa, 2, 8, 'codex');
++  await claim(lanesDirPath, pb, 1, 8, 'anthropic');
++  const env = { SWARM_PROJECTS_FILE: path.join(home, 'projects.json'), SWARM_LANES_DIR: lanesDirPath, SWARM_CONFIG: path.join(home, 'config.json') };
++  await fs.writeFile(env.SWARM_CONFIG, JSON.stringify({ machineConcurrency: 8 }));
++  await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({ version: 1, projects: [{ id: pa, root: A, name: 'app-a', addedAt: 'x', lastSeen: 'x' }, { id: pb, root: B, name: 'app-b', addedAt: 'x', lastSeen: 'x' }] }));
++  const api = createBoardApi({ env, live: async () => [], cacheMs: 0 });
++  const snap = await api.snapshot();
++  assert.equal(snap.machine.workers.max, 8);
++  assert.equal(snap.machine.workers.invalid, undefined);
++  assert.equal(snap.machine.workers.total, 3);
++  assert.deepEqual(snap.machine.workers.byProject[pa], { total: 2, byLane: { Codex: 2 } });
++  assert.deepEqual(snap.machine.workers.byProject[pb], { total: 1, byLane: { 'Anthropic API': 1 } });
++  const js = await fs.readFile(new URL('../tools/watch-assets/board.js', import.meta.url), 'utf8');
++  assert.match(js, /Workers held/);
++  assert.match(js, /shared fairly between active projects/);
++});
++
++test('two projects running at once (real runs) share a machine limit of 2, finish, and stay isolated: each run, output and state is its own project\'s', async t => {
++  const { execFile } = await import('node:child_process');
++  const { promisify } = await import('node:util');
++  const { runManifest } = await import('../tools/swarm.mjs');
++  const exec = promisify(execFile);
++  const home = await tmp(t);
++  await fs.writeFile(path.join(home, 'config.json'), JSON.stringify({ machineConcurrency: 2 }));
++  const env = { ...process.env, SWARM_CONFIG: path.join(home, 'config.json'), SWARM_SPEND_DIR: path.join(home, 'spend'), SWARM_LANES_DIR: path.join(home, 'lanes') };
++  const repo = async name => {
++    const root = path.join(home, name); await fs.mkdir(root);
++    await fs.writeFile(path.join(root, 'input.txt'), `${name}\n`); await fs.writeFile(path.join(root, '.gitignore'), '.swarm/\n');
++    await exec('git', ['init', '-q', root]); await exec('git', ['-C', root, 'add', '.']); await exec('git', ['-C', root, '-c', 'user.name=T', '-c', 'user.email=t@e.i', 'commit', '-qm', 'i']);
++    return root;
++  };
++  const [one, two] = [await repo('one'), await repo('two')];
++  let running = 0, peak = 0;
++  const fetchFor = name => async (_url, request) => {
++    const n = /out\/(\d+)\.txt/.exec(request.body)[1];
++    running += 1; peak = Math.max(peak, running);
++    await new Promise(r => setTimeout(r, 60));
++    running -= 1;
++    return new Response(JSON.stringify({ done: true, done_reason: 'stop', usage: { prompt_tokens: 6, completion_tokens: 4, total_tokens: 10 }, message: { content: JSON.stringify({ summary: 'done', files: [{ path: `out/${n}.txt`, content: `${name}-${n}\\n` }] }) } }), { headers: { 'content-type': 'application/json' } });
++  };
++  const manifest = { version: 1, concurrency: 4, lanes: { ollama: { concurrency: 8 } }, jobs: Array.from({ length: 4 }, (_, n) => ({ id: `job-${n}`, agent: 'ollama', model: 'm', prompt: `Write out/${n}.txt`, context: ['input.txt'], outputs: [`out/${n}.txt`], timeoutMs: 20000 })) };
++  const run = (root, name) => runManifest(root, manifest, { root, env, liveDir: path.join(home, `live-${name}`), fetchImpl: fetchFor(name) });
++  const [a, b] = await Promise.all([run(one, 'one'), run(two, 'two')]);
++  assert.equal(a.status, 'complete', a.error);
++  assert.equal(b.status, 'complete', b.error);
++  assert.ok(peak <= 2, `at most 2 workers on the machine at once (saw ${peak})`);
++  for (const [root, state, name] of [[one, a, 'one'], [two, b, 'two']]) {
++    assert.equal(state.root, await fs.realpath(root), 'the run knows only its own project');
++    for (const j of state.jobs) assert.ok((await fs.readFile(path.join(root, j.workspace, j.outputs[0]), 'utf8')).startsWith(name), `${name}'s output is ${name}'s`);
++  }
++  assert.ok(!(await fs.readdir(path.join(one, '.swarm/runs'))).includes(b.id), 'project one has no trace of project two\'s run');
++  assert.ok(!(await fs.readdir(path.join(two, '.swarm/runs'))).includes(a.id));
++  const store = JSON.parse(await fs.readFile(path.join(home, 'lanes', 'lanes.json'), 'utf8').catch(() => '{"slots":{}}'));
++  assert.deepEqual(Object.values(store.slots).flat(), [], 'every worker slot was given back');
++});
++
++test('review fixes: an invalid limit is shown as such on the board, and a malformed waiting list never stops a run', async t => {
++  const home = await tmp(t);
++  const env = { SWARM_PROJECTS_FILE: path.join(home, 'projects.json'), SWARM_LANES_DIR: path.join(home, 'lanes'), SWARM_CONFIG: path.join(home, 'config.json') };
++  await fs.writeFile(env.SWARM_CONFIG, JSON.stringify({ machineConcurrency: 'lots' }));
++  const api = createBoardApi({ env, live: async () => [], cacheMs: 0 });
++  assert.equal((await api.snapshot()).machine.workers.invalid, true);
++  const dir = path.join(home, 'lanes'); await fs.mkdir(dir, { recursive: true });
++  await fs.writeFile(path.join(dir, 'lanes.json'), JSON.stringify({ version: 1, slots: {}, pauses: {}, demand: ['junk'] }));
++  assert.equal((await claim(dir, 'A', 2, 4)).granted.length, 2, 'the junk waiting list is reset, the claim goes through');
++  await fs.writeFile(path.join(dir, 'lanes.json'), JSON.stringify({ version: 1, slots: {}, pauses: {}, demand: { x: { count: 'many' }, y: null } }));
++  assert.equal((await claim(dir, 'A', 2, 4)).granted.length, 2);
++});
+diff --git a/tools/board-data.mjs b/tools/board-data.mjs
+index 41c36c2..b025b28 100644
+--- a/tools/board-data.mjs
++++ b/tools/board-data.mjs
+@@ -9,6 +9,7 @@ import { readLedger } from './tickets.mjs';
+ import { projectSummary } from './project-spend.mjs';
+ import { listLessons } from './lesson-store.mjs';
+ import { sanitizeWorkerText } from './worker-text.mjs';
++import os from 'node:os';
+ 
+ const DAY = 86400000;
+ const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   // subscription lanes: not billed per use
+@@ -129,7 +130,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
+ }
+ 
+ // The whole board: machine totals (sums of the project numbers) and one overview per registered project.
+-export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary } = {}) {
++export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, workers = null } = {}) {
+   const overviews = [];
+   // A live run belongs to the project whose real root it ran in, however the path was spelled.
+   const live = await Promise.all(liveRuns.map(async r => ({ ...r, root: await fs.realpath(r.root).catch(() => r.root) })));
+@@ -147,6 +148,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
+     machine.liveRuns += o.live.length;
+   }
+   for (const key of ['todayUsd', 'weekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] = Math.round(machine.cost[key] * 1e6) / 1e6;
++  machine.workers = workers;
+   return { at: new Date(now).toISOString(), machine, projects: overviews };
+ }
+ 
+@@ -194,3 +196,31 @@ export async function historyEventsOf(project) {
+   for (const l of lessons) events.push({ ...base, kind: 'lesson', key: `lesson:${project.id}:${l.id}`, at: l.date ?? l.at ?? project.addedAt, ref: String(l.id), title: `Lesson ${l.id}: ${l.what ?? l.title ?? l.rule ?? ''}` });
+   return events.filter(e => e.at);
+ }
++
++// Who holds the machine's workers right now: the slots in the shared lane store, by project and lane (the project a slot was claimed for is recorded on it).
++// A slot whose process is gone is not counted. `max` is the machine-wide limit (null: none), `demand` what projects are waiting for.
++export async function workersHeld({ dir, max = null, invalid = false, isAlive: probe = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } } } = {}) {
++  const seen = new Map();
++  const isAlive = pid => { if (!seen.has(pid)) seen.set(pid, probe(pid)); return seen.get(pid); };
++  let store = null;
++  try { store = JSON.parse(await fs.readFile(path.join(dir, 'lanes.json'), 'utf8')); } catch { /* no workers have ever been claimed */ }
++  const host = os.hostname();
++  const byProject = {};
++  let total = 0;
++  for (const [agent, slots] of Object.entries(store?.slots ?? {})) {
++    for (const slot of Array.isArray(slots) ? slots : []) {
++      if (!slot || (slot.host === host && !isAlive(slot.pid))) continue;
++      const key = typeof slot.project === 'string' && slot.project ? slot.project : 'unknown';
++      const lane = agent === 'anthropic' ? 'Anthropic API' : laneLabel(agent, null);
++      const entry = byProject[key] ??= { total: 0, byLane: {} };
++      entry.total += 1; entry.byLane[lane] = (entry.byLane[lane] ?? 0) + 1; total += 1;
++    }
++  }
++  const demand = {};
++  // Waiting entries are per run and lane; the board shows them per project, and only the fresh ones (a waiting run refreshes its entry every poll).
++  for (const entry of Object.values(store?.demand ?? {})) {
++    if (!entry || typeof entry.project !== 'string' || !Number.isInteger(entry.count) || entry.count <= 0 || !(Date.now() - entry.at <= 5000) || (entry.host === host && !isAlive(entry.pid))) continue;
++    demand[entry.project] = (demand[entry.project] ?? 0) + entry.count;
++  }
++  return { max, ...(invalid ? { invalid: true } : {}), total, free: max ? Math.max(0, max - total) : null, byProject, demand };
++}
+diff --git a/tools/lanes.mjs b/tools/lanes.mjs
+index 0aa9f3d..18bd255 100644
+--- a/tools/lanes.mjs
++++ b/tools/lanes.mjs
+@@ -189,6 +189,14 @@ export async function withLaneStore(fn, { dir = lanesDir(), now = Date.now, isAl
+       else delete store.slots[agent];
+     }
+     for (const [agent, pause] of Object.entries(store.pauses)) if (!(pause.until > now())) delete store.pauses[agent];
++    // The waiting list is advisory: a malformed one is reset (never an error that stops every run), dead or expired entries are dropped.
++    if (store.demand !== undefined) {
++      if (!store.demand || typeof store.demand !== 'object' || Array.isArray(store.demand)) store.demand = {};
++      for (const [key, entry] of Object.entries(store.demand)) {
++        const ok = entry && typeof entry === 'object' && Number.isInteger(entry.pid) && entry.pid > 0 && typeof entry.host === 'string' && entry.host && Number.isInteger(entry.count) && entry.count > 0 && typeof entry.project === 'string' && Number.isFinite(entry.at) && now() - entry.at <= DEMAND_TTL_MS * 4;
++        if (!ok || !slotLive(entry, host, isAlive)) delete store.demand[key];
++      }
++    }
+     const result = await fn(store);
+     if (JSON.stringify(store) !== before) {
+       temp = path.join(dir, `.lanes-${process.pid}-${crypto.randomUUID()}.tmp`);
+@@ -205,18 +213,85 @@ export async function withLaneStore(fn, { dir = lanesDir(), now = Date.now, isAl
+   }
+ }
+ 
++// The machine-wide worker limit from the local config (`machineConcurrency`): null (no limit, the default) or a whole number 1 to 2048. Anything else is an error, never "no limit".
++export function machineConcurrency(config) {
++  const value = config?.machineConcurrency;
++  if (value === undefined) return null;
++  if (!Number.isInteger(value) || value < 1 || value > 2048) throw Object.assign(new Error('lanes-invalid: machineConcurrency must be a whole number from 1 to 2048 (or left out for no limit)'), { code: 'lanes-invalid' });
++  return value;
++}
++
++// Fair sharing of a machine-wide worker limit between projects (the setting `machineConcurrency`).
++// A project's guaranteed share is the limit divided by the projects that are active (holding workers, or waiting for some), at least 1.
++// A project may borrow what the others are not using, but never what another active project is still entitled to and asking for:
++// capacity left for others = the sum, over the other projects, of min(their share not yet held, what they are waiting for).
++// Where there are more projects than workers (shares of 1), a freed worker goes to the project that has waited longest, not back to the one that freed it.
++// So one project cannot starve another, and an idle project's share is not wasted. Lane limits and spend caps are separate and unchanged.
++const DEMAND_TTL_MS = 5000;           // a waiting run refreshes its entry every poll; one that stops polling stops reserving
++const demandKey = (project, runId, agent) => `${project}|${runId}|${agent}`;
++
++// Waiting entries per project: counts added up, the oldest `since` kept; stale or malformed entries ignored.
++function waitingByProject(store, { time, host, isAlive, except = null }) {
++  const out = {};
++  for (const entry of Object.values(store.demand && typeof store.demand === 'object' && !Array.isArray(store.demand) ? store.demand : {})) {
++    if (!entry || typeof entry.project !== 'string' || entry.project === '' || entry.project === except || !Number.isInteger(entry.count) || entry.count <= 0) continue;
++    if (!(Number.isFinite(entry.at) && time - entry.at <= DEMAND_TTL_MS) || typeof entry.host !== 'string' || !slotLive({ host: entry.host, pid: entry.pid }, host, isAlive)) continue;
++    const have = out[entry.project] ??= { count: 0, since: Infinity };
++    have.count += entry.count;
++    have.since = Math.min(have.since, Number.isFinite(entry.since) ? entry.since : entry.at);
++  }
++  return out;
++}
++
++export function machineAllowance({ store, project, count, max, isAlive, time = Date.now(), host = os.hostname() }) {
++  const held = {};
++  let total = 0;
++  for (const slots of Object.values(store.slots)) for (const slot of slots) { const key = slot.project ?? ''; held[key] = (held[key] ?? 0) + 1; total += 1; }
++  const waiting = waitingByProject(store, { time, host, isAlive, except: project });
++  const mine = waitingByProject(store, { time, host, isAlive }) [project];
++  // Slots with no project (an older runner) count toward the total but are not a project that shares.
++  const active = new Set([project, ...Object.keys(held).filter(key => key !== '' && held[key] > 0), ...Object.keys(waiting)]);
++  const share = Math.max(1, Math.floor(max / active.size));
++  const entitled = key => Math.min(Math.max(0, share - (held[key] ?? 0)), waiting[key]?.count ?? 0);
++  const mySince = mine?.since ?? time;
++  let reserved = 0, reservedAhead = 0;
++  for (const key of Object.keys(waiting)) {
++    reserved += entitled(key);
++    if (waiting[key].since < mySince || (waiting[key].since === mySince && key < project)) reservedAhead += entitled(key);
++  }
++  const free = Math.max(0, max - total);
++  const guaranteed = Math.min(count, Math.max(0, share - (held[project] ?? 0)), Math.max(0, free - reservedAhead));
++  const borrowed = Math.min(count, Math.max(0, free - reserved));
++  return { allowed: Math.max(guaranteed, borrowed), share, held, total, free, reserved };
++}
++
+ // One lock grants every slot this run can take. A per-job lock on a slow disk spaces
+ // state writes past the coalesce window.
+-export function claimLaneSlots({ dir, agent, concurrency, count, runId = '', now = Date.now, isAlive } = {}) {
++export function claimLaneSlots({ dir, agent, concurrency, count, runId = '', machine = null, now = Date.now, isAlive } = {}) {
+   return withLaneStore(store => {
+     const slots = store.slots[agent] ?? [];
+     const pause = store.pauses[agent];
+     if (pause && pause.until > now()) return { granted: [], reason: pause.state, state: pause.state, until: pause.until, consecutiveRateLimits: pause.consecutiveRateLimits, inFlight: slots.length };
+-    const take = Math.min(Math.max(0, count), Math.max(0, concurrency - slots.length));
+-    if (take === 0) return { granted: [], reason: 'full', inFlight: slots.length };
++    const laneRoom = Math.max(0, concurrency - slots.length);
++    let take = Math.min(Math.max(0, count), laneRoom);
++    let machineLimited = false;
++    if (machine?.max) {
++      const project = String(machine.project ?? '');
++      const time = now();
++      const { allowed } = machineAllowance({ store, project, count: take, max: machine.max, isAlive: isAlive ?? pidAlive, time });
++      if (allowed < take) machineLimited = true;
++      take = Math.min(take, allowed);
++      // What this run still waits for on this lane (not what the lane's own limit holds back) is written down, so the others leave its share for it.
++      store.demand = store.demand && typeof store.demand === 'object' && !Array.isArray(store.demand) ? store.demand : {};
++      const key = demandKey(project, runId, agent);
++      const waitingFor = Math.max(0, Math.min(count, laneRoom) - take);
++      if (waitingFor > 0 && project) store.demand[key] = { project, runId, agent, count: waitingFor, pid: process.pid, host: os.hostname(), since: store.demand[key]?.since ?? time, at: time };
++      else delete store.demand[key];
++    }
++    if (take === 0) return { granted: [], reason: machineLimited ? 'machine-full' : 'full', inFlight: slots.length };
+     const granted = [];
+     for (let n = 0; n < take; n += 1) {
+-      const slot = { id: crypto.randomUUID(), pid: process.pid, host: os.hostname(), runId };
++      const slot = { id: crypto.randomUUID(), pid: process.pid, host: os.hostname(), runId, ...(machine?.project ? { project: String(machine.project) } : {}) };
+       slots.push(slot);
+       granted.push(slot.id);
+     }
+@@ -225,6 +300,14 @@ export function claimLaneSlots({ dir, agent, concurrency, count, runId = '', now
+   }, { dir, now, isAlive });
+ }
+ 
++// A run that closes no longer waits: its own waiting entries go, never a sibling run's of the same project.
++export function clearMachineDemand({ dir, project, runId, now = Date.now, isAlive } = {}) {
++  return withLaneStore(store => {
++    if (!store.demand || typeof store.demand !== 'object') return;
++    for (const [key, entry] of Object.entries(store.demand)) if (entry?.project === project && entry?.runId === runId) delete store.demand[key];
++  }, { dir, now, isAlive });
++}
++
+ export function releaseLaneSlot({ dir, agent, slotId, now = Date.now, isAlive } = {}) {
+   return releaseLaneSlots({ dir, slots: [{ agent, slotId }], now, isAlive });
+ }
+@@ -266,7 +349,7 @@ export class LaneScheduler {
+     this.setTimer = setTimer;
+     this.clearTimer = clearTimer;
+     this.random = random;
+-    this.shared = shared ? { dir: shared.dir, runId: shared.runId ?? '', isAlive: shared.isAlive ?? pidAlive, file: path.join(shared.dir, 'lanes.json') } : null;
++    this.shared = shared ? { dir: shared.dir, runId: shared.runId ?? '', isAlive: shared.isAlive ?? pidAlive, file: path.join(shared.dir, 'lanes.json'), machine: shared.machine?.max ? { max: shared.machine.max, project: shared.machine.project ?? '' } : null } : null;
+     this.held = [];
+     this.pendingReleases = [];
+     this.releaseWaiters = [];
+@@ -320,10 +403,12 @@ export class LaneScheduler {
+     const host = os.hostname();
+     const seen = new Map();
+     const alive = pid => { if (!seen.has(pid)) seen.set(pid, this.shared.isAlive(pid)); return seen.get(pid); };
++    this.machineTotal = 0;
+     for (const agent of LANE_AGENTS) {
+       const lane = this.states[agent];
+       const slots = store.slots[agent] ?? [];
+       lane.machineInFlight = slots.filter(slot => slotLive(slot, host, alive)).length;
++      this.machineTotal += lane.machineInFlight;
+       const pause = store.pauses[agent];
+       if (!pause || !(pause.until > time)) continue;
+       const keep = lane.state === 'paused' && lane.until !== null && lane.until >= pause.until && pause.state !== 'paused';
+@@ -431,6 +516,8 @@ export class LaneScheduler {
+         if (otherLimits.requestsPerMinute !== null && other.acquisitions.length >= otherLimits.requestsPerMinute) continue;
+         otherEarliest = Math.min(otherEarliest, other.queue[0].arrival);
+       }
++      // The machine is full and this run's waiting entry was written a moment ago: look again later without taking the file lock (the entry is refreshed at least every second).
++      if (this.shared.machine && Number.isFinite(this.machineTotal) && this.machineTotal >= this.shared.machine.max && time - (this.lastDemandAt ?? -Infinity) < 1000) { skipped.add(selected); continue; }
+       const waiters = [];
+       for (const waiter of lane.queue) {
+         if (waiter.arrival > otherEarliest) break;
+@@ -441,7 +528,7 @@ export class LaneScheduler {
+       }
+       if (!waiters.length) break;
+       let claim;
+-      try { claim = await claimLaneSlots({ dir: this.shared.dir, agent: selected, concurrency: this.limitOf(selected), count: waiters.length, runId: this.shared.runId, now: this.now, isAlive: this.shared.isAlive }); }
++      try { claim = await claimLaneSlots({ dir: this.shared.dir, agent: selected, concurrency: this.limitOf(selected), count: waiters.length, runId: this.shared.runId, machine: this.shared.machine, now: this.now, isAlive: this.shared.isAlive }); }
+       catch (error) {
+         for (const waiter of waiters) {
+           const index = lane.queue.indexOf(waiter);
+@@ -455,6 +542,7 @@ export class LaneScheduler {
+       const grantCount = Math.min(pending.length, claim.granted.length);
+       for (const slotId of claim.granted.slice(grantCount)) await releaseSlot(selected, slotId);
+       if (this.closed) return;
++      if (claim.reason === 'machine-full') this.lastDemandAt = time;
+       if (!claim.granted.length) {
+         if (claim.state) {
+           if (lane.state !== 'paused' || lane.until < claim.until) {
+@@ -641,11 +729,13 @@ export class LaneScheduler {
+     this.refillTimer = null;
+     const leftover = [...this.held.splice(0), ...this.pendingReleases.splice(0)];
+     const waiters = this.releaseWaiters.splice(0);
++    // A run that closes no longer waits for workers: the share it was asking for is freed for the others.
++    const clearDemand = this.shared?.machine ? clearMachineDemand({ dir: this.shared.dir, project: this.shared.machine.project, runId: this.shared.runId, now: this.now, isAlive: this.shared.isAlive }).catch(() => {}) : null;
+     if (!this.shared || !leftover.length) {
+       for (const resolve of waiters) resolve();
+-      return;
++      return clearDemand ?? undefined;
+     }
+-    const done = releaseLaneSlots({ dir: this.shared.dir, slots: leftover, now: this.now, isAlive: this.shared.isAlive }).catch(() => {});
++    const done = Promise.all([clearDemand, releaseLaneSlots({ dir: this.shared.dir, slots: leftover, now: this.now, isAlive: this.shared.isAlive })]).catch(() => {});
+     for (const resolve of waiters) done.then(resolve, resolve);
+     return done;
+   }
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index 5dba309..15932a0 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -20,7 +20,8 @@ import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths,
+ import { expandShellPreset, validateNetworkAllow, validateLoopbackAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterDirs, resolveRootGitInfo, scanListeningPorts, resolveRigServicePort, createShellScratchDir, shellMessage, containsKey, redactKey, effectiveShellDeniedHomeDirs, workerKeyItem, TOOLCHAIN_DIRS, scratchRootDir, assertScratchOutsideRepo, resolveSharedUvCacheDir } from './claude-shell.mjs';
+ import { portBlockFor, resolvePortBlock } from './ports.mjs';
+ import { loadLocalConfig } from './local-config.mjs';
+-import { resolveLanes, LaneScheduler, classifyProviderOutcome, lanesDir } from './lanes.mjs';
++import { resolveLanes, LaneScheduler, classifyProviderOutcome, lanesDir, machineConcurrency } from './lanes.mjs';
++import { projectId } from './projects.mjs';
+ import { resolveHosts, enabledHosts, createHostPool, defaultHostTransport, remoteEnv, checkPulled, isSecretPath } from './executors.mjs';
+ import { initProject, checkProject, refreshRepoMap } from './init.mjs';
+ import { summarizeMap, mapIsFresh, readRepoMap } from './repo-map.mjs';
+@@ -2712,7 +2713,9 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
+   }
+   const lanes = resolveLanes({ config: worktreeConfig, manifest, env });
+   const laneDirectory = lanesDir(env);
+-  const scheduler = new LaneScheduler({ lanes, globalConcurrency: state.concurrency, now, shared: { dir: laneDirectory, runId: id } });
++  // The machine-wide worker limit (config machineConcurrency), shared fairly between projects: this run is one project's share of it.
++  const machineMax = machineConcurrency(worktreeConfig);
++  const scheduler = new LaneScheduler({ lanes, globalConcurrency: state.concurrency, now, shared: { dir: laneDirectory, runId: id, machine: machineMax ? { max: machineMax, project: projectId(await fs.realpath(root)) } : null } });
+   const configuredHosts = enabledHosts(resolveHosts(manifest.hosts ?? worktreeConfig.hosts));
+   if (configuredHosts && heartbeatMs) for (const host of configuredHosts) host.heartbeatMs = heartbeatMs;
+   const hostTransportUsed = configuredHosts ? (hostTransport ?? defaultHostTransport({ spawnImpl })) : null;
+diff --git a/tools/watch-assets/board.js b/tools/watch-assets/board.js
+index 1a2919b..ec73937 100644
+--- a/tools/watch-assets/board.js
++++ b/tools/watch-assets/board.js
+@@ -48,6 +48,15 @@
+     var c = m.cost;
+     grid.appendChild(tile('Spend today', usd(c.todayUsd), 'last 7 days ' + usd(c.weekUsd)));
+     grid.appendChild(tile('Spend, all time', usd(c.allUsd), 'billed per use ' + usd(c.paidUsd) + ' (of which estimated ' + usd(c.paidEstimatedUsd) + ') | flat-rate lanes (Codex, Cursor, Claude subscription), list value only, not billed ' + usd(c.flatRateListUsd)));
++    var w = m.workers;
++    if (w) {
++      var holders = {};
++      Object.keys(w.byProject).forEach(function (id) { var h = w.byProject[id]; holders[names[id] || (id === 'unknown' ? 'unknown project' : id)] = h.total + ' (' + pairs(h.byLane, String) + ')'; });
++      var waiting = {};
++      Object.keys(w.demand || {}).forEach(function (id) { waiting[names[id] || id] = w.demand[id]; });
++      var limit = w.invalid ? w.total + ' in use, LIMIT INVALID (fix machineConcurrency; runs will not start)' : w.max ? w.total + ' of ' + w.max + ' in use' : w.total + ' in use, no machine limit';
++      grid.appendChild(tile('Workers held', limit, 'who holds them: ' + (Object.keys(holders).length ? Object.keys(holders).sort().map(function (k) { return k + ' ' + holders[k]; }).join(' | ') : 'nobody') + (Object.keys(waiting).length ? ' | waiting: ' + pairs(waiting, String) : '') + (w.max ? ' | shared fairly between active projects' : '')));
++    }
+     var per = {};
+     Object.keys(c.byProject).forEach(function (id) { per[c.byProject[id].name || id] = usd(c.byProject[id].allUsd); });
+     grid.appendChild(tile('By project', String(Object.keys(per).length), Object.keys(per).sort().map(function (k) { return k + ' ' + per[k]; }).join(', ') || 'none'));
+diff --git a/tools/watch-cli.mjs b/tools/watch-cli.mjs
+index a137af6..aa0e614 100644
+--- a/tools/watch-cli.mjs
++++ b/tools/watch-cli.mjs
+@@ -20,7 +20,9 @@ import { readLedger } from './tickets.mjs';
+ import { boardSummary, listLiveRuns } from './board.mjs';
+ import { listProjects, projectsFile } from './projects.mjs';
+ import { readHistory, historyCsv, historyFile } from './history.mjs';
+-import { boardSnapshot, projectDetail } from './board-data.mjs';
++import { boardSnapshot, projectDetail, workersHeld } from './board-data.mjs';
++import { lanesDir, machineConcurrency } from './lanes.mjs';
++import { loadLocalConfig } from './local-config.mjs';
+ import { backfillHistory } from './board-commands.mjs';
+ import { projectSummary } from './project-spend.mjs';
+ 
+@@ -205,7 +207,11 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
+     // One snapshot at a time: requests that arrive while one is being built share it.
+     snapshot() {
+       if (cached && now() - cached.at < cacheMs) return cached.promise;
+-      const promise = (async () => boardSnapshot({ projects: await listProjects({ file: projectsFile(env) }), liveRuns: await live(), now: now() }))();
++      const promise = (async () => {
++        let max = null, invalid = false;
++        try { max = machineConcurrency(loadLocalConfig({ env })); } catch { invalid = true; /* the runs that read it refuse to start; the board says so */ }
++        return boardSnapshot({ projects: await listProjects({ file: projectsFile(env) }), liveRuns: await live(), now: now(), workers: await workersHeld({ dir: lanesDir(env), max, invalid }) });
++      })();
+       cached = { at: now(), promise };
+       promise.catch(() => { if (cached?.promise === promise) cached = null; });
+       return promise;

@@ -20,7 +20,8 @@ import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths,
 import { expandShellPreset, validateNetworkAllow, validateLoopbackAllow, validateShellTestEnvKey, requireShellPlatform, requireSandboxExec, resolveWorkerKey, claudeShellArgs, shellProfile, shellEnvironment, startConnectProxy, resolveClaudeBinary, resolveVenvInterpreterDirs, resolveRootGitInfo, scanListeningPorts, resolveRigServicePort, createShellScratchDir, shellMessage, containsKey, redactKey, effectiveShellDeniedHomeDirs, workerKeyItem, TOOLCHAIN_DIRS, scratchRootDir, assertScratchOutsideRepo, resolveSharedUvCacheDir } from './claude-shell.mjs';
 import { portBlockFor, resolvePortBlock } from './ports.mjs';
 import { loadLocalConfig } from './local-config.mjs';
-import { resolveLanes, LaneScheduler, classifyProviderOutcome, lanesDir } from './lanes.mjs';
+import { resolveLanes, LaneScheduler, classifyProviderOutcome, lanesDir, machineConcurrency } from './lanes.mjs';
+import { projectId } from './projects.mjs';
 import { resolveHosts, enabledHosts, createHostPool, defaultHostTransport, remoteEnv, checkPulled, isSecretPath } from './executors.mjs';
 import { initProject, checkProject, refreshRepoMap } from './init.mjs';
 import { summarizeMap, mapIsFresh, readRepoMap } from './repo-map.mjs';
@@ -2712,7 +2713,9 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
   }
   const lanes = resolveLanes({ config: worktreeConfig, manifest, env });
   const laneDirectory = lanesDir(env);
-  const scheduler = new LaneScheduler({ lanes, globalConcurrency: state.concurrency, now, shared: { dir: laneDirectory, runId: id } });
+  // The machine-wide worker limit (config machineConcurrency), shared fairly between projects: this run is one project's share of it.
+  const machineMax = machineConcurrency(worktreeConfig);
+  const scheduler = new LaneScheduler({ lanes, globalConcurrency: state.concurrency, now, shared: { dir: laneDirectory, runId: id, machine: machineMax ? { max: machineMax, project: projectId(await fs.realpath(root)) } : null } });
   const configuredHosts = enabledHosts(resolveHosts(manifest.hosts ?? worktreeConfig.hosts));
   if (configuredHosts && heartbeatMs) for (const host of configuredHosts) host.heartbeatMs = heartbeatMs;
   const hostTransportUsed = configuredHosts ? (hostTransport ?? defaultHostTransport({ spawnImpl })) : null;

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.115.0
+
+The Swarm Watch board, part 2: a machine-wide worker limit shared fairly between projects.
+- New local-config setting `machineConcurrency` (a whole number 1 to 2048; none by default; anything else is an error): the most workers the machine runs at once, in all lanes and projects together. Projects share it fairly: a guaranteed share of limit / active projects (at least 1), idle capacity can be borrowed, but not what another active project is waiting for. Lane limits and every spend cap stay separate and unchanged.
+- The board's top bar shows "Workers held": use of the limit, which project holds how many (by lane), and who is waiting.
+- Tested with real concurrent runs of two projects: at most the limit at once, both finish, each run's outputs and state stay in its own project, every worker slot is given back.
+- An Opus review (1 high, 5 medium, 4 low) was fixed before release: with more projects than workers a freed worker goes to the longest-waiting project; waiting entries are per run and lane and expire after 5 seconds; a waiting run polls the file without taking its lock while the machine is full; a malformed waiting list is reset, never an error; the board shows an invalid limit as `LIMIT INVALID`. (A lead job gives its worker back before its child run starts, so nested runs cannot deadlock on a small limit.)
+- Tests: `tests/machine-share.test.mjs`.
+
 ## 1.114.0
 
 The Swarm Watch board, part 1 (data and page). `swarm watch --all` is now the board of the whole machine:
