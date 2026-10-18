@@ -62,7 +62,7 @@ import { SCALE_DEFAULT_CONCURRENCY, SCALE_DEFAULT_JOBS, prepareScaleRepo, scaleS
 import { routeJob, rentedContractProblem } from './router.mjs';
 import { anthropicPrice, assertOpusTier as assertAnthropicModel, readAnthropicKey, ANTHROPIC_ENDPOINT } from './anthropic.mjs';
 import { loadRentedConfig, createRentalMeter, rentalDecision, rentedSensitiveOk, RENTED_DEFAULTS } from './rented.mjs';
-import { checkProjectCap } from './project-spend.mjs';
+import { checkProjectCap, noCapWarning } from './project-spend.mjs';
 import { accrueSpend, resolveBudget, runTotals, jobSpend, spendDir, withSpendStore, laneDayTotals, estimateReservation, reserveSpend, settleSpend, releaseSpend, finalCost, PAID_LANES, capDecision, ledgerRows, mergeLedger, validateIdleItems, runIdleMenu } from './spend.mjs';
 import { JOB_TYPES, applyJobType, jobTypeOutputViolations } from './job-types.mjs';
 import { validateLeadArea, validateParentLeads, validateChildManifest, leadPromptBlock, leadRollup } from './leads.mjs';
@@ -8212,6 +8212,7 @@ async function mainInner() {
   if(command==='go'){
     const flags=rest.splice(0,rest.length);
     goFlags=parseGoFlags(flags);
+    { const noCap=await noCapWarning(root).catch(()=>null); if(noCap)process.stderr.write(`${noCap}\n`); }
     planFlagsFromCli={maxUsd:goFlags.maxUsd,maxTokens:goFlags.maxTokens};
   }
   // validate/run's --evidence names a local file whose failures block is appended to every job

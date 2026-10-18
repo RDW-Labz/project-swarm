@@ -89,7 +89,7 @@ export function renderTui(snapshot, opts = {}) {
 
   if (snapshot.project) {
     const pr = snapshot.project;
-    out.push(cut('project total ' + money(pr.spendUsd) + ' over ' + (pr.runs || 0) + ' runs' + (pr.capUsd ? '  cap ' + money(pr.capUsd) + (pr.reached ? '  CAP REACHED: no new runs' : '') : '  (no project cap set)'), W));
+    out.push(cut('project total ' + money(pr.spendUsd) + ' over ' + (pr.runs || 0) + ' runs' + (pr.capUsd ? '  cap ' + money(pr.capUsd) + (pr.reached ? '  CAP REACHED: no new runs' : '') : '  NO CAP'), W));
   }
 
   out.push('');

@@ -84,8 +84,15 @@ export async function projectSummary(root, { env = process.env, now = Date.now, 
     let info = null, capError = null;
     try { info = await readProjectCap(root, { env }); } catch (error) { capError = error.message; }
     const decision = info ? projectCapDecision({ spent, cap: info.cap, source: info.source }) : null;
-    value = { spendUsd: Math.round(spent.usd * 100) / 100, runs: spent.runs, capUsd: info?.cap ?? null, reached: Boolean(decision), unknownUsd: spent.unknownUsd, unreadable: spent.unreadable.length, ...(capError ? { capError } : {}) };
+    value = { spendUsd: Math.round(spent.usd * 100) / 100, runs: spent.runs, capUsd: info?.cap ?? null, noCap: !info && !capError, reached: Boolean(decision), unknownUsd: spent.unknownUsd, unreadable: spent.unreadable.length, ...(capError ? { capError } : {}) };
   } catch (error) { value = { spendUsd: null, runs: 0, capUsd: null, reached: false, unknownUsd: 0, unreadable: 0, capError: String(error.message).slice(0, 200) }; }
   summaryCache.set(root, { at: now(), value });
   return value;
+}
+
+// swarm go prints this when the project has no cap at all. Nothing is set for the owner: there is no default value.
+export const NO_CAP_WARNING = 'warning: NO CAP: this project has no project-wide spend cap, so only each run\'s own --max-usd limits spending. Set budget.projectMaxUsd in the profile (or spend.projectMaxUsd in the local config); swarm sets none for you.';
+export async function noCapWarning(root, { env = process.env } = {}) {
+  try { return (await readProjectCap(root, { env })) === null ? NO_CAP_WARNING : null; }
+  catch { return null; } // an invalid cap is refused loudly when the run starts; it is not "no cap"
 }

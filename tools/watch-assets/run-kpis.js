@@ -123,7 +123,7 @@
     var bar = $('kSpendBar');
     if (bar && bar.parentNode) bar.parentNode.hidden = true;
     var pj = run.project;
-    setText('kForecast', (pj ? 'project ' + fmt$(pj.spendUsd) + (pj.capUsd ? ' / ' + fmt$(pj.capUsd) + (pj.reached ? ' CAP REACHED' : '') : '') + ' · ' : '') + 'rate ' + fmt$(spendRate) + '/min');
+    setText('kForecast', (pj ? 'project ' + fmt$(pj.spendUsd) + (pj.capUsd ? ' / ' + fmt$(pj.capUsd) + (pj.reached ? ' CAP REACHED' : '') : (pj.capError ? ' CAP INVALID' : ' NO CAP')) + ' · ' : '') + 'rate ' + fmt$(spendRate) + '/min');
     setText('kEta', run.status === 'complete' ? 'done' : (k.etaMs == null ? '–' : fmtT(k.etaMs)));
     setText('kRate', (k.jobsPerSec || 0).toFixed(1) + ' jobs/s');
     var mq = run.mergeQueue;
