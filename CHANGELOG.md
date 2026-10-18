@@ -6,6 +6,10 @@ Two parts-app S11 review bugs:
 - The acceptance review job was written with the tier `standard`, which the runner does not know (`cheap`, `mid`, `expensive`), so the manifest was refused. It is now `mid`; a test runs the manifest through the runner's own validation.
 - A review answer that ends with the worker's status line (`{"status":"complete",...}`, which the runner asks every review job to finish with) hid the verdict line, and the recorder found no verdict. The recorder now skips ONE trailing status line (exactly the runner's shape, status complete; a blocked or failed footer means no verdict) and reads the line before it, for the acceptance review and the security review. The rule against quoted objects is kept: a verdict-looking line earlier in the text still never wins, and anything else after the verdict line (prose) still hides it. An Opus review (2 medium, 3 low) tightened the footer rule.
 - Tests: in `tests/acceptance-sync.test.mjs`.
+Speed and accessibility budgets (A2) and the model watcher (B3):
+- **Budgets:** a `budgets` block in the profile (performance, accessibility, axe impacts, key screens, your Lighthouse and axe commands). When the preview hook passes, Lighthouse and axe run on each screen; a failing screen (or a tool that could not run) is recorded, gets one fix ticket for the batch's files, and `swarm ship` refuses with `budgets-failing` only for the PR that finishes the last stage. `swarm budgets check --url URL` / `status`. See `docs/budgets.md`. The default tool commands were not run against a real site.
+- **Model watch:** `swarm models watch` (weekly) finds new open coding models that fit our GPUs and new Anthropic API model versions and puts each new one in the inbox as a decision (default skip); the first run is a silent baseline. It never rents a GPU: the inbox item carries the `swarm gpu bakeoff` command and your pre-approved `modelWatch.evalCapUsd` (or says none is set). `swarm models compare A B` reports pass rate and cost from recorded eval runs. See `docs/models.md`.
+- Tests: `tests/budgets.test.mjs`, `tests/model-watch.test.mjs`.
 
 ## 1.111.0
 

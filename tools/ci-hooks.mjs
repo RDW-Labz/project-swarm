@@ -131,7 +131,7 @@ function safeTail(text) {
   return t.slice(-TAIL_CHARS);
 }
 
-function filterEnv(env) {
+export function filterEnv(env) {
   const out = {};
   for (const [k, v] of Object.entries(env || {})) {
     if (typeof v !== 'string' || SECRET_KEY_RE.test(k)) continue;
@@ -140,7 +140,7 @@ function filterEnv(env) {
   return out;
 }
 
-function defaultRun(command, args, options) {
+export function defaultRun(command, args, options) {
   return new Promise((resolve) => {
     let child;
     try {

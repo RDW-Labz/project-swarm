@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { validateApprovalPolicy } from './approval-policy.mjs';
 import { validateCiConfig } from './ci-hooks.mjs';
+import { validateBudgetsConfig } from './budgets.mjs';
 import { validateVerifyConfig } from './verify-config.mjs';
 import { validateUiConfig } from './ui-compare.mjs';
 import { validateMigrationsConfig } from './migration-gate.mjs';
@@ -10,7 +11,7 @@ import { sanitizeText } from './journal.mjs';
 
 export const DEFAULT_PROFILE_BUDGET = Object.freeze({ maxUsd: 5, maxTokens: 2000000 });
 const STATUSES = ['green', 'red', 'skipped', 'none'];
-const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality', 'migrations', 'acceptance'];
+const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality', 'migrations', 'acceptance', 'budgets'];
 const REQUIRED_KEYS = ['sensitive', 'protectedPaths', 'budget', 'baseCheck'];
 const BASE_KEYS = ['status', 'ranAt', 'head', 'checks'];
 // The pointer (profile) and the checks file decide what later runs may do and execute, so no job may rewrite them.
@@ -214,6 +215,17 @@ export function validateProfile(profile) {
       // The script the dev server command runs is protected like a ci hook's files.
       // The mockups are what pages are compared with: workers cannot edit them (jobs that render those screens may still read them).
       for (const entry of [...hookFiles(checked.config.start), ...checked.config.screens.map(screen => screen.mockup)]) {
+        try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch { /* not a usable path */ }
+      }
+    }
+  }
+  if (profile.budgets !== undefined) {
+    const checked = validateBudgetsConfig(profile.budgets);
+    for (const message of checked.errors) errors.push(`profile.${message}`);
+    if (checked.ok) {
+      out.budgets = checked.config;
+      // A script the budget tools run is protected like a ci hook's files.
+      for (const tool of [checked.config.lighthouse, checked.config.axe]) for (const entry of hookFiles(tool.argv)) {
         try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch { /* not a usable path */ }
       }
     }
