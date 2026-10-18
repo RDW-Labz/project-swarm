@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText, isSensitiveText } from './scope.mjs';
-import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, STATUSES } from './tickets.mjs';
+import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS } from './tickets.mjs';
 import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
 import { missingToolConfigs, toolConfigLines, projectFileList, existsIn, e2eSpecWarnings } from './tool-config.mjs';
 import { isSecretLooking } from './ignored-artifacts.mjs';
@@ -44,7 +44,8 @@ export const SCOPE_USAGE = [
   '       swarm scope security-review RUN     (records the verdicts of an Opus security review run)',
   '       swarm scope acceptance-review RUN   (records the per-line verdicts of an acceptance review run)',
   '       swarm scope contracts OPENAPI.json',
-  '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high] [--set STATUS] [--note TEXT] [--json]',
+  '       swarm tickets ID --lane auto|claude|codex|cursor|anthropic[:MODEL] | --risk low|medium|high [--yes]   (logged; an approved ledger is sealed again)',
+  '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high (filter; with an ID use the --risk line above)] [--set STATUS] [--note TEXT] [--json]',
   '       swarm tickets ID --files a,b [--take-from TICKET] [--deletes x,y] [--dependencies pkg,pkg@^1] [--context c,d] [--tests t] [--acceptance "one || two"] [--add-acceptance TEXT] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
   '       swarm tickets ID... --release [--note TEXT]     (clean release of held tickets: blocked, todo or review go back to ready with attempts, escalation and retry notes cleared)',
   '       swarm tickets --mark-deps [ID...] [--yes]     (one time, older ledgers: mark blocked tickets with no reason as dependency-blocked so they unlock)',
@@ -59,7 +60,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from']);
+const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const out = (text, exitCode = 0) => ({ stdout: text.endsWith('\n') ? text : `${text}\n`, exitCode });
@@ -1503,6 +1504,45 @@ async function editTicketFiles(root, ledger, rest, flags) {
   } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
 }
 
+// The owner changes a ticket's risk or pins its lane. Both are in the ticket hash, so an approved ledger is sealed again over the change (your --yes is the approval) and the edit is logged.
+async function setTicketRoute(root, rest, flags) {
+  if (rest.length !== 1) return bad('tickets --lane/--risk needs one ticket id');
+  const risk = flags.risk;
+  const parsedLane = flags.lane === undefined || flags.lane === 'auto' ? null : parseLane(flags.lane);
+  const lane = flags.lane === undefined ? undefined : flags.lane === 'auto' ? 'auto' : laneText(parsedLane) ?? flags.lane;
+  const others = ['set', 'files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from', 'json', 'release'].filter(k => flags[k] !== undefined);
+  if (others.length) return bad(`tickets --lane/--risk cannot be combined with --${others[0]}; run them one at a time`);
+  if (risk !== undefined && !['low', 'medium', 'high'].includes(risk)) return out('risk must be low, medium or high', 1);
+  if (lane !== undefined && lane !== 'auto' && !parsedLane) return out(`lane must be auto or one of ${TICKET_LANE_AGENTS.join(', ')} (optionally agent:model, like claude:opus)`, 1);
+  try {
+    return await withLock(root, async () => {
+      const fresh = await readLedger(root);
+      const ticket = fresh.tickets.find(x => x.id === rest[0]);
+      if (!ticket) return out(`no ticket ${rest[0]}`, 1);
+      if (!['todo', 'ready', 'blocked'].includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}; only a todo, ready or blocked ticket can change its risk or lane (send it back with swarm tickets ${ticket.id} --set todo first)`, 1);
+      if (lane !== undefined && lane !== 'auto' && ticket.sensitive === true && !laneOkForSensitive(parsedLane)) return out(`${ticket.id} is sensitive: lane ${lane} is not allowed (cursor only without a model)`, 1);
+      const next = { ...ticket };
+      if (risk !== undefined) next.risk = risk;
+      if (lane !== undefined) { if (lane === 'auto') delete next.lane; else next.lane = lane; }
+      const v = validateTicket(next);
+      if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
+      const fields = [...(risk !== undefined ? ['risk'] : []), ...(lane !== undefined ? ['lane'] : [])];
+      const show = x => String(x ?? 'auto');
+      const summary = fields.map(k => `  ${k}: ${show(ticket[k] ?? (k === 'risk' ? undefined : 'auto'))}  ->  ${show(next[k] ?? (k === 'risk' ? undefined : 'auto'))}`).join('\n');
+      if (fields.every(k => (ticket[k] ?? null) === (next[k] ?? null))) return out(`${ticket.id}: nothing to change`);
+      const wasApproved = isApproved(fresh);
+      if (flags.yes !== true) return out(`${ticket.id}:\n${summary}\nRerun with --yes to apply${wasApproved ? ' (the approval is renewed over the change)' : ''}.`);
+      fresh.tickets = fresh.tickets.map(x => x.id === ticket.id ? next : x);
+      const saved = wasApproved ? approveLedger(fresh, { by: 'owner' }) : fresh;
+      saved.updatedAt = new Date().toISOString();
+      await writeLedger(root, saved);
+      await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields, before: Object.fromEntries(fields.map(k => [k, ticket[k] ?? null])), after: Object.fromEntries(fields.map(k => [k, next[k] ?? null])), note: flags.note ?? null, reapproved: wasApproved });
+      await refreshPlan(root);
+      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the change).' : ''}`);
+    });
+  } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
+}
+
 // A clean release of held tickets: back to ready with the failure history cleared, so the next wave starts them from the first level.
 // Only tickets whose dependencies are done can be released; a running, done or cancelled ticket is left alone.
 async function releaseTickets(root, ids, flags) {
@@ -1538,6 +1578,7 @@ export async function runTicketsCommand(root, args) {
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
   if (flags['mark-deps']) return markDepsCommand(root, ledger, rest, flags);
   if (flags.release === true) return releaseTickets(root, rest, flags);
+  if (flags.lane !== undefined || (flags.risk !== undefined && rest.length === 1 && flags.set === undefined)) return setTicketRoute(root, rest, flags);
   if (['files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from'].some(k => flags[k] !== undefined)) return editTicketFiles(root, ledger, rest, flags);
   if (flags.set !== undefined) {
     if (rest.length !== 1) return bad('tickets --set needs one ticket id');

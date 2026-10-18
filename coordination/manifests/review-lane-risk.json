@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.0 },
+  "jobs": [
+    {
+      "id": "review-lane-risk",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "changes what the owner approved in the ticket hash",
+      "type": "review",
+      "prompt": "Review coordination/review/lane-risk.diff (new: swarm tickets ID --risk / --lane; ticket field `lane` added to the approval hash; ticket-manifest uses it). Rules: (1) existing approved ledgers must still verify: a ticket without lane must hash exactly as before (check ticketSetHash / canon with undefined values); (2) the re-approval must only happen with --yes and only when the ledger was approved; a preview must write nothing; (3) lane parsing must be strict: no shell characters, no unknown agents, no way to route a sensitive ticket to a non-sensitive-only provider (openrouter/openai/gemini/lambda are not allowed); (4) a pinned lane must not break verify-lane jobs (shell, setup, testEnv) or delete tickets in ticket-manifest; look for the model handling line and tell me if `delete job.model` is wrong; (5) concurrency: it runs under withLock like the other edits; (6) tickets ID --risk now sets instead of ignoring: any caller or doc relying on the old behavior; (7) the log entry. Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete failing scenario, and say what you checked that is fine. Do not edit files.",
+      "context": ["tools/tickets.mjs", "tools/ticket-manifest.mjs", "tools/scope-commands.mjs", "tests/ticket-lane-risk.test.mjs", "coordination/review/lane-risk.diff"],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

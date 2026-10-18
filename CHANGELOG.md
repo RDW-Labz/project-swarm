@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.107.0
+
+`swarm tickets ID --risk low|medium|high` and `swarm tickets ID --lane auto|claude|codex|cursor|anthropic[:MODEL]` (the S8 gap: a ticket's route could only be changed by editing the ledger by hand):
+- Both change a todo, ready or blocked ticket. Without `--yes` it previews; with `--yes` it applies, writes a `ticket-edit` line to `.swarm/project/tickets.log` (before, after, whether the approval was renewed) and seals an approved ledger again, since `risk` and the new `lane` field are part of the approved hash. A ticket with no lane hashes exactly as before, so existing approvals stay valid.
+- A pinned lane wins over escalation routing and the profile's verify lane when the ticket becomes a job. A lane that cannot run tests or delete files (`anthropic`) is refused for a ticket that has `tests` or `deletes`. `tickets ID --risk X` with an id now sets; with no id it still filters.
+- A lane is validated strictly (a model must start with a letter or digit; the stored text is normalised). A sensitive ticket may not pin a lane that leaves the known providers (`cursor` only without a model), both when set and when the manifest is built (the pin is then ignored with a warning). `--lane`/`--risk` cannot be mixed with other edit flags. An Opus review (3 medium, 5 low) was fixed before release.
+- Test: `tests/ticket-lane-risk.test.mjs`.
+
 ## 1.106.0
 
 Migrations: `down: "dir"` and `down: "none"` (parts-app: with Supabase, `down: "sibling"` breaks the CLI, which reads `0009_x.down.sql` as a second migration with version 0009, and `down: "section"` runs the down right after the up):
