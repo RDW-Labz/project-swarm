@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { projectSpend, projectCap, projectCapInfo, projectCapDecision, projectSummary, checkProjectCap } from '../tools/project-spend.mjs';
+import { noCapWarning, NO_CAP_WARNING, projectSpend, projectCap, projectCapInfo, projectCapDecision, projectSummary, checkProjectCap } from '../tools/project-spend.mjs';
 import { runManifest, resumeRun } from '../tools/swarm.mjs';
 import { resolveBudget, mergeLedger, ledgerRows, parseLedgerRow } from '../tools/spend.mjs';
 import { validateProfile } from '../tools/init-profile.mjs';
@@ -92,14 +92,14 @@ test('a project under its cap, or without one, still runs', async t => {
 test('project summary for swarm watch shows the total, the cap and whether it is reached', async t => {
   const fx = await repo(t, { profile: { budget: { projectMaxUsd: 4 } } });
   await oldRun(fx.root, 'old-1', [3]);
-  assert.deepEqual(await projectSummary(fx.root, { env: fx.env, ttlMs: 0 }), { spendUsd: 3, runs: 1, capUsd: 4, reached: false, unknownUsd: 0, unreadable: 0 });
+  assert.deepEqual(await projectSummary(fx.root, { env: fx.env, ttlMs: 0 }), { spendUsd: 3, runs: 1, capUsd: 4, noCap: false, reached: false, unknownUsd: 0, unreadable: 0 });
   await oldRun(fx.root, 'old-2', [1.5]);
   const summary = await projectSummary(fx.root, { env: fx.env, ttlMs: 0 });
   assert.equal(summary.spendUsd, 4.5);
   assert.equal(summary.reached, true);
   const frame = renderTui({ runId: 'r', status: 'running', kpi: {}, lanes: [], project: summary }, { width: 120, color: false });
   assert.match(frame, /project total \$4\.50 over 2 runs {2}cap \$4\.00 {2}CAP REACHED: no new runs/);
-  assert.match(renderTui({ runId: 'r', status: 'running', kpi: {}, lanes: [], project: { spendUsd: 1, runs: 1, capUsd: null } }, { width: 120, color: false }), /project total \$1\.00 over 1 runs {2}\(no project cap set\)/);
+  assert.match(renderTui({ runId: 'r', status: 'running', kpi: {}, lanes: [], project: { spendUsd: 1, runs: 1, capUsd: null, noCap: true } }, { width: 120, color: false }), /project total \$1\.00 over 1 runs {2}NO CAP/);
 });
 
 const attempt = (id, cost, agent = 'anthropic', task = 'build a thing') => ({ id, agent, model: 'm', status: 'complete', costUsd: cost, usage: { total_tokens: 1000 }, report: { summary: task }, attempts: [{ status: 'complete', finishedAt: '2026-10-18T10:00:00Z' }] });
@@ -203,4 +203,33 @@ test('ledger: the total row keeps the estimate and subscription notes', () => {
   assert.match(mergeLedger('', ledgerRows({ id: 'r1', jobs: [est] })), /\*\*total\*\* \| all \| 1 \| 1 \| 0 \| 1,000 \| \$1\.00 \(incl\. estimates\) \|/);
   const sub = { ...attempt('b', null, 'codex'), costUsd: undefined };
   assert.match(mergeLedger('', ledgerRows({ id: 'r1', jobs: [sub] })), /\*\*total\*\* \| all \| 1 \| 1 \| 0 \| 1,000 \| subscription \|/);
+});
+
+test('no project cap: swarm go warns (stderr text) and swarm watch says NO CAP; a set cap or an invalid one does not warn; nothing is defaulted', async t => {
+  const none = await repo(t, { profile: { budget: { maxUsd: 5 } } });
+  assert.equal(await noCapWarning(none.root, { env: none.env }), NO_CAP_WARNING);
+  assert.match(NO_CAP_WARNING, /NO CAP/);
+  assert.equal((await projectSummary(none.root, { env: none.env, ttlMs: 0 })).noCap, true);
+  assert.equal((await projectSummary(none.root, { env: none.env, ttlMs: 0 })).capUsd, null, 'no value is invented');
+  const set = await repo(t, { profile: { budget: { projectMaxUsd: 9 } } });
+  assert.equal(await noCapWarning(set.root, { env: set.env }), null);
+  const bad = await repo(t, { profile: { budget: { projectMaxUsd: -1 } } });
+  assert.equal(await noCapWarning(bad.root, { env: bad.env }), null);
+  const web = await fs.readFile(new URL('../tools/watch-assets/run-kpis.js', import.meta.url), 'utf8');
+  assert.match(web, /NO CAP/);
+});
+
+test('swarm go prints the NO CAP warning on stderr for a project without a cap', async t => {
+  const fx = await repo(t, { profile: { budget: { maxUsd: 5 } } });
+  const swarm = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'tools', 'swarm.mjs');
+  await fs.writeFile(path.join(fx.root, 'dirty.txt'), 'x'); // a dirty tree is refused by go itself before any model is called
+  const result = await exec(process.execPath, [swarm, 'go', 'noop goal'], { cwd: fx.root, env: fx.env }).catch(error => error);
+  assert.match(String(result.stderr), /warning: NO CAP: this project has no project-wide spend cap/);
+});
+
+test('swarm watch tells an invalid cap from no cap', () => {
+  const frame = project => renderTui({ runId: 'r', status: 'running', kpi: {}, lanes: [], project }, { width: 120, color: false });
+  assert.match(frame({ spendUsd: 1, runs: 1, capUsd: null, noCap: false, capError: 'project-cap-invalid: x' }), /CAP INVALID/);
+  assert.doesNotMatch(frame({ spendUsd: 1, runs: 1, capUsd: null, noCap: false, capError: 'x' }), /NO CAP/);
+  assert.match(frame({ spendUsd: 1, runs: 1, capUsd: null, noCap: true }), /NO CAP/);
 });

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.2 },
+  "jobs": [
+    {
+      "id": "review-central-checks",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "changes when a worker's blocked report is treated as complete",
+      "type": "review",
+      "prompt": "Review tools/central-checks.mjs and coordination/review/central-checks.diff (a worker's blocked envelope that is only about not being able to run a check, with all outputs written, becomes complete with checksDeferred; integrate warns checks-run-centrally or checks-not-run; plus the NO CAP warning in swarm go and swarm watch). Rules: (1) a REAL block (needs a file, cannot meet a rule or contract, outside outputs, missing output, secret/permission problem) must NEVER be downgraded to complete: hunt for phrasings the CANNOT/RUN/CHECK regexes accept that are really a different block, and for ways a worker could talk its way past a block on purpose (the summary is untrusted worker text); (2) the downgrade must only happen when every declared output exists and is non-empty in the workspace, and never for a job that already failed/timed out; (3) the deferral must never make unchecked code look verified: integrate with --no-checks or no manifest checks must say so, and a failing central check must still fail; check the other integrate paths (queue mode, ship, go, salvage, --accept-blocked) for ones that skip deferredCheckWarnings; (4) the second blocked path at swarm.mjs ~2132 (missing outputs) and the prose 'Status: BLOCKED' path: are they correctly left alone? (5) NO CAP: warning never printed for --help or machine output that must stay clean; invalid cap not reported as no cap; nothing defaulted. Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete failing scenario; say what you checked that is fine. Do not edit files.",
+      "context": ["tools/central-checks.mjs", "tools/project-spend.mjs", "tests/central-checks.test.mjs", "coordination/review/central-checks.diff"],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

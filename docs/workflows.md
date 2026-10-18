@@ -99,3 +99,7 @@ For example, the website project's six-worker run produced a browser-test file a
 The examples directory includes `code-review.json`, `ui-review.json`, `documentation.json`, `test-plan.json`, `four-reviewers.json`, and `mixed-provider-review.json`. They use this toolkit README as safe example context. Adapt the file lists, prompts, declared reports, and model names before using them on your application. After installation they are named `coordination/swarm-<example-name>.json`.
 
 Code review asks for defects with source evidence; UI review evaluates supplied source and cannot see rendered pixels; documentation writes a complete declared Markdown output; test planning proposes checks without pretending to execute them. Four-reviewer and mixed-provider recipes explicitly opt into concurrency 4. Jobs have separate workspaces; after dependencies can pass completed outputs where supported. Use separate runs after integration for dependent stages. See [provider setup](providers.md) to configure only the providers you choose.
+
+## A worker that cannot run a check
+
+A worker with no shell sometimes writes correct files and then reports `blocked` because it could not run the tests. When the block is only about that (and every declared output is written), the job counts as complete and the swarm runs the checks centrally at integrate; integrate names the jobs (`checks-run-centrally`), or warns `checks-not-run` when no check is configured or `--no-checks` is used. Any other block stays a block.

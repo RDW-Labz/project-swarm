@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.105.0
+
+NO CAP warning, and a worker that could not run a check is no longer blocked (parts-app lesson 52):
+- A project with no project-wide spend cap gets `warning: NO CAP ...` from `swarm go` (stderr), and swarm watch shows `NO CAP` (terminal and web Spend tile). Nothing is defaulted: the owner sets `budget.projectMaxUsd` (an invalid value is refused at run start and shows `CAP INVALID`).
+- A worker's own blocked report that is ONLY about not being able to run a check (no shell, tests not allowed, tool missing), with every declared output written and non-empty, now finishes as `complete` with `checksDeferred` on the job; before, the job was blocked and the orchestrator copied the files by hand. The swarm runs the manifest's checks centrally at integrate (`checks-run-centrally` note; a failing check fails the integrate as always). With `--no-checks`, or a manifest with no checks, integrate says `checks-not-run` so nothing looks verified that was not. A block about anything else (a file it needs, a rule it cannot meet, credentials, permissions, a missing output) stays blocked: every sentence of the report must be "could not run a check" or plain progress. The downgrade needs the manifest to have checks (otherwise nothing would verify the files), every output written, non-empty, not a symlink and different from its start. An Opus review (5 high, 5 medium, 5 low) was fixed before release. `tools/central-checks.mjs`.
+
 ## 1.104.0
 
 Project-wide spend cap and a ledger that adds up (parts-app lesson 50):
