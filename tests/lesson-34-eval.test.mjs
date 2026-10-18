@@ -45,10 +45,18 @@ test('eval 34.1: split adds an integration ticket per requirement, and a require
   // Old behavior: modules only, nothing mounts them, split accepted it.
   const root = await project(t);
   await fakeRun(root, 'r1', [MODULE]);
-  const refused = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
-  assert.equal(refused.exitCode, 1);
-  assert.match(refused.stdout, /not wired.*R-001: build tickets but no integration ticket/s);
-  assert.equal(await readLedger(root), null, 'no ledger is written for an unwired split');
+  // New behaviour (parts-app lesson 55): the split is kept, the wire manifest is written, and approval is held until the integration ticket exists.
+  const kept = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
+  assert.equal(kept.exitCode, 0, kept.stdout);
+  assert.match(kept.stdout, /wiring: 1 requirement\(s\) have modules but no integration ticket \(R-001\)/);
+  assert.match(kept.stdout, /Next: swarm run docs\/scope\/split\/wire-manifest\.json, then swarm scope split --ingest RUN --merge --wire/);
+  const wireManifest = JSON.parse(await fs.readFile(path.join(root, 'docs/scope/split/wire-manifest.json'), 'utf8'));
+  assert.match(wireManifest.jobs[0].prompt, /Write ONLY integration tickets/);
+  assert.equal((await readLedger(root)).tickets.length > 0, true, 'the split is not thrown away');
+  const held = await runScopeCommand(root, 'scope', ['approve', '--yes']);
+  assert.equal(held.exitCode, 1);
+  assert.match(held.stdout, /not approvable: 1 requirement\(s\) have modules but no integration ticket \(R-001\)/);
+  await fs.rm(path.join(root, '.swarm/project/tickets.json'));
   // The prompt asks for it.
   assert.match(buildSplitManifest(parseScope(SCOPE), {}).jobs[0].prompt, /integration ticket.*routes, pages or entry points.*route-level or end-to-end test/s);
   // An integration ticket without a route-level test is refused too.

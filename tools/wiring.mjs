@@ -100,3 +100,35 @@ export function unwiredRequirements(tickets) {
   const reqs = [...new Set(list.filter(buildOf).filter(t => t.integration !== true).flatMap(t => t.scopeRefs ?? []))];
   return reqs.filter(r => !integrationTickets(list, r).length).sort();
 }
+
+// Tests wait for the modules they test (parts-app lesson 55): a test ticket that runs before its module exists can only fail or block.
+// Every test ticket of `added` depends on the module tickets of its requirements (from `existing` and `added`); a module that was told to wait
+// for that test (a test-first order from the worker) has that dependency removed, so no cycle appears. Integration tickets are not touched
+// (they already wait for their modules). Mutates `added`; returns notes for the owner.
+export function orderTestsAfterBuild(added, existing = []) {
+  const all = [...existing, ...added];
+  const notes = [];
+  const byId = id => all.find(x => x.id === id) ?? { id };
+  const reaches = (from, target, seen = new Set()) => {
+    if (seen.has(from.id)) return false;
+    seen.add(from.id);
+    return (from.dependsOn ?? []).some(d => d === target || reaches(byId(d), target, seen));
+  };
+  const newIds = new Set(added.map(t => t.id));
+  for (const t of added) {
+    if (t.type !== 'test' || t.status === 'cancelled') continue;
+    // The modules a test checks: build tickets (not integration) and migrations of its requirements.
+    const prerequisites = req => [...moduleTickets(all, req), ...all.filter(x => x.type === 'migration' && x.status !== 'cancelled' && (x.scopeRefs ?? []).includes(req))];
+    const modules = [...new Set((t.scopeRefs ?? []).flatMap(prerequisites))].filter(m => m.id !== t.id && newIds.has(m.id));
+    const flipped = [], waits = [];
+    for (const m of modules) if ((m.dependsOn ?? []).includes(t.id)) { m.dependsOn = m.dependsOn.filter(d => d !== t.id); flipped.push(m.id); }
+    const indirect = [];
+    for (const m of modules) {
+      if (reaches(m, t.id)) { indirect.push(m.id); continue; }
+      if (!(t.dependsOn ?? []).includes(m.id)) { t.dependsOn = [...(t.dependsOn ?? []), m.id]; waits.push(m.id); }
+    }
+    if (indirect.length) notes.push(`${t.id}: ${indirect.join(', ')} waits for this test through other tickets, so the test could not be ordered after it; check that order`);
+    if (waits.length) notes.push(`${t.id}: test ticket now waits for ${waits.join(', ')} (a test runs after the module it tests)${flipped.length ? `; ${flipped.join(', ')} no longer waits for it` : ''}`);
+  }
+  return notes;
+}

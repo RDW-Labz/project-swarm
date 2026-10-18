@@ -27,9 +27,9 @@ import { summarizeMap, mapIsFresh, readRepoMap } from './repo-map.mjs';
 import { selectAffectedTests, expandAffectedArgv } from './affected.mjs';
 import { createBatchController } from './adaptive-batch.mjs';
 import { runHook, shouldRun, fixTicketFromFailure } from './ci-hooks.mjs';
-import { redactText } from './lesson-schema.mjs';
+import { redactText, findUnsafeText } from './lesson-schema.mjs';
 import { addCiFixTicket } from './scope-commands.mjs';
-import { protectedViolations, protectedPathHit, isExampleFile, formatBaseCheck, validateProfile, hookFiles, hookScriptNames } from './init-profile.mjs';
+import { protectedViolations, protectedPathHit, isExampleFile, isSecretPath as isProfileSecretPath, templateReadable, formatBaseCheck, validateProfile, hookFiles, hookScriptNames } from './init-profile.mjs';
 import { resolveCliHosts, sshInvocation, sshEnv, remoteExec, cliHostFailure } from './cli-host.mjs';
 import { isHumanJob, validateHumanJob, liftHumanJobs, addGroup, readStore as readHumanStore, humanGroupReady, updateGroup as updateHumanGroup } from './human-jobs.mjs';
 import { createBatchCollector, batchEligible, BATCH_LIMITS } from './batch.mjs';
@@ -924,8 +924,8 @@ async function expandJobContext(root, job) {
   return [...new Set([...job.context, ...extra])];
 }
 
-async function safePath(root, value, { internal = false, parents = false } = {}) {
-  const parts = relative(value, internal);
+async function safePath(root, value, { internal = false, parents = false, readOnly = false } = {}) {
+  const parts = relative(value, internal, { readOnly });
   let current = root;
   for (let index = 0; index < parts.length; index++) {
     current = path.join(current, parts[index]);
@@ -948,7 +948,8 @@ async function droppedBytesAt(root, value) {
 }
 
 async function bytesAt(root, value, internal = false) {
-  const target = await safePath(root, value, { internal });
+  // Reading a names-only template (.env.example) is allowed; writing one never is (write() does not pass readOnly).
+  const target = await safePath(root, value, { internal, readOnly: true });
   try {
     const info = await fs.lstat(target);
     if (!info.isFile() || info.size > MAX_FILE) fail(`Expected regular file of at most 16 MiB: ${value}`);
@@ -956,13 +957,14 @@ async function bytesAt(root, value, internal = false) {
   } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 
-async function write(root, value, bytes, internal = false, mode = 0o644) {
-  const target = await safePath(root, value, { internal, parents: true });
+// `template`: the copy of a context file into a worker's own workspace may be a names-only template (.env.example); an output never is (outputs are validated before any copy).
+async function write(root, value, bytes, internal = false, mode = 0o644, { template = false } = {}) {
+  const target = await safePath(root, value, { internal, parents: true, readOnly: template });
   const temporary = `${target}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   try {
     await fs.writeFile(temporary, bytes, { flag: 'wx', mode });
     await fs.chmod(temporary, mode);
-    await safePath(root, value, { internal });
+    await safePath(root, value, { internal, readOnly: template });
     await fs.rename(temporary, target);
   } catch (error) {
     await fs.unlink(temporary).catch(() => {});
@@ -2026,8 +2028,8 @@ async function reaskWorkerReport(job, result, workspace, options, launch) {
     for (const [file, { bytes: before, mode }] of saved) {
       const after = await bytesAt(workspace, file);
       if (before === null ? after === null : after !== null && before.equals(after)) continue;
-      if (before === null) await fs.rm(await safePath(workspace, file), { force: true });
-      else await write(workspace, file, before, false, mode);
+      if (before === null) await fs.rm(await safePath(workspace, file, { readOnly: true }), { force: true });
+      else await write(workspace, file, before, false, mode, { template: true });
       restored.push(file);
     }
     if (restored.length) result.reportReaskRestored = restored;
@@ -2275,8 +2277,8 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
     // Unlike codex, the declared files start from the project's current bytes (uncommitted edits
     // included), as in every other claude job, so integrate's base hashes describe what it saw.
     for (const { file, bytes, mode } of options.snapshotFiles) {
-      if (bytes === null) await fs.rm(await safePath(worktree, file), { force: true });
-      else await write(worktree, file, bytes, false, mode);
+      if (bytes === null) await fs.rm(await safePath(worktree, file, { readOnly: true }), { force: true });
+      else await write(worktree, file, bytes, false, mode, { template: true });
     }
     // Copied once the worktree exists; the source dir was already read once per run, not per job.
     if (options.skillsSourceDir) await copySkillsInto(options.skillsSourceDir, path.join(worktree, SKILLS_DIR_NAME));
@@ -2939,13 +2941,13 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
         const bytes = await bytesAt(root, file);
         const hash = bytes === null ? null : digest(bytes);
         if (hash !== snapshotHashes.get(file)) fail(`snapshot-changed: ${file}`);
-        const mode = bytes === null ? 0o644 : (await fs.stat(await safePath(root, file))).mode & 0o777;
+        const mode = bytes === null ? 0o644 : (await fs.stat(await safePath(root, file, { readOnly: true }))).mode & 0o777;
         if (job.context.includes(file)) contextHashes[file] = hash;
         if (job.outputs.includes(file)) {
           record.baseHashes[file] = hash; record.baseModes[file] = mode;
           if (bytes !== null) await write(root, `${record.baseWorkspace}/${file}`, bytes, true, mode);
         }
-        if (bytes !== null && !usesWorktree(job)) await write(destination, file, bytes, false, mode);
+        if (bytes !== null && !usesWorktree(job)) await write(destination, file, bytes, false, mode, { template: true });
         if (snapshotFiles && (job.context.includes(file) || job.outputs.includes(file))) snapshotFiles.push({ file, bytes, mode });
         if (resourceFiles.includes(file)) resources.push({ file, bytes, mode });
       }
@@ -5678,7 +5680,7 @@ function pickJobRoute(job, lanes, options = {}) {
 }
 
 async function snapshotHash(root, file) {
-  const target = await safePath(root, file);
+  const target = await safePath(root, file, { readOnly: true });
   const hash = crypto.createHash('sha256');
   try {
     for await (const chunk of createReadStream(target)) hash.update(chunk);
@@ -7388,7 +7390,15 @@ async function enforceProtectedPaths(root, jobs, { resources = [] } = {}) {
         const real = await resolveReal(file);
         if (real !== realRoot && !real.startsWith(realRoot + path.sep)) fail(`path-outside-project: job ${job.id} ${verb(kind)} ${file}, which resolves outside the project`, 'path-outside-project');
         const relative = path.relative(realRoot, real).split(path.sep).join('/');
-        const entry = profile && !(kind === 'context' && typeof job.allowProtectedContext === 'string' && job.allowProtectedContext.trim()) ? protectedPathHit(profile, relative) : null;
+        // The real target decides: a template read stays allowed, a symlink that leads to a real secret or protected file does not.
+        const asTemplate = kind === 'context' && profile && templateReadable(profile, relative);
+        if (kind === 'context' && isExampleFile(file) && relative !== path.posix.normalize(file) && isProfileSecretPath(relative) && !isExampleFile(relative)) fail(`protected-path: job ${job.id} reads ${file}, which is a link to the secret ${relative}`, 'protected-path');
+        if (asTemplate && isExampleFile(relative)) {
+          // A template is names, not values: one that holds what looks like a real key is not handed to a worker.
+          const text = await fs.readFile(path.join(realRoot, relative), 'utf8').then(value => value.slice(0, 40000), () => null);
+          if (text !== null && findUnsafeText(text).length) fail(`protected-path: job ${job.id} reads ${file}, which holds what looks like a real secret value; empty the values (a template holds names only)`, 'protected-path');
+        }
+        const entry = profile && !(kind === 'context' && ((typeof job.allowProtectedContext === 'string' && job.allowProtectedContext.trim()) || asTemplate)) ? protectedPathHit(profile, relative) : null;
         if (entry) fail(`protected-path: job ${job.id} ${verb(kind)} ${file} (resolves to ${relative}; protected: ${entry})`, 'protected-path');
       }
     }
