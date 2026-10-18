@@ -250,7 +250,7 @@ export async function initProject(root, { source = installSource(), install = in
     // Blocks the owner set by hand (security policy, approval, ci hooks, verify, context) survive a re-init.
     ...Object.fromEntries(['security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality', 'migrations', 'acceptance'].filter(key => prior[key] !== undefined).map(key => [key, prior[key]])),
     // A NEW project (no profile yet) that already has a migrations folder gets the migration check on; an existing profile keeps what it has.
-    ...(priorPointer?.profile === undefined && prior.migrations === undefined && migrationsDir ? { migrations: { dir: migrationsDir, down: 'sibling' } } : {}),
+    ...(priorPointer?.profile === undefined && prior.migrations === undefined && migrationsDir ? { migrations: migrationsDir === 'supabase/migrations' ? { dir: migrationsDir, down: 'dir', downDir: 'supabase/migrations_down' } : { dir: migrationsDir, down: 'sibling' } } : {}),
     baseCheck: runBase
       ? await runBaseChecks(root, checksToRun, { run, head: await gitHead(root), now })
       : (prior.baseCheck ?? { status: 'skipped', ranAt: new Date(now()).toISOString(), head: await gitHead(root), checks: [] }),

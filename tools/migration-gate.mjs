@@ -8,7 +8,7 @@ const WS_RE = new RegExp('[ ' + String.fromCharCode(9, 10, 13) + ']+', 'g');
 const DOWN_MARK = /^--[ ]*migrate:down/im;
 const APPROVALS = '.swarm/project/migration-approvals.json';
 const CMD_KEYS = ['up', 'down', 'seed'];
-const CONFIG_KEYS = ['dir', 'down', 'commands', 'env'];
+const CONFIG_KEYS = ['dir', 'down', 'downDir', 'commands', 'env'];
 const ENV_KEEP = ['PATH', 'HOME', 'USER', 'LANG', 'TERM', 'TMPDIR', 'DOCKER_HOST', 'DOCKER_CONFIG'];
 // The environment a migration command gets: a short allow list (never provider keys), plus names the profile lists in migrations.env.
 export function migrationEnv(extraNames = [], env = process.env) {
@@ -95,7 +95,21 @@ export function validateMigrationsConfig(raw) {
     else envNames = [...raw.env];
   }
   const down = raw.down ?? MIGRATION_DEFAULTS.down;
-  if (down !== 'sibling' && down !== 'section') errors.push('down must be sibling or section');
+  if (down !== 'sibling' && down !== 'section' && down !== 'dir') errors.push('down must be sibling, section or dir');
+  // down "dir": down files live in a separate folder the migration tool never reads (Supabase reads every .sql in its migrations folder, so a
+  // down file next to its migration is run as a second migration with the same version). Same file name, mirrored path.
+  let downDir = null;
+  if (raw.downDir !== undefined && down !== 'dir') errors.push('downDir needs down: "dir"');
+  if (down === 'dir') {
+    const rawDown = raw.downDir ?? (segments.length ? segments.join('/') + '_down' : '');
+    const parts = typeof rawDown === 'string' ? rawDown.split('/').filter((part) => part !== '' && part !== '.') : [];
+    if (typeof rawDown !== 'string' || rawDown.startsWith('/') || parts.length === 0 || parts.includes('..')) errors.push('downDir must be a relative path without ..');
+    else {
+      downDir = parts.join('/');
+      const nested = (a, b) => a === b || a.startsWith(b + '/');
+      if (nested(downDir, dir) || nested(dir, downDir)) errors.push('downDir must be a separate folder, not the migrations folder or inside it (the migration tool would read the down files)');
+    }
+  }
   const commands = {};
   if (raw.commands !== undefined) {
     if (raw.commands === null || typeof raw.commands !== 'object' || Array.isArray(raw.commands)) errors.push('commands must be an object');
@@ -109,7 +123,7 @@ export function validateMigrationsConfig(raw) {
       }
   }
   if (errors.length > 0) return { ok: false, config: null, errors };
-  return { ok: true, config: { dir, down, commands, env: envNames, commandTimeoutMs: MIGRATION_DEFAULTS.commandTimeoutMs }, errors: [] };
+  return { ok: true, config: { dir, down, ...(downDir ? { downDir } : {}), commands, env: envNames, commandTimeoutMs: MIGRATION_DEFAULTS.commandTimeoutMs }, errors: [] };
 }
 export function isMigrationFile(file, config) {
   if (typeof file !== 'string' || !config) return false;
@@ -117,8 +131,15 @@ export function isMigrationFile(file, config) {
   const lower = file.toLowerCase();
   return file.startsWith(prefix) && lower.endsWith('.sql') && !lower.endsWith('.down.sql') && !file.split('/').includes('..');
 }
-export function downFileFor(file) {
+export function downFileFor(file, config) {
+  if (config?.down === 'dir' && config.downDir && file.startsWith(config.dir + '/')) return config.downDir + '/' + file.slice(config.dir.length + 1);
   return file.replace(/[.]sql$/i, '.down.sql');
+}
+// The migration a down file belongs to, or null (a sibling X.down.sql, or a file in the down folder).
+export function upFileFor(file, config) {
+  if (config?.down === 'dir' && config.downDir && file.startsWith(config.downDir + '/') && /[.]sql$/i.test(file) && !file.split('/').includes('..')) return config.dir + '/' + file.slice(config.downDir.length + 1);
+  if (config?.down !== 'dir' && /[.]down[.]sql$/i.test(file)) return file.replace(/[.]down[.]sql$/i, '.sql');
+  return null;
 }
 // The marker only counts as a line comment in real code (not inside a block comment or a string).
 function splitDown(sql) {
@@ -194,17 +215,16 @@ export async function checkMigrations({ files = [], config, read, exists, approv
   // A change to a down file is a change to its migration: the pair is checked again.
   const wanted = new Set();
   for (const changed of files) {
-    if (typeof changed === 'string' && /[.]down[.]sql$/i.test(changed)) {
-      const up = changed.replace(/[.]down[.]sql$/i, '.sql');
-      if (await exists(up)) wanted.add(up);
-    } else wanted.add(changed);
+    const up = typeof changed === 'string' ? upFileFor(changed, config) : null;
+    if (up) { if (await exists(up)) wanted.add(up); }
+    else wanted.add(changed);
   }
   for (const file of wanted) {
     if (!isMigrationFile(file, config)) continue;
     const bytes = await read(file);
     const sql = Buffer.from(bytes).toString('utf8');
-    if (config.down === 'sibling') {
-      const df = downFileFor(file);
+    if (config.down === 'sibling' || config.down === 'dir') {
+      const df = downFileFor(file, config);
       const has = (await exists(df)) && stripNonCode(Buffer.from(await read(df)).toString('utf8')).trim().length > 0;
       if (!has) problems.push({ file, check: 'no-down', message: 'migration ' + file + ' has no down step (add ' + df + ')' });
     } else {

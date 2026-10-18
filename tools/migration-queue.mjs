@@ -12,7 +12,7 @@ export async function migrationQueueCheck({ root, changes, profile, exec }) {
   if (!checked.ok) return { blocks: [{ check: 'migration', severity: 'high', message: `profile.migrations is invalid: ${checked.errors.join('; ')}` }], notes: [], needsApproval: [] };
   const config = checked.config;
   // Up files and down files both count: an edit of a down file re-checks its migration.
-  const touched = changes.filter(change => change.bytes !== null && change.file.startsWith(`${config.dir}/`) && /[.]sql$/i.test(change.file)).map(change => change.file);
+  const touched = changes.filter(change => change.bytes !== null && (change.file.startsWith(`${config.dir}/`) || (config.downDir && change.file.startsWith(`${config.downDir}/`))) && /[.]sql$/i.test(change.file)).map(change => change.file);
   if (!touched.length) return { blocks: [], notes: [], needsApproval: [] };
   if (!profile?.migrations) {
     return { blocks: [], notes: [`migrations: ${touched.length} migration file(s) changed but the profile has no migrations block, so no down-step or destructive-change check ran (add "migrations": {} to the profile)`], needsApproval: [] };
