@@ -107,10 +107,10 @@ test('folder outputs are skipped with a warning', () => {
   assert.ok(warnings[0].includes('src/parts/'));
 });
 
-test('design tickets are skipped and reported', () => {
+test('design tickets run as docs jobs (lesson 40: go --scope no longer skips them)', () => {
   const r = ticketsToManifest([ticket({ id: 'T-0001', type: 'design' }), ticket({ id: 'T-0002' })], { scope });
-  assert.deepEqual(r.skipped, ['T-0001']);
-  assert.deepEqual(r.manifest.jobs.map(j => j.id), ['T-0002']);
+  assert.deepEqual(r.skipped, []);
+  assert.deepEqual(r.manifest.jobs.map(j => [j.id, j.type]), [['T-0001', 'docs'], ['T-0002', 'build']]);
 });
 
 test('human tickets become human jobs with steps', () => {

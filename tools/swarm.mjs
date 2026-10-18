@@ -41,6 +41,7 @@ import { collectInbox } from './inbox.mjs';
 import { runGpuCommand } from './gpu-commands.mjs';
 import { parseUncovered, ignoreUncovered } from './uncovered-tests.mjs';
 import { createTestChecker } from './best-of.mjs';
+import { validDependencySpec, dependencyWrites, installDependencies } from './dep-install.mjs';
 import { runSecurityGate, recordGate, formatBlocks } from './security-gate.mjs';
 import { runBrainCommand, createProjectBrain, triageRun, preflightManifest, brainStats, brainSettings } from './brain-commands.mjs';
 import { readBacklog, nextStartable, markStarted as markBacklogStarted } from './backlog.mjs';
@@ -1203,6 +1204,8 @@ function normalizeManifestMetadata(manifest) {
   return manifest;
 }
 
+// Generated framework caches a check may ask the runner to clear first (never source, never a path of the manifest's choosing).
+const CLEANABLE_DIRS = ['.next/types'];
 export function validateManifest(manifest, { outputJobIds = null } = {}) {
   normalizeManifestMetadata(manifest);
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.jobs) || !manifest.jobs.length || manifest.jobs.length > 5000) fail('Manifest requires version: 1 and 1–5000 jobs');
@@ -1251,7 +1254,7 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     if (!Array.isArray(manifest.checks) || manifest.checks.length > 10) fail('checks must be an array of at most 10 checks');
     for (const check of manifest.checks) {
       if (!check || typeof check !== 'object') fail('Invalid check');
-      for (const key of Object.keys(check)) if (!['name', 'argv', 'timeoutMs', 'repeat', 'flakeRuns', 'integrateOnly', 'affectedArgv', 'fullEvery'].includes(key)) fail(`Unknown check field: ${key}`);
+      for (const key of Object.keys(check)) if (!['name', 'argv', 'timeoutMs', 'repeat', 'flakeRuns', 'integrateOnly', 'affectedArgv', 'fullEvery', 'cleanDirs'].includes(key)) fail(`Unknown check field: ${key}`);
       if (typeof check.name !== 'string' || !CHECK_NAME.test(check.name)) fail(`Invalid check name: ${check?.name}`);
       if (!Array.isArray(check.argv) || !check.argv.length) fail(`Check argv must be a non-empty array: ${check.name}`);
       if (check.argv.some(item => typeof item !== 'string')) fail(`Check argv items must be strings: ${check.name}`);
@@ -1264,6 +1267,7 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
       // Field lesson #238: a check that only ever runs outside the sandbox (needs network the
       // shell worker never gets) is skipped there and reported skipped-integrate-only, never a fail.
       if (check.integrateOnly !== undefined && typeof check.integrateOnly !== 'boolean') fail(`Check integrateOnly must be true or false: ${check.name}`);
+      if (check.cleanDirs !== undefined && (!Array.isArray(check.cleanDirs) || check.cleanDirs.some(dir => !CLEANABLE_DIRS.includes(dir)))) fail(`Check cleanDirs may only name ${CLEANABLE_DIRS.join(', ')}: ${check.name}`);
     }
   }
   // Field lesson 109: env-sync commands to run before `checks` whenever integration touches a
@@ -1437,6 +1441,9 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
         if (file.includes('*')) fail(`Job ${job.id}: deletes must not contain globs: ${file}`);
       }
     }
+    if (job.dependencies !== undefined) {
+      if (!Array.isArray(job.dependencies) || job.dependencies.length > 10 || job.dependencies.some(spec => !validDependencySpec(spec))) fail(`Job ${job.id}: dependencies must be at most 10 registry package names with an optional version`);
+    }
     // A named `skills` list (even `[]`) overrides frontmatter `paths:` auto-attach for this job;
     // the names themselves are only checked against the skills source dir at validate/run time.
     if (job.skills !== undefined) {
@@ -1465,7 +1472,7 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     // Unknown command/provider fields cannot create an execution path.
     if (job.type === 'lead') validateLeadArea(job);
     else if (job.area !== undefined) fail(`lead-area-invalid: Job ${job.id}: area requires type lead`, 'lead-area-invalid');
-    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext', 'batch', 'contract', 'acceptance', 'bestOf', 'hard'];
+    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'dependencies', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext', 'batch', 'contract', 'acceptance', 'bestOf', 'hard'];
     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
     if (job.batch !== undefined && typeof job.batch !== 'boolean') fail(`Job ${job.id}: batch must be true or false`, 'batch-invalid');
     if (job.hard !== undefined && typeof job.hard !== 'boolean') fail(`Job ${job.id}: hard must be true or false`, 'hard-invalid');
@@ -4095,6 +4102,10 @@ export async function runChecks(root, checks, integratedFiles, newFiles, spawnIm
     }
     const { argv, empty } = expandCheckArgv(sourceArgv, integratedFiles, newFiles, root);
     if (empty) { results.push({ name: check.name, status: 'skipped', exitCode: null, durationMs: 0, tail: '', runs: 0 }); continue; }
+    // Stale generated files (a deleted page still named in .next/types) must not fail this check.
+    // next-env.d.ts names .next/types/routes.d.ts when typed routes are on: that file would not come back, so the folder stays.
+    const nextEnv = (check.cleanDirs ?? []).length ? await fs.readFile(path.join(root, 'next-env.d.ts'), 'utf8').catch(() => '') : '';
+    for (const dir of (check.cleanDirs ?? []).filter(d => CLEANABLE_DIRS.includes(d) && !/\.next\/types\/routes/.test(nextEnv))) await fs.rm(path.join(root, dir), { recursive: true, force: true }).catch(() => {});
     // Field lesson #175: a bare check argv[0] (e.g. "uv") is not reliably on PATH when it lives
     // only in the swarm's own toolchains dir; resolved here the same way the uv lock check already
     // is (toolchains dir, then PATH) before ever spawning, so an unresolvable one refuses just this
@@ -4575,8 +4586,14 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, ad
           else await write(root, change.file, change.bytes, false, change.mode);
         });
       }
-      gate = await runSecurityGate({ changes: changes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: securityPolicy, hookScripts: hookScriptNames(securityProfile), exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: securitySensitive, fingerprintKey: securityKey, cache: securityCache });
+      // The owner approved the ticket that declares these packages: its manifest and lockfile change is approved by content (the audit still runs).
+      gate = await runSecurityGate({ changes: changes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: withApprovedManifests(securityPolicy, changes.filter(change => change.fromDependencies && change.bytes).map(change => ({ file: change.file, sha256: digest(change.bytes) }))), hookScripts: hookScriptNames(securityProfile), exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: securitySensitive, fingerprintKey: securityKey, cache: securityCache });
       // The gate runs BEFORE the project checks: a blocked batch never gets to execute its own code (tests, installs, postinstall scripts).
+      if (gate.ok && changes.some(change => change.fromDependencies)) {
+        // The gate passed (manifest approved, lockfile audited): now the packages go into node_modules, from that lockfile, with no install scripts.
+        const installed = await installDependencies({ root, exec: securityGate.exec ?? securityExec });
+        if (!installed.ok) gate = { ...gate, ok: false, blocks: [{ check: 'dependency-install', severity: 'high', message: `npm install failed after the gate passed: ${installed.tail}` }] };
+      }
       if (gate.ok) {
         const changedFiles = changes.map(change => change.file);
         let selection = repoMap && !last && !forceFull ? selectAffectedTests(repoMap, changedFiles, { deleted: changes.filter(change => change.bytes === null).map(change => change.file) }) : null;
@@ -5057,6 +5074,21 @@ async function integrateRunLocked(root, id, options = {}) {
         if (hits.length) fail(hits.map(hit => hit.message).join('\n'), 'work-folder-reference');
         if (conflictingFiles.length) queueConflicts.push({ job: job.id, files: conflictingFiles, reason: conflictReason });
         else queuePlans.push({ job: job.id, writes: plannedWrites, snapshots, alreadyApplied: state.mergeQueue?.state === 'running' && !plannedWrites.length });
+      }
+    }
+    // Packages the integrated tickets declare: the runner builds the new package.json and lockfile (no scripts), and they go through the gate like any manifest change.
+    {
+      const declaring = (manifest.jobs ?? []).filter(j => j.dependencies?.length && integratedJobs.includes(j.id));
+      const specs = [...new Set(declaring.flatMap(j => j.dependencies))];
+      if (specs.length) {
+        if (!queue) fail('security-gate-blocked: a ticket declares new dependencies, which change package.json and the lockfile; plain integrate cannot audit them before writing. Nothing was written. Use integrate --queue.', 'security-gate-blocked');
+        const target = queuePlans.find(plan => declaring.some(j => j.id === plan.job));
+        if (!target) fail(`dependencies of ${declaring.map(j => j.id).join(', ')} were not applied: that job was not integrated (conflict); integrate it again`, 'dependencies-not-applied');
+        if (writes.some(change => ['package.json', 'package-lock.json'].includes(change.file)) || queuePlans.some(plan => plan.writes.some(change => ['package.json', 'package-lock.json'].includes(change.file)))) fail('a ticket declares dependencies while another job in this run writes package.json or the lockfile; run them separately', 'dependencies-conflict');
+        let depChanges;
+        try { depChanges = await dependencyWrites({ root, specs, exec: securityGate.exec ?? securityExec }); } catch (error) { fail(`dependencies-failed: ${String(error.message ?? error).slice(0, 300)}. Nothing was written.`, error.code ?? 'dependencies-failed'); }
+        target.writes.push(...depChanges);
+        state.dependencyInstall = { jobs: declaring.map(j => j.id), packages: specs };
       }
     }
     if (queue) writes.push(...queuePlans.flatMap(plan => plan.writes));
@@ -6700,9 +6732,9 @@ const ownRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 // check, the pre-push lock check) is only ever handed the toolchains-bin-first PATH ship computed
 // (toolchainCheckEnv) when this itself honours the `env` its caller passed, instead of always
 // falling back to this process's own environment.
-export function shipExec(file, args, { cwd, input, env } = {}) {
+export function shipExec(file, args, { cwd, input, env, timeoutMs } = {}) {
   return new Promise(resolve => {
-    const child = execFile(file, args, { cwd, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8', ...(env ? { env } : {}) }, (error, stdout, stderr) => {
+    const child = execFile(file, args, { cwd, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8', ...(env ? { env } : {}), ...(timeoutMs ? { timeout: timeoutMs } : {}) }, (error, stdout, stderr) => {
       const spawnFailed = Boolean(error) && typeof error.code !== 'number';
       resolve({
         code: error ? (typeof error.code === 'number' ? error.code : 1) : 0,
@@ -6726,13 +6758,15 @@ const SHIP_FLAGS_WITH_VALUE = new Set(['--repo', '--pr', '--require-section', '-
 // Pure CLI-flag parsing, kept separate from ship() execution so it is directly testable.
 export function parseShipFlags(flags) {
   let repo, payloadPath, mergeMethod, timeoutMs, pollMs, tagTimeoutMs, noFlakeCheck, branch, merge = true, privateNamesFile;
-  let checksFromCi, checksFromCiPath, rerunFlaky, rerunFlakyCi, acceptPreExisting = false, perTestTimeoutSeconds, preflight = false, waitRequiredOnly = false;
+  let ciLocal = true, checksFromCi, checksFromCiPath, rerunFlaky, rerunFlakyCi, acceptPreExisting = false, perTestTimeoutSeconds, preflight = false, waitRequiredOnly = false;
   const requireSections = [], checks = [], exemptions = [];
   for (let index = 0; index < flags.length; index++) {
     const flag = flags[index];
     if (flag === '--wait-required-only') { if (waitRequiredOnly) fail('Duplicate flag: --wait-required-only'); waitRequiredOnly = true; continue; }
     if (flag === '--no-flake-check') { noFlakeCheck = true; continue; }
     if (flag === '--no-merge') { merge = false; continue; }
+    // The owner's way out of the local CI run (the workflow cannot run on this machine); the result still names that it was off.
+    if (flag === '--no-ci-local') { ciLocal = false; continue; }
     // Field lesson #254: without this, a check whose failure also reproduces on the base holds
     // ship (status `held-red-check`) instead of quietly waving a red local check through.
     if (flag === '--accept-pre-existing') { acceptPreExisting = true; continue; }
@@ -6791,6 +6825,7 @@ export function parseShipFlags(flags) {
     repo, payloadPath, requireSections, merge, mergeMethod, timeoutMs, pollMs,
     ...(tagTimeoutMs !== undefined ? { tagTimeoutMs } : {}),
     ...(noFlakeCheck ? { noFlakeCheck } : {}),
+    ...(ciLocal ? {} : { ciLocal: false }),
     ...(branch ? { branch, checks } : {}),
     ...(checksFromCi ? { checksFromCi, ...(checksFromCiPath !== undefined ? { checksFromCiPath } : {}) } : {}),
     ...(rerunFlaky !== undefined ? { rerunFlaky } : {}),

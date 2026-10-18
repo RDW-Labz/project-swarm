@@ -32,16 +32,18 @@ import { detectTestCommand } from './zero-tests.mjs';
 import { execFile } from 'node:child_process';
 import { existsSync, statSync, lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
+import { securityReviewReason, securityReviewManifest, parseReviewVerdicts, filesHash, readReviewRecords, writeReviewRecords } from './security-review.mjs';
 
 export const SCOPE_USAGE = [
   'Usage: swarm scope template [--out FILE]',
   '       swarm scope check [FILE]',
   '       swarm scope split [FILE] [--stage S1] | scope split --wire [--all] | scope split --ingest RUN [--merge] [--wire]',
   '       swarm scope approve [FILE] [--yes]',
-  '       swarm scope sync RUN [--integrated]',
+  '       swarm scope sync RUN [--integrated] [--accept-unreviewed T-0001 --yes]',
+  '       swarm scope security-review RUN     (records the verdicts of an Opus security review run)',
   '       swarm scope contracts OPENAPI.json',
   '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high] [--set STATUS] [--note TEXT] [--json]',
-  '       swarm tickets ID --files a,b [--take-from TICKET] [--deletes x,y] [--context c,d] [--tests t] [--acceptance "one || two"] [--add-acceptance TEXT] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
+  '       swarm tickets ID --files a,b [--take-from TICKET] [--deletes x,y] [--dependencies pkg,pkg@^1] [--context c,d] [--tests t] [--acceptance "one || two"] [--add-acceptance TEXT] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
   '       swarm tickets ID... --release [--note TEXT]     (clean release of held tickets: blocked, todo or review go back to ready with attempts, escalation and retry notes cleared)',
   '       swarm tickets --mark-deps [ID...] [--yes]     (one time, older ledgers: mark blocked tickets with no reason as dependency-blocked so they unlock)',
   '       swarm change "reason" [FILE] [--yes]',
@@ -55,7 +57,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--deletes', '--acceptance', '--add-acceptance', '--take-from']);
+const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const out = (text, exitCode = 0) => ({ stdout: text.endsWith('\n') ? text : `${text}\n`, exitCode });
@@ -314,7 +316,7 @@ function splitPrompt(scope, stage, only, layout = '', wire = null, existing = nu
     'Each ticket object has these fields:',
     'key (short unique name in this file), title (under 140 characters), type (build, test, docs, migration, design, contract or human),',
     'epic (a feature group name), scopeRefs (requirement ids, at least one for build, test, docs, migration), acceptance (1 to 5 observable checks; required for build, test, migration),',
-    'files (the files this ticket writes: repo-relative paths WITH their folders, for example src/app/page.tsx or supabase/migrations/0001_init.sql, never a bare file name unless the file really lives at the repo root; never a folder, never an absolute path, never a dot-env file: use env.example.txt for an env template), deletes (existing files this ticket must delete, each named exactly; omit when none), context (files it reads), contracts (contract files it uses), tests (the test files that prove this ticket: a build ticket lists the test files owned by its test ticket and depends on that test ticket; a test ticket lists its own), screens (only on UI tickets: the ids of the design screens the ticket renders, from the profile ui screens), dependsOn (keys of other tickets in this file),',
+    'files (the files this ticket writes: repo-relative paths WITH their folders, for example src/app/page.tsx or supabase/migrations/0001_init.sql, never a bare file name unless the file really lives at the repo root; never a folder, never an absolute path, never a dot-env file: use env.example.txt for an env template), deletes (existing files this ticket must delete, each named exactly; omit when none), dependencies (new npm packages the ticket needs, like zod or zod@^3.23.0; the runner installs them and the change goes through the security gate; omit when none), context (files it reads), contracts (contract files it uses), tests (the test files that prove this ticket: a build ticket lists the test files owned by its test ticket and depends on that test ticket; a test ticket lists its own), screens (only on UI tickets: the ids of the design screens the ticket renders, from the profile ui screens), dependsOn (keys of other tickets in this file),',
     'size (S or M; never larger: split instead), risk (low, medium or high), sensitive (true for payments, auth or customer data), steps (only for human tickets: 1 to 30 short imperative steps), skeleton (true only on the tickets of the thinnest vertical slice of the first stage: database, API, screen and test, the smallest path through the product; omit it elsewhere).',
     'Rules: every requirement is covered by at least one ticket; every ticket traces to a requirement; two tickets that can run at the same time never write the same file;',
     'put shared types or contracts first and make the tickets that use them depend on them; add a test ticket for each requirement group.',
@@ -405,7 +407,7 @@ async function changeContext(root, tickets) {
   return { files, tickets: list };
 }
 
-const ARRAY_FIELDS = ['scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'tests', 'screens', 'dependsOn', 'steps', 'deletes'];
+const ARRAY_FIELDS = ['scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'tests', 'screens', 'dependsOn', 'steps', 'deletes', 'dependencies'];
 const isStrings = v => Array.isArray(v) && v.every(x => typeof x === 'string');
 const strings = v => (isStrings(v) ? v : []);
 
@@ -448,6 +450,7 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
     if (raw.skeleton === true) t.skeleton = true;
     if (raw.integration === true) t.integration = true;
     if (strings(raw.deletes).length) t.deletes = strings(raw.deletes);
+    if (strings(raw.dependencies).length) t.dependencies = strings(raw.dependencies);
     const v = validateTicket(t);
     if (!v.ok) errors.push(`${id}: ${v.errors[0]}`);
     // Format rules the dogfood run needed (contract format, real paths, env template, one package manager).
@@ -776,6 +779,40 @@ async function readUiResultsGuarded(root) {
   } catch { return null; }
 }
 
+// Records the verdicts of a finished security review run, against the code that is in the tree now.
+async function cmdSecurityReview(root, { rest }) {
+  if (rest.length !== 1) return bad('scope security-review needs the id of the finished review run');
+  if (!/^[A-Za-z0-9._-]{1,80}$/.test(rest[0])) return bad('scope security-review: bad run id');
+  const state = await readRunState(root, rest[0]);
+  const job = (state.jobs ?? []).find(j => /^sec-review-/.test(j.id));
+  if (!job) return out(`run ${rest[0]} has no security review job`, 1);
+  if (job.model !== 'opus') return out(`the security review job ran on ${job.model ?? 'an unknown model'}, not opus; run the manifest that sync wrote`, 1);
+  // The review must be of a manifest sync wrote: its ticket list and the code hashes taken then.
+  const sourceRun = job.id.slice('sec-review-'.length);
+  let requested;
+  try { requested = JSON.parse(await fs.readFile(path.join(root, '.swarm', 'security-reviews', `${sourceRun}.hashes.json`), 'utf8')); } catch { return out(`no review was requested for run ${sourceRun} (sync writes .swarm/security-reviews/${sourceRun}.json); run that manifest`, 1); }
+  if (job.status !== 'complete') return out(`the security review job is ${job.status}, not complete; run it again`, 1);
+  let text = '';
+  try { text = await fs.readFile(path.join(root, '.swarm', 'runs', rest[0], job.id, 'response.txt'), 'utf8'); } catch { return out('the review has no response to read', 1); }
+  const verdicts = parseReviewVerdicts(text);
+  if (!verdicts) return out('the review response has no {"reviews":[...]} result; run it again', 1);
+  const ledger = await readLedger(root);
+  const records = await readReviewRecords(root);
+  const lines = [];
+  // One entry per ticket, and a fail anywhere wins over a pass.
+  const merged = new Map();
+  for (const v of verdicts) { const old = merged.get(v.ticket); merged.set(v.ticket, old ? { ticket: v.ticket, verdict: old.verdict === 'fail' || v.verdict === 'fail' ? 'fail' : 'pass', findings: [...old.findings, ...v.findings].slice(0, 10) } : v); }
+  for (const v of merged.values()) {
+    const t = ledger?.tickets.find(x => x.id === v.ticket);
+    if (!t || !Object.hasOwn(requested, t.id)) continue;
+    records.tickets[t.id] = { verdict: v.verdict, findings: v.findings, run: rest[0], at: new Date().toISOString(), filesHash: requested[t.id] };
+    lines.push(`${t.id}: ${v.verdict}${v.findings.length ? ` (${v.findings.length} finding${v.findings.length > 1 ? 's' : ''})` : ''}`);
+    await appendLog(root, { event: 'security-review', id: t.id, verdict: v.verdict, findings: v.findings.length, run: rest[0], by: 'owner' });
+  }
+  await writeReviewRecords(root, records);
+  return out(lines.length ? `security review recorded:\n${lines.map(x => `  ${x}`).join('\n')}\nRun swarm scope sync RUN --integrated to move the passed tickets to done and send the failed ones back.` : 'the review named none of the tickets in this ledger', 0);
+}
+
 async function cmdSync(root, { rest, flags }) {
   if (rest.length !== 1) return bad('scope sync needs a run id');
   const ledger = await readLedger(root);
@@ -800,6 +837,14 @@ async function cmdSync(root, { rest, flags }) {
       if (flags.yes !== true) return out(`--accept-failed-check ${[...accepted].join(',')} lets tickets reach done while that check fails on run ${rest[0]}. Rerun with --yes to confirm; it is logged.`, 1);
       await appendLog(root, { event: 'accept-failed-check', by: 'owner', run: rest[0], checks: [...accepted], note: flags.note ?? null });
     }
+    // The owner's way out of a security review (Opus unavailable, or the review is judged unneeded): named, confirmed with --yes, logged.
+    const unreviewedOk = new Set(String(flags['accept-unreviewed'] ?? '').split(',').map(x => x.trim()).filter(Boolean));
+    if (unreviewedOk.size) {
+      if (flags.yes !== true) return out(`--accept-unreviewed ${[...unreviewedOk].join(',')} lets those tickets reach done without a security review. Rerun with --yes to confirm; it is logged.`, 1);
+      await appendLog(root, { event: 'accept-unreviewed', by: 'owner', run: rest[0], tickets: [...unreviewedOk], note: flags.note ?? null });
+    }
+    const reviewRecords = await readReviewRecords(root);
+    const needReview = [];
     const qualityNames = await runQualityNames(root, rest[0]);
     const profileQuality = (await qualityFor(root, profile)).map(check => check.name).filter(name => !qualityNames.includes(name));
     // A check that fails for many tickets of the same run is the base or the setup, not the tickets: no paid retries for it.
@@ -876,6 +921,19 @@ async function cmdSync(root, { rest, flags }) {
         continue;
       }
       if (integrated && !integrated.has(t.id)) { notIntegrated.push(t.id); continue; }
+      // The test files a ticket names must exist in the tree: a ticket whose tests were never written is not done, whatever the suite says.
+      const namedTests = ['build', 'test', 'migration'].includes(t.type) ? [...new Set([...(t.tests ?? []), ...ticketTests(t)])].filter(f => looksLikeTestFile(f) && !/[*?]|\/$/.test(f) && !(t.deletes ?? []).includes(f)) : [];
+      const missingAll = namedTests.filter(f => !existsSync(path.join(root, f)));
+      // A test file another ticket owns is that ticket's to write: while it is not done, this ticket waits (no retry, no attempt).
+      const ownerOf = f => ledger.tickets.find(o => o.id !== t.id && o.status !== 'cancelled' && ((o.files ?? []).includes(f) || (o.type === 'test' && (o.tests ?? []).includes(f))));
+      const waiting = missingAll.filter(f => { const o = ownerOf(f); return o && o.status !== 'done'; });
+      if (waiting.length) { unverified.push(`${t.id} (waiting for ${[...new Set(waiting.map(f => ownerOf(f).id))].join(', ')} to write ${waiting.join(', ')}; not retried)`); continue; }
+      const missingTests = missingAll;
+      if (missingTests.length) {
+        const result = await applyRetry(root, t.id, `failed checks: named test files missing: ${missingTests.join(', ')}; write them (they are in your outputs) and make them pass`, rest[0]);
+        (result === 'blocked' ? blocked : retried).push(t.id);
+        continue;
+      }
       // A ticket with tests is done only when the runner itself saw them pass (a worker's own report is not evidence).
       if (profile?.verify && ticketTests(t).length) {
         let evidence = testResults.get(t.id) ?? doneEvidence(state, t.id);
@@ -916,6 +974,21 @@ async function cmdSync(root, { rest, flags }) {
         } else unverified.push(`${t.id} (the ${runFailed.names.join(', ')} check failed ${runFailed.shared ? 'on this run' : 'on its batch'}, so no ticket in it is done; fix it and run sync again; not retried)`);
         continue;
       }
+      // A ticket that touches auth, an API route, a migration, a policy or a sensitive path is done only after an Opus review passed on the code that is in the tree now.
+      const reviewReason = unreviewedOk.has(t.id) ? null : securityReviewReason(t);
+      if (reviewReason) {
+        const record = reviewRecords.tickets[t.id];
+        const now = await filesHash(root, [...(t.files ?? []), ...(t.deletes ?? [])]);
+        if (record?.verdict === 'fail' && record.filesHash === now) {
+          const found = (record.findings ?? []).map(f => `${f.severity} ${f.file}${f.line ? `:${f.line}` : ''} ${f.issue}${f.fix ? ` (fix: ${f.fix})` : ''}`).join('; ').slice(0, 500);
+          delete reviewRecords.tickets[t.id];
+          await writeReviewRecords(root, reviewRecords);
+          const result = await applyRetry(root, t.id, `failed checks: security review; ${found || 'the review failed this ticket'}`, rest[0]);
+          (result === 'blocked' ? blocked : retried).push(t.id);
+          continue;
+        }
+        if (!(record?.verdict === 'pass' && record.filesHash === now)) { needReview.push({ ticket: t, reason: reviewReason }); continue; }
+      }
       // A UI ticket is done only when the rendered check passed for each of its screens after this run was integrated.
       if ((t.screens ?? []).length) {
         uiResults ??= await readUiResultsGuarded(root);
@@ -932,8 +1005,21 @@ async function cmdSync(root, { rest, flags }) {
       await lockedTransition(root, t.id, 'done', { by: 'sync', note: inTree.has(t.id) ? `output already in the tree; not re-verified by ${rest[0]}` : `integrated ${rest[0]}` });
       done.push(t.id);
     }
+    let reviewLine = null;
+    if (needReview.length) {
+      const manifest = await securityReviewManifest(root, rest[0], needReview);
+      const file = `.swarm/security-reviews/${rest[0]}.json`;
+      await fs.mkdir(path.join(root, '.swarm', 'security-reviews'), { recursive: true });
+      await fs.writeFile(path.join(root, file), `${JSON.stringify(manifest, null, 2)}\n`);
+      // The code each ticket has right now: a verdict counts only for exactly this code.
+      const hashes = {};
+      for (const { ticket } of needReview) hashes[ticket.id] = await filesHash(root, [...(ticket.files ?? []), ...(ticket.deletes ?? [])]);
+      await fs.writeFile(path.join(root, `.swarm/security-reviews/${rest[0]}.hashes.json`), `${JSON.stringify(hashes)}\n`);
+      reviewLine = `${needReview.length} ticket(s) stay in review until an Opus security review passes: ${needReview.map(x => `${x.ticket.id} (${x.reason})`).join('; ')}. Run: swarm run ${file}; then swarm scope security-review <that run id>; then swarm scope sync ${rest[0]} --integrated`;
+    }
     await refreshPlan(root);
     return out([`${done.length} ticket(s) marked done`,
+      ...(reviewLine ? [reviewLine] : []),
       ...(inTree.size ? [`${[...inTree].filter(id => done.includes(id)).length} of them on output that was already in the tree (not re-verified by this run): ${[...inTree].filter(id => done.includes(id)).join(', ')}`] : []),
       ...(retried.length ? [`${retried.length} ticket(s) back to ready, one level higher, after failed checks: ${retried.join(', ')}`] : []),
       ...(blocked.length ? [`${blocked.length} ticket(s) blocked after every escalation level failed: ${blocked.join(', ')}`] : []),
@@ -1046,10 +1132,12 @@ async function editTicketFiles(root, ledger, rest, flags) {
   const list = v => [...new Set(String(v).split(',').map(x => x.trim()).filter(Boolean))];
   const lines = v => String(v).split(/\n| ;; /).map(x => x.trim()).filter(Boolean);
   const changes = {};
-  for (const key of ['files', 'context', 'tests', 'deletes']) if (flags[key] !== undefined) changes[key] = list(flags[key]);
+  for (const key of ['files', 'context', 'tests', 'deletes', 'dependencies']) if (flags[key] !== undefined) changes[key] = list(flags[key]);
   const acceptanceEdit = flags.acceptance !== undefined || flags['add-acceptance'] !== undefined;
-  const takeFrom = flags['take-from'] === undefined ? null : String(flags['take-from']);
-  if (takeFrom && changes.files === undefined) return bad('tickets --take-from needs --files (the files to move to this ticket)');
+  // --take-from names one or more tickets (comma separated): a file may have two owners, and the moved paths can be written or deleted by this ticket.
+  const takeFromList = flags['take-from'] === undefined ? [] : list(flags['take-from']);
+  const takeFrom = takeFromList.join(', ') || null;
+  if (takeFrom && changes.files === undefined && changes.deletes === undefined) return bad('tickets --take-from needs --files or --deletes (the files to move to this ticket)');
   try {
     return await withLock(root, async () => {
       const fresh = await readLedger(root);
@@ -1068,12 +1156,15 @@ async function editTicketFiles(root, ledger, rest, flags) {
       if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
       const problems = [];
       const moved = [];
-      let source = null;
-      if (takeFrom) {
-        source = fresh.tickets.find(x => x.id === takeFrom);
-        if (!source || source.id === ticket.id) problems.push(`--take-from ${takeFrom}: no such other ticket`);
-        else if (['running', 'review', 'cancelled'].includes(source.status)) problems.push(`${source.id} is ${source.status}; its files cannot move`);
+      const sources = [];
+      for (const id of takeFromList) {
+        const found = fresh.tickets.find(x => x.id === id);
+        if (!found || found.id === ticket.id) problems.push(`--take-from ${id}: no such other ticket`);
+        else if (['running', 'review', 'cancelled'].includes(found.status)) problems.push(`${found.id} is ${found.status}; its files cannot move`);
+        else sources.push(found);
       }
+      const sourceIds = new Set(sources.map(x => x.id));
+      const movedFrom = new Map();
       for (const key of ['context', 'tests']) for (const f of next[key] ?? []) if (f.split('/').pop().startsWith('.env') && !(key === 'context' && isExampleFile(f))) problems.push(`${f} is a reserved name and cannot be in ${key}`);
       for (const key of ['files', 'deletes']) for (const f of next[key] ?? []) {
         const base = f.split('/').pop();
@@ -1082,22 +1173,23 @@ async function editTicketFiles(root, ledger, rest, flags) {
         if ((ticket[key] ?? []).includes(f)) continue;
         const owners = fresh.tickets.filter(x => x.id !== ticket.id && x.status !== 'cancelled' && ((x.files ?? []).includes(f) || (x.deletes ?? []).includes(f)));
         if (!owners.length) continue;
-        // A file can move only when the named source is its one owner and writes it (not deletes it).
-        if (source && key === 'files' && owners.length === 1 && owners[0].id === source.id && (source.files ?? []).includes(f) && !(source.deletes ?? []).includes(f)) { moved.push(f); continue; }
+        // A file can move when every one of its owners is named in --take-from and the role is kept: a written file moves into --files, a deleted file into --deletes (a deletion is never turned into a write).
+        if (sources.length && owners.every(o => sourceIds.has(o.id) && (o.files ?? []).includes(f) === (key === 'files'))) { if (!moved.includes(f)) moved.push(f); movedFrom.set(f, owners.map(o => o.id)); continue; }
         const first = owners[0];
         const writes = (first.files ?? []).includes(f);
-        problems.push(`${f} is already ${writes ? 'written' : 'deleted'} by ${owners.map(o => o.id).join(', ')}${takeFrom ? ` (not ${takeFrom} alone)` : writes && owners.length === 1 && key === 'files' ? `; to move it use --take-from ${first.id}` : ''}`);
+        problems.push(`${f} is already ${writes ? 'written' : 'deleted'} by ${owners.map(o => o.id).join(', ')}${takeFrom ? ` (not ${takeFrom} alone)` : `; to move it use --take-from ${owners.map(o => o.id).join(',')}`}`);
       }
-      if (takeFrom && source && !moved.length && !problems.length) problems.push(`${source.id} does not own any of the files named in --files`);
-      if (source && moved.length) { const left = validateTicket({ ...source, files: (source.files ?? []).filter(f => !moved.includes(f)) }); if (!left.ok) problems.push(`${source.id} would no longer be valid without ${moved.join(', ')}: ${left.errors[0]}`); }
+      if (takeFrom && sources.length === takeFromList.length && !moved.length && !problems.length) problems.push(`${takeFrom} does not own any of the files named in --files/--deletes`);
+      const strip = x => ({ ...x, files: (x.files ?? []).filter(f => !(movedFrom.get(f) ?? []).includes(x.id)), ...(x.deletes ? { deletes: x.deletes.filter(f => !(movedFrom.get(f) ?? []).includes(x.id)) } : {}) });
+      for (const src of sources) { const mine = moved.filter(f => (movedFrom.get(f) ?? []).includes(src.id)); if (!mine.length) continue; const left = validateTicket(strip(src)); if (!left.ok) problems.push(`${src.id} would no longer be valid without ${mine.join(', ')}: ${left.errors[0]}`); }
       if (next.integration === true && !(next.tests ?? []).some(looksLikeTestFile)) problems.push('an integration ticket needs a route-level test file (in a tests folder, or ending in .test or .spec)');
       if (problems.length) return out(`refused:\n${problems.map(x => `  ${x}`).join('\n')}`, 1);
-      const summary = [...Object.keys(changes), ...(acceptanceEdit ? ['acceptance'] : [])].map(k => `  ${k}: ${(ticket[k] ?? []).join(k === 'acceptance' ? ' | ' : ', ') || 'none'}  ->  ${(next[k] ?? []).join(k === 'acceptance' ? ' | ' : ', ') || 'none'}`).join('\n') + (moved.length ? `\n  moves from ${takeFrom}: ${moved.join(', ')} (${takeFrom} no longer writes ${moved.length > 1 ? 'them' : 'it'}${source.status === 'done' ? `; ${takeFrom} is done and its tests are not re-run for ${moved.length > 1 ? 'them' : 'it'}` : ''})` : '');
+      const summary = [...Object.keys(changes), ...(acceptanceEdit ? ['acceptance'] : [])].map(k => `  ${k}: ${(ticket[k] ?? []).join(k === 'acceptance' ? ' | ' : ', ') || 'none'}  ->  ${(next[k] ?? []).join(k === 'acceptance' ? ' | ' : ', ') || 'none'}`).join('\n') + (moved.length ? `\n  moves from ${takeFrom}: ${moved.join(', ')} (${takeFrom} no longer ${moved.every(f => sources.some(x => (x.files ?? []).includes(f))) ? 'writes' : 'owns'} ${moved.length > 1 ? 'them' : 'it'}${sources.some(x => x.status === 'done') ? `; ${sources.filter(x => x.status === 'done').map(x => x.id).join(', ')} is done and its tests are not re-run for ${moved.length > 1 ? 'them' : 'it'}` : ''})` : '');
       if (flags.yes !== true) return out(`${ticket.id}:\n${summary}\nRerun with --yes to apply${isApproved(fresh) ? ' (the approval is renewed over the new lists)' : ''}.`);
       const wasApproved = isApproved(fresh);
       fresh.tickets = fresh.tickets.map(x => {
         if (x.id === ticket.id) return next;
-        if (source && x.id === source.id && moved.length) return { ...x, files: (x.files ?? []).filter(f => !moved.includes(f)) };
+        if (sourceIds.has(x.id) && moved.length) return strip(x);
         return x;
       });
       const saved = wasApproved ? approveLedger(fresh, { by: 'owner' }) : fresh;
@@ -1105,7 +1197,7 @@ async function editTicketFiles(root, ledger, rest, flags) {
       await writeLedger(root, saved);
       const touched = [...Object.keys(changes), ...(acceptanceEdit ? ['acceptance'] : [])];
       await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields: touched, before: Object.fromEntries(touched.map(k => [k, ticket[k] ?? []])), after: Object.fromEntries(touched.map(k => [k, next[k] ?? []])), reapproved: wasApproved });
-      if (moved.length) await appendLog(root, { event: 'file-move', by: 'owner', from: takeFrom, to: ticket.id, files: moved, fromStatus: source.status, reapproved: wasApproved });
+      if (moved.length) await appendLog(root, { event: 'file-move', by: 'owner', from: takeFromList.length === 1 ? takeFromList[0] : takeFromList, to: ticket.id, files: moved, fromStatus: sources.length === 1 ? sources[0].status : Object.fromEntries(sources.map(x => [x.id, x.status])), reapproved: wasApproved });
       await refreshPlan(root);
       return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the new lists).' : ''}`);
     });
@@ -1147,7 +1239,7 @@ export async function runTicketsCommand(root, args) {
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
   if (flags['mark-deps']) return markDepsCommand(root, ledger, rest, flags);
   if (flags.release === true) return releaseTickets(root, rest, flags);
-  if (['files', 'context', 'tests', 'deletes', 'acceptance', 'add-acceptance', 'take-from'].some(k => flags[k] !== undefined)) return editTicketFiles(root, ledger, rest, flags);
+  if (['files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from'].some(k => flags[k] !== undefined)) return editTicketFiles(root, ledger, rest, flags);
   if (flags.set !== undefined) {
     if (rest.length !== 1) return bad('tickets --set needs one ticket id');
     if (!STATUSES.includes(flags.set)) return out(`status must be one of: ${STATUSES.join(', ')}`, 1);
@@ -1209,6 +1301,7 @@ export async function runScopeCommand(root, command, args) {
     if (verb === 'split') return await cmdSplit(root, sub);
     if (verb === 'approve') return await cmdApprove(root, sub);
     if (verb === 'sync') return await cmdSync(root, sub);
+    if (verb === 'security-review') return await cmdSecurityReview(root, sub);
     if (verb === 'contracts') return await cmdContracts(root, sub);
     return bad(verb ? `unknown scope command: ${verb}` : 'scope needs a command');
   } catch (error) {

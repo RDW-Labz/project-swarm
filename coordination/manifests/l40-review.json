@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "l40-review",
+      "type": "review",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "Dependency installs through the security gate, a ship-time local CI run, and an automatic security review gate; review before PR.",
+      "prompt": "Review lessons 40-41 before a PR. Read coordination/manifests/l40-review.diff (tools diff against main). It adds: (1) tools/dep-install.mjs plus the integrate step in tools/swarm.mjs: a ticket's `dependencies` are resolved by the runner into package.json and package-lock.json (npm install --package-lock-only --ignore-scripts in a scratch dir), added to the queue plan writes, approved by content for the gate, audited, then `npm ci --ignore-scripts` after the gate passes; (2) tools/ci-local.mjs and its hook in tools/ship.mjs: every run: step of pull_request workflows is executed locally with bash -c before push; (3) tools/security-review.mjs and cmdSync/cmdSecurityReview in tools/scope-commands.mjs: tickets touching auth/API/migrations/sensitive paths are held until an Opus review verdict recorded against a files hash; (4) default-on build check, cleanDirs for .next/types, test files as outputs plus the missing-test-file done gate, --take-from with several sources, design tickets as docs jobs. Find concrete defects. Focus: (a) can a malicious ticket or package spec make dependencyWrites or npm ci run code, reach a URL/git/file source, or write outside package.json/package-lock.json; does the content-hash approval of fromDependencies weaken the manifest-change rule for other files; is the lockfile really audited before node_modules changes; what happens to the written files if npm ci fails after the gate (rollback?); (b) ci-local: can a workflow step run something dangerous or unwanted on the owner's machine (secrets filter gaps, deploy/publish filter gaps, working-directory escapes, steps that need services), does a missing/odd workflow wrongly block a ship, is order right across several workflows and jobs with needs; (c) security review: can a ticket skip the review (path patterns, unreviewed types, the records file, hash covering), can the response parse be spoofed by text inside the reviewed code, is the manifest prompt injectable from ticket titles, is the filesHash correct for deleted files; (d) the --take-from rewrite: any way to take files from a running/review/cancelled ticket, to leave a source ticket invalid, or to bypass the approval reseal; (e) the missing-test-file gate: false positives that block valid tickets (test type tickets, tests owned by another ticket not yet done). Rank findings high/medium/low with file and line, and a one-line fix each. Do not edit anything.",
+      "context": [
+        "coordination/manifests/l40-review.diff",
+        "tools/dep-install.mjs",
+        "tools/ci-local.mjs",
+        "tools/security-review.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

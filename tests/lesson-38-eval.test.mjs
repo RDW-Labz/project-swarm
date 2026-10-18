@@ -142,6 +142,9 @@ test('eval 38.4: a ticket whose output already matches the tree is not stuck in 
   const root = await project(t, [tk('T-0001', { runId: 'r9', tests: ['tests/T-0001.test.ts'] })], { verify: true });
   await fs.mkdir(path.join(root, 'src'), { recursive: true });
   await fs.writeFile(path.join(root, 'src/T-0001.ts'), 'export const a = 1;\n');
+  // The ticket names a test file, so it must exist in the tree (a ticket whose tests were never written is not done).
+  await fs.mkdir(path.join(root, 'tests'), { recursive: true });
+  await fs.writeFile(path.join(root, 'tests/T-0001.test.ts'), "import { a } from '../src/T-0001';\nif (a !== 1) throw new Error('a');\n");
   const ws = '.swarm/workspaces/r9/T-0001';
   await fs.mkdir(path.join(root, ws, 'src'), { recursive: true });
   await fs.writeFile(path.join(root, ws, 'src/T-0001.ts'), 'export const a = 1;\n');

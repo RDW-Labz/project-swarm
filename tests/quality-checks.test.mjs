@@ -59,10 +59,13 @@ test('derive: order is typecheck, lint, build', () => {
   assert.deepEqual(namesOf(out), ['typecheck', 'lint', 'build']);
 });
 
-test('derive: build is off by default even when scripts.build exists', () => {
+test('derive: build is on by default when scripts.build exists; build false is the opt-out', () => {
   const pkg = { scripts: { build: 'vite build' } };
-  assert.deepEqual(deriveQualityChecks({ pkg, hasTsconfig: false }), []);
-  assert.deepEqual(deriveQualityChecks({ pkg, hasTsconfig: false, config: {} }), []);
+  const built = [{ name: 'build', argv: ['npm', 'run', 'build'] }];
+  assert.deepEqual(deriveQualityChecks({ pkg, hasTsconfig: false }), built);
+  assert.deepEqual(deriveQualityChecks({ pkg, hasTsconfig: false, config: {} }), built);
+  assert.deepEqual(deriveQualityChecks({ pkg, hasTsconfig: false, config: { build: false } }), []);
+  assert.deepEqual(deriveQualityChecks({ pkg: { scripts: {} }, hasTsconfig: false }), [], 'no build script, no build check');
 });
 
 test('derive: build true uses scripts.build', () => {
@@ -153,8 +156,9 @@ test('jobs: a build job maps derived checks with default timeout', () => {
     { name: 'lint', argv: ['npm', 'run', 'lint'] },
   ];
   const jobs = [{ id: 'a', type: 'feature' }, { id: 'b', type: 'build' }];
+  // The typecheck also clears the framework's generated type files first (.next/types can name pages that no longer exist).
   assert.deepEqual(qualityChecksForJobs(jobs, derived), [
-    { name: 'typecheck', argv: ['npm', 'run', 'typecheck'], timeoutMs: 600000 },
+    { name: 'typecheck', argv: ['npm', 'run', 'typecheck'], timeoutMs: 600000, cleanDirs: ['.next/types'] },
     { name: 'lint', argv: ['npm', 'run', 'lint'], timeoutMs: 600000 },
   ]);
 });

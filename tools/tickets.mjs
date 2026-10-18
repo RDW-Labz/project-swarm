@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { validDependencySpec } from './dep-install.mjs';
 import fs from 'node:fs/promises';
 import { randomBytes, createHash } from 'node:crypto';
 import path from 'node:path';
@@ -12,7 +13,7 @@ export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'co
 const RISKS = ['low', 'medium', 'high'];
 const SIZES = ['S', 'M'];
 const NEEDS_ACCEPTANCE = ['build', 'test', 'migration'];
-const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps', 'skeleton', 'tests', 'screens', 'integration', 'deletes'];
+const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps', 'skeleton', 'tests', 'screens', 'integration', 'deletes', 'dependencies'];
 const RESERVED_FIRST = ['.git', '.swarm', '.github-hooks-free'];
 // Build output anywhere in a path, and any dot-env file, are never ticket files.
 const BUILD_DIRS = ['.next', 'node_modules', 'dist'];
@@ -75,7 +76,11 @@ export function validateTicket(t) {
   if (t.size === 'L') errors.push('size L: split this ticket');
   else if (!SIZES.includes(t.size)) errors.push(`bad size: ${t.size}`);
   if (!RISKS.includes(t.risk)) errors.push(`bad risk: ${t.risk}`);
-  for (const k of ['dependsOn', 'files', 'context', 'contracts', 'tests', 'deletes']) if (t[k] !== undefined && !isStrArr(t[k])) errors.push(`${k} must be an array of strings`);
+  for (const k of ['dependsOn', 'files', 'context', 'contracts', 'tests', 'deletes', 'dependencies']) if (t[k] !== undefined && !isStrArr(t[k])) errors.push(`${k} must be an array of strings`);
+  if (isStrArr(t.dependencies)) {
+    if (t.dependencies.length > 10) errors.push('dependencies: at most 10 packages');
+    for (const d of t.dependencies) if (!validDependencySpec(d)) errors.push(`dependencies entry not allowed: ${d} (a registry package name with an optional version, like zod or zod@^3.23.0)`);
+  }
   if (isStrArr(t.deletes)) {
     if (t.deletes.length > 20) errors.push('deletes: at most 20 files');
     for (const p of t.deletes) { if (badPath(p) || p.endsWith('/') || p.includes('*')) errors.push(`deletes path not allowed: ${p} (one real file, no folder, no glob)`); else if (isSensitivePath(p)) errors.push(`deletes path not allowed: ${p} is a manifest, lockfile, workflow, hook or profile file: delete it by hand`); if (isStrArr(t.files) && t.files.includes(p)) errors.push(`${p} is both written and deleted`); }
