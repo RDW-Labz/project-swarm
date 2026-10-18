@@ -56,6 +56,7 @@ export function createWatchServer(opts) {
     getJobReport,
     getBoard,
     board,
+    nav,
     indexName = 'index.html',
     commandList,
     contextCommands,
@@ -186,8 +187,10 @@ export function createWatchServer(opts) {
     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
     const boardRoutes = board ? ['/api/board', '/api/project', '/api/history', '/history.csv', '/open/run', '/project'] : [];
     const isBoardRoute = boardRoutes.includes(pathname);
+    // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
+    const isNav = Boolean(nav) && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
     const isShot = parts.length === 4 && parts[1] === 'shot' && (parts[3] === 'mockup' || parts[3] === 'page');
-    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute) return sendText(res, method, 404, 'not found');
+    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav) return sendText(res, method, 404, 'not found');
     const q = u.searchParams.get('t');
     const h = req.headers['x-watch-token'];
     const ok = (typeof q === 'string' && safeEqual(q, token)) || (typeof h === 'string' && safeEqual(h, token));
@@ -199,6 +202,13 @@ export function createWatchServer(opts) {
     if (pathname === '/api/snapshot') return sendJson(res, method, await payload());
     if (pathname === '/events') return openEvents(res, method);
     if (isBoard) return sendJson(res, method, (await getBoard()) ?? { runs: [] });
+    if (isNav) {
+      if (pathname === '/api/nav') return sendJson(res, method, { project: nav.project ?? null, run: nav.runId ?? null, board: '/nav/board', projectPage: nav.project ? '/nav/project' : null });
+      // The board is found (already running, in this or another process) or started; the browser is sent there with the board's own token.
+      const target = await nav.openBoard(pathname === '/nav/project' ? nav.project?.id ?? null : null);
+      if (!target) return sendText(res, method, 404, 'not found');
+      return send(res, method, 302, { Location: target, 'Content-Type': 'text/plain; charset=utf-8' }, 'redirecting');
+    }
     if (isBoardRoute) {
       const q = Object.fromEntries(u.searchParams);
       if (pathname === '/project') return sendAsset(res, method, 'project.html');

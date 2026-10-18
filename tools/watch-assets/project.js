@@ -10,9 +10,12 @@
   function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
   function when(iso) { return iso ? String(iso).slice(0, 16).replace('T', ' ') : '-'; }
   $('back').href = '/?t=' + T;
+  $('crumbBack').href = '/?t=' + T;
+  $('crumbAll').href = '/?t=' + T;
 
   function render(p) {
     $('title').textContent = p.name;
+    $('crumbProject').textContent = p.name;
     $('root').textContent = p.root;
     var s = $('spend'); s.textContent = '';
     [['Today', usd(p.spend.todayUsd)], ['Last 7 days', usd(p.spend.weekUsd)], ['All time', usd(p.spend.allUsd)], ['Flat-rate lanes (list value, not billed)', usd(p.spend.flatRateListUsd)]].forEach(function (pair) {

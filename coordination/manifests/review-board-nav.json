@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 0.8 },
+  "jobs": [
+    {
+      "id": "review-board-nav",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "new redirects between local servers that carry tokens",
+      "type": "review",
+      "prompt": "Review coordination/review/board-nav.diff: navigation from a run page back to the board (nav option and /api/nav, /nav/board, /nav/project routes in tools/watch-server.mjs; boardFile/readBoardFile/writeBoardFile/ensureBoard/runNav/startBoardServer in tools/watch-cli.mjs; nav.js, project.html/js crumbs). Rules: (1) every nav route needs the RUN page's own token (the board's token must not work there, and vice versa), only GET/HEAD, Host check kept; (2) the 302 Location may only ever be a loopback (127.0.0.1) board that really answers with its token; check open-redirect: can anything a user or file controls (board.json, project id, run id, query) produce a Location to another host or a javascript: URL? (3) board.json: mode 0600, atomic write, stale/hostile contents, pid reuse, concurrent processes starting two boards at once (race in ensureBoard), a board that dies leaves a stale file, who removes it, a process that crashes; (4) a board started inside a run-page process: lifetime (ownedBoardDone), what happens to its tokens and file when the run page closes first, port exposure; (5) tokens in URLs: leaked via Referer (Referrer-Policy is no-referrer: confirm), history, logs; the project id in /nav/project must come from the server-side nav option, not the request; (6) XSS in the crumbs (project name from disk): textContent only. Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete scenario, and say what you checked that is fine. Do not edit files.",
+      "context": ["tools/watch-server.mjs", "tools/watch-cli.mjs", "tools/watch-assets/nav.js", "tools/watch-assets/project.js", "tests/board-nav.test.mjs", "coordination/review/board-nav.diff"],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

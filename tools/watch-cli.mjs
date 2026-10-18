@@ -18,7 +18,9 @@ import { buildCommandList, contextCommands } from './watch-command-meta.mjs';
 import { COMMANDS } from './completion.mjs';
 import { readLedger } from './tickets.mjs';
 import { boardSummary, listLiveRuns } from './board.mjs';
-import { listProjects, projectsFile } from './projects.mjs';
+import { listProjects, projectsFile, projectId } from './projects.mjs';
+import os from 'node:os';
+import { randomBytes } from 'node:crypto';
 import { readHistory, historyCsv, historyFile } from './history.mjs';
 import { boardSnapshot, projectDetail, workersHeld } from './board-data.mjs';
 import { lanesDir, machineConcurrency } from './lanes.mjs';
@@ -196,11 +198,76 @@ export function makeRunServer(root, runId, extra = {}) {
 
 // What the board server calls. Every lookup goes through the machine's project list: a project is named by its id, never by a path the page could send,
 // and a project's runs, tickets and files are only ever read under its own root.
+// Finding the board from anywhere. A running board writes its address (it holds the board's own token) to a file only the user can read; a run page that wants to
+// go back to it reads that file, checks the board still answers, and otherwise starts one in its own process.
+export const boardFile = (env = process.env, home = os.homedir()) => env.SWARM_BOARD_FILE || path.join(home, '.project-swarm', 'board.json');
+// A board of ours belongs to this user: a process that exists but is not ours (EPERM) is not one.
+const pidAlive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
+
+async function boardAnswers(url, fetchImpl = fetch) {
+  try {
+    const u = new URL(url);
+    if (u.hostname !== '127.0.0.1') return false;
+    // Only our own board answers with the board's shape; a redirect is never followed (the token goes to this address and nowhere else).
+    const res = await fetchImpl(`${u.origin}/api/board?t=${encodeURIComponent(u.searchParams.get('t') ?? '')}`, { redirect: 'manual', signal: AbortSignal.timeout?.(2000) });
+    if (!res.ok) return false;
+    const body = typeof res.json === 'function' ? await res.json() : null;
+    return Boolean(body) && typeof body === 'object' && Array.isArray(body.projects) && Boolean(body.machine);
+  } catch { return false; }
+}
+
+export async function writeBoardFile(url, { env = process.env } = {}) {
+  const file = boardFile(env);
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  await fs.writeFile(tmp, `${JSON.stringify({ pid: process.pid, url, startedAt: new Date().toISOString() })}\n`, { mode: 0o600, flag: 'wx' });
+  await fs.rename(tmp, file);
+}
+
+export async function readBoardFile({ env = process.env, fetchImpl = fetch } = {}) {
+  try {
+    const data = JSON.parse(await fs.readFile(boardFile(env), 'utf8'));
+    if (data && pidAlive(data.pid) && typeof data.url === 'string' && await boardAnswers(data.url, fetchImpl)) { const u = new URL(data.url); return `${u.origin}/?t=${encodeURIComponent(u.searchParams.get('t') ?? '')}`; }
+  } catch { /* no board, or a stale file */ }
+  return null;
+}
+
+// The board's own project page address, from the board's address: same server, same token.
+export function boardProjectUrl(boardUrl, projectId) {
+  const u = new URL(boardUrl);
+  return `${u.origin}/project?id=${encodeURIComponent(projectId)}&t=${encodeURIComponent(u.searchParams.get('t') ?? '')}`;
+}
+
+let ownedBoard = null;   // a board this process started for a run page that was opened directly
+export function ownedBoardDone() { return ownedBoard?.server.done ?? Promise.resolve(); }
+export async function closeOwnedBoard() { if (ownedBoard) { const b = ownedBoard; ownedBoard = null; await b.server.close().catch(() => {}); await b.api.close().catch(() => {}); } }
+
+// The board that exists, or a new one started here. `start` is injectable for tests.
+let pendingBoard = null;
+export function ensureBoard({ env = process.env, root, fetchImpl = fetch, start = startBoardServer } = {}) {
+  // One lookup-or-start at a time in this process: two clicks at once share it, so only one board is ever started here.
+  pendingBoard ??= (async () => {
+    const found = await readBoardFile({ env, fetchImpl });
+    if (found) return found;
+    if (ownedBoard && await boardAnswers(ownedBoard.url, fetchImpl)) return ownedBoard.url;
+    ownedBoard = await start({ env, root });
+    return ownedBoard.url;
+  })().finally(() => { pendingBoard = null; });
+  return pendingBoard;
+}
+
+// The run page's navigation: where it sits and how to get back to the board (or to this project's page on it).
+export function runNav({ root, runId, env = process.env, openBoard }) {
+  const project = { id: projectId(root), name: path.basename(root).slice(0, 80) };
+  return { project, runId, openBoard: openBoard ?? (async pid => { const board = await ensureBoard({ env, root }); return pid ? boardProjectUrl(board, pid) : board; }) };
+}
+
 const MAX_WATCHERS = 6;
 const BOARD_RUN_IDLE_MS = 10 * 60 * 1000;
 
 export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000 } = {}) {
   const watchers = new Map();                // `${projectId}/${runId}` -> { server, url, closed }
+  let boardUrl = null;
   let cached = null;
   const find = async id => (await listProjects({ file: projectsFile(env) })).find(p => p.id === id) ?? null;
   const api = {
@@ -242,7 +309,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       entry.pending = (async () => {
         const open = [...watchers.entries()].filter(([, w]) => !w.closed);
         while (open.length >= MAX_WATCHERS) { const [oldKey, old] = open.shift(); old.closed = true; watchers.delete(oldKey); await old.server?.close().catch(() => {}); }
-        entry.server = runServer(project.root, runId, { idleMs: BOARD_RUN_IDLE_MS });
+        entry.server = runServer(project.root, runId, { idleMs: BOARD_RUN_IDLE_MS, nav: { project: { id: project.id, name: project.name }, runId, openBoard: async pid => (boardUrl ? (pid ? boardProjectUrl(boardUrl, pid) : boardUrl) : null) } });
         const { url } = await entry.server.listen();
         entry.server.done.then(() => { entry.closed = true; });
         return url;
@@ -251,10 +318,41 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       entry.pending.catch(() => { entry.closed = true; watchers.delete(key); });
       return entry.pending;
     },
+    // The board tells the api its own address once it is listening: the run pages it opens link back to it.
+    setBoardUrl(url) { boardUrl = url; },
     watcherCount: () => [...watchers.values()].filter(w => !w.closed).length,
     async close() { for (const w of watchers.values()) if (!w.closed) await w.server?.close().catch(() => {}); watchers.clear(); },
   };
   return api;
+}
+
+// Starts the board server in this process and records its address for run pages that want to go back to it.
+export async function startBoardServer({ env = process.env, root }) {
+  const api = createBoardApi({ env });
+  backfillHistory({ env }).catch(() => {});
+  const server = createWatchServer({
+    root,
+    getRunSnapshot: async () => null,
+    getPlanSnapshot: async () => ({ present: false }),
+    getGallery: async () => ({ schema: 1, screens: [] }),
+    getBoard: () => safeBoard(),
+    board: api,
+    indexName: 'board.html',
+    commandList: buildCommandList(COMMANDS),
+    contextCommands,
+    assetDir: path.join(here, 'watch-assets'),
+    deltaFile: path.join(here, 'watch-delta.mjs'),
+  });
+  const { url } = await server.listen();
+  api.setBoardUrl(url);
+  await writeBoardFile(url, { env }).catch(() => {});
+  server.done.then(async () => {
+    // The run pages this board opened must not point back at a board that is gone, and they close with it.
+    api.setBoardUrl(null);
+    await api.close().catch(() => {});
+    try { const data = JSON.parse(await fs.readFile(boardFile(env), 'utf8')); if (data.pid === process.pid && data.url === url) await fs.rm(boardFile(env), { force: true }); } catch { /* already gone */ }
+  });
+  return { server, api, url };
 }
 
 export async function runWatchCommand(root, args, { write = text => process.stdout.write(text) } = {}) {
@@ -264,29 +362,14 @@ export async function runWatchCommand(root, args, { write = text => process.stdo
   if (opts.all && (opts.text || opts.tui)) return { stdout: await boardText(), exitCode: 0 };
   if (opts.all) {
     // The web board: a lane per project on this machine, the machine's agents and spend on top, the history, and a click-through to any run's own page.
-    const api = createBoardApi({ env: process.env });
-    backfillHistory({ env: process.env }).catch(() => {});
-    const server = createWatchServer({
-      root,
-      getRunSnapshot: async () => null,
-      getPlanSnapshot: async () => ({ present: false }),
-      getGallery: async () => ({ schema: 1, screens: [] }),
-      getBoard: () => safeBoard(),
-      board: api,
-      indexName: 'board.html',
-      commandList: buildCommandList(COMMANDS),
-      contextCommands,
-      assetDir: path.join(here, 'watch-assets'),
-      deltaFile: path.join(here, 'watch-delta.mjs'),
-    });
-    const { url } = await server.listen();
-    write(`Swarm Watch board (every project on this machine)\n${url}\nRead-only, on this machine only. Opening a run starts that run's own page. Stops after 30 minutes idle. Ctrl-C stops it now. (swarm watch --all --text prints the live runs instead.)\n`);
-    if (opts.open) openUrl(url);
-    const stop = () => { server.close(); api.close(); };
+    const board = await startBoardServer({ env: process.env, root });
+    write(`Swarm Watch board (every project on this machine)\n${board.url}\nRead-only, on this machine only. Opening a run starts that run's own page. Stops after 30 minutes idle. Ctrl-C stops it now. (swarm watch --all --text prints the live runs instead.)\n`);
+    if (opts.open) openUrl(board.url);
+    const stop = () => { board.server.close(); board.api.close(); };
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
-    await server.done;
-    await api.close();
+    await board.server.done;
+    await board.api.close();
     return { stdout: '', exitCode: 0 };
   }
   const runId = await findRunId(root, opts.run);
@@ -295,14 +378,18 @@ export async function runWatchCommand(root, args, { write = text => process.stdo
     return { stdout: `${JSON.stringify({ run: await runSnapshotLoader(root, runId)(), plan: await planLoader(root)() }, null, 2)}\n`, exitCode: 0 };
   }
   if (opts.tui) { await tuiLoop(root, runId, write); return { stdout: '', exitCode: 0 }; }
-  const server = makeRunServer(root, runId);
+  const realRoot = await fs.realpath(root).catch(() => root);
+  const server = makeRunServer(realRoot, runId, { nav: runNav({ root: realRoot, runId, env: process.env }) });
   const { url } = await server.listen();
   write(`Swarm Watch for run ${runId}\n${url}\nRead-only, on this machine only. Stops after 30 minutes idle, or when the run is done and the page is closed. Ctrl-C stops it now.\n`);
   if (opts.open) openUrl(url);
-  const stop = () => { server.close(); };
+  let signalled = false;
+  const stop = () => { signalled = true; server.close(); closeOwnedBoard(); };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   await server.done;
+  // A board started from this run's page lives as long as this process (the person may still be on it), unless the person stopped it with Ctrl-C.
+  if (!signalled) await ownedBoardDone();
   return { stdout: '', exitCode: 0 };
 }
 
