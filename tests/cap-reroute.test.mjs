@@ -90,3 +90,19 @@ test('a job that named its lane is still held at the lane cap, and so is the run
   assert.equal(state.status, 'paused');
   assert.ok(state.jobs.some(record => record.heldReason === 'lane-cap'));
 });
+
+test('a sensitive job whose cheap lanes are all capped never falls back to a lane outside the known providers (never OpenRouter, OpenAI, Gemini, Lambda or rented)', async () => {
+  const { routeJob } = await import('../tools/router.mjs');
+  const lanes = { anthropic: { model: 'claude-haiku-5-5' }, openrouter: { model: 'test/model' }, openai: { model: 'x' }, gemini: { model: 'x' }, lambda: { model: 'x' }, rented: { model: 'x' } };
+  const job = { id: 's', agent: 'auto', sensitive: true, outputs: ['CHANGELOG.md'], prompt: 'p', context: [] };
+  const capped = new Set(['anthropic']);
+  const health = agent => ({ state: capped.has(agent) ? 'paused' : 'ok' });
+  for (const sensitive of [true, undefined]) {
+    const picked = routeJob({ ...job, sensitive }, { lanes, health, ready: 1000 });
+    assert.equal(picked.agent, 'anthropic', `the only lane a sensitive job may use is returned (it holds): ${picked.agent}`);
+  }
+  // With Codex configured and healthy it moves there, still never to a non-sensitive lane.
+  const withCodex = routeJob(job, { lanes: { ...lanes, codex: { model: 'gpt' } }, health });
+  assert.equal(withCodex.agent, 'codex');
+  for (const bad of ['openrouter', 'openai', 'gemini', 'lambda', 'rented']) assert.notEqual(withCodex.agent, bad);
+});
