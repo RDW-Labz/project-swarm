@@ -15,7 +15,13 @@ swarm lessons backfill [--dry-run]
 
 `backfill` converted the 229 numbered entries in docs/lessons.md and the 2 queue rows (coordination/swarm-lessons.jsonl) once; running it again writes nothing. Their `caughtBy` is `unknown`, and stage and tags come from keywords, so treat them as a first pass to improve by hand. The older `swarm lesson` queue (area, evidence, rule, fix, public line) is unchanged.
 
-Lessons from other projects come back here as lesson files only (see CLAUDE.md): run `swarm lessons add` in that project, then copy the file into this repo's `lessons/<project>/`.
+Lessons from other projects come back here as lesson files only (see CLAUDE.md). The project keeps its lessons in its own `coordination/swarm-lessons.jsonl`; bring them in with:
+
+```
+swarm lessons import <project-path> [--project NAME] [--dry-run]
+```
+
+It reads that one file (a regular file, at most 2 MB, never a symlink; the other project is never changed) and writes `lessons/<NAME>/L-xxxx.json`, where NAME defaults to the folder name and `L-000N` is row id N. Rows already imported are skipped (same id, or same rule text under another id), so it is safe to run again after every stage. Only the lesson text is copied, redacted by the same rules as every lesson (a secret becomes `<token>`, an email `<email>`); no files and no code. For area `tool` the stage and tags come from the text. A row that is not valid JSON, has a bad or repeated id, or does not become a valid lesson is listed as failed (exit code 1) and not written. The name `swarm` is refused (it is this repo's own lessons).
 
 ## Mining lessons into guards
 

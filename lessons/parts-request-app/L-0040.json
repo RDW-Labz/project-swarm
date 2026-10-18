@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "L-0040",
+  "project": "parts-request-app",
+  "date": "2026-10-17",
+  "stage": "split",
+  "what": "S7 (1.98.0): T-0166/T-0167 integration tickets went done although their named route tests (e2e/login-route.spec.ts, e2e/dashboard-route.spec.ts) never existed; the build was broken (middleware matcher as a template string: next build failed) and typecheck/test checks were never run against a build; magic link redirected to /dashboard not /auth/callback; Failed-emails card and retry read a cookie sb-access-token that @supabase/ssr never sets; /dashboard crashed for any signed-in user (client-module function called on the server).",
+  "rule": "An integration ticket is done only when its named route test file exists in the tree and passes; sync must refuse a tests path that is not a file, and a run touching routes must run next build.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Hand-wrote real e2e (login, dashboard, retry, responsive) against local Supabase+Mailpit, added them to scripts/e2e-app.sh and CI; fixed redirect, session helper, matcher, server/client import.",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "path-safety",
+    "privacy",
+    "retries",
+    "split",
+    "tokens",
+    "tool"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#40"
+  }
+}

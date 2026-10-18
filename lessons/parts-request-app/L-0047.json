@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0047",
+  "project": "parts-request-app",
+  "date": "2026-10-18",
+  "stage": "split",
+  "what": "Parts app S8: T-0168 had acceptance lines 'validate + encode reply links' and 'page.tsx under 8 KB, no inline actions' (added with --add-acceptance) and still went done with neither met (page was 14 KB, 3 inline server actions, unvalidated hrefs). Opus review only noted the gaps as low findings.",
+  "rule": "Acceptance lines must be enforced: before a ticket is done, every acceptance line needs a passing named test or an explicit pass/fail from the review job, listed per line in the report; any unmet line keeps the ticket in review.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Not fixed in the swarm yet; parts app handles it in a cleanup PR after S9",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "review",
+    "split",
+    "tool"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#47"
+  }
+}

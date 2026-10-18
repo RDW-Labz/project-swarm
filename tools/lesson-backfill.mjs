@@ -110,7 +110,7 @@ function hasWord(lower, kw) {
 
 const upperFirst = s => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
-function stageFor(text) {
+export function stageFor(text) {
   const lower = String(text).toLowerCase();
   for (const [re, stage] of STAGE_RULES) {
     if (re.test(lower)) return stage;
@@ -118,7 +118,7 @@ function stageFor(text) {
   return 'build';
 }
 
-function tagsFor(text, extra) {
+export function tagsFor(text, extra) {
   const lower = String(text).toLowerCase();
   const matched = [];
   for (const [kw, tag] of TAG_RULES) {
@@ -229,11 +229,14 @@ export function lessonFromFieldEntry(entry, { project = 'swarm', date, idOffset 
 }
 
 function storeRowToLesson(row, project, idOffset, date) {
-  const ref = `coordination/swarm-lessons.jsonl#${row?.id}`;
-  const n = Number(row?.id) + idOffset;
+  // Only a whole number (or a short digit string) is an id; anything else never reaches the ref or the lesson id.
+  const rawId = row?.id;
+  const idOk = Number.isInteger(rawId) || (typeof rawId === 'string' && /^[1-9]\d{0,3}$/.test(rawId));
+  const ref = `coordination/swarm-lessons.jsonl#${idOk ? Number(rawId) : 'row'}`;
+  const n = idOk ? Number(rawId) + idOffset : NaN;
   if (!Number.isInteger(n) || n < 0) return { ref, lesson: null, warnings: ['bad-id'] };
   const area = String(row.area ?? '').toLowerCase();
-  const stage = STORE_STAGE[area] ?? 'build';
+  const stage = Object.hasOwn(STORE_STAGE, area) ? STORE_STAGE[area] : 'build';
   const evidence = String(row.evidence ?? '');
   const rule = String(row.rule ?? '').trim();
   const testText = typeof row.test === 'string' ? row.test : '';
@@ -243,16 +246,17 @@ function storeRowToLesson(row, project, idOffset, date) {
     project,
     date: row.date ?? (date ?? today()),
     stage,
-    what: cut(evidence, 600),
-    rule: ensureEnd(rule, 300),
+    // Not cut here: finalize redacts the whole text first and cuts after (a cut can split a token below what the detectors see).
+    what: evidence,
+    rule,
     caughtBy: 'unknown',
     cost: { retries: 0, minutes: 0, usd: 0 },
     laneModel: null,
-    fix: cut(String(row.fix ?? ''), 600),
+    fix: String(row.fix ?? ''),
     guard: {
       kind: testText ? 'test-template' : 'none',
-      text: cut(testText, 300),
-      status: STORE_STATUS[row.status] ?? 'proposed',
+      text: testText,
+      status: Object.hasOwn(STORE_STATUS, row.status) ? STORE_STATUS[row.status] : 'proposed',
     },
     tags: tagsFor(`${area} ${evidence} ${rule}`, [stage, area]),
     source: { kind: 'backfill', ref },
@@ -264,7 +268,7 @@ export function lessonsFromStore(rows, { project = 'swarm', idOffset = 5000, dat
   return (Array.isArray(rows) ? rows : []).map((row) => storeRowToLesson(row, project, idOffset, date));
 }
 
-function parseStoreRows(text) {
+export function parseStoreRows(text) {
   const rows = [];
   const failed = [];
   text.split(/\r?\n/).forEach((line, i) => {

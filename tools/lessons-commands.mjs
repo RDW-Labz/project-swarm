@@ -6,6 +6,7 @@ import path from 'node:path';
 import { listLessons, readLessons, nextLessonId, writeLesson, filterLessons, lessonStats } from './lesson-store.mjs';
 import { normalizeLesson, STAGES, CAUGHT_BY, GUARD_KINDS } from './lesson-schema.mjs';
 import { backfill } from './lesson-backfill.mjs';
+import { importLessons } from './lesson-import.mjs';
 import { mine } from './lesson-mine.mjs';
 import { queryFromTicket, selectNotes, renderNotes } from './lesson-notes.mjs';
 import { listEvals, validateEval, evalManifest, scoreRun, compareBaseline } from './evals.mjs';
@@ -17,6 +18,7 @@ export const LESSONS_USAGE = [
   '       swarm lessons show ID',
   '       swarm lessons add --stage S --what TEXT --rule TEXT [--fix TEXT] [--caught-by C] [--tag T]... [--lane-model M] [--ticket T-0001] [--requirement R-001] [--guard-kind K] [--guard-text TEXT] [--retries N] [--minutes N] [--usd N]',
   '       swarm lessons check | stats [--json] | backfill [--dry-run] | mine [--min N] [--include-guarded] [--write] [--json]',
+  '       swarm lessons import PROJECT_PATH [--project NAME] [--dry-run]     (read the other project\'s coordination/swarm-lessons.jsonl, write lessons/NAME/; the other project is never changed)',
   '       swarm lessons notes "TEXT" [--file PATH]...',
   '       swarm eval list | validate [ID | --all] | manifest [ID... | --all] [--agent A] [--model M] [--out FILE] | score RUN [--record] | gate RUN [--update-baseline]',
   ''].join('\n');
@@ -96,6 +98,12 @@ async function lessonsCommand(root, verb, args, { installRoot }) {
   if (verb === 'backfill') {
     const r = await backfill(root, { project, dryRun: flags['dry-run'] === true });
     return out([`${flags['dry-run'] ? 'would write' : 'wrote'} ${r.written.length}, skipped ${r.skipped.length} that already exist, failed ${r.failed.length} (of ${r.total})`, ...r.failed.slice(0, 10).map(f => `  ${f.ref}: ${f.reason}`)].join('\n'), r.failed.length ? 1 : 0);
+  }
+  if (verb === 'import') {
+    if (rest.length !== 1) return bad('lessons import needs the project path');
+    const r = await importLessons(root, rest[0], { project: flags.project, dryRun: flags['dry-run'] === true });
+    const lines = [`${r.project}: ${flags['dry-run'] ? 'would write' : 'wrote'} ${r.written.length}${r.written.length ? ` (${r.written.join(', ')})` : ''}, skipped ${r.skipped.length} already imported, failed ${r.failed.length}`, ...r.duplicates.map(d => `  ${d.id} has the same rule as ${d.of}`), ...r.failed.slice(0, 10).map(f => `  failed ${f.ref}: ${f.reason}`)];
+    return out(lines.join('\n'), r.failed.length ? 1 : 0);
   }
   if (verb === 'add') {
     for (const need of ['stage', 'what', 'rule']) if (!flags[need]) return bad(`lessons add needs --${need}`);
