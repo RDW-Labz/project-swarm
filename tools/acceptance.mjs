@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Acceptance enforcement (docs/plans/acceptance-design.md): which acceptance lines a passing test covers, which need the review, and whether a ticket is met.
+import { verdictLine } from './review-text.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -246,7 +247,8 @@ export function reviewManifest(runId, items, { model = 'sonnet', agent = 'claude
     type: 'review',
     agent,
     model,
-    tier: 'standard',
+    // A tier the runner knows (cheap, mid, expensive): "standard" is not one, and the manifest was refused.
+    tier: 'mid',
     outputs: [],
     timeoutMs: 900000,
     context: context.slice(0, 60),
@@ -256,12 +258,8 @@ export function reviewManifest(runId, items, { model = 'sonnet', agent = 'claude
 }
 
 export function parseAcceptanceVerdicts(text) {
-  const rows = String(text ?? '')
-    .split(NL)
-    .map((l) => l.trim())
-    .filter((l) => l !== '');
-  const last = rows[rows.length - 1];
-  if (last === undefined) {
+  const last = verdictLine(text);
+  if (last === '') {
     return null;
   }
   let parsed = null;

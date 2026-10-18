@@ -230,7 +230,7 @@ describe('reviewManifest', () => {
     assert.equal(job.type, 'review');
     assert.equal(job.agent, 'claude');
     assert.equal(job.model, 'sonnet');
-    assert.equal(job.tier, 'standard');
+    assert.equal(job.tier, 'mid');
     assert.deepEqual(job.outputs, []);
     assert.equal(job.timeoutMs, 900000);
   });

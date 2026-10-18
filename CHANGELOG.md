@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.112.0
+
+Two parts-app S11 review bugs:
+- The acceptance review job was written with the tier `standard`, which the runner does not know (`cheap`, `mid`, `expensive`), so the manifest was refused. It is now `mid`; a test runs the manifest through the runner's own validation.
+- A review answer that ends with the worker's status line (`{"status":"complete",...}`, which the runner asks every review job to finish with) hid the verdict line, and the recorder found no verdict. The recorder now skips ONE trailing status line (exactly the runner's shape, status complete; a blocked or failed footer means no verdict) and reads the line before it, for the acceptance review and the security review. The rule against quoted objects is kept: a verdict-looking line earlier in the text still never wins, and anything else after the verdict line (prose) still hides it. An Opus review (2 medium, 3 low) tightened the footer rule.
+- Tests: in `tests/acceptance-sync.test.mjs`.
+
 ## 1.111.0
 
 Two parts-app bugs (lessons 54 and 55):
