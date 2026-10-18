@@ -143,7 +143,8 @@
       .catch(function () {});
   }
 
-  $('filters').addEventListener('input', loadHistory);
+  var debounce = null;
+  $('filters').addEventListener('input', function () { clearTimeout(debounce); debounce = setTimeout(loadHistory, 300); });
   $('filters').addEventListener('submit', function (e) { e.preventDefault(); loadHistory(); });
   poll(); loadHistory();
   setInterval(poll, 2000);

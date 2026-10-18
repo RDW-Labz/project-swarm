@@ -4,6 +4,8 @@ import fs from 'node:fs/promises';
 import { listProjects, registerProject, removeProject, projectsFile } from './projects.mjs';
 import { readHistory, historyCsv, appendHistory, historyFile } from './history.mjs';
 import { historyEventsOf } from './board-data.mjs';
+import { sanitizeWorkerText } from './worker-text.mjs';
+const safe = v => sanitizeWorkerText(v ?? '', 240);
 
 export const BOARD_USAGE = 'Usage: swarm projects [list | add PATH | remove ID]\n       swarm history [--project NAME] [--kind project|stage|run|pr|merge|lesson|spend] [--q TEXT] [--from DATE] [--to DATE] [--limit N] [--csv] [--backfill]\n';
 const out = (stdout, exitCode = 0) => ({ stdout: stdout.endsWith('\n') ? stdout : `${stdout}\n`, exitCode });
@@ -24,7 +26,7 @@ export async function runBoardCommand(root, command, args, { env = process.env }
     const file = projectsFile(env);
     if (verb === 'list') {
       const projects = await listProjects({ file });
-      return out(projects.length ? projects.map(p => `${p.id}  ${p.name}  ${p.root}  last seen ${p.lastSeen}`).join('\n') : 'No projects yet. Run a swarm command inside one, or swarm projects add PATH.');
+      return out(projects.length ? projects.map(p => `${p.id}  ${safe(p.name)}  ${safe(p.root)}  last seen ${safe(p.lastSeen)}`).join('\n') : 'No projects yet. Run a swarm command inside one, or swarm projects add PATH.');
     }
     if (verb === 'add') {
       if (rest.length !== 1) return out(`add needs one folder\n${BOARD_USAGE}`, 2);
@@ -50,5 +52,5 @@ export async function runBoardCommand(root, command, args, { env = process.env }
   if (backfill) { const added = await backfillHistory({ env }); if (!csv && !Object.keys(query).length) return out(`history backfilled: ${added} new event(s)`); }
   const { total, events } = await readHistory({ file: historyFile(env), ...query, limit: csv ? 1e6 : Number(query.limit) || 50, cap: csv ? 1e6 : 1000 });
   if (csv) return out(historyCsv(events).trimEnd());
-  return out(events.length ? [...events.map(e => `${e.at}  ${e.project}  ${e.kind}  ${e.title}${e.usd ? `  $${e.usd.toFixed(2)}` : ''}`), `${events.length} of ${total} event(s)`].join('\n') : 'No history yet. swarm history --backfill adds what is already on disk.');
+  return out(events.length ? [...events.map(e => `${e.at}  ${safe(e.project)}  ${e.kind}  ${safe(e.title)}${typeof e.usd === 'number' ? `  $${e.usd.toFixed(2)}` : ''}`), `${events.length} of ${total} event(s)`].join('\n') : 'No history yet. swarm history --backfill adds what is already on disk.');
 }

@@ -2677,7 +2677,8 @@ async function runManifestMain(root, manifest, options = {}) {
   await registerLiveRun({ runId: id, root, outputs: declaredOutputs, dir: liveDirOpt });
   try {
     const finishedState = await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept, acceptedRedBaseInfo, pendingBaseChecks, sync, scopeWarnings, jobTypeWarnings: appliedTypes.warnings.filter(warning => manifest.jobs.some(job => job.id === warning.jobId)), liveDir: liveDirOpt, maxUsd, maxTokens, now, sleep, resumeState, parentRun, leadJob, hostTransport, heartbeatMs, batchFlag, batchLimits, childOptions: options });
-    import('./history-hooks.mjs').then(hooks => hooks.recordRunHistory(root, finishedState)).catch(() => {});
+    // The record is written before the command can exit, but a slow disk never holds the run's result back for more than a moment.
+    await Promise.race([import('./history-hooks.mjs').then(hooks => hooks.recordRunHistory(root, finishedState)).catch(() => {}), new Promise(resolve => setTimeout(resolve, 2000).unref?.())]);
     return finishedState;
   } finally {
     await unregisterLiveRun(id, { dir: liveDirOpt });
@@ -7601,7 +7602,7 @@ async function mainInner() {
   }
   // Any swarm command in a folder lists it as a project on the board (not help, not the commands that are about the machine itself).
   if(args.length&&!['--help','-h','help','version','update','completion','onboard','projects','history','doctor','gpu','stop'].includes(args[0])&&!args.includes('--help')&&!args.includes('-h')){
-    try{await(await import('./history-hooks.mjs')).noteProject(await fs.realpath(root));}catch{/* a folder that does not exist yet is not a project */}
+    try{const real=await fs.realpath(root);if(real!==await fs.realpath(ownRoot).catch(()=>ownRoot))await(await import('./history-hooks.mjs')).noteProject(real);}catch{/* a folder that does not exist yet is not a project */}
   }
   if(args[0]==='projects'||args[0]==='history'){
     root=await fs.realpath(root);

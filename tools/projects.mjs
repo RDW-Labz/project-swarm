@@ -13,11 +13,30 @@ const isObj = v => typeof v === 'object' && v !== null && !Array.isArray(v);
 let queue = Promise.resolve();
 const serial = fn => { const run = queue.then(fn, fn); queue = run.catch(() => {}); return run; };
 
+// One entry per folder, and an entry's id must be the hash of its own root: a hand-edited or doubled entry is dropped, not counted twice.
+const valid = list => {
+  const seen = new Set();
+  return list.filter(p => {
+    if (!isObj(p) || typeof p.root !== 'string' || !path.isAbsolute(p.root) || typeof p.id !== 'string' || p.id !== projectId(p.root) || seen.has(p.root)) return false;
+    seen.add(p.root);
+    return true;
+  });
+};
+
 export async function listProjects({ file = projectsFile() } = {}) {
   try {
     const data = JSON.parse(await fs.readFile(file, 'utf8'));
-    return (isObj(data) && Array.isArray(data.projects) ? data.projects : []).filter(p => isObj(p) && typeof p.root === 'string' && path.isAbsolute(p.root) && typeof p.id === 'string');
+    return valid(isObj(data) && Array.isArray(data.projects) ? data.projects : []);
   } catch { return []; }
+}
+
+// For writers: the same list, but a file that exists and cannot be read is an error (never "empty"), so a damaged list is never overwritten.
+async function listForWrite(file) {
+  let text;
+  try { text = await fs.readFile(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  let data;
+  try { data = JSON.parse(text); } catch { throw Object.assign(new Error(`projects-unreadable: ${file} is damaged; fix or move it (nothing was written)`), { code: 'projects-unreadable' }); }
+  return valid(isObj(data) && Array.isArray(data.projects) ? data.projects : []);
 }
 
 async function write(file, projects) {
@@ -28,7 +47,11 @@ async function write(file, projects) {
 }
 
 // Scratch folders (a test's temp dir) are not projects unless the registry file was chosen explicitly.
-const inTmp = async real => { const tmp = await fs.realpath(os.tmpdir()).catch(() => path.resolve(os.tmpdir())); return real === tmp || real.startsWith(tmp + path.sep); };
+// Scratch places: the temp directory (as the OS and as /private/tmp), and anything inside a .swarm folder (worker copies, worktrees).
+const inTmp = async real => {
+  const bases = new Set([path.resolve(os.tmpdir()), await fs.realpath(os.tmpdir()).catch(() => null), '/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp'].filter(Boolean));
+  return [...bases].some(tmp => real === tmp || real.startsWith(tmp + path.sep)) || real.split(path.sep).includes('.swarm');
+};
 
 // Adds the project (or refreshes its lastSeen). Returns { project, added } or null when the folder is not a project to list.
 export function registerProject(root, { file = projectsFile(), env = process.env, now = Date.now, name } = {}) {
@@ -37,7 +60,7 @@ export function registerProject(root, { file = projectsFile(), env = process.env
     try { real = await fs.realpath(root); } catch { return null; }
     if (!(await fs.stat(real).then(s => s.isDirectory(), () => false))) return null;
     if (!env.SWARM_PROJECTS_FILE && await inTmp(real)) return null;
-    const projects = await listProjects({ file });
+    const projects = await listForWrite(file);
     const id = projectId(real);
     const at = new Date(now()).toISOString();
     const known = projects.find(p => p.id === id);
@@ -51,7 +74,7 @@ export function registerProject(root, { file = projectsFile(), env = process.env
 
 export function removeProject(id, { file = projectsFile() } = {}) {
   return serial(async () => {
-    const projects = await listProjects({ file });
+    const projects = await listForWrite(file);
     const left = projects.filter(p => p.id !== id);
     if (left.length === projects.length) return false;
     await write(file, left);

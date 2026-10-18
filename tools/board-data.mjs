@@ -27,17 +27,27 @@ export function laneLabel(agent, model) {
   return agent ? String(agent).slice(0, 20) : 'other';
 }
 
-async function readRunStates(root, { limit = 300 } = {}) {
+// Parsed run states are remembered by path, size and modification time: a poll costs one stat per run, and a run that finished is read once.
+const stateCache = new Map();
+async function readRunStates(root, { limit = 5000 } = {}) {
   const dir = path.join(root, '.swarm', 'runs');
   let ids = [];
   try { ids = (await fs.readdir(dir)).filter(id => RUN_ID.test(id)).sort().slice(-limit); } catch { return []; }
   const runs = [];
   for (const id of ids) {
     try {
+      const folder = await fs.lstat(path.join(dir, id));
+      if (folder.isSymbolicLink() || !folder.isDirectory()) continue;
       const file = path.join(dir, id, 'state.json');
-      const [raw, stat] = await Promise.all([fs.readFile(file, 'utf8'), fs.stat(file)]);
-      const state = JSON.parse(raw);
-      if (state && typeof state === 'object' && !Array.isArray(state) && (state.jobs === undefined || Array.isArray(state.jobs))) runs.push({ id, state, mtimeMs: stat.mtimeMs });
+      const stat = await fs.stat(file);
+      let hit = stateCache.get(file);
+      if (!hit || hit.size !== stat.size || hit.mtimeMs !== stat.mtimeMs) {
+        const state = JSON.parse(await fs.readFile(file, 'utf8'));
+        hit = { size: stat.size, mtimeMs: stat.mtimeMs, state: state && typeof state === 'object' && !Array.isArray(state) && (state.jobs === undefined || Array.isArray(state.jobs)) ? state : null };
+        if (stateCache.size > 20000) stateCache.clear();
+        stateCache.set(file, hit);
+      }
+      if (hit.state) runs.push({ id, state: hit.state, mtimeMs: stat.mtimeMs });
     } catch { /* an unreadable run is not counted here; projectSummary reports it */ }
   }
   return runs;
@@ -55,15 +65,15 @@ export function costOf(runs, now = Date.now()) {
     out.allUsd += runTotals(state).usd;
     const rentalUsd = num(state.rental?.usd);
     const runDay = Date.parse(state.finishedAt ?? state.startedAt ?? '');
+    // Today and the last 7 days count what is BILLED (per-use lanes and rented GPUs); flat-rate lanes show only in the all-time list value.
     const add = (usd, at) => { if (at >= startOfDay.getTime()) out.todayUsd += usd; if (at >= now - 7 * DAY) out.weekUsd += usd; };
     if (rentalUsd) { out.paidUsd += rentalUsd; if (Number.isFinite(runDay)) add(rentalUsd, runDay); }
     for (const job of state.jobs ?? []) {
       const usd = num(jobSpend(job).usd);
       if (!usd) { if (FLAT_RATE.has(job.agent) && job.status === 'complete') out.flatRateJobs += 1; continue; }
       const at = Date.parse(job.finishedAt ?? '') || runDay;
-      if (Number.isFinite(at)) add(usd, at);
       if (FLAT_RATE.has(job.agent)) { out.flatRateListUsd += usd; out.flatRateJobs += 1; }
-      else { out.paidUsd += usd; if (ESTIMATED.has(job.costSource)) out.paidEstimatedUsd += usd; }
+      else { out.paidUsd += usd; if (ESTIMATED.has(job.costSource)) out.paidEstimatedUsd += usd; if (Number.isFinite(at)) add(usd, at); }
     }
   }
   for (const key of Object.keys(out)) if (key.endsWith('Usd')) out[key] = Math.round(out[key] * 1e6) / 1e6;
@@ -100,7 +110,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const runs = await readRunStates(project.root);
   const liveIds = new Set(liveRuns.map(r => r.runId));
   const ledger = await readLedger(project.root).catch(() => null);
-  const spend = await summary(project.root).catch(() => ({ spendUsd: null, capUsd: null }));
+  const spend = await summary(project.root).catch(error => ({ spendUsd: null, capUsd: null, capError: String(error.message).slice(0, 120) }));
   const cost = costOf(runs, now);
   const agents = agentsOf(runs, liveIds);
   const lastRun = runs.length ? runs[runs.length - 1].state : null;
@@ -121,8 +131,10 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
 // The whole board: machine totals (sums of the project numbers) and one overview per registered project.
 export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary } = {}) {
   const overviews = [];
+  // A live run belongs to the project whose real root it ran in, however the path was spelled.
+  const live = await Promise.all(liveRuns.map(async r => ({ ...r, root: await fs.realpath(r.root).catch(() => r.root) })));
   for (const project of projects) {
-    const mine = liveRuns.filter(r => r.root === project.root);
+    const mine = live.filter(r => r.root === project.root);
     overviews.push(await projectOverview(project, mine, { now, summary }));
   }
   const machine = { agents: { total: 0, byLane: {}, byProject: {} }, cost: { todayUsd: 0, weekUsd: 0, allUsd: 0, paidUsd: 0, paidEstimatedUsd: 0, flatRateListUsd: 0, byProject: {} }, liveRuns: 0 };
@@ -165,6 +177,8 @@ export async function historyEventsOf(project) {
   events.push({ ...base, kind: 'project', key: `project:${project.id}`, at: project.addedAt, title: `Project ${project.name} registered` });
   const runs = await readRunStates(project.root, { limit: 1000 });
   for (const { id, state } of runs) {
+    // A run that is still going is written by its own finish hook, with its final status and spend: backfilling it now would lock in a half-written entry.
+    if (!['complete', 'failed', 'cancelled'].includes(state.status)) continue;
     const jobs = state.jobs ?? [];
     events.push({ ...base, kind: 'run', key: `run:${project.id}:${id}`, at: state.startedAt, run: id, ref: id, title: `Run ${id}: ${state.status ?? 'unknown'}, ${jobs.filter(j => j.status === 'complete').length}/${jobs.length} jobs` });
     const usd = runTotals(state).usd;

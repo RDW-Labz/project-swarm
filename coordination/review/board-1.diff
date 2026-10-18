@@ -1,0 +1,1672 @@
+diff --git a/docs/watch.md b/docs/watch.md
+index d6ea409..8ccbc0a 100644
+--- a/docs/watch.md
++++ b/docs/watch.md
+@@ -5,7 +5,7 @@ A read-only dashboard for a run. Design: [plans/watch-design.md](plans/watch-des
+ ## Use
+ 
+ - `swarm watch` starts the dashboard for the newest live run in this project (or the newest run) and prints a URL. `swarm watch RUN` picks a run. `--open` opens the browser.
+-- `swarm watch --tui` draws the same data in the terminal (press `q` to leave). `swarm watch --json` prints the run and plan data once. `swarm watch --all` opens a web board of every live run on this machine (read-only, token-protected) with the command to watch each; `--all --text` prints that list and `--all --json` prints it as data.
++- `swarm watch --tui` draws the same data in the terminal (press `q` to leave). `swarm watch --json` prints the run and plan data once. `swarm watch --all` opens the **board**: every project on this machine (see below). `--all --text` prints the live runs as a list and `--all --json` prints them as data.
+ - `swarm go` starts Swarm Watch for its run when you are at a terminal and prints `watch: URL` (not in CI or a pipe; `--no-watch` or `SWARM_NO_WATCH=1` turns it off). It stops by itself when the run is done and the page is closed, or after 30 minutes idle. `go --scope` (the wave loop) does not start one: run `swarm watch` beside it.
+ - `swarm gallery list` shows the screens from `swarm ui check`. `swarm gallery approve ID...` approves them. `swarm gallery comment ID "text"` saves a comment and, when a ticket ledger exists, proposes a fix ticket for it; `swarm gallery tickets [ID...]` does the same for older comments.
+ - **Comments are untrusted text.** The ticket's title and acceptance are fixed words; the comment is kept only in `notes`, and a worker sees it only as quoted data. The ticket is `proposed`: outside the plan and the approval, never ready, never a job. You read it (`swarm tickets --status proposed`), name its files (`swarm tickets T-0042 --files a,b --yes`), and approve it (`swarm tickets T-0042 --approve --yes`); only then it is a todo ticket. `--set cancelled` drops it.
+@@ -30,3 +30,15 @@ A read-only dashboard for a run. Design: [plans/watch-design.md](plans/watch-des
+ 
+ - The job drawer fetches the worker's report (summary, files, risks, follow-ups) when it opens, as sanitised, capped text under an "untrusted worker data" label; it does not show check output.
+ - The board lists runs; each run's page is its own server, so you copy the command for it.
++
++## The board (`swarm watch --all`)
++
++One page for the whole machine, read-only and behind a token like every Watch page.
++
++- **Top:** live agents right now (workers running in runs that are really alive), by lane (Haiku, Sonnet, Opus, Codex, Cursor, GPU) and by project; spend today (UTC day), over the last 7 days and all time, in total and per project. Today and 7 days count what is billed per use (API lanes, rented GPUs); the all-time total is the number the project's cap uses and also holds the flat-rate lanes (Codex, Cursor, Claude subscription), which are shown apart as a list value only because they cost nothing extra; estimates (from tokens or a reservation) are marked. Each project's total is exactly the number its spend cap uses, and the machine totals are the sums of the project totals.
++- **A lane per project:** current stage, live runs, jobs running / queued / blocked, open and blocked tickets, spend against the cap (or **NO CAP**, **CAP INVALID**, **CAP REACHED**), last activity. Lanes with live runs are open; idle ones are collapsed (your choice is kept while the page is open).
++- **Click a run** and its own full Watch page opens: the board starts that run's page server (or reuses it) and sends you there; the page has its own token. **Click a project** for its page: tickets by status, run history, spend by lane, lessons.
++- **History:** a permanent, append-only log of every project, stage, run, PR, merge, lesson and spend, newest first, in `~/.project-swarm/history/history.ndjson`. Search it, filter by project, type and date, click an entry to open it (a run opens its page, a PR opens on GitHub), export it as CSV. It survives restarts; `swarm history --backfill` adds what is already on disk (runs, spend, finished stages, lessons), and running it again adds nothing.
++- **Limits:** the board reads at most the newest 5000 runs of a project and remembers parsed run states until they change; at most 6 per-run pages stay open from the board (the oldest is closed) and each closes after 10 idle minutes; the history log is read whole and is not rotated yet.
++- **Which projects:** any swarm command run inside a folder lists it (`~/.project-swarm/projects.json`; scratch folders in the temp directory are not listed). `swarm projects`, `swarm projects add PATH`, `swarm projects remove ID` (removing only unlists it).
++- **Isolation:** a project is named by an id from that list, never by a path the page sends. Its runs, tickets, lessons and files are read only under its own folder; two projects with the same run id are two different runs. `swarm history` (`--project`, `--kind`, `--q`, `--from`, `--to`, `--csv`) is the same log in the terminal.
+diff --git a/tests/board-page.test.mjs b/tests/board-page.test.mjs
+new file mode 100644
+index 0000000..1e612c9
+--- /dev/null
++++ b/tests/board-page.test.mjs
+@@ -0,0 +1,420 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import http from 'node:http';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { execFile } from 'node:child_process';
++import { promisify } from 'node:util';
++import { fileURLToPath } from 'node:url';
++import { registerProject, listProjects, removeProject, projectId } from '../tools/projects.mjs';
++import { appendHistory, readHistory, historyCsv } from '../tools/history.mjs';
++import { laneLabel, costOf, boardSnapshot, projectDetail, projectOverview, historyEventsOf } from '../tools/board-data.mjs';
++import { projectSpend } from '../tools/project-spend.mjs';
++import { createBoardApi, makeRunServer } from '../tools/watch-cli.mjs';
++import { createWatchServer } from '../tools/watch-server.mjs';
++import { runBoardCommand, backfillHistory } from '../tools/board-commands.mjs';
++import { recordRunHistory, recordShipHistory, recordHistory } from '../tools/history-hooks.mjs';
++import { createLedger, writeLedger } from '../tools/tickets.mjs';
++
++const execFileP = promisify(execFile);
++const NOW = Date.UTC(2026, 9, 18, 15, 0, 0);
++const DAY = 86400000;
++const iso = ms => new Date(ms).toISOString();
++const deltaFile = fileURLToPath(new URL('../tools/watch-delta.mjs', import.meta.url));
++const realAssets = fileURLToPath(new URL('../tools/watch-assets', import.meta.url));
++const tmp = async t => { const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'board-'))); t.after(() => fs.rm(d, { recursive: true, force: true })); return d; };
++
++const job = (id, agent, model, usd, finishedMs, extra = {}) => ({ id, agent, model, status: 'complete', costUsd: usd, finishedAt: iso(finishedMs), usage: { total_tokens: 100 }, ...extra });
++async function project(t, name, { runs = {}, tickets = null, home }) {
++  const root = path.join(home, name);
++  await fs.mkdir(root, { recursive: true });
++  for (const [id, state] of Object.entries(runs)) {
++    await fs.mkdir(path.join(root, '.swarm/runs', id), { recursive: true });
++    await fs.writeFile(path.join(root, '.swarm/runs', id, 'state.json'), JSON.stringify({ id, ...state }));
++  }
++  if (tickets) await writeLedger(root, createLedger({ scope: { name: name, version: 1, hash: 'a'.repeat(64) }, tickets }));
++  return { id: projectId(root), name, root, addedAt: iso(NOW - 30 * DAY), lastSeen: iso(NOW) };
++}
++const tk = (id, stage, status, extra = {}) => ({ id, title: `Ticket ${id}`, type: 'build', epic: 'E', scopeRefs: ['R-001'], acceptance: ['ok'], files: [`src/${id}.ts`], context: [], contracts: [], dependsOn: [], size: 'S', risk: 'low', sensitive: false, status, stage, ...extra });
++
++async function twoProjects(t) {
++  const home = await tmp(t);
++  const A = await project(t, 'parts-request-app', { home,
++    runs: {
++      'run-a1': { status: 'running', startedAt: iso(NOW - 3600000), jobs: [job('a-1', 'anthropic', 'claude-haiku-5-5', 0.5, NOW - 1800000, { costSource: 'estimated-from-tokens' }), job('a-2', 'anthropic', 'claude-sonnet-5-5', 1.25, NOW - 600000), { id: 'a-3', agent: 'codex', model: 'gpt-5.5', status: 'running' }, { id: 'a-4', agent: 'anthropic', model: 'claude-haiku-5-5', status: 'running' }, { id: 'a-5', agent: 'rented', model: 'qwen', status: 'queued' }, { id: 'a-6', agent: 'cursor', status: 'blocked' }] },
++      'run-old': { status: 'complete', startedAt: iso(NOW - 20 * DAY), finishedAt: iso(NOW - 20 * DAY), jobs: [job('o-1', 'anthropic', 'claude-haiku-5-5', 2, NOW - 20 * DAY), job('o-2', 'claude', 'opus', 0.6, NOW - 20 * DAY)], rental: { usd: 3 } },
++      'run-wk': { status: 'complete', startedAt: iso(NOW - 3 * DAY), finishedAt: iso(NOW - 3 * DAY), jobs: [job('w-1', 'openrouter', 'x', 0.25, NOW - 3 * DAY)] },
++    },
++    tickets: [tk('T-0001', 'S1', 'done'), tk('T-0002', 'S2', 'running'), tk('T-0003', 'S2', 'blocked'), tk('T-0004', 'S3', 'todo')] });
++  // The other project reuses the SAME run id on purpose.
++  const B = await project(t, 'project-swarm', { home,
++    runs: { 'run-a1': { status: 'running', startedAt: iso(NOW - 600000), jobs: [job('b-1', 'anthropic', 'claude-haiku-5-5', 0.1, NOW - 60000), { id: 'b-2', agent: 'claude', model: 'opus', status: 'running' }] } },
++    tickets: [tk('T-0001', 'S1', 'done'), tk('T-0002', 'S1', 'done')] });
++  return { home, A, B };
++}
++
++test('projects: listed once per real path, skipped in scratch folders unless the file is chosen, removable without touching anything else', async t => {
++  const home = await tmp(t);
++  const file = path.join(home, 'projects.json');
++  const root = path.join(home, 'app'); await fs.mkdir(root);
++  assert.equal(await registerProject(root, { file, env: {} }), null, 'a temp folder is not a project by default');
++  const first = await registerProject(root, { file, env: { SWARM_PROJECTS_FILE: file }, now: () => NOW });
++  assert.equal(first.added, true);
++  assert.equal(first.project.id, projectId(await fs.realpath(root)));
++  assert.equal((await registerProject(root, { file, env: { SWARM_PROJECTS_FILE: file }, now: () => NOW + 1 })).added, false);
++  assert.equal((await listProjects({ file })).length, 1);
++  assert.equal(await registerProject(path.join(home, 'missing'), { file, env: { SWARM_PROJECTS_FILE: file } }), null);
++  assert.equal(await removeProject(first.project.id, { file }), true);
++  assert.deepEqual(await listProjects({ file }), []);
++  await fs.stat(root);
++});
++
++test('history: append-only, deduped by key, newest first, filters, survives a restart, CSV is safe', async t => {
++  const home = await tmp(t);
++  const file = path.join(home, 'history', 'history.ndjson');
++  const ev = (kind, at, extra = {}) => ({ project: 'parts-request-app', projectId: 'p1', kind, at, title: `${kind} thing`, ...extra });
++  assert.deepEqual(await appendHistory([ev('run', iso(NOW - 2 * DAY), { key: 'run:1', run: 'r1', title: 'Run r1 done' }), ev('merge', iso(NOW - DAY), { key: 'merge:5', ref: '#5', url: 'https://github.com/o/r/pull/5' }), { kind: 'bogus' }], { file }), { added: 2 });
++  const sizeBefore = (await fs.stat(file)).size, head = (await fs.readFile(file, 'utf8'));
++  assert.deepEqual(await appendHistory([ev('run', iso(NOW), { key: 'run:1' })], { file }), { added: 0 }, 'the same key is never added twice');
++  await appendHistory([ev('lesson', iso(NOW), { key: 'lesson:L1', project: 'project-swarm', projectId: 'p2', title: '=HYPERLINK("http://evil","x")' })], { file });
++  assert.ok((await fs.readFile(file, 'utf8')).startsWith(head), 'earlier lines are never rewritten');
++  assert.ok((await fs.stat(file)).size > sizeBefore);
++  // "Restart": a different process reads the same file.
++  const read = await execFileP(process.execPath, ['--input-type=module', '-e', `import {readHistory} from ${JSON.stringify(new URL('../tools/history.mjs', import.meta.url).href)}; const r = await readHistory({file:${JSON.stringify(file)}}); console.log(JSON.stringify(r.events.map(e=>e.kind)));`]);
++  assert.deepEqual(JSON.parse(read.stdout), ['lesson', 'merge', 'run'], 'newest first, and still there');
++  assert.equal((await readHistory({ file, project: 'project-swarm' })).total, 1);
++  assert.equal((await readHistory({ file, project: 'p1', kind: 'merge' })).total, 1);
++  assert.equal((await readHistory({ file, q: 'r1 done' })).total, 1);
++  assert.equal((await readHistory({ file, from: iso(NOW - DAY - 1000).slice(0, 10), to: iso(NOW - DAY).slice(0, 10) })).total, 1);
++  assert.equal((await readHistory({ file, q: 'nothing like this' })).total, 0);
++  await fs.appendFile(file, 'not json\n{"kind":"nope"}\n');
++  assert.equal((await readHistory({ file })).total, 3, 'garbage lines are skipped, not fatal');
++  const csv = historyCsv((await readHistory({ file })).events);
++  assert.match(csv.split('\n')[0], /^at,project,kind,title,ref,run,usd,url$/);
++  assert.match(csv, /"'=HYPERLINK\(""http:\/\/evil"",""x""\)"/, 'a formula is neutralised and quotes are escaped');
++  assert.match(csv, /https:\/\/github\.com\/o\/r\/pull\/5/);
++  assert.equal((await appendHistory([ev('pr', iso(NOW), { url: 'javascript:alert(1)' })], { file })).added, 1);
++  assert.equal((await readHistory({ file, kind: 'pr' })).events[0].url, null, 'only an https address is kept as a link');
++});
++
++test('worker labels and the live agent count: only runs that are really alive, by lane and by project', async t => {
++  assert.deepEqual(['anthropic claude-haiku-5-5', 'anthropic claude-sonnet-5-5', 'claude opus', 'codex x', 'cursor x', 'rented q', 'ollama q', 'lambda q'].map(s => laneLabel(...s.split(' '))), ['Haiku', 'Sonnet', 'Opus', 'Codex', 'Cursor', 'GPU', 'GPU', 'GPU']);
++  const { A, B } = await twoProjects(t);
++  const live = [{ runId: 'run-a1', root: A.root, startedAt: iso(NOW - 3600000) }, { runId: 'run-a1', root: B.root, startedAt: iso(NOW - 600000) }];
++  const snap = await boardSnapshot({ projects: [A, B], liveRuns: live, now: NOW, summary: async () => ({ spendUsd: 0, capUsd: null }) });
++  const a = snap.projects.find(p => p.id === A.id), b = snap.projects.find(p => p.id === B.id);
++  assert.deepEqual(a.agents.byLane, { Codex: 1, Haiku: 1 });
++  assert.deepEqual(b.agents.byLane, { Opus: 1 });
++  assert.deepEqual(a.agents.jobs, { running: 2, queued: 1, blocked: 1 });
++  assert.equal(snap.machine.agents.total, 3);
++  assert.deepEqual(snap.machine.agents.byLane, { Codex: 1, Haiku: 1, Opus: 1 });
++  assert.deepEqual(snap.machine.agents.byProject, { [A.id]: 2, [B.id]: 1 });
++  // A run that is not alive (a crashed run whose state says running) counts no workers.
++  const stale = await boardSnapshot({ projects: [A], liveRuns: [], now: NOW, summary: async () => ({}) });
++  assert.equal(stale.machine.agents.total, 0);
++  assert.equal(stale.projects[0].idle, true);
++});
++
++test('cost: the machine totals are exactly the sums of the project totals, each project total is the number the cap uses, and estimated / flat-rate are marked', async t => {
++  const { A, B } = await twoProjects(t);
++  const snap = await boardSnapshot({ projects: [A, B], liveRuns: [], now: NOW, summary: async () => ({}) });
++  for (const p of [A, B]) {
++    const overview = snap.projects.find(x => x.id === p.id);
++    assert.equal(overview.cost.allUsd, Math.round((await projectSpend(p.root)).usd * 1e6) / 1e6, `${p.name}: the board total is the project's own total`);
++    assert.equal(overview.spend.usd, overview.cost.allUsd);
++    assert.equal(snap.machine.cost.byProject[p.id].allUsd, overview.cost.allUsd);
++  }
++  const sum = key => Math.round(snap.projects.reduce((s, p) => s + p.cost[key], 0) * 1e6) / 1e6;
++  for (const key of ['allUsd', 'todayUsd', 'weekUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) assert.equal(snap.machine.cost[key], sum(key), key);
++  const a = snap.projects.find(p => p.id === A.id).cost;
++  const r6 = x => Math.round(x * 1e6) / 1e6;
++  assert.equal(a.allUsd, r6(0.5 + 1.25 + 2 + 0.6 + 3 + 0.25), 'jobs plus the rental');
++  assert.equal(a.todayUsd, r6(0.5 + 1.25), 'only what finished today');
++  assert.equal(a.weekUsd, r6(0.5 + 1.25 + 0.25), 'the last seven days');
++  assert.equal(a.paidEstimatedUsd, 0.5, 'an estimate from tokens is marked as one');
++  assert.equal(a.flatRateListUsd, 0.6, 'a Claude subscription job is a list value, not a bill');
++  assert.equal(a.paidUsd, r6(0.5 + 1.25 + 2 + 3 + 0.25), 'paid = billed per use, with the rented GPU');
++  assert.equal(snap.machine.cost.allUsd, r6(a.allUsd + 0.1));
++});
++
++test('stage, tickets, caps and last activity per project; a project is never mixed with another (same run id, same ticket ids)', async t => {
++  const { A, B } = await twoProjects(t);
++  const summaries = { [A.root]: { spendUsd: 7.6, capUsd: 10 }, [B.root]: { spendUsd: 0.1, capUsd: null } };
++  const snap = await boardSnapshot({ projects: [A, B], liveRuns: [{ runId: 'run-a1', root: A.root }], now: NOW, summary: async root => summaries[root] });
++  const a = snap.projects.find(p => p.id === A.id), b = snap.projects.find(p => p.id === B.id);
++  assert.equal(a.stage, 'S2');
++  assert.deepEqual([a.tickets.open, a.tickets.blocked, a.tickets.total], [3, 1, 4]);
++  assert.equal(b.stage, 'done');
++  assert.equal(a.spend.capUsd, 10);
++  assert.equal(a.spend.noCap, false);
++  assert.equal(b.spend.noCap, true, 'no cap is said, never defaulted');
++  assert.ok(a.lastActivityAt && b.lastActivityAt);
++  assert.equal(a.idle, false);
++  assert.equal(b.idle, true);
++  const da = await projectDetail(A, { now: NOW }), db = await projectDetail(B, { now: NOW });
++  assert.deepEqual(da.runs.map(r => r.runId).sort(), ['run-a1', 'run-old', 'run-wk']);
++  assert.deepEqual(db.runs.map(r => r.runId), ['run-a1']);
++  assert.equal(da.runs.find(r => r.runId === 'run-a1').jobs, 6);
++  assert.equal(db.runs[0].jobs, 2, 'the same run id in the other project is a different run');
++  assert.equal(da.tickets.length, 4);
++  assert.equal(db.tickets.length, 2);
++  assert.ok(!JSON.stringify(da).includes(B.root) && !JSON.stringify(db).includes(A.root), 'neither project\'s data names the other\'s folder');
++  assert.equal(da.spend.byLane.Haiku, 2.5);
++  assert.equal(db.spend.byLane.Haiku, 0.1);
++});
++
++test('the history of what is on disk can be backfilled, once: run, spend, stage and project events with keys', async t => {
++  const { home, A, B } = await twoProjects(t);
++  const env = { SWARM_PROJECTS_FILE: path.join(home, 'projects.json'), SWARM_HISTORY_FILE: path.join(home, 'h', 'history.ndjson') };
++  await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({ version: 1, projects: [A, B] }));
++  const first = await backfillHistory({ env });
++  assert.ok(first >= 6, `${first} events`);
++  assert.equal(await backfillHistory({ env }), 0, 'running it again adds nothing');
++  const all = (await readHistory({ file: env.SWARM_HISTORY_FILE })).events;
++  assert.ok(all.some(e => e.kind === 'stage' && e.project === 'project-swarm' && e.ref === 'S1'));
++  assert.ok(all.some(e => e.kind === 'spend' && e.project === 'parts-request-app' && e.run === 'run-old' && e.usd === 5.6));
++  assert.equal(all.filter(e => e.kind === 'run').length, 2, 'only finished runs are backfilled; a run still going writes its own entry when it ends');
++  assert.ok(!all.some(e => e.run === 'run-a1'));
++  const events = await historyEventsOf(A);
++  assert.ok(events.every(e => e.projectId === A.id && e.project === 'parts-request-app'));
++  // the commands
++  const list = await runBoardCommand(home, 'projects', ['list'], { env });
++  assert.match(list.stdout, /parts-request-app/);
++  const csv = await runBoardCommand(home, 'history', ['--csv', '--kind', 'stage'], { env });
++  assert.match(csv.stdout, /^at,project,kind/);
++  assert.match(csv.stdout, /Stage S1 done/);
++  assert.equal((await runBoardCommand(home, 'history', ['--bogus'], { env })).exitCode, 2);
++});
++
++test('hooks write the history of a run, a PR and a merge, and nothing in a scratch folder unless the file is chosen', async t => {
++  const home = await tmp(t);
++  const root = path.join(home, 'app'); await fs.mkdir(root);
++  const state = { id: 'r-1', status: 'complete', finishedAt: iso(NOW), jobs: [job('j1', 'anthropic', 'claude-haiku-5-5', 0.4, NOW), job('j2', 'codex', 'x', 0, NOW)] };
++  await recordRunHistory(root, state, { env: {} });
++  const file = path.join(home, 'hist.ndjson');
++  assert.deepEqual((await readHistory({ file })).events, [], 'nothing written for a temp folder without a chosen file');
++  const env = { SWARM_HISTORY_FILE: file };
++  await recordRunHistory(root, state, { env });
++  await recordRunHistory(root, state, { env });
++  await recordShipHistory(root, { status: 'merged', pr: 41, repo: 'o/app', url: 'https://github.com/o/app/pull/41', mergeSha: 'abcdef1234567890', runId: 'r-1' }, { env });
++  await recordHistory(root, { kind: 'lesson', title: 'Lesson L-9', key: 'lesson:x:L-9' }, { env });
++  const kinds = (await readHistory({ file })).events.map(e => e.kind).sort();
++  assert.deepEqual(kinds, ['lesson', 'merge', 'pr', 'run', 'spend'], 'each once, even after a repeat');
++  const merge = (await readHistory({ file, kind: 'merge' })).events[0];
++  assert.match(merge.title, /Merged #41 on o\/app \(abcdef12\)/);
++  assert.equal(merge.url, 'https://github.com/o/app/pull/41');
++  const spend = (await readHistory({ file, kind: 'spend' })).events[0];
++  assert.equal(spend.usd, 0.4);
++});
++
++// --- the server: links, auth, isolation --------------------------------------------------------------------------------------------------------------------
++
++const get = (port, pathname, { method = 'GET', headers = {}, host } = {}) => new Promise((resolve, reject) => {
++  const req = http.request({ hostname: '127.0.0.1', port, path: pathname, method, headers: { Host: host ?? `127.0.0.1:${port}`, ...headers } }, res => {
++    const chunks = []; res.on('data', c => chunks.push(c)); res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8'), headers: res.headers }));
++  });
++  req.on('error', reject); req.end();
++});
++
++async function boardServer(t, { A, B, home }) {
++  const env = { SWARM_PROJECTS_FILE: path.join(home, 'projects.json'), SWARM_HISTORY_FILE: path.join(home, 'h.ndjson') };
++  await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({ version: 1, projects: [A, B] }));
++  await backfillHistory({ env });
++  const api = createBoardApi({ env, now: () => NOW, live: async () => [{ runId: 'run-a1', root: A.root, startedAt: iso(NOW) }], cacheMs: 0 });
++  const server = createWatchServer({ root: home, assetDir: realAssets, deltaFile, idleMs: 600000, getRunSnapshot: async () => null, getPlanSnapshot: async () => ({ present: false }), getGallery: async () => ({ schema: 1, screens: [] }), getBoard: async () => ({ runs: [] }), board: api, indexName: 'board.html', commandList: [], contextCommands: () => [] });
++  await server.listen();
++  t.after(async () => { await server.close(); await api.close(); });
++  return { server, api, port: Number(new URL(server.url).port), token: server.token };
++}
++
++test('the board: every data route needs the token, only GET, wrong host refused; links open the right project and run', async t => {
++  const ctx = await twoProjects(t);
++  const { server, api, port, token } = await boardServer(t, ctx);
++  const { A, B } = ctx;
++  for (const route of ['/api/board', `/api/project?id=${A.id}`, '/api/history', '/history.csv', `/open/run?id=${A.id}&run=run-a1`, `/project?id=${A.id}`, '/']) {
++    assert.equal((await get(port, route)).status, 403, `${route} without a token`);
++    assert.equal((await get(port, `${route}${route.includes('?') ? '&' : '?'}t=wrong`)).status, 403, `${route} with a wrong token`);
++  }
++  assert.equal((await get(port, `/api/board?t=${token}`, { method: 'POST' })).status, 405);
++  assert.equal((await get(port, `/api/board?t=${token}`, { host: 'evil.example:80' })).status, 421);
++  const page = await get(port, `/?t=${token}`);
++  assert.match(page.body, /Every project on this machine/);
++  const projectPage = await get(port, `/project?id=${A.id}&t=${token}`);
++  assert.equal(projectPage.status, 200);
++  assert.match(projectPage.body, /assets\/project\.js/);
++  const data = JSON.parse((await get(port, `/api/board?t=${token}`)).body);
++  assert.equal(data.projects.length, 2);
++  assert.equal(data.machine.agents.total, 2);
++  assert.equal((await get(port, `/api/project?id=${A.id}&t=${token}`)).status, 200);
++  assert.equal((await get(port, `/api/project?id=nope&t=${token}`)).status, 404);
++  assert.equal((await get(port, `/api/project?id=${encodeURIComponent('../../etc')}&t=${token}`)).status, 404, 'a project is named by id, never by a path');
++  // The page builds its links with the token and the ids: a click on a run row goes to /open/run.
++  const js = (await get(port, '/assets/board.js')).body;
++  assert.match(js, /\/open\/run\?id=/);
++  assert.match(js, /\/project\?id=/);
++  assert.doesNotMatch(js, /innerHTML|eval\(/);
++  // Opening a run starts that run's own Watch page, with its own token, and reuses it.
++  const open = await get(port, `/open/run?id=${A.id}&run=run-a1&t=${token}`);
++  assert.equal(open.status, 302);
++  const target = new URL(open.headers.location);
++  assert.equal(target.hostname, '127.0.0.1');
++  assert.notEqual(Number(target.port), port, 'its own server');
++  assert.notEqual(target.searchParams.get('t'), token, 'its own token');
++  const snapshot = JSON.parse((await get(Number(target.port), `/api/snapshot?t=${target.searchParams.get('t')}`)).body);
++  assert.equal(snapshot.run.runId, 'run-a1');
++  assert.equal(snapshot.run.jobs.length, 6, 'it is project A\'s run-a1, not B\'s');
++  assert.equal((await get(Number(target.port), '/api/snapshot')).status, 403, 'the run page keeps its own token protection');
++  const again = await get(port, `/open/run?id=${A.id}&run=run-a1&t=${token}`);
++  assert.equal(again.headers.location, open.headers.location, 'reused, not started twice');
++  assert.equal(api.watcherCount(), 1);
++  const other = new URL((await get(port, `/open/run?id=${B.id}&run=run-a1&t=${token}`)).headers.location);
++  const otherSnap = JSON.parse((await get(Number(other.port), `/api/snapshot?t=${other.searchParams.get('t')}`)).body);
++  assert.equal(otherSnap.run.jobs.length, 2, 'the same run id in project B opens B\'s run');
++  assert.equal(api.watcherCount(), 2);
++  assert.equal((await get(port, `/open/run?id=${A.id}&run=nope&t=${token}`)).status, 404);
++  assert.equal((await get(port, `/open/run?id=${A.id}&run=${encodeURIComponent('../x')}&t=${token}`)).status, 404);
++  assert.equal((await get(port, `/open/run?id=unknown&run=run-a1&t=${token}`)).status, 404);
++  assert.equal((await get(port, `/open/run?id=${B.id}&run=run-old&t=${token}`)).status, 404, 'a run of another project is not reachable through this one');
++});
++
++test('the board: history search, filters and CSV over HTTP, and history survives a restart of the server', async t => {
++  const ctx = await twoProjects(t);
++  const first = await boardServer(t, ctx);
++  const all = JSON.parse((await get(first.port, `/api/history?t=${first.token}`)).body);
++  assert.ok(all.total >= 6);
++  const onlyB = JSON.parse((await get(first.port, `/api/history?project=${ctx.B.id}&t=${first.token}`)).body);
++  assert.ok(onlyB.events.length > 0 && onlyB.events.every(e => e.projectId === ctx.B.id), 'filtered by project');
++  const stages = JSON.parse((await get(first.port, `/api/history?kind=stage&t=${first.token}`)).body);
++  assert.ok(stages.events.every(e => e.kind === 'stage'));
++  assert.equal(JSON.parse((await get(first.port, `/api/history?q=run-old&t=${first.token}`)).body).events.every(e => /run-old/.test(`${e.title} ${e.run}`)), true);
++  const csv = await get(first.port, `/history.csv?kind=stage&t=${first.token}`);
++  assert.match(csv.headers['content-type'], /text\/csv/);
++  assert.match(csv.headers['content-disposition'], /attachment/);
++  assert.match(csv.body, /^at,project,kind,title,ref,run,usd,url\n/);
++  assert.match(csv.body, /Stage S1 done/);
++  // restart: a new server over the same files shows the same history
++  await first.server.close(); await first.api.close();
++  const second = await boardServer(t, ctx);
++  const again = JSON.parse((await get(second.port, `/api/history?t=${second.token}`)).body);
++  assert.equal(again.total, all.total, 'nothing lost, nothing doubled by the restart');
++});
++
++test('the board server never reads outside the registered projects: an id it does not know opens nothing, and projects.json cannot be used to read other files', async t => {
++  const ctx = await twoProjects(t);
++  const { port, token } = await boardServer(t, ctx);
++  const outside = path.join(ctx.home, 'outside'); await fs.mkdir(path.join(outside, '.swarm/runs/r9'), { recursive: true });
++  await fs.writeFile(path.join(outside, '.swarm/runs/r9/state.json'), JSON.stringify({ id: 'r9', status: 'running', jobs: [] }));
++  assert.equal((await get(port, `/open/run?id=${projectId(outside)}&run=r9&t=${token}`)).status, 404);
++  assert.equal((await get(port, `/api/project?id=${projectId(outside)}&t=${token}`)).status, 404);
++});
++
++test('a swarm command in a folder lists it as a project (only when the file is chosen for a scratch folder); help and version do not; swarm projects add / remove', async t => {
++  const home = await tmp(t);
++  const root = path.join(home, 'app'); await fs.mkdir(root);
++  const env = { ...process.env, SWARM_PROJECTS_FILE: path.join(home, 'projects.json'), SWARM_HISTORY_FILE: path.join(home, 'h.ndjson'), SWARM_CONFIG: path.join(home, 'none.json') };
++  const run = (...args) => execFileP(process.execPath, ['tools/swarm.mjs', '--root', root, ...args], { env }).then(r => r.stdout, e => e.stdout ?? '');
++  await run('--help');
++  await run('version');
++  assert.deepEqual(await listProjects({ file: env.SWARM_PROJECTS_FILE }), []);
++  await run('tickets');
++  const listed = await listProjects({ file: env.SWARM_PROJECTS_FILE });
++  assert.equal(listed.length, 1);
++  assert.equal(listed[0].name, 'app');
++  assert.match((await readHistory({ file: env.SWARM_HISTORY_FILE })).events[0].title, /Project app registered/);
++  assert.match(await run('projects'), new RegExp(listed[0].id));
++  assert.match(await run('projects', 'remove', listed[0].id), /removed/);
++  assert.match(await run('projects', 'add', root), /added: app/);
++});
++
++test('a finished run writes its history by itself (run and spend), once', async t => {
++  const { runManifest } = await import('../tools/swarm.mjs');
++  const home = await tmp(t);
++  const root = path.join(home, 'repo'); await fs.mkdir(root);
++  await fs.writeFile(path.join(root, 'input.txt'), 'x\n'); await fs.writeFile(path.join(root, '.gitignore'), '.swarm/\n');
++  const exec = (...a) => execFileP('git', ['-C', root, '-c', 'user.name=T', '-c', 'user.email=t@e.i', ...a]);
++  await execFileP('git', ['init', '-q', root]); await exec('add', '.'); await exec('commit', '-qm', 'i');
++  await fs.writeFile(path.join(home, 'config.json'), '{}');
++  const file = path.join(home, 'h.ndjson');
++  const before = process.env.SWARM_HISTORY_FILE;
++  process.env.SWARM_HISTORY_FILE = file;
++  t.after(() => { if (before === undefined) delete process.env.SWARM_HISTORY_FILE; else process.env.SWARM_HISTORY_FILE = before; });
++  const state = await runManifest(root, { version: 1, concurrency: 1, jobs: [{ id: 'j', agent: 'ollama', model: 'm', prompt: 'Write out/0.txt', context: ['input.txt'], outputs: ['out/0.txt'], timeoutMs: 5000 }] }, { root, env: { ...process.env, SWARM_CONFIG: path.join(home, 'config.json'), SWARM_SPEND_DIR: path.join(home, 'spend') }, liveDir: path.join(home, 'live'), fetchImpl: async () => new Response(JSON.stringify({ done: true, done_reason: 'stop', usage: { prompt_tokens: 6, completion_tokens: 4, total_tokens: 10 }, message: { content: JSON.stringify({ summary: 'done', files: [{ path: 'out/0.txt', content: 'x' }] }) } }), { headers: { 'content-type': 'application/json' } }) });
++  assert.equal(state.status, 'complete');
++  for (let i = 0; i < 50; i += 1) { if ((await readHistory({ file })).total) break; await new Promise(r => setTimeout(r, 50)); }
++  const events = (await readHistory({ file })).events;
++  assert.equal(events.filter(e => e.kind === 'run').length, 1);
++  assert.match(events[0].title, new RegExp(`Run ${state.id}: complete, 1/1 jobs`));
++});
++
++test('review fixes: a damaged project list is never overwritten, one entry per folder with a matching id, scratch places are skipped', async t => {
++  const home = await tmp(t);
++  const file = path.join(home, 'projects.json');
++  const env = { SWARM_PROJECTS_FILE: file };
++  const root = path.join(home, 'app'); await fs.mkdir(root);
++  const real = await fs.realpath(root);
++  await fs.writeFile(file, '{ this is not json');
++  await assert.rejects(registerProject(root, { file, env }), /projects-unreadable/);
++  assert.equal(await fs.readFile(file, 'utf8'), '{ this is not json', 'the damaged file is left as it was');
++  await fs.writeFile(file, JSON.stringify({ version: 1, projects: [{ id: 'wrong', root: real, name: 'a' }, { id: projectId(real), root: real, name: 'a' }, { id: projectId(real), root: real, name: 'dup' }, { id: 'x', root: 'relative/path', name: 'r' }] }));
++  const list = await listProjects({ file });
++  assert.deepEqual(list.map(p => p.name), ['a'], 'a wrong id, a duplicate and a relative path are dropped');
++  for (const scratch of ['/tmp/some-project', '/private/tmp/some-project']) assert.equal(await registerProject(scratch, { file, env: {} }), null, scratch);
++  const worker = path.join(home, 'app', '.swarm', 'workspaces', 'r1'); await fs.mkdir(worker, { recursive: true });
++  assert.equal(await registerProject(worker, { file, env: {} }), null, 'a worker copy inside .swarm is not a project');
++});
++
++test('review fixes: history dedupes a key written twice by two processes, restarts a torn line, ignores hostile fields on read', async t => {
++  const home = await tmp(t);
++  const file = path.join(home, 'h.ndjson');
++  const line = e => `${JSON.stringify(e)}\n`;
++  const ev = (key, extra = {}) => ({ at: iso(NOW), project: 'p', projectId: 'pid', kind: 'spend', key, title: 'Spent', usd: 1, ...extra });
++  await fs.writeFile(file, line(ev('spend:1')) + line(ev('spend:1')) + JSON.stringify(ev('torn')).slice(0, 20));
++  const first = await readHistory({ file });
++  assert.equal(first.total, 1, 'the same key twice counts once');
++  await appendHistory([ev('after-torn')], { file });
++  assert.equal((await readHistory({ file })).total, 2, 'the new event is not swallowed by the torn line');
++  await fs.appendFile(file, line({ ...ev('hostile'), url: 'javascript:alert(1)', usd: 'lots', at: 'not a date', title: '\u001b[31mred\u001b[0m' }));
++  const hostile = (await readHistory({ file })).events.find(e => e.key === 'hostile');
++  assert.equal(hostile.url, null);
++  assert.equal(hostile.usd, null);
++  assert.doesNotMatch(hostile.title, /\u001b/);
++  assert.ok(Number.isFinite(Date.parse(hostile.at)));
++  const before = (await readHistory({ file })).total;
++  await fs.appendFile(file, line(ev('late')));
++  assert.equal((await readHistory({ file })).total, before + 1, 'a change to the file is seen (the parsed copy is re-read only when the file changed)');
++});
++
++test('review fixes: a live run through a symlinked folder still belongs to its project; a symlinked run folder is not read; windows count what is billed', async t => {
++  const { A } = await twoProjects(t);
++  const link = path.join(path.dirname(A.root), 'link-to-parts');
++  await fs.symlink(A.root, link);
++  const snap = await boardSnapshot({ projects: [A], liveRuns: [{ runId: 'run-a1', root: link }], now: NOW, summary: async () => ({}) });
++  assert.equal(snap.projects[0].agents.total, 2, 'matched by the real folder');
++  const outside = path.join(path.dirname(A.root), 'elsewhere'); await fs.mkdir(path.join(outside, 'x'), { recursive: true });
++  await fs.writeFile(path.join(outside, 'x', 'state.json'), JSON.stringify({ id: 'sym', status: 'running', jobs: [{ id: 'z', agent: 'codex', status: 'running' }] }));
++  await fs.symlink(path.join(outside, 'x'), path.join(A.root, '.swarm/runs/sym'));
++  const detail = await projectDetail(A, { now: NOW });
++  assert.ok(!detail.runs.some(r => r.runId === 'sym'), 'a run folder that is a link is skipped');
++  // today and 7 days = billed lanes only (the Claude subscription job is a list value, never billed)
++  const cost = costOf([{ id: 'r', state: { jobs: [job('f', 'claude', 'opus', 9, NOW - 1000), job('p', 'anthropic', 'claude-haiku-5-5', 1, NOW - 1000)] } }], NOW);
++  assert.deepEqual([cost.todayUsd, cost.weekUsd, cost.allUsd, cost.flatRateListUsd], [1, 1, 10, 9]);
++});
++
++test('review fixes: two clicks on one run start one server, and no more than six stay open (the oldest is closed)', async t => {
++  const ctx = await twoProjects(t);
++  const env = { SWARM_PROJECTS_FILE: path.join(ctx.home, 'projects.json'), SWARM_HISTORY_FILE: path.join(ctx.home, 'h.ndjson') };
++  await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({ version: 1, projects: [ctx.A, ctx.B] }));
++  for (let n = 0; n < 8; n += 1) { await fs.mkdir(path.join(ctx.A.root, '.swarm/runs', `many-${n}`), { recursive: true }); await fs.writeFile(path.join(ctx.A.root, '.swarm/runs', `many-${n}`, 'state.json'), JSON.stringify({ id: `many-${n}`, status: 'complete', jobs: [] })); }
++  const idles = [];
++  const api = createBoardApi({ env, now: () => NOW, live: async () => [], runServer: (root, runId, extra) => { idles.push(extra?.idleMs); return makeRunServer(root, runId, extra); } });
++  t.after(() => api.close());
++  const [one, two] = await Promise.all([api.openRun(ctx.A.id, 'many-0'), api.openRun(ctx.A.id, 'many-0')]);
++  assert.equal(one, two);
++  assert.equal(idles.length, 1, 'one server for two simultaneous clicks');
++  assert.ok(idles[0] <= 10 * 60 * 1000, 'a board-started server idles out sooner');
++  for (let n = 1; n < 8; n += 1) await api.openRun(ctx.A.id, `many-${n}`);
++  assert.equal(api.watcherCount(), 6);
++});
+diff --git a/tools/board-commands.mjs b/tools/board-commands.mjs
+new file mode 100644
+index 0000000..3477c2d
+--- /dev/null
++++ b/tools/board-commands.mjs
+@@ -0,0 +1,56 @@
++// SPDX-License-Identifier: Apache-2.0
++// swarm projects [list | add PATH | remove ID]     swarm history [filters] [--csv] [--backfill]
++import fs from 'node:fs/promises';
++import { listProjects, registerProject, removeProject, projectsFile } from './projects.mjs';
++import { readHistory, historyCsv, appendHistory, historyFile } from './history.mjs';
++import { historyEventsOf } from './board-data.mjs';
++import { sanitizeWorkerText } from './worker-text.mjs';
++const safe = v => sanitizeWorkerText(v ?? '', 240);
++
++export const BOARD_USAGE = 'Usage: swarm projects [list | add PATH | remove ID]\n       swarm history [--project NAME] [--kind project|stage|run|pr|merge|lesson|spend] [--q TEXT] [--from DATE] [--to DATE] [--limit N] [--csv] [--backfill]\n';
++const out = (stdout, exitCode = 0) => ({ stdout: stdout.endsWith('\n') ? stdout : `${stdout}\n`, exitCode });
++
++// Adds the history of what is already on disk (runs, spend, stages, lessons) for every listed project. Safe to run again: events carry keys.
++export async function backfillHistory({ env = process.env } = {}) {
++  let added = 0;
++  for (const project of await listProjects({ file: projectsFile(env) })) {
++    const result = await appendHistory(await historyEventsOf(project), { file: historyFile(env) });
++    added += result.added;
++  }
++  return added;
++}
++
++export async function runBoardCommand(root, command, args, { env = process.env } = {}) {
++  if (command === 'projects') {
++    const [verb = 'list', ...rest] = args;
++    const file = projectsFile(env);
++    if (verb === 'list') {
++      const projects = await listProjects({ file });
++      return out(projects.length ? projects.map(p => `${p.id}  ${safe(p.name)}  ${safe(p.root)}  last seen ${safe(p.lastSeen)}`).join('\n') : 'No projects yet. Run a swarm command inside one, or swarm projects add PATH.');
++    }
++    if (verb === 'add') {
++      if (rest.length !== 1) return out(`add needs one folder\n${BOARD_USAGE}`, 2);
++      const real = await fs.realpath(rest[0]).catch(() => null);
++      if (!real) return out(`no such folder: ${rest[0]}`, 1);
++      const result = await registerProject(real, { file, env: { ...env, SWARM_PROJECTS_FILE: file } });
++      return result ? out(`${result.added ? 'added' : 'already listed'}: ${result.project.name} (${result.project.id})`) : out('that is not a folder', 1);
++    }
++    if (verb === 'remove') {
++      if (rest.length !== 1) return out(`remove needs a project id\n${BOARD_USAGE}`, 2);
++      return (await removeProject(rest[0], { file })) ? out(`removed ${rest[0]} from the list (its files and its history are untouched)`) : out(`no project ${rest[0]}`, 1);
++    }
++    return out(`Unknown projects command: ${verb}\n${BOARD_USAGE}`, 2);
++  }
++  const query = {}; let csv = false, backfill = false;
++  for (let i = 0; i < args.length; i += 1) {
++    const flag = args[i];
++    if (flag === '--csv') csv = true;
++    else if (flag === '--backfill') backfill = true;
++    else if (['--project', '--kind', '--q', '--from', '--to', '--limit'].includes(flag) && args[i + 1] !== undefined) query[flag.slice(2)] = args[++i];
++    else return out(`Unknown argument: ${flag}\n${BOARD_USAGE}`, 2);
++  }
++  if (backfill) { const added = await backfillHistory({ env }); if (!csv && !Object.keys(query).length) return out(`history backfilled: ${added} new event(s)`); }
++  const { total, events } = await readHistory({ file: historyFile(env), ...query, limit: csv ? 1e6 : Number(query.limit) || 50, cap: csv ? 1e6 : 1000 });
++  if (csv) return out(historyCsv(events).trimEnd());
++  return out(events.length ? [...events.map(e => `${e.at}  ${safe(e.project)}  ${e.kind}  ${safe(e.title)}${typeof e.usd === 'number' ? `  $${e.usd.toFixed(2)}` : ''}`), `${events.length} of ${total} event(s)`].join('\n') : 'No history yet. swarm history --backfill adds what is already on disk.');
++}
+diff --git a/tools/board-data.mjs b/tools/board-data.mjs
+new file mode 100644
+index 0000000..41c36c2
+--- /dev/null
++++ b/tools/board-data.mjs
+@@ -0,0 +1,196 @@
++// SPDX-License-Identifier: Apache-2.0
++// What the Swarm Watch board shows: one lane per registered project, with machine-wide totals above them.
++// Everything is read from the project's own folder (its run states, ticket ledger, lessons) and nothing is ever mixed across projects:
++// each function takes ONE project and reads only under its root. The machine-wide numbers are sums of the per-project numbers.
++import fs from 'node:fs/promises';
++import path from 'node:path';
++import { runTotals, jobSpend } from './spend.mjs';
++import { readLedger } from './tickets.mjs';
++import { projectSummary } from './project-spend.mjs';
++import { listLessons } from './lesson-store.mjs';
++import { sanitizeWorkerText } from './worker-text.mjs';
++
++const DAY = 86400000;
++const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   // subscription lanes: not billed per use
++const ESTIMATED = new Set(['estimated-from-tokens', 'reservation']);
++const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
++const txt = (v, n = 160) => (v === null || v === undefined ? null : sanitizeWorkerText(v, n));
++const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
++
++// The name the board uses for a worker: Haiku, Sonnet, Opus, Codex, Cursor, GPU (our own or rented GPUs and local models).
++export function laneLabel(agent, model) {
++  const m = String(model ?? '').toLowerCase();
++  if (['anthropic', 'claude'].includes(agent)) return m.includes('haiku') ? 'Haiku' : m.includes('sonnet') ? 'Sonnet' : m.includes('opus') ? 'Opus' : 'Claude';
++  if (agent === 'codex') return 'Codex';
++  if (agent === 'cursor') return 'Cursor';
++  if (['rented', 'ollama', 'lambda'].includes(agent)) return 'GPU';
++  return agent ? String(agent).slice(0, 20) : 'other';
++}
++
++// Parsed run states are remembered by path, size and modification time: a poll costs one stat per run, and a run that finished is read once.
++const stateCache = new Map();
++async function readRunStates(root, { limit = 5000 } = {}) {
++  const dir = path.join(root, '.swarm', 'runs');
++  let ids = [];
++  try { ids = (await fs.readdir(dir)).filter(id => RUN_ID.test(id)).sort().slice(-limit); } catch { return []; }
++  const runs = [];
++  for (const id of ids) {
++    try {
++      const folder = await fs.lstat(path.join(dir, id));
++      if (folder.isSymbolicLink() || !folder.isDirectory()) continue;
++      const file = path.join(dir, id, 'state.json');
++      const stat = await fs.stat(file);
++      let hit = stateCache.get(file);
++      if (!hit || hit.size !== stat.size || hit.mtimeMs !== stat.mtimeMs) {
++        const state = JSON.parse(await fs.readFile(file, 'utf8'));
++        hit = { size: stat.size, mtimeMs: stat.mtimeMs, state: state && typeof state === 'object' && !Array.isArray(state) && (state.jobs === undefined || Array.isArray(state.jobs)) ? state : null };
++        if (stateCache.size > 20000) stateCache.clear();
++        stateCache.set(file, hit);
++      }
++      if (hit.state) runs.push({ id, state: hit.state, mtimeMs: stat.mtimeMs });
++    } catch { /* an unreadable run is not counted here; projectSummary reports it */ }
++  }
++  return runs;
++}
++
++const stageNumber = stage => { const m = /^S(\d+)$/.exec(String(stage ?? '')); return m ? Number(m[1]) : null; };
++
++// Money for one project: the total is exactly what runTotals gives for every run (the number the project cap uses); today and the last 7 days
++// split the same jobs by when they finished (a rental's dollars go to the day its run finished). `paid` lanes bill per use; flat-rate lanes
++// (Codex, Cursor, Claude subscription) show their list-price value only, they cost nothing extra.
++export function costOf(runs, now = Date.now()) {
++  const startOfDay = new Date(now); startOfDay.setUTCHours(0, 0, 0, 0);
++  const out = { allUsd: 0, todayUsd: 0, weekUsd: 0, paidUsd: 0, paidEstimatedUsd: 0, flatRateListUsd: 0, flatRateJobs: 0 };
++  for (const { state } of runs) {
++    out.allUsd += runTotals(state).usd;
++    const rentalUsd = num(state.rental?.usd);
++    const runDay = Date.parse(state.finishedAt ?? state.startedAt ?? '');
++    // Today and the last 7 days count what is BILLED (per-use lanes and rented GPUs); flat-rate lanes show only in the all-time list value.
++    const add = (usd, at) => { if (at >= startOfDay.getTime()) out.todayUsd += usd; if (at >= now - 7 * DAY) out.weekUsd += usd; };
++    if (rentalUsd) { out.paidUsd += rentalUsd; if (Number.isFinite(runDay)) add(rentalUsd, runDay); }
++    for (const job of state.jobs ?? []) {
++      const usd = num(jobSpend(job).usd);
++      if (!usd) { if (FLAT_RATE.has(job.agent) && job.status === 'complete') out.flatRateJobs += 1; continue; }
++      const at = Date.parse(job.finishedAt ?? '') || runDay;
++      if (FLAT_RATE.has(job.agent)) { out.flatRateListUsd += usd; out.flatRateJobs += 1; }
++      else { out.paidUsd += usd; if (ESTIMATED.has(job.costSource)) out.paidEstimatedUsd += usd; if (Number.isFinite(at)) add(usd, at); }
++    }
++  }
++  for (const key of Object.keys(out)) if (key.endsWith('Usd')) out[key] = Math.round(out[key] * 1e6) / 1e6;
++  return out;
++}
++
++// The workers running right now in the runs that are really alive (their process exists), by lane label.
++export function agentsOf(runs, liveIds) {
++  const byLane = {};
++  const jobs = { running: 0, queued: 0, blocked: 0 };
++  for (const { id, state } of runs) {
++    if (!liveIds.has(id)) continue;
++    for (const job of state.jobs ?? []) {
++      if (job.status === 'running') { const label = laneLabel(job.agent, job.model); byLane[label] = (byLane[label] ?? 0) + 1; jobs.running += 1; }
++      else if (job.status === 'queued') jobs.queued += 1;
++      else if (job.status === 'held' || job.status === 'blocked') jobs.blocked += 1;
++    }
++  }
++  return { total: jobs.running, byLane, jobs };
++}
++
++export function ticketsOf(ledger) {
++  const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object');
++  const byStatus = {};
++  for (const t of tickets) byStatus[t.status] = (byStatus[t.status] ?? 0) + 1;
++  const open = tickets.filter(t => ['todo', 'ready', 'running', 'review', 'blocked'].includes(t.status));
++  const stages = open.map(t => stageNumber(t.stage)).filter(n => n > 0);
++  const stage = !tickets.length ? null : stages.length ? `S${Math.min(...stages)}` : (tickets.some(t => stageNumber(t.stage) > 0) ? 'done' : null);
++  return { total: tickets.filter(t => !['cancelled', 'proposed'].includes(t.status)).length, open: open.length, blocked: byStatus.blocked ?? 0, proposed: byStatus.proposed ?? 0, byStatus, stage };
++}
++
++// One project's lane on the board. `liveRuns` are the alive runs of THIS project only.
++export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary } = {}) {
++  const runs = await readRunStates(project.root);
++  const liveIds = new Set(liveRuns.map(r => r.runId));
++  const ledger = await readLedger(project.root).catch(() => null);
++  const spend = await summary(project.root).catch(error => ({ spendUsd: null, capUsd: null, capError: String(error.message).slice(0, 120) }));
++  const cost = costOf(runs, now);
++  const agents = agentsOf(runs, liveIds);
++  const lastRun = runs.length ? runs[runs.length - 1].state : null;
++  const lastActivityMs = Math.max(0, ...runs.map(r => r.mtimeMs), Date.parse(ledger?.updatedAt ?? '') || 0);
++  const tickets = ticketsOf(ledger);
++  return {
++    id: project.id, name: txt(project.name, 80), root: project.root,
++    stage: tickets.stage, tickets,
++    live: liveRuns.map(r => { const hit = runs.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
++    agents, cost,
++    spend: { usd: cost.allUsd, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached) },
++    lastRunAt: lastRun?.startedAt ?? null,
++    lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
++    idle: liveRuns.length === 0,
++  };
++}
++
++// The whole board: machine totals (sums of the project numbers) and one overview per registered project.
++export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary } = {}) {
++  const overviews = [];
++  // A live run belongs to the project whose real root it ran in, however the path was spelled.
++  const live = await Promise.all(liveRuns.map(async r => ({ ...r, root: await fs.realpath(r.root).catch(() => r.root) })));
++  for (const project of projects) {
++    const mine = live.filter(r => r.root === project.root);
++    overviews.push(await projectOverview(project, mine, { now, summary }));
++  }
++  const machine = { agents: { total: 0, byLane: {}, byProject: {} }, cost: { todayUsd: 0, weekUsd: 0, allUsd: 0, paidUsd: 0, paidEstimatedUsd: 0, flatRateListUsd: 0, byProject: {} }, liveRuns: 0 };
++  for (const o of overviews) {
++    machine.agents.total += o.agents.total;
++    machine.agents.byProject[o.id] = o.agents.total;
++    for (const [lane, n] of Object.entries(o.agents.byLane)) machine.agents.byLane[lane] = (machine.agents.byLane[lane] ?? 0) + n;
++    for (const key of ['todayUsd', 'weekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] += o.cost[key];
++    machine.cost.byProject[o.id] = { name: o.name, ...o.cost };
++    machine.liveRuns += o.live.length;
++  }
++  for (const key of ['todayUsd', 'weekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] = Math.round(machine.cost[key] * 1e6) / 1e6;
++  return { at: new Date(now).toISOString(), machine, projects: overviews };
++}
++
++// One project's page: its tickets by status, its run history, its spend by lane and its lessons. Reads only under project.root.
++export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set() } = {}) {
++  const runs = await readRunStates(project.root, { limit: 200 });
++  const ledger = await readLedger(project.root).catch(() => null);
++  const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 1000).map(t => ({ id: txt(t.id, 20), title: txt(t.title, 140), status: txt(t.status, 20), stage: txt(t.stage, 10), risk: txt(t.risk, 10) }));
++  const byLane = {};
++  for (const { state } of runs) for (const job of state.jobs ?? []) { const usd = num(jobSpend(job).usd); if (!usd) continue; const label = laneLabel(job.agent, job.model); byLane[label] = Math.round(((byLane[label] ?? 0) + usd) * 1e6) / 1e6; }
++  const lessons = await listLessons(project.root).then(r => r.lessons.slice(0, 200).map(l => ({ id: txt(l.id, 40), what: txt(l.what ?? l.title ?? l.rule, 200), stage: txt(l.stage, 20), status: txt(l.guard?.status ?? l.status, 20) })), () => []);
++  return {
++    id: project.id, name: txt(project.name, 80), root: project.root,
++    tickets, ticketCounts: ticketsOf(ledger),
++    runs: runs.slice().reverse().map(({ id, state }) => {
++      const jobs = state.jobs ?? [];
++      return { runId: id, status: txt(state.status, 30), live: liveRunIds.has(id), startedAt: state.startedAt ?? null, finishedAt: state.finishedAt ?? null, jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length, failed: jobs.filter(j => ['failed', 'timeout'].includes(j.status)).length, costUsd: Math.round(runTotals(state).usd * 1e6) / 1e6 };
++    }),
++    spend: { ...costOf(runs, now), byLane },
++    lessons,
++  };
++}
++
++// Backfill for the history log from what is on disk (runs, spend, lessons, stages): events carry keys, so running it again adds nothing new.
++export async function historyEventsOf(project) {
++  const events = [];
++  const base = { project: project.name, projectId: project.id };
++  events.push({ ...base, kind: 'project', key: `project:${project.id}`, at: project.addedAt, title: `Project ${project.name} registered` });
++  const runs = await readRunStates(project.root, { limit: 1000 });
++  for (const { id, state } of runs) {
++    // A run that is still going is written by its own finish hook, with its final status and spend: backfilling it now would lock in a half-written entry.
++    if (!['complete', 'failed', 'cancelled'].includes(state.status)) continue;
++    const jobs = state.jobs ?? [];
++    events.push({ ...base, kind: 'run', key: `run:${project.id}:${id}`, at: state.startedAt, run: id, ref: id, title: `Run ${id}: ${state.status ?? 'unknown'}, ${jobs.filter(j => j.status === 'complete').length}/${jobs.length} jobs` });
++    const usd = runTotals(state).usd;
++    if (usd > 0) events.push({ ...base, kind: 'spend', key: `spend:${project.id}:${id}`, at: state.finishedAt ?? state.startedAt, run: id, usd, title: `Run ${id} spent $${usd.toFixed(2)}` });
++  }
++  const ledger = await readLedger(project.root).catch(() => null);
++  const live = (ledger?.tickets ?? []).filter(t => !['cancelled', 'proposed'].includes(t.status));
++  for (const stage of [...new Set(live.map(t => t.stage).filter(s => stageNumber(s) > 0))]) {
++    const mine = live.filter(t => t.stage === stage);
++    if (mine.every(t => t.status === 'done')) events.push({ ...base, kind: 'stage', key: `stage:${project.id}:${stage}`, at: ledger.updatedAt, ref: stage, title: `Stage ${stage} done (${mine.length} tickets)` });
++  }
++  const { lessons } = await listLessons(project.root).catch(() => ({ lessons: [] }));
++  for (const l of lessons) events.push({ ...base, kind: 'lesson', key: `lesson:${project.id}:${l.id}`, at: l.date ?? l.at ?? project.addedAt, ref: String(l.id), title: `Lesson ${l.id}: ${l.what ?? l.title ?? l.rule ?? ''}` });
++  return events.filter(e => e.at);
++}
+diff --git a/tools/completion.mjs b/tools/completion.mjs
+index 8129449..d883e6a 100644
+--- a/tools/completion.mjs
++++ b/tools/completion.mjs
+@@ -54,6 +54,8 @@ export const COMMANDS = [
+   command('stop', 'Panic button: swarm stop --all cancels runs, stops autopilot and ends a rented GPU session.', 'none', '--all --status --clear --reason'),
+   command('backup', 'Snapshot swarm state (no secrets): backup, backup list, backup verify ID.', 'none', '--reason --json'),
+   command('restore', 'Restore swarm state from a backup (shows the plan until --yes).', 'none', '--yes'),
++  command('projects', 'The projects on this machine (listed on the Swarm Watch board): list, add, remove.', 'none', ''),
++  command('history', 'The machine-wide history of projects, stages, runs, PRs, merges, lessons and spend: filter, search, CSV.', 'none', '--project --kind --q --from --to --limit --csv --backfill'),
+   command('models', 'Model watch: new open coding models that fit our GPUs and new API versions, into the inbox; compare models from eval runs.', 'none', '--force --json'),
+   command('budgets', 'Speed and accessibility budgets: check a preview with Lighthouse and axe, show status.', 'none', '--url --screens'),
+   command('migrations', 'Check database migrations: down steps, destructive changes, up/down/up round trip.', 'none', '--yes --note'),
+diff --git a/tools/history-hooks.mjs b/tools/history-hooks.mjs
+new file mode 100644
+index 0000000..acbbebd
+--- /dev/null
++++ b/tools/history-hooks.mjs
+@@ -0,0 +1,77 @@
++// SPDX-License-Identifier: Apache-2.0
++// The places where the runner writes to the machine's history log. Always best effort: a failure here never touches the work.
++// Scratch folders (a test's temp dir) write nothing unless the history file was chosen explicitly.
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { appendHistory, historyFile } from './history.mjs';
++import { registerProject, projectId, projectsFile } from './projects.mjs';
++import { runTotals } from './spend.mjs';
++
++const inTmp = async real => {
++  const bases = new Set([path.resolve(os.tmpdir()), await fs.realpath(os.tmpdir()).catch(() => null), '/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp'].filter(Boolean));
++  return [...bases].some(tmp => real === tmp || real.startsWith(tmp + path.sep)) || real.split(path.sep).includes('.swarm');
++};
++
++async function identity(root, env) {
++  let real;
++  try { real = await fs.realpath(root); } catch { return null; }
++  if (!env.SWARM_HISTORY_FILE && await inTmp(real)) return null;
++  return { project: path.basename(real).slice(0, 80), projectId: projectId(real), real };
++}
++
++export async function recordHistory(root, event, { env = process.env } = {}) {
++  try {
++    const who = await identity(root, env);
++    if (!who) return;
++    await appendHistory({ project: who.project, projectId: who.projectId, ...event }, { file: historyFile(env) });
++  } catch { /* history is a record, not part of the work */ }
++}
++
++// swarm commands that mean "this folder is a project": it is listed on the board, and the first time is a history event.
++export async function noteProject(root, { env = process.env } = {}) {
++  try {
++    const result = await registerProject(root, { file: projectsFile(env), env });
++    // The history line follows the same rule as every other history write: nothing for a scratch folder unless the file was chosen.
++    if (result?.added && await identity(root, env)) await appendHistory({ project: result.project.name, projectId: result.project.id, kind: 'project', key: `project:${result.project.id}`, title: `Project ${result.project.name} registered` }, { file: historyFile(env) });
++  } catch { /* never in the way */ }
++}
++
++export async function recordRunHistory(root, state, { env = process.env } = {}) {
++  if (!state || typeof state !== 'object' || !state.id) return;
++  const jobs = state.jobs ?? [];
++  const who = await identity(root, env).catch(() => null);
++  const key = who ? who.projectId : 'x';
++  await recordHistory(root, { kind: 'run', key: `run:${key}:${state.id}`, at: state.finishedAt ?? new Date().toISOString(), run: state.id, ref: state.id, title: `Run ${state.id}: ${state.status ?? 'finished'}, ${jobs.filter(j => j.status === 'complete').length}/${jobs.length} jobs` }, { env });
++  const usd = runTotals(state).usd;
++  if (usd > 0) await recordHistory(root, { kind: 'spend', key: `spend:${key}:${state.id}`, at: state.finishedAt ?? new Date().toISOString(), run: state.id, usd, title: `Run ${state.id} spent $${usd.toFixed(2)}` }, { env });
++}
++
++// A ship or merge result: the PR when there is one, and the merge when it merged.
++export async function recordShipHistory(root, result, { env = process.env } = {}) {
++  if (!result || typeof result !== 'object') return;
++  const pr = result.pr && typeof result.pr === 'object' ? result.pr : null;
++  const number = pr?.number ?? (Number.isInteger(result.pr) ? result.pr : null);
++  const url = typeof pr?.url === 'string' ? pr.url : typeof result.url === 'string' ? result.url : null;
++  const who = await identity(root, env).catch(() => null);
++  const key = who ? who.projectId : 'x';
++  if (number !== null) await recordHistory(root, { kind: 'pr', key: `pr:${key}:${number}`, ref: `#${number}`, run: result.runId ?? null, url, title: `Pull request #${number}${result.repo ? ` on ${result.repo}` : ''}` }, { env });
++  if (result.status === 'merged' && number !== null) await recordHistory(root, { kind: 'merge', key: `merge:${key}:${number}`, ref: `#${number}`, url, title: `Merged #${number}${result.repo ? ` on ${result.repo}` : ''}${(result.mergeSha ?? result.sha) ? ` (${String(result.mergeSha ?? result.sha).slice(0, 8)})` : ''}` }, { env });
++}
++
++// A stage whose tickets are all done (the ledger of the project at `root`), once.
++export async function recordStageHistory(root, ledger, { env = process.env } = {}) {
++  const live = (ledger?.tickets ?? []).filter(t => t && !['cancelled', 'proposed'].includes(t.status) && /^S[1-9]\d*$/.test(String(t.stage)));
++  const who = await identity(root, env).catch(() => null);
++  if (!who) return;
++  for (const stage of [...new Set(live.map(t => t.stage))]) {
++    const mine = live.filter(t => t.stage === stage);
++    if (mine.every(t => t.status === 'done')) await recordHistory(root, { kind: 'stage', key: `stage:${who.projectId}:${stage}`, ref: stage, title: `Stage ${stage} done (${mine.length} tickets)` }, { env });
++  }
++}
++
++export async function recordLessonHistory(root, lesson, { env = process.env } = {}) {
++  const who = await identity(root, env).catch(() => null);
++  if (!who || !lesson?.id) return;
++  await recordHistory(root, { kind: 'lesson', key: `lesson:${who.projectId}:${lesson.id}`, ref: String(lesson.id), title: `Lesson ${lesson.id}: ${lesson.what ?? lesson.rule ?? ''}` }, { env });
++}
+diff --git a/tools/history.mjs b/tools/history.mjs
+new file mode 100644
+index 0000000..1433dc5
+--- /dev/null
++++ b/tools/history.mjs
+@@ -0,0 +1,99 @@
++// SPDX-License-Identifier: Apache-2.0
++// Swarm history: a permanent, append-only log of every project, stage, run, PR, merge, lesson and spend, machine-wide.
++// One JSON line per event in ~/.project-swarm/history/history.ndjson. Nothing is ever rewritten or deleted here; an event with a `key`
++// that is already in the log is not added again, so a backfill can be run any number of times.
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { sanitizeWorkerText } from './worker-text.mjs';
++
++export const HISTORY_KINDS = Object.freeze(['project', 'stage', 'run', 'pr', 'merge', 'lesson', 'spend']);
++export const historyFile = (env = process.env, home = os.homedir()) => env.SWARM_HISTORY_FILE || path.join(home, '.project-swarm', 'history', 'history.ndjson');
++const clean = (v, n = 200) => sanitizeWorkerText(v ?? '', n);
++
++let queue = Promise.resolve();
++const serial = fn => { const run = queue.then(fn, fn); queue = run.catch(() => {}); return run; };
++
++export function normalizeEvent(event, now = Date.now) {
++  if (!event || typeof event !== 'object' || !HISTORY_KINDS.includes(event.kind)) return null;
++  const at = Number.isFinite(Date.parse(event.at)) ? new Date(event.at).toISOString() : new Date(now()).toISOString();
++  const url = typeof event.url === 'string' && /^https:\/\/[A-Za-z0-9.-]+(?:\/[\w./?=&%#~+-]*)?$/.test(event.url) ? event.url.slice(0, 300) : null;
++  return {
++    at, project: clean(event.project, 80), projectId: clean(event.projectId, 20) || null, kind: event.kind,
++    key: event.key ? clean(event.key, 200) : null, title: clean(event.title, 240),
++    ref: event.ref ? clean(event.ref, 120) : null, run: event.run ? clean(event.run, 120) : null,
++    usd: Number.isFinite(event.usd) && event.usd >= 0 ? Math.round(event.usd * 1e6) / 1e6 : null, url,
++  };
++}
++
++// The whole log, parsed once per change of the file (path, size and mtime), every line normalised again on the way in, and a key seen twice kept once
++// (two processes may both have appended it).
++const cache = new Map();
++async function readAll(file) {
++  let stat;
++  try { stat = await fs.stat(file); } catch { return []; }
++  const hit = cache.get(file);
++  if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) return hit.rows;
++  let text = '';
++  try { text = await fs.readFile(file, 'utf8'); } catch { return []; }
++  const seen = new Set();
++  const rows = [];
++  for (const line of text.split('\n')) {
++    if (!line) continue;
++    let e;
++    try { e = JSON.parse(line); } catch { continue; }
++    const row = normalizeEvent(e);
++    if (!row) continue;
++    if (row.key) { if (seen.has(row.key)) continue; seen.add(row.key); }
++    rows.push(row);
++  }
++  cache.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, rows });
++  return rows;
++}
++
++// Appends the events that are new (by key). Returns how many were added. Never throws into the caller's work: failures are returned as { error }.
++export function appendHistory(events, { file = historyFile(), now = Date.now } = {}) {
++  return serial(async () => {
++    try {
++      const list = (Array.isArray(events) ? events : [events]).map(e => normalizeEvent(e, now)).filter(Boolean);
++      if (!list.length) return { added: 0 };
++      const seen = new Set((await readAll(file)).map(e => e.key).filter(Boolean));
++      const fresh = [];
++      for (const e of list) { if (e.key) { if (seen.has(e.key)) continue; seen.add(e.key); } fresh.push(e); }
++      if (!fresh.length) return { added: 0 };
++      await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
++      // A torn last line (a crash mid-write) must not swallow the next event: start on a fresh line.
++      let lead = '';
++      try { const handle = await fs.open(file, 'r'); try { const { size } = await handle.stat(); if (size > 0) { const last = Buffer.alloc(1); await handle.read(last, 0, 1, size - 1); if (last[0] !== 10) lead = '\n'; } } finally { await handle.close(); } } catch { /* a new file */ }
++      await fs.appendFile(file, lead + fresh.map(e => `${JSON.stringify(e)}\n`).join(''), { mode: 0o600 });
++      return { added: fresh.length };
++    } catch (error) { return { added: 0, error: String(error.message).slice(0, 200) }; }
++  });
++}
++
++// Newest first. Filters: project (name or id), kind, q (words, all must appear), from / to (dates or ISO times).
++export async function readHistory({ file = historyFile(), project, kind, q, from, to, limit = 200, offset = 0, cap = 1000 } = {}) {
++  const words = String(q ?? '').toLowerCase().split(/\s+/).filter(Boolean);
++  const fromMs = from ? Date.parse(from) : null, toMs = to ? Date.parse(to.length === 10 ? `${to}T23:59:59.999Z` : to) : null;
++  const rows = (await readAll(file)).filter(e => {
++    if (project && e.project !== project && e.projectId !== project) return false;
++    if (kind && e.kind !== kind) return false;
++    const t = Date.parse(e.at);
++    if (fromMs !== null && Number.isFinite(fromMs) && t < fromMs) return false;
++    if (toMs !== null && Number.isFinite(toMs) && t > toMs) return false;
++    if (words.length) { const hay = `${e.project} ${e.kind} ${e.title} ${e.ref ?? ''} ${e.run ?? ''}`.toLowerCase(); if (!words.every(w => hay.includes(w))) return false; }
++    return true;
++  }).sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
++  return { total: rows.length, events: rows.slice(offset, offset + Math.min(Math.max(1, limit), cap)) };
++}
++
++// A cell that starts like a formula is neutralised (spreadsheet injection); quotes and line breaks are escaped.
++const cell = value => {
++  let text = value === null || value === undefined ? '' : String(value);
++  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
++  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
++};
++export function historyCsv(events) {
++  const head = ['at', 'project', 'kind', 'title', 'ref', 'run', 'usd', 'url'];
++  return `${[head.join(','), ...events.map(e => [e.at, e.project, e.kind, e.title, e.ref, e.run, e.usd, e.url].map(cell).join(','))].join('\n')}\n`;
++}
+diff --git a/tools/lessons-commands.mjs b/tools/lessons-commands.mjs
+index 76224c0..515b9ac 100644
+--- a/tools/lessons-commands.mjs
++++ b/tools/lessons-commands.mjs
+@@ -120,6 +120,7 @@ async function lessonsCommand(root, verb, args, { installRoot }) {
+       tags: flags.tag?.length ? flags.tag : [flags.stage], source: { kind: 'manual' },
+     });
+     const file = await writeLesson(root, lesson);
++    await import('./history-hooks.mjs').then(hooks => hooks.recordLessonHistory(root, lesson)).catch(() => {});
+     return out(`wrote ${file}`);
+   }
+   if (verb === 'mine') {
+diff --git a/tools/projects.mjs b/tools/projects.mjs
+new file mode 100644
+index 0000000..389f4cb
+--- /dev/null
++++ b/tools/projects.mjs
+@@ -0,0 +1,83 @@
++// SPDX-License-Identifier: Apache-2.0
++// The machine's list of projects (every folder swarm has worked in), for the Swarm Watch board. One small file in the user's home.
++// A project is identified by the real path of its root; its id is a short hash of that path. Nothing here reads a project's files.
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { createHash, randomBytes } from 'node:crypto';
++
++export const projectsFile = (env = process.env, home = os.homedir()) => env.SWARM_PROJECTS_FILE || path.join(home, '.project-swarm', 'projects.json');
++export const projectId = root => createHash('sha256').update(root).digest('hex').slice(0, 12);
++const isObj = v => typeof v === 'object' && v !== null && !Array.isArray(v);
++
++let queue = Promise.resolve();
++const serial = fn => { const run = queue.then(fn, fn); queue = run.catch(() => {}); return run; };
++
++// One entry per folder, and an entry's id must be the hash of its own root: a hand-edited or doubled entry is dropped, not counted twice.
++const valid = list => {
++  const seen = new Set();
++  return list.filter(p => {
++    if (!isObj(p) || typeof p.root !== 'string' || !path.isAbsolute(p.root) || typeof p.id !== 'string' || p.id !== projectId(p.root) || seen.has(p.root)) return false;
++    seen.add(p.root);
++    return true;
++  });
++};
++
++export async function listProjects({ file = projectsFile() } = {}) {
++  try {
++    const data = JSON.parse(await fs.readFile(file, 'utf8'));
++    return valid(isObj(data) && Array.isArray(data.projects) ? data.projects : []);
++  } catch { return []; }
++}
++
++// For writers: the same list, but a file that exists and cannot be read is an error (never "empty"), so a damaged list is never overwritten.
++async function listForWrite(file) {
++  let text;
++  try { text = await fs.readFile(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
++  let data;
++  try { data = JSON.parse(text); } catch { throw Object.assign(new Error(`projects-unreadable: ${file} is damaged; fix or move it (nothing was written)`), { code: 'projects-unreadable' }); }
++  return valid(isObj(data) && Array.isArray(data.projects) ? data.projects : []);
++}
++
++async function write(file, projects) {
++  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
++  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
++  await fs.writeFile(tmp, `${JSON.stringify({ version: 1, projects }, null, 2)}\n`, { mode: 0o600 });
++  await fs.rename(tmp, file);
++}
++
++// Scratch folders (a test's temp dir) are not projects unless the registry file was chosen explicitly.
++// Scratch places: the temp directory (as the OS and as /private/tmp), and anything inside a .swarm folder (worker copies, worktrees).
++const inTmp = async real => {
++  const bases = new Set([path.resolve(os.tmpdir()), await fs.realpath(os.tmpdir()).catch(() => null), '/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp'].filter(Boolean));
++  return [...bases].some(tmp => real === tmp || real.startsWith(tmp + path.sep)) || real.split(path.sep).includes('.swarm');
++};
++
++// Adds the project (or refreshes its lastSeen). Returns { project, added } or null when the folder is not a project to list.
++export function registerProject(root, { file = projectsFile(), env = process.env, now = Date.now, name } = {}) {
++  return serial(async () => {
++    let real;
++    try { real = await fs.realpath(root); } catch { return null; }
++    if (!(await fs.stat(real).then(s => s.isDirectory(), () => false))) return null;
++    if (!env.SWARM_PROJECTS_FILE && await inTmp(real)) return null;
++    const projects = await listForWrite(file);
++    const id = projectId(real);
++    const at = new Date(now()).toISOString();
++    const known = projects.find(p => p.id === id);
++    if (known) { if (Date.parse(known.lastSeen) > now() - 60000) return { project: known, added: false }; known.lastSeen = at; await write(file, projects); return { project: known, added: false }; }
++    const project = { id, root: real, name: String(name ?? path.basename(real)).replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 80) || id, addedAt: at, lastSeen: at };
++    projects.push(project);
++    await write(file, projects);
++    return { project, added: true };
++  });
++}
++
++export function removeProject(id, { file = projectsFile() } = {}) {
++  return serial(async () => {
++    const projects = await listForWrite(file);
++    const left = projects.filter(p => p.id !== id);
++    if (left.length === projects.length) return false;
++    await write(file, left);
++    return true;
++  });
++}
+diff --git a/tools/scope-commands.mjs b/tools/scope-commands.mjs
+index 7c84c13..923accc 100644
+--- a/tools/scope-commands.mjs
++++ b/tools/scope-commands.mjs
+@@ -1348,6 +1348,7 @@ async function cmdSync(root, { rest, flags }) {
+       reviewLine = `${needReview.length} ticket(s) stay in review until an Opus security review passes: ${needReview.map(x => `${x.ticket.id} (${x.reason}${x.ticket.securityReview?.state === 'blocked' ? '; review-blocked: the last review gave no result' : ''})`).join('; ')}. Run: swarm run ${file}; then swarm scope security-review <that run id>; then swarm scope sync ${rest[0]} --integrated`;
+     }
+     await refreshPlan(root);
++    if (done.length) await import('./history-hooks.mjs').then(async hooks => hooks.recordStageHistory(root, await readLedger(root))).catch(() => {});
+     return out([`${done.length} ticket(s) marked done`,
+       ...(notUnmet.length ? [`--accept-unmet: ${notUnmet.join(', ')} had no unmet line to accept (not in this run, not done, no lines unmet, or a failing line, which is never overridden)`] : []),
+       ...(notAccepted.length ? [`--accept-unreviewed: ${notAccepted.join(', ')} did not skip a review (not in this run, not done, no review needed, a review already passed, or a failing review on this code: that one is never overridden)`] : []),
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index 1b304b5..5dba309 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -2676,7 +2676,10 @@ async function runManifestMain(root, manifest, options = {}) {
+   }
+   await registerLiveRun({ runId: id, root, outputs: declaredOutputs, dir: liveDirOpt });
+   try {
+-    return await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept, acceptedRedBaseInfo, pendingBaseChecks, sync, scopeWarnings, jobTypeWarnings: appliedTypes.warnings.filter(warning => manifest.jobs.some(job => job.id === warning.jobId)), liveDir: liveDirOpt, maxUsd, maxTokens, now, sleep, resumeState, parentRun, leadJob, hostTransport, heartbeatMs, batchFlag, batchLimits, childOptions: options });
++    const finishedState = await runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl, env, signal, id, onState, progressIntervalMs, platform, workerKey, shellHooks, redBaseAutoAccept, acceptedRedBaseInfo, pendingBaseChecks, sync, scopeWarnings, jobTypeWarnings: appliedTypes.warnings.filter(warning => manifest.jobs.some(job => job.id === warning.jobId)), liveDir: liveDirOpt, maxUsd, maxTokens, now, sleep, resumeState, parentRun, leadJob, hostTransport, heartbeatMs, batchFlag, batchLimits, childOptions: options });
++    // The record is written before the command can exit, but a slow disk never holds the run's result back for more than a moment.
++    await Promise.race([import('./history-hooks.mjs').then(hooks => hooks.recordRunHistory(root, finishedState)).catch(() => {}), new Promise(resolve => setTimeout(resolve, 2000).unref?.())]);
++    return finishedState;
+   } finally {
+     await unregisterLiveRun(id, { dir: liveDirOpt });
+   }
+@@ -7569,7 +7572,7 @@ async function mainInner() {
+     const cut=args.indexOf('--');
+     const flagArgs=(cut===-1?args:args.slice(0,cut));
+     const helpAt=flagArgs.findIndex((a,i)=>i>0&&(a==='--help'||a==='-h')&&!VALUE_FLAGS.has(flagArgs[i-1]));
+-    if(helpAt!==-1&&['go','plan','scope','tickets','change','run','integrate','autopilot','merge','update','cancel','resume','sweep','backlog','ui','gallery','stop','backup','restore','migrations','budgets','models'].includes(args[0]))args.splice(0,args.length,'--help');
++    if(helpAt!==-1&&['go','plan','scope','tickets','change','run','integrate','autopilot','merge','update','cancel','resume','sweep','backlog','ui','gallery','stop','backup','restore','migrations','projects','history','budgets','models'].includes(args[0]))args.splice(0,args.length,'--help');
+   }
+   // Commands that act on the install itself keep the install root even when run from a project folder.
+   if(rootIndex===-1&&INSTALL_COMMANDS.includes(args[0]))root=defaultRoot(ownRoot);
+@@ -7597,6 +7600,18 @@ async function mainInner() {
+     if(res.exitCode)process.exitCode=res.exitCode;
+     return;
+   }
++  // Any swarm command in a folder lists it as a project on the board (not help, not the commands that are about the machine itself).
++  if(args.length&&!['--help','-h','help','version','update','completion','onboard','projects','history','doctor','gpu','stop'].includes(args[0])&&!args.includes('--help')&&!args.includes('-h')){
++    try{const real=await fs.realpath(root);if(real!==await fs.realpath(ownRoot).catch(()=>ownRoot))await(await import('./history-hooks.mjs')).noteProject(real);}catch{/* a folder that does not exist yet is not a project */}
++  }
++  if(args[0]==='projects'||args[0]==='history'){
++    root=await fs.realpath(root);
++    const {runBoardCommand}=await import('./board-commands.mjs');
++    const res=await runBoardCommand(root,args[0],args.slice(1));
++    process.stdout.write(res.stdout);
++    if(res.exitCode)process.exitCode=res.exitCode;
++    return;
++  }
+   if(['stop','backup','restore','migrations'].includes(args[0])){
+     root=await fs.realpath(root);
+     const {runSafetyCommand}=await import('./safety-commands.mjs');
+@@ -7862,6 +7877,7 @@ async function mainInner() {
+     const {runMerge}=await import('./merge-guard.mjs');
+     const res=await runMerge(root,args.slice(1));
+     process.stdout.write(`${JSON.stringify(res)}\n`);
++    if(res.status==='merged')await(await import('./history-hooks.mjs')).recordShipHistory(root,{...res,url:res.repo&&res.pr?`https://github.com/${res.repo}/pull/${res.pr}`:null});
+     if(res.status!=='merged')process.exitCode=1;
+     return;
+   }
+@@ -7931,7 +7947,7 @@ async function mainInner() {
+   // `swarm "goal sentence"` is shorthand for `swarm go "goal sentence"`. Only one argument with
+   // whitespace counts, so a mistyped one-word command never starts a paid run.
+   if(!args[0].startsWith('-')&&/\s/.test(args[0])&&isGoalArgument(args[0]))args.unshift('go');
+-  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] [--skip-skeleton] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | tickets --mark-deps [ID...] [--yes] | change "REASON" [FILE] [--yes] | merge PR [--repo OWNER/NAME] | stop --all|--status|--clear | backup [list|verify ID] [--reason TEXT] | restore ID [--yes] | migrations [check [--yes]|approve FILE [--note TEXT]] | budgets check [--url URL] [--screens a,b] | budgets status | models watch [--force] [--json] | models list | models compare CURRENT CANDIDATE | ui check [SCREEN_ID...] [--base-url URL] [--json] | ui list | watch [RUN] [--all] [--tui] [--open] [--json] | gallery list|approve ID...|comment ID "text" | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
++  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] [--skip-skeleton] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | tickets --mark-deps [ID...] [--yes] | change "REASON" [FILE] [--yes] | merge PR [--repo OWNER/NAME] | stop --all|--status|--clear | backup [list|verify ID] [--reason TEXT] | restore ID [--yes] | migrations [check [--yes]|approve FILE [--note TEXT]] | projects [list|add PATH|remove ID] | history [--project P] [--kind K] [--q TEXT] [--from D] [--to D] [--csv] [--backfill] | budgets check [--url URL] [--screens a,b] | budgets status | models watch [--force] [--json] | models list | models compare CURRENT CANDIDATE | ui check [SCREEN_ID...] [--base-url URL] [--json] | ui list | watch [RUN] [--all] [--tui] [--open] [--json] | gallery list|approve ID...|comment ID "text" | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+   if(args[0]==='lesson'){
+     try{
+       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
+@@ -8748,7 +8764,7 @@ async function mainInner() {
+   }
+   process.stdout.write(`${JSON.stringify(result)}\n`);
+   if(command==='wait'){if(result.status==='running')process.exitCode=2;else if(['failed','cancelled'].includes(result.status))process.exitCode=1;return;}
+-  if(command==='ship'){if(shipExitCode(result.status)!==0)process.exitCode=1;return;}
++  if(command==='ship'){await(await import('./history-hooks.mjs')).recordShipHistory(root,result).catch(()=>{});if(shipExitCode(result.status)!==0)process.exitCode=1;return;}
+   if(command==='go'){if(result.status==='paused')process.exitCode=75;else if(goExitCode(result.status)!==0)process.exitCode=1;return;}
+   if(['run','resume'].includes(command)&&result.status==='paused')process.exitCode=75;
+   if(['failed','cancelled'].includes(result.status)||(command==='integrate'&&result.status==='partial'))process.exitCode=1;
+diff --git a/tools/watch-assets/board.css b/tools/watch-assets/board.css
+index adadd64..d1b7bba 100644
+--- a/tools/watch-assets/board.css
++++ b/tools/watch-assets/board.css
+@@ -1,8 +1,22 @@
+ .board-list{display:grid;gap:10px}
+-.board-run{display:grid;gap:6px;padding:10px 12px;border-radius:12px;border:1px solid rgba(128,128,128,.25)}
+-.board-run .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+-.board-run .mono{overflow-wrap:anywhere}
+-.board-bar{height:6px;border-radius:3px;background:rgba(128,128,128,.25);overflow:hidden}
+-.board-bar>i{display:block;height:100%;background:currentColor;opacity:.7}
++.board-h{margin:0 0 10px;font-size:15px}
+ .board-note{margin:12px 0 0;opacity:.7}
+ .board-empty{padding:18px;text-align:center;opacity:.7}
++.board-totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
++.board-totals .tile{padding:10px 12px;border-radius:12px;border:1px solid rgba(128,128,128,.25)}
++.board-totals .big{font-size:26px;font-weight:700}
++.board-totals .sub{opacity:.75;font-size:12px;overflow-wrap:anywhere}
++.board-lane{border:1px solid rgba(128,128,128,.25);border-radius:12px;padding:0}
++.board-lane>summary{cursor:pointer;padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
++.board-lane .lane-body{padding:6px 12px 12px;display:grid;gap:8px}
++.board-lane .name{font-weight:700}
++.board-run{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border-radius:10px;border:1px solid rgba(128,128,128,.25);text-decoration:none;color:inherit}
++.board-run:hover,.board-entry:hover{background:rgba(128,128,128,.12)}
++.board-bar{height:6px;border-radius:3px;background:rgba(128,128,128,.25);overflow:hidden;min-width:80px;flex:1}
++.board-bar>i{display:block;height:100%;background:currentColor;opacity:.7}
++.board-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
++.board-filters input,.board-filters select{padding:6px 8px;border-radius:8px;border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit}
++.board-entry{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;padding:6px 10px;border-radius:8px;border:1px solid rgba(128,128,128,.2);text-decoration:none;color:inherit}
++.board-entry .when{opacity:.7;font-size:12px}
++.board-entry .kind{font-size:12px;text-transform:uppercase;opacity:.8}
++.board-link{color:inherit;text-decoration:underline}
+diff --git a/tools/watch-assets/board.html b/tools/watch-assets/board.html
+index c0b4fba..add64e9 100644
+--- a/tools/watch-assets/board.html
++++ b/tools/watch-assets/board.html
+@@ -3,20 +3,32 @@
+ <head>
+ <meta charset="utf-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+-<title>Swarm Watch: all runs</title>
++<title>Swarm Watch: all projects</title>
+ <link rel="stylesheet" href="assets/watch.css">
+ <link rel="stylesheet" href="assets/board.css">
+ </head>
+ <body>
+ <div class="wrap">
+   <header class="top hud">
+-    <div class="brand"><div class="logo" aria-hidden="true"><i>SW</i></div><div><h1>Swarm Watch</h1><div class="goal">Every live run on this machine</div></div></div>
++    <div class="brand"><div class="logo" aria-hidden="true"><i>SW</i></div><div><h1>Swarm Watch</h1><div class="goal">Every project on this machine</div></div></div>
+     <div class="spacer"></div>
+-    <div class="chips"><span class="chip mono num" id="count">0 runs</span><span class="chip mono" id="updated">-</span></div>
++    <div class="chips"><span class="chip mono num" id="count">0 projects</span><span class="chip mono" id="updated">-</span></div>
+   </header>
+   <main class="pane">
+-    <section class="card hud"><div id="runs" class="board-list" aria-live="polite"></div>
+-    <p class="board-note">Read-only. Each run has its own page: copy the command for the run you want and run it in a terminal.</p></section>
++    <section class="card hud" id="machine" aria-label="Machine totals"></section>
++    <section class="card hud"><h2 class="board-h">Projects</h2><div id="lanes" class="board-list" aria-live="polite"></div>
++    <p class="board-note">Read-only. Open a project for its tickets, runs, spend and lessons; open a run for its full Watch page.</p></section>
++    <section class="card hud"><h2 class="board-h">History</h2>
++      <form id="filters" class="board-filters" autocomplete="off">
++        <input id="q" type="search" placeholder="Search" aria-label="Search history">
++        <select id="fproject" aria-label="Project"><option value="">All projects</option></select>
++        <select id="fkind" aria-label="Type"><option value="">All types</option><option>project</option><option>stage</option><option>run</option><option>pr</option><option>merge</option><option>lesson</option><option>spend</option></select>
++        <input id="ffrom" type="date" aria-label="From"><input id="fto" type="date" aria-label="To">
++        <a id="csv" class="copy" href="#">Export CSV</a>
++      </form>
++      <div id="history" class="board-list"></div>
++      <div class="board-note" id="historyNote"></div>
++    </section>
+   </main>
+ </div>
+ <script src="assets/board.js"></script>
+diff --git a/tools/watch-assets/board.js b/tools/watch-assets/board.js
+index 554e066..1a2919b 100644
+--- a/tools/watch-assets/board.js
++++ b/tools/watch-assets/board.js
+@@ -2,9 +2,10 @@
+ (function () {
+   'use strict';
+   var TOKEN = new URLSearchParams(location.search).get('t') || '';
+-  var list = document.getElementById('runs');
+-  var count = document.getElementById('count');
+-  var updated = document.getElementById('updated');
++  var T = encodeURIComponent(TOKEN);
++  var $ = function (id) { return document.getElementById(id); };
++  var open = Object.create(null);          // lane open state the person chose, by project id
++  var projects = [];
+ 
+   function el(tag, cls, text) {
+     var n = document.createElement(tag);
+@@ -12,58 +13,140 @@
+     if (text !== undefined) { n.textContent = text; }
+     return n;
+   }
++  function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
++  function ago(iso) {
++    var t = Date.parse(iso);
++    if (!isFinite(t)) { return 'never'; }
++    var m = Math.max(0, Math.round((Date.now() - t) / 60000));
++    return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 2880 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago';
++  }
++  function runHref(projectId, runId) { return '/open/run?id=' + encodeURIComponent(projectId) + '&run=' + encodeURIComponent(runId) + '&t=' + T; }
++  function projectHref(projectId) { return '/project?id=' + encodeURIComponent(projectId) + '&t=' + T; }
++  function link(href, cls, parts) { var a = el('a', cls); a.href = href; parts.forEach(function (p) { a.appendChild(p); }); return a; }
++
++  function tile(title, big, sub) {
++    var t = el('div', 'tile');
++    t.appendChild(el('div', 'label', title));
++    t.appendChild(el('div', 'big num', big));
++    t.appendChild(el('div', 'sub', sub));
++    return t;
++  }
++  function pairs(map, fmt) {
++    var keys = Object.keys(map || {}).filter(function (k) { return map[k]; }).sort();
++    return keys.length ? keys.map(function (k) { return k + ' ' + fmt(map[k]); }).join(', ') : 'none';
++  }
++
++  function renderMachine(m, list) {
++    var names = {};
++    list.forEach(function (p) { names[p.id] = p.name; });
++    var box = $('machine');
++    box.textContent = '';
++    var grid = el('div', 'board-totals');
++    var byProject = {};
++    Object.keys(m.agents.byProject).forEach(function (id) { byProject[names[id] || id] = m.agents.byProject[id]; });
++    grid.appendChild(tile('Live agents', String(m.agents.total), 'by lane: ' + pairs(m.agents.byLane, String) + ' | by project: ' + pairs(byProject, String)));
++    var c = m.cost;
++    grid.appendChild(tile('Spend today', usd(c.todayUsd), 'last 7 days ' + usd(c.weekUsd)));
++    grid.appendChild(tile('Spend, all time', usd(c.allUsd), 'billed per use ' + usd(c.paidUsd) + ' (of which estimated ' + usd(c.paidEstimatedUsd) + ') | flat-rate lanes (Codex, Cursor, Claude subscription), list value only, not billed ' + usd(c.flatRateListUsd)));
++    var per = {};
++    Object.keys(c.byProject).forEach(function (id) { per[c.byProject[id].name || id] = usd(c.byProject[id].allUsd); });
++    grid.appendChild(tile('By project', String(Object.keys(per).length), Object.keys(per).sort().map(function (k) { return k + ' ' + per[k]; }).join(', ') || 'none'));
++    box.appendChild(grid);
++  }
+ 
+-  function copy(text, btn) {
+-    var done = function (msg) { btn.textContent = msg; setTimeout(function () { btn.textContent = 'Copy'; }, 1500); };
+-    if (navigator.clipboard && navigator.clipboard.writeText) {
+-      navigator.clipboard.writeText(text).then(function () { done('Copied'); }, function () { done('Select and copy'); });
+-    } else { done('Select and copy'); }
++  function chip(text, cls) { return el('span', 'pill ' + (cls || 'info'), text); }
++
++  function renderLane(p) {
++    var d = el('details', 'board-lane');
++    d.dataset.id = p.id;
++    d.open = Object.prototype.hasOwnProperty.call(open, p.id) ? open[p.id] : !p.idle;
++    d.addEventListener('toggle', function () { open[p.id] = d.open; });
++    var s = el('summary');
++    s.appendChild(el('span', 'name', p.name));
++    s.appendChild(chip(p.stage ? 'stage ' + p.stage : 'no stage', 'lav'));
++    s.appendChild(chip(p.live.length + ' live run' + (p.live.length === 1 ? '' : 's'), p.live.length ? 'good' : 'info'));
++    s.appendChild(el('span', 'num mono', 'jobs ' + p.agents.jobs.running + ' running, ' + p.agents.jobs.queued + ' queued, ' + p.agents.jobs.blocked + ' blocked'));
++    s.appendChild(el('span', 'num mono', p.tickets.open + ' open ticket' + (p.tickets.open === 1 ? '' : 's') + (p.tickets.blocked ? ', ' + p.tickets.blocked + ' blocked' : '')));
++    var cap = p.spend.capUsd;
++    s.appendChild(el('span', 'num mono', 'spend ' + usd(p.spend.usd) + (cap ? ' of ' + usd(cap) : '')));
++    if (p.spend.noCap) { s.appendChild(chip('NO CAP', 'warn')); }
++    if (p.spend.capInvalid) { s.appendChild(chip('CAP INVALID', 'bad')); }
++    if (p.spend.reached) { s.appendChild(chip('CAP REACHED', 'bad')); }
++    s.appendChild(el('span', 'mono', 'last activity ' + ago(p.lastActivityAt)));
++    d.appendChild(s);
++    var body = el('div', 'lane-body');
++    body.appendChild(link(projectHref(p.id), 'board-link', [el('span', '', 'Open project page: tickets by status, run history, spend, lessons')]));
++    if (!p.live.length) { body.appendChild(el('div', 'board-note', 'No live runs. Last run ' + ago(p.lastRunAt) + '.')); }
++    p.live.forEach(function (r) {
++      var bar = el('div', 'board-bar'); var fill = el('i'); fill.style.width = (r.jobs ? Math.round(100 * r.done / r.jobs) : 0) + '%'; bar.appendChild(fill);
++      body.appendChild(link(runHref(p.id, r.runId), 'board-run', [el('span', 'mono', r.runId), chip(r.status, 'info'), el('span', 'num mono', r.done + '/' + r.jobs + ' jobs'), bar]));
++    });
++    d.appendChild(body);
++    return d;
++  }
++
++  function renderBoard(data) {
++    projects = data.projects;
++    $('count').textContent = projects.length + (projects.length === 1 ? ' project' : ' projects');
++    $('updated').textContent = new Date().toLocaleTimeString();
++    renderMachine(data.machine, projects);
++    var lanes = $('lanes');
++    lanes.textContent = '';
++    if (!projects.length) { lanes.appendChild(el('div', 'board-empty', 'No projects yet. Run a swarm command inside a project, or swarm projects add PATH.')); }
++    projects.slice().sort(function (a, b) { return (b.live.length - a.live.length) || String(b.lastActivityAt).localeCompare(String(a.lastActivityAt)); }).forEach(function (p) { lanes.appendChild(renderLane(p)); });
++    var sel = $('fproject'); var keep = sel.value;
++    if (sel.options.length - 1 !== projects.length) {
++      while (sel.options.length > 1) { sel.remove(1); }
++      projects.forEach(function (p) { var o = el('option', '', p.name); o.value = p.id; sel.appendChild(o); });
++      sel.value = keep;
++    }
+   }
+ 
+-  function shellQuote(value) { return "'" + String(value).replace(/'/g, "'\\''") + "'"; }
++  function query() {
++    var q = new URLSearchParams();
++    [['q', 'q'], ['project', 'fproject'], ['kind', 'fkind'], ['from', 'ffrom'], ['to', 'fto']].forEach(function (pair) { var v = $(pair[1]).value; if (v) { q.set(pair[0], v); } });
++    return q;
++  }
+ 
+-  function card(run) {
+-    var jobs = Array.isArray(run.jobs) ? run.jobs : [];
+-    var done = jobs.filter(function (j) { return j.status === 'complete'; }).length;
+-    var failed = jobs.filter(function (j) { return j.status === 'failed' || j.status === 'timeout'; }).length;
+-    var box = el('div', 'board-run');
+-    var head = el('div', 'row');
+-    head.appendChild(el('span', 'mono', String(run.runId)));
+-    head.appendChild(el('span', 'pill ' + (failed ? 'bad' : run.status === 'running' ? 'info' : 'good'), String(run.status)));
+-    head.appendChild(el('span', 'num mono', done + '/' + jobs.length + ' jobs' + (failed ? ', ' + failed + ' failed' : '')));
+-    box.appendChild(head);
+-    var bar = el('div', 'board-bar');
+-    var fill = el('i');
+-    fill.style.width = (jobs.length ? Math.round(100 * done / jobs.length) : 0) + '%';
+-    bar.appendChild(fill);
+-    box.appendChild(bar);
+-    box.appendChild(el('div', 'mono', String(run.root)));
+-    var command = 'swarm --root ' + shellQuote(run.root) + ' watch ' + shellQuote(run.runId);
+-    var line = el('div', 'row');
+-    line.appendChild(el('span', 'mono', command));
+-    var btn = el('button', 'copy', 'Copy');
+-    btn.type = 'button';
+-    btn.addEventListener('click', function () { copy(command, btn); });
+-    line.appendChild(btn);
+-    box.appendChild(line);
+-    return box;
++  function entryNode(e) {
++    var parts = [el('span', 'when mono', e.at.slice(0, 16).replace('T', ' ')), el('span', 'kind', e.kind), el('span', '', e.project + ': ' + e.title)];
++    if (typeof e.usd === 'number') { parts.push(el('span', 'num mono', usd(e.usd))); }
++    var known = projects.some(function (p) { return p.id === e.projectId; });
++    var node;
++    if (e.run && known && (e.kind === 'run' || e.kind === 'spend')) { node = link(runHref(e.projectId, e.run), 'board-entry', parts); }
++    else if (e.url && (e.kind === 'pr' || e.kind === 'merge')) { node = link(e.url, 'board-entry', parts); node.rel = 'noopener noreferrer'; node.target = '_blank'; }
++    else if (known) { node = link(projectHref(e.projectId), 'board-entry', parts); }
++    else { node = el('div', 'board-entry'); parts.forEach(function (p) { node.appendChild(p); }); }
++    return node;
+   }
+ 
+-  function render(data) {
+-    var runs = data && Array.isArray(data.runs) ? data.runs : [];
+-    count.textContent = runs.length + (runs.length === 1 ? ' run' : ' runs');
+-    updated.textContent = new Date().toLocaleTimeString();
+-    list.textContent = '';
+-    if (!runs.length) { list.appendChild(el('div', 'board-empty', 'No live runs on this machine.')); return; }
+-    runs.forEach(function (run) { list.appendChild(card(run)); });
++  function loadHistory() {
++    var q = query();
++    var csv = new URLSearchParams(q); csv.set('t', TOKEN);
++    $('csv').href = '/history.csv?' + csv.toString();
++    var api = new URLSearchParams(q); api.set('t', TOKEN); api.set('limit', '100');
++    fetch('/api/history?' + api.toString(), { headers: { 'x-watch-token': TOKEN } })
++      .then(function (r) { return r.ok ? r.json() : null; })
++      .then(function (data) {
++        if (!data) { return; }
++        var box = $('history'); box.textContent = '';
++        if (!data.events.length) { box.appendChild(el('div', 'board-empty', 'Nothing matches.')); }
++        data.events.forEach(function (e) { box.appendChild(entryNode(e)); });
++        $('historyNote').textContent = 'Showing ' + data.events.length + ' of ' + data.total + ' event(s), newest first. The log is append-only and kept on disk.';
++      }).catch(function () {});
+   }
+ 
+   function poll() {
+-    fetch('/board?t=' + encodeURIComponent(TOKEN), { headers: { 'x-watch-token': TOKEN } })
++    fetch('/api/board?t=' + T, { headers: { 'x-watch-token': TOKEN } })
+       .then(function (r) { return r.ok ? r.json() : null; })
+-      .then(function (data) { if (data) { render(data); } })
++      .then(function (data) { if (data) { renderBoard(data); } })
+       .catch(function () {});
+   }
+-  poll();
++
++  var debounce = null;
++  $('filters').addEventListener('input', function () { clearTimeout(debounce); debounce = setTimeout(loadHistory, 300); });
++  $('filters').addEventListener('submit', function (e) { e.preventDefault(); loadHistory(); });
++  poll(); loadHistory();
+   setInterval(poll, 2000);
++  setInterval(loadHistory, 10000);
+ })();
+diff --git a/tools/watch-assets/project.html b/tools/watch-assets/project.html
+new file mode 100644
+index 0000000..3f7ab11
+--- /dev/null
++++ b/tools/watch-assets/project.html
+@@ -0,0 +1,26 @@
++<!doctype html>
++<html lang="en">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
++<title>Swarm Watch: project</title>
++<link rel="stylesheet" href="assets/watch.css">
++<link rel="stylesheet" href="assets/board.css">
++</head>
++<body>
++<div class="wrap">
++  <header class="top hud">
++    <div class="brand"><div class="logo" aria-hidden="true"><i>SW</i></div><div><h1 id="title">Project</h1><div class="goal" id="root">-</div></div></div>
++    <div class="spacer"></div>
++    <div class="chips"><a class="chip mono" id="back" href="#">All projects</a></div>
++  </header>
++  <main class="pane">
++    <section class="card hud"><h2 class="board-h">Spend</h2><div id="spend" class="board-totals"></div></section>
++    <section class="card hud"><h2 class="board-h">Tickets</h2><div id="tickets" class="board-list"></div></section>
++    <section class="card hud"><h2 class="board-h">Runs</h2><div id="runs" class="board-list"></div></section>
++    <section class="card hud"><h2 class="board-h">Lessons</h2><div id="lessons" class="board-list"></div></section>
++  </main>
++</div>
++<script src="assets/project.js"></script>
++</body>
++</html>
+diff --git a/tools/watch-assets/project.js b/tools/watch-assets/project.js
+new file mode 100644
+index 0000000..620655a
+--- /dev/null
++++ b/tools/watch-assets/project.js
+@@ -0,0 +1,60 @@
++// SPDX-License-Identifier: Apache-2.0
++(function () {
++  'use strict';
++  var params = new URLSearchParams(location.search);
++  var TOKEN = params.get('t') || '';
++  var ID = params.get('id') || '';
++  var T = encodeURIComponent(TOKEN);
++  var $ = function (id) { return document.getElementById(id); };
++  function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined) { n.textContent = text; } return n; }
++  function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
++  function when(iso) { return iso ? String(iso).slice(0, 16).replace('T', ' ') : '-'; }
++  $('back').href = '/?t=' + T;
++
++  function render(p) {
++    $('title').textContent = p.name;
++    $('root').textContent = p.root;
++    var s = $('spend'); s.textContent = '';
++    [['Today', usd(p.spend.todayUsd)], ['Last 7 days', usd(p.spend.weekUsd)], ['All time', usd(p.spend.allUsd)], ['Flat-rate lanes (list value, not billed)', usd(p.spend.flatRateListUsd)]].forEach(function (pair) {
++      var tile = el('div', 'tile'); tile.appendChild(el('div', 'label', pair[0])); tile.appendChild(el('div', 'big num', pair[1])); s.appendChild(tile);
++    });
++    var lanes = Object.keys(p.spend.byLane).sort();
++    var byLane = el('div', 'tile'); byLane.appendChild(el('div', 'label', 'By lane')); byLane.appendChild(el('div', 'sub', lanes.length ? lanes.map(function (k) { return k + ' ' + usd(p.spend.byLane[k]); }).join(', ') : 'none')); s.appendChild(byLane);
++
++    var t = $('tickets'); t.textContent = '';
++    var counts = p.ticketCounts.byStatus; 
++    t.appendChild(el('div', 'board-note', Object.keys(counts).sort().map(function (k) { return k + ' ' + counts[k]; }).join(', ') || 'No ticket ledger.'));
++    ['blocked', 'running', 'review', 'ready', 'todo', 'proposed', 'done'].forEach(function (status) {
++      var list = p.tickets.filter(function (x) { return x.status === status; });
++      if (!list.length) { return; }
++      var d = el('details', 'board-lane'); d.open = status !== 'done';
++      d.appendChild(el('summary', '', status + ' (' + list.length + ')'));
++      var body = el('div', 'lane-body');
++      list.slice(0, 200).forEach(function (x) { body.appendChild(el('div', 'board-entry', x.id + '  ' + (x.stage || '') + '  ' + (x.risk || '') + '  ' + x.title)); });
++      d.appendChild(body); t.appendChild(d);
++    });
++
++    var r = $('runs'); r.textContent = '';
++    if (!p.runs.length) { r.appendChild(el('div', 'board-empty', 'No runs yet.')); }
++    p.runs.slice(0, 100).forEach(function (run) {
++      var a = el('a', 'board-run'); a.href = '/open/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(run.runId) + '&t=' + T;
++      a.appendChild(el('span', 'mono', run.runId)); a.appendChild(el('span', 'pill ' + (run.live ? 'good' : run.failed ? 'bad' : 'info'), run.live ? 'live' : run.status));
++      a.appendChild(el('span', 'num mono', run.done + '/' + run.jobs + ' jobs' + (run.failed ? ', ' + run.failed + ' failed' : '')));
++      a.appendChild(el('span', 'num mono', usd(run.costUsd))); a.appendChild(el('span', 'mono', when(run.startedAt)));
++      r.appendChild(a);
++    });
++
++    var l = $('lessons'); l.textContent = '';
++    if (!p.lessons.length) { l.appendChild(el('div', 'board-empty', 'No lessons recorded here.')); }
++    p.lessons.forEach(function (x) { l.appendChild(el('div', 'board-entry', x.id + '  ' + (x.stage || '') + '  ' + (x.what || ''))); });
++  }
++
++  function load() {
++    fetch('/api/project?id=' + encodeURIComponent(ID) + '&t=' + T, { headers: { 'x-watch-token': TOKEN } })
++      .then(function (res) { return res.ok ? res.json() : null; })
++      .then(function (p) { if (p) { render(p); } else { $('title').textContent = 'Unknown project'; } })
++      .catch(function () {});
++  }
++  load();
++  setInterval(load, 5000);
++})();
+diff --git a/tools/watch-cli.mjs b/tools/watch-cli.mjs
+index 7e53101..a137af6 100644
+--- a/tools/watch-cli.mjs
++++ b/tools/watch-cli.mjs
+@@ -17,7 +17,11 @@ import { ticketComments } from './gallery-tickets.mjs';
+ import { buildCommandList, contextCommands } from './watch-command-meta.mjs';
+ import { COMMANDS } from './completion.mjs';
+ import { readLedger } from './tickets.mjs';
+-import { boardSummary } from './board.mjs';
++import { boardSummary, listLiveRuns } from './board.mjs';
++import { listProjects, projectsFile } from './projects.mjs';
++import { readHistory, historyCsv, historyFile } from './history.mjs';
++import { boardSnapshot, projectDetail } from './board-data.mjs';
++import { backfillHistory } from './board-commands.mjs';
+ import { projectSummary } from './project-spend.mjs';
+ 
+ const here = path.dirname(fileURLToPath(import.meta.url));
+@@ -172,19 +176,97 @@ async function tuiLoop(root, runId, write) {
+   } finally { if (stdin.isTTY) { stdin.setRawMode(false); stdin.pause(); } }
+ }
+ 
++// The Watch server of one run: its own port and its own token.
++export function makeRunServer(root, runId, extra = {}) {
++  return createWatchServer({
++    root,
++    getRunSnapshot: runSnapshotLoader(root, runId),
++    getPlanSnapshot: planLoader(root),
++    getGallery: () => readGallery(root),
++    getJobReport: jobReportLoader(root, runId),
++    commandList: buildCommandList(COMMANDS),
++    contextCommands,
++    assetDir: path.join(here, 'watch-assets'),
++    deltaFile: path.join(here, 'watch-delta.mjs'),
++    ...extra,
++  });
++}
++
++// What the board server calls. Every lookup goes through the machine's project list: a project is named by its id, never by a path the page could send,
++// and a project's runs, tickets and files are only ever read under its own root.
++const MAX_WATCHERS = 6;
++const BOARD_RUN_IDLE_MS = 10 * 60 * 1000;
++
++export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000 } = {}) {
++  const watchers = new Map();                // `${projectId}/${runId}` -> { server, url, closed }
++  let cached = null;
++  const find = async id => (await listProjects({ file: projectsFile(env) })).find(p => p.id === id) ?? null;
++  const api = {
++    // One snapshot at a time: requests that arrive while one is being built share it.
++    snapshot() {
++      if (cached && now() - cached.at < cacheMs) return cached.promise;
++      const promise = (async () => boardSnapshot({ projects: await listProjects({ file: projectsFile(env) }), liveRuns: await live(), now: now() }))();
++      cached = { at: now(), promise };
++      promise.catch(() => { if (cached?.promise === promise) cached = null; });
++      return promise;
++    },
++    async project(id) {
++      const project = await find(id);
++      if (!project) return null;
++      const liveRuns = (await live()).filter(r => r.root === project.root);
++      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)) });
++    },
++    async history(q = {}) {
++      return readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: Number(q.limit) || 100, offset: Number(q.offset) || 0 });
++    },
++    async historyCsv(q = {}) {
++      const { events } = await readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: 1e6, cap: 1e6 });
++      return historyCsv(events);
++    },
++    // Starts the run's own Watch server (or reuses the one already up) and returns its address, with that server's token. Null for anything not a run of a listed project.
++    async openRun(id, runId) {
++      const project = await find(id);
++      if (!project || !RUN_ID_RE.test(String(runId))) return null;
++      if (!(await findRunId(project.root, runId))) return null;
++      const key = `${project.id}/${runId}`;
++      const hit = watchers.get(key);
++      if (hit && !hit.closed) return hit.pending;
++      // The promise is stored before the server starts, so two clicks at once share one server; at most MAX_WATCHERS stay open (the oldest is closed).
++      const entry = { closed: false, server: null, pending: null };
++      entry.pending = (async () => {
++        const open = [...watchers.entries()].filter(([, w]) => !w.closed);
++        while (open.length >= MAX_WATCHERS) { const [oldKey, old] = open.shift(); old.closed = true; watchers.delete(oldKey); await old.server?.close().catch(() => {}); }
++        entry.server = runServer(project.root, runId, { idleMs: BOARD_RUN_IDLE_MS });
++        const { url } = await entry.server.listen();
++        entry.server.done.then(() => { entry.closed = true; });
++        return url;
++      })();
++      watchers.set(key, entry);
++      entry.pending.catch(() => { entry.closed = true; watchers.delete(key); });
++      return entry.pending;
++    },
++    watcherCount: () => [...watchers.values()].filter(w => !w.closed).length,
++    async close() { for (const w of watchers.values()) if (!w.closed) await w.server?.close().catch(() => {}); watchers.clear(); },
++  };
++  return api;
++}
++
+ export async function runWatchCommand(root, args, { write = text => process.stdout.write(text) } = {}) {
+   const opts = parseWatchArgs(args);
+   if (opts.error) return { stdout: `${opts.error}\n${WATCH_USAGE}`, exitCode: 2 };
+   if (opts.all && opts.json) return { stdout: `${JSON.stringify(await safeBoard(), null, 2)}\n`, exitCode: 0 };
+   if (opts.all && (opts.text || opts.tui)) return { stdout: await boardText(), exitCode: 0 };
+   if (opts.all) {
+-    // The web board: every live run on this machine, read-only. Each run has its own page (its own server and token), so the board shows the command for it.
++    // The web board: a lane per project on this machine, the machine's agents and spend on top, the history, and a click-through to any run's own page.
++    const api = createBoardApi({ env: process.env });
++    backfillHistory({ env: process.env }).catch(() => {});
+     const server = createWatchServer({
+       root,
+       getRunSnapshot: async () => null,
+       getPlanSnapshot: async () => ({ present: false }),
+       getGallery: async () => ({ schema: 1, screens: [] }),
+       getBoard: () => safeBoard(),
++      board: api,
+       indexName: 'board.html',
+       commandList: buildCommandList(COMMANDS),
+       contextCommands,
+@@ -192,11 +274,13 @@ export async function runWatchCommand(root, args, { write = text => process.stdo
+       deltaFile: path.join(here, 'watch-delta.mjs'),
+     });
+     const { url } = await server.listen();
+-    write(`Swarm Watch board (every live run on this machine)\n${url}\nRead-only, on this machine only. Stops after 30 minutes idle. Ctrl-C stops it now. (swarm watch --all --text prints it instead.)\n`);
++    write(`Swarm Watch board (every project on this machine)\n${url}\nRead-only, on this machine only. Opening a run starts that run's own page. Stops after 30 minutes idle. Ctrl-C stops it now. (swarm watch --all --text prints the live runs instead.)\n`);
+     if (opts.open) openUrl(url);
+-    process.once('SIGINT', () => { server.close(); });
+-    process.once('SIGTERM', () => { server.close(); });
++    const stop = () => { server.close(); api.close(); };
++    process.once('SIGINT', stop);
++    process.once('SIGTERM', stop);
+     await server.done;
++    await api.close();
+     return { stdout: '', exitCode: 0 };
+   }
+   const runId = await findRunId(root, opts.run);
+@@ -205,18 +289,7 @@ export async function runWatchCommand(root, args, { write = text => process.stdo
+     return { stdout: `${JSON.stringify({ run: await runSnapshotLoader(root, runId)(), plan: await planLoader(root)() }, null, 2)}\n`, exitCode: 0 };
+   }
+   if (opts.tui) { await tuiLoop(root, runId, write); return { stdout: '', exitCode: 0 }; }
+-  const commandList = buildCommandList(COMMANDS);
+-  const server = createWatchServer({
+-    root,
+-    getRunSnapshot: runSnapshotLoader(root, runId),
+-    getPlanSnapshot: planLoader(root),
+-    getGallery: () => readGallery(root),
+-    getJobReport: jobReportLoader(root, runId),
+-    commandList,
+-    contextCommands,
+-    assetDir: path.join(here, 'watch-assets'),
+-    deltaFile: path.join(here, 'watch-delta.mjs'),
+-  });
++  const server = makeRunServer(root, runId);
+   const { url } = await server.listen();
+   write(`Swarm Watch for run ${runId}\n${url}\nRead-only, on this machine only. Stops after 30 minutes idle, or when the run is done and the page is closed. Ctrl-C stops it now.\n`);
+   if (opts.open) openUrl(url);
+diff --git a/tools/watch-server.mjs b/tools/watch-server.mjs
+index 7827589..ff9437c 100644
+--- a/tools/watch-server.mjs
++++ b/tools/watch-server.mjs
+@@ -55,6 +55,7 @@ export function createWatchServer(opts) {
+     getGallery,
+     getJobReport,
+     getBoard,
++    board,
+     indexName = 'index.html',
+     commandList,
+     contextCommands,
+@@ -182,8 +183,11 @@ export function createWatchServer(opts) {
+     const parts = pathname.split('/');
+     const isJob = parts.length === 3 && parts[1] === 'job' && typeof getJobReport === 'function';
+     const isBoard = pathname === '/board' && typeof getBoard === 'function';
++    // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
++    const boardRoutes = board ? ['/api/board', '/api/project', '/api/history', '/history.csv', '/open/run', '/project'] : [];
++    const isBoardRoute = boardRoutes.includes(pathname);
+     const isShot = parts.length === 4 && parts[1] === 'shot' && (parts[3] === 'mockup' || parts[3] === 'page');
+-    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard) return sendText(res, method, 404, 'not found');
++    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute) return sendText(res, method, 404, 'not found');
+     const q = u.searchParams.get('t');
+     const h = req.headers['x-watch-token'];
+     const ok = (typeof q === 'string' && safeEqual(q, token)) || (typeof h === 'string' && safeEqual(h, token));
+@@ -195,6 +199,18 @@ export function createWatchServer(opts) {
+     if (pathname === '/api/snapshot') return sendJson(res, method, await payload());
+     if (pathname === '/events') return openEvents(res, method);
+     if (isBoard) return sendJson(res, method, (await getBoard()) ?? { runs: [] });
++    if (isBoardRoute) {
++      const q = Object.fromEntries(u.searchParams);
++      if (pathname === '/project') return sendAsset(res, method, 'project.html');
++      if (pathname === '/api/board') return sendJson(res, method, await board.snapshot());
++      if (pathname === '/api/project') { const detail = await board.project(String(q.id ?? '')); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
++      if (pathname === '/api/history') return sendJson(res, method, await board.history(q));
++      if (pathname === '/history.csv') return send(res, method, 200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="swarm-history.csv"' }, await board.historyCsv(q));
++      // /open/run?id=PROJECT&run=RUN: starts the run's own Watch server (or reuses it) and sends the browser to it. The target address carries that server's own token.
++      const target = await board.openRun(String(q.id ?? ''), String(q.run ?? ''));
++      if (!target) return sendText(res, method, 404, 'not found');
++      return send(res, method, 302, { Location: target, 'Content-Type': 'text/plain; charset=utf-8' }, 'redirecting');
++    }
+     if (isJob) {
+       const report = await getJobReport(decodeURIComponent(parts[2]));
+       return report ? sendJson(res, method, report) : sendText(res, method, 404, 'not found');

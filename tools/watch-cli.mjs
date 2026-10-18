@@ -194,16 +194,21 @@ export function makeRunServer(root, runId, extra = {}) {
 
 // What the board server calls. Every lookup goes through the machine's project list: a project is named by its id, never by a path the page could send,
 // and a project's runs, tickets and files are only ever read under its own root.
+const MAX_WATCHERS = 6;
+const BOARD_RUN_IDLE_MS = 10 * 60 * 1000;
+
 export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000 } = {}) {
   const watchers = new Map();                // `${projectId}/${runId}` -> { server, url, closed }
   let cached = null;
   const find = async id => (await listProjects({ file: projectsFile(env) })).find(p => p.id === id) ?? null;
   const api = {
-    async snapshot() {
-      if (cached && now() - cached.at < cacheMs) return cached.value;
-      const value = await boardSnapshot({ projects: await listProjects({ file: projectsFile(env) }), liveRuns: await live(), now: now() });
-      cached = { at: now(), value };
-      return value;
+    // One snapshot at a time: requests that arrive while one is being built share it.
+    snapshot() {
+      if (cached && now() - cached.at < cacheMs) return cached.promise;
+      const promise = (async () => boardSnapshot({ projects: await listProjects({ file: projectsFile(env) }), liveRuns: await live(), now: now() }))();
+      cached = { at: now(), promise };
+      promise.catch(() => { if (cached?.promise === promise) cached = null; });
+      return promise;
     },
     async project(id) {
       const project = await find(id);
@@ -225,16 +230,23 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       if (!(await findRunId(project.root, runId))) return null;
       const key = `${project.id}/${runId}`;
       const hit = watchers.get(key);
-      if (hit && !hit.closed) return hit.url;
-      const server = runServer(project.root, runId);
-      const { url } = await server.listen();
-      const entry = { server, url, closed: false };
-      server.done.then(() => { entry.closed = true; });
+      if (hit && !hit.closed) return hit.pending;
+      // The promise is stored before the server starts, so two clicks at once share one server; at most MAX_WATCHERS stay open (the oldest is closed).
+      const entry = { closed: false, server: null, pending: null };
+      entry.pending = (async () => {
+        const open = [...watchers.entries()].filter(([, w]) => !w.closed);
+        while (open.length >= MAX_WATCHERS) { const [oldKey, old] = open.shift(); old.closed = true; watchers.delete(oldKey); await old.server?.close().catch(() => {}); }
+        entry.server = runServer(project.root, runId, { idleMs: BOARD_RUN_IDLE_MS });
+        const { url } = await entry.server.listen();
+        entry.server.done.then(() => { entry.closed = true; });
+        return url;
+      })();
       watchers.set(key, entry);
-      return url;
+      entry.pending.catch(() => { entry.closed = true; watchers.delete(key); });
+      return entry.pending;
     },
     watcherCount: () => [...watchers.values()].filter(w => !w.closed).length,
-    async close() { for (const w of watchers.values()) if (!w.closed) await w.server.close().catch(() => {}); watchers.clear(); },
+    async close() { for (const w of watchers.values()) if (!w.closed) await w.server?.close().catch(() => {}); watchers.clear(); },
   };
   return api;
 }

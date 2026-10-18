@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.5 },
+  "jobs": [
+    {
+      "id": "review-board-1",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "a local web server that reads every project on the machine and starts other servers",
+      "type": "review",
+      "prompt": "Review coordination/review/board-1.diff: the Swarm Watch board (swarm watch --all). New: tools/projects.mjs (machine project registry), tools/history.mjs (append-only history log + CSV), tools/history-hooks.mjs (best-effort writers), tools/board-data.mjs (per-project overview, machine totals, project detail, backfill), tools/board-commands.mjs, createBoardApi/makeRunServer in tools/watch-cli.mjs, the board routes in tools/watch-server.mjs (/api/board, /api/project, /api/history, /history.csv, /open/run -> 302 to a per-run server with its own token, /project), assets board.html/js/css and project.html/js, hooks in swarm.mjs (noteProject on every command, run/ship/merge/lesson/stage history). Rules: (1) read-only and token-protected: every new route needs the token (timing-safe), only GET/HEAD, Host check kept, no way to read a file outside a registered project's own root (the page sends an id, never a path; check findRunId/RUN_ID_RE use, symlinks inside .swarm/runs, a hostile projects.json or history line), no XSS (everything via textContent; run ids/titles/names come from disk), the 302 Location only ever points at 127.0.0.1 of a server we started; per-run servers: unbounded count? lifetime? leaked tokens in redirects/logs? (2) isolation: one project's runs, tickets, lessons never mix with another's (same run id in two projects), machine totals equal the sum of project totals and each project's total equals the project cap's own number (projectSpend/runTotals), today/week windows, estimated vs flat-rate classification, the live agent count only from runs whose process is alive; (3) history: append-only (never rewritten), dedupe by key under concurrency (two processes appending the same key), partial/torn lines, CSV formula injection, unbounded growth/perf of reading the whole file on every append and every request, sanitisation of titles; (4) registration: noteProject runs before almost every command: cost, failure modes, temp-dir skip (macOS /var vs /private/var), any chance it registers the install dir or writes to a real home during tests; (5) performance of /api/board polled every 2s with many projects/runs (readRunStates reads up to 300 states per project per poll). Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete scenario, and say what you checked that is fine. Do not edit files.",
+      "context": ["tools/projects.mjs", "tools/history.mjs", "tools/history-hooks.mjs", "tools/board-data.mjs", "tools/board-commands.mjs", "tools/watch-cli.mjs", "tools/watch-server.mjs", "tools/watch-assets/board.js", "tools/watch-assets/project.js", "tests/board-page.test.mjs", "coordination/review/board-1.diff"],
+      "outputs": [],
+      "timeoutMs": 1500000
+    }
+  ]
+}

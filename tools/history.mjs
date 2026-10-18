@@ -26,10 +26,29 @@ export function normalizeEvent(event, now = Date.now) {
   };
 }
 
+// The whole log, parsed once per change of the file (path, size and mtime), every line normalised again on the way in, and a key seen twice kept once
+// (two processes may both have appended it).
+const cache = new Map();
 async function readAll(file) {
+  let stat;
+  try { stat = await fs.stat(file); } catch { return []; }
+  const hit = cache.get(file);
+  if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) return hit.rows;
   let text = '';
   try { text = await fs.readFile(file, 'utf8'); } catch { return []; }
-  return text.split('\n').filter(Boolean).flatMap(line => { try { const e = JSON.parse(line); return e && HISTORY_KINDS.includes(e.kind) ? [e] : []; } catch { return []; } });
+  const seen = new Set();
+  const rows = [];
+  for (const line of text.split('\n')) {
+    if (!line) continue;
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    const row = normalizeEvent(e);
+    if (!row) continue;
+    if (row.key) { if (seen.has(row.key)) continue; seen.add(row.key); }
+    rows.push(row);
+  }
+  cache.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, rows });
+  return rows;
 }
 
 // Appends the events that are new (by key). Returns how many were added. Never throws into the caller's work: failures are returned as { error }.
@@ -43,7 +62,10 @@ export function appendHistory(events, { file = historyFile(), now = Date.now } =
       for (const e of list) { if (e.key) { if (seen.has(e.key)) continue; seen.add(e.key); } fresh.push(e); }
       if (!fresh.length) return { added: 0 };
       await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-      await fs.appendFile(file, fresh.map(e => `${JSON.stringify(e)}\n`).join(''), { mode: 0o600 });
+      // A torn last line (a crash mid-write) must not swallow the next event: start on a fresh line.
+      let lead = '';
+      try { const handle = await fs.open(file, 'r'); try { const { size } = await handle.stat(); if (size > 0) { const last = Buffer.alloc(1); await handle.read(last, 0, 1, size - 1); if (last[0] !== 10) lead = '\n'; } } finally { await handle.close(); } } catch { /* a new file */ }
+      await fs.appendFile(file, lead + fresh.map(e => `${JSON.stringify(e)}\n`).join(''), { mode: 0o600 });
       return { added: fresh.length };
     } catch (error) { return { added: 0, error: String(error.message).slice(0, 200) }; }
   });

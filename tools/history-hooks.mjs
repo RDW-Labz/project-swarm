@@ -8,7 +8,10 @@ import { appendHistory, historyFile } from './history.mjs';
 import { registerProject, projectId, projectsFile } from './projects.mjs';
 import { runTotals } from './spend.mjs';
 
-const inTmp = async real => { const tmp = await fs.realpath(os.tmpdir()).catch(() => path.resolve(os.tmpdir())); return real === tmp || real.startsWith(tmp + path.sep); };
+const inTmp = async real => {
+  const bases = new Set([path.resolve(os.tmpdir()), await fs.realpath(os.tmpdir()).catch(() => null), '/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp'].filter(Boolean));
+  return [...bases].some(tmp => real === tmp || real.startsWith(tmp + path.sep)) || real.split(path.sep).includes('.swarm');
+};
 
 async function identity(root, env) {
   let real;
@@ -29,7 +32,8 @@ export async function recordHistory(root, event, { env = process.env } = {}) {
 export async function noteProject(root, { env = process.env } = {}) {
   try {
     const result = await registerProject(root, { file: projectsFile(env), env });
-    if (result?.added) await appendHistory({ project: result.project.name, projectId: result.project.id, kind: 'project', key: `project:${result.project.id}`, title: `Project ${result.project.name} registered` }, { file: historyFile(env) });
+    // The history line follows the same rule as every other history write: nothing for a scratch folder unless the file was chosen.
+    if (result?.added && await identity(root, env)) await appendHistory({ project: result.project.name, projectId: result.project.id, kind: 'project', key: `project:${result.project.id}`, title: `Project ${result.project.name} registered` }, { file: historyFile(env) });
   } catch { /* never in the way */ }
 }
 

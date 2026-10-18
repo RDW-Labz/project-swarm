@@ -171,12 +171,13 @@ test('the history of what is on disk can be backfilled, once: run, spend, stage 
   const env = { SWARM_PROJECTS_FILE: path.join(home, 'projects.json'), SWARM_HISTORY_FILE: path.join(home, 'h', 'history.ndjson') };
   await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({ version: 1, projects: [A, B] }));
   const first = await backfillHistory({ env });
-  assert.ok(first >= 8, `${first} events`);
+  assert.ok(first >= 6, `${first} events`);
   assert.equal(await backfillHistory({ env }), 0, 'running it again adds nothing');
   const all = (await readHistory({ file: env.SWARM_HISTORY_FILE })).events;
   assert.ok(all.some(e => e.kind === 'stage' && e.project === 'project-swarm' && e.ref === 'S1'));
   assert.ok(all.some(e => e.kind === 'spend' && e.project === 'parts-request-app' && e.run === 'run-old' && e.usd === 5.6));
-  assert.equal(all.filter(e => e.kind === 'run').length, 4);
+  assert.equal(all.filter(e => e.kind === 'run').length, 2, 'only finished runs are backfilled; a run still going writes its own entry when it ends');
+  assert.ok(!all.some(e => e.run === 'run-a1'));
   const events = await historyEventsOf(A);
   assert.ok(events.every(e => e.projectId === A.id && e.project === 'parts-request-app'));
   // the commands
@@ -283,7 +284,7 @@ test('the board: history search, filters and CSV over HTTP, and history survives
   const ctx = await twoProjects(t);
   const first = await boardServer(t, ctx);
   const all = JSON.parse((await get(first.port, `/api/history?t=${first.token}`)).body);
-  assert.ok(all.total >= 8);
+  assert.ok(all.total >= 6);
   const onlyB = JSON.parse((await get(first.port, `/api/history?project=${ctx.B.id}&t=${first.token}`)).body);
   assert.ok(onlyB.events.length > 0 && onlyB.events.every(e => e.projectId === ctx.B.id), 'filtered by project');
   const stages = JSON.parse((await get(first.port, `/api/history?kind=stage&t=${first.token}`)).body);
@@ -346,4 +347,74 @@ test('a finished run writes its history by itself (run and spend), once', async 
   const events = (await readHistory({ file })).events;
   assert.equal(events.filter(e => e.kind === 'run').length, 1);
   assert.match(events[0].title, new RegExp(`Run ${state.id}: complete, 1/1 jobs`));
+});
+
+test('review fixes: a damaged project list is never overwritten, one entry per folder with a matching id, scratch places are skipped', async t => {
+  const home = await tmp(t);
+  const file = path.join(home, 'projects.json');
+  const env = { SWARM_PROJECTS_FILE: file };
+  const root = path.join(home, 'app'); await fs.mkdir(root);
+  const real = await fs.realpath(root);
+  await fs.writeFile(file, '{ this is not json');
+  await assert.rejects(registerProject(root, { file, env }), /projects-unreadable/);
+  assert.equal(await fs.readFile(file, 'utf8'), '{ this is not json', 'the damaged file is left as it was');
+  await fs.writeFile(file, JSON.stringify({ version: 1, projects: [{ id: 'wrong', root: real, name: 'a' }, { id: projectId(real), root: real, name: 'a' }, { id: projectId(real), root: real, name: 'dup' }, { id: 'x', root: 'relative/path', name: 'r' }] }));
+  const list = await listProjects({ file });
+  assert.deepEqual(list.map(p => p.name), ['a'], 'a wrong id, a duplicate and a relative path are dropped');
+  for (const scratch of ['/tmp/some-project', '/private/tmp/some-project']) assert.equal(await registerProject(scratch, { file, env: {} }), null, scratch);
+  const worker = path.join(home, 'app', '.swarm', 'workspaces', 'r1'); await fs.mkdir(worker, { recursive: true });
+  assert.equal(await registerProject(worker, { file, env: {} }), null, 'a worker copy inside .swarm is not a project');
+});
+
+test('review fixes: history dedupes a key written twice by two processes, restarts a torn line, ignores hostile fields on read', async t => {
+  const home = await tmp(t);
+  const file = path.join(home, 'h.ndjson');
+  const line = e => `${JSON.stringify(e)}\n`;
+  const ev = (key, extra = {}) => ({ at: iso(NOW), project: 'p', projectId: 'pid', kind: 'spend', key, title: 'Spent', usd: 1, ...extra });
+  await fs.writeFile(file, line(ev('spend:1')) + line(ev('spend:1')) + JSON.stringify(ev('torn')).slice(0, 20));
+  const first = await readHistory({ file });
+  assert.equal(first.total, 1, 'the same key twice counts once');
+  await appendHistory([ev('after-torn')], { file });
+  assert.equal((await readHistory({ file })).total, 2, 'the new event is not swallowed by the torn line');
+  await fs.appendFile(file, line({ ...ev('hostile'), url: 'javascript:alert(1)', usd: 'lots', at: 'not a date', title: '\u001b[31mred\u001b[0m' }));
+  const hostile = (await readHistory({ file })).events.find(e => e.key === 'hostile');
+  assert.equal(hostile.url, null);
+  assert.equal(hostile.usd, null);
+  assert.doesNotMatch(hostile.title, /\u001b/);
+  assert.ok(Number.isFinite(Date.parse(hostile.at)));
+  const before = (await readHistory({ file })).total;
+  await fs.appendFile(file, line(ev('late')));
+  assert.equal((await readHistory({ file })).total, before + 1, 'a change to the file is seen (the parsed copy is re-read only when the file changed)');
+});
+
+test('review fixes: a live run through a symlinked folder still belongs to its project; a symlinked run folder is not read; windows count what is billed', async t => {
+  const { A } = await twoProjects(t);
+  const link = path.join(path.dirname(A.root), 'link-to-parts');
+  await fs.symlink(A.root, link);
+  const snap = await boardSnapshot({ projects: [A], liveRuns: [{ runId: 'run-a1', root: link }], now: NOW, summary: async () => ({}) });
+  assert.equal(snap.projects[0].agents.total, 2, 'matched by the real folder');
+  const outside = path.join(path.dirname(A.root), 'elsewhere'); await fs.mkdir(path.join(outside, 'x'), { recursive: true });
+  await fs.writeFile(path.join(outside, 'x', 'state.json'), JSON.stringify({ id: 'sym', status: 'running', jobs: [{ id: 'z', agent: 'codex', status: 'running' }] }));
+  await fs.symlink(path.join(outside, 'x'), path.join(A.root, '.swarm/runs/sym'));
+  const detail = await projectDetail(A, { now: NOW });
+  assert.ok(!detail.runs.some(r => r.runId === 'sym'), 'a run folder that is a link is skipped');
+  // today and 7 days = billed lanes only (the Claude subscription job is a list value, never billed)
+  const cost = costOf([{ id: 'r', state: { jobs: [job('f', 'claude', 'opus', 9, NOW - 1000), job('p', 'anthropic', 'claude-haiku-5-5', 1, NOW - 1000)] } }], NOW);
+  assert.deepEqual([cost.todayUsd, cost.weekUsd, cost.allUsd, cost.flatRateListUsd], [1, 1, 10, 9]);
+});
+
+test('review fixes: two clicks on one run start one server, and no more than six stay open (the oldest is closed)', async t => {
+  const ctx = await twoProjects(t);
+  const env = { SWARM_PROJECTS_FILE: path.join(ctx.home, 'projects.json'), SWARM_HISTORY_FILE: path.join(ctx.home, 'h.ndjson') };
+  await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({ version: 1, projects: [ctx.A, ctx.B] }));
+  for (let n = 0; n < 8; n += 1) { await fs.mkdir(path.join(ctx.A.root, '.swarm/runs', `many-${n}`), { recursive: true }); await fs.writeFile(path.join(ctx.A.root, '.swarm/runs', `many-${n}`, 'state.json'), JSON.stringify({ id: `many-${n}`, status: 'complete', jobs: [] })); }
+  const idles = [];
+  const api = createBoardApi({ env, now: () => NOW, live: async () => [], runServer: (root, runId, extra) => { idles.push(extra?.idleMs); return makeRunServer(root, runId, extra); } });
+  t.after(() => api.close());
+  const [one, two] = await Promise.all([api.openRun(ctx.A.id, 'many-0'), api.openRun(ctx.A.id, 'many-0')]);
+  assert.equal(one, two);
+  assert.equal(idles.length, 1, 'one server for two simultaneous clicks');
+  assert.ok(idles[0] <= 10 * 60 * 1000, 'a board-started server idles out sooner');
+  for (let n = 1; n < 8; n += 1) await api.openRun(ctx.A.id, `many-${n}`);
+  assert.equal(api.watcherCount(), 6);
 });

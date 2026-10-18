@@ -8,6 +8,7 @@ The Swarm Watch board, part 1 (data and page). `swarm watch --all` is now the bo
 - **History:** an append-only, key-deduplicated log of every project, stage, run, PR, merge, lesson and spend, kept on disk (`~/.project-swarm/history/history.ndjson`), searchable, filterable by project, type and date, clickable, exportable as CSV (formula-safe). `swarm history`, `swarm history --backfill`.
 - **Projects:** any swarm command in a folder lists it (`swarm projects`, `add`, `remove`); scratch folders are not listed. A project is named by id, never by a path from the page; two projects stay isolated even with the same run id.
 - Read-only and token-protected: every board route needs the token, only GET, a wrong host is refused.
+- An Opus review (2 high, 11 medium, 8 low) was fixed before release: parsed run states are cached and one snapshot is shared; backfill skips runs still going; history dedupes by key on read, restarts a torn line and normalises every line; a damaged project list is never overwritten, scratch and worker folders are never listed; live runs match by real folder; at most 6 per-run servers, one per run; today / 7 days count billed lanes only.
 - Part 2 (a machine-wide worker limit so projects share workers fairly) follows.
 - Tests: `tests/board-page.test.mjs`.
 
