@@ -2795,7 +2795,10 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
     if (rentalTicker) { clearInterval(rentalTicker); rentalTicker = null; }
     if (rentalMeter) { rentalMeter.close(); await accrueRental(true); }
   };
-  const routeHealth = totals => agent => capDecision({ budget: { ...state.budget, maxUsd: null, maxTokens: null }, run: {}, laneToday: totals, agent }) ? { state: 'paused' } : scheduler.health(agent);
+  // A lane that refused an auto job at its daily cap (the reservation saw spend the day totals had not) is skipped for THAT job only: another job may still fit.
+  const cappedLanes = new Map();
+  const cappedFor = id => cappedLanes.get(id) ?? new Set();
+  const routeHealth = (totals, jobId) => agent => cappedFor(jobId).has(agent) || capDecision({ budget: { ...state.budget, maxUsd: null, maxTokens: null }, run: {}, laneToday: totals, agent }) ? { state: 'paused' } : scheduler.health(agent);
   if (!state.worktreesBase && worktreeConfig.worktreesOutsideRoot !== false && manifest.jobs.some(usesWorktree)) state.worktreesBase = await worktreesBaseFor(root, worktreeConfig, { env });
   // Field lesson #202: two shell jobs each told to run the full suite, sharing one root, is a
   // manifest-shape problem known before any worker starts — surfaced on every state write.
@@ -3021,8 +3024,9 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
       const failures = record.routeFailures ??= {};
       try {
         if (original.agent === 'auto') {
-          record.route = pickJobRoute(original, lanes, { health: routeHealth(await today()), failures, contract: manifest.contract, ready: readyAutoJobs(manifest) });
+          record.route = pickJobRoute(original, lanes, { health: routeHealth(await today(), original.id), failures, contract: manifest.contract, ready: readyAutoJobs(manifest) });
           job = { ...job, agent: record.route.agent, model: record.route.model };
+          if (record.capFallbacks?.length) record.capFallbacks[record.capFallbacks.length - 1].to = record.route.agent;
           // The API lanes carry the short report inside their envelope (`result`); the "finish with one JSON line" instruction is for CLI lanes and makes small models drop the files.
           if (API_AGENTS.includes(job.agent) && job.report === 'short' && job.prompt.endsWith(`\n\n${REPORT_PROMPT_LINE}`)) job = { ...job, prompt: job.prompt.slice(0, -REPORT_PROMPT_LINE.length - 2) };
           if (job.agent === 'codex') requireCodexPlatform(platform);
@@ -3081,6 +3085,21 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
         const decision = await admit;
         if (decision) {
           await release(); release = null;
+          // A lane at its daily cap does not stop an auto job: the next lane in the routing order (Cursor, then Codex, both subscriptions) takes it.
+          // The run cap, and a job that named its lane, still hold as before. When no other lane can take it, it holds.
+          if (decision.reason === 'lane-cap' && original.agent === 'auto' && !cappedFor(original.id).has(job.agent)) {
+            const capped = job.agent;
+            cappedLanes.set(original.id, new Set([...cappedFor(original.id), capped]));
+            let next = null;
+            try { next = pickJobRoute(original, lanes, { health: routeHealth(await today(), original.id), failures, contract: manifest.contract, ready: readyAutoJobs(manifest) }); } catch { /* nothing else can take it */ }
+            if (next && !cappedFor(original.id).has(next.agent)) {
+              (record.capFallbacks ??= []).push({ from: capped, to: next.agent, reason: decision.message, at: new Date(now()).toISOString() });
+              (state.spendWarnings ??= []).push(`lane-cap-reroute: ${original.id} left ${capped} (${decision.message.split('; resume')[0]}) for ${next.agent}`);
+              record.status = 'queued'; record.startedAt = null; record.finishedAt = null; record.durationMs = null; record.progress = null;
+              await queueSave();
+              ready.push(index); notify(); return;
+            }
+          }
           record.status = 'held'; record.heldReason = decision.reason; record.error = decision.message;
           await queueSave(); await settle(index); return;
         }
@@ -3451,7 +3470,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
           } else { record.status = 'failed'; record.error = `rate-limited: ${result.error ?? job.agent}`; }
         } else if (!result.reportInvalid && original.agent === 'auto' && !['blocked', 'cancelled'].includes(result.status) && (outcome.kind === 'quota-exhausted' || ['failed', 'timeout'].includes(result.status))) {
           if (['failed', 'timeout'].includes(result.status)) failures[job.agent] = (failures[job.agent] ?? 0) + 1;
-          try { pickJobRoute(original, lanes, { health: agent => scheduler.health(agent), failures, contract: manifest.contract, ready: readyAutoJobs(manifest) }); retry = true; }
+          try { pickJobRoute(original, lanes, { health: routeHealth(await today(), original.id), failures, contract: manifest.contract, ready: readyAutoJobs(manifest) }); retry = true; }
           catch (error) { record.status = 'failed'; record.error = error.message; }
         }
         if (outcome.kind === 'quota-exhausted' && !retry) { record.heldReason = 'quota'; record.heldUntil = scheduler.health(job.agent).until; }
@@ -3648,7 +3667,8 @@ export async function resumeRun(root, id, { raises = [], reason, wait = false, n
   const totals = await withSpendStore(store => laneDayTotals(store, { day: new Date(now()).toISOString().slice(0, 10) }), { dir: spendDir(runOptions.env), now });
   // The hour limit is per run: a held rented job is not resumed past it (start a new run, and shut the server down).
   if (state.jobs.some(record => record.heldReason === 'rental-hours')) fail('resume-over-cap: the rented lane reached its hour limit for this run; start a new run (and make sure the server is shut down)', 'resume-over-cap');
-  for (const record of state.jobs.filter(record => ['run-cap', 'lane-cap'].includes(record.heldReason))) {
+  // An auto job held at a lane cap is routed again when it runs (the capped lane is skipped), so only its run cap is checked here.
+  for (const record of state.jobs.filter(record => record.heldReason === 'run-cap' || (record.heldReason === 'lane-cap' && manifest.jobs.find(job => job.id === record.id)?.agent !== 'auto'))) {
     const decision = capDecision({ budget, run: runTotals(state), laneToday: totals, agent: record.agent });
     if (decision) fail(`resume-over-cap: ${decision.message}`, 'resume-over-cap');
   }
