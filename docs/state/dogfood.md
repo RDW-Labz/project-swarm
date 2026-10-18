@@ -246,3 +246,7 @@ Lesson 39 real integration tests (tests/lesson-39-integrate.test.mjs): a ticket 
 ### Safety group (1.100.0)
 
 3 swarm jobs (stop-all, state-backup, migration-gate, each with tests; Haiku, one run, all 34 tests green first time; the migration-gate files came back as one line each and were formatted with prettier). Hand work: command layer, queue wiring, profile block, docs. Opus review ($0.7 or less): 7 high, 8 medium, 8 low, all but two low items fixed with tests (left: seed check does not read package.json script bodies; the stop step does not cancel statuses other than running). Notes: a worker module that takes `exec` results must be told the shape (`exitCode`), the design said `code`.
+
+### Lessons import (1.101.0)
+
+Hand-written glue (about 90 lines over the existing backfill mapping), not a swarm job: too small and too tied to existing helpers to be worth a worker. Imported parts-request-app lessons 33-47 (15 new; 32 skipped as already here).

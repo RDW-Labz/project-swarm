@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0044",
+  "project": "parts-request-app",
+  "date": "2026-10-18",
+  "stage": "split",
+  "what": "S8 T-0138 (Haiku, escalated) produced a 16.7 KB monolithic page.tsx with inline actions that ignored the reviewed S8 components; swarm go then refused T-0168 (output-cap-exceeded, 15 KB per-file cap) before running, so no escalation happened. A ticket with a named test file under a verify profile never reaches Codex (routingFor skipped), and editing risk in the ledger breaks the approval seal",
+  "rule": "Keep page files under 12 KB: tell workers to compose existing components and put server actions in their own file; an output-cap refusal before dispatch should escalate the ticket to Codex instead of aborting go.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Moved the four inline server actions and helpers into actions.ts and request-data.ts by hand (pure move) so T-0168 to T-0171 can run on Haiku",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "review",
+    "split",
+    "tool",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#44"
+  }
+}

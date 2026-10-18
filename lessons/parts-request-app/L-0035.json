@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "id": "L-0035",
+  "project": "parts-request-app",
+  "date": "2026-10-17",
+  "stage": "scope",
+  "what": "S5 wiring: swarm change plus scope split for one new requirement (R-037) made Haiku rewrite the whole S5 split (24 tickets, old guessed file paths, duplicates), and the merge was refused for file ownership conflicts, so I wrote the single wiring ticket by hand. The worker-written e2e spec used guessed selectors (exact label Model, input id desc, cf-turnstile token not awaited) and the S4 form sent side:null that the new route schema rejects; only running the e2e against a real server found it, the route-level unit tests passed.",
+  "rule": "A change order split must only create tickets for the new requirement and see the real file layout; e2e tickets need a runner step that starts the app and runs the spec; the generated client and route should share one schema.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Hand-written ticket T-0163, fixed e2e selectors and Turnstile wait, client omits null side; ran e2e with a local script (build, next start, supabase env).",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "merge-queue",
+    "path-safety",
+    "schema",
+    "scope",
+    "tokens",
+    "tool",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#35"
+  }
+}

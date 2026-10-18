@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1.0
+  },
+  "jobs": [
+    {
+      "id": "review-lesson-import",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "reads a file from another project and writes lesson files: secret handling and path safety",
+      "type": "review",
+      "prompt": "Review tools/lesson-import.mjs and coordination/review/lesson-import.diff (command swarm lessons import PROJECT_PATH). Rules that must hold: (1) the other project is only read: one regular file, no symlink (also a symlinked coordination folder or parent), size cap enforced before reading (race between lstat and read?), never written; (2) nothing but redacted lesson text is copied: secrets, emails, home paths, tokens never reach lessons/ (check every field that is copied, including tags, date, guard text, and the ref; a hostile date, id or area value; very long strings; prototype keys like __proto__ in a row); (3) ids: row id maps to L-000N, a hostile id (negative, float, huge, string, 5000+) is refused, a repeated id is refused, files cannot be written outside lessons/<project>/ (project name validation, path traversal through --project); (4) dedupe by id and by rule text cannot be used to overwrite an existing lesson (writeLesson overwrite false?) or to skip a real new lesson wrongly; (5) the stage and tag override for area tool revalidates the lesson; (6) exit codes and the dry-run writing nothing. Find real bugs with file and line evidence, rank high, medium, low, and say how to fix each. Do not edit files.",
+      "context": [
+        "tools/lesson-import.mjs",
+        "tools/lesson-store.mjs",
+        "tools/lesson-schema.mjs",
+        "tools/lesson-backfill.mjs",
+        "coordination/review/lesson-import.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

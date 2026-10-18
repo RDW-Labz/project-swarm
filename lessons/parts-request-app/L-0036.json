@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0036",
+  "project": "parts-request-app",
+  "date": "2026-10-17",
+  "stage": "split",
+  "what": "S5: workers built two versions of ip hashing, photo upload and the submit form (ip-hash.ts/photo-upload.ts/SubmitForm.tsx vs inline hmacIp/storePhoto and the S4 step form). The wiring ticket used the inline ones, leaving the better-validated modules unused.",
+  "rule": "Before a build ticket creates a module, check whether the stage already owns one for the same job; a wiring ticket must use the existing tested modules, not write parallel ones.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Scope split: list existing modules per requirement in each ticket's context and forbid new files that duplicate them; integration tickets name the modules they must import.",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "split",
+    "tool",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#36"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0042",
+  "project": "parts-request-app",
+  "date": "2026-10-17",
+  "stage": "test",
+  "what": "S7 PR #10 CI failed at 'Contract tests (real app)': the app did not start because the staff middleware needs NEXT_PUBLIC_SUPABASE_ANON_KEY and scripts/contracts-run.mjs did not set it. I had run vitest, e2e and pgTAP locally but not npm run test:contracts:app, which CI runs.",
+  "rule": "Before opening a PR run every command the CI workflow runs, in CI order, not a subset.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Set the anon key in contracts-run.mjs; ran the full CI command list locally before pushing.",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "ci",
+    "test",
+    "tool"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#42"
+  }
+}

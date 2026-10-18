@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "L-0039",
+  "project": "parts-request-app",
+  "date": "2026-10-17",
+  "stage": "scope",
+  "what": "S6 follow-up: scope-args: --files needs a value refused every file because done tickets own them (one writer per file); only a hand edit of the ledger could move ownership. T-0164 (claude lane, $0.50) rewired the route to S6 modules but its e2e assumed the dev transport under next start (NODE_ENV=production disables it), so rows ended failed/resend_api_key_missing until a stub Resend and a guarded RESEND_BASE_URL were added by hand. T-0165, built the step before, imported the S5 sender instead of the S6 modules, and S6 had three overlapping senders/status helpers.",
+  "rule": "Integration tickets must be able to take over files from done tickets (or the original ticket must own all files on the path); a worker that adds an e2e must run it; deletions of superseded modules must be a ticket output; one capability = one owner module per stage.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "tickets --files: allow transferring a file from a done ticket with --yes and a note; integrate: propagate declared deletions; runner: run the ticket's e2e (e2e/*.spec.ts) in verify with the project's e2e command; scope split: integration tickets list the superseded modules to delete.",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "lane-routing",
+    "path-safety",
+    "scope",
+    "tool",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#39"
+  }
+}

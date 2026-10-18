@@ -27,7 +27,11 @@ const ALLOWED_IP = new Set(['127.0.0.1', '0.0.0.0']);
 
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 const matches = (v, re) => typeof v === 'string' && re.test(v);
-const validDate = (v) => matches(v, DATE_RE) && new Date(v + 'T00:00:00Z').toISOString().slice(0, 10) === v;
+const validDate = (v) => {
+  if (!matches(v, DATE_RE)) return false;
+  const d = new Date(v + 'T00:00:00Z');
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+};
 const normalizeText = (text) => text.normalize('NFKC').replace(FORMAT_RE, '');
 const hasSecret = (text) => scanSecrets([{ path: 'text', content: text }]).length > 0;
 const isMixed = (s) => /[a-z]/.test(s) && /[A-Z]/.test(s) && /[0-9]/.test(s);

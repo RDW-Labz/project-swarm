@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.101.0
+
+- `swarm lessons import <project-path> [--project NAME] [--dry-run]`: reads another project's `coordination/swarm-lessons.jsonl` (read only: a regular file, 2 MB cap, no symlink) and writes the lessons it does not have yet to `lessons/<NAME>/`, redacted, with stage and tags from the text; running it again skips what exists. First use: the parts-request-app lessons 33 to 47 (the earlier 32 were already here). An Opus review (2 high, 3 medium, 4 low) was fixed: no symlink on the way and one open handle with the size checked on it, a bad date fails only its row, text is redacted before it is cut, an existing id with another rule is a conflict, ids must be whole numbers, inherited object keys are ignored. Doc: docs/lessons-loop.md.
+
 ## 1.100.0
 
 Safety group (docs/safety.md, design docs/plans/safety-design.md):
