@@ -16,7 +16,7 @@ export const ERRORS_FILE = '.swarm/project/errors.json';
 // Any-depth patterns (the folder anywhere in the route, or the route itself): /payments, /api/v1/payments/charge, /en/checkout, /api/webhooks/stripe all count.
 export const DEFAULT_CRITICAL = Object.freeze(['**/payments/**', '**/payment/**', '**/checkout/**', '**/billing/**', '**/stripe/**', '**/auth/**', '**/login/**', '**/signup/**']);
 export const DEFAULT_SPIKE = Object.freeze({ count: 20, windowMinutes: 10 });
-export const DEFAULT_VERCEL_ARGV = Object.freeze(['vercel', 'logs', '--query', 'level:(error OR fatal) AND environment:production', '--since', '15m', '--limit', '500', '--json', '--non-interactive']);
+export const DEFAULT_VERCEL_ARGV = Object.freeze(['vercel', 'logs', '--query', 'environment:production AND (level:(error OR fatal OR warning) OR stream:stderr)', '--since', '15m', '--limit', '500', '--json', '--non-interactive']);
 const MAX_RECENT = 500, MAX_SEEN = 5000, MAX_GROUPS = 2000;
 const MAX_TICKETS_PER_INGEST = 20, MAX_NOTIFICATIONS_PER_INGEST = 5;
 const FIX_GRACE_MS = 30 * 60000;                       // events this soon after a fix was noticed are the old deploy still running
@@ -169,14 +169,31 @@ export function normalizeEvent(raw, { now = Date.now() } = {}) {
 export function parseVercelLine(line) {
   let obj;
   try { obj = JSON.parse(line); } catch { return null; }
-  if (!isObj(obj) || obj.type === 'summary' || obj.summary !== undefined || obj.next !== undefined && obj.message === undefined) return null;
+  if (!isObj(obj) || obj.type === 'summary' || obj.summary !== undefined || obj.recordsReturned !== undefined || obj.next !== undefined && obj.message === undefined) return null;
   const entry = isObj(obj.entry) ? obj.entry : isObj(obj.log) ? obj.log : isObj(obj.data) ? obj.data : obj;
-  const level = String(entry.level ?? obj.level ?? '').toLowerCase();
+  let level = String(entry.level ?? obj.level ?? '').toLowerCase();
+  const stream = String(entry.stream ?? '').toLowerCase();
   const status = Number(entry.responseStatusCode ?? entry.statusCode ?? entry.httpStatus ?? 0);
-  if (!['error', 'fatal'].includes(level) && !(status >= 500)) return null;
+  let message = typeof entry.message === 'string' ? entry.message : typeof entry.msg === 'string' ? entry.msg : '';
+  // An app that logs JSON puts its own level inside the message ({"level":"error","event":"payment_failed"}): that level decides, not the stream's.
+  if (message.trimStart().startsWith('{')) {
+    try {
+      const inner = JSON.parse(message);
+      if (isObj(inner) && typeof inner.level === 'string') {
+        const innerLevel = inner.level.toLowerCase();
+        if (!['error', 'fatal'].includes(innerLevel)) return null;
+        level = 'error';
+        message = String(inner.error?.message ?? inner.error ?? inner.message ?? inner.event ?? 'logged error');
+      }
+    } catch { /* not JSON after all: the text is the message */ }
+  }
+  // Vercel reports what an app writes to stderr as warn: an Error-shaped message on stderr counts as an error, a plain warning does not.
+  const errorShaped = /\b[A-Za-z][A-Za-z0-9_]*(?:Error|Exception)\b|^Error\b/.test(message.slice(0, 300));
+  const isError = ['error', 'fatal'].includes(level) || status >= 500 || (['warn', 'warning'].includes(level) && stream === 'stderr' && errorShaped);
+  if (!isError) return null;
   return {
     at: entry.timestamp ?? entry.timestampInMs ?? entry.time ?? obj.timestamp,
-    message: entry.message ?? entry.msg ?? (status >= 500 ? `HTTP ${status} on ${normalizeRoute(entry.requestPath ?? entry.path ?? '/')}` : ''),
+    message: message || (status >= 500 ? `HTTP ${status} on ${normalizeRoute(entry.requestPath ?? entry.path ?? '/')}` : ''),
     requestPath: entry.requestPath ?? entry.path ?? entry.route,
     requestId: entry.requestId ?? entry.id,
     deploymentId: entry.deploymentId,
