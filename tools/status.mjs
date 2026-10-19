@@ -2,7 +2,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const NEXT_COMMANDS = ['swarm doctor all', 'swarm board', 'swarm version --check', 'swarm scale', 'swarm help'];
+const NEXT_COMMANDS = ['swarm doctor all', 'swarm watch --all --text', 'swarm board', 'swarm version --check', 'swarm scale', 'swarm help'];
 
 function timestamp(value) {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
@@ -56,7 +56,8 @@ export async function projectStatus(root, { env = process.env, now = Date.now, d
   try {
     const result = await doctorAll();
     for (const { agent, status } of result.providers) {
-      lanes[['compatible', 'configured', 'reachable'].includes(status) ? 'up' : 'down'].push(agent);
+      if (status === 'remote-unchecked') (lanes.unchecked ??= []).push(agent);
+      else lanes[['compatible', 'configured', 'reachable'].includes(status) ? 'up' : 'down'].push(agent);
     }
   } catch (error) { lanes = { up: [], down: [], error: error?.message ?? String(error) }; }
   let spend = { usd: null, byLane: {} };
@@ -95,6 +96,7 @@ export function formatStatus(status, { now = Date.now } = {}) {
     run ? `Last run: ${run.id}, ${run.status}, ${age(run.startedAt, typeof now === 'function' ? now() : now)}; counts: ${counts}; cost: ${money(run.costUsd)}` : 'Last run: none',
     `Lanes up: ${status.lanes.up.join(', ') || 'none'}`,
     `Lanes down: ${status.lanes.down.join(', ') || 'none'}`,
+    ...(status.lanes.unchecked?.length ? [`Lanes not checked (remote host): ${status.lanes.unchecked.join(', ')}; swarm doctor LANE checks one`] : []),
     `Today's spend: ${money(status.spendToday.usd)}`,
     '',
     'Next:',

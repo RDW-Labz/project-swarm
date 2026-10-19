@@ -6525,9 +6525,13 @@ export async function doctor({exec=execViaFile, agent='claude', env=process.env,
   return {status:'compatible',node:process.versions.node,claude:version.stdout.trim(),auth:'not checked; use a live smoke job',liveVerified:false,platform:process.platform,toolchains};
 }
 
+// `skipRemote`: a provider that runs on another machine over ssh is not probed (an unreachable host would take minutes: ssh retries), it is reported "remote-unchecked".
+// Bare `swarm` and `swarm status` use it so they answer at once; `swarm doctor AGENT` still does the real check.
 export async function doctorAll(options={}){
   const providers=[];
-  for(const agent of AGENTS)try{providers.push({agent,...await doctor({...options,agent})});}catch{providers.push({agent,status:'unavailable',liveVerified:false,note:'Provider compatibility check failed; run doctor for this provider for details.'});}
+  const hosts=options.skipRemote?resolveCliHosts(loadLocalConfig({env:options.env??process.env}).cliHosts):{};
+  for(const agent of AGENTS)if(hosts[agent]){providers.push({agent,status:'remote-unchecked',liveVerified:false,host:hosts[agent].target,note:`Runs on ${hosts[agent].target}; not probed here. swarm doctor ${agent} checks it.`});continue;}
+  else try{providers.push({agent,...await doctor({...options,agent})});}catch{providers.push({agent,status:'unavailable',liveVerified:false,note:'Provider compatibility check failed; run doctor for this provider for details.'});}
   return {status:'report',providers};
 }
 
@@ -7890,6 +7894,7 @@ async function mainInner() {
     if(out.exitCode)process.exitCode=out.exitCode;
     return;
   }
+  if(args[0]==='status'&&args[1]==='--all'&&args.length===2)args.splice(0,2,'watch','--all','--text');
   if(args[0]==='watch'||args[0]==='gallery'){
     root=await fs.realpath(root);
     const {runWatchCommand,runGalleryCommand}=await import('./watch-cli.mjs');
@@ -7955,8 +7960,9 @@ async function mainInner() {
     process.stdout.write(`${JSON.stringify({status:'ok',steps:steps.length,actions:steps.flatMap(step=>step.actions.map(action=>({action:action.action,run:action.run??action.wave,ok:action.ok}))),blocked:[...new Set(steps.flatMap(step=>step.blocked))]})}\n`);
     return;
   }
-  if(!args.length||(args.length===1&&args[0]==='--json')){
-    // `swarm` alone: where this project stands and what to run next.
+  if(!args.length||(args.length===1&&args[0]==='--json')||(args[0]==='status'&&(args.length===1||(args.length===2&&args[1]==='--json')))){
+    // `swarm` alone (or `swarm status`): where this project stands and what to run next. Fast: no remote probes, a hard 5 second limit.
+    if(args[0]==='status')args.shift();
     root=await fs.realpath(root);
     const spendToday=async()=>{
       const day=new Date().toISOString().slice(0,10);
@@ -7964,8 +7970,10 @@ async function mainInner() {
       const byLane=Object.fromEntries(Object.entries(totals).map(([lane,total])=>[lane,total.usd]));
       return {usd:Object.values(byLane).reduce((sum,usd)=>sum+usd,0),byLane};
     };
-    const status=await projectStatus(root,{doctorAll:()=>doctorAll({root,probeLocal:true}),spendToday});
-    process.stdout.write(args[0]==='--json'?`${JSON.stringify(status)}\n`:`${formatStatus(status)}\n`);
+    const deadline=(promise,label)=>Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(Error(`${label} timed out after 5 seconds`)),5000).unref())]);
+    const status=await projectStatus(root,{doctorAll:()=>deadline(doctorAll({root,probeLocal:true,skipRemote:true}),'the lane check'),spendToday:()=>deadline(spendToday(),'the spend read')});
+    // A probe that is still running must not keep the process alive: print, then leave.
+    process.stdout.write(args[0]==='--json'?`${JSON.stringify(status)}\n`:`${formatStatus(status)}\n`,()=>process.exit(process.exitCode??0));
     return;
   }
   if(args[0]==='completion'){
