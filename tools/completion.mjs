@@ -29,7 +29,7 @@ export const COMMANDS = [
   command('draft', 'Draft docs, PR text or a plan locally, then polish.', 'none', '--context --out --json'),
   command('brain', 'Local brain status, stats or a test call.', 'none', '--json --markdown'),
   command('gpu', 'Rented GPU session: models, up, down, status, bake-off (never rents).', 'none', '--target --key --model --models --hourly-usd --max-usd --max-hours --gpus --per-replica --max-model-len --image --levels --repo --yes --json --extra-quant --allow-no-poweroff --best-of --ssh-port --bench-ref --mode --probe-ports --local-port'),
-  command('init', 'Initialize a project: profile, base check, repo map.', 'none', '--check --json --sensitive --not-sensitive --protect --max-usd --max-tokens --base-check --no-base-check --no-map'),
+  command('init', 'Initialize a project: profile, base check, repo map.', 'none', '--check --json --sensitive --not-sensitive --protect --max-usd --max-tokens --base-check --no-base-check --no-map --kit --kit-source --name --no-protect-kit'),
   command('map', 'Build or refresh the repo map.', 'none', '--json'),
   command('scale', 'Run stub jobs to measure scale.', 'none', '--jobs --concurrency'),
   command('go', 'Complete a manifest or goal.', 'goal', '--scope --wave --max-waves --allow-main-branch --skip-skeleton --leads --max-jobs --concurrency --max-usd --max-tokens --commit-message --repo --pr --require-section --mutants --merge-method --timeout --tag-timeout --no-flake-check --no-watch --exempt --yes --plan --accept-stale --batch'),

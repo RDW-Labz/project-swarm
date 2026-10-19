@@ -218,7 +218,7 @@ async function readChecks(root) {
   } catch { return []; }
 }
 
-export async function initProject(root, { source = installSource(), install = installProject, sensitive, protect = [], maxUsd, maxTokens, baseCheck, confirmBase, map = true, ask, run = runCheckArgv, now = Date.now } = {}) {
+export async function initProject(root, { source = installSource(), install = installProject, sensitive, protect = [], readOnly = [], maxUsd, maxTokens, baseCheck, confirmBase, map = true, ask, run = runCheckArgv, now = Date.now } = {}) {
   // The earlier answers are read before install rewrites the pointer file.
   const priorPointer = await fs.readFile(path.join(root, '.project-swarm.json'), 'utf8').then(text => JSON.parse(text), () => null);
   const linked = await install(root, { source });
@@ -246,6 +246,7 @@ export async function initProject(root, { source = installSource(), install = in
     stack,
     sensitive: answer !== false,
     protectedPaths: [...new Set([...(prior.protectedPaths ?? []), ...detected, ...protect.map(normalizeProtectedPath)])].sort(),
+    ...((prior.readOnlyPaths?.length || readOnly.length) ? { readOnlyPaths: [...new Set([...(prior.readOnlyPaths ?? []), ...readOnly.map(normalizeProtectedPath)])].sort() } : {}),
     budget: { ...DEFAULT_PROFILE_BUDGET, ...(prior.budget ?? {}), ...(maxUsd !== undefined ? { maxUsd } : {}), ...(maxTokens !== undefined ? { maxTokens } : {}) },
     // Blocks the owner set by hand (security policy, approval, ci hooks, verify, context) survive a re-init.
     ...Object.fromEntries(['security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality', 'migrations', 'acceptance'].filter(key => prior[key] !== undefined).map(key => [key, prior[key]])),

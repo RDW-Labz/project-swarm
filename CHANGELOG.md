@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.135.0
+
+Phase 18: the starter kit hook and the scope interview (`docs/starter-kit.md`). The `web-portal` kit itself is its own repo (`web-portal-kit`), not part of project-swarm.
+- `swarm init --kit web-portal --kit-source PATH_OR_GIT_URL [--name NAME] [--no-protect-kit]`: copies the kit into a new repo (no secrets, dependencies, git history or links; size limits; all or nothing, a failure puts the folder back), names the project, lists the kit-owned files in the new profile key `readOnlyPaths` (tickets may read them as context but not edit, create or delete them; the swarm builds only in the kit's project slots), adds one Day 0 human task per service to `swarm inbox`, then runs the normal init. A git source is cloned into a temp folder that is removed; nothing from the kit is run. `kit.json` is validated (names, versions, slots with an owner, plain relative paths, env names).
+- `swarm scope new [--type web-portal] [--out FILE] [--answers FILE]`: an interview (or the same answers as JSON) that writes the scope with requirement IDs, stages of four, a "Provided by the kit" section, external services and sensitive data. No model, no cost; answers are flattened to one line each so they cannot add headings or requirements; never overwrites; rejected answers are kept in `.swarm/project/scope-answers.json`.
+- Opus review fixes: a kit that ships `.project-swarm.json` or `coordination/checks.json` is refused; placeholders only touch files the kit just wrote; a linked `.gitignore` is never written through and kit `!` lines are dropped; the whole kit is checked before anything is written and a failure restores the README and `.gitignore`; a README with content is kept; secrets are skipped in any case and depth (the init-profile secret rules); clone hardened (`--`, no submodules, no external helpers, no LFS download, passwords hidden in errors); the interview summary can no longer start a heading, NEL and Unicode separators are flattened; a kit flag twice or an empty name is refused. Kit files being read-only (not unreadable) is new: `protectedPathHit(profile, file, { read })`.
+- Tests: `tests/kit-and-interview.test.mjs` (23). A project made from the real kit passes its own typecheck, lint, 36 tests, build and 14-check smoke run. Not verified: the kit against a real Supabase, Resend or Stripe account.
+
 ## 1.134.0
 
 Handoff docs (`docs/handoff.md`): `swarm handoff generate --stage S3 [--max-usd N] [--yes] [--dry-run]`, `check --url PREVIEW [--propose]`, `status`, `final` (`handoff --to AGENT` is unchanged).
