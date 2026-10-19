@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.126.0
+
+The board's "Needs you" panel (`docs/watch.md`). `swarm watch --all` shows, above the projects, what waits for you in every project: inbox decisions with their choices, human tasks, blockers and proposed tickets, with the command to run at the computer (a Copy button) and, when a question was also sent to your phone, its state and expiry. A count sits in the top bar; `swarm watch --all --text` (and `swarm status --all`) print the same. Read-only and behind the board token: nothing is answered from the page; text is set as text, secrets are redacted, a command is never offered for an id with a control character, one unreadable project is named and does not hide the others, at most 50 rows per project. Opus review fixes: no command for a choice that starts with a dash or holds control, zero-width or text-direction characters; a bad phone expiry date no longer hides a project; an expired phone question says expired; every project is read at once with a 3 second limit (a hung one is named, the rest still show); rows are sorted across projects and the 50-per-project cap is reported ("N more not shown"). Tests: `tests/board-inbox.test.mjs`.
+
 ## 1.125.0
 
 Bare `swarm` no longer hangs, and `swarm status` exists.

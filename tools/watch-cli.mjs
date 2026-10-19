@@ -22,6 +22,7 @@ import { listProjects, projectsFile, projectId } from './projects.mjs';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { readHistory, historyCsv, historyFile } from './history.mjs';
+import { boardInbox, inboxText } from './board-inbox.mjs';
 import { boardSnapshot, projectDetail, workersHeld } from './board-data.mjs';
 import { lanesDir, machineConcurrency } from './lanes.mjs';
 import { loadLocalConfig } from './local-config.mjs';
@@ -153,13 +154,15 @@ async function safeBoard() {
   return { runs: runs.filter(run => RUN_ID_RE.test(String(run.runId)) && typeof run.root === 'string' && !/[\u0000-\u001f]/.test(run.root)) };
 }
 
-async function boardText() {
+async function boardText({ env = process.env } = {}) {
   const { runs } = await safeBoard();
-  if (!runs.length) return 'No live runs on this machine.\n';
+  const projects = await listProjects({ file: projectsFile(env) }).catch(() => []);
+  const needs = inboxText(await boardInbox({ projects, env }).catch(() => null));
+  if (!runs.length) return `No live runs on this machine.\n${needs}`;
   return runs.map(run => {
     const done = run.jobs.filter(job => job.status === 'complete').length;
     return `${run.runId}  ${run.status}  ${done}/${run.jobs.length} jobs  ${run.root}\n  watch: swarm --root ${shellQuote(run.root)} watch ${shellQuote(run.runId)}`;
-  }).join('\n') + '\n';
+  }).join('\n') + `\n${needs}`;
 }
 
 async function tuiLoop(root, runId, write) {
@@ -277,7 +280,11 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       const promise = (async () => {
         let max = null, invalid = false;
         try { max = machineConcurrency(loadLocalConfig({ env })); } catch { invalid = true; /* the runs that read it refuse to start; the board says so */ }
-        return boardSnapshot({ projects: await listProjects({ file: projectsFile(env) }), liveRuns: await live(), now: now(), workers: await workersHeld({ dir: lanesDir(env), max, invalid }) });
+        const projects = await listProjects({ file: projectsFile(env) });
+        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: now(), workers: await workersHeld({ dir: lanesDir(env), max, invalid }) });
+        // What waits for the owner (read-only); a failure here never hides the rest of the board.
+        snapshot.inbox = await boardInbox({ projects, now: now(), env }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
+        return snapshot;
       })();
       cached = { at: now(), promise };
       promise.catch(() => { if (cached?.promise === promise) cached = null; });

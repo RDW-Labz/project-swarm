@@ -28,3 +28,10 @@
 .crumbs .back:hover{background:rgba(128,128,128,.12)}
 .crumbs .sep{opacity:.5}
 .crumbs .here{opacity:.8;overflow-wrap:anywhere}
+
+.need{border:1px solid rgba(128,128,128,.3);border-left:4px solid #d9a400;border-radius:10px;padding:10px 12px;display:grid;gap:6px}
+.need-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.need-title{overflow-wrap:anywhere}
+.need-cmd{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.need-cmd code{padding:3px 6px;border-radius:6px;background:rgba(128,128,128,.15);overflow-wrap:anywhere}
+.chip.needs-some{background:#d9a400;color:#111}

@@ -94,7 +94,48 @@
     return d;
   }
 
+  function until(iso) {
+    var m = Math.round((Date.parse(iso) - Date.now()) / 60000);
+    return !isFinite(m) ? '' : m <= 0 ? 'expired' : m < 90 ? 'expires in ' + m + ' min' : 'expires in ' + Math.round(m / 60) + ' h';
+  }
+  function renderInbox(inbox) {
+    var box = $('needs'); var note = $('needsNote');
+    box.textContent = '';
+    var items = inbox && inbox.items ? inbox.items : [];
+    var chipEl = $('needsChip');
+    chipEl.textContent = (inbox ? inbox.total : 0) + ' need you';
+    chipEl.className = 'chip mono num' + (items.length ? ' needs-some' : '');
+    if (!items.length) { box.appendChild(el('div', 'board-empty', 'Nothing needs you.')); }
+    items.forEach(function (it) {
+      var row = el('div', 'need');
+      var head = el('div', 'need-head');
+      head.appendChild(chip(it.kind.replace('-', ' '), it.kind === 'blocker' ? 'bad' : 'warn'));
+      head.appendChild(link(projectHref(it.projectId), 'board-link', [el('span', 'name', it.project)]));
+      head.appendChild(el('span', 'mono', 'waiting ' + ago(it.since).replace(' ago', '')));
+      if (it.unblocks) { head.appendChild(el('span', 'mono', 'unblocks ' + it.unblocks)); }
+      if (it.phone) { head.appendChild(chip('asked on your phone (' + it.phone.status + '), ' + until(it.phone.expiresAt), 'lav')); }
+      row.appendChild(head);
+      row.appendChild(el('div', 'need-title', it.title || ''));
+      if (it.choices && it.choices.length) { row.appendChild(el('div', 'board-note', 'Choices: ' + it.choices.join(', '))); }
+      if (it.kind === 'proposed-ticket' && !it.filesNamed) { row.appendChild(el('div', 'board-note', 'Needs its files named before it can be approved' + (it.origin ? ' (from ' + it.origin + ')' : '') + '.')); }
+      if (it.command) {
+        var cmd = el('div', 'need-cmd');
+        cmd.appendChild(el('code', 'mono', it.command));
+        var btn = el('button', 'copy', 'Copy');
+        btn.type = 'button';
+        btn.addEventListener('click', function () { if (navigator.clipboard) { navigator.clipboard.writeText(it.command).then(function () { btn.textContent = 'Copied'; }, function () {}); } });
+        cmd.appendChild(btn);
+        row.appendChild(cmd);
+      }
+      box.appendChild(row);
+    });
+    if (inbox && inbox.hidden) { box.appendChild(el('div', 'board-note', inbox.hidden + ' more not shown (the list is cut at 50 per project): swarm inbox --all')); }
+    var ph = inbox && inbox.phone;
+    note.textContent = 'Read-only: the board never answers anything. Run the command at your computer' + (ph ? ph.on ? ', or answer on your phone (' + ph.open + ' question' + (ph.open === 1 ? '' : 's') + ' open in ' + ph.repo + ').' : '. Phone questions are switched off.' : '. Phone answers are not set up (swarm phone setup).') + (inbox && inbox.problems && inbox.problems.length ? ' Could not read: ' + inbox.problems.map(function (p) { return p.project; }).join(', ') + '.' : '');
+  }
+
   function renderBoard(data) {
+    renderInbox(data.inbox);
     projects = data.projects;
     $('count').textContent = projects.length + (projects.length === 1 ? ' project' : ' projects');
     $('updated').textContent = new Date().toLocaleTimeString();
