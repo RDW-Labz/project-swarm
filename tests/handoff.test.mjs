@@ -106,7 +106,9 @@ test('the manifest: two mid-tier docs jobs under the cap, writing only the two g
   assert.equal(m.budget.maxUsd, 1.5);
   assert.deepEqual(m.jobs.map(j => j.outputs[0]), ['docs/handoff/user-guide.md', 'docs/handoff/admin-guide.md']);
   assert.ok(m.jobs.every(j => j.type === 'docs' && j.tier === 'mid' && j.context.length === 1));
-  assert.ok(m.jobs.every(j => !/[\/*]/.test(j.prompt.replace(/<!--.*?-->/g, ''))), 'no slash or asterisk tokens');
+  // The one example check line is the only place a slash may appear (cut out by position, not by pattern).
+  const withoutExample = prompt => prompt.slice(0, prompt.indexOf('<!--')) + prompt.slice(prompt.indexOf('-->') + 3);
+  assert.ok(m.jobs.every(j => !/[\/*]/.test(withoutExample(j.prompt))), 'no slash or asterisk tokens');
   assert.match(m.jobs[0].prompt, /Do not invent/);
   assert.match(m.jobs[0].prompt, /TODO \(owner\)/);
 });
