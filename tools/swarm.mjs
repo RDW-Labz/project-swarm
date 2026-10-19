@@ -57,7 +57,7 @@ import { loadRuns } from './brief.mjs';
 import { zeroTestGuard } from './zero-tests.mjs';
 import { projectStatus, formatStatus } from './status.mjs';
 import { commandLikeMessage } from './goal-guard.mjs';
-import { zshCompletion, completeRuns } from './completion.mjs';
+import { zshCompletion, completeRuns, COMMANDS } from './completion.mjs';
 import { checkSwarmCommand } from './swarm-bin.mjs';
 import { autoInit, GOAL_BUDGET, isGoalArgument, manifestForGoal, goGoal, goalRunId, topLevelFolders, trackedFiles, worktreeDirty, createGoBranch } from './goal.mjs';
 import { SCALE_DEFAULT_CONCURRENCY, SCALE_DEFAULT_JOBS, prepareScaleRepo, scaleStub } from './scale.mjs';
@@ -6677,6 +6677,8 @@ export async function updateInstall(root,{home,doctorAllImpl=doctorAll}={}){
   if(beforePkg.name!=='project-swarm')fail('Refusing to update: target is not a project-swarm install');
   const gitRoot=await fs.realpath((await execFileAsync('git',['-C',root,'rev-parse','--show-toplevel'],{encoding:'utf8'})).stdout.trim());
   if(gitRoot!==root)fail('Refusing to update: project-swarm install must be its own git checkout');
+  // An install made with --dev is a development checkout: it is never moved to a release (that would detach its branch).
+  try{if(JSON.parse(await fs.readFile(path.join(root,'.swarm-install.json'),'utf8')).dev===true)fail('Refusing to update: this install was made with --dev (a development checkout), so it is never moved to a release. Install a real one with: node tools/install.mjs --user (from a clean checkout of a release tag)');}catch(error){if(error?.message?.startsWith('Refusing'))throw error;}
   if(await gitDirty(root,['tools','skills']))fail('Refusing to update: uncommitted changes in tools/ or skills/');
   const from=beforePkg.version;
   await execFileAsync('git',['-C',root,'fetch','--tags'],{encoding:'utf8'});
@@ -7232,6 +7234,17 @@ export function parseGoFlags(flags) {
 // Run through current/, this file's realpath is a snapshot under <install>/versions/<v>/, which
 // holds only tools/ and package.json; commands with no --root (version, update, self-hosted
 // runs) must still target the install checkout itself, never the snapshot.
+// What a person sees for a word swarm does not know: say so, say which swarm this is, and point at the likely cause (an install that has not been updated).
+export async function invalidArgumentsMessage(command,installRoot){
+  const known=new Set(COMMANDS.map(c=>c.name));
+  if(command&&!command.startsWith('-')&&!known.has(command)){
+    let version='unknown';try{version=JSON.parse(await fs.readFile(path.join(installRoot,'package.json'),'utf8')).version;}catch{/* version stays unknown */}
+    return `Unknown command "${command}". This is swarm ${version} (${installRoot}). If it is a newer command, run: swarm update. swarm --help lists the commands.`;
+  }
+  if(command&&command.startsWith('-'))return `Unknown option "${command}". swarm --help lists the commands and their options.`;
+  return 'Invalid arguments; use --help';
+}
+
 export function defaultRoot(dir){
   return path.basename(path.dirname(dir))==='versions'?path.dirname(path.dirname(dir)):dir;
 }
@@ -7525,6 +7538,8 @@ async function runStats(root, runId) {
 
 async function mainInner() {
   const args=process.argv.slice(2);let root=resolveDefaultRoot(ownRoot, process.cwd());
+  // swarm --version (also -v, -V) is swarm version.
+  if(['--version','-v','-V'].includes(args[0]))args[0]='version';
   const testIndex=args.indexOf('--test');
   const rootIndex=args.findIndex((arg,index)=>arg==='--root'&&(testIndex===-1||index<testIndex));
   const newCommandIndex = rootIndex === 0 ? 2 : 0;
@@ -7580,7 +7595,7 @@ async function mainInner() {
     const cut=args.indexOf('--');
     const flagArgs=(cut===-1?args:args.slice(0,cut));
     const helpAt=flagArgs.findIndex((a,i)=>i>0&&(a==='--help'||a==='-h')&&!VALUE_FLAGS.has(flagArgs[i-1]));
-    if(helpAt!==-1&&['go','plan','scope','tickets','change','run','integrate','autopilot','merge','update','cancel','resume','sweep','backlog','ui','gallery','stop','backup','restore','migrations','projects','history','budgets','models'].includes(args[0]))args.splice(0,args.length,'--help');
+    if(helpAt!==-1&&['go','plan','scope','tickets','change','run','integrate','autopilot','merge','update','cancel','resume','sweep','backlog','ui','gallery','stop','backup','restore','migrations','projects','history','budgets','models','doctor','validate','preflight','board','orphans','status','monitor','wait','inspect','rollup','mutants','env','redcheck','think','digest','init','map','scale','note','ask','scout','verify','check-pins','version','squash','clean-branch','onboard','ledger','idle','done'].includes(args[0]))args.splice(0,args.length,'--help');
   }
   // Commands that act on the install itself keep the install root even when run from a project folder.
   if(rootIndex===-1&&INSTALL_COMMANDS.includes(args[0]))root=defaultRoot(ownRoot);
@@ -8051,7 +8066,31 @@ async function mainInner() {
       fail('Invalid arguments; use --help');
     }
     root=await fs.realpath(root);
-    const result=useProjects?await updateProjects(root,{projects:dirs.length?dirs:undefined,yes}):await updateInstall(root);
+    // `swarm update` moves the INSTALLED swarm (the one the swarm command on this machine runs). Run from a development checkout it must not touch that checkout
+    // (it would detach its branch): it finds the install through the launcher, and says so. (--root is refused for update: it always means the install.)
+    const bin=await import('./swarm-bin.mjs');
+    const launcher=await bin.readLauncher(os.homedir());
+    let target=root,note;
+    {
+      if(launcher&&!launcher.installRoot)fail(`the swarm command (${launcher.path}) runs ${launcher.runner}, which is not <install>/current/tools/swarm.mjs, so swarm cannot tell which install to update; reinstall with: node tools/install.mjs --user`);
+      const installed=launcher?.installRoot??path.join(os.homedir(),'.project-swarm');
+      const real=await fs.realpath(installed).catch(()=>null);
+      if(real&&real!==root){target=real;note=`updated the installed swarm at ${real}; the checkout you ran this from (${root}) was left alone`;}
+      else if(!real&&root===await fs.realpath(ownRoot).catch(()=>ownRoot)&&path.basename(path.dirname(ownRoot))!=='versions')fail(`this is a development checkout (${root}) and there is no installed swarm at ${installed}; install one with: node tools/install.mjs --user`);
+    }
+    const result=useProjects?await updateProjects(target,{projects:dirs.length?dirs:undefined,yes}):await updateInstall(target);
+    if(!useProjects){
+      const after=await bin.readLauncher(os.homedir());
+      const runnerVersion=after?await fs.readFile(path.join(path.dirname(path.dirname(after.runner)),'package.json'),'utf8').then(t=>JSON.parse(t).version,()=>null):null;
+      result.target=target;
+      if(note)result.note=note;
+      result.command={path:after?.path??null,runner:after?.runner??null,version:runnerVersion};
+      const commandRoot=after?.installRoot?await fs.realpath(after.installRoot).catch(()=>null):null;
+      if(!after)result.warning='there is no swarm command of ours on this machine; run node tools/install.mjs --user in the install to create ~/.local/bin/swarm';
+      else if(runnerVersion===null)result.warning=`the swarm command (${after.path}) points at ${after.runner}, which is missing: run node tools/install.mjs --user in ${target}`;
+      else if(commandRoot&&commandRoot!==target)result.warning=`the swarm command runs the install at ${commandRoot}, not ${target}: run node tools/install.mjs --user in ${target} to move it`;
+      else if(result.to&&runnerVersion!==result.to&&!result.tagPending)result.warning=`the swarm command still runs ${runnerVersion}, not ${result.to}: run node tools/install.mjs --user in ${target}`;
+    }
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }
@@ -8548,7 +8587,7 @@ async function mainInner() {
       rest.push(flag);
     }
   }
-  if(rest.length||!['doctor','board','orphans','init','validate','preflight','run','status','monitor','wait','inspect','integrate','cancel','ship','go','resume','ledger','idle'].includes(command)||(command==='doctor'?(argument!==undefined&&!['claude','codex','cursor','shell',...EXTRA_CLI_AGENTS,...API_AGENTS,'all'].includes(argument)):(command==='board'||command==='orphans'||command==='init')?argument!==undefined:!argument))fail('Invalid arguments; use --help');
+  if(rest.length||!['doctor','board','orphans','init','validate','preflight','run','status','monitor','wait','inspect','integrate','cancel','ship','go','resume','ledger','idle'].includes(command)||(command==='doctor'?(argument!==undefined&&!['claude','codex','cursor','shell',...EXTRA_CLI_AGENTS,...API_AGENTS,'all'].includes(argument)):(command==='board'||command==='orphans'||command==='init')?argument!==undefined:!argument))fail(await invalidArgumentsMessage(command,defaultRoot(ownRoot)));
   root=await fs.realpath(root);let result;
   // Field lesson #225: the effective claude-shell sandbox profile, one command instead of an
   // inference from a validate warning or `doctor openrouter`.
