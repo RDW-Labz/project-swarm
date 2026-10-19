@@ -23,7 +23,7 @@ plan saved: plan-... (run it with: swarm go --plan plan-...)
 
 ## Approving
 
-- `swarm go "GOAL"` prints the same preview (to stderr) and asks `Run? [y/N]`. Only `y` or `yes` runs it.
+- `swarm go "GOAL"` prints the same preview (to stderr) and asks `Run, spending at most $X (the cap)? [y/N]` (the question names the cap, the most the run may spend). Only `y` or `yes` runs it. A goal that looks like a command (a `--flag` in it, or a known subcommand starting a sentence of up to three words) is refused with "Did you mean: swarm ...?" before anything is planned.
 - `--yes` skips the question. With no terminal (a script, cron, another agent) `--yes` is required, and it also needs `--max-usd`.
 - `swarm go --plan ID` runs exactly the saved plan. It refuses if the repository moved since the plan was made (`plan-stale`; pass `--accept-stale` to go on) or if the saved file was edited (`plan-invalid: hash`).
 - A plan runs once (`plan-already-run` after that). The saved file is checked against a hash of the manifest, goal, flags and HEAD, so an accidental or casual edit is refused; the preview shown at approval is recomputed from the saved manifest, never read from the file. `--max-usd` and `--max-tokens` on `go --plan` can only tighten the saved caps.
