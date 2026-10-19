@@ -2,10 +2,15 @@
 // swarm time log HOURS "note" | list      swarm quote SCOPE.md | record | list | config
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { ownerHoursOf, renderSummary } from './time-auto.mjs';
 import { parseScope } from './scope.mjs';
 import { logTime, readTime, readQuoteConfig, writeQuoteConfig, readRecords, recordsDamaged, saveRecord, buildRecord, buildQuote, estimatedFull, renderQuote, traitsOf, quotesDir } from './quotes.mjs';
 
-export const TIME_USAGE = 'Usage: swarm time log HOURS ["note"]     swarm time list';
+export const TIME_USAGE = [
+  'Usage: swarm time log HOURS ["note"] [--date YYYY-MM-DD | --through YYYY-MM-DD]   your own hours (--date: a past day; --through: a total up to that day)',
+  '       swarm time summary [--days N]    estimated hands-on hours per day from your activity (marked estimated); your entries replace the estimate for their days',
+  '       swarm time list                  your entries',
+].join('\n');
 export const QUOTE_USAGE = [
   'Usage: swarm quote SCOPE.md                                  ranges from the most similar finished projects (price blank until rate and margin are set)',
   '       swarm quote record [--name NAME] [--charged USD] [--change-orders N] [--gpu-hours H] [--backfill]   keep this project\'s numbers',
@@ -14,22 +19,37 @@ export const QUOTE_USAGE = [
 ].join('\n');
 const out = (stdout, exitCode = 0) => ({ stdout: stdout.endsWith('\n') ? stdout : `${stdout}\n`, exitCode });
 
-export async function runTimeCommand(root, args, { now = Date.now } = {}) {
+export async function runTimeCommand(root, args, { now = Date.now, activity } = {}) {
   const [sub, ...rest] = args;
   if (sub === 'log') {
-    if (rest[0] === undefined) return out(TIME_USAGE, 2);
-    const result = await logTime(root, rest[0], rest.slice(1).join(' '), { now });
-    return result.ok ? out(`logged ${result.entry.hours} hours (${(await readTime(root)).total} total on this project)`) : out(result.error, 2);
+    const words = [];
+    const flags = {};
+    for (let i = 0; i < rest.length; i += 1) {
+      if ((rest[i] === '--date' || rest[i] === '--through') && rest[i + 1] !== undefined) flags[rest[i].slice(2)] = rest[++i];
+      else if (rest[i].startsWith('--')) return out(`Unknown argument: ${rest[i]}\n${TIME_USAGE}`, 2);
+      else words.push(rest[i]);
+    }
+    if (words[0] === undefined) return out(TIME_USAGE, 2);
+    const result = await logTime(root, words[0], words.slice(1).join(' '), { now, ...flags });
+    if (!result.ok) return out(result.error, 2);
+    const daily = await ownerHoursOf(root, activity);
+    return out(`logged ${result.entry.hours} hours${flags.through ? ` as your total through ${flags.through}` : flags.date ? ` for ${flags.date}` : ''}; hours that count on this project now: ${daily.total} (${daily.estimatedPart} estimated)`);
+  }
+  if (sub === 'summary') {
+    let days = 14;
+    if (rest[0] === '--days') { days = Number(rest[1]); if (!Number.isInteger(days) || days < 1 || days > 400) return out('--days must be a whole number from 1 to 400', 2); }
+    else if (rest.length) return out(TIME_USAGE, 2);
+    return out(renderSummary(await ownerHoursOf(root, activity), { days, now }));
   }
   if (sub === 'list') {
     const t = await readTime(root);
-    const lines = t.entries.map(e => `${e.at.slice(0, 10)}  ${String(e.hours).padStart(5)} h  ${e.note}`.trimEnd());
-    return out(t.entries.length ? [...lines, `total ${t.total} hours${t.skipped ? ` (${t.skipped} unreadable line(s) skipped)` : ''}`].join('\n') : 'No hours logged yet. swarm time log HOURS "note"');
+    const lines = t.entries.map(e => `${e.day ?? e.at.slice(0, 10)}  ${String(e.hours).padStart(5)} h  ${e.through ? `(total through ${e.through}) ` : ''}${e.note}`.trimEnd());
+    return out(t.entries.length ? [...lines, `entered ${t.total} hours${t.skipped ? ` (${t.skipped} unreadable line(s) skipped)` : ''}; swarm time summary shows what counts`].join('\n') : 'No hours entered yet. swarm time log HOURS "note"   (swarm time summary shows the estimate)');
   }
   return out(TIME_USAGE, 2);
 }
 
-export async function runQuoteCommand(root, args, { now = Date.now, env = process.env } = {}) {
+export async function runQuoteCommand(root, args, { now = Date.now, env = process.env, activity } = {}) {
   const dir = quotesDir(env);
   const [sub, ...rest] = args;
   if (sub === 'config') {
@@ -69,11 +89,11 @@ export async function runQuoteCommand(root, args, { now = Date.now, env = proces
     };
     let record;
     try {
-      record = await buildRecord(root, { name: flags.name ?? path.basename(root), source: flags.backfill ? 'backfill' : 'recorded', charged: numeric('charged'), changeOrders: numeric('change-orders', true), gpuHours: numeric('gpu-hours'), now });
+      record = await buildRecord(root, { name: flags.name ?? path.basename(root), source: flags.backfill ? 'backfill' : 'recorded', charged: numeric('charged'), changeOrders: numeric('change-orders', true), gpuHours: numeric('gpu-hours'), now, activity });
     } catch (error) { return out(error.message, 2); }
     let saved;
     try { saved = await saveRecord(dir, record); } catch (error) { return out(error.message, 1); }
-    return out([`${saved.replaced ? 'updated' : 'kept'}: ${record.name}${record.source === 'backfill' ? ' (backfilled)' : ''}`, `requirements ${record.requirements ?? '?'}, tickets ${record.tickets ?? '?'}, estimated full ${record.estimatedFullUsd === null ? '? (no runs here)' : `$${record.estimatedFullUsd}`} (billed ${record.billedUsd === null ? '?' : `$${record.billedUsd}`}), flat-rate list value ${record.flatRateListUsd === null ? '?' : `$${record.flatRateListUsd}`}, owner hours ${record.ownerHours ?? 'none logged'}, calendar days ${record.calendarDays ?? '?'}`].join('\n'));
+    return out([`${saved.replaced ? 'updated' : 'kept'}: ${record.name}${record.source === 'backfill' ? ' (backfilled)' : ''}`, `requirements ${record.requirements ?? '?'}, tickets ${record.tickets ?? '?'}, estimated full ${record.estimatedFullUsd === null ? '? (no runs here)' : `$${record.estimatedFullUsd}`} (billed ${record.billedUsd === null ? '?' : `$${record.billedUsd}`}), flat-rate list value ${record.flatRateListUsd === null ? '?' : `$${record.flatRateListUsd}`}, owner hours ${record.ownerHours ?? 'none'}${record.ownerHoursEstimated ? ` (${record.ownerHoursEstimated} of them estimated)` : ''}, calendar days ${record.calendarDays ?? '?'}`].join('\n'));
   }
   if (sub && !sub.startsWith('--')) {
     let text;

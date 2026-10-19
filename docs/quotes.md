@@ -7,6 +7,14 @@ Private to you. Never part of a client report. Nothing here calls a model or the
 - `swarm time log HOURS "note"` adds one entry (0.05 to 24 hours) to `.swarm/project/time.ndjson` in the project.
 - `swarm time list` shows the entries and the total.
 
+## Estimated hours (automatic)
+
+`swarm time summary [--days N]` shows your estimated hands-on hours per day. Signals, timestamps only (never what you wrote): your messages to the orchestrator in this folder's Claude Code sessions (`~/.claude/projects/...`), ticket approvals, merges, and inbox answers. Activity with gaps of 15 minutes or less is one working block; its hours are the block's span plus 5 minutes (a single message still took some time). Messages that are tool results, system notices or side conversations do not count, and work in a different folder is not attributed.
+
+Estimates are marked **estimated** and are never written to the time file. Your entries replace them:
+- `swarm time log 3 "note"` replaces today's estimate; `--date YYYY-MM-DD` corrects a past day.
+- `swarm time log 5.5 "so far" --through YYYY-MM-DD` enters a total up to that day: counted once, and the estimates for the days before it are not added on top.
+
 ## What is kept for each finished project
 
 `swarm quote record [--name NAME] [--charged USD] [--change-orders N] [--gpu-hours H] [--backfill]`, run in the project folder, writes one entry to `~/.project-swarm/quotes/projects.json` (change the folder with `SWARM_QUOTES_DIR`). Recording again with the same name updates the entry.
