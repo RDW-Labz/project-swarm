@@ -9,7 +9,7 @@ import { isExampleFile } from './init-profile.mjs';
 import { isSensitivePath } from './sensitive-paths.mjs';
 
 // Tickets made from outside text (a gallery comment, a production error) are proposals: no worker runs one until the owner approves it.
-export const PROPOSAL_ORIGINS = ['comment', 'error'];
+export const PROPOSAL_ORIGINS = ['comment', 'error', 'handoff'];
 const unapprovedProposal = t => PROPOSAL_ORIGINS.includes(t?.origin) && t.approvedBy !== 'owner';
 export const STATUSES = ['proposed', 'todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled'];
 export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'contract', 'human'];
@@ -128,8 +128,8 @@ export function validateTicket(t) {
     const list = t.acceptanceResults;
     if (!Array.isArray(list) || list.length > 100 || !list.every(r => r && typeof r === 'object' && Number.isInteger(r.n) && r.n >= 1 && r.n <= 200 && ['test', 'review', 'owner'].includes(r.by) && ['pass', 'fail', 'pending', 'missing', 'accepted'].includes(r.verdict) && (r.line === undefined || (typeof r.line === 'string' && r.line.length <= 200)) && (r.evidence === undefined || (typeof r.evidence === 'string' && r.evidence.length <= 300)))) errors.push('acceptanceResults must be a list of {n, line, by, verdict, evidence} (verdict pass, fail, pending, missing or accepted)');
   }
-  if (t.origin !== undefined && !['ci', ...PROPOSAL_ORIGINS].includes(t.origin)) errors.push('origin must be ci, comment or error when set');
-  if (PROPOSAL_ORIGINS.includes(t.origin) && t.status !== 'proposed' && t.status !== 'cancelled' && !(t.approvedBy === 'owner')) errors.push('a ticket made from a comment or an error needs the owner approval record (approvedBy)');
+  if (t.origin !== undefined && !['ci', ...PROPOSAL_ORIGINS].includes(t.origin)) errors.push('origin must be ci, comment, error or handoff when set');
+  if (PROPOSAL_ORIGINS.includes(t.origin) && t.status !== 'proposed' && t.status !== 'cancelled' && !(t.approvedBy === 'owner')) errors.push('a ticket made from a comment, an error or a handoff check needs the owner approval record (approvedBy)');
   if (t.type === 'human' && !(isStrArr(t.steps) && t.steps.length >= 1 && t.steps.length <= 30)) errors.push('human tickets need 1 to 30 steps');
   return { ok: errors.length === 0, errors };
 }
@@ -194,7 +194,7 @@ export async function transition(root, id, to, { by = 'system', note, now = Date
   const ticket = ledger.tickets.find(t => t.id === id);
   if (!ticket) throw fail('ticket-missing', `no ticket ${id}`);
   if (!STATUSES.includes(to) || !legalMoves(ticket).includes(to)) throw fail('ticket-transition', `${id}: ${ticket.status} -> ${to} is not allowed; legal next statuses: ${legalMoves(ticket).join(', ') || 'none'}`);
-  if (unapprovedProposal(ticket) && ['todo', 'ready', 'running'].includes(to)) throw fail('ticket-unapproved', `${id} came from outside text (a gallery comment or a production error); the owner approves it with swarm tickets ${id} --approve`);
+  if (unapprovedProposal(ticket) && ['todo', 'ready', 'running'].includes(to)) throw fail('ticket-unapproved', `${id} came from outside text (a gallery comment, a production error or a handoff check); the owner approves it with swarm tickets ${id} --approve`);
   if (to === 'ready') {
     const waiting = (ticket.dependsOn ?? []).filter(d => ledger.tickets.find(x => x.id === d)?.status !== 'done');
     if (waiting.length) throw fail('ticket-deps', `${id} waits on ${waiting.join(', ')}`);

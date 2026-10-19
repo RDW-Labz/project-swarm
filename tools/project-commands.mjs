@@ -146,8 +146,9 @@ export async function runBriefCommand(root, args, { now = Date.now } = {}) {
 }
 
 export async function runHandoffCommand(root, args, { now = Date.now } = {}) {
+  if (['generate', 'check', 'status', 'final'].includes(args[0])) return (await import('./handoff-commands.mjs')).runHandoffDocs(root, args);
   const at = args.indexOf('--to');
-  if (args.length !== 2 || at !== 0 || !args[1]) return { stdout: 'Usage: swarm handoff --to codex|cursor|claude|gemini\n', exitCode: 1 };
+  if (args.length !== 2 || at !== 0 || !args[1]) return { stdout: 'Usage: swarm handoff --to codex|cursor|claude|gemini | generate --stage S3 | check --url URL | status | final\n', exitCode: 1 };
   const brief = await currentBrief(root, { now });
   try { return { stdout: `${renderAgentHandoff(brief, args[1])}\n`, exitCode: 0 }; }
   catch (error) { return { stdout: `${error.message}\nUsage: swarm handoff --to codex|cursor|claude|gemini\n`, exitCode: 1 }; }
