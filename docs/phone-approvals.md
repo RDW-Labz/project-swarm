@@ -4,7 +4,7 @@ Answer the swarm from your phone, with the GitHub app you may already have. No s
 
 ## Set up (once)
 
-1. `swarm phone setup --repo OWNER/NAME` uses that repo, creates it (private) if it does not exist, and **refuses a public repo**. It records your own GitHub login, from `gh`: that login is the only one ever listened to. (The login must be allowed to create repos where you name one; or create the private repo yourself first.)
+1. `swarm phone setup --repo OWNER/NAME` uses that repo, creates it (private) if it does not exist, and **refuses a public repo**. It records your own GitHub login, from `gh`; add other logins that are also you with `--owner LOGIN` (repeatable). Replies from those logins, and no others, count. Whichever of them can see the repo can run `swarm phone sync`. (The login must be allowed to create repos where you name one; or create the private repo yourself first.)
 2. On the phone: install the GitHub app, sign in, open the repo and choose Watch > All activity.
 3. `swarm phone sync` opens a question for each waiting decision (and each proposed ticket that already names its files), plus one **panic button**.
 
@@ -27,7 +27,7 @@ Merge, deploy, raise a spend cap, accept a security or migration override, accep
 
 ## The rules that make it safe
 
-- A reply counts only if it is from **your login**, on an issue the swarm opened (kept in a local record, not read from the issue), **once**, within **24 hours**, **unedited**, one plain word, and one of the replies **that question** offered. Anything else is ignored; `~/.project-swarm/phone/ignored.ndjson` records who, which issue and why (never what they wrote).
+- A reply counts only if it is from **one of your logins**, on an issue the swarm opened (kept in a local record, not read from the issue), **once**, within **24 hours**, **unedited**, one plain word, and one of the replies **that question** offered. Anything else is ignored; `~/.project-swarm/phone/ignored.ndjson` records who, which issue and why (never what they wrote).
 - **Second step** for anything touching money, sign-in, secrets, deletion, migrations or production, a ticket marked sensitive or high risk, a ticket whose files look like those, and always for the panic button: after your answer the swarm posts a one-time word; reply with it within an hour. Three wrong words lock the question. `decline` cancels.
 - An answer is recorded **before** it runs, so a crash or a second reply cannot run it twice. A failing command is reported on the issue and not retried.
 - A question you handled at your computer is closed on the next sync. Expired ones are closed with "Nothing was done".

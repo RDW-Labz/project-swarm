@@ -26,6 +26,8 @@ const MAX_WRONG_WORDS = 3;
 const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
 const LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 const LABEL = 'swarm-phone';
+const MAX_OWNERS = 4;
+const MARK = '<!-- swarm-phone -->';
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const TICKET_ID = /^T-\d{4}$/;
 
@@ -46,8 +48,11 @@ async function writeJson(file, value) {
 
 export async function readPhoneConfig(dir = phoneDir()) {
   const c = await readJson(path.join(dir, 'config.json'), null).catch(() => null);
-  if (!c || typeof c.repo !== 'string' || !REPO_RE.test(c.repo) || typeof c.owner !== 'string' || !LOGIN_RE.test(c.owner)) return null;
-  return { repo: c.repo, owner: c.owner, enabled: c.enabled !== false };
+  if (!c || typeof c.repo !== 'string' || !REPO_RE.test(c.repo)) return null;
+  // The owner may have more than one GitHub login (all of them are the owner); a config from before had a single `owner`.
+  const owners = [...new Set([...(Array.isArray(c.owners) ? c.owners : []), ...(typeof c.owner === 'string' ? [c.owner] : [])].filter(l => typeof l === 'string' && LOGIN_RE.test(l)))].slice(0, MAX_OWNERS);
+  if (!owners.length) return null;
+  return { repo: c.repo, owner: owners[0], owners, enabled: c.enabled !== false };
 }
 export const writePhoneConfig = (dir, config) => writeJson(path.join(dir, 'config.json'), config);
 const stateFile = dir => path.join(dir, 'state.json');
@@ -88,11 +93,15 @@ const api = async (deps, args, body) => {
 };
 
 // Create the private repo if it is not there (the owner chose this repo), and refuse a repo that is not private: decisions must not be public.
-export async function setupPhone({ repo, dir = phoneDir(), deps }) {
+export async function setupPhone({ repo, dir = phoneDir(), deps, owners: extra = [] }) {
   if (!REPO_RE.test(repo ?? '')) return { ok: false, error: 'the repo must look like OWNER/NAME' };
   let login;
   try { login = String(await deps.gh(['api', 'user', '--jq', '.login'])).trim(); } catch { return { ok: false, error: 'gh is not logged in (gh auth login)' }; }
   if (!LOGIN_RE.test(login)) return { ok: false, error: 'could not read your GitHub login' };
+  if (extra.some(l => !LOGIN_RE.test(String(l)))) return { ok: false, error: '--owner must be a GitHub login' };
+  const owners = [];
+  for (const l of [login, ...extra.map(String)]) if (!owners.some(o => o.toLowerCase() === l.toLowerCase())) owners.push(l);
+  owners.splice(MAX_OWNERS);
   let info = null;
   try { info = JSON.parse(await deps.gh(['repo', 'view', repo, '--json', 'isPrivate,nameWithOwner'])); } catch { info = null; }
   let created = false;
@@ -102,8 +111,8 @@ export async function setupPhone({ repo, dir = phoneDir(), deps }) {
   }
   if (info.isPrivate !== true) return { ok: false, error: `${repo} is PUBLIC. Phone decisions must be private: make it private or pick another repo` };
   try { await deps.gh(['api', '-X', 'POST', `repos/${repo}/labels`, '--input', '-'], { input: JSON.stringify({ name: LABEL, color: '5319e7', description: 'created by swarm phone sync' }) }); } catch { /* the label may already exist */ }
-  await writePhoneConfig(dir, { repo, owner: login, enabled: true });
-  return { ok: true, repo, owner: login, created };
+  await writePhoneConfig(dir, { repo, owner: owners[0], owners, enabled: true });
+  return { ok: true, repo, owner: owners[0], owners, created };
 }
 
 // ---- what is offered ----------------------------------------------------------------------------------------------------------------------------
@@ -139,7 +148,7 @@ export function issueBody(rec, { expiresAt }) {
   }
   if (rec.kind === 'decision') lines.push('', 'Picking a choice other than the current default adds a change to the backlog, so it needs the confirmation word.');
   if (rec.secondStep && rec.kind !== 'panic') lines.push('', 'This one touches money, sign-in, secrets, deletion or production: after your answer I will post a one-time word, and you reply with it to confirm.');
-  lines.push('', `Only your own GitHub login is listened to. One answer, until ${new Date(expiresAt).toISOString()}. Merging, deploying, spend caps and overrides are never done from here: do those at your computer.`);
+  lines.push('', `Only your own GitHub login(s) are listened to. One answer, until ${new Date(expiresAt).toISOString()}. Merging, deploying, spend caps and overrides are never done from here: do those at your computer.`);
   return lines.join('\n');
 }
 
@@ -148,7 +157,8 @@ export function issueBody(rec, { expiresAt }) {
 const word = random => `${['amber', 'birch', 'cedar', 'dune', 'ember', 'fjord', 'grove', 'heron', 'iris', 'jade', 'kelp', 'lark'][random(12)]}-${['otter', 'pine', 'quartz', 'reed', 'slate', 'tide', 'umber', 'vale', 'wren', 'yarrow', 'zinc', 'moss'][random(12)]}-${String(random(90) + 10)}`;
 const same = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && timingSafeEqual(x, y); };
 
-const comment = (deps, repo, number, body) => api(deps, ['api', '-X', 'POST', `repos/${repo}/issues/${number}/comments`], { body });
+// Every comment the swarm posts starts with a marker and is never read back as an answer (the swarm's gh login may itself be one of the owner's logins).
+const comment = (deps, repo, number, body) => api(deps, ['api', '-X', 'POST', `repos/${repo}/issues/${number}/comments`], { body: `${MARK}\n${body}` });
 const closeIssue = (deps, repo, number) => api(deps, ['api', '-X', 'PATCH', `repos/${repo}/issues/${number}`], { state: 'closed' });
 
 /**
@@ -198,8 +208,9 @@ async function syncUnlocked({ dir, deps, dryRun }) {
       const id = String(c?.id ?? '');
       if (!id || rec.seen.includes(id)) continue;
       rec.seen.push(id);
+      if (String(c?.body ?? '').startsWith(MARK)) continue;
       const login = String(c?.user?.login ?? '');
-      const why = login.toLowerCase() !== config.owner.toLowerCase() ? 'not the owner' : c.user?.type && c.user.type !== 'User' ? 'not a user account' : c.updated_at !== c.created_at ? 'edited' : !(Date.parse(c.created_at) >= rec.createdAt) ? 'before the issue' : Date.parse(c.created_at) > rec.expiresAt ? 'after expiry' : null;
+      const why = !config.owners.some(o => o.toLowerCase() === login.toLowerCase()) ? 'not the owner' : c.user?.type && c.user.type !== 'User' ? 'not a user account' : c.updated_at !== c.created_at ? 'edited' : !(Date.parse(c.created_at) >= rec.createdAt) ? 'before the issue' : Date.parse(c.created_at) > rec.expiresAt ? 'after expiry' : null;
       if (why) { report.ignored += 1; if (!dryRun) await logIgnored(dir, { issue: Number(number), login: clean(login, 40), reason: why }, now); continue; }
       const token = String(c.body ?? '').trim().toLowerCase();
       if (token.length > 40 || /\s/.test(token)) { report.ignored += 1; if (!dryRun) await logIgnored(dir, { issue: Number(number), login, reason: 'not one word' }, now); continue; }

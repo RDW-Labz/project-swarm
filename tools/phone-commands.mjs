@@ -14,7 +14,7 @@ const run = promisify(execFile);
 const SWARM = fileURLToPath(new URL('./swarm.mjs', import.meta.url));
 
 export const PHONE_USAGE = [
-  'Usage: swarm phone setup --repo OWNER/NAME   use (or create) a PRIVATE repo for phone questions; needs the gh login',
+  'Usage: swarm phone setup --repo OWNER/NAME [--owner LOGIN]...   use (or create) a PRIVATE repo; the active gh login is the owner, each --owner adds another of YOUR logins',
   '       swarm phone sync [--dry-run]            open issues for what waits for you, read your answers (run it by hand or in a loop)',
   '       swarm phone status                      what is set up and how many questions are open',
   '       swarm phone off                         stop opening issues and reading answers',
@@ -51,11 +51,16 @@ export function realDeps() {
 export async function runPhoneCommand(args, { deps = realDeps(), dir = phoneDir() } = {}) {
   const [sub, ...rest] = args;
   if (sub === 'setup') {
-    const i = rest.indexOf('--repo');
-    if (i === -1 || rest[i + 1] === undefined || rest.length !== 2) return out(PHONE_USAGE, 2);
-    const result = await setupPhone({ repo: rest[i + 1], dir, deps });
+    let repo; const owners = [];
+    for (let k = 0; k < rest.length; k += 1) {
+      if (rest[k] === '--repo' && rest[k + 1] !== undefined && repo === undefined) repo = rest[++k];
+      else if (rest[k] === '--owner' && rest[k + 1] !== undefined) owners.push(rest[++k]);
+      else return out(PHONE_USAGE, 2);
+    }
+    if (repo === undefined) return out(PHONE_USAGE, 2);
+    const result = await setupPhone({ repo, dir, deps, owners });
     if (!result.ok) return out(result.error, 1);
-    return out([`${result.created ? 'created the private repo' : 'using the private repo'} ${result.repo}`, `only your GitHub login (${result.owner}) is listened to`,
+    return out([`${result.created ? 'created the private repo' : 'using the private repo'} ${result.repo}`, `only replies from ${result.owners.join(' or ')} count; every other login is ignored`,
       'On your phone: install the GitHub app, sign in, and turn on notifications for that repo (Watch > All activity).',
       'Then: swarm phone sync   (opens a question per waiting decision, plus a panic button)',
       `Offered from a phone: ${PHONE_ACTIONS.join(', ')}. Never: ${NEVER_FROM_PHONE.join(', ')}.`].join('\n'));
@@ -69,7 +74,7 @@ export async function runPhoneCommand(args, { deps = realDeps(), dir = phoneDir(
   if (sub === 'status' && !rest.length) {
     const s = await phoneStatus(dir);
     if (!s.config) return out('phone is not set up. swarm phone setup --repo OWNER/NAME');
-    return out([`repo: ${s.config.repo}   listening to: ${s.config.owner}   ${s.config.enabled ? 'on' : 'OFF'}`, Object.entries(s.counts).map(([k, v]) => `${k}: ${v}`).join(', ') || 'no questions yet'].join('\n'));
+    return out([`repo: ${s.config.repo}   listening to: ${s.config.owners.join(', ')}   ${s.config.enabled ? 'on' : 'OFF'}`, Object.entries(s.counts).map(([k, v]) => `${k}: ${v}`).join(', ') || 'no questions yet'].join('\n'));
   }
   if (sub === 'off' && !rest.length) { const r = await phoneOff(dir); return r.ok ? out('phone is off: no issues are opened and no answers are read. swarm phone setup --repo ... turns it on again') : out(r.error, 1); }
   return out(PHONE_USAGE, 2);
