@@ -8,7 +8,7 @@ Answer the swarm from your phone, with the GitHub app you may already have. No s
 2. On the phone: install the GitHub app, sign in, open the repo and choose Watch > All activity.
 3. `swarm phone sync` opens a question for each waiting decision (and each proposed ticket that already names its files), plus one **panic button**.
 
-`swarm phone status` shows what is open. `swarm phone off` stops it. `swarm phone sync --dry-run` shows what it would do and changes nothing.
+`swarm phone status` shows what is open; `swarm status` is the short project status and `swarm status --all` the board's text view (live runs on this machine). `swarm phone off` stops it. `swarm phone sync --dry-run` shows what it would do and changes nothing.
 
 ## What you can answer
 

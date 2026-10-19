@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.125.0
+
+Bare `swarm` no longer hangs, and `swarm status` exists.
+- Cause: the short status checked every lane, and a lane that runs on another machine over ssh (hermes on dev2) was probed through ssh with a 90 second timeout, up to three times, so an unreachable host kept `swarm` waiting for minutes.
+- Now the status does not probe remote lanes: they are listed as "not checked (remote host)" (`swarm doctor LANE` still does the real check), the lane check and the spend read have a 5 second limit, and the command exits as soon as it has printed.
+- `swarm status` (no run id) and `swarm status --json` print the same short status; `swarm status RUN` is unchanged; `swarm status --all` is the board's text view (`swarm watch --all --text`).
+- Tests: `tests/bare-status.test.mjs` (a lane on an address that never answers; the whole command must finish in under 15 seconds).
+
 ## 1.124.0
 
 Phone approvals: more than one login for the same owner (`docs/phone-approvals.md`). `swarm phone setup --repo OWNER/NAME [--owner LOGIN]...` records the active `gh` login plus each `--owner` as the owner; replies from any of them count, every other login is ignored. Sync can run as any of them. Every comment the swarm posts starts with a marker and is never read back as an answer (the swarm's own login may be one of the owner's). All other rules unchanged (once, 24 hours, unedited, second word for risky items). Tests in `tests/phone.test.mjs`.
