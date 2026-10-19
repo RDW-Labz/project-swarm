@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.119.0
+
+Phase 19, part 2: client progress reports, files only (`docs/client-report.md`).
+- `swarm report --client [--since DAYS] [--preview URL]` writes a DRAFT (self-contained html, plain text, a record) from the scope's requirements (your own sentences), stage names and ticket progress: percent complete, done this week (from the ticket log), in progress, coming up, decisions from a scope "Client decisions" section, an https preview link. Never ticket titles, notes, models, costs or code.
+- A scan refuses the report, saying what it found, if it holds a money amount, a model or vendor name, an id, a path, code, an internal word, a secret-looking value, an email or any address but the preview link. It runs again at approval.
+- `--approve` records a hash of the exact files; `--status` shows draft / approved / edited; any later edit un-approves.
+- Hardened after an Opus review: the page is read the way a client sees it (comments, scripts, images, extra attributes and links are refused; tags cannot split a word; entities, fullwidth and invisible characters are folded); the status re-scans the files instead of trusting the record; the preview address comes from the record and must be a plain https host with no internal id; a scope section "Report allow" lists phrases (like "support ticket") that are fine for this client, never for money, vendors, ids, paths or secrets; numbered report folders, atomic file creation, `--since` wording.
+- Nothing is sent; the modules contain no network or mail code (a test checks).
+- Tests: `tests/client-report.test.mjs`.
+
 ## 1.118.0
 
 `swarm errors pull`, checked against the real `vercel logs --json` (parts-app, read-only dry run): entries are `{type:"log", data:{...}}` with a `{type:"summary"}` last line, which the parser already read. Two fixes from what was seen: Vercel calls an app's stderr output `warn`, so the default query is now `environment:production AND (level:(error OR fatal OR warning) OR stream:stderr)` and an Error-shaped stderr message counts as an error (a plain warning does not); an app that logs JSON is read by the level inside its message (an info line is not an error; an `error` line uses its own message). The Pro plan refuses long windows (24h); the default 15 minutes works. Tests in `tests/errors.test.mjs`.
