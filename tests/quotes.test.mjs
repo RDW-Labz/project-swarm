@@ -11,7 +11,7 @@ import { runTimeCommand, runQuoteCommand } from '../tools/quote-commands.mjs';
 
 const NOW = Date.UTC(2026, 9, 18, 12, 0, 0);
 const tmp = async t => { const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'quotes-'))); t.after(() => fs.rm(d, { recursive: true, force: true })); return d; };
-const rec = (name, over = {}) => ({ id: name, name, source: 'recorded', requirements: 10, stages: 3, screens: 8, services: 2, billedUsd: 20, ownerHours: 30, calendarDays: 20, gpuHours: null, ...over });
+const rec = (name, over = {}) => ({ id: name, name, source: 'recorded', requirements: 10, stages: 3, screens: 8, services: 2, billedUsd: 20, flatRateListUsd: 0, ownerHours: 30, calendarDays: 20, gpuHours: null, ...over });
 const scopeOf = n => ['# Scope: X', 'Version: 1', '## Stages', '- S1: A', '- S2: B', '## S1 A', ...Array.from({ length: n }, (_, i) => `### R-${String(i + 1).padStart(3, '0')} Thing ${i}.\nAcceptance:\n- ok`), '## Screens', '- Home', '- Cart', '## External', '- Resend: email'].join('\n');
 const env = dir => ({ SWARM_QUOTES_DIR: dir });
 
@@ -87,7 +87,7 @@ test('quote SCOPE.md reads the sizes from the scope and prints ranges; an empty 
   const res = await runQuoteCommand(root, ['scope.md'], { env: env(dir) });
   assert.equal(res.exitCode, 0, res.stdout);
   assert.match(res.stdout, /requirements 10, stages 2, screens 2, services 1/);
-  assert.match(res.stdout, /Model cost \(billed\):\s+\$15 to \$25/);
+  assert.match(res.stdout, /Model cost \(estimated full, list prices\): \$15 to \$25/);
   assert.match(res.stdout, /Your hours:\s+15 to 25 hours/);
   assert.match(res.stdout, /Price:\s+blank/);
   assert.match(res.stdout, /Confidence: medium/);
@@ -115,13 +115,14 @@ test('record keeps a project\'s numbers (scope sizes, tickets, billed vs flat-ra
   assert.deepEqual([r.name, r.source, r.requirements, r.stages, r.screens, r.services, r.tickets], ['Dealer Portal', 'backfill', 3, 2, 2, 1, 1]);
   assert.equal(r.billedUsd, 5, 'per-use anthropic 2 + rented gpu 3; the flat-rate codex 5 is not billed');
   assert.equal(r.flatRateListUsd, 5);
+  assert.equal(r.estimatedFullUsd, 10, 'billed 5 + subscription list value 5');
   assert.deepEqual([r.ownerHours, r.calendarDays, r.chargedUsd, r.changeOrders, r.gpuHours], [4, 10, 9000, 2, 1.5]);
   const again = await runQuoteCommand(root, ['record', '--name', 'Dealer Portal'], { env: env(dir), now: () => NOW });
   assert.match(again.stdout, /^updated/);
   assert.equal((await readRecords(dir)).length, 1);
   assert.equal((await runQuoteCommand(root, ['record', '--charged', '-5'], { env: env(dir) })).exitCode, 2);
   assert.equal((await runQuoteCommand(root, ['record', '--change-orders', '1.5'], { env: env(dir) })).exitCode, 2);
-  assert.match((await runQuoteCommand(root, ['list'], { env: env(dir) })).stdout, /Dealer Portal.*billed \$5.*owner hours 4/);
+  assert.match((await runQuoteCommand(root, ['list'], { env: env(dir) })).stdout, /Dealer Portal.*estimated full \$10 \(billed \$5\).*owner hours 4/);
 });
 
 test('a project with no scope, ledger or hours still records (missing numbers are ?, never 0) and is not used to match on traits it lacks', async t => {
@@ -170,4 +171,18 @@ test('review fixes: a damaged record file is never overwritten; names that slug 
   assert.match(thin.why, /only 1 have owner hours/);
   const far = buildQuote({ traits, records: [rec('huge', { requirements: 200, stages: 20, screens: 150, services: 12 })], config: {} });
   assert.equal(far.confidence, 'none');
+});
+
+test('quotes use the estimated full cost (billed plus the list value of subscription lanes) and show billed apart', () => {
+  const traits = { requirements: 10, stages: 3, screens: 8, services: 2 };
+  const records = [rec('a', { billedUsd: 2, flatRateListUsd: 25 }), rec('b', { billedUsd: 4, flatRateListUsd: 35 }), rec('c', { billedUsd: 3, flatRateListUsd: 30 })];
+  const q = buildQuote({ traits, records, config: {} });
+  assert.deepEqual([q.cost.low, q.cost.high], [30, 36]);
+  assert.deepEqual([q.billed.low, q.billed.high], [2.5, 3.5]);
+  const text = renderQuote(q);
+  assert.match(text, /estimated full, list prices\): \$30 to \$36/);
+  assert.match(text, /of which billed:\s+\$2\.5 to \$3\.5/);
+  const priced = buildQuote({ traits, records: records.map(r => ({ ...r, ownerHours: 10 })), config: { hourlyRate: 100, margin: 0.5 } });
+  assert.equal(priced.price.low, Math.round((30 + 10 * 100) / 0.5), 'the price starts from the full cost, not the billed one');
+  assert.equal(buildQuote({ traits, records: [rec('x', { billedUsd: 5, flatRateListUsd: null })], config: {} }).cost, null, 'a record that cannot say its full cost gives no cost number');
 });

@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parseScope } from './scope.mjs';
-import { logTime, readTime, readQuoteConfig, writeQuoteConfig, readRecords, recordsDamaged, saveRecord, buildRecord, buildQuote, renderQuote, traitsOf, quotesDir } from './quotes.mjs';
+import { logTime, readTime, readQuoteConfig, writeQuoteConfig, readRecords, recordsDamaged, saveRecord, buildRecord, buildQuote, estimatedFull, renderQuote, traitsOf, quotesDir } from './quotes.mjs';
 
 export const TIME_USAGE = 'Usage: swarm time log HOURS ["note"]     swarm time list';
 export const QUOTE_USAGE = [
@@ -51,7 +51,7 @@ export async function runQuoteCommand(root, args, { now = Date.now, env = proces
     const list = await readRecords(dir);
     if (!list.length) return out('No finished projects kept yet. In a project folder: swarm quote record');
     const f = v => (v === null || v === undefined ? '?' : v);
-    return out(list.map(p => `${p.name}${p.source === 'backfill' ? ' (backfilled)' : ''}: requirements ${f(p.requirements)}, tickets ${f(p.tickets)}, billed ${p.billedUsd === null || p.billedUsd === undefined ? '?' : `$${p.billedUsd}`}, owner hours ${f(p.ownerHours)}, days ${f(p.calendarDays)}${p.chargedUsd === null ? '' : `, charged $${p.chargedUsd}`}`).join('\n'));
+    return out(list.map(p => `${p.name}${p.source === 'backfill' ? ' (backfilled)' : ''}: requirements ${f(p.requirements)}, tickets ${f(p.tickets)}, estimated full ${estimatedFull(p) === null ? '?' : `$${Math.round(estimatedFull(p) * 100) / 100}`} (billed ${p.billedUsd === null || p.billedUsd === undefined ? '?' : `$${p.billedUsd}`}), owner hours ${f(p.ownerHours)}, days ${f(p.calendarDays)}${p.chargedUsd === null ? '' : `, charged $${p.chargedUsd}`}`).join('\n'));
   }
   if (sub === 'record') {
     const flags = {};
@@ -73,7 +73,7 @@ export async function runQuoteCommand(root, args, { now = Date.now, env = proces
     } catch (error) { return out(error.message, 2); }
     let saved;
     try { saved = await saveRecord(dir, record); } catch (error) { return out(error.message, 1); }
-    return out([`${saved.replaced ? 'updated' : 'kept'}: ${record.name}${record.source === 'backfill' ? ' (backfilled)' : ''}`, `requirements ${record.requirements ?? '?'}, tickets ${record.tickets ?? '?'}, billed ${record.billedUsd === null ? '? (no runs here)' : `$${record.billedUsd}`}, flat-rate list value ${record.flatRateListUsd === null ? '?' : `$${record.flatRateListUsd}`}, owner hours ${record.ownerHours ?? 'none logged'}, calendar days ${record.calendarDays ?? '?'}`].join('\n'));
+    return out([`${saved.replaced ? 'updated' : 'kept'}: ${record.name}${record.source === 'backfill' ? ' (backfilled)' : ''}`, `requirements ${record.requirements ?? '?'}, tickets ${record.tickets ?? '?'}, estimated full ${record.estimatedFullUsd === null ? '? (no runs here)' : `$${record.estimatedFullUsd}`} (billed ${record.billedUsd === null ? '?' : `$${record.billedUsd}`}), flat-rate list value ${record.flatRateListUsd === null ? '?' : `$${record.flatRateListUsd}`}, owner hours ${record.ownerHours ?? 'none logged'}, calendar days ${record.calendarDays ?? '?'}`].join('\n'));
   }
   if (sub && !sub.startsWith('--')) {
     let text;
