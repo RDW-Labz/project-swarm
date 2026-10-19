@@ -21,7 +21,10 @@ async function world(t) {
   const home = await tmp(t);
   const config = path.join(home, 'config.json');
   await fs.writeFile(config, JSON.stringify({ cliHosts: { hermes: { target: 'dev2@192.0.2.1', command: '/home/dev2/.local/bin/hermes' } } }));
-  const env = { ...process.env, HOME: home, SWARM_CONFIG: config, SWARM_PROJECTS_FILE: path.join(home, 'projects.json'), SWARM_HISTORY_FILE: path.join(home, 'history.ndjson'), SWARM_SPEND_DIR: path.join(home, 'spend') };
+  // An empty PATH: the local lane checks (claude, codex, cursor) fail at once instead of spawning real tools, so the test measures only the remote lane and cannot be slowed by a loaded machine.
+  const bin = path.join(home, 'bin');
+  await fs.mkdir(bin);
+  const env = { ...process.env, PATH: bin, HOME: home, SWARM_CONFIG: config, SWARM_PROJECTS_FILE: path.join(home, 'projects.json'), SWARM_HISTORY_FILE: path.join(home, 'history.ndjson'), SWARM_SPEND_DIR: path.join(home, 'spend') };
   return { home, env, cwd: home };
 }
 

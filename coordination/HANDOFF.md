@@ -5,12 +5,11 @@
 ```text
 Project Swarm brief
 Goal: none
-Done:
-  - run 1792298822339-3f63d5c6 integrated, 2 files
+Done: none
 Running: none
 Needs the owner: none
 Next 3 actions:
-  1. swarm integrate 1792374024876-60fc116b --queue
+  1. swarm integrate 1792377591786-3775f133 --queue
   2. swarm "describe the goal in one sentence"
   3. swarm status
 Rules:

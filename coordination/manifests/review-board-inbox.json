@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1.0
+  },
+  "jobs": [
+    {
+      "id": "review-board-inbox",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "the board shows decisions and commands to copy-paste into a terminal",
+      "type": "review",
+      "prompt": "Review coordination/review/board-inbox.diff (the board's Needs you panel: tools/board-inbox.mjs, wiring in tools/watch-cli.mjs, tools/watch-assets/board.js/html/css). Promise: READ-ONLY (the board never answers or changes anything), behind the existing token, text set via textContent only, secrets redacted, no control characters, a command is shown for the owner to copy and run at the computer. Look for: (1) XSS or terminal-escape injection through titles, ids, project names, choices, file names, paths (a root path or decision id that makes the displayed or copied command run something else: quote() correctness for ids and roots with quotes, spaces, newlines, unicode lookalikes, a leading dash), (2) leaking data that should not show (steps text, notes, proposed-ticket notes with untrusted comment text, phone issue numbers, repo name, owner logins, expiry) to anyone who has the board URL, (3) cost or DoS: boardInbox runs on every snapshot (cacheMs 1000) and reads every project's journal and ledger: is anything unbounded, does one slow project block, is the inbox failure isolated, (4) correctness: sorting, the 50 cap hiding items without saying so, phone-state matching by key (root|kind|id) when a project path has special characters, expired questions shown as open, the count chip vs items length, (5) the text view (watch --all --text) now calls boardInbox: error handling, output when no runs, (6) test gaps. Real findings only, ranked, file:line, concrete input.",
+      "context": [
+        "tools/board-inbox.mjs",
+        "tests/board-inbox.test.mjs",
+        "coordination/review/board-inbox.diff",
+        "tools/watch-assets/board.js"
+      ],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}

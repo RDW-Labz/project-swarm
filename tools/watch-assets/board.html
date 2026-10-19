@@ -12,10 +12,12 @@
   <header class="top hud">
     <div class="brand"><div class="logo" aria-hidden="true"><i>SW</i></div><div><h1>Swarm Watch</h1><div class="goal">Every project on this machine</div></div></div>
     <div class="spacer"></div>
-    <div class="chips"><span class="chip mono num" id="count">0 projects</span><span class="chip mono" id="updated">-</span></div>
+    <div class="chips"><span class="chip mono num" id="needsChip">0 need you</span><span class="chip mono num" id="count">0 projects</span><span class="chip mono" id="updated">-</span></div>
   </header>
   <main class="pane">
     <section class="card hud" id="machine" aria-label="Machine totals"></section>
+    <section class="card hud" id="needsCard" aria-label="Needs you"><h2 class="board-h">Needs you</h2><div id="needs" class="board-list" aria-live="polite"></div>
+    <p class="board-note" id="needsNote"></p></section>
     <section class="card hud"><h2 class="board-h">Projects</h2><div id="lanes" class="board-list" aria-live="polite"></div>
     <p class="board-note">Read-only. Open a project for its tickets, runs, spend and lessons; open a run for its full Watch page.</p></section>
     <section class="card hud"><h2 class="board-h">History</h2>
