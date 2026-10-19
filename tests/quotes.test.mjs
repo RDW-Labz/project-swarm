@@ -87,8 +87,10 @@ test('quote SCOPE.md reads the sizes from the scope and prints ranges; an empty 
   const res = await runQuoteCommand(root, ['scope.md'], { env: env(dir) });
   assert.equal(res.exitCode, 0, res.stdout);
   assert.match(res.stdout, /requirements 10, stages 2, screens 2, services 1/);
-  assert.match(res.stdout, /Model cost \(estimated full, list prices\): \$15 to \$25/);
-  assert.match(res.stdout, /Your hours:\s+15 to 25 hours/);
+  // The three projects (8, 10, 12 requirements; $10, $20, $30) are scaled to 10 requirements first: $12.50 * ... = $16.25 to $22.50 (middle half of 12.5, 20, 25).
+  assert.match(res.stdout, /Model cost \(estimated full, list prices\): \$16\.25 to \$22\.5/);
+  assert.match(res.stdout, /Your hours:\s+16\.3 to 22\.5 hours/);
+  assert.match(res.stdout, /scaled to this scope's size \(p1 x1, p2 x0\.83, p0 x1\.25/);
   assert.match(res.stdout, /Price:\s+blank/);
   assert.match(res.stdout, /Confidence: medium/);
   assert.equal((await runQuoteCommand(root, ['nope.md'], { env: env(dir) })).exitCode, 2);

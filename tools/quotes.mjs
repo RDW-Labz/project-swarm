@@ -122,7 +122,7 @@ export async function saveRecord(dir, record) {
   return { replaced: next.length === list.length };
 }
 
-async function readRuns(root) {
+export async function readRuns(root) {
   const dir = path.join(root, '.swarm', 'runs');
   let ids = [];
   try { ids = await fs.readdir(dir); } catch { return []; }
@@ -208,13 +208,20 @@ export const estimatedFull = r => (typeof r.estimatedFullUsd === 'number' ? r.es
 
 export function buildQuote({ traits, records, config, k = 5 }) {
   const ranked = records.map(r => ({ r, d: distance(traits, r) })).filter(x => x.d !== null).sort((a, b) => a.d - b.d || a.r.id.localeCompare(b.r.id));
-  const similar = ranked.filter(x => x.d <= MAX_DISTANCE).slice(0, k);
+  // Similar in size too: a project more than five times larger or smaller in requirements is not scaled into a quote, it is left out.
+  const ratioOk = r => !(traits.requirements > 0 && r.requirements > 0) || (traits.requirements / r.requirements >= 0.2 && traits.requirements / r.requirements <= 5);
+  const similar = ranked.filter(x => x.d <= MAX_DISTANCE && ratioOk(x.r)).slice(0, k);
   const items = similar.map(x => x.r);
-  const cost = rangeOf(items.map(estimatedFull));
-  const billed = rangeOf(items.map(r => r.billedUsd));
-  const hours = rangeOf(items.map(r => r.ownerHours));
-  const days = rangeOf(items.map(r => r.calendarDays));
-  const gpu = rangeOf(items.map(r => r.gpuHours));
+  // Each finished project is scaled to THIS scope's size before the range is taken: cost, hours and rented GPU time by the ratio of requirements, calendar time by its
+  // square root (more tickets run side by side, they do not take proportionally longer). Without a requirement count on either side the number is used as it is, and said so.
+  const factor = r => (traits.requirements > 0 && r.requirements > 0 ? traits.requirements / r.requirements : null);
+  const scaled = (r, value, power = 1) => (typeof value === 'number' ? (factor(r) === null ? value : value * factor(r) ** power) : value);
+  const unscaled = items.filter(r => factor(r) === null).length;
+  const cost = rangeOf(items.map(r => scaled(r, estimatedFull(r))));
+  const billed = rangeOf(items.map(r => scaled(r, r.billedUsd)));
+  const hours = rangeOf(items.map(r => scaled(r, r.ownerHours)));
+  const days = rangeOf(items.map(r => scaled(r, r.calendarDays, 0.5)));
+  const gpu = rangeOf(items.map(r => scaled(r, r.gpuHours)));
   const medianD = similar.length ? similar[Math.floor(similar.length / 2)].d : null;
   let confidence = 'none', why = records.length ? 'no finished project shares a size measure with this scope' : 'no finished project has been recorded yet (swarm quote record)';
   if (similar.length) {
@@ -225,6 +232,7 @@ export function buildQuote({ traits, records, config, k = 5 }) {
     else if (similar.length >= 5 && medianD < 0.35) { confidence = 'high'; why = `${similar.length} similar projects, close in size`; }
     else { confidence = 'medium'; why = `${similar.length} similar projects${medianD >= 0.35 ? ', but not close in size' : ''}`; }
     if (backfilled) why += `; ${backfilled} backfilled from earlier work, not recorded as they happened`;
+    if (unscaled) why += traits.requirements > 0 ? `; ${unscaled} had no requirement count, so its numbers are not scaled for size` : '; this scope has no requirement count, so the numbers are not scaled for size';
     if (!hours) why += '; none of them has owner hours logged';
     if (!cost) why += '; none of them has a cost recorded';
   }
@@ -234,7 +242,7 @@ export function buildQuote({ traits, records, config, k = 5 }) {
     const at = (c, h) => round((c + h * config.hourlyRate) / (1 - config.margin), 0);
     price = { low: at(cost.low, hours.low), high: at(cost.high, hours.high) };
   }
-  return { traits, billed, confidence, why, similar: similar.map(x => ({ name: x.r.name, source: x.r.source, distance: round(x.d, 2) })), cost, hours, days, gpu, price, priceBlank };
+  return { traits, billed, confidence, why, scale: similar.map(x => ({ name: x.r.name, factor: factor(x.r) === null ? null : round(factor(x.r), 2) })), similar: similar.map(x => ({ name: x.r.name, source: x.r.source, distance: round(x.d, 2) })), cost, hours, days, gpu, price, priceBlank };
 }
 
 const usd = v => `$${v >= 100 ? Math.round(v) : round(v, 2)}`;
@@ -254,6 +262,6 @@ export function renderQuote(q) {
     ...(q.gpu ? [`Rented GPU:          ${span(q.gpu, plain, ' hours')}`] : []),
     q.price ? `Price:                ${usd(q.price.low)} to ${usd(q.price.high)} (cost plus hours at your rate, with your margin)` : `Price:                blank until you set both: swarm quote config --rate USD_PER_HOUR --margin PERCENT${q.cost && q.hours ? '' : ' (and the similar projects need cost and hours)'}`,
     `Confidence: ${q.confidence}. ${q.why}.`,
-    'Ranges are the middle half of the similar projects (the lowest to the highest when there are only two). They are not scaled for size.',
+    `Each similar project is scaled to this scope's size (${(q.scale ?? []).map(x => `${x.name} x${x.factor ?? '?'}`).join(', ')}; calendar time by the square root). Ranges are the middle half of the scaled numbers (the lowest to the highest when there are only two).`,
   ].join('\n');
 }

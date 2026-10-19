@@ -111,8 +111,11 @@ test('impactAnalysis asks for tickets for added and uncovered changed requiremen
   const diff = diffScopes(base, next);
   const impact = impactAnalysis({ diff, tickets: [{ id: 'T-1', status: 'todo', scopeRefs: ['R-001'] }] });
   assert.deepEqual(impact.needTickets, ['R-005', 'R-003']);
-  assert.equal(impact.estimate.newTickets, 2);
-  assert.ok(Math.abs(impact.estimate.usd - 0.006) < 1e-9);
+  // Two requirements are not two tickets: with no finished stage to learn from, four tickets per requirement are assumed, and no dollar figure is invented.
+  assert.equal(impact.estimate.requirements, 2);
+  assert.equal(impact.estimate.newTickets, 8);
+  assert.equal(impact.estimate.usd, null);
+  assert.equal(impact.estimate.learned, false);
 });
 
 test('impactAnalysis resets transitive dependents of a reopened chain of three tickets', () => {

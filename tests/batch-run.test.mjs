@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { runTotals } from '../tools/spend.mjs';
 import { runManifest, validateManifest, parseGoFlags } from '../tools/swarm.mjs';
 import { usageCostUsd, ledgerPath, readLedger } from '../tools/anthropic.mjs';
 import { estimatePlan, formatPreview } from '../tools/plan-preview.mjs';
@@ -101,10 +102,12 @@ test('batch jobs obey the same caps and reservations: the standard price is rese
   const state = await runManifest(root, { version: 1, concurrency: 40, lanes: { anthropic: { concurrency: 40 } }, budget: { maxUsd: 0.05, lanes: { anthropic: { dailyUsd: 0.05 } } }, jobs }, { ...options(root, fetchImpl, { batch: true }), id: 'capped' });
   const sent = seen.created.flat().length;
   const held = state.jobs.filter(entry => entry.status === 'held');
-  assert.ok(sent >= 1 && sent < 40, `${sent} requests were sent`);
-  assert.equal(held.length + sent, 40);
+  // Jobs refused only because of money reserved for batch jobs still waiting now wait for them and try again (they are held for good only when money already spent blocks them),
+  // so more than one batch of requests can go out: the cap, not the number sent, is what must hold.
+  assert.ok(sent >= 1, `${sent} requests were sent`);
+  assert.equal(held.length + state.jobs.filter(entry => entry.status === 'complete').length, 40);
   assert.ok(held.every(entry => ['run-cap', 'lane-cap'].includes(entry.heldReason)));
-  assert.equal(state.status, 'paused');
+  assert.ok(runTotals(state).usd <= 0.05 + 1e-9, `spent ${runTotals(state).usd}`);
 });
 
 test('a cancelled run cancels its batch', async t => {
