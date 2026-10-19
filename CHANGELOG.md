@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.124.0
+
+Phone approvals: more than one login for the same owner (`docs/phone-approvals.md`). `swarm phone setup --repo OWNER/NAME [--owner LOGIN]...` records the active `gh` login plus each `--owner` as the owner; replies from any of them count, every other login is ignored. Sync can run as any of them. Every comment the swarm posts starts with a marker and is never read back as an answer (the swarm's own login may be one of the owner's). All other rules unchanged (once, 24 hours, unedited, second word for risky items). Tests in `tests/phone.test.mjs`.
+
 ## 1.123.0
 
 Phase 19, part 4: phone approvals through a private GitHub repo (`docs/phone-approvals.md`).

@@ -63,7 +63,7 @@ test('setup: uses the owner\'s gh login, creates the private repo when it is mis
   const r = await setupPhone({ repo: REPO, dir, deps: { gh: gh.run } });
   assert.deepEqual([r.ok, r.created, r.owner], [true, true, 'owner-login']);
   assert.ok(gh.calls.some(c => c.args[0] === 'repo' && c.args[1] === 'create' && c.args.includes('--private')));
-  assert.deepEqual(await readPhoneConfig(dir), { repo: REPO, owner: 'owner-login', enabled: true });
+  assert.deepEqual(await readPhoneConfig(dir), { repo: REPO, owner: 'owner-login', owners: ['owner-login'], enabled: true });
   const pub = await setupPhone({ repo: REPO, dir: await tmp(t), deps: { gh: fakeGithub({ isPrivate: false }).run } });
   assert.equal(pub.ok, false);
   assert.match(pub.error, /PUBLIC/);
@@ -271,7 +271,7 @@ test('the phone code cannot reach merge, deploy, spend caps or overrides: it onl
   assert.doesNotMatch(src, /pr['", ]+merge|swarm merge|vercel|--max-usd|--override|--accept|maxUsd|projectMaxUsd|--force|funnel/i);
   const runs = [...src.matchAll(/runSwarm\([^)]*\[([^\]]*)\]/g)].map(m => m[1].replace(/\s+/g, ' '));
   assert.deepEqual(runs, ["'decide', rec.itemId, action.choice", "'tickets', rec.itemId, '--approve', '--yes'", "'stop', '--all'"]);
-  assert.match(issueBody(decision(), { expiresAt: Date.now() }), /Only your own GitHub login is listened to/);
+  assert.match(issueBody(decision(), { expiresAt: Date.now() }), /Only your own GitHub login\(s\) are listened to/);
 });
 
 test('review fixes: a declined, locked or answered question is never reopened; an expired one is not reopened in the same sync', async t => {
@@ -346,4 +346,57 @@ test('review fixes: two syncs at once do not both act (a lock); a stale lock is 
   await fs.utimes(path.join(r.dir, 'sync.lock'), old, old);
   assert.equal((await r.sync()).ok, true);
   await assert.rejects(fs.access(path.join(r.dir, 'sync.lock')), 'the lock is released');
+});
+
+test('two logins of the same owner: replies from either count, a third login is ignored, and the swarm\'s own comments (posted by one of the owner\'s logins) are never read as answers', async t => {
+  const dir = await tmp(t);
+  const gh = fakeGithub({ login: 'Btabor11' });
+  const set = await setupPhone({ repo: REPO, dir, deps: { gh: gh.run }, owners: ['BradenTabor'] });
+  assert.deepEqual(set.owners, ['Btabor11', 'BradenTabor']);
+  assert.deepEqual(await readPhoneConfig(dir), { repo: REPO, owner: 'Btabor11', owners: ['Btabor11', 'BradenTabor'], enabled: true });
+  assert.equal((await setupPhone({ repo: REPO, dir, deps: { gh: gh.run }, owners: ['bad login'] })).ok, false);
+  assert.deepEqual((await setupPhone({ repo: REPO, dir, deps: { gh: gh.run }, owners: ['btabor11'] })).owners, ['Btabor11'], 'the same login in another case is one login');
+  await setupPhone({ repo: REPO, dir, deps: { gh: gh.run }, owners: ['BradenTabor'] });
+  const items = [decision('d-1'), decision('d-2'), decision('d-3')];
+  const world = { now: Date.now() };
+  gh.clock = () => world.now;
+  const ran = [];
+  const deps = { gh: gh.run, items: async () => items, now: () => world.now, random: n => 3 % n, runSwarm: async (root, args) => { ran.push(args); return { ok: true, text: 'ok' }; } };
+  await syncPhone({ dir, deps });
+  const n1 = numberOf(gh, 'decision d-1').number, n2 = numberOf(gh, 'decision d-2').number, n3 = numberOf(gh, 'decision d-3').number;
+  gh.say(n1, '2', { user: 'Btabor11' });
+  gh.say(n2, '2', { user: 'BradenTabor' });
+  gh.say(n3, '2', { user: 'a-third-login' });
+  gh.say(n3, '2', { user: 'bradentabor-fan' });
+  const res = await syncPhone({ dir, deps });
+  assert.equal(res.answered.length, 2);
+  assert.deepEqual(ran.map(a => a[1]).sort(), ['d-1', 'd-2']);
+  assert.equal(res.ignored, 2);
+  assert.equal((await readPhoneState(dir, REPO)).issues[n3].status, 'open');
+  const log = (await fs.readFile(path.join(dir, 'ignored.ndjson'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(log.map(e => [e.login, e.reason]), [['a-third-login', 'not the owner'], ['bradentabor-fan', 'not the owner']]);
+  // the swarm posts as one of the owner's logins: a one-word comment of its own starting with the marker is not an answer
+  gh.say(n3, '<!-- swarm-phone -->\n2', { user: 'BradenTabor' });
+  await syncPhone({ dir, deps });
+  assert.equal(ran.length, 2);
+  // a second step: the word comment the swarm posted (as an owner login) never counts either, only the owner's own reply
+  const risky = await rig(t, { items: [decision('d-9', { secondStep: true })] });
+  await risky.sync();
+  const nr = numberOf(risky.github, 'decision d-9').number;
+  risky.github.say(nr, '2');
+  await risky.sync();
+  const wordText = risky.github.issues.get(nr).comments.find(c => /one-time word/.test(c.body)).body;
+  assert.match(wordText, /^<!-- swarm-phone -->/);
+  await risky.sync();
+  assert.equal(risky.ran.length, 0);
+});
+
+test('setup arguments: --owner can repeat, --repo once, unknown arguments refused', async t => {
+  const dir = await tmp(t);
+  const gh = fakeGithub({ login: 'Btabor11' });
+  const res = await runPhoneCommand(['setup', '--repo', REPO, '--owner', 'BradenTabor'], { dir, deps: { gh: gh.run } });
+  assert.equal(res.exitCode, 0, res.stdout);
+  assert.match(res.stdout, /only replies from Btabor11 or BradenTabor count/);
+  assert.match((await runPhoneCommand(['status'], { dir })).stdout, /listening to: Btabor11, BradenTabor/);
+  for (const bad of [['setup'], ['setup', '--repo', REPO, '--repo', REPO], ['setup', '--repo', REPO, '--who', 'x'], ['setup', '--owner', 'x']]) assert.equal((await runPhoneCommand(bad, { dir, deps: { gh: gh.run } })).exitCode, 2, bad.join(' '));
 });
