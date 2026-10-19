@@ -23,7 +23,9 @@ import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { readHistory, historyCsv, historyFile } from './history.mjs';
 import { boardInbox, inboxText } from './board-inbox.mjs';
-import { boardSnapshot, projectDetail, workersHeld } from './board-data.mjs';
+import { runDetail, compareRuns } from './board-run.mjs';
+import { boardSnapshot, projectDetail, workersHeld, laneUsage } from './board-data.mjs';
+import { resolveBudget, spendDir } from './spend.mjs';
 import { lanesDir, machineConcurrency } from './lanes.mjs';
 import { loadLocalConfig } from './local-config.mjs';
 import { backfillHistory } from './board-commands.mjs';
@@ -287,7 +289,8 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
         const all = await listProjects({ file: projectsFile(env) });
         // Test and temp projects are left out of everything (lanes, totals, the inbox) unless asked for, so the numbers still add up.
         const projects = scratch ? all : all.filter(p => !isScratchRoot(p.root));
-        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: now(), workers: await workersHeld({ dir: lanesDir(env), max, invalid }) });
+        const caps = (() => { try { const lanes = resolveBudget({ config: loadLocalConfig({ env }) }).lanes ?? {}; return Object.fromEntries(Object.entries(lanes).map(([k, v]) => [k, v?.dailyUsd])); } catch { return {}; } })();
+        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: now(), workers: await workersHeld({ dir: lanesDir(env), max, invalid }), lanes: laneToday => laneUsage({ laneToday, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: now() }) });
         // What waits for the owner (read-only); a failure here never hides the rest of the board.
         snapshot.inbox = await boardInbox({ projects, now: now(), env }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
         snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : all.length - projects.length, total: all.filter(p => isScratchRoot(p.root)).length };
@@ -302,6 +305,16 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       if (!project) return null;
       const liveRuns = (await live()).filter(r => r.root === project.root);
       return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)) });
+    },
+    // One run's jobs, graph and journal; with `compare`, that run beside another run of the same project.
+    async run(id, runId, compare = null) {
+      const project = await find(id);
+      if (!project) return null;
+      const a = await runDetail(project, runId);
+      if (!a) return null;
+      if (!compare) return a;
+      const b = await runDetail(project, compare);
+      return b ? { run: a, compare: compareRuns(a, b) } : null;
     },
     async history(q = {}) {
       return readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: Number(q.limit) || 100, offset: Number(q.offset) || 0, fold: true, exclude: showsScratch(q) ? undefined : await scratchIds() });

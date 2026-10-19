@@ -96,12 +96,14 @@ test('no http(s) URL outside comment or SPDX lines in css and js files', () => {
 
 test('every js file parses as a classic script (syntax only)', () => {
   for (const name of files.filter((f) => f.endsWith('.js'))) {
-    assert.doesNotThrow(() => new vm.Script(read(name), { filename: name }), name);
+    // The board's own scripts are ES modules (import and export): their import lines and export keywords are dropped, the rest must still parse.
+    const source = read(name).replace(/^import [^\n]*;\n/gm, '').replace(/^export (?=function|const|class|let|var)/gm, '');
+    assert.doesNotThrow(() => new vm.Script(source, { filename: name }), name);
   }
 });
 
 test('tab scripts register under one of the four tab names', () => {
-  const tabFiles = files.filter((f) => f.endsWith('.js') && f !== 'app.js' && f !== 'run-drawer.js' && f !== 'board.js' && f !== 'project.js' && f !== 'nav.js');
+  const tabFiles = files.filter((f) => f.endsWith('.js') && f !== 'app.js' && f !== 'run-drawer.js' && f !== 'board.js' && f !== 'project.js' && f !== 'nav.js' && f !== 'run.js' && f !== 'board-lib.js' && !f.startsWith('robot-'));
   assert.ok(tabFiles.length > 0, 'no tab scripts found');
   const re = /register\(\s*['"](run|plan|commands|gallery)['"]/;
   for (const name of tabFiles) {

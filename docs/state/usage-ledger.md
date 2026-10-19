@@ -146,6 +146,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-19 | - | review-quotes: Reviewed quotes.diff (quotes.mjs, quote-commands.mjs, swarm/completion wiring, tests) | claude | opus | pass | 85,088 | $0.46 |
 | 2026-10-19 | - | review-phone: Reviewed phone.diff (phone.mjs, phone-commands.mjs, tests, wiring) against inbox.mjs d | claude | opus | pass | 179,306 | $0.65 |
 | 2026-10-19 | - | review-board-inbox: Read-only, textContent-only rendering and the token check hold. Main problems: t | claude | opus | pass | 59,636 | $0.33 |
+| 2026-10-19 | - | review-watch-ui: Read-only review of the watch-ui diff; no files edited. 1 high-severity finding (a | claude | opus | pass | 454,439 | $1.22 |
 
 ## Daily summary
 
@@ -159,5 +160,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-16 | claude | 1 | 0 | 1 | 46,296 | $0.42 |
 | 2026-10-16 | codex | 2 | 2 | 0 | 31,624 | subscription |
 | 2026-10-18 | claude | 14 | 14 | 0 | 6,874,167 | $13.02 |
-| 2026-10-19 | claude | 4 | 4 | 0 | 417,581 | $2.02 |
-| **total** | all | 142 | 127 | 15 | 12,467,907 | $19.97 (incl. estimates) |
+| 2026-10-19 | claude | 5 | 5 | 0 | 872,020 | $3.24 |
+| **total** | all | 143 | 128 | 15 | 12,922,346 | $21.19 (incl. estimates) |

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Swarm Watch: run</title>
+<link rel="stylesheet" href="assets/swarm-ui.css">
+</head>
+<body>
+<div class="app">
+  <nav class="crumbs" aria-label="Breadcrumb"><a class="back" id="backAll" href="#">← All projects</a><span class="sep">›</span><a id="crumbProject" href="#">Project</a><span class="sep">›</span><span class="here mono" id="crumbRun">run</span></nav>
+  <header class="topbar"><div class="brand"><div class="logo" aria-hidden="true">SW</div><div><h1 id="title">Run</h1><div class="crumb" id="subtitle">-</div></div></div><div class="spacer"></div>
+    <div class="chips"><a class="chip btn" id="watchLink" href="#">Open the live Watch page</a></div></header>
+  <main class="stack">
+    <div class="kpis" id="kpis"></div>
+    <section class="card"><h2>Job graph</h2><div id="graphNote" class="note"></div><div class="graph" id="graph" tabindex="0" aria-label="Job graph, scrollable"></div>
+      <div class="legend"><span><i class="dot" style="animation:none;background:var(--accent)"></i> running</span><span><i class="dot bad"></i> failed</span><span>dashed amber outline: tried more than once (a retry, or sent up to another lane)</span></div>
+      <div id="detail" class="note" role="status"></div></section>
+    <section class="card"><h2>Journal and replay</h2>
+      <div class="filters"><button class="btn primary" id="play" type="button">Play</button><button class="btn" id="stepBack" type="button">Back</button><button class="btn" id="stepFwd" type="button">Step</button>
+        <label class="sub" for="scrub">Position</label><input class="scrub" id="scrub" type="range" min="0" max="0" value="0" aria-label="Replay position"></div>
+      <div id="replayStat" class="row" role="status"></div>
+      <div id="journal" class="journal" tabindex="0" aria-label="Run journal, scrollable"></div>
+      <p class="note">Every time the run recorded for each job, in order. A job's cost appears where it ended: the run records it per job, not per attempt.</p></section>
+    <section class="card"><h2>Compare with another run</h2>
+      <div class="filters"><label class="sub" for="other">Other run</label><select id="other" aria-label="Run to compare with"><option value="">Choose a run</option></select></div>
+      <div id="compare" class="cmp"></div><div id="compareNote" class="note"></div></section>
+  </main>
+</div>
+<script src="assets/board-lib.js"></script>
+<script type="module" src="assets/run.js"></script>
+</body>
+</html>

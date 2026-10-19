@@ -40,7 +40,7 @@
     var r = $('runs'); r.textContent = '';
     if (!p.runs.length) { r.appendChild(el('div', 'board-empty', 'No runs yet.')); }
     p.runs.slice(0, 100).forEach(function (run) {
-      var a = el('a', 'board-run'); a.href = '/open/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(run.runId) + '&t=' + T;
+      var a = el('a', 'board-run'); a.href = '/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(run.runId) + '&t=' + T; a.title = 'Open the run inspector (graph, journal, compare)';
       a.appendChild(el('span', 'mono', run.runId)); a.appendChild(el('span', 'pill ' + (run.live ? 'good' : run.failed ? 'bad' : 'info'), run.live ? 'live' : run.status));
       a.appendChild(el('span', 'num mono', run.done + '/' + run.jobs + ' jobs' + (run.failed ? ', ' + run.failed + ' failed' : '')));
       a.appendChild(el('span', 'num mono', usd(run.costUsd))); a.appendChild(el('span', 'mono', when(run.startedAt)));

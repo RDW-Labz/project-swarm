@@ -1,0 +1,2036 @@
+diff --git a/tests/watch-ui.test.mjs b/tests/watch-ui.test.mjs
+new file mode 100644
+index 0000000..3d6726b
+--- /dev/null
++++ b/tests/watch-ui.test.mjs
+@@ -0,0 +1,362 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import http from 'node:http';
++import vm from 'node:vm';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++import { agentState, agentsOf, laneUsage, costOf, WORKING_MS, ERROR_SHOWN_MS } from '../tools/board-data.mjs';
++import { runDetail, compareRuns, layersOf } from '../tools/board-run.mjs';
++import { createBoardApi } from '../tools/watch-cli.mjs';
++import { createWatchServer } from '../tools/watch-server.mjs';
++import { projectId } from '../tools/projects.mjs';
++
++const NOW = Date.UTC(2026, 9, 19, 12, 0, 0);
++const iso = ms => new Date(ms).toISOString();
++const assets = fileURLToPath(new URL('../tools/watch-assets', import.meta.url));
++const deltaFile = fileURLToPath(new URL('../tools/watch-delta.mjs', import.meta.url));
++const tmp = async t => { const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'watch-ui-'))); t.after(() => fs.rm(d, { recursive: true, force: true })); return d; };
++const read = f => fs.readFile(path.join(assets, f), 'utf8');
++const lib = async () => { const box = { self: {} }; vm.runInNewContext(await read('board-lib.js'), box); return box.self.BoardLib; };
++const plain = x => JSON.parse(JSON.stringify(x));
++
++test('an agent\'s state comes from what its job recorded: output in the last 90 s is working, running without output is thinking, a fresh failure is error, nothing else is shown', () => {
++  const run = (over = {}) => ({ status: 'running', progress: { lastOutputAt: iso(NOW - 10000) }, ...over });
++  assert.equal(agentState(run(), NOW), 'working');
++  assert.equal(agentState(run({ progress: { lastOutputAt: iso(NOW - WORKING_MS - 1000) } }), NOW), 'thinking', 'quiet for longer than 90 s');
++  assert.equal(agentState(run({ progress: undefined }), NOW), 'thinking', 'started, no output yet');
++  assert.equal(agentState(run({ progress: { lastOutputAt: 'garbage' } }), NOW), 'thinking');
++  assert.equal(agentState({ status: 'failed', finishedAt: iso(NOW - 60000) }, NOW), 'error');
++  assert.equal(agentState({ status: 'timeout', finishedAt: iso(NOW - 60000) }, NOW), 'error');
++  assert.equal(agentState({ status: 'failed', finishedAt: iso(NOW - ERROR_SHOWN_MS - 1000) }, NOW), null, 'an old failure is not shown');
++  assert.equal(agentState({ status: 'failed' }, NOW), null, 'no time recorded: not shown');
++  for (const status of ['complete', 'queued', 'blocked', 'held', 'cancelled', undefined]) assert.equal(agentState({ status, finishedAt: iso(NOW) }, NOW), null, String(status));
++  assert.equal(agentState(null, NOW), null);
++});
++
++test('agentsOf: one entry per running or just-failed agent of a LIVE run only; failed ones are listed but not counted as running; names are bounded', () => {
++  const job = (id, status, extra = {}) => ({ id, agent: 'anthropic', model: 'claude-haiku-5-5', status, startedAt: iso(NOW - 5000), progress: { lastOutputAt: iso(NOW - 1000) }, ...extra });
++  const runs = [
++    { id: 'live1', state: { jobs: [job('a', 'running'), job('b', 'running', { progress: {} }), job('c', 'failed', { finishedAt: iso(NOW - 1000) }), job('d', 'queued'), job('e', 'complete')] } },
++    { id: 'dead1', state: { jobs: [job('z', 'running')] } },
++  ];
++  const r = agentsOf(runs, new Set(['live1']), NOW);
++  assert.deepEqual(r.list.map(a => [a.jobId, a.state]), [['a', 'working'], ['b', 'thinking'], ['c', 'error']]);
++  assert.equal(r.total, 2);
++  assert.deepEqual(plain(r.byLane), { Haiku: 2 });
++  assert.equal(r.list[2].ended, iso(NOW - 1000));
++  const many = agentsOf([{ id: 'l', state: { jobs: Array.from({ length: 500 }, (_, i) => job(`j${i}`, 'running')) } }], new Set(['l']), NOW);
++  assert.equal(many.list.length, 200);
++  assert.equal(many.total, 500, 'the count is the truth, the list is bounded');
++});
++
++test('costOf keeps what each lane did today (billed lanes: charged; flat-rate lanes: list value) so a lane\'s usage can be shown', () => {
++  const j = (agent, usd, finished) => ({ id: agent + usd, agent, status: 'complete', costUsd: usd, usage: { total_tokens: 1 }, finishedAt: finished });
++  const cost = costOf([{ state: { startedAt: iso(NOW - 100000), jobs: [j('anthropic', 2, iso(NOW - 1000)), j('codex', 5, iso(NOW - 2000)), j('codex', 7, iso(NOW - 3 * 86400000))] } }], NOW);
++  assert.deepEqual(plain(cost.laneToday), { anthropic: 2, codex: 5 });
++});
++
++test('laneUsage: today per lane against its daily cap, the cap\'s reset at UTC midnight, and a rate-limit pause with the time it ends; only lanes with something to say; read-only', async t => {
++  const dir = await tmp(t);
++  await fs.mkdir(path.join(dir, 'spend'), { recursive: true }); await fs.mkdir(path.join(dir, 'lanes'), { recursive: true });
++  const day = iso(NOW).slice(0, 10);
++  await fs.writeFile(path.join(dir, 'spend/daily.json'), JSON.stringify({ version: 1, entries: { a: { day, lane: 'anthropic', usd: 3.5, tokens: 1 }, b: { day: '2026-10-18', lane: 'anthropic', usd: 99, tokens: 1 } } }));
++  await fs.writeFile(path.join(dir, 'lanes/lanes.json'), JSON.stringify({ version: 1, slots: {}, pauses: { codex: { state: 'backoff', until: NOW + 600000 }, cursor: { state: 'paused', until: NOW - 1000 } } }));
++  const before = await fs.readFile(path.join(dir, 'spend/daily.json'), 'utf8');
++  const rows = await laneUsage({ laneToday: { codex: 4, claude: 1.25 }, spendDirectory: path.join(dir, 'spend'), lanesDirectory: path.join(dir, 'lanes'), caps: { anthropic: 20, openrouter: 5 }, now: NOW });
++  const by = Object.fromEntries(rows.map(r => [r.lane, r]));
++  assert.deepEqual([by.anthropic.todayUsd, by.anthropic.dailyCapUsd, by.anthropic.kind, by.anthropic.label], [3.5, 20, 'billed', 'Anthropic API'], 'yesterday is not today');
++  assert.equal(by.anthropic.capResetsAt, '2026-10-20T00:00:00.000Z');
++  assert.deepEqual([by.codex.todayUsd, by.codex.kind, by.codex.limited.state, by.codex.limited.until], [4, 'flat-rate', 'backoff', iso(NOW + 600000)]);
++  assert.equal(by.cursor, undefined, 'a pause that already ended is not shown');
++  assert.equal(by.claude.todayUsd, 1.25);
++  assert.equal(by.openrouter.todayUsd, 0, 'a lane with a cap is listed even with no spend');
++  assert.equal(await fs.readFile(path.join(dir, 'spend/daily.json'), 'utf8'), before);
++  assert.deepEqual(await laneUsage({ spendDirectory: path.join(dir, 'none'), lanesDirectory: path.join(dir, 'none'), now: NOW }), [], 'no files, nothing to show');
++});
++
++async function runFixture(t) {
++  const root = await tmp(t);
++  const dir = path.join(root, '.swarm/runs/run-1');
++  await fs.mkdir(dir, { recursive: true });
++  const job = (id, status, o = {}) => ({ id, agent: 'claude', model: 'sonnet', status, queuedAt: iso(NOW - 9000), startedAt: iso(NOW - 8000), finishedAt: iso(NOW - 2000), durationMs: 6000, costUsd: 0.5, attempts: [{ agent: 'claude', model: 'sonnet', status }], ...o });
++  await fs.writeFile(path.join(dir, 'state.json'), JSON.stringify({ id: 'run-1', status: 'complete', startedAt: iso(NOW - 10000), finishedAt: iso(NOW), budget: { maxUsd: 5 }, jobs: [
++    job('build', 'complete'), job('test', 'complete', { startedAt: iso(NOW - 6000), finishedAt: iso(NOW - 1000) }),
++    job('docs', 'failed', { agent: 'codex', model: 'gpt', error: 'boom sk-ant-' + 'a'.repeat(30), attempts: [{ agent: 'codex', status: 'failed', error: 'first' }, { agent: 'claude', model: 'opus', status: 'failed' }] }),
++    job('ship', 'complete', { startedAt: iso(NOW - 500), finishedAt: iso(NOW - 100) })] }));
++  await fs.writeFile(path.join(dir, 'manifest.json'), JSON.stringify({ version: 1, jobs: [{ id: 'build' }, { id: 'test', after: ['build'] }, { id: 'docs', after: ['build'] }, { id: 'ship', after: ['test', 'docs', 'ghost'] }] }));
++  return { root, project: { id: projectId(root), name: 'p', root } };
++}
++
++test('run inspect: the graph layers come from what each job waited for, a job tried twice is flagged, the journal is in time order with each job\'s cost, secrets are redacted', async t => {
++  const { project } = await runFixture(t);
++  const r = await runDetail(project, 'run-1');
++  const by = Object.fromEntries(r.jobs.map(j => [j.id, j]));
++  assert.deepEqual([by.build.layer, by.test.layer, by.docs.layer, by.ship.layer], [0, 1, 1, 2]);
++  assert.deepEqual(by.ship.after, ['test', 'docs', 'ghost']);
++  assert.equal(r.layers, 3);
++  assert.equal(r.hasGraph, true);
++  assert.deepEqual([by.docs.rerun, by.build.rerun, by.docs.attempts.length], [true, false, 2]);
++  assert.deepEqual(by.docs.attempts.map(a => a.lane), ['Codex', 'Opus']);
++  assert.doesNotMatch(JSON.stringify(r), /sk-ant-a{10}/);
++  assert.deepEqual(plain(r.totals), { jobs: 4, byStatus: { complete: 3, failed: 1 }, usd: 2, rerun: 1 });
++  assert.equal(r.durationMs, 10000);
++  const times = r.journal.map(e => e.at);
++  assert.deepEqual(times, [...times].sort(), 'in time order');
++  const ended = r.journal.filter(e => e.event !== 'queued' && e.event !== 'started');
++  assert.deepEqual(ended.map(e => [e.job, e.event, e.usd]).sort(), [['build', 'finished', 0.5], ['docs', 'failed', 0.5], ['ship', 'finished', 0.5], ['test', 'finished', 0.5]]);
++  assert.equal(r.journal.filter(e => e.event === 'queued').length, 4);
++});
++
++test('run inspect: no manifest means no edges (and it says so), a cycle or a missing dependency does not break the layers, and only a real run folder of the project is read', async t => {
++  const { project, root } = await runFixture(t);
++  await fs.rm(path.join(root, '.swarm/runs/run-1/manifest.json'));
++  const r = await runDetail(project, 'run-1');
++  assert.deepEqual([r.hasGraph, r.layers, r.jobs.every(j => j.after.length === 0)], [false, 1, true]);
++  assert.deepEqual([...layersOf([{ id: 'a', after: ['b'] }, { id: 'b', after: ['a'] }, { id: 'c', after: ['nope'] }]).entries()].map(([k]) => k).sort(), ['a', 'b', 'c']);
++  for (const bad of ['../run-1', 'run-1/../run-1', '', 'x'.repeat(200), '.hidden', 'nope']) assert.equal(await runDetail(project, bad), null, bad);
++  await fs.symlink(path.join(root, '.swarm/runs/run-1'), path.join(root, '.swarm/runs/linked'));
++  assert.equal(await runDetail(project, 'linked'), null, 'a symlinked run folder is not followed');
++  await fs.writeFile(path.join(root, '.swarm/runs/run-1/state.json'), '{ not json');
++  assert.equal(await runDetail(project, 'run-1'), null);
++});
++
++test('compare: totals and lanes side by side, the job ids both runs share with a changed outcome, and what only one run has', async t => {
++  const { project, root } = await runFixture(t);
++  const dir2 = path.join(root, '.swarm/runs/run-2'); await fs.mkdir(dir2, { recursive: true });
++  const state = JSON.parse(await fs.readFile(path.join(root, '.swarm/runs/run-1/state.json'), 'utf8'));
++  state.status = 'failed'; state.finishedAt = iso(NOW + 20000);
++  state.jobs = state.jobs.filter(j => j.id !== 'ship').map(j => (j.id === 'build' ? { ...j, status: 'failed', costUsd: 1.5 } : j)).concat([{ ...state.jobs[0], id: 'extra', agent: 'cursor', model: 'composer' }]);
++  await fs.writeFile(path.join(dir2, 'state.json'), JSON.stringify(state));
++  const [a, b] = [await runDetail(project, 'run-1'), await runDetail(project, 'run-2')];
++  const c = compareRuns(a, b);
++  assert.deepEqual([c.a.runId, c.b.runId, c.onlyA, c.onlyB], ['run-1', 'run-2', 1, 1]);
++  assert.equal(c.shared.length, 3);
++  assert.deepEqual(c.shared.find(s => s.id === 'build'), { id: 'build', a: { status: 'complete', durationMs: 6000, costUsd: 0.5, rerun: false }, b: { status: 'failed', durationMs: 6000, costUsd: 1.5, rerun: false } });
++  assert.ok(c.lanes.some(l => l.lane === 'Cursor' && l.a === null && l.b.jobs === 1));
++  assert.equal(compareRuns(a, null), null);
++});
++
++test('the board serves the run inspector behind the token: the page, the data, compare; a wrong token, an unknown project or run, and a bad run id are refused', async t => {
++  const home = await tmp(t);
++  const { project } = await runFixture(t);
++  const env = { ...process.env, SWARM_PROJECTS_FILE: path.join(home, 'p.json'), SWARM_HISTORY_FILE: path.join(home, 'h.ndjson'), SWARM_LANES_DIR: path.join(home, 'l'), SWARM_SPEND_DIR: path.join(home, 's'), SWARM_PHONE_DIR: path.join(home, 'ph') };
++  await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({ version: 1, projects: [{ ...project, addedAt: iso(NOW), lastSeen: iso(NOW) }] }));
++  const api = createBoardApi({ env, now: () => NOW, live: async () => [], cacheMs: 0 });
++  const server = createWatchServer({ root: home, getRunSnapshot: async () => null, getPlanSnapshot: async () => ({ present: false }), getGallery: async () => ({ schema: 1, screens: [] }), getBoard: async () => ({ runs: [] }), board: api, indexName: 'board.html', assetDir: assets, deltaFile, commandList: [], contextCommands: () => [] });
++  const { url } = await server.listen();
++  t.after(() => server.close());
++  const token = new URL(url).searchParams.get('t');
++  const get = p => new Promise((resolve, reject) => http.get(new URL(p, url), res => { let b = ''; res.on('data', d => { b += d; }); res.on('end', () => resolve({ status: res.statusCode, body: b })); }).on('error', reject));
++  const q = (run, extra = '') => `/api/run?id=${project.id}&run=${run}${extra}&t=${token}`;
++  const ok = await get(q('run-1'));
++  assert.equal(ok.status, 200);
++  assert.equal(JSON.parse(ok.body).totals.jobs, 4);
++  assert.match((await get(`/run?id=${project.id}&run=run-1&t=${token}`)).body, /Job graph/);
++  assert.equal((await get(`/run?id=${project.id}&run=run-1`)).status, 403);
++  assert.equal((await get(q('run-1').replace(token, 'wrong'))).status, 403);
++  assert.equal((await get(`/api/run?id=${project.id}&run=run-1`)).status, 403);
++  assert.equal((await get(q('nope'))).status, 404);
++  assert.equal((await get(`/api/run?id=ffffffffffff&run=run-1&t=${token}`)).status, 404);
++  assert.equal((await get(q('..%2Frun-1'))).status, 404);
++  assert.equal((await get(q('run-1', '&compare=nope'))).status, 404);
++  assert.equal((await get(q('run-1', '&compare=run-1'))).status, 200);
++});
++
++test('the board page helpers (unread, liveness, countdown, bays, hash, graph layout, replay) do what the page relies on', async () => {
++  const L = await lib();
++  const items = [{ projectId: 'p', kind: 'blocker', id: 'a' }, { projectId: 'p', kind: 'human', id: 'b' }];
++  assert.deepEqual(plain(L.unread(items, [])), ['p|blocker|a', 'p|human|b']);
++  assert.deepEqual(plain(L.unread(items, ['p|blocker|a'])), ['p|human|b']);
++  assert.deepEqual(plain(L.unread([], ['x'])), []);
++  assert.equal(L.remember(Array.from({ length: 500 }, (_, i) => `k${i}`), ['new'], 500).length, 500);
++  assert.equal(L.remember(['a'], ['a', 'b'], 500).join(), 'a,b');
++  assert.deepEqual(plain(L.liveness(NOW - 2000, NOW)), { state: 'live', ageS: 2 });
++  assert.equal(L.liveness(NOW - 20000, NOW).state, 'stale');
++  assert.equal(L.liveness(0, NOW).state, 'stale');
++  assert.equal(L.countdown(iso(NOW + 30000), NOW), 'in 30 s');
++  assert.equal(L.countdown(iso(NOW + 12 * 60000), NOW), 'in 12 min');
++  assert.equal(L.countdown(iso(NOW + 125 * 60000), NOW), 'in 2 h 5 min');
++  assert.equal(L.countdown(iso(NOW - 1000), NOW), 'now');
++  assert.equal(L.countdown('junk', NOW), '');
++  const bays = L.bays([{ lane: 'Haiku', state: 'working' }, { lane: 'Haiku', state: 'error' }, { lane: 'Zeta', state: 'thinking' }], []);
++  const haiku = bays.find(b => b.lane === 'Haiku');
++  assert.deepEqual([haiku.agents.length, haiku.running, haiku.idle], [2, 1, false], 'a failed agent is listed but not counted as running');
++  assert.equal(bays.find(b => b.lane === 'Sonnet').idle, true, 'no agent running: a sleeping head, never an invented agent');
++  assert.ok(bays.some(b => b.lane === 'Zeta'));
++  assert.deepEqual(plain(L.parseHash('#tab=cost')), { tab: 'cost' });
++  assert.deepEqual(plain(L.parseHash('#run=abc123/1792-aaaa')), { run: { projectId: 'abc123', runId: '1792-aaaa' } });
++  for (const bad of ['#tab=evil', '#run=../x/y', '#run=a/b/c', '#javascript:alert(1)', '', undefined]) assert.deepEqual(plain(L.parseHash(bad)), {}, String(bad));
++  const g = L.layoutGraph([{ id: 'a', layer: 0, after: [] }, { id: 'b', layer: 1, after: ['a'] }, { id: 'c', layer: 1, after: ['a', 'zz'] }]);
++  assert.deepEqual(plain(g.edges), [{ from: 'a', to: 'b' }, { from: 'a', to: 'c' }]);
++  assert.ok(g.pos.b.x > g.pos.a.x && g.pos.c.y > g.pos.b.y);
++  const journal = [{ job: 'a', event: 'queued' }, { job: 'a', event: 'started' }, { job: 'a', event: 'finished', usd: 0.5 }, { job: 'b', event: 'started' }, { job: 'b', event: 'failed', usd: 0.25 }];
++  assert.deepEqual(plain(L.replay(journal, 2)), { spentUsd: 0, running: 1, ended: 0 });
++  assert.deepEqual(plain(L.replay(journal, 5)), { spentUsd: 0.75, running: 0, ended: 2 });
++  assert.deepEqual(plain(L.replay(journal, 0)), { spentUsd: 0, running: 0, ended: 0 });
++});
++
++test('the ported robot heads: attributed and licensed, they draw every state the board uses, and only the five states the swarm can back are mapped', async () => {
++  const license = await read('ROBOT-HEADS-LICENSE.txt').catch(() => '');
++  assert.match(license, /MIT License/);
++  assert.match(license, /Fayaz Ahmed/);
++  for (const f of ['color', 'ticker', 'light', 'geometry', 'faces', 'sim', 'render']) {
++    const src = await read(`robot-${f}.js`);
++    assert.match(src.split('\n')[0], /Ported from https:\/\/github\.com\/fayazara\/robot-heads .*commit 58ebf6439a8125a769f63b22ffd35bc18834b1b5\. MIT License/, f);
++    assert.doesNotMatch(src, /\bimport React\b|from 'react'|from "react"/, 'no React');
++  }
++  const { FACES } = await import('../tools/watch-assets/robot-faces.js');
++  const { RobotSim, restPose } = await import('../tools/watch-assets/robot-sim.js');
++  const { STATES } = await import('../tools/watch-assets/robot-head.js').catch(() => ({ STATES: ['idle', 'thinking', 'working', 'error', 'sleeping'] }));
++  for (const s of ['idle', 'thinking', 'working', 'error', 'sleeping']) {
++    assert.ok(FACES[s], `a face for ${s}`);
++    const sim = new RobotSim(0.5, s); sim.setState(s);
++    for (let i = 0; i < 30; i += 1) sim.update(0.05);
++    assert.ok(Number.isFinite(sim.pose.yaw ?? 0), `${s} steps without NaN`);
++    assert.ok(restPose(s), `${s} has a still frame (reduced motion)`);
++  }
++  assert.ok(STATES.length >= 5);
++  const board = await read('board.js');
++  assert.match(board, /var HEAD_STATE = \{ working: 'working', thinking: 'thinking', error: 'error', sleeping: 'sleeping' \}/);
++});
++
++test('motion rules in the code: heads stay still under reduced motion or when paused, stop drawing off screen; the stylesheet turns animation off; no pointer-following', async () => {
++  const head = await read('robot-head.js');
++  assert.match(head, /prefers-reduced-motion: reduce/);
++  assert.match(head, /IntersectionObserver/);
++  assert.match(head, /let still = paused \|\| reducedMotion\(\) \|\| !visible/);
++  assert.match(head, /export const MAX_ANIMATED = 12/);
++  assert.match(head, /const FRAME_S = 1 \/ 15/);
++  assert.match(head, /sim\.pointer = null/);
++  const css = await read('swarm-ui.css');
++  assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*animation: none !important/);
++  assert.match(css, /body\.paused-motion/);
++  assert.match(await read('board.js'), /if \(reducedMotion\(\)\) \{ \$\('pauseMotion'\)\.hidden = true; \}/);
++});
++
++test('the pages never build HTML from data, load nothing from the internet, and keep the keyboard, deep links and read-only promise', async () => {
++  for (const f of ['board.js', 'run.js', 'robot-head.js', 'board-lib.js', 'project.js']) {
++    assert.doesNotMatch(await read(f), /innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function/, f);
++  }
++  for (const f of ['board.html', 'run.html', 'project.html', 'swarm-ui.css', 'board.js', 'run.js']) {
++    const text = await read(f);
++    const urls = [...text.matchAll(/https?:\/\/[^\s"')]+/g)].map(m => m[0]).filter(u => u !== 'http://www.w3.org/2000/svg');
++    assert.deepEqual(urls, [], `${f} loads or links nothing external`);
++    assert.doesNotMatch(text, /@import|<link[^>]+(googleapis|cdn)/i, f);
++  }
++  const board = await read('board.js');
++  for (const key of ["e.key === '/'", "e.key === '?'", "e.key === 'u'", "e.key === 'p'", "e.key >= '1' && e.key <= '4'", "e.key === 'Escape'"]) assert.ok(board.includes(key), key);
++  assert.match(board, /L\.parseHash\(location\.hash\)/);
++  assert.match(board, /Read-only: the board never answers anything/);
++  const html = await read('board.html');
++  for (const id of ['tab-overview', 'tab-cost', 'tab-agents', 'tab-events', 'needsChip', 'scratch', 'liveChip', 'help']) assert.match(html, new RegExp(`id="${id}"`), id);
++  assert.match(html, /role="tablist"/);
++  assert.match(html, /role="dialog" aria-modal="true"/);
++  assert.doesNotMatch(await read('board.js'), /method:\s*['"](POST|PUT|PATCH|DELETE)/i, 'the board only reads');
++});
++
++test('provenance and the design system: third-party sources, commits and licenses are logged; the skill is installed project-local; every token the design doc names exists in the stylesheet', async () => {
++  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
++  const third = await fs.readFile(path.join(root, 'docs/third-party.md'), 'utf8');
++  for (const needle of ['github.com/fayazara/robot-heads', '58ebf6439a8125a769f63b22ffd35bc18834b1b5', 'github.com/nextlevelbuilder/ui-ux-pro-max-skill', '56ea9cf174ed86786187daa9de0e6247cb0747e4', 'MIT', 'orca', 'ruflo', 'archify', 'ComfyUI', 'openhuman', 'zero code', 'text-to-cad', 'CLI-Anything']) assert.ok(third.includes(needle), needle);
++  const skill = await fs.readFile(path.join(root, '.claude/skills/ui-ux-pro-max/SKILL.md'), 'utf8');
++  assert.match(skill, /^---\nname: ui-ux-pro-max/);
++  assert.match(await fs.readFile(path.join(root, '.claude/skills/ui-ux-pro-max/LICENSE'), 'utf8'), /MIT License[\s\S]*Next Level Builder/);
++  await assert.rejects(fs.access(path.join(root, '.claude/skills/ui-ux-pro-max/scripts/tests')), 'the upstream tests were left out');
++  const doc = await fs.readFile(path.join(root, 'docs/design/swarm-watch-design-system.md'), 'utf8');
++  const css = await read('swarm-ui.css');
++  const tokens = [...new Set([...doc.matchAll(/`(--[a-z0-9-]+)`/g)].map(m => m[1]))];
++  assert.ok(tokens.length >= 20, 'the doc names the tokens');
++  for (const token of tokens) assert.ok(css.includes(`${token}:`), `${token} is defined in swarm-ui.css`);
++  assert.match(doc, /ui-ux-pro-max/);
++  assert.match(doc, /UX checks/);
++});
++
++test('contrast: every text colour of the design system is at least 4.5:1 on the surfaces it sits on, and focus has a visible ring', async () => {
++  const css = await read('swarm-ui.css');
++  const token = name => { const m = new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`).exec(css); assert.ok(m, `--${name} is a hex colour`); return m[1]; };
++  const channel = c => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
++  const lum = hex => 0.2126 * channel(parseInt(hex.slice(1, 3), 16)) + 0.7152 * channel(parseInt(hex.slice(3, 5), 16)) + 0.0722 * channel(parseInt(hex.slice(5, 7), 16));
++  const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
++  for (const text of ['fg', 'muted', 'faint', 'accent', 'warn', 'bad', 'info', 'lav']) for (const surface of ['bg', 'card', 'card-2']) assert.ok(ratio(token(text), token(surface)) >= 4.5, `${text} on ${surface}: ${ratio(token(text), token(surface)).toFixed(2)}`);
++  assert.ok(ratio('#a7f3d0', '#0f3a2a') >= 4.5, 'the selected tab');
++  assert.ok(ratio('#1a1202', token('warn')) >= 4.5, 'the unread badge');
++  assert.match(css, /:focus-visible \{ outline: none; box-shadow: var\(--ring\)/);
++  assert.match(css, /@media \(max-width: 960px\)[\s\S]*min-height: 44px/);
++});
++
++test('review fixes: a lane, job or status called __proto__ or constructor is only a name (no prototype pollution anywhere), in the server data and in the page helpers', async t => {
++  const root = await tmp(t);
++  const dir = path.join(root, '.swarm/runs/run-1'); await fs.mkdir(dir, { recursive: true });
++  const job = (id, agent, status) => ({ id, agent, model: 'x', status, queuedAt: iso(NOW - 9000), startedAt: iso(NOW - 8000), finishedAt: iso(NOW - 1000), costUsd: 1, usage: { total_tokens: 1 }, progress: { lastOutputAt: iso(NOW - 1000) }, attempts: [{ agent, status }] });
++  await fs.writeFile(path.join(dir, 'state.json'), JSON.stringify({ id: 'run-1', status: 'running', startedAt: iso(NOW - 10000), jobs: [job('__proto__', '__proto__', '__proto__'), job('constructor', 'constructor', 'running'), job('toString', 'hasOwnProperty', 'running'), null, 'junk', [], job('ok', 'claude', 'complete')] }));
++  await fs.writeFile(path.join(dir, 'manifest.json'), JSON.stringify({ jobs: [{ id: '__proto__' }, { id: 'constructor', after: ['__proto__'] }, { id: 'toString', after: ['constructor', '__proto__'] }] }));
++  const project = { id: projectId(root), name: 'p', root };
++  const r = await runDetail(project, 'run-1');
++  assert.equal(({}).jobs, undefined, 'Object.prototype was not touched');
++  assert.equal(({}).usd, undefined);
++  assert.equal(r.totals.jobs, 4, 'null, a string and an array in the job list are skipped');
++  assert.equal(r.jobs.find(j => j.id === 'toString').layer, 2);
++  assert.equal(r.lanes['__proto__'].jobs, 1);
++  assert.equal(r.totals.byStatus['__proto__'], 1);
++  const live = agentsOf([{ id: 'run-1', state: JSON.parse(await fs.readFile(path.join(dir, 'state.json'), 'utf8')) }], new Set(['run-1']), NOW);
++  assert.equal(({}).jobs, undefined);
++  assert.equal(live.byLane.constructor, 1);
++  assert.equal(live.total, 2);
++  const cost = costOf([{ state: { startedAt: iso(NOW - 10000), jobs: [job('a', '__proto__', 'complete'), null] } }], NOW);
++  assert.equal(cost.laneToday['__proto__'], 1);
++  assert.equal(({}).usd, undefined);
++  const L = await lib();
++  const bays = L.bays([{ lane: '__proto__', state: 'working' }, { lane: 'constructor', state: 'thinking' }], []);
++  assert.equal(bays.find(b => b.lane === '__proto__').agents.length, 1);
++  const g = L.layoutGraph([{ id: '__proto__', layer: 0, after: [] }, { id: 'constructor', layer: 1, after: ['__proto__'] }]);
++  assert.equal(g.edges.length, 1);
++  assert.equal(L.unread([{ projectId: 'p', kind: 'k', id: '__proto__' }], ['p|k|__proto__']).length, 0);
++  assert.equal(({}).agents, undefined);
++});
++
++test('review fixes: a symlinked or non-file state.json is refused (never followed or waited on), a long chain of jobs does not overflow the stack, and replay order is fixed', async t => {
++  const root = await tmp(t);
++  const dir = path.join(root, '.swarm/runs/run-1'); await fs.mkdir(dir, { recursive: true });
++  const outside = path.join(root, 'outside.json'); await fs.writeFile(outside, JSON.stringify({ id: 'x', status: 'complete', jobs: [] }));
++  await fs.symlink(outside, path.join(dir, 'state.json'));
++  const project = { id: projectId(root), name: 'p', root };
++  assert.equal(await runDetail(project, 'run-1'), null, 'a symlinked state file is not read');
++  await fs.rm(path.join(dir, 'state.json'));
++  await fs.mkdir(path.join(dir, 'state.json'));
++  assert.equal(await runDetail(project, 'run-1'), null, 'a directory is not a state file');
++  const chain = Array.from({ length: 2000 }, (_, i) => ({ id: `j${i}`, after: i ? [`j${i - 1}`] : [] }));
++  assert.equal(layersOf(chain).get('j1999'), 1999);
++  assert.deepEqual([...layersOf([{ id: 'a', after: ['b'] }, { id: 'b', after: ['a'] }]).values()].sort(), [0, 1]);
++  await fs.rm(path.join(dir, 'state.json'), { recursive: true });
++  const same = iso(NOW);
++  const mk = id => ({ id, agent: 'claude', model: 'sonnet', status: 'complete', queuedAt: same, startedAt: same, finishedAt: same, costUsd: 0.1, attempts: [{ agent: 'claude' }] });
++  const run = jobs => fs.writeFile(path.join(dir, 'state.json'), JSON.stringify({ id: 'run-1', status: 'complete', startedAt: same, finishedAt: same, jobs }));
++  await run([mk('b'), mk('a'), mk('c')]);
++  const one = (await runDetail(project, 'run-1')).journal.map(e => `${e.job}:${e.event}`);
++  await run([mk('c'), mk('a'), mk('b')]);
++  const two = (await runDetail(project, 'run-1')).journal.map(e => `${e.job}:${e.event}`);
++  assert.deepEqual(one, two, 'the order does not depend on the order the jobs were written in');
++  assert.deepEqual(one.slice(0, 3), ['a:queued', 'b:queued', 'c:queued'], 'at the same instant: all queued first');
++  assert.deepEqual(one.slice(3, 6), ['a:started', 'b:started', 'c:started']);
++});
++
++test('review fixes in the page: one poll at a time, nothing rebuilt when nothing changed (keyboard focus stays), stale bays removed, announcements only on change, and a run link that does not trap the Back button', async () => {
++  const board = await read('board.js');
++  assert.match(board, /if \(state\.polling\) \{ return; \}/);
++  assert.match(board, /\.then\(function \(\) \{ state\.polling = false; \}\)/);
++  assert.match(board, /if \(sig === state\.needsSig\) \{ return; \}/);
++  assert.match(board, /if \(psig === state\.projSig\) \{ return; \}/);
++  assert.match(board, /if \(csig === state\.costSig\) \{ return; \}/);
++  assert.match(board, /map\.forEach\(function \(v, lane\) \{ if \(!names\[lane\]\)/);
++  assert.match(board, /sessionStorage\.getItem\('swarm-deeplink'\)/);
++  assert.match(board, /\$\('deeplink'\)\.hidden = false/);
++  assert.match(board, /\$\('announce'\)\.textContent = said/);
++  const html = await read('board.html');
++  assert.match(html, /id="announce" role="status" aria-live="polite" aria-atomic="true"/);
++  assert.doesNotMatch(html, /id="liveChip"[^>]*role="status"/, 'a clock-like chip is not a live region');
++  assert.match(html, /id="deeplink" hidden/);
++});
+diff --git a/tools/board-data.mjs b/tools/board-data.mjs
+index b025b28..02afc71 100644
+--- a/tools/board-data.mjs
++++ b/tools/board-data.mjs
+@@ -4,7 +4,7 @@
+ // each function takes ONE project and reads only under its root. The machine-wide numbers are sums of the per-project numbers.
+ import fs from 'node:fs/promises';
+ import path from 'node:path';
+-import { runTotals, jobSpend } from './spend.mjs';
++import { runTotals, jobSpend, laneDayTotals } from './spend.mjs';
+ import { readLedger } from './tickets.mjs';
+ import { projectSummary } from './project-spend.mjs';
+ import { listLessons } from './lesson-store.mjs';
+@@ -16,6 +16,10 @@ const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   //
+ const ESTIMATED = new Set(['estimated-from-tokens', 'reservation']);
+ const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
+ const txt = (v, n = 160) => (v === null || v === undefined ? null : sanitizeWorkerText(v, n));
++// Maps keyed by text from run files (lane names, statuses, project names) have no prototype: a lane called __proto__ or constructor must not reach Object.prototype.
++const dict = () => Object.create(null);
++// What leaves the module is an ordinary object again (Object.fromEntries defines each key as an own property, even one called __proto__).
++const plain = d => Object.fromEntries(Object.entries(d));
+ const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+ 
+ // The name the board uses for a worker: Haiku, Sonnet, Opus, Codex, Cursor, GPU (our own or rented GPUs and local models).
+@@ -62,6 +66,7 @@ const stageNumber = stage => { const m = /^S(\d+)$/.exec(String(stage ?? '')); r
+ export function costOf(runs, now = Date.now()) {
+   const startOfDay = new Date(now); startOfDay.setUTCHours(0, 0, 0, 0);
+   const out = { allUsd: 0, todayUsd: 0, weekUsd: 0, paidUsd: 0, paidEstimatedUsd: 0, flatRateListUsd: 0, flatRateJobs: 0 };
++  const laneToday = dict();   // by agent lane: what jobs that finished today cost (billed lanes) or are worth at list price (flat-rate lanes)
+   for (const { state } of runs) {
+     out.allUsd += runTotals(state).usd;
+     const rentalUsd = num(state.rental?.usd);
+@@ -70,40 +75,64 @@ export function costOf(runs, now = Date.now()) {
+     const add = (usd, at) => { if (at >= startOfDay.getTime()) out.todayUsd += usd; if (at >= now - 7 * DAY) out.weekUsd += usd; };
+     if (rentalUsd) { out.paidUsd += rentalUsd; if (Number.isFinite(runDay)) add(rentalUsd, runDay); }
+     for (const job of state.jobs ?? []) {
++      if (!job || typeof job !== 'object') continue;
+       const usd = num(jobSpend(job).usd);
+       if (!usd) { if (FLAT_RATE.has(job.agent) && job.status === 'complete') out.flatRateJobs += 1; continue; }
+       const at = Date.parse(job.finishedAt ?? '') || runDay;
++      if (Number.isFinite(at) && at >= startOfDay.getTime() && job.agent) laneToday[job.agent] = (laneToday[job.agent] ?? 0) + usd;
+       if (FLAT_RATE.has(job.agent)) { out.flatRateListUsd += usd; out.flatRateJobs += 1; }
+       else { out.paidUsd += usd; if (ESTIMATED.has(job.costSource)) out.paidEstimatedUsd += usd; if (Number.isFinite(at)) add(usd, at); }
+     }
+   }
+   for (const key of Object.keys(out)) if (key.endsWith('Usd')) out[key] = Math.round(out[key] * 1e6) / 1e6;
++  out.laneToday = Object.fromEntries(Object.entries(laneToday).map(([k, v]) => [k, Math.round(v * 1e6) / 1e6]));
+   return out;
+ }
+ 
+-// The workers running right now in the runs that are really alive (their process exists), by lane label.
+-export function agentsOf(runs, liveIds) {
+-  const byLane = {};
++// What an agent is doing, from what the run recorded about its job (never guessed): running with output in the last 90 seconds is "working"; running with
++// no output yet, or quiet for longer, is "thinking" (it started and has not answered); a job that failed or timed out in the last 10 minutes is "error".
++export const WORKING_MS = 90 * 1000;
++export const ERROR_SHOWN_MS = 10 * 60 * 1000;
++export function agentState(job, now = Date.now()) {
++  if (job?.status === 'running') {
++    const last = Date.parse(job.progress?.lastOutputAt ?? '');
++    return Number.isFinite(last) && now - last <= WORKING_MS ? 'working' : 'thinking';
++  }
++  if (job?.status === 'failed' || job?.status === 'timeout') {
++    const finished = Date.parse(job.finishedAt ?? '');
++    return Number.isFinite(finished) && now - finished <= ERROR_SHOWN_MS ? 'error' : null;
++  }
++  return null;
++}
++
++// The workers running right now in the runs that are really alive (their process exists), by lane label, and one entry per agent (running, or just failed).
++export function agentsOf(runs, liveIds, now = Date.now()) {
++  const byLane = dict();
+   const jobs = { running: 0, queued: 0, blocked: 0 };
++  const list = [];
+   for (const { id, state } of runs) {
+     if (!liveIds.has(id)) continue;
+     for (const job of state.jobs ?? []) {
+-      if (job.status === 'running') { const label = laneLabel(job.agent, job.model); byLane[label] = (byLane[label] ?? 0) + 1; jobs.running += 1; }
++      if (!job || typeof job !== 'object') continue;
++      const label = laneLabel(job.agent, job.model);
++      const st = agentState(job, now);
++      if (st) list.push({ runId: id, jobId: txt(job.id, 60), lane: label, agent: txt(job.agent, 30), state: st, since: job.startedAt ?? null, ...(st === 'error' ? { ended: job.finishedAt ?? null } : {}) });
++      if (job.status === 'running') { byLane[label] = (byLane[label] ?? 0) + 1; jobs.running += 1; }
+       else if (job.status === 'queued') jobs.queued += 1;
+       else if (job.status === 'held' || job.status === 'blocked') jobs.blocked += 1;
+     }
+   }
+-  return { total: jobs.running, byLane, jobs };
++  return { total: jobs.running, byLane: plain(byLane), jobs, list: list.slice(0, 200) };
+ }
+ 
+ export function ticketsOf(ledger) {
+   const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object');
+-  const byStatus = {};
++  const byStatus = dict();
+   for (const t of tickets) byStatus[t.status] = (byStatus[t.status] ?? 0) + 1;
+   const open = tickets.filter(t => ['todo', 'ready', 'running', 'review', 'blocked'].includes(t.status));
+   const stages = open.map(t => stageNumber(t.stage)).filter(n => n > 0);
+   const stage = !tickets.length ? null : stages.length ? `S${Math.min(...stages)}` : (tickets.some(t => stageNumber(t.stage) > 0) ? 'done' : null);
+-  return { total: tickets.filter(t => !['cancelled', 'proposed'].includes(t.status)).length, open: open.length, blocked: byStatus.blocked ?? 0, proposed: byStatus.proposed ?? 0, byStatus, stage };
++  return { total: tickets.filter(t => !['cancelled', 'proposed'].includes(t.status)).length, open: open.length, blocked: byStatus.blocked ?? 0, proposed: byStatus.proposed ?? 0, byStatus: plain(byStatus), stage };
+ }
+ 
+ // One project's lane on the board. `liveRuns` are the alive runs of THIS project only.
+@@ -113,7 +142,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
+   const ledger = await readLedger(project.root).catch(() => null);
+   const spend = await summary(project.root).catch(error => ({ spendUsd: null, capUsd: null, capError: String(error.message).slice(0, 120) }));
+   const cost = costOf(runs, now);
+-  const agents = agentsOf(runs, liveIds);
++  const agents = agentsOf(runs, liveIds, now);
+   const lastRun = runs.length ? runs[runs.length - 1].state : null;
+   const lastActivityMs = Math.max(0, ...runs.map(r => r.mtimeMs), Date.parse(ledger?.updatedAt ?? '') || 0);
+   const tickets = ticketsOf(ledger);
+@@ -130,7 +159,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
+ }
+ 
+ // The whole board: machine totals (sums of the project numbers) and one overview per registered project.
+-export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, workers = null } = {}) {
++export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, workers = null, lanes = null } = {}) {
+   const overviews = [];
+   // A live run belongs to the project whose real root it ran in, however the path was spelled.
+   const live = await Promise.all(liveRuns.map(async r => ({ ...r, root: await fs.realpath(r.root).catch(() => r.root) })));
+@@ -138,17 +167,23 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
+     const mine = live.filter(r => r.root === project.root);
+     overviews.push(await projectOverview(project, mine, { now, summary }));
+   }
+-  const machine = { agents: { total: 0, byLane: {}, byProject: {} }, cost: { todayUsd: 0, weekUsd: 0, allUsd: 0, paidUsd: 0, paidEstimatedUsd: 0, flatRateListUsd: 0, byProject: {} }, liveRuns: 0 };
++  const machine = { agents: { total: 0, byLane: dict(), byProject: dict(), list: [] }, cost: { todayUsd: 0, weekUsd: 0, allUsd: 0, paidUsd: 0, paidEstimatedUsd: 0, flatRateListUsd: 0, byProject: {} }, liveRuns: 0 };
+   for (const o of overviews) {
+     machine.agents.total += o.agents.total;
+     machine.agents.byProject[o.id] = o.agents.total;
++    for (const a of o.agents.list ?? []) machine.agents.list.push({ ...a, projectId: o.id, project: o.name });
+     for (const [lane, n] of Object.entries(o.agents.byLane)) machine.agents.byLane[lane] = (machine.agents.byLane[lane] ?? 0) + n;
+     for (const key of ['todayUsd', 'weekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] += o.cost[key];
++    for (const [agent, usd] of Object.entries(o.cost.laneToday ?? {})) (machine.cost.laneToday ??= dict())[agent] = (machine.cost.laneToday[agent] ?? 0) + usd;
+     machine.cost.byProject[o.id] = { name: o.name, ...o.cost };
+     machine.liveRuns += o.live.length;
+   }
+   for (const key of ['todayUsd', 'weekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] = Math.round(machine.cost[key] * 1e6) / 1e6;
++  machine.agents.byLane = plain(machine.agents.byLane);
++  machine.agents.byProject = plain(machine.agents.byProject);
++  if (machine.cost.laneToday) machine.cost.laneToday = plain(machine.cost.laneToday);
+   machine.workers = workers;
++  machine.lanes = lanes ? await lanes(machine.cost.laneToday ?? {}) : [];
+   return { at: new Date(now).toISOString(), machine, projects: overviews };
+ }
+ 
+@@ -157,8 +192,8 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
+   const runs = await readRunStates(project.root, { limit: 200 });
+   const ledger = await readLedger(project.root).catch(() => null);
+   const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 1000).map(t => ({ id: txt(t.id, 20), title: txt(t.title, 140), status: txt(t.status, 20), stage: txt(t.stage, 10), risk: txt(t.risk, 10) }));
+-  const byLane = {};
+-  for (const { state } of runs) for (const job of state.jobs ?? []) { const usd = num(jobSpend(job).usd); if (!usd) continue; const label = laneLabel(job.agent, job.model); byLane[label] = Math.round(((byLane[label] ?? 0) + usd) * 1e6) / 1e6; }
++  const byLane = dict();
++  for (const { state } of runs) for (const job of state.jobs ?? []) { if (!job || typeof job !== 'object') continue; const usd = num(jobSpend(job).usd); if (!usd) continue; const label = laneLabel(job.agent, job.model); byLane[label] = Math.round(((byLane[label] ?? 0) + usd) * 1e6) / 1e6; }
+   const lessons = await listLessons(project.root).then(r => r.lessons.slice(0, 200).map(l => ({ id: txt(l.id, 40), what: txt(l.what ?? l.title ?? l.rule, 200), stage: txt(l.stage, 20), status: txt(l.guard?.status ?? l.status, 20) })), () => []);
+   return {
+     id: project.id, name: txt(project.name, 80), root: project.root,
+@@ -167,7 +202,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
+       const jobs = state.jobs ?? [];
+       return { runId: id, status: txt(state.status, 30), live: liveRunIds.has(id), startedAt: state.startedAt ?? null, finishedAt: state.finishedAt ?? null, jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length, failed: jobs.filter(j => ['failed', 'timeout'].includes(j.status)).length, costUsd: Math.round(runTotals(state).usd * 1e6) / 1e6 };
+     }),
+-    spend: { ...costOf(runs, now), byLane },
++    spend: { ...costOf(runs, now), byLane: plain(byLane) },
+     lessons,
+   };
+ }
+@@ -205,22 +240,48 @@ export async function workersHeld({ dir, max = null, invalid = false, isAlive: p
+   let store = null;
+   try { store = JSON.parse(await fs.readFile(path.join(dir, 'lanes.json'), 'utf8')); } catch { /* no workers have ever been claimed */ }
+   const host = os.hostname();
+-  const byProject = {};
++  const byProject = dict();
+   let total = 0;
+   for (const [agent, slots] of Object.entries(store?.slots ?? {})) {
+     for (const slot of Array.isArray(slots) ? slots : []) {
+       if (!slot || (slot.host === host && !isAlive(slot.pid))) continue;
+       const key = typeof slot.project === 'string' && slot.project ? slot.project : 'unknown';
+       const lane = agent === 'anthropic' ? 'Anthropic API' : laneLabel(agent, null);
+-      const entry = byProject[key] ??= { total: 0, byLane: {} };
++      const entry = byProject[key] ??= { total: 0, byLane: dict() };
+       entry.total += 1; entry.byLane[lane] = (entry.byLane[lane] ?? 0) + 1; total += 1;
+     }
+   }
+-  const demand = {};
++  const demand = dict();
+   // Waiting entries are per run and lane; the board shows them per project, and only the fresh ones (a waiting run refreshes its entry every poll).
+   for (const entry of Object.values(store?.demand ?? {})) {
+     if (!entry || typeof entry.project !== 'string' || !Number.isInteger(entry.count) || entry.count <= 0 || !(Date.now() - entry.at <= 5000) || (entry.host === host && !isAlive(entry.pid))) continue;
+     demand[entry.project] = (demand[entry.project] ?? 0) + entry.count;
+   }
+-  return { max, ...(invalid ? { invalid: true } : {}), total, free: max ? Math.max(0, max - total) : null, byProject, demand };
++  for (const entry of Object.values(byProject)) entry.byLane = plain(entry.byLane);
++  return { max, ...(invalid ? { invalid: true } : {}), total, free: max ? Math.max(0, max - total) : null, byProject: plain(byProject), demand: plain(demand) };
++}
++
++// Per lane today: what it cost (billed lanes) or is worth at list price (flat-rate lanes), its daily cap and when the cap resets (UTC midnight, the day the
++// spend store counts by), and a rate-limit or quota pause with the time it ends. Only lanes with something to say are listed. Read-only.
++const PAID = new Set(['openrouter', 'openai', 'gemini', 'lambda', 'anthropic', 'rented']);
++export async function laneUsage({ laneToday = {}, spendDirectory, lanesDirectory, caps = {}, now = Date.now() } = {}) {
++  const day = new Date(now).toISOString().slice(0, 10);
++  const midnight = Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)) + 1);
++  let store = null;
++  try { store = JSON.parse(await fs.readFile(path.join(spendDirectory, 'daily.json'), 'utf8')); } catch { /* nothing was ever spent */ }
++  const spent = store && typeof store.entries === 'object' && store.entries ? laneDayTotals(store, { day }) : {};
++  let lanes = null;
++  try { lanes = JSON.parse(await fs.readFile(path.join(lanesDirectory, 'lanes.json'), 'utf8')); } catch { /* no lane has been used */ }
++  const names = new Set([...Object.keys(laneToday), ...Object.keys(spent), ...Object.keys(caps), ...Object.keys(lanes?.pauses ?? {})]);
++  const rows = [];
++  for (const agent of [...names].sort()) {
++    const paid = PAID.has(agent);
++    const todayUsd = Math.round(num(paid ? (spent[agent]?.usd ?? laneToday[agent]) : laneToday[agent]) * 1e6) / 1e6;
++    const cap = typeof caps[agent] === 'number' && caps[agent] > 0 ? caps[agent] : null;
++    const pause = lanes?.pauses?.[agent];
++    const limited = pause && Number.isFinite(pause.until) && pause.until > now ? { state: txt(pause.state, 20), until: new Date(pause.until).toISOString() } : null;
++    if (!todayUsd && !cap && !limited) continue;
++    rows.push({ lane: txt(agent, 30), label: agent === 'anthropic' ? 'Anthropic API' : laneLabel(agent, null), kind: paid ? 'billed' : 'flat-rate', todayUsd, dailyCapUsd: cap, capResetsAt: cap ? new Date(midnight).toISOString() : null, limited });
++  }
++  return rows;
+ }
+diff --git a/tools/board-run.mjs b/tools/board-run.mjs
+new file mode 100644
+index 0000000..ec1ed4a
+--- /dev/null
++++ b/tools/board-run.mjs
+@@ -0,0 +1,121 @@
++// SPDX-License-Identifier: Apache-2.0
++// Run inspect, for the board: one run's jobs as a graph (who waits for whom), which jobs were run again, and a journal of what happened in time order with
++// what each job cost. Everything comes from the run's own files (state.json and manifest.json); nothing is estimated, and a field the run did not record is
++// left out rather than filled in. Read-only, and only reads under the project's own .swarm/runs/RUN.
++import fs from 'node:fs/promises';
++import path from 'node:path';
++import { sanitizeWorkerText } from './worker-text.mjs';
++import { laneLabel } from './board-data.mjs';
++import { jobSpend } from './spend.mjs';
++import { sanitizeText } from './journal.mjs';
++
++export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
++// Secrets redacted, control characters removed, length bounded: job text came from a worker.
++const txt = (v, n = 160) => (v === null || v === undefined ? null : sanitizeText(sanitizeWorkerText(v, n)));
++const iso = v => (Number.isFinite(Date.parse(v ?? '')) ? new Date(v).toISOString() : null);
++const MAX_JOBS = 2000;
++// Maps keyed by text from the run files have no prototype (a lane called __proto__ must not reach Object.prototype).
++const dict = () => Object.create(null);
++const plain = d => Object.fromEntries(Object.entries(d));
++
++async function readJson(file) {
++  // lstat, not stat: a symlink or a pipe named state.json is refused, never followed or waited on.
++  const stat = await fs.lstat(file);
++  if (!stat.isFile() || stat.size > 40 * 1024 * 1024) throw new Error('not a plain file, or too large');
++  return JSON.parse(await fs.readFile(file, 'utf8'));
++}
++
++// Layers for the graph: a job sits one layer after the deepest job it waits for. A cycle or a dependency on a job that is not in the run does not break it.
++export function layersOf(jobs) {
++  const byId = new Map(jobs.map(j => [j.id, j]));
++  const depth = new Map();
++  // Iterative (an explicit stack), so a long chain of jobs cannot overflow the call stack; a cycle is cut where it closes.
++  for (const job of jobs) {
++    if (depth.has(job.id)) continue;
++    const visiting = new Set([job.id]);
++    const stack = [{ id: job.id, i: 0, deps: null, best: 0 }];
++    while (stack.length) {
++      const f = stack[stack.length - 1];
++      if (!f.deps) f.deps = (byId.get(f.id)?.after ?? []).filter(d => byId.has(d));
++      if (f.i < f.deps.length) {
++        const d = f.deps[f.i++];
++        if (depth.has(d)) f.best = Math.max(f.best, depth.get(d) + 1);
++        else if (!visiting.has(d)) { visiting.add(d); stack.push({ id: d, i: 0, deps: null, best: 0 }); }
++      } else {
++        depth.set(f.id, f.best);
++        visiting.delete(f.id);
++        stack.pop();
++        if (stack.length) { const parent = stack[stack.length - 1]; parent.best = Math.max(parent.best, f.best + 1); }
++      }
++    }
++  }
++  return depth;
++}
++
++export async function runDetail(project, runId) {
++  if (!RUN_ID.test(String(runId))) return null;
++  const dir = path.join(project.root, '.swarm', 'runs', runId);
++  let folder;
++  try { folder = await fs.lstat(dir); } catch { return null; }
++  if (folder.isSymbolicLink() || !folder.isDirectory()) return null;
++  let state, manifest = null;
++  try { state = await readJson(path.join(dir, 'state.json')); } catch { return null; }
++  if (!state || typeof state !== 'object' || Array.isArray(state)) return null;
++  try { manifest = await readJson(path.join(dir, 'manifest.json')); } catch { /* an old run may have no manifest: the graph then has no edges */ }
++  const after = new Map((Array.isArray(manifest?.jobs) ? manifest.jobs : []).map(j => [String(j?.id), Array.isArray(j?.after) ? j.after.map(String) : []]));
++  const jobs = (Array.isArray(state.jobs) ? state.jobs : []).filter(j => j && typeof j === 'object' && !Array.isArray(j)).slice(0, MAX_JOBS).map(j => {
++    const attempts = Array.isArray(j.attempts) ? j.attempts : [];
++    const usd = jobSpend(j).usd;
++    const queued = iso(j.queuedAt), started = iso(j.startedAt), finished = iso(j.finishedAt);
++    return {
++      id: txt(j.id, 60), lane: laneLabel(j.agent, j.model), agent: txt(j.agent, 30), model: txt(j.model, 60), status: txt(j.status, 20),
++      after: (after.get(String(j.id)) ?? []).slice(0, 50).map(d => txt(d, 60)),
++      queuedAt: queued, startedAt: started, finishedAt: finished, durationMs: Number.isFinite(j.durationMs) ? j.durationMs : null,
++      costUsd: usd, costSource: txt(j.costSource, 30),
++      // Run again = the job was tried more than once (a retry, or sent up to another lane): each attempt is in the run's own record.
++      attempts: attempts.slice(0, 8).map(a => ({ lane: laneLabel(a.agent, a.model), status: txt(a.status, 20), error: a.error ? txt(a.error, 160) : null })),
++      rerun: attempts.length > 1,
++      error: j.error ? txt(j.error, 200) : null,
++    };
++  });
++  const layers = layersOf(jobs);
++  for (const j of jobs) j.layer = layers.get(j.id) ?? 0;
++  // The journal: every recorded time of every job, in order. Cost is shown where the job finished (the run records it per job, not per attempt).
++  const journal = [];
++  for (const j of jobs) {
++    if (j.queuedAt) journal.push({ at: j.queuedAt, job: j.id, lane: j.lane, event: 'queued' });
++    if (j.startedAt) journal.push({ at: j.startedAt, job: j.id, lane: j.lane, event: 'started' });
++    if (j.finishedAt) journal.push({ at: j.finishedAt, job: j.id, lane: j.lane, event: j.status === 'complete' ? 'finished' : (j.status ?? 'ended'), usd: j.costUsd, rerun: j.rerun, error: j.error });
++  }
++  // At the same instant: queued, then started, then ended; then by job id. A fixed order, so the replay is the same every time.
++  const rank = e => (e.event === 'queued' ? 0 : e.event === 'started' ? 1 : 2);
++  journal.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : rank(a) - rank(b) || (String(a.job) < String(b.job) ? -1 : String(a.job) > String(b.job) ? 1 : 0)));
++  const byStatus = dict();
++  for (const j of jobs) byStatus[j.status ?? 'unknown'] = (byStatus[j.status ?? 'unknown'] ?? 0) + 1;
++  const totalUsd = jobs.reduce((s, j) => s + (j.costUsd ?? 0), 0);
++  const lanes = dict();
++  for (const j of jobs) { const l = lanes[j.lane] ??= { jobs: 0, usd: 0 }; l.jobs += 1; l.usd += j.costUsd ?? 0; }
++  return {
++    runId: txt(runId, 120), projectId: project.id, project: txt(project.name, 80), status: txt(state.status, 30),
++    startedAt: iso(state.startedAt), finishedAt: iso(state.finishedAt),
++    durationMs: iso(state.startedAt) && iso(state.finishedAt) ? Date.parse(state.finishedAt) - Date.parse(state.startedAt) : null,
++    budgetUsd: Number.isFinite(state.budget?.maxUsd) ? state.budget.maxUsd : null,
++    hasGraph: after.size > 0 && jobs.some(j => j.after.length),
++    totals: { jobs: jobs.length, byStatus: plain(byStatus), usd: Math.round(totalUsd * 1e6) / 1e6, rerun: jobs.filter(j => j.rerun).length },
++    lanes: Object.fromEntries(Object.entries(lanes).map(([k, v]) => [k, { jobs: v.jobs, usd: Math.round(v.usd * 1e6) / 1e6 }])),
++    jobs, journal: journal.slice(0, 6000), layers: Math.max(-1, ...jobs.map(j => j.layer)) + 1,
++  };
++}
++
++// Two runs side by side: totals, lanes and the jobs they share (a job id that appears in both: its status, time and cost in each).
++export function compareRuns(a, b) {
++  if (!a || !b) return null;
++  const byId = new Map(b.jobs.map(j => [j.id, j]));
++  const shared = a.jobs.filter(j => byId.has(j.id)).map(j => {
++    const o = byId.get(j.id);
++    return { id: j.id, a: { status: j.status, durationMs: j.durationMs, costUsd: j.costUsd, rerun: j.rerun }, b: { status: o.status, durationMs: o.durationMs, costUsd: o.costUsd, rerun: o.rerun } };
++  });
++  const laneNames = [...new Set([...Object.keys(a.lanes), ...Object.keys(b.lanes)])].sort();
++  const pick = r => ({ runId: r.runId, status: r.status, startedAt: r.startedAt, durationMs: r.durationMs, totals: r.totals, budgetUsd: r.budgetUsd });
++  return { a: pick(a), b: pick(b), lanes: laneNames.map(l => ({ lane: l, a: a.lanes[l] ?? null, b: b.lanes[l] ?? null })), shared: shared.slice(0, 500), onlyA: a.jobs.filter(j => !byId.has(j.id)).length, onlyB: b.jobs.length - shared.length };
++}
+diff --git a/tools/watch-assets/board-lib.js b/tools/watch-assets/board-lib.js
+new file mode 100644
+index 0000000..703ca50
+--- /dev/null
++++ b/tools/watch-assets/board-lib.js
+@@ -0,0 +1,105 @@
++// SPDX-License-Identifier: Apache-2.0
++// Pure helpers for the board pages (no DOM). The same file runs in the browser (window.BoardLib) and in the tests (require).
++(function (root, factory) {
++  if (typeof module === 'object' && module.exports) { module.exports = factory(); } else { root.BoardLib = factory(); }
++}(typeof self !== 'undefined' ? self : this, function () {
++  'use strict';
++  var LANE_COLORS = { Haiku: '#34d399', Sonnet: '#60a5fa', Opus: '#fbbf24', Codex: '#f472b6', Cursor: '#a3e635', GPU: '#fb923c', Claude: '#94a3b8' };
++  var KNOWN_LANES = ['Haiku', 'Sonnet', 'Opus', 'Codex', 'Cursor', 'GPU'];
++  var LIVE_MS = 6000;
++
++  function laneColor(label) { return Object.prototype.hasOwnProperty.call(LANE_COLORS, label) ? LANE_COLORS[label] : '#94a3b8'; }
++  // Did anything the page shows change? (A page that rebuilds itself on every poll loses the keyboard focus of whatever was focused.)
++  function signature(value, minute) { return JSON.stringify(value) + '|' + minute; }
++  function itemKey(item) { return String(item.projectId) + '|' + String(item.kind) + '|' + String(item.id); }
++
++  // Which Needs-you items the person has not seen yet. `seen` is a list of keys; an item that is no longer waiting is simply not in the result.
++  function unread(items, seen) {
++    var known = Object.create(null);
++    (seen || []).forEach(function (k) { known[k] = true; });
++    return (items || []).map(itemKey).filter(function (k) { return !known[k]; });
++  }
++  // Remember keys as seen, newest last, never more than `cap` (old keys fall off the front).
++  function remember(seen, keys, cap) {
++    var out = (seen || []).slice();
++    keys.forEach(function (k) { if (out.indexOf(k) === -1) { out.push(k); } });
++    return out.slice(Math.max(0, out.length - (cap || 500)));
++  }
++
++  // "Live" only while the last answer from the server is recent; otherwise stale, with the time of the last good answer.
++  function liveness(lastOkMs, nowMs) {
++    if (!isFinite(lastOkMs) || lastOkMs <= 0) { return { state: 'stale', ageS: null }; }
++    var age = Math.max(0, nowMs - lastOkMs);
++    return { state: age <= LIVE_MS ? 'live' : 'stale', ageS: Math.round(age / 1000) };
++  }
++
++  // "in 12 min", "in 2 h 5 min", "now" (the time has passed).
++  function countdown(untilIso, nowMs) {
++    var t = Date.parse(untilIso);
++    if (!isFinite(t)) { return ''; }
++    var s = Math.round((t - nowMs) / 1000);
++    if (s <= 0) { return 'now'; }
++    if (s < 90) { return 'in ' + s + ' s'; }
++    var m = Math.round(s / 60);
++    if (m < 90) { return 'in ' + m + ' min'; }
++    var h = Math.floor(m / 60);
++    return 'in ' + h + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '');
++  }
++
++  function duration(ms) {
++    if (typeof ms !== 'number' || !isFinite(ms) || ms < 0) { return '-'; }
++    var s = Math.round(ms / 1000);
++    if (s < 60) { return s + ' s'; }
++    var m = Math.floor(s / 60);
++    if (m < 60) { return m + ' min ' + (s % 60) + ' s'; }
++    return Math.floor(m / 60) + ' h ' + (m % 60) + ' min';
++  }
++
++  // One bay per lane: the agents really running (or just failed) in it, and an idle flag when there are none. No agent is ever invented:
++  // an idle bay shows a sleeping head, which means exactly "no agent is running in this lane".
++  function bays(list, extraLanes) {
++    var by = Object.create(null);   // keyed by lane names from run files: no prototype, so a lane called __proto__ is just a name
++    (list || []).forEach(function (a) { (by[a.lane] = by[a.lane] || []).push(a); });
++    var names = KNOWN_LANES.slice();
++    Object.keys(by).concat(extraLanes || []).forEach(function (n) { if (names.indexOf(n) === -1) { names.push(n); } });
++    return names.map(function (lane) { var agents = by[lane] || []; return { lane: lane, agents: agents, running: agents.filter(function (a) { return a.state !== 'error'; }).length, idle: agents.length === 0 }; });
++  }
++
++  // Location hash: "#tab=cost" or "#run=PROJECT/RUN". Anything else is ignored.
++  var TABS = ['overview', 'cost', 'agents', 'events'];
++  function parseHash(hash) {
++    var h = String(hash || '').replace(/^#/, '');
++    var m;
++    if ((m = /^tab=([a-z]+)$/.exec(h)) && TABS.indexOf(m[1]) !== -1) { return { tab: m[1] }; }
++    if ((m = /^run=([A-Za-z0-9._-]{1,121})\/([A-Za-z0-9][A-Za-z0-9._-]{0,120})$/.exec(h))) { return { run: { projectId: m[1], runId: m[2] } }; }
++    return {};
++  }
++
++  // Positions for the job graph: a column per layer, jobs stacked in a column, an edge from each job it waits for.
++  function layoutGraph(jobs, opts) {
++    var o = opts || {};
++    var w = o.nodeW || 210, h = o.nodeH || 44, gx = o.gapX || 56, gy = o.gapY || 14;
++    var cols = Object.create(null);
++    var pos = Object.create(null);
++    jobs.forEach(function (j) { var c = cols[j.layer] = cols[j.layer] || []; c.push(j); });
++    Object.keys(cols).forEach(function (layer) { cols[layer].forEach(function (j, i) { pos[j.id] = { x: Number(layer) * (w + gx), y: i * (h + gy), w: w, h: h }; }); });
++    var edges = [];
++    jobs.forEach(function (j) { (j.after || []).forEach(function (d) { if (pos[d] && pos[j.id]) { edges.push({ from: d, to: j.id }); } }); });
++    var width = 0, height = 0;
++    Object.keys(pos).forEach(function (k) { width = Math.max(width, pos[k].x + w); height = Math.max(height, pos[k].y + h); });
++    return { pos: pos, edges: edges, width: width, height: height };
++  }
++
++  // The journal up to position `n` (0 = nothing yet): what has happened, the job each event is about, and the spend so far (cost counted when a job ends).
++  function replay(journal, n) {
++    var spent = 0, running = {}, done = 0;
++    for (var i = 0; i < Math.min(n, journal.length); i += 1) {
++      var e = journal[i];
++      if (e.event === 'started') { running[e.job] = true; }
++      else if (e.event !== 'queued') { delete running[e.job]; done += 1; spent += typeof e.usd === 'number' ? e.usd : 0; }
++    }
++    return { spentUsd: Math.round(spent * 1e6) / 1e6, running: Object.keys(running).length, ended: done };
++  }
++
++  return { signature: signature, laneColor: laneColor, itemKey: itemKey, unread: unread, remember: remember, liveness: liveness, countdown: countdown, duration: duration, bays: bays, parseHash: parseHash, layoutGraph: layoutGraph, replay: replay, KNOWN_LANES: KNOWN_LANES, TABS: TABS, LIVE_MS: LIVE_MS };
++}));
+diff --git a/tools/watch-assets/board.html b/tools/watch-assets/board.html
+index 77a68f9..37851d2 100644
+--- a/tools/watch-assets/board.html
++++ b/tools/watch-assets/board.html
+@@ -3,37 +3,78 @@
+ <head>
+ <meta charset="utf-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
++<meta name="color-scheme" content="dark">
+ <title>Swarm Watch: all projects</title>
+-<link rel="stylesheet" href="assets/watch.css">
+-<link rel="stylesheet" href="assets/board.css">
++<link rel="stylesheet" href="assets/swarm-ui.css">
+ </head>
+ <body>
+-<div class="wrap">
+-  <header class="top hud">
+-    <div class="brand"><div class="logo" aria-hidden="true"><i>SW</i></div><div><h1>Swarm Watch</h1><div class="goal">Every project on this machine</div></div></div>
++<div class="app">
++  <div class="sr" id="announce" role="status" aria-live="polite" aria-atomic="true"></div>
++  <div class="card" id="deeplink" hidden><span id="deeplinkText"></span> <a class="btn primary" id="deeplinkGo" href="#">Open the run inspector</a></div>
++  <header class="topbar">
++    <div class="brand"><div class="logo" aria-hidden="true">SW</div><div><h1>Swarm Watch</h1><div class="crumb">Every project on this machine</div></div></div>
+     <div class="spacer"></div>
+-    <div class="chips"><span class="chip mono num" id="needsChip">0 need you</span><span class="chip mono num" id="count">0 projects</span><label class="chip mono scratch-toggle"><input type="checkbox" id="scratch"> <span id="scratchLabel">show test/temp projects</span></label><span class="chip mono" id="updated">-</span></div>
++    <div class="chips">
++      <span class="chip" id="liveChip"><span class="dot off" id="liveDot" aria-hidden="true"></span><span id="liveText">connecting</span></span>
++      <button class="chip btn" id="needsChip" type="button" aria-label="0 need you">0 need you</button>
++      <span class="chip mono num" id="count">0 projects</span>
++      <label class="chip toggle"><input type="checkbox" id="scratch"> <span id="scratchLabel">show test/temp projects</span></label>
++      <button class="chip btn" id="pauseMotion" type="button" aria-pressed="false">Pause motion</button>
++      <button class="chip btn" id="helpBtn" type="button" aria-haspopup="dialog">Keys <span class="kbd">?</span></button>
++    </div>
+   </header>
+-  <main class="pane">
+-    <section class="card hud" id="machine" aria-label="Machine totals"></section>
+-    <section class="card hud" id="needsCard" aria-label="Needs you"><h2 class="board-h">Needs you</h2><div id="needs" class="board-list" aria-live="polite"></div>
+-    <details class="fyi" id="fyi" hidden><summary id="fyiSummary">FYI notes</summary><div id="fyiList" class="board-list"></div></details>
+-    <p class="board-note" id="needsNote"></p></section>
+-    <section class="card hud"><h2 class="board-h">Projects</h2><div id="lanes" class="board-list" aria-live="polite"></div>
+-    <p class="board-note">Read-only. Open a project for its tickets, runs, spend and lessons; open a run for its full Watch page.</p></section>
+-    <section class="card hud"><h2 class="board-h">History</h2>
+-      <form id="filters" class="board-filters" autocomplete="off">
+-        <input id="q" type="search" placeholder="Search" aria-label="Search history">
+-        <select id="fproject" aria-label="Project"><option value="">All projects</option></select>
+-        <select id="fkind" aria-label="Type"><option value="">All types</option><option>project</option><option>stage</option><option>run</option><option>pr</option><option>merge</option><option>lesson</option><option>spend</option></select>
+-        <input id="ffrom" type="date" aria-label="From"><input id="fto" type="date" aria-label="To">
+-        <a id="csv" class="copy" href="#">Export CSV</a>
+-      </form>
+-      <div id="history" class="board-list"></div>
+-      <div class="board-note" id="historyNote"></div>
++  <nav class="tabs" id="tabs" role="tablist" aria-label="Board sections">
++    <button class="tab" role="tab" id="tab-overview-btn" aria-controls="tab-overview" aria-selected="true" data-tab="overview" type="button">Overview <span class="kbd">1</span></button>
++    <button class="tab" role="tab" id="tab-cost-btn" aria-controls="tab-cost" aria-selected="false" tabindex="-1" data-tab="cost" type="button">Cost <span class="kbd">2</span></button>
++    <button class="tab" role="tab" id="tab-agents-btn" aria-controls="tab-agents" aria-selected="false" tabindex="-1" data-tab="agents" type="button">Agents <span class="kbd">3</span></button>
++    <button class="tab" role="tab" id="tab-events-btn" aria-controls="tab-events" aria-selected="false" tabindex="-1" data-tab="events" type="button">Events <span class="kbd">4</span></button>
++  </nav>
++  <main>
++    <section id="tab-overview" role="tabpanel" aria-labelledby="tab-overview-btn" class="stack">
++      <div class="kpis" id="kpis"></div>
++      <div class="layout">
++        <div class="stack">
++          <section class="card" aria-label="Agents by lane"><h2>Agents now</h2><div class="bays" id="bays"></div></section>
++          <section class="card" aria-label="Projects"><h2>Projects</h2>
++            <div class="tablewrap collapse"><table id="projTable"></table></div><div class="cards" id="projCards"></div>
++            <p class="board-note">Open a project for its tickets, runs, spend and lessons. A run opens in the run inspector (graph, journal, compare).</p></section>
++        </div>
++        <aside>
++          <section class="card" id="needsCard" aria-label="Needs you"><h2>Needs you <span class="badge" id="needsBadge" hidden>0</span> <button class="btn" id="markRead" type="button" hidden>Mark all read</button></h2><div id="needs" class="needs" aria-live="off"></div>
++            <details class="fyi" id="fyi" hidden><summary id="fyiSummary">FYI notes</summary><div id="fyiList"></div></details>
++            <p class="board-note" id="needsNote"></p></section>
++        </aside>
++      </div>
++    </section>
++    <section id="tab-cost" role="tabpanel" aria-labelledby="tab-cost-btn" class="stack" hidden>
++      <div class="kpis" id="costKpis"></div>
++      <section class="card"><h2>Lanes today</h2><div class="tablewrap"><table id="laneTable"></table></div><p class="board-note" id="laneNote"></p></section>
++      <section class="card"><h2>Projects: spend against cap</h2><div class="tablewrap"><table id="spendTable"></table></div></section>
++    </section>
++    <section id="tab-agents" role="tabpanel" aria-labelledby="tab-agents-btn" class="stack" hidden>
++      <section class="card"><h2>Live agents <span class="badge quiet" id="agentsCount">0</span></h2><div class="agents-grid" id="agentsGrid"></div>
++        <p class="board-note">One head per agent that is running (or failed in the last 10 minutes). Working: it produced output in the last 90 seconds. Thinking: running, no output yet or quiet for longer. Error: its job failed. Sleeping head: no agent is running in that lane.</p></section>
++    </section>
++    <section id="tab-events" role="tabpanel" aria-labelledby="tab-events-btn" class="stack" hidden>
++      <section class="card"><h2>Events</h2>
++        <form id="filters" class="filters" autocomplete="off">
++          <input id="q" type="search" placeholder="Search events (press /)" aria-label="Search events">
++          <select id="fproject" aria-label="Project"><option value="">All projects</option></select>
++          <select id="fkind" aria-label="Type"><option value="">All types</option><option>project</option><option>stage</option><option>run</option><option>pr</option><option>merge</option><option>lesson</option><option>spend</option></select>
++          <input id="ffrom" type="date" aria-label="From"><input id="fto" type="date" aria-label="To">
++          <a id="csv" class="btn" href="#">Export CSV</a>
++        </form>
++        <div id="history" class="feed"></div><p class="board-note" id="historyNote"></p></section>
+     </section>
+   </main>
+ </div>
+-<script src="assets/board.js"></script>
++<div class="overlay" id="help" hidden role="dialog" aria-modal="true" aria-labelledby="helpTitle"><div class="dialog">
++  <h2 id="helpTitle">Keyboard</h2>
++  <dl><dt><span class="kbd">1</span> to <span class="kbd">4</span></dt><dd>Overview, Cost, Agents, Events</dd><dt><span class="kbd">/</span></dt><dd>Search events</dd><dt><span class="kbd">u</span></dt><dd>Mark Needs you as read</dd><dt><span class="kbd">p</span></dt><dd>Pause or resume motion</dd><dt><span class="kbd">?</span></dt><dd>This list</dd><dt><span class="kbd">Esc</span></dt><dd>Close</dd></dl>
++  <p class="note">A run link such as <span class="mono">#run=PROJECT/RUN</span> opens that run in the inspector; <span class="mono">#tab=cost</span> opens a tab.</p>
++  <button class="btn primary" id="helpClose" type="button">Close</button>
++</div></div>
++<script src="assets/board-lib.js"></script>
++<script type="module" src="assets/board.js"></script>
+ </body>
+ </html>
+diff --git a/tools/watch-assets/board.js b/tools/watch-assets/board.js
+index a89b350..25caf02 100644
+--- a/tools/watch-assets/board.js
++++ b/tools/watch-assets/board.js
+@@ -1,220 +1,511 @@
+ // SPDX-License-Identifier: Apache-2.0
+-(function () {
+-  'use strict';
+-  var TOKEN = new URLSearchParams(location.search).get('t') || '';
+-  var T = encodeURIComponent(TOKEN);
+-  var $ = function (id) { return document.getElementById(id); };
+-  var open = Object.create(null);          // lane open state the person chose, by project id
+-  var projects = [];
+-  var showScratch = false;
+-  try { showScratch = localStorage.getItem('swarm-scratch') === '1'; } catch (e) { /* the switch just starts off */ }
+-
+-  function el(tag, cls, text) {
+-    var n = document.createElement(tag);
+-    if (cls) { n.className = cls; }
+-    if (text !== undefined) { n.textContent = text; }
+-    return n;
+-  }
+-  function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
+-  function ago(iso) {
+-    var t = Date.parse(iso);
+-    if (!isFinite(t)) { return 'never'; }
+-    var m = Math.max(0, Math.round((Date.now() - t) / 60000));
+-    return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 2880 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago';
+-  }
+-  function runHref(projectId, runId) { return '/open/run?id=' + encodeURIComponent(projectId) + '&run=' + encodeURIComponent(runId) + '&t=' + T; }
+-  function projectHref(projectId) { return '/project?id=' + encodeURIComponent(projectId) + '&t=' + T; }
+-  function link(href, cls, parts) { var a = el('a', cls); a.href = href; parts.forEach(function (p) { a.appendChild(p); }); return a; }
+-
+-  function tile(title, big, sub) {
+-    var t = el('div', 'tile');
+-    t.appendChild(el('div', 'label', title));
+-    t.appendChild(el('div', 'big num', big));
+-    t.appendChild(el('div', 'sub', sub));
+-    return t;
+-  }
+-  function pairs(map, fmt) {
+-    var keys = Object.keys(map || {}).filter(function (k) { return map[k]; }).sort();
+-    return keys.length ? keys.map(function (k) { return k + ' ' + fmt(map[k]); }).join(', ') : 'none';
++// The board (swarm watch --all): Overview, Cost, Agents, Events. Read-only; every number and every agent state comes from /api/board and /api/history.
++// Text is always set with textContent (never as HTML). Nothing here invents progress: an empty list says so.
++import { mountRobotHead, setAnimationPaused, animationPaused, reducedMotion } from './robot-head.js';
++
++var L = self.BoardLib;
++var TOKEN = new URLSearchParams(location.search).get('t') || '';
++var T = encodeURIComponent(TOKEN);
++var $ = function (id) { return document.getElementById(id); };
++var store = {
++  get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
++  set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* kept for this visit only */ } }
++};
++
++var state = { data: null, lastOk: 0, tab: 'overview', scratch: store.get('swarm-scratch') === '1', seen: [], rendered: null, firstRender: true, readTimer: null };
++try { state.seen = JSON.parse(store.get('swarm-seen') || '[]'); if (!Array.isArray(state.seen)) { state.seen = []; } } catch (e) { state.seen = []; }
++
++function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined && text !== null) { n.textContent = text; } return n; }
++function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
++function ago(iso) {
++  var t = Date.parse(iso);
++  if (!isFinite(t)) { return 'never'; }
++  var m = Math.max(0, Math.round((Date.now() - t) / 60000));
++  return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 2880 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago';
++}
++function clock(ms) { return new Date(ms).toLocaleTimeString([], { hour12: false }); }
++function runHref(projectId, runId) { return '/run?id=' + encodeURIComponent(projectId) + '&run=' + encodeURIComponent(runId) + '&t=' + T; }
++function watchHref(projectId, runId) { return '/open/run?id=' + encodeURIComponent(projectId) + '&run=' + encodeURIComponent(runId) + '&t=' + T; }
++function projectHref(projectId) { return '/project?id=' + encodeURIComponent(projectId) + '&t=' + T; }
++function link(href, cls, parts) { var a = el('a', cls); a.href = href; parts.forEach(function (p) { a.appendChild(p); }); return a; }
++function pill(text, cls) { return el('span', 'pill ' + (cls || 'info'), text); }
++function meter(pct, hot) { var m = el('div', 'meter' + (hot ? ' hot' : '')); var i = el('i'); i.style.width = Math.max(0, Math.min(100, pct)) + '%'; m.appendChild(i); m.setAttribute('role', 'img'); m.setAttribute('aria-label', Math.round(pct) + ' percent'); return m; }
++function dot(cls) { return el('span', 'dot' + (cls ? ' ' + cls : '')); }
++function th(cells) { var tr = el('tr'); cells.forEach(function (c) { var h = el('th', '', c); h.scope = 'col'; tr.appendChild(h); }); var head = el('thead'); head.appendChild(tr); return head; }
++function td(child, cls) { var c = el('td', cls || ''); if (typeof child === 'string') { c.textContent = child; } else if (child) { c.appendChild(child); } return c; }
++
++// ---- tabs, hash, keyboard ----------------------------------------------------------------------------------------------------------------------
++
++// Tabs are plain hash links (#tab=cost): the Back button moves between them and nothing else is needed. A click or key changes the hash; the hashchange
++// handler does the switch, so there is one path.
++function go(tab) { if (location.hash === '#tab=' + tab) { setTab(tab); } else { location.hash = 'tab=' + tab; } }
++function setTab(tab) {
++  if (L.TABS.indexOf(tab) === -1) { tab = 'overview'; }
++  state.tab = tab;
++  L.TABS.forEach(function (name) {
++    var on = name === tab;
++    $('tab-' + name).hidden = !on;
++    var b = $('tab-' + name + '-btn');
++    b.setAttribute('aria-selected', on ? 'true' : 'false');
++    b.tabIndex = on ? 0 : -1;
++  });
++  if (tab === 'events') { loadHistory(); if (state.focusSearch) { state.focusSearch = false; $('q').focus(); } }
++  if (state.data) { renderTab(); }
++  watchNeedsVisible();
++}
++function applyHash() {
++  var h = L.parseHash(location.hash);
++  if (h.run) {
++    var href = runHref(h.run.projectId, h.run.runId);
++    // The first visit goes straight to the run. When the person comes back with the Back button the same link is still in the address, so it is not followed
++    // again: a banner offers it instead (otherwise Back would bounce forward forever).
++    var done = null;
++    try { done = sessionStorage.getItem('swarm-deeplink'); } catch (e) { done = null; }
++    if (done !== location.hash) { try { sessionStorage.setItem('swarm-deeplink', location.hash); } catch (e) { /* the banner then shows next time */ } location.assign(href); return; }
++    $('deeplinkText').textContent = 'This address points at run ' + h.run.runId + '.';
++    $('deeplinkGo').href = href; $('deeplink').hidden = false;
++    setTab('overview');
++    return;
+   }
++  $('deeplink').hidden = true;
++  setTab(h.tab || 'overview');
++}
++$('tabs').addEventListener('click', function (e) { var b = e.target.closest('[data-tab]'); if (b) { go(b.dataset.tab); } });
++$('tabs').addEventListener('keydown', function (e) {
++  var i = L.TABS.indexOf(state.tab), n = null;
++  if (e.key === 'ArrowRight') { n = L.TABS[(i + 1) % L.TABS.length]; } else if (e.key === 'ArrowLeft') { n = L.TABS[(i + L.TABS.length - 1) % L.TABS.length]; }
++  if (n) { go(n); $('tab-' + n + '-btn').focus(); e.preventDefault(); }
++});
++window.addEventListener('hashchange', applyHash);
++
++var helpOpener = null;
++function toggleHelp(open) {
++  var box = $('help');
++  var show = open === undefined ? box.hidden : open;
++  box.hidden = !show;
++  if (show) { helpOpener = document.activeElement; $('helpClose').focus(); } else if (helpOpener && helpOpener.focus) { helpOpener.focus(); }
++}
++$('helpBtn').addEventListener('click', function () { toggleHelp(true); });
++$('helpClose').addEventListener('click', function () { toggleHelp(false); });
++$('help').addEventListener('click', function (e) { if (e.target === $('help')) { toggleHelp(false); } });
++$('help').addEventListener('keydown', function (e) { if (e.key === 'Tab') { e.preventDefault(); $('helpClose').focus(); } });
+ 
+-  function renderMachine(m, list) {
+-    var names = {};
+-    list.forEach(function (p) { names[p.id] = p.name; });
+-    var box = $('machine');
+-    box.textContent = '';
+-    var grid = el('div', 'board-totals');
+-    var byProject = {};
+-    Object.keys(m.agents.byProject).forEach(function (id) { byProject[names[id] || id] = m.agents.byProject[id]; });
+-    grid.appendChild(tile('Live agents', String(m.agents.total), 'by lane: ' + pairs(m.agents.byLane, String) + ' | by project: ' + pairs(byProject, String)));
+-    var c = m.cost;
+-    grid.appendChild(tile('Spend today', usd(c.todayUsd), 'last 7 days ' + usd(c.weekUsd)));
+-    grid.appendChild(tile('Spend, all time', usd(c.allUsd), 'billed per use ' + usd(c.paidUsd) + ' (of which estimated ' + usd(c.paidEstimatedUsd) + ') | flat-rate lanes (Codex, Cursor, Claude subscription), list value only, not billed ' + usd(c.flatRateListUsd)));
+-    var w = m.workers;
+-    if (w) {
+-      var holders = {};
+-      Object.keys(w.byProject).forEach(function (id) { var h = w.byProject[id]; holders[names[id] || (id === 'unknown' ? 'unknown project' : id)] = h.total + ' (' + pairs(h.byLane, String) + ')'; });
+-      var waiting = {};
+-      Object.keys(w.demand || {}).forEach(function (id) { waiting[names[id] || id] = w.demand[id]; });
+-      var limit = w.invalid ? w.total + ' in use, LIMIT INVALID (fix machineConcurrency; runs will not start)' : w.max ? w.total + ' of ' + w.max + ' in use' : w.total + ' in use, no machine limit';
+-      grid.appendChild(tile('Workers held', limit, 'who holds them: ' + (Object.keys(holders).length ? Object.keys(holders).sort().map(function (k) { return k + ' ' + holders[k]; }).join(' | ') : 'nobody') + (Object.keys(waiting).length ? ' | waiting: ' + pairs(waiting, String) : '') + (w.max ? ' | shared fairly between active projects' : '')));
++document.addEventListener('keydown', function (e) {
++  if (e.ctrlKey || e.metaKey || e.altKey) { return; }
++  var t = e.target, typing = t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
++  if (e.key === 'Escape') { if (!$('help').hidden) { toggleHelp(false); } else if (typing && t.blur) { t.blur(); } return; }
++  if (typing) { return; }
++  if (e.key >= '1' && e.key <= '4') { go(L.TABS[Number(e.key) - 1]); e.preventDefault(); }
++  else if (e.key === '/') { state.focusSearch = true; go('events'); e.preventDefault(); }
++  else if (e.key === '?') { toggleHelp(); e.preventDefault(); }
++  else if (e.key === 'u') { markRead(); }
++  else if (e.key === 'p') { togglePause(); }
++});
++
++// ---- motion ------------------------------------------------------------------------------------------------------------------------------------
++
++function applyPause(paused) {
++  setAnimationPaused(paused);
++  document.body.classList.toggle('paused-motion', paused);
++  var b = $('pauseMotion');
++  b.setAttribute('aria-pressed', paused ? 'true' : 'false');
++  b.textContent = paused ? 'Resume motion' : 'Pause motion';
++}
++function togglePause() { var next = !(animationPaused() && store.get('swarm-paused') === '1'); store.set('swarm-paused', next ? '1' : '0'); applyPause(next); }
++$('pauseMotion').addEventListener('click', togglePause);
++applyPause(store.get('swarm-paused') === '1');
++if (reducedMotion()) { $('pauseMotion').hidden = true; }
++
++// ---- heads: one per agent, reused between polls so they keep animating -----------------------------------------------------------------------
++
++var HEAD_STATE = { working: 'working', thinking: 'thinking', error: 'error', sleeping: 'sleeping' };
++function headSpec(a) { return { key: a.runId + '|' + a.jobId, state: HEAD_STATE[a.state] || 'idle', lane: a.lane }; }
++function syncHeads(host, specs, size, withLabels, labelOf) {
++  var map = host.__heads || (host.__heads = new Map());
++  var keep = {};
++  specs.forEach(function (s) {
++    keep[s.key] = true;
++    var hit = map.get(s.key);
++    if (hit) { hit.handle.setState(s.state); if (hit.label && labelOf) { hit.label.textContent = labelOf(s); } return; }
++    var wrap = el('div', 'agent');
++    var holder = el('div');
++    wrap.appendChild(holder);
++    var color = L.laneColor(s.lane);
++    var handle = mountRobotHead(holder, { state: s.state, size: size, color: color, screenColor: s.state === 'error' ? '#ffc4c4' : '#e8f2ff', id: s.key, label: s.lane + ' agent, ' + s.state });
++    var label = null;
++    if (withLabels) { label = el('div', 'jid mono', labelOf ? labelOf(s) : ''); wrap.appendChild(label); }
++    host.appendChild(wrap);
++    map.set(s.key, { wrap: wrap, handle: handle, label: label });
++  });
++  map.forEach(function (v, k) { if (!keep[k]) { v.handle.destroy(); v.wrap.remove(); map.delete(k); } });
++}
++
++// ---- overview ----------------------------------------------------------------------------------------------------------------------------------
++
++function tile(title, big, sub, extra) {
++  var t = el('div', 'card kpi');
++  t.appendChild(el('div', 'l', title)); t.appendChild(el('div', 'v num', big)); t.appendChild(el('div', 's', sub));
++  if (extra) { t.appendChild(extra); }
++  return t;
++}
++function renderKpis(m) {
++  var box = $('kpis'); box.textContent = '';
++  var c = m.cost;
++  var seg = el('div', 'seg');
++  Object.keys(m.agents.byLane).forEach(function (lane) { if (m.agents.byLane[lane]) { var i = el('i'); i.style.flex = String(m.agents.byLane[lane]); i.style.background = L.laneColor(lane); seg.appendChild(i); } });
++  box.appendChild(tile('Live agents', String(m.agents.total), m.liveRuns + ' live run' + (m.liveRuns === 1 ? '' : 's'), m.agents.total ? seg : null));
++  box.appendChild(tile('Spend today', usd(c.todayUsd), 'last 7 days ' + usd(c.weekUsd)));
++  box.appendChild(tile('Billed, all time', usd(c.paidUsd), 'of which estimated ' + usd(c.paidEstimatedUsd) + ' | flat-rate list value ' + usd(c.flatRateListUsd)));
++  var w = m.workers;
++  if (w) {
++    var limit = w.invalid ? 'LIMIT INVALID' : w.max ? w.total + ' / ' + w.max : String(w.total);
++    var bar = w.max && !w.invalid ? meter(100 * w.total / w.max, w.total >= w.max) : null;
++    box.appendChild(tile('Workers held', limit, w.invalid ? 'fix machineConcurrency: runs will not start' : w.max ? 'machine limit ' + w.max + ', shared fairly between active projects, ' + (w.free === null ? 0 : w.free) + ' free' : 'no machine limit', bar));
++  }
++}
++function renderBays(m) {
++  var host = $('bays');
++  var bays = L.bays(m.agents.list, Object.keys(m.agents.byLane));
++  var map = host.__bays || (host.__bays = new Map());
++  var names = Object.create(null);
++  bays.forEach(function (b) { names[b.lane] = true; });
++  map.forEach(function (v, lane) { if (!names[lane]) { v.heads.__heads && v.heads.__heads.forEach(function (h) { h.handle.destroy(); }); v.node.remove(); map.delete(lane); } });
++  bays.forEach(function (b, idx) {
++    var hit = map.get(b.lane);
++    if (!hit) {
++      var node = el('div', 'bay'); node.style.setProperty('--c', L.laneColor(b.lane));
++      var top = el('div', 'top'); var name = el('span', 'name', b.lane); var n = el('span', 'n num', '0'); top.appendChild(name); top.appendChild(n);
++      var heads = el('div', 'heads'); node.appendChild(top); node.appendChild(heads);
++      hit = { node: node, n: n, heads: heads }; map.set(b.lane, hit); host.appendChild(node);
+     }
+-    var per = {};
+-    Object.keys(c.byProject).forEach(function (id) { per[c.byProject[id].name || id] = usd(c.byProject[id].allUsd); });
+-    grid.appendChild(tile('By project', String(Object.keys(per).length), Object.keys(per).sort().map(function (k) { return k + ' ' + per[k]; }).join(', ') || 'none'));
+-    box.appendChild(grid);
++    hit.n.textContent = String(b.running);
++    hit.node.classList.toggle('idle', b.idle);
++    var specs = b.idle ? [{ key: 'sleep|' + b.lane, state: 'sleeping', lane: b.lane }] : b.agents.slice(0, 10).map(headSpec);
++    syncHeads(hit.heads, specs, 34, false);
++    var more = b.agents.length - 10;
++    var extra = hit.heads.querySelector('.more');
++    if (more > 0) { if (!extra) { extra = el('span', 'sub more'); hit.heads.appendChild(extra); } extra.textContent = '+' + more; } else if (extra) { extra.remove(); }
++    host.appendChild(hit.node);
++  });
++}
++function capCell(p) {
++  var s = p.spend, box = el('div');
++  if (s.capUsd) {
++    box.appendChild(meter(100 * s.usd / s.capUsd, s.usd / s.capUsd > 0.75));
++    box.appendChild(el('span', 'mono sub', usd(s.usd) + ' of ' + usd(s.capUsd)));
++  } else {
++    var r = el('div', 'livebar'); r.appendChild(pill(s.capInvalid ? 'CAP INVALID' : 'NO CAP', s.capInvalid ? 'bad' : 'warn')); r.appendChild(el('span', 'mono sub', usd(s.usd))); box.appendChild(r);
+   }
++  if (s.reached) { box.appendChild(pill('CAP REACHED', 'bad')); }
++  return box;
++}
++function liveCell(p) {
++  var box = el('div');
++  if (!p.live.length) { box.appendChild(el('span', 'sub', 'idle, last run ' + ago(p.lastRunAt))); return box; }
++  p.live.forEach(function (r) {
++    var row = el('div', 'livebar');
++    row.appendChild(dot());
++    var a = link(runHref(p.id, r.runId), 'board-link mono', [el('span', '', r.runId.length > 18 ? r.runId.slice(0, 8) + '…' + r.runId.slice(-6) : r.runId)]);
++    a.title = 'Open the run inspector: ' + r.runId;
++    row.appendChild(a);
++    row.appendChild(meter(r.jobs ? 100 * r.done / r.jobs : 0));
++    row.appendChild(el('span', 'num mono', r.done + '/' + r.jobs));
++    var w = link(watchHref(p.id, r.runId), 'sub', [el('span', '', 'Watch')]);
++    row.appendChild(w);
++    box.appendChild(row);
++  });
++  return box;
++}
++function laneDots(p) {
++  var d = el('div', 'livebar');
++  Object.keys(p.agents.byLane).forEach(function (lane) { for (var i = 0; i < Math.min(p.agents.byLane[lane], 8); i += 1) { var s = el('i'); s.style.cssText = 'width:9px;height:9px;border-radius:3px;display:block;background:' + L.laneColor(lane); s.title = lane; d.appendChild(s); } });
++  if (!d.childNodes.length) { d.appendChild(el('span', 'sub', '-')); }
++  return d;
++}
++function renderProjects(projects) {
++  var psig = L.signature(projects, Math.floor(Date.now() / 60000));
++  if (psig === state.projSig) { return; }
++  state.projSig = psig;
++  var sorted = projects.slice().sort(function (a, b) { return (b.live.length - a.live.length) || String(b.lastActivityAt).localeCompare(String(a.lastActivityAt)); });
++  var table = $('projTable'); table.textContent = '';
++  var cards = $('projCards'); cards.textContent = '';
++  if (!sorted.length) { var none = 'No projects yet. Run a swarm command inside a project, or swarm projects add PATH.'; $('projTable').appendChild(el('caption', 'empty', none)); cards.appendChild(el('div', 'empty', none)); cards.classList.add('show'); }
++  else { cards.classList.remove('show'); table.appendChild(th(['Project', 'Live runs', 'Jobs', 'Tickets', 'Spend and cap', 'Lanes', 'Last activity'])); }
++  var body = el('tbody');
++  sorted.forEach(function (p) {
++    var tr = el('tr');
++    var name = el('div'); name.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)])); name.appendChild(document.createTextNode(' ')); name.appendChild(el('span', 'stage', p.stage ? 'stage ' + p.stage : 'no stage'));
++    tr.appendChild(td(name)); tr.appendChild(td(liveCell(p), 'wrap'));
++    tr.appendChild(td(p.agents.jobs.running + ' run, ' + p.agents.jobs.queued + ' q, ' + p.agents.jobs.blocked + ' blk', 'mono'));
++    tr.appendChild(td(p.tickets.open + ' open' + (p.tickets.blocked ? ', ' + p.tickets.blocked + ' blocked' : ''), 'mono'));
++    tr.appendChild(td(capCell(p))); tr.appendChild(td(laneDots(p))); tr.appendChild(td(ago(p.lastActivityAt), 'mono'));
++    body.appendChild(tr);
++    var c = el('div', 'pcard');
++    var head = el('div', 'row'); head.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)])); head.appendChild(el('span', 'stage', p.stage ? 'stage ' + p.stage : 'no stage')); c.appendChild(head);
++    c.appendChild(liveCell(p));
++    var meta = el('div', 'row'); meta.appendChild(el('span', 'mono', p.tickets.open + ' open' + (p.tickets.blocked ? ', ' + p.tickets.blocked + ' blocked' : ''))); meta.appendChild(el('span', 'mono', ago(p.lastActivityAt))); c.appendChild(meta);
++    c.appendChild(capCell(p));
++    cards.appendChild(c);
++  });
++  table.appendChild(body);
++}
+ 
+-  function chip(text, cls) { return el('span', 'pill ' + (cls || 'info'), text); }
+-
+-  function renderLane(p) {
+-    var d = el('details', 'board-lane');
+-    d.dataset.id = p.id;
+-    d.open = Object.prototype.hasOwnProperty.call(open, p.id) ? open[p.id] : !p.idle;
+-    d.addEventListener('toggle', function () { open[p.id] = d.open; });
+-    var s = el('summary');
+-    s.appendChild(el('span', 'name', p.name));
+-    s.appendChild(chip(p.stage ? 'stage ' + p.stage : 'no stage', 'lav'));
+-    s.appendChild(chip(p.live.length + ' live run' + (p.live.length === 1 ? '' : 's'), p.live.length ? 'good' : 'info'));
+-    s.appendChild(el('span', 'num mono', 'jobs ' + p.agents.jobs.running + ' running, ' + p.agents.jobs.queued + ' queued, ' + p.agents.jobs.blocked + ' blocked'));
+-    s.appendChild(el('span', 'num mono', p.tickets.open + ' open ticket' + (p.tickets.open === 1 ? '' : 's') + (p.tickets.blocked ? ', ' + p.tickets.blocked + ' blocked' : '')));
+-    var cap = p.spend.capUsd;
+-    s.appendChild(el('span', 'num mono', 'spend ' + usd(p.spend.usd) + (cap ? ' of ' + usd(cap) : '')));
+-    if (p.spend.noCap) { s.appendChild(chip('NO CAP', 'warn')); }
+-    if (p.spend.capInvalid) { s.appendChild(chip('CAP INVALID', 'bad')); }
+-    if (p.spend.reached) { s.appendChild(chip('CAP REACHED', 'bad')); }
+-    s.appendChild(el('span', 'mono', 'last activity ' + ago(p.lastActivityAt)));
+-    d.appendChild(s);
+-    var body = el('div', 'lane-body');
+-    body.appendChild(link(projectHref(p.id), 'board-link', [el('span', '', 'Open project page: tickets by status, run history, spend, lessons')]));
+-    if (!p.live.length) { body.appendChild(el('div', 'board-note', 'No live runs. Last run ' + ago(p.lastRunAt) + '.')); }
+-    p.live.forEach(function (r) {
+-      var bar = el('div', 'board-bar'); var fill = el('i'); fill.style.width = (r.jobs ? Math.round(100 * r.done / r.jobs) : 0) + '%'; bar.appendChild(fill);
+-      body.appendChild(link(runHref(p.id, r.runId), 'board-run', [el('span', 'mono', r.runId), chip(r.status, 'info'), el('span', 'num mono', r.done + '/' + r.jobs + ' jobs'), bar]));
+-    });
+-    d.appendChild(body);
+-    return d;
+-  }
++// ---- needs you (unread badges) -------------------------------------------------------------------------------------------------------------------
+ 
+-  function until(iso) {
+-    var m = Math.round((Date.parse(iso) - Date.now()) / 60000);
+-    return !isFinite(m) ? '' : m <= 0 ? 'expired' : m < 90 ? 'expires in ' + m + ' min' : 'expires in ' + Math.round(m / 60) + ' h';
+-  }
+-  function renderInbox(inbox) {
+-    var box = $('needs'); var note = $('needsNote');
+-    box.textContent = '';
+-    var items = inbox && inbox.items ? inbox.items : [];
+-    var chipEl = $('needsChip');
+-    chipEl.textContent = (inbox ? inbox.total : 0) + ' need you';
+-    chipEl.className = 'chip mono num' + (items.length ? ' needs-some' : '');
+-    if (!items.length) { box.appendChild(el('div', 'board-empty', 'Nothing needs you.')); }
+-    items.forEach(function (it) {
+-      var row = el('div', 'need');
+-      var head = el('div', 'need-head');
+-      head.appendChild(chip(it.kind.replace('-', ' '), it.kind === 'blocker' ? 'bad' : 'warn'));
+-      head.appendChild(link(projectHref(it.projectId), 'board-link', [el('span', 'name', it.project)]));
+-      head.appendChild(el('span', 'mono', 'waiting ' + ago(it.since).replace(' ago', '')));
+-      if (it.unblocks) { head.appendChild(el('span', 'mono', 'unblocks ' + it.unblocks)); }
+-      if (it.phone) { head.appendChild(chip('asked on your phone (' + it.phone.status + '), ' + until(it.phone.expiresAt), 'lav')); }
+-      row.appendChild(head);
+-      row.appendChild(el('div', 'need-title', it.title || ''));
+-      if (it.choices && it.choices.length) { row.appendChild(el('div', 'board-note', 'Choices: ' + it.choices.join(', '))); }
+-      if (it.kind === 'proposed-ticket' && !it.filesNamed) { row.appendChild(el('div', 'board-note', 'Needs its files named before it can be approved' + (it.origin ? ' (from ' + it.origin + ')' : '') + '.')); }
+-      if (it.next) { row.appendChild(el('div', 'need-next', it.next)); }
+-      (it.commands || []).forEach(function (c) {
+-        var cmd = el('div', 'need-cmd');
+-        cmd.appendChild(el('span', 'need-label', c.label));
+-        cmd.appendChild(el('code', 'mono', c.cmd));
+-        var btn = el('button', 'copy', 'Copy');
+-        btn.type = 'button';
+-        btn.addEventListener('click', function () { if (navigator.clipboard) { navigator.clipboard.writeText(c.cmd).then(function () { btn.textContent = 'Copied'; }, function () {}); } });
+-        cmd.appendChild(btn);
+-        row.appendChild(cmd);
++function persistSeen() { store.set('swarm-seen', JSON.stringify(state.seen)); }
++function markRead() {
++  var inbox = state.data && state.data.inbox;
++  if (!inbox) { return; }
++  var keys = L.unread(inbox.items, state.seen);
++  if (!keys.length) { return; }
++  state.seen = L.remember(state.seen, keys, 500);
++  persistSeen();
++  renderNeeds(inbox);
++}
++function watchNeedsVisible() {
++  clearTimeout(state.readTimer);
++  if (state.tab !== 'overview' || document.hidden) { return; }
++  // Reading counts: the panel stays on screen for a moment while the page has focus.
++  state.readTimer = setTimeout(function () {
++    var r = $('needsCard').getBoundingClientRect();
++    if (state.tab === 'overview' && !document.hidden && r.top < innerHeight * 0.85 && r.bottom > 40) { markRead(); }
++  }, 2500);
++}
++document.addEventListener('visibilitychange', watchNeedsVisible);
++$('markRead').addEventListener('click', markRead);
++$('needsChip').addEventListener('click', function () { go('overview'); $('needsCard').scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start' }); });
++
++function renderNeeds(inbox) {
++  var box = $('needs'); box.textContent = '';
++  var items = inbox && inbox.items ? inbox.items : [];
++  var fresh = L.unread(items, state.seen);
++  var keysNow = {};
++  items.forEach(function (it) { keysNow[L.itemKey(it)] = true; });
++  var chipEl = $('needsChip'), total = inbox ? inbox.total : 0;
++  var said = total + ' need you' + (fresh.length ? ', ' + fresh.length + ' new' : '');
++  if (chipEl.textContent !== said) { chipEl.textContent = said; if (state.announced !== undefined) { $('announce').textContent = said; } }
++  state.announced = said;
++  var sig = L.signature({ inbox: inbox, seen: state.seen }, Math.floor(Date.now() / 60000));
++  if (sig === state.needsSig) { return; }   // nothing changed: leave the page as it is, so keyboard focus stays where it is
++  state.needsSig = sig;
++  chipEl.setAttribute('aria-label', total + ' need you' + (fresh.length ? ', ' + fresh.length + ' new' : ''));
++  chipEl.style.borderColor = total ? '#6b5614' : '';
++  $('needsBadge').hidden = !fresh.length; $('needsBadge').textContent = String(fresh.length);
++  $('markRead').hidden = !fresh.length;
++  document.title = (fresh.length ? '(' + fresh.length + ') ' : '') + 'Swarm Watch: all projects';
++  if (!items.length) { box.appendChild(el('div', 'empty', 'Nothing needs you.')); }
++  items.forEach(function (it) {
++    var key = L.itemKey(it);
++    var isNew = fresh.indexOf(key) !== -1;
++    var row = el('div', 'need ' + it.kind.split('-')[0] + (isNew && !state.firstRender && state.rendered && !state.rendered[key] ? ' fresh' : ''));
++    var head = el('div', 'need-head');
++    if (isNew) { var fd = el('span', 'fresh-dot'); fd.title = 'New'; head.appendChild(fd); head.appendChild(el('span', 'sr', 'New: ')); }
++    head.appendChild(pill(it.kind.replace('-', ' '), it.kind === 'blocker' ? 'bad' : 'warn'));
++    head.appendChild(link(projectHref(it.projectId), 'board-link', [el('span', 'name', it.project)]));
++    head.appendChild(el('span', 'mono sub', 'waiting ' + ago(it.since).replace(' ago', '')));
++    if (it.unblocks) { head.appendChild(el('span', 'mono sub', 'unblocks ' + it.unblocks)); }
++    if (it.phone) { head.appendChild(pill('on your phone (' + it.phone.status + ')' + (it.phone.expiresAt && it.phone.status !== 'expired' ? ', expires ' + L.countdown(it.phone.expiresAt, Date.now()) : ''), 'lav')); }
++    row.appendChild(head);
++    row.appendChild(el('div', 'need-title', it.title || ''));
++    if (it.choices && it.choices.length) { row.appendChild(el('div', 'note', 'Choices: ' + it.choices.join(', '))); }
++    if (it.kind === 'proposed-ticket' && !it.filesNamed) { row.appendChild(el('div', 'note', 'Needs its files named before it can be approved' + (it.origin ? ' (from ' + it.origin + ')' : '') + '.')); }
++    if (it.next) { row.appendChild(el('div', 'need-next', it.next)); }
++    (it.commands || []).forEach(function (c) {
++      var cmd = el('div', 'need-cmd');
++      cmd.appendChild(el('span', 'need-label', c.label));
++      cmd.appendChild(el('code', 'mono', c.cmd));
++      var btn = el('button', 'copy', 'Copy'); btn.type = 'button';
++      btn.addEventListener('click', function () {
++        function done() { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1500); }
++        if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(c.cmd).then(done, function () { btn.textContent = 'Select it'; }); } else { btn.textContent = 'Select it'; }
+       });
+-      box.appendChild(row);
++      cmd.appendChild(btn); row.appendChild(cmd);
+     });
+-    var fyi = inbox && inbox.fyi ? inbox.fyi : [];
+-    var fy = $('fyi'); var fl = $('fyiList');
+-    fl.textContent = '';
+-    fy.hidden = !fyi.length;
+-    $('fyiSummary').textContent = fyi.length + ' FYI note' + (fyi.length === 1 ? '' : 's') + ' (no action needed, not counted)';
+-    fyi.forEach(function (n) { var r = el('div', 'need fyi-row'); r.appendChild(el('span', 'mono', n.project + ' | ' + ago(n.since))); r.appendChild(el('div', 'need-title', n.title || '')); fl.appendChild(r); });
+-    if (inbox && inbox.hidden) { box.appendChild(el('div', 'board-note', inbox.hidden + ' more not shown (the list is cut at 50 per project): swarm inbox --all')); }
+-    var ph = inbox && inbox.phone;
+-    note.textContent = 'Read-only: the board never answers anything. Run the command at your computer' + (ph ? ph.on ? ', or answer on your phone (' + ph.open + ' question' + (ph.open === 1 ? '' : 's') + ' open in ' + ph.repo + ').' : '. Phone questions are switched off.' : '. Phone answers are not set up (swarm phone setup).') + (inbox && inbox.problems && inbox.problems.length ? ' Could not read: ' + inbox.problems.map(function (p) { return p.project; }).join(', ') + '.' : '');
++    box.appendChild(row);
++  });
++  state.rendered = keysNow;
++  var fyi = inbox && inbox.fyi ? inbox.fyi : [];
++  var fl = $('fyiList'); fl.textContent = '';
++  $('fyi').hidden = !fyi.length;
++  $('fyiSummary').textContent = fyi.length + ' FYI note' + (fyi.length === 1 ? '' : 's') + ' (no action needed, not counted)';
++  fyi.forEach(function (n) { var r = el('div', 'fyi-row'); r.appendChild(el('div', 'mono sub', n.project + ' | ' + ago(n.since))); r.appendChild(el('div', 'need-title', n.title || '')); fl.appendChild(r); });
++  if (inbox && inbox.hidden) { box.appendChild(el('div', 'note', inbox.hidden + ' more not shown (the list is cut at 50 per project): swarm inbox --all')); }
++  var ph = inbox && inbox.phone;
++  $('needsNote').textContent = 'Read-only: the board never answers anything. Run the command at your computer' + (ph ? ph.on ? ', or answer on your phone (' + ph.open + ' question' + (ph.open === 1 ? '' : 's') + ' open in ' + ph.repo + ').' : '. Phone questions are switched off.' : '. Phone answers are not set up (swarm phone setup).') + (inbox && inbox.problems && inbox.problems.length ? ' Could not read: ' + inbox.problems.map(function (p) { return p.project; }).join(', ') + '.' : '');
++}
++
++// ---- cost ----------------------------------------------------------------------------------------------------------------------------------------
++
++function renderCost(data) {
++  var csig = L.signature({ m: data.machine, p: data.projects }, Math.floor(Date.now() / 60000));
++  if (csig === state.costSig) { return; }
++  state.costSig = csig;
++  var c = data.machine.cost;
++  var k = $('costKpis'); k.textContent = '';
++  k.appendChild(tile('Today', usd(c.todayUsd), 'billed lanes and rented GPUs'));
++  k.appendChild(tile('Last 7 days', usd(c.weekUsd), 'billed'));
++  k.appendChild(tile('Billed, all time', usd(c.paidUsd), 'estimated part ' + usd(c.paidEstimatedUsd)));
++  k.appendChild(tile('Flat-rate list value', usd(c.flatRateListUsd), 'Codex, Cursor, Claude subscription: not billed'));
++  k.appendChild(tile('Estimated full cost', usd(c.paidUsd + c.flatRateListUsd), 'billed plus list value: what the work would cost at list prices'));
++  var t = $('laneTable'); t.textContent = '';
++  var lanes = data.machine.lanes || [];
++  if (!lanes.length) { t.appendChild(el('caption', 'empty', 'No lane has spent anything today, has a daily cap, or is paused.')); }
++  else {
++    t.appendChild(th(['Lane', 'Kind', 'Today', 'Daily cap', 'Status']));
++    var body = el('tbody');
++    lanes.forEach(function (l) {
++      var tr = el('tr');
++      var nameCell = el('div', 'livebar'); var sw = el('i'); sw.style.cssText = 'width:10px;height:10px;border-radius:3px;display:block;background:' + L.laneColor(l.label); nameCell.appendChild(sw); nameCell.appendChild(el('span', 'name', l.label));
++      tr.appendChild(td(nameCell)); tr.appendChild(td(l.kind === 'billed' ? pill('billed', 'good') : pill('flat-rate, list value', 'info')));
++      tr.appendChild(td(usd(l.todayUsd), 'mono'));
++      var cap = el('div');
++      if (l.dailyCapUsd) { cap.appendChild(meter(100 * l.todayUsd / l.dailyCapUsd, l.todayUsd / l.dailyCapUsd > 0.75)); cap.appendChild(el('span', 'mono sub', usd(l.todayUsd) + ' of ' + usd(l.dailyCapUsd))); } else { cap.appendChild(el('span', 'sub', 'no daily cap')); }
++      tr.appendChild(td(cap));
++      var st = el('div');
++      if (l.limited) { var p = pill('paused (' + l.limited.state + ')', 'warn'); st.appendChild(p); var cd = el('span', 'mono sub', ' resets ' + L.countdown(l.limited.until, Date.now())); cd.dataset.until = l.limited.until; cd.dataset.prefix = ' resets '; st.appendChild(cd); }
++      else if (l.dailyCapUsd) { var rs = el('span', 'mono sub', 'cap resets ' + L.countdown(l.capResetsAt, Date.now()) + ' (UTC midnight)'); rs.dataset.until = l.capResetsAt; rs.dataset.prefix = 'cap resets '; rs.dataset.suffix = ' (UTC midnight)'; st.appendChild(rs); }
++      else { st.appendChild(el('span', 'sub', 'ok')); }
++      tr.appendChild(td(st)); body.appendChild(tr);
++    });
++    t.appendChild(body);
+   }
++  $('laneNote').textContent = 'Billed lanes count what they were charged today; flat-rate lanes show what the work is worth at list price. A pause comes from a real rate-limit or quota event recorded by the lane scheduler.';
++  var s = $('spendTable'); s.textContent = '';
++  s.appendChild(th(['Project', 'Today', '7 days', 'All time', 'Spend and cap']));
++  var sb = el('tbody');
++  data.projects.forEach(function (p) {
++    var bp = data.machine.cost.byProject[p.id] || {};
++    var tr = el('tr');
++    tr.appendChild(td(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)]))); tr.appendChild(td(usd(bp.todayUsd), 'mono')); tr.appendChild(td(usd(bp.weekUsd), 'mono')); tr.appendChild(td(usd(bp.allUsd), 'mono')); tr.appendChild(td(capCell(p)));
++    sb.appendChild(tr);
++  });
++  s.appendChild(sb);
++}
++function tickCountdowns() {
++  document.querySelectorAll('[data-until]').forEach(function (n) { n.textContent = (n.dataset.prefix || '') + L.countdown(n.dataset.until, Date.now()) + (n.dataset.suffix || ''); });
++  var lv = L.liveness(state.lastOk, Date.now());
++  $('liveDot').className = 'dot' + (lv.state === 'live' ? '' : ' off');
++  $('liveText').textContent = lv.state === 'live' ? 'Live, updated ' + clock(state.lastOk) : state.lastOk ? 'Stale, last update ' + clock(state.lastOk) : 'connecting';
++}
++setInterval(tickCountdowns, 1000);
+ 
+-  function renderBoard(data) {
+-    renderInbox(data.inbox);
+-    projects = data.projects;
+-    $('count').textContent = projects.length + (projects.length === 1 ? ' project' : ' projects');
+-    var sc = data.scratch || { hidden: 0, total: 0 };
+-    $('scratchLabel').textContent = showScratch ? 'showing test/temp projects' : 'show test/temp projects' + (sc.hidden ? ' (' + sc.hidden + ' hidden)' : '');
+-    $('scratch').checked = showScratch;
+-    $('updated').textContent = new Date().toLocaleTimeString();
+-    renderMachine(data.machine, projects);
+-    var lanes = $('lanes');
+-    lanes.textContent = '';
+-    if (!projects.length) { lanes.appendChild(el('div', 'board-empty', 'No projects yet. Run a swarm command inside a project, or swarm projects add PATH.')); }
+-    projects.slice().sort(function (a, b) { return (b.live.length - a.live.length) || String(b.lastActivityAt).localeCompare(String(a.lastActivityAt)); }).forEach(function (p) { lanes.appendChild(renderLane(p)); });
+-    var sel = $('fproject'); var keep = sel.value;
+-    if (sel.options.length - 1 !== projects.length) {
+-      while (sel.options.length > 1) { sel.remove(1); }
+-      projects.forEach(function (p) { var o = el('option', '', p.name); o.value = p.id; sel.appendChild(o); });
+-      sel.value = keep;
++// ---- agents --------------------------------------------------------------------------------------------------------------------------------------
++
++function renderAgents(data) {
++  var list = data.machine.agents.list;
++  $('agentsCount').textContent = String(data.machine.agents.total);
++  var host = $('agentsGrid');
++  var specs = list.slice(0, 80).map(function (a) { return { key: a.runId + '|' + a.jobId, state: HEAD_STATE[a.state] || 'idle', lane: a.lane, a: a }; });
++  var idleLanes = L.bays(list, []).filter(function (b) { return b.idle; }).map(function (b) { return { key: 'sleep|' + b.lane, state: 'sleeping', lane: b.lane, a: null }; });
++  var all = specs.concat(idleLanes);
++  var map = host.__rows || (host.__rows = new Map());
++  var keep = {};
++  all.forEach(function (s) {
++    keep[s.key] = true;
++    var hit = map.get(s.key);
++    if (!hit) {
++      var row = el('div', 'agent-row'); var holder = el('div'); row.appendChild(holder);
++      var handle = mountRobotHead(holder, { state: s.state, size: 56, color: L.laneColor(s.lane), screenColor: s.state === 'error' ? '#ffc4c4' : '#e8f2ff', id: s.key, label: s.lane + ' agent, ' + s.state });
++      var who = el('div', 'who'); var b = el('b', 'mono'); var l2 = el('span', 'sub'); var st = el('span', 'state'); var links = el('span', 'sub');
++      who.appendChild(b); who.appendChild(l2); who.appendChild(st); who.appendChild(links); row.appendChild(who);
++      hit = { row: row, handle: handle, b: b, l2: l2, st: st, links: links }; map.set(s.key, hit); host.appendChild(row);
+     }
+-  }
++    hit.handle.setState(s.state);
++    if (s.a) {
++      hit.b.textContent = s.a.jobId; hit.l2.textContent = s.a.lane + ' | ' + s.a.project;
++      hit.st.textContent = s.state === 'error' ? 'failed ' + (s.a.ended ? ago(s.a.ended) : '') : s.state + (s.a.since ? ' | running ' + L.duration(Date.now() - Date.parse(s.a.since)) : ''); hit.st.className = 'state ' + s.state;
++      hit.links.textContent = '';
++      hit.links.appendChild(link(runHref(s.a.projectId, s.a.runId), 'board-link', [el('span', '', 'run inspector')]));
++    } else { hit.b.textContent = s.lane; hit.l2.textContent = 'No agent running in this lane'; hit.st.textContent = 'sleeping'; hit.st.className = 'state sleeping'; hit.links.textContent = ''; }
++  });
++  map.forEach(function (v, k) { if (!keep[k]) { v.handle.destroy(); v.row.remove(); map.delete(k); } });
++  if (list.length > 80) { $('agentsCount').title = 'Showing 80 of ' + list.length; }
++}
+ 
+-  function query() {
+-    var q = new URLSearchParams();
+-    [['q', 'q'], ['project', 'fproject'], ['kind', 'fkind'], ['from', 'ffrom'], ['to', 'fto']].forEach(function (pair) { var v = $(pair[1]).value; if (v) { q.set(pair[0], v); } });
+-    return q;
+-  }
++// ---- events (history) ----------------------------------------------------------------------------------------------------------------------------
+ 
+-  function entryNode(e) {
+-    var parts = [el('span', 'when mono', e.at.slice(0, 16).replace('T', ' ')), el('span', 'kind', e.kind), el('span', '', e.project + ': ' + e.title)];
+-    if (typeof e.usd === 'number') { parts.push(el('span', 'num mono', usd(e.usd))); }
+-    var known = projects.some(function (p) { return p.id === e.projectId; });
+-    var node;
+-    if (e.run && known && (e.kind === 'run' || e.kind === 'spend')) { node = link(runHref(e.projectId, e.run), 'board-entry', parts); }
+-    else if (e.url && (e.kind === 'pr' || e.kind === 'merge')) { node = link(e.url, 'board-entry', parts); node.rel = 'noopener noreferrer'; node.target = '_blank'; }
+-    else if (known) { node = link(projectHref(e.projectId), 'board-entry', parts); }
+-    else { node = el('div', 'board-entry'); parts.forEach(function (p) { node.appendChild(p); }); }
+-    return node;
+-  }
++function query() {
++  var q = new URLSearchParams();
++  [['q', 'q'], ['project', 'fproject'], ['kind', 'fkind'], ['from', 'ffrom'], ['to', 'fto']].forEach(function (pair) { var v = $(pair[1]).value; if (v) { q.set(pair[0], v); } });
++  return q;
++}
++function entryNode(e, projects) {
++  var parts = [el('span', 'when mono', e.at.slice(0, 16).replace('T', ' ')), el('span', 'kind', e.kind), el('span', 'what', e.project + ': ' + e.title)];
++  if (typeof e.usd === 'number') { parts.push(el('span', 'num mono', usd(e.usd))); }
++  var known = projects.some(function (p) { return p.id === e.projectId; });
++  var node;
++  if (e.run && known && (e.kind === 'run' || e.kind === 'spend')) { node = link(runHref(e.projectId, e.run), 'entry', parts); }
++  else if (e.url && (e.kind === 'pr' || e.kind === 'merge')) { node = link(e.url, 'entry', parts); node.rel = 'noopener noreferrer'; node.target = '_blank'; }
++  else if (known) { node = link(projectHref(e.projectId), 'entry', parts); }
++  else { node = el('div', 'entry'); parts.forEach(function (p) { node.appendChild(p); }); }
++  return node;
++}
++function loadHistory() {
++  if (state.tab !== 'events' || !state.data) { return; }
++  var q = query();
++  var csv = new URLSearchParams(q); csv.set('t', TOKEN);
++  var api = new URLSearchParams(q); api.set('t', TOKEN); api.set('limit', '100');
++  if (state.scratch) { api.set('scratch', '1'); csv.set('scratch', '1'); }
++  $('csv').href = '/history.csv?' + csv.toString();
++  fetch('/api/history?' + api.toString(), { headers: { 'x-watch-token': TOKEN } })
++    .then(function (r) { return r.ok ? r.json() : null; })
++    .then(function (data) {
++      if (!data) { return; }
++      var box = $('history'); box.textContent = '';
++      if (!data.events.length) { box.appendChild(el('div', 'empty', 'Nothing matches.')); }
++      data.events.forEach(function (e) { box.appendChild(entryNode(e, state.data.projects)); });
++      $('historyNote').textContent = 'Showing ' + data.events.length + ' of ' + data.total + ' event(s), newest first. A pull request and its merge are one row. The log is append-only and kept on disk.';
++    }).catch(function () {});
++}
++var debounce = null;
++$('filters').addEventListener('input', function () { clearTimeout(debounce); debounce = setTimeout(loadHistory, 300); });
++$('filters').addEventListener('submit', function (e) { e.preventDefault(); loadHistory(); });
+ 
+-  function loadHistory() {
+-    var q = query();
+-    var csv = new URLSearchParams(q); csv.set('t', TOKEN);
+-    $('csv').href = '/history.csv?' + csv.toString();
+-    var api = new URLSearchParams(q); api.set('t', TOKEN); api.set('limit', '100'); if (showScratch) { api.set('scratch', '1'); csv.set('scratch', '1'); }
+-    fetch('/api/history?' + api.toString(), { headers: { 'x-watch-token': TOKEN } })
+-      .then(function (r) { return r.ok ? r.json() : null; })
+-      .then(function (data) {
+-        if (!data) { return; }
+-        var box = $('history'); box.textContent = '';
+-        if (!data.events.length) { box.appendChild(el('div', 'board-empty', 'Nothing matches.')); }
+-        data.events.forEach(function (e) { box.appendChild(entryNode(e)); });
+-        $('historyNote').textContent = 'Showing ' + data.events.length + ' of ' + data.total + ' event(s), newest first. The log is append-only and kept on disk.';
+-      }).catch(function () {});
+-  }
++// ---- data loop -----------------------------------------------------------------------------------------------------------------------------------
+ 
+-  function poll() {
+-    fetch('/api/board?t=' + T + (showScratch ? '&scratch=1' : ''), { headers: { 'x-watch-token': TOKEN } })
+-      .then(function (r) { return r.ok ? r.json() : null; })
+-      .then(function (data) { if (data) { renderBoard(data); } })
+-      .catch(function () {});
++function renderTab() {
++  var d = state.data;
++  if (!d) { return; }
++  if (state.tab === 'overview') { renderKpis(d.machine); renderBays(d.machine); renderProjects(d.projects); }
++  else if (state.tab === 'cost') { renderCost(d); }
++  else if (state.tab === 'agents') { renderAgents(d); }
++  tickCountdowns();
++}
++function renderBoard(data) {
++  state.data = data;
++  state.lastOk = Date.now();
++  $('count').textContent = data.projects.length + (data.projects.length === 1 ? ' project' : ' projects');
++  var sc = data.scratch || { hidden: 0 };
++  $('scratchLabel').textContent = state.scratch ? 'showing test/temp projects' : 'show test/temp projects' + (sc.hidden ? ' (' + sc.hidden + ' hidden)' : '');
++  $('scratch').checked = state.scratch;
++  // The chip and title stay current on every tab; the panels render where they are visible.
++  renderNeeds(data.inbox);
++  renderTab();
++  state.firstRender = false;
++  if (state.tab === 'events' && !state.eventsLoaded) { state.eventsLoaded = true; loadHistory(); }
++  var sel = $('fproject'); var keep = sel.value;
++  if (sel.options.length - 1 !== data.projects.length) {
++    while (sel.options.length > 1) { sel.remove(1); }
++    data.projects.forEach(function (p) { var o = el('option', '', p.name); o.value = p.id; sel.appendChild(o); });
++    sel.value = keep;
+   }
+-
+-  var debounce = null;
+-  $('filters').addEventListener('input', function () { clearTimeout(debounce); debounce = setTimeout(loadHistory, 300); });
+-  $('filters').addEventListener('submit', function (e) { e.preventDefault(); loadHistory(); });
+-  $('scratch').addEventListener('change', function () {
+-    showScratch = $('scratch').checked;
+-    try { localStorage.setItem('swarm-scratch', showScratch ? '1' : '0'); } catch (e) { /* kept for this visit only */ }
+-    poll(); loadHistory();
+-  });
++}
++function poll() {
++  if (state.polling) { return; }   // one request at a time: a slow answer is not overtaken by the next poll
++  state.polling = true;
++  fetch('/api/board?t=' + T + (state.scratch ? '&scratch=1' : ''), { headers: { 'x-watch-token': TOKEN } })
++    .then(function (r) { return r.ok ? r.json() : null; })
++    .then(function (data) { if (data) { renderBoard(data); } })
++    .catch(function () {})
++    .then(function () { state.polling = false; });
++}
++$('scratch').addEventListener('change', function () {
++  state.scratch = $('scratch').checked;
++  store.set('swarm-scratch', state.scratch ? '1' : '0');
+   poll(); loadHistory();
+-  setInterval(poll, 2000);
+-  setInterval(loadHistory, 10000);
+-})();
++});
++
++applyHash();
++poll();
++setInterval(poll, 2000);
++setInterval(loadHistory, 10000);
+diff --git a/tools/watch-assets/robot-head.js b/tools/watch-assets/robot-head.js
+new file mode 100644
+index 0000000..96a7fdb
+--- /dev/null
++++ b/tools/watch-assets/robot-head.js
+@@ -0,0 +1,119 @@
++// SPDX-License-Identifier: Apache-2.0
++// A plain-DOM mount for the ported robot-heads drawing (the React component of https://github.com/fayazara/robot-heads, MIT, was
++// rewritten here without React; the drawing itself is in robot-*.js). One head is one agent: its face shows the agent's real state.
++// Motion rules: a head is static under prefers-reduced-motion or when animation is paused, it stops drawing while it is off screen,
++// and the shared loop sleeps when no head is moving or the tab is hidden.
++import { getShape } from './robot-geometry.js';
++import { RobotSim, restPose } from './robot-sim.js';
++import { RobotRenderer, frameFor } from './robot-render.js';
++import { linear } from './robot-light.js';
++import { parseColor } from './robot-color.js';
++import { subscribe } from './robot-ticker.js';
++
++export const STATES = ['idle', 'thinking', 'working', 'error', 'sleeping'];
++
++const media = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
++let paused = false;
++const heads = new Set();
++// Drawing a head is software 3D on a 2D canvas, so animation has a budget: at most MAX_ANIMATED heads move at once (the rest show a still frame of their state),
++// each repaints at about 15 frames per second, and a head that is off screen or hidden costs nothing. 60 live agents therefore cost the same as 12.
++export const MAX_ANIMATED = 12;
++const FRAME_S = 1 / 15;
++const animating = new Set();
++let rebalanceQueued = false;
++function rebalance() { if (rebalanceQueued) return; rebalanceQueued = true; setTimeout(() => { rebalanceQueued = false; heads.forEach(h => h.sync(true)); }, 60); }
++
++function palette(color, trim, screen) {
++  const shell = parseColor(color) ?? [48, 80, 172];
++  const metal = parseColor(trim) ?? [150, 168, 200];
++  const led = parseColor(screen) ?? [232, 242, 255];
++  return {
++    shell: { albedo: linear(shell), f0: 0.05, metal: 0.15, spec: 0.55, shininess: 70, rim: 0.9 },
++    trim: { albedo: linear(metal), f0: 0.2, metal: 0.65, spec: 0.8, shininess: 45, rim: 0.7 },
++    led,
++  };
++}
++
++const hashSeed = id => { let h = 2166136261; for (let i = 0; i < id.length; i += 1) h = Math.imul(h ^ id.charCodeAt(i), 16777619); return ((h >>> 0) % 1000) / 1000; };
++
++export function reducedMotion() { return Boolean(media && media.matches); }
++export function animationPaused() { return paused; }
++
++/** Pause or resume every head (a control on the page, and the reduced-motion setting, both end up here). */
++export function setAnimationPaused(value) {
++  paused = Boolean(value);
++  heads.forEach(h => h.sync());
++}
++if (media && media.addEventListener) media.addEventListener('change', () => heads.forEach(h => h.sync()));
++
++/**
++ * host: an element to put the head in. options: state, size (px), color, trimColor, screenColor, shape, antenna, id (any string: spreads blinks),
++ * label (accessible name). Returns { setState, setColor, destroy }.
++ */
++export function mountRobotHead(host, { state = 'idle', size = 56, color = '#2b49a3', trimColor = '#93a6c8', screenColor = '#e8f2ff', shape = 'rectangle', antenna = false, id = '', label } = {}) {
++  const box = document.createElement('span');
++  box.setAttribute('role', 'img');
++  box.style.cssText = `position:relative;display:block;flex:none;width:${size}px;height:${size}px`;
++  const canvas = document.createElement('canvas');
++  canvas.setAttribute('aria-hidden', 'true');
++  box.appendChild(canvas);
++  host.appendChild(box);
++  const geometry = getShape(shape);
++  const frame = frameFor(geometry, antenna, size);
++  canvas.style.cssText = `position:absolute;left:${-frame.padSide}px;top:${-frame.padTop}px;width:${frame.box + 2 * frame.padSide}px;height:${frame.box + frame.padTop + frame.padBottom}px;display:block;pointer-events:none`;
++  let current = STATES.includes(state) ? state : 'idle';
++  let pal = palette(color, trimColor, screenColor);
++  const sim = new RobotSim(hashSeed(String(id)), current);
++  sim.setState(current);
++  const renderer = new RobotRenderer();
++  let visible = true;
++  let unsubscribe = null;
++  const label0 = () => label ?? `Agent, ${current}`;
++  box.setAttribute('aria-label', label0());
++
++  let paintedStill = '';
++  const paint = animated => {
++    // A still frame is drawn once per state and colour, not on every sync.
++    const key = animated ? '' : `${current}|${color}`;
++    if (!animated && key === paintedStill) return;
++    paintedStill = key;
++    const dpr = Math.min(2, (typeof devicePixelRatio === 'number' && devicePixelRatio) || 1);
++    const w = Math.round((frame.box + 2 * frame.padSide) * dpr);
++    const h = Math.round((frame.box + frame.padTop + frame.padBottom) * dpr);
++    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
++    const ctx = canvas.getContext('2d');
++    if (!ctx) return;
++    renderer.draw(ctx, frame, dpr, animated ? sim.pose : restPose(current), animated ? sim : null, current, geometry, pal, { floorShadow: false, antenna });
++  };
++
++  let acc = 0;
++  const handle = {
++    sync(fromRebalance) {
++      let still = paused || reducedMotion() || !visible;
++      if (!still && !animating.has(handle)) { if (animating.size < MAX_ANIMATED) animating.add(handle); else still = true; }
++      if (still) {
++        const had = animating.delete(handle);
++        if (unsubscribe) { unsubscribe(); unsubscribe = null; }
++        paint(false);
++        if (had && !fromRebalance) rebalance();   // a freed slot goes to a head that was waiting
++        return;
++      }
++      if (!unsubscribe) unsubscribe = subscribe(dt => { sim.pointer = null; sim.update(dt); acc += dt; if (acc >= FRAME_S) { acc = 0; paint(true); } });
++    },
++    setState(next) {
++      const s = STATES.includes(next) ? next : 'idle';
++      if (s === current) return;
++      current = s; sim.setState(s); box.setAttribute('aria-label', label0());
++      handle.sync();
++      if (!unsubscribe) paint(false);
++    },
++    setColor(c) { pal = palette(c, trimColor, screenColor); if (!unsubscribe) paint(false); },
++    destroy() { if (unsubscribe) unsubscribe(); unsubscribe = null; observer?.disconnect(); heads.delete(handle); const had = animating.delete(handle); box.remove(); if (had) rebalance(); },
++  };
++  // Stop drawing while the head is off screen.
++  const observer = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => { visible = entries[entries.length - 1].isIntersecting; handle.sync(); }) : null;
++  observer?.observe(box);
++  heads.add(handle);
++  handle.sync();
++  return handle;
++}
+diff --git a/tools/watch-assets/run.html b/tools/watch-assets/run.html
+new file mode 100644
+index 0000000..4a38472
+--- /dev/null
++++ b/tools/watch-assets/run.html
+@@ -0,0 +1,34 @@
++<!doctype html>
++<html lang="en">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
++<meta name="color-scheme" content="dark">
++<title>Swarm Watch: run</title>
++<link rel="stylesheet" href="assets/swarm-ui.css">
++</head>
++<body>
++<div class="app">
++  <nav class="crumbs" aria-label="Breadcrumb"><a class="back" id="backAll" href="#">← All projects</a><span class="sep">›</span><a id="crumbProject" href="#">Project</a><span class="sep">›</span><span class="here mono" id="crumbRun">run</span></nav>
++  <header class="topbar"><div class="brand"><div class="logo" aria-hidden="true">SW</div><div><h1 id="title">Run</h1><div class="crumb" id="subtitle">-</div></div></div><div class="spacer"></div>
++    <div class="chips"><a class="chip btn" id="watchLink" href="#">Open the live Watch page</a></div></header>
++  <main class="stack">
++    <div class="kpis" id="kpis"></div>
++    <section class="card"><h2>Job graph</h2><div id="graphNote" class="note"></div><div class="graph" id="graph" tabindex="0" aria-label="Job graph, scrollable"></div>
++      <div class="legend"><span><i class="dot" style="animation:none;background:var(--accent)"></i> running</span><span><i class="dot bad"></i> failed</span><span>dashed amber outline: tried more than once (a retry, or sent up to another lane)</span></div>
++      <div id="detail" class="note" role="status"></div></section>
++    <section class="card"><h2>Journal and replay</h2>
++      <div class="filters"><button class="btn primary" id="play" type="button">Play</button><button class="btn" id="stepBack" type="button">Back</button><button class="btn" id="stepFwd" type="button">Step</button>
++        <label class="sub" for="scrub">Position</label><input class="scrub" id="scrub" type="range" min="0" max="0" value="0" aria-label="Replay position"></div>
++      <div id="replayStat" class="row" role="status"></div>
++      <div id="journal" class="journal" tabindex="0" aria-label="Run journal, scrollable"></div>
++      <p class="note">Every time the run recorded for each job, in order. A job's cost appears where it ended: the run records it per job, not per attempt.</p></section>
++    <section class="card"><h2>Compare with another run</h2>
++      <div class="filters"><label class="sub" for="other">Other run</label><select id="other" aria-label="Run to compare with"><option value="">Choose a run</option></select></div>
++      <div id="compare" class="cmp"></div><div id="compareNote" class="note"></div></section>
++  </main>
++</div>
++<script src="assets/board-lib.js"></script>
++<script type="module" src="assets/run.js"></script>
++</body>
++</html>
+diff --git a/tools/watch-assets/run.js b/tools/watch-assets/run.js
+new file mode 100644
+index 0000000..1ce8ebd
+--- /dev/null
++++ b/tools/watch-assets/run.js
+@@ -0,0 +1,150 @@
++// SPDX-License-Identifier: Apache-2.0
++// Run inspector: one run's job graph, a replayable journal with the cost of each job, and a side-by-side compare. Read-only; all data from /api/run.
++var L = self.BoardLib;
++var params = new URLSearchParams(location.search);
++var TOKEN = params.get('t') || '';
++var ID = params.get('id') || '';
++var RUN = params.get('run') || '';
++var T = encodeURIComponent(TOKEN);
++var $ = function (id) { return document.getElementById(id); };
++var NS = 'http://www.w3.org/2000/svg';
++function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined && text !== null) { n.textContent = text; } return n; }
++function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
++function when(iso) { return iso ? String(iso).slice(11, 19) : '-'; }
++function api(extra) { return fetch('/api/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(RUN) + (extra || '') + '&t=' + T, { headers: { 'x-watch-token': TOKEN } }).then(function (r) { return r.ok ? r.json() : null; }); }
++
++$('backAll').href = '/?t=' + T;
++$('crumbProject').href = '/project?id=' + encodeURIComponent(ID) + '&t=' + T;
++$('watchLink').href = '/open/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(RUN) + '&t=' + T;
++$('crumbRun').textContent = RUN;
++
++var run = null, pos = 0, timer = null;
++
++function tile(title, big, sub) { var t = el('div', 'card kpi'); t.appendChild(el('div', 'l', title)); t.appendChild(el('div', 'v num', big)); t.appendChild(el('div', 's', sub)); return t; }
++function renderSummary(r) {
++  $('title').textContent = 'Run ' + r.runId;
++  $('subtitle').textContent = r.project + ' | started ' + (r.startedAt ? r.startedAt.slice(0, 16).replace('T', ' ') : '-');
++  $('crumbProject').textContent = r.project;
++  document.title = 'Run ' + r.runId + ' | Swarm Watch';
++  var k = $('kpis'); k.textContent = '';
++  k.appendChild(tile('Status', r.status || '-', L.duration(r.durationMs)));
++  var st = Object.keys(r.totals.byStatus).sort().map(function (s) { return s + ' ' + r.totals.byStatus[s]; }).join(', ');
++  k.appendChild(tile('Jobs', String(r.totals.jobs), st || 'none recorded'));
++  k.appendChild(tile('Cost', usd(r.totals.usd), r.budgetUsd ? 'run cap ' + usd(r.budgetUsd) : 'no run cap recorded'));
++  k.appendChild(tile('Tried more than once', String(r.totals.rerun), r.totals.rerun ? 'jobs with 2 or more attempts' : 'every job ran once'));
++  var lanes = Object.keys(r.lanes).sort().map(function (l) { return l + ' ' + r.lanes[l].jobs + ' (' + usd(r.lanes[l].usd) + ')'; }).join(' | ');
++  k.appendChild(tile('Lanes', String(Object.keys(r.lanes).length), lanes || 'none'));
++}
++
++function renderGraph(r) {
++  var box = $('graph'); box.textContent = '';
++  $('graphNote').textContent = r.hasGraph ? 'An arrow goes from a job to the job that waited for it.' : 'These jobs did not wait for each other (the run recorded no dependencies), so they sit in one column.';
++  if (!r.jobs.length) { box.appendChild(el('div', 'empty', 'This run has no jobs.')); return; }
++  var g = L.layoutGraph(r.jobs);
++  var svg = document.createElementNS(NS, 'svg');
++  var pad = 12;
++  svg.setAttribute('width', g.width + 2 * pad); svg.setAttribute('height', g.height + 2 * pad); svg.setAttribute('viewBox', '0 0 ' + (g.width + 2 * pad) + ' ' + (g.height + 2 * pad));
++  svg.setAttribute('role', 'group'); svg.setAttribute('aria-label', r.jobs.length + ' jobs');
++  g.edges.forEach(function (e) {
++    var a = g.pos[e.from], b = g.pos[e.to];
++    var p = document.createElementNS(NS, 'path');
++    var x1 = pad + a.x + a.w, y1 = pad + a.y + a.h / 2, x2 = pad + b.x, y2 = pad + b.y + b.h / 2, mx = (x1 + x2) / 2;
++    p.setAttribute('d', 'M' + x1 + ' ' + y1 + ' C' + mx + ' ' + y1 + ' ' + mx + ' ' + y2 + ' ' + x2 + ' ' + y2);
++    p.setAttribute('class', 'edge'); svg.appendChild(p);
++  });
++  r.jobs.forEach(function (j) {
++    var p = g.pos[j.id];
++    var n = document.createElementNS(NS, 'g');
++    n.setAttribute('class', 'node' + (j.rerun ? ' rerun' : '') + (j.status === 'failed' || j.status === 'timeout' ? ' failed' : '') + (j.status === 'running' ? ' running' : ''));
++    n.setAttribute('transform', 'translate(' + (pad + p.x) + ',' + (pad + p.y) + ')');
++    n.setAttribute('tabindex', '0'); n.setAttribute('role', 'button'); n.setAttribute('aria-label', 'Job ' + j.id + ', ' + j.lane + ', ' + j.status + (j.rerun ? ', tried more than once' : ''));
++    var rect = document.createElementNS(NS, 'rect'); rect.setAttribute('width', p.w); rect.setAttribute('height', p.h); n.appendChild(rect);
++    var bar = document.createElementNS(NS, 'rect'); bar.setAttribute('width', 5); bar.setAttribute('height', p.h); bar.setAttribute('rx', 2); bar.style.fill = L.laneColor(j.lane); bar.style.stroke = 'none'; n.appendChild(bar);
++    var t1 = document.createElementNS(NS, 'text'); t1.setAttribute('x', 14); t1.setAttribute('y', 18); t1.textContent = j.id.length > 18 ? j.id.slice(0, 17) + '…' : j.id; n.appendChild(t1);
++    var t2 = document.createElementNS(NS, 'text'); t2.setAttribute('x', 14); t2.setAttribute('y', 33); t2.setAttribute('class', 't2'); t2.textContent = j.lane + ' | ' + j.status + (j.costUsd ? ' | ' + usd(j.costUsd) : '') + (j.rerun ? ' | x' + j.attempts.length : ''); n.appendChild(t2);
++    var show = function () { showDetail(j); };
++    n.addEventListener('click', show); n.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { show(); e.preventDefault(); } });
++    svg.appendChild(n);
++  });
++  box.appendChild(svg);
++}
++function showDetail(j) {
++  var lines = [j.id + ': ' + j.lane + (j.model ? ' (' + j.model + ')' : '') + ', ' + j.status + ', ' + L.duration(j.durationMs) + ', ' + usd(j.costUsd) + (j.costSource ? ' (' + j.costSource + ')' : '')];
++  if (j.attempts.length > 1) { lines.push('Attempts: ' + j.attempts.map(function (a, i) { return (i + 1) + '. ' + a.lane + ' ' + a.status + (a.error ? ' (' + a.error + ')' : ''); }).join('; ')); }
++  if (j.after.length) { lines.push('Waited for: ' + j.after.join(', ')); }
++  if (j.error) { lines.push('Error: ' + j.error); }
++  $('detail').textContent = lines.join('. ');
++}
++
++function renderJournal() {
++  var r = run, box = $('journal');
++  var st = L.replay(r.journal, pos);
++  $('replayStat').textContent = '';
++  [['Step', pos + ' of ' + r.journal.length], ['Running', String(st.running)], ['Ended', String(st.ended)], ['Spent so far', usd(st.spentUsd)]].forEach(function (p) { var s = el('span', 'mono'); s.textContent = p[0] + ': ' + p[1]; $('replayStat').appendChild(s); });
++  if (!box.childNodes.length) {
++    if (!r.journal.length) { box.appendChild(el('div', 'empty', 'The run recorded no times.')); }
++    r.journal.forEach(function (e, i) {
++      var row = el('div', 'jrow');
++      row.appendChild(el('span', 'mono sub', when(e.at))); row.appendChild(el('span', 'lane sub', e.lane));
++      row.appendChild(el('span', 'mono', e.job + ' ' + e.event + (e.rerun ? ' (after more than one attempt)' : '') + (e.error ? ': ' + e.error : '')));
++      row.appendChild(el('span', 'mono sub', typeof e.usd === 'number' && e.usd ? usd(e.usd) : ''));
++      row.dataset.i = String(i); box.appendChild(row);
++    });
++  }
++  Array.prototype.forEach.call(box.children, function (row) {
++    if (!row.dataset.i) { return; }
++    var i = Number(row.dataset.i);
++    row.className = 'jrow ' + (i < pos ? 'past' : 'future') + (i === pos - 1 ? ' now' : '');
++  });
++  var now = box.querySelector('.now');
++  if (now && !timer) { now.scrollIntoView({ block: 'nearest' }); }
++}
++function setPos(n) { pos = Math.max(0, Math.min(run.journal.length, n)); $('scrub').value = String(pos); renderJournal(); }
++function stop() { clearInterval(timer); timer = null; $('play').textContent = 'Play'; }
++$('play').addEventListener('click', function () {
++  if (timer) { stop(); return; }
++  if (pos >= run.journal.length) { setPos(0); }
++  $('play').textContent = 'Pause';
++  timer = setInterval(function () { if (pos >= run.journal.length) { stop(); return; } setPos(pos + 1); }, 350);
++});
++$('stepFwd').addEventListener('click', function () { stop(); setPos(pos + 1); });
++$('stepBack').addEventListener('click', function () { stop(); setPos(pos - 1); });
++$('scrub').addEventListener('input', function () { stop(); setPos(Number($('scrub').value)); });
++
++function diff(a, b, fmt, lowerIsBetter) {
++  var s = el('span', 'mono', fmt(b));
++  if (typeof a === 'number' && typeof b === 'number' && a !== b) { s.className += (b > a) === lowerIsBetter ? ' diff-up' : ' diff-down'; }
++  return s;
++}
++function renderCompare(c) {
++  var box = $('compare'); box.textContent = '';
++  if (!c) { $('compareNote').textContent = ''; return; }
++  function row(label, a, b) { box.appendChild(el('span', '', label)); var x = el('span'); x.appendChild(a); var y = el('span'); y.appendChild(b); box.appendChild(x); box.appendChild(y); }
++  box.appendChild(el('span', 'h', '')); box.appendChild(el('span', 'h mono', 'This run')); box.appendChild(el('span', 'h mono', c.b.runId.length > 20 ? c.b.runId.slice(0, 8) + '…' + c.b.runId.slice(-6) : c.b.runId));
++  var A = c.a, B = c.b;
++  row('Status', el('span', 'mono', A.status || '-'), el('span', 'mono', B.status || '-'));
++  row('Duration', el('span', 'mono', L.duration(A.durationMs)), diff(A.durationMs, B.durationMs, L.duration, true));
++  row('Jobs', el('span', 'mono', String(A.totals.jobs)), diff(A.totals.jobs, B.totals.jobs, String, true));
++  row('Cost', el('span', 'mono', usd(A.totals.usd)), diff(A.totals.usd, B.totals.usd, usd, true));
++  row('Tried more than once', el('span', 'mono', String(A.totals.rerun)), diff(A.totals.rerun, B.totals.rerun, String, true));
++  c.lanes.forEach(function (l) { row('Lane ' + l.lane, el('span', 'mono', l.a ? l.a.jobs + ' jobs, ' + usd(l.a.usd) : '-'), el('span', 'mono', l.b ? l.b.jobs + ' jobs, ' + usd(l.b.usd) : '-')); });
++  var changed = c.shared.filter(function (s) { return s.a.status !== s.b.status || s.a.rerun !== s.b.rerun; });
++  $('compareNote').textContent = c.shared.length + ' job id' + (c.shared.length === 1 ? '' : 's') + ' appear in both runs' + (changed.length ? ' (' + changed.length + ' with a different outcome: ' + changed.slice(0, 6).map(function (s) { return s.id + ' ' + s.a.status + ' to ' + s.b.status; }).join(', ') + ')' : '') + '; only in this run: ' + c.onlyA + ', only in the other: ' + c.onlyB + '. Red means more than this run, green means less.';
++}
++$('other').addEventListener('change', function () {
++  var v = $('other').value;
++  if (!v) { renderCompare(null); return; }
++  api('&compare=' + encodeURIComponent(v)).then(function (d) { renderCompare(d && d.compare); });
++});
++
++api().then(function (r) {
++  if (!r) { $('title').textContent = 'Run not found'; $('subtitle').textContent = 'No run ' + RUN + ' in this project.'; return; }
++  run = r;
++  renderSummary(r); renderGraph(r);
++  $('scrub').max = String(r.journal.length);
++  setPos(r.journal.length);
++});
++fetch('/api/project?id=' + encodeURIComponent(ID) + '&t=' + T, { headers: { 'x-watch-token': TOKEN } }).then(function (r) { return r.ok ? r.json() : null; }).then(function (p) {
++  if (!p) { return; }
++  p.runs.filter(function (x) { return x.runId !== RUN; }).slice(0, 60).forEach(function (x) { var o = el('option', '', x.runId + '  ' + x.status + '  ' + x.done + '/' + x.jobs + ' jobs'); o.value = x.runId; $('other').appendChild(o); });
++}).catch(function () {});
+diff --git a/tools/watch-cli.mjs b/tools/watch-cli.mjs
+index 33f9ac3..6239a20 100644
+--- a/tools/watch-cli.mjs
++++ b/tools/watch-cli.mjs
+@@ -23,7 +23,9 @@ import os from 'node:os';
+ import { randomBytes } from 'node:crypto';
+ import { readHistory, historyCsv, historyFile } from './history.mjs';
+ import { boardInbox, inboxText } from './board-inbox.mjs';
+-import { boardSnapshot, projectDetail, workersHeld } from './board-data.mjs';
++import { runDetail, compareRuns } from './board-run.mjs';
++import { boardSnapshot, projectDetail, workersHeld, laneUsage } from './board-data.mjs';
++import { resolveBudget, spendDir } from './spend.mjs';
+ import { lanesDir, machineConcurrency } from './lanes.mjs';
+ import { loadLocalConfig } from './local-config.mjs';
+ import { backfillHistory } from './board-commands.mjs';
+@@ -287,7 +289,8 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
+         const all = await listProjects({ file: projectsFile(env) });
+         // Test and temp projects are left out of everything (lanes, totals, the inbox) unless asked for, so the numbers still add up.
+         const projects = scratch ? all : all.filter(p => !isScratchRoot(p.root));
+-        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: now(), workers: await workersHeld({ dir: lanesDir(env), max, invalid }) });
++        const caps = (() => { try { const lanes = resolveBudget({ config: loadLocalConfig({ env }) }).lanes ?? {}; return Object.fromEntries(Object.entries(lanes).map(([k, v]) => [k, v?.dailyUsd])); } catch { return {}; } })();
++        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: now(), workers: await workersHeld({ dir: lanesDir(env), max, invalid }), lanes: laneToday => laneUsage({ laneToday, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: now() }) });
+         // What waits for the owner (read-only); a failure here never hides the rest of the board.
+         snapshot.inbox = await boardInbox({ projects, now: now(), env }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
+         snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : all.length - projects.length, total: all.filter(p => isScratchRoot(p.root)).length };
+@@ -303,6 +306,16 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
+       const liveRuns = (await live()).filter(r => r.root === project.root);
+       return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)) });
+     },
++    // One run's jobs, graph and journal; with `compare`, that run beside another run of the same project.
++    async run(id, runId, compare = null) {
++      const project = await find(id);
++      if (!project) return null;
++      const a = await runDetail(project, runId);
++      if (!a) return null;
++      if (!compare) return a;
++      const b = await runDetail(project, compare);
++      return b ? { run: a, compare: compareRuns(a, b) } : null;
++    },
+     async history(q = {}) {
+       return readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: Number(q.limit) || 100, offset: Number(q.offset) || 0, fold: true, exclude: showsScratch(q) ? undefined : await scratchIds() });
+     },
+diff --git a/tools/watch-server.mjs b/tools/watch-server.mjs
+index a1ea703..06393bd 100644
+--- a/tools/watch-server.mjs
++++ b/tools/watch-server.mjs
+@@ -185,7 +185,7 @@ export function createWatchServer(opts) {
+     const isJob = parts.length === 3 && parts[1] === 'job' && typeof getJobReport === 'function';
+     const isBoard = pathname === '/board' && typeof getBoard === 'function';
+     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
+-    const boardRoutes = board ? ['/api/board', '/api/project', '/api/history', '/history.csv', '/open/run', '/project'] : [];
++    const boardRoutes = board ? ['/api/board', '/api/project', '/api/history', '/history.csv', '/open/run', '/project', '/run', '/api/run'] : [];
+     const isBoardRoute = boardRoutes.includes(pathname);
+     // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
+     const isNav = Boolean(nav) && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
+@@ -212,6 +212,8 @@ export function createWatchServer(opts) {
+     if (isBoardRoute) {
+       const q = Object.fromEntries(u.searchParams);
+       if (pathname === '/project') return sendAsset(res, method, 'project.html');
++      if (pathname === '/run') return sendAsset(res, method, 'run.html');
++      if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
+       if (pathname === '/api/board') return sendJson(res, method, await board.snapshot(q));
+       if (pathname === '/api/project') { const detail = await board.project(String(q.id ?? '')); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
+       if (pathname === '/api/history') return sendJson(res, method, await board.history(q));

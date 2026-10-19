@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.129.0
+
+Swarm Watch UI upgrade (`docs/design/swarm-watch-design-system.md`, `docs/design/swarm-watch-preflight.md`, `docs/watch.md`).
+- The `swarm watch --all` board has four tabs (Overview, Cost, Agents, Events), a new dark design system (rounded, pill controls, one accent per lane, system fonts only, nothing loaded from the internet), and a phone layout (one column, Needs you first). The project page uses the same system.
+- One robot head per live agent (the MIT-licensed robot-heads drawing, ported to plain JavaScript without React): working when its job produced output in the last 90 seconds, thinking when it is running without output, error when its job failed in the last 10 minutes, sleeping head when a lane has no running agent. At most 12 heads move at once; reduced motion, a Pause motion button (`p`), a hidden tab and off-screen heads all stop drawing. Nothing is shown that the run files do not back.
+- Unread badges on Needs you (kept in the browser); a "Live" chip that turns Stale when the last answer is over 6 seconds old; per-lane usage against the daily cap with the cap's reset time and rate-limit pauses with their end time (Cost tab); keyboard shortcuts (`1`-`4`, `/`, `u`, `p`, `?`) and deep links (`#tab=cost`, `#run=PROJECT/RUN`).
+- New run inspector (`/run?id=PROJECT&run=RUN`): job graph from the run's dependencies, a dashed outline for jobs tried more than once, a journal with each job's cost, a replay slider, and compare against another run. New read-only route `/api/run` behind the board token.
+- `.claude/skills/ui-ux-pro-max/` (MIT, project-local, from nextlevelbuilder/ui-ux-pro-max-skill) was used to write the design system; sources, commits and licenses are in `docs/third-party.md`. `.project-swarm.json` is now git-ignored (a project cap kept on one machine).
+- Opus review fixes: a lane, job or status named `__proto__` or `constructor` can no longer reach `Object.prototype` (maps keyed by run-file text have no prototype); a symlinked or non-file `state.json` is refused; null entries in a job list are skipped; the job graph layers are computed without recursion; replay order is fixed; one poll at a time; the page is not rebuilt when nothing changed (keyboard focus stays); stale lane bays are removed; the live clock chip is no longer a live region (a separate announcement says "N need you, M new" only when it changes); a `#run=` link opens once and does not trap the Back button.
+- Tests: `tests/watch-ui.test.mjs`; the other board tests were updated for the new page (tabs by hash link, `swarm go` test now passes `--root`).
+
 ## 1.128.0
 
 Board feedback (`docs/watch.md`).
