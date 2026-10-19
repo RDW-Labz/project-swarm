@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.123.0
+
+Phase 19, part 4: phone approvals through a private GitHub repo (`docs/phone-approvals.md`).
+- `swarm phone setup --repo OWNER/NAME | sync [--dry-run] | status | off`. Decisions with choices and proposed tickets that name their files become issues in one private repo (a public repo is refused); you reply with one word from the GitHub app; `swarm phone sync` reads it with the `gh` login already on the machine. No server, no webhook, no new service.
+- A reply counts only from the owner's own login, on an issue the tool opened (kept locally), once, within 24 hours, unedited, one offered word. Borderline items (money, sign-in, secrets, deletion, production, sensitive or high-risk tickets) and the panic button (`swarm stop --all`) need a second step: a one-time word, three wrong tries lock it.
+- Never from a phone: merge, deploy, spend caps, overrides, accepting unmet acceptance lines (not offered; a test reads the source to keep the code from reaching them). Answers are recorded before they run (once only).
+- Opus review fixes: a declined, locked or answered question is never reopened (an expired one only in a later sync); only choices exactly as `swarm decide` compares them, without a leading dash, and plain ids are offered; picking anything but a decision's default (it queues a change goal) needs the confirmation word; a changed set of choices or a ticket that became borderline is re-checked at answer time; state is tied to the repo; a lock file stops two syncs acting on one answer.
+- Tests: `tests/phone.test.mjs` (a fake GitHub).
+
 ## 1.122.0
 
 Quotes: automatic time tracking (`docs/quotes.md`).

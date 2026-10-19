@@ -7,11 +7,10 @@ Project Swarm brief
 Goal: none
 Done:
   - run 1792298822339-3f63d5c6 integrated, 2 files
-  - run 1792294097320-e7a7b9e2 integrated, 6 files
 Running: none
 Needs the owner: none
 Next 3 actions:
-  1. swarm integrate 1792370825506-8b8568f4 --queue
+  1. swarm integrate 1792374024876-60fc116b --queue
   2. swarm "describe the goal in one sentence"
   3. swarm status
 Rules:
