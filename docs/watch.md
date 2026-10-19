@@ -53,3 +53,7 @@ One page for the whole machine, read-only and behind a token like every Watch pa
 - **Getting back:** every run page and project page has "← All projects" and a breadcrumb (All projects › project › run). The links are ordinary links, so the Back button works too. From a run page the link finds the board that is running (its address is kept in `~/.project-swarm/board.json`, readable only by you) or starts one, and sends the browser there with the board's own token; a run page opened directly with `swarm watch RUN` works the same way. A board started that way stays up as long as that process does.
 - **Which projects:** any swarm command run inside a folder lists it (`~/.project-swarm/projects.json`; scratch folders in the temp directory are not listed). `swarm projects`, `swarm projects add PATH`, `swarm projects remove ID` (removing only unlists it).
 - **Isolation:** a project is named by an id from that list, never by a path the page sends. Its runs, tickets, lessons and files are read only under its own folder; two projects with the same run id are two different runs. `swarm history` (`--project`, `--kind`, `--q`, `--from`, `--to`, `--csv`) is the same log in the terminal.
+
+## On your phone
+
+`swarm remote on` shows this board on your phone over Tailscale (your tailnet only, never the public internet). See [remote.md](remote.md).

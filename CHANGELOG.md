@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.130.0
+
+`swarm remote` (`docs/remote.md`): the Swarm Watch board on your phone over Tailscale.
+- `swarm remote on|off|status|show|rotate`. Off by default. `on` checks Tailscale is installed (offers `brew install --cask tailscale`) and signed in (runs `tailscale up`), refuses if Funnel is on for the board's port, starts the board on 127.0.0.1 only with a saved token, runs `tailscale serve` (HTTPS port 8443, tailnet only), checks its own work (Funnel off, the name resolves only to tailnet addresses, the board answers, a wrong token is refused, otherwise everything is taken down) and prints the address, a QR code and the phone steps.
+- The board stays read-only and the token is still required. Through Tailscale only your own login is let in (the `Tailscale-User-Login` header); no run page is started from the remote board.
+- `swarm remote` never runs `tailscale funnel` (the code has no such call, and a test checks that), never listens on a network address, and never changes a `tailscale serve` entry that is not its own. `off` removes the serve entry, stops the board and deletes the token; `rotate` makes a new token and the old link stops working.
+- New: `tools/qr.mjs` (a dependency-free QR encoder, checked with the textbook Reed-Solomon vector and by decoding with macOS CoreImage), `tools/remote.mjs`, `tests/remote.test.mjs` (30 tests against a pretend `tailscale`, `tests/fixtures/mock-tailscale.mjs`). The watch server takes a fixed port, a fixed token and an allowed-host/login rule (`remote`).
+- Opus review fixes: every request to the remote board must carry the owner's Tailscale login whatever its Host (a spoofed loopback Host skipped the login check), every refusal is the same 403, and a Funnel request is refused; an unreadable `tailscale serve status` is "unknown", not "nothing set"; foreground Funnel, Funnel on another entry that proxies to the board, and a taken TCP port are seen; the board stops itself if Funnel appears later; `off` keeps the saved settings and says so when the Tailscale entry or the board could not be removed; a board that starts late is always stopped; a serve entry counts as ours only if it points at one of our loopback ports; QR quiet zone is 4 modules.
+- Not tested: a real Tailscale network and a real phone.
+
 ## 1.129.0
 
 Swarm Watch UI upgrade (`docs/design/swarm-watch-design-system.md`, `docs/design/swarm-watch-preflight.md`, `docs/watch.md`).
