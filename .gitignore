@@ -14,3 +14,6 @@ artifacts/
 # test scratch folders left by the suite
 .tmp-test-*/
 evals/.run/
+
+# a project cap kept on this machine only (the owner's own setting)
+.project-swarm.json

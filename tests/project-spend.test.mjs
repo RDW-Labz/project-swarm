@@ -223,7 +223,7 @@ test('swarm go prints the NO CAP warning on stderr for a project without a cap',
   const fx = await repo(t, { profile: { budget: { maxUsd: 5 } } });
   const swarm = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'tools', 'swarm.mjs');
   await fs.writeFile(path.join(fx.root, 'dirty.txt'), 'x'); // a dirty tree is refused by go itself before any model is called
-  const result = await exec(process.execPath, [swarm, 'go', 'noop goal'], { cwd: fx.root, env: fx.env }).catch(error => error);
+  const result = await exec(process.execPath, [swarm, '--root', fx.root, 'go', 'noop goal'], { cwd: fx.root, env: fx.env }).catch(error => error);
   assert.match(String(result.stderr), /warning: NO CAP: this project has no project-wide spend cap/);
 });
 

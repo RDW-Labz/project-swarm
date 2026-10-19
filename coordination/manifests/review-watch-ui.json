@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1.0
+  },
+  "jobs": [
+    {
+      "id": "review-watch-ui",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "a new read-only route that reads run files from disk, and a browser UI that renders worker-written text",
+      "type": "review",
+      "prompt": "Review coordination/review/watch-ui.diff (the Swarm Watch UI upgrade: the new run inspector routes in tools/watch-server.mjs and tools/watch-cli.mjs, tools/board-run.mjs which reads a run's state.json and manifest.json, the new agent states and lane usage in tools/board-data.mjs, and the browser scripts board.js, run.js, robot-head.js, board-lib.js). The ported drawing files robot drawing (MIT, third party) and the installed skill are out of scope. Promises: read-only, token-protected, a project is named by an id from the registry never a path from the page, run ids are validated, worker-written text is shown only through textContent and is redacted, nothing is loaded from the internet, nothing animates under reduced motion, no state is shown that the run files do not back. Look hard for: (1) path traversal or symlink escape through run ids, project ids, the compare parameter, or fields read from manifest.json and state.json (job ids used as map keys, __proto__ or constructor as a job id or lane name breaking the layers map, the journal or lanes objects keyed by worker text), (2) denial of service: a huge state.json or manifest.json, thousands of jobs, a deep dependency chain making layersOf recursive (stack overflow), O(n squared) work in layoutGraph, the board polling every 2 s re-reading and re-parsing, journal capped at 6000 but jobs at 2000, (3) XSS or DOM injection in board.js and run.js and the SVG building (setAttribute with worker text, href built from data, innerHTML-like sinks, the title attribute), the deep link handler (#run=...) building a URL, location.assign with data, (4) correctness: agentState thresholds, laneUsage UTC day math at month end, the unread logic (keys), liveness, the animation budget in robot-head.js (rebalance, leaks of IntersectionObserver or subscribers, heads left animating after destroy), the hash change and go flow double-render, polling after errors, (5) accessibility mistakes, (6) test gaps. Real findings only, ranked, file:line, a concrete input.",
+      "context": [
+        "tools/board-run.mjs",
+        "tools/board-data.mjs",
+        "tools/watch-assets/board.js",
+        "tools/watch-assets/run.js",
+        "tools/watch-assets/robot-head.js",
+        "tools/watch-assets/board-lib.js",
+        "tests/watch-ui.test.mjs",
+        "coordination/review/watch-ui.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}

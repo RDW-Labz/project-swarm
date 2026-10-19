@@ -185,7 +185,7 @@ export function createWatchServer(opts) {
     const isJob = parts.length === 3 && parts[1] === 'job' && typeof getJobReport === 'function';
     const isBoard = pathname === '/board' && typeof getBoard === 'function';
     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
-    const boardRoutes = board ? ['/api/board', '/api/project', '/api/history', '/history.csv', '/open/run', '/project'] : [];
+    const boardRoutes = board ? ['/api/board', '/api/project', '/api/history', '/history.csv', '/open/run', '/project', '/run', '/api/run'] : [];
     const isBoardRoute = boardRoutes.includes(pathname);
     // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
     const isNav = Boolean(nav) && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
@@ -212,6 +212,8 @@ export function createWatchServer(opts) {
     if (isBoardRoute) {
       const q = Object.fromEntries(u.searchParams);
       if (pathname === '/project') return sendAsset(res, method, 'project.html');
+      if (pathname === '/run') return sendAsset(res, method, 'run.html');
+      if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
       if (pathname === '/api/board') return sendJson(res, method, await board.snapshot(q));
       if (pathname === '/api/project') { const detail = await board.project(String(q.id ?? '')); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
       if (pathname === '/api/history') return sendJson(res, method, await board.history(q));
