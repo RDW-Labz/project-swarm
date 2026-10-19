@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.132.0
+
+Live project overview (`docs/watch.md`): a project's page on the `--all` board opens on a **Live** tab that combines every live run in that project.
+- Header: running / queued / blocked jobs, runs live now, spend today, project spend against its cap, and an ETA (the slowest live run's own estimate; "unknown yet" when a run has none).
+- Lanes: one bay per lane with a robot head for every live agent across all runs, labeled with its ticket (when a ticket has that job's id) and run. The board's head cap (12 moving), 15 fps, off-screen, hidden-tab, Pause motion and reduced-motion rules apply.
+- Combined swarm map: one square per job from every live run, filled by state, lane or run, outlined in its run's colour. Combined stats: progress, in flight, first-try pass, retries / failed, merged, merge queue, conflicts. Live runs list (progress ring, spend, elapsed, "Open run page" to the run's own page, which is unchanged, and the inspector). Recent today (result and cost). With nothing running: "No live runs", the last activity and quick links.
+- Real data only: `/api/live` (read-only, token-protected, new `tools/board-live.mjs`) sums the same run files the run pages read; a run that finishes mid-view moves to Recent on the next poll; a failed run's failed jobs and error heads are shown as recorded. The old project sections are the **Overview** tab.
+- Opus review fixes: a run whose state says it is over leaves Live and the live numbers at once and shows under Recent; run and Recent spend is the run total (as the Overview tab); no redraw from elapsed time or estimates (elapsed time ticks in the page), a tab change no longer traps the Back button, a failed load says why, fetches time out, heads exist only for counted jobs, lanes and heads are capped, a paused run makes the ETA unknown.
+- Tests: `tests/board-live.test.mjs` (two or more runs, one finishing mid-view, a failed run, the empty state, hostile names, caps, the route, the page).
+
 ## 1.131.0
 
 The per-run Watch page (`swarm watch RUN`) is restyled to match the board (`docs/design/swarm-watch-design-system.md`).

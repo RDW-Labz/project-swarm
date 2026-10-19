@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.0 },
+  "jobs": [
+    {
+      "id": "review-watch-live",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner standing rule: an Opus review on every PR",
+      "type": "review",
+      "prompt": "Review coordination/review/watch-live.diff: the Live tab of the Swarm Watch project page. A new read-only route /api/live (tools/board-live.mjs combines every live run of ONE project from the same run files the run pages read) and a browser module project-live.js that renders heads, a combined swarm map, stats, live runs and recent runs. Promises: read-only, token-protected, a project is found by registry id and never by a path from the page, worker-written text only through textContent, real events only (no invented ticket, state or progress), a run finishing mid-view moves to Recent, a failed run shows its failed jobs and error heads as recorded, head cap and reduced motion as the board. Look hard for: (1) wrong numbers when runs are combined (ETA, first-try rate, retries, merge counts, spend today vs billed lanes, runs counted live when finished or paused, double counting), (2) hostile run files (a job or lane named __proto__, null jobs, huge job lists, ids with markup) reaching the DOM or Object.prototype, (3) the module: heads leaked or left animating after a lane or agent disappears, polling that overlaps or runs while hidden, hash and tab handling, keyboard and screen reader behaviour, links built from data (the /open/run href), (4) the empty state when the data is missing or the fetch fails, (5) phone layout and 44px targets, (6) test gaps. Real findings only, ranked, file and line, concrete input.",
+      "context": [
+        "tools/board-live.mjs",
+        "tools/watch-assets/project-live.js",
+        "tools/watch-assets/project.html",
+        "tools/watch-assets/project.js",
+        "tools/watch-assets/board-lib.js",
+        "tools/watch-state.mjs",
+        "tools/board-data.mjs",
+        "tests/board-live.test.mjs",
+        "coordination/review/watch-live.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}

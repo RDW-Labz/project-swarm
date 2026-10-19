@@ -199,7 +199,7 @@ export function createWatchServer(opts) {
     const isBoard = pathname === '/board' && typeof getBoard === 'function';
     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
     // The remote board only reads: it never starts a run's own page on the computer ('/open/run') or a board.
-    const boardRoutes = board ? ['/api/board', '/api/project', '/api/history', '/history.csv', ...(remote ? [] : ['/open/run']), '/project', '/run', '/api/run'] : [];
+    const boardRoutes = board ? ['/api/board', '/api/project', '/api/live', '/api/history', '/history.csv', ...(remote ? [] : ['/open/run']), '/project', '/run', '/api/run'] : [];
     const isBoardRoute = boardRoutes.includes(pathname);
     // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
     const isNav = Boolean(nav) && !remote && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
@@ -230,6 +230,7 @@ export function createWatchServer(opts) {
       if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
       if (pathname === '/api/board') return sendJson(res, method, await board.snapshot(q));
       if (pathname === '/api/project') { const detail = await board.project(String(q.id ?? '')); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
+      if (pathname === '/api/live') { const live = await board.live(String(q.id ?? '')); return live ? sendJson(res, method, live) : sendText(res, method, 404, 'not found'); }
       if (pathname === '/api/history') return sendJson(res, method, await board.history(q));
       if (pathname === '/history.csv') return send(res, method, 200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="swarm-history.csv"' }, await board.historyCsv(q));
       // /open/run?id=PROJECT&run=RUN: starts the run's own Watch server (or reuses it) and sends the browser to it. The target address carries that server's own token.

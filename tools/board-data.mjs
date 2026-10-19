@@ -34,7 +34,7 @@ export function laneLabel(agent, model) {
 
 // Parsed run states are remembered by path, size and modification time: a poll costs one stat per run, and a run that finished is read once.
 const stateCache = new Map();
-async function readRunStates(root, { limit = 5000 } = {}) {
+export async function readRunStates(root, { limit = 5000 } = {}) {
   const dir = path.join(root, '.swarm', 'runs');
   let ids = [];
   try { ids = (await fs.readdir(dir)).filter(id => RUN_ID.test(id)).sort().slice(-limit); } catch { return []; }
