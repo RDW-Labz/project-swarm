@@ -190,7 +190,7 @@ test('pull: runs the configured log command, turns its error lines into events, 
   const pulled = await pullErrors(root, { config: cfg, run, env: { PATH: '/bin', HOME: '/h', VERCEL_TOKEN: 'secret-token', AWS_SECRET_ACCESS_KEY: 'x' } });
   assert.equal(pulled.events.length, 1);
   assert.equal(seen[0].cmd, 'vercel');
-  assert.ok(seen[0].args.includes('--json') && seen[0].args.includes('level:(error OR fatal) AND environment:production'));
+  assert.ok(seen[0].args.includes('--json') && seen[0].args.includes('environment:production AND (level:(error OR fatal OR warning) OR stream:stderr)'));
   assert.equal(seen[0].options.cwd, root);
   assert.equal(seen[0].options.env.VERCEL_TOKEN, 'secret-token', 'the vercel CLI keeps its own login variables');
   assert.ok(!('AWS_SECRET_ACCESS_KEY' in seen[0].options.env), 'no other secret of the shell is handed to the log command');
@@ -408,4 +408,24 @@ test('review fixes, tickets: an approved ticket made from a comment or an error 
     assert.ok(!report.errors.some(e => e.code === 'untraced'), `${origin}: not untraced`);
   }
   assert.ok(checkTicketTree({ scope, tickets: [traced, { ...base, id: 'T-0003', title: 'n', scopeRefs: [] }] }).errors.some(e => e.code === 'untraced'), 'an ordinary ticket with no requirement still is');
+});
+
+test('the real vercel log shape ({type:"log", data:{...}} plus a summary line): stderr errors that Vercel calls warn count, plain warnings and the app\'s own info lines do not, an app JSON error inside the message counts', () => {
+  const log = (data, extra = {}) => JSON.stringify({ type: 'log', data: { level: 'info', message: '', stream: 'stdout', timestamp: new Date(NOW).toISOString(), requestPath: '/', requestId: 'r1', deploymentId: 'dpl_x', environment: 'production', isSystemLog: false, ...data }, ...extra });
+  const summary = JSON.stringify({ type: 'summary', recordsReturned: 3, timeRange: {}, pagination: {}, excludedIntervals: [] });
+  assert.equal(parseVercelLine(summary), null);
+  assert.equal(parseVercelLine(JSON.stringify({ recordsReturned: 2, timeRange: {} })), null, 'a summary without its type is still not an event');
+  const stderrError = parseVercelLine(log({ level: 'warn', stream: 'stderr', message: 'Error: The Server Reference ID did not match the expected format. Received "y".' }));
+  assert.equal(normalizeEvent(stderrError, { now: NOW }).kind, 'Error');
+  assert.equal(parseVercelLine(log({ level: 'warn', stream: 'stderr', message: 'DeprecationWarning: something is old' })), null, 'a plain warning is not an error');
+  assert.equal(parseVercelLine(log({ level: 'warn', stream: 'stdout', message: 'Error: printed to stdout as a warning' })), null);
+  assert.equal(parseVercelLine(log({ level: 'info', message: JSON.stringify({ at: 'x', level: 'info', event: 'request_saved' }) })), null, 'the app\'s own info line');
+  assert.equal(parseVercelLine(log({ level: 'warn', stream: 'stderr', message: JSON.stringify({ level: 'info', event: 'tick', error: 'Error: noise' }) })), null, 'the level inside the message decides');
+  const inner = parseVercelLine(log({ level: 'info', message: JSON.stringify({ level: 'error', event: 'payment_failed', error: { message: 'StripeError: card_declined for jane@x.io' } }) }));
+  const e = normalizeEvent(inner, { now: NOW });
+  assert.equal(e.kind, 'StripeError');
+  assert.ok(!e.message.includes('jane@'));
+  const fatal = parseVercelLine(log({ level: 'fatal', message: 'out of memory' }));
+  assert.equal(normalizeEvent(fatal, { now: NOW }).message, 'out of memory');
+  assert.equal(normalizeEvent(parseVercelLine(log({ level: 'error', message: 'Error: x' })), { now: NOW }).at, NOW, 'an ISO string timestamp is read');
 });
