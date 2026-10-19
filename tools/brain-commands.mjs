@@ -102,7 +102,7 @@ const oneLine = text => sanitizeText(String(text)).replace(/\s+/g, ' ').trim();
 
 async function readProjectFile(root, profile, relative, { max = MAX_FILE } = {}) {
   const clean = path.posix.normalize(String(relative).split(path.sep).join('/'));
-  if (path.isAbsolute(clean) || clean.startsWith('..') || SECRET_PATH.test(clean) || protectedPathHit(profile, clean)) throw new Error(`brain-path-refused: ${oneLine(relative)} is a protected or secret path`);
+  if (path.isAbsolute(clean) || clean.startsWith('..') || SECRET_PATH.test(clean) || protectedPathHit(profile, clean, { read: true })) throw new Error(`brain-path-refused: ${oneLine(relative)} is a protected or secret path`);
   const realRoot = await fs.realpath(root);
   const real = await fs.realpath(path.join(root, clean));
   if (!real.startsWith(`${realRoot}${path.sep}`)) throw new Error(`brain-path-refused: ${oneLine(relative)} resolves outside the project`);

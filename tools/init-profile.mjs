@@ -13,7 +13,7 @@ import { sanitizeText } from './journal.mjs';
 
 export const DEFAULT_PROFILE_BUDGET = Object.freeze({ maxUsd: 5, maxTokens: 2000000 });
 const STATUSES = ['green', 'red', 'skipped', 'none'];
-const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality', 'migrations', 'acceptance', 'budgets', 'errors', 'handoff'];
+const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality', 'migrations', 'acceptance', 'budgets', 'errors', 'handoff', 'readOnlyPaths'];
 const REQUIRED_KEYS = ['sensitive', 'protectedPaths', 'budget', 'baseCheck'];
 const BASE_KEYS = ['status', 'ranAt', 'head', 'checks'];
 // The pointer (profile) and the checks file decide what later runs may do and execute, so no job may rewrite them.
@@ -104,10 +104,11 @@ export function normalizeProtectedPath(value) {
   return parts.join('/') + (folder ? '/' : '');
 }
 
-export function protectedPathHit(profile, file) {
+// `read`: the file is being READ as context. Paths in `readOnlyPaths` (a starter kit's files) are refused as outputs, deletes and edits, but a worker may read them.
+export function protectedPathHit(profile, file, { read = false } = {}) {
   // APFS treats NFC and NFD spellings as one file, so both sides are compared in NFC.
   const target = path.posix.normalize(String(file).split('\\').join('/')).normalize('NFC').toLowerCase();
-  const entries = [...ALWAYS_PROTECTED, ...(profile?.protectedPaths ?? [])];
+  const entries = [...ALWAYS_PROTECTED, ...(profile?.protectedPaths ?? []), ...(read ? [] : (profile?.readOnlyPaths ?? []))];
   for (const entry of entries) {
     const key = entry.normalize('NFC').toLowerCase();
     const hit = key.endsWith('/')
@@ -131,7 +132,7 @@ export function protectedViolations(profile, jobs) {
       for (const file of files) {
         // A names-only template (.env.example) is readable even when it is a protected path: protection is against writes, and the file holds no values.
         if (kind === 'context' && typeof file === 'string' && templateReadable(profile, file)) continue;
-        const entry = typeof file === 'string' ? protectedPathHit(profile, file) : null;
+        const entry = typeof file === 'string' ? protectedPathHit(profile, file, { read: kind === 'context' }) : null;
         if (entry) out.push({ job: id, path: file, entry, kind });
       }
     }
@@ -160,6 +161,7 @@ export function validateProfile(profile) {
   out.sensitive = profile.sensitive === undefined ? true : profile.sensitive;
   if (typeof out.sensitive !== 'boolean') errors.push('profile.sensitive: must be true or false');
   out.protectedPaths = validatePaths(profile.protectedPaths, errors);
+  if (profile.readOnlyPaths !== undefined) out.readOnlyPaths = validatePaths(profile.readOnlyPaths, errors, 'readOnlyPaths');
   out.budget = validateBudget(profile.budget, errors);
   out.baseCheck = validateBaseCheck(profile.baseCheck, errors);
   const stack = profile.stack === undefined ? null : validateStack(profile.stack, errors);
@@ -295,10 +297,10 @@ function validateContextBlock(value) {
   return { value: errors.length ? null : out, errors };
 }
 
-function validatePaths(value, errors) {
+function validatePaths(value, errors, label = 'protectedPaths') {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 100) {
-    errors.push('profile.protectedPaths: array of at most 100 entries');
+    errors.push(`profile.${label}: array of at most 100 entries`);
     return [];
   }
   const paths = [];
@@ -307,7 +309,7 @@ function validatePaths(value, errors) {
       const entry = normalizeProtectedPath(raw);
       if (!paths.includes(entry)) paths.push(entry);
     } catch (error) {
-      errors.push(`profile.protectedPaths: ${error.message}`);
+      errors.push(`profile.${label}: ${error.message}`);
     }
   }
   return paths;

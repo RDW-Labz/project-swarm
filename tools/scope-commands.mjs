@@ -6,6 +6,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
+import { appTypes, runInterview, scopeFromAnswers } from './scope-interview.mjs';
+import readline from 'node:readline';
 import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText, isSensitiveText } from './scope.mjs';
 import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS } from './tickets.mjs';
 import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
@@ -36,7 +38,8 @@ import { acceptanceLines, coverage, evaluate, reviewManifest as acceptanceManife
 import { securityReviewReason, securityReviewManifest, parseReviewVerdicts, filesHash, readReviewRecords, writeReviewRecords } from './security-review.mjs';
 
 export const SCOPE_USAGE = [
-  'Usage: swarm scope template [--out FILE]',
+  'Usage: swarm scope new [--type web-portal] [--out FILE] [--answers FILE]   (an interview that writes the scope: no model, no cost; --answers takes the same answers as JSON)',
+  '       swarm scope template [--out FILE]',
   '       swarm scope check [FILE]',
   '       swarm scope split [FILE] [--stage S1] | scope split --wire [--all] | scope split --ingest RUN [--merge] [--wire]',
   '       swarm scope approve [FILE] [--yes]',
@@ -61,7 +64,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from']);
+const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const out = (text, exitCode = 0) => ({ stdout: text.endsWith('\n') ? text : `${text}\n`, exitCode });
@@ -141,7 +144,7 @@ export function contextEnvFor(root, profile) {
   const usable = (p, allowProtected = false) => {
     if (!safe(p)) return false;
     // A names-only template (.env.example) is read-only context: allowed here, still refused as an output.
-    if (!isExampleFile(p) && (isSecretPath(p) || (!allowProtected && profile && protectedPathHit(profile, p)))) { if (!rejected.includes(p)) rejected.push(p); return false; }
+    if (!isExampleFile(p) && (isSecretPath(p) || (!allowProtected && profile && protectedPathHit(profile, p, { read: true })))) { if (!rejected.includes(p)) rejected.push(p); return false; }
     try {
       let current = root;
       for (const part of p.split('/')) { current = path.join(current, part); if (lstatSync(current).isSymbolicLink()) return false; }
@@ -558,6 +561,46 @@ async function toolConfigWarnings(root, tickets) {
     return value;
   };
   return [...lines, ...e2eSpecWarnings(tickets, { scriptsFor })];
+}
+
+// A terminal question and answer: Enter is an empty answer, the end of the input is null.
+function terminalAsk() {
+  if (!process.stdin.isTTY) return null;
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  let closed = false;
+  rl.on('close', () => { closed = true; });
+  const ask = question => new Promise(resolve => { if (closed) return resolve(null); const onClose = () => resolve(null); rl.once('close', onClose); rl.question(`${question}\n> `, answer => { rl.off('close', onClose); resolve(answer); }); });
+  ask.close = () => rl.close();
+  return ask;
+}
+
+// swarm scope new: the interview (or --answers FILE) writes the scope file. No model, no cost. A file that exists is never overwritten.
+async function cmdNew(root, { flags }, deps = {}) {
+  const type = typeof flags.type === 'string' ? flags.type : 'web-portal';
+  if (!appTypes().includes(type)) return bad(`unknown app type "${type}" (known: ${appTypes().join(', ')})`);
+  const file = typeof flags.out === 'string' ? flags.out : DEFAULT_SCOPE_FILE;
+  const target = resolveInside(root, file);
+  if (await fs.lstat(target).then(() => true, () => false)) return out(`${file} already exists; not overwritten (use --out for another name)`, 1);
+  let raw, close = null;
+  if (typeof flags.answers === 'string') {
+    try { raw = JSON.parse(await fs.readFile(resolveInside(root, flags.answers), 'utf8')); } catch { return out(`could not read the answers file ${flags.answers} (JSON with name, summary, roles, features, ...)`, 1); }
+  } else {
+    const ask = deps.ask ?? terminalAsk();
+    if (!ask) return out('swarm scope new asks questions in a terminal. In a script, give the answers with --answers FILE (JSON: name, summary, roles, features[{text, accept[]}], payments, email, uploads, other, sensitive, outOfScope).', 1);
+    close = ask.close ?? null;
+    try { raw = await runInterview(ask, type); } finally { close?.(); }
+    if (raw === null) return out('The input ended before the interview finished; nothing was written.', 1);
+  }
+  const built = scopeFromAnswers(raw, type);
+  if (!built.ok) {
+    // Keep what was typed, so fixing one line does not mean answering everything again.
+    const saved = '.swarm/project/scope-answers.json';
+    try { const dir = await safeWritableDir(root, ['.swarm', 'project']); await fs.writeFile(path.join(dir, 'scope-answers.json'), `${JSON.stringify(raw, null, 2)}\n`); } catch { /* the message below still says what to fix */ }
+    return out(`The scope was not written:\n${built.errors.map(e => `  - ${e}`).join('\n')}\nYour answers are kept in ${saved}: fix them there and run swarm scope new --answers ${saved}`, 1);
+  }
+  await writeFileSafe(root, rel(path.relative(root, target)), built.text, { exclusive: true });
+  const warns = built.findings.filter(f => f.level !== 'info');
+  return out([`wrote ${file}: ${built.requirements} requirement(s)`, ...warns.map(f => `  ${f.level} ${f.code}${f.id ? ` ${f.id}` : ''}: ${f.message} -> ${f.fix}`), 'Read it, then: swarm scope check, swarm scope split, swarm scope approve --yes.'].join('\n'));
 }
 
 async function cmdTemplate(root, { flags }) {
@@ -1673,6 +1716,7 @@ export async function runScopeCommand(root, command, args, deps = {}) {
     if (command === 'change') return await cmdChange(root, parsed);
     const [verb, ...more] = args;
     const sub = parseArgs(more);
+    if (verb === 'new') return await cmdNew(root, sub, deps);
     if (verb === 'template') return await cmdTemplate(root, sub);
     if (verb === 'check') return await cmdCheck(root, sub);
     if (verb === 'split') return await cmdSplit(root, sub);

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.0 },
+  "jobs": [
+    {
+      "id": "review-kit-interview",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner standing rule: an Opus review on every PR; this copies files from a source the owner names into a project and writes the scope",
+      "type": "review",
+      "prompt": "Review coordination/review/kit-interview.diff: swarm init with a kit option (tools/kit.mjs) and swarm scope new (tools/scope-interview.mjs, tools/scope-commands.mjs). Promises: a kit is copied into a NEW repo only, never overwriting anything, never copying secrets, dependencies, git history or symlinks, within size limits; kit.json is validated; kit-owned files become protected paths in the profile; Day 0 services become inbox tasks; a git source is cloned into a temp folder that is removed and nothing from the kit is run; the scope interview uses no model and spends nothing, answers cannot inject headings or requirements into the scope file, and a scope file is never overwritten. Look hard for: (1) path traversal or writes outside the project through kit.json paths, file names in the kit, placeholders, symlinks (including a symlinked folder, a symlink swapped in during the copy, a .gitignore that is a link), (2) the copy leaving a partial project behind on failure and what that means for a rerun, (3) the git clone: option injection through the source (a source starting with a dash, ext:: or file:: helpers, hooks or filters running on clone, submodules), (4) prompt or scope injection through interview answers (markdown, a name containing a path, an unusual Unicode line separator that is not flattened, the project name used in package.json and in replaced text), (5) protected path entries for paths with odd characters and what protectedPaths means for later tickets, (6) the init flag handling (flags that need a value, a kit flag given twice, interaction with check mode), (7) test gaps. Real findings only, ranked, file and line, concrete input.",
+      "context": ["tools/kit.mjs", "tools/scope-interview.mjs", "tools/scope-commands.mjs", "tools/init-profile.mjs", "tests/kit-and-interview.test.mjs", "coordination/review/kit-interview.diff"],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}
