@@ -75,7 +75,7 @@ export const COMMANDS = [
   command('ticket', 'Run a ticket through the pipeline.', 'manifest', '--pr --check --repo --branch --commit-message --require-section --resume --wait-required-only'),
   command('scaffold', 'Write a job or PR manifest.', 'none', '--id --agent --model --tier --context --outputs --command --prompt-file --ticket --out --from --title --repo'),
   command('brief', 'Print a short briefing so any agent can take over.', 'none', '--json'),
-  command('handoff', 'Print a paste-ready handoff message for another agent.', 'none', '--to'),
+  command('handoff', 'Hand off to another agent (--to), or write the client handoff docs: generate, check, status, final.', 'none', '--to --stage --max-usd --yes --dry-run --url --propose'),
   command('checkpoint', 'Save a snapshot of the project state.', 'none', '--quiet'),
   command('inbox', 'List what is waiting on you, most-blocking first.', 'none', '--json --all'),
   command('done', 'Mark a human item done.', 'none'),

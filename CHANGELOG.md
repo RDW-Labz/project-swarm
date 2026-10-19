@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.134.0
+
+Handoff docs (`docs/handoff.md`): `swarm handoff generate --stage S3 [--max-usd N] [--yes] [--dry-run]`, `check --url PREVIEW [--propose]`, `status`, `final` (`handoff --to AGENT` is unchanged).
+- `generate` states the worst case and the cap first (default $2.00, at most $20; `--dry-run` writes and spends nothing; without `--yes` it asks, and with no terminal it refuses). The runbook is built from the new `profile.handoff` block with no model (deploy, roll back, rotate keys, logs, contacts); a missing fact is written as `TODO (owner)`. The two guides are written by two mid-tier workers in a normal manifest (`coordination/manifests/handoff-SN.json`) from the approved scope, screens and external services (never ticket titles), then integrated. Screenshots from the gallery are copied to `docs/handoff/img/`.
+- Every guide step that names a screen, address or visible text carries `<!-- check: route=/x text="..." -->`; `check` fetches each route on a preview (https, no credentials; the same host; scripts and styles do not count as text) and, with `--propose`, files one proposed ticket per failing step (new proposal origin `handoff`: it never runs before you approve it).
+- `final` needs all three files, no `TODO (owner)`, a check after the last generate, and no failed step.
+- Opus review fixes: a failing step's ticket has fixed acceptance text and a plain route of at most 100 characters (what the guide said is only in notes, shown to a worker fenced as untrusted); redirects are followed by hand, same protocol and host, at most 5 hops, and a body is read to 2 MB at most; check text in comments, noscript, title or an unclosed script does not count and entities are decoded; `final` is tied to a hash of the checked guides and to a generate followed by a check, and a generate that starts clears an earlier final; `TODO (owner)` is found in any spelling; guides' output is limited to 8,000 tokens each and the plan says when the worst case is above the cap; previewUrl needs previewHosts, IP addresses and `*.com` are not hosts, and a command word may not hold a pipe, semicolon, ampersand, dollar, backtick or angle bracket; a cancelled proposal is not filed again.
+- Tests: `tests/handoff.test.mjs` (26, with a pretend swarm). Not run for real: a live generation (it spends model money; run it when you choose).
+
+
+
 ## 1.133.0
 
 The installed `swarm` command: `--version`, a real `swarm update`, and a test that runs it from PATH.

@@ -398,7 +398,7 @@ test('review fixes, digest and pull: a digest uses when events were pulled, a st
 
 test('review fixes, tickets: an approved ticket made from a comment or an error is not "untraced" at scope approval, and proposals made from outside text share one rule', async () => {
   const { PROPOSAL_ORIGINS } = await import('../tools/tickets.mjs');
-  assert.deepEqual([...PROPOSAL_ORIGINS].sort(), ['comment', 'error']);
+  assert.deepEqual([...PROPOSAL_ORIGINS].sort(), ['comment', 'error', 'handoff']);
   const { checkTicketTree } = await import('../tools/scope-integrity.mjs');
   const scope = { requirements: [{ id: 'R-001', stage: 'S1', title: 'x', acceptance: ['y'] }], stages: [{ id: 'S1', title: 'Core' }] };
   const base = { type: 'build', epic: 'E', acceptance: ['ok'], files: ['src/a.ts'], context: [], contracts: [], dependsOn: [], size: 'S', risk: 'low', sensitive: false, stage: 'S1', status: 'todo' };
