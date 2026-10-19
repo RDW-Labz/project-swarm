@@ -145,6 +145,7 @@ export async function buildRecord(root, { name, source = 'recorded', charged, ch
     id: slug(name), name: clean(name, 80), source, recordedAt: new Date(now()).toISOString(),
     ...traits, tickets: tickets || null,
     billedUsd: runs.length ? round(cost.paidUsd, 4) : null, flatRateListUsd: runs.length ? round(cost.flatRateListUsd, 4) : null,
+    estimatedFullUsd: runs.length ? round(cost.paidUsd + cost.flatRateListUsd, 4) : null,
     gpuHours: gpuHours !== undefined ? gpuHours : (rentalHours || null),
     ownerHours: time.entries.length ? time.total : null,
     changeOrders: changeOrders ?? null,
@@ -179,11 +180,15 @@ export function rangeOf(values) {
   return { low: quantile(v, 0.25), high: quantile(v, 0.75), n: v.length, single: false };
 }
 
+// What the work would cost at list prices: billed plus the list value of subscription lanes (a quote must not pretend flat-rate work was free).
+export const estimatedFull = r => (typeof r.estimatedFullUsd === 'number' ? r.estimatedFullUsd : typeof r.billedUsd === 'number' && typeof r.flatRateListUsd === 'number' ? r.billedUsd + r.flatRateListUsd : null);
+
 export function buildQuote({ traits, records, config, k = 5 }) {
   const ranked = records.map(r => ({ r, d: distance(traits, r) })).filter(x => x.d !== null).sort((a, b) => a.d - b.d || a.r.id.localeCompare(b.r.id));
   const similar = ranked.filter(x => x.d <= MAX_DISTANCE).slice(0, k);
   const items = similar.map(x => x.r);
-  const cost = rangeOf(items.map(r => r.billedUsd));
+  const cost = rangeOf(items.map(estimatedFull));
+  const billed = rangeOf(items.map(r => r.billedUsd));
   const hours = rangeOf(items.map(r => r.ownerHours));
   const days = rangeOf(items.map(r => r.calendarDays));
   const gpu = rangeOf(items.map(r => r.gpuHours));
@@ -193,12 +198,12 @@ export function buildQuote({ traits, records, config, k = 5 }) {
     const backfilled = items.filter(r => r.source === 'backfill').length;
     const thin = Math.min(...[cost, hours].filter(Boolean).map(r => r.n));
     if (similar.length < 3) { confidence = 'low'; why = `only ${similar.length} similar finished project${similar.length === 1 ? '' : 's'}`; }
-    else if (thin < 3) { confidence = 'low'; why = `${similar.length} similar projects, but only ${thin} have ${cost && hours && cost.n === thin && hours.n === thin ? 'cost and hours' : hours && hours.n === thin ? 'owner hours' : 'a billed cost'} recorded`; }
+    else if (thin < 3) { confidence = 'low'; why = `${similar.length} similar projects, but only ${thin} have ${cost && hours && cost.n === thin && hours.n === thin ? 'cost and hours' : hours && hours.n === thin ? 'owner hours' : 'an estimated cost'} recorded`; }
     else if (similar.length >= 5 && medianD < 0.35) { confidence = 'high'; why = `${similar.length} similar projects, close in size`; }
     else { confidence = 'medium'; why = `${similar.length} similar projects${medianD >= 0.35 ? ', but not close in size' : ''}`; }
     if (backfilled) why += `; ${backfilled} backfilled from earlier work, not recorded as they happened`;
     if (!hours) why += '; none of them has owner hours logged';
-    if (!cost) why += '; none of them has a billed cost recorded';
+    if (!cost) why += '; none of them has a cost recorded';
   }
   let price = null;
   const priceBlank = config.hourlyRate === null || config.margin === null;
@@ -206,7 +211,7 @@ export function buildQuote({ traits, records, config, k = 5 }) {
     const at = (c, h) => round((c + h * config.hourlyRate) / (1 - config.margin), 0);
     price = { low: at(cost.low, hours.low), high: at(cost.high, hours.high) };
   }
-  return { traits, confidence, why, similar: similar.map(x => ({ name: x.r.name, source: x.r.source, distance: round(x.d, 2) })), cost, hours, days, gpu, price, priceBlank };
+  return { traits, billed, confidence, why, similar: similar.map(x => ({ name: x.r.name, source: x.r.source, distance: round(x.d, 2) })), cost, hours, days, gpu, price, priceBlank };
 }
 
 const usd = v => `$${v >= 100 ? Math.round(v) : round(v, 2)}`;
@@ -219,7 +224,8 @@ export function renderQuote(q) {
   return [
     `Scope size: ${t}`,
     `Similar finished projects: ${q.similar.map(s => `${s.name}${s.source === 'backfill' ? ' (backfilled)' : ''}`).join(', ')}`,
-    `Model cost (billed):  ${span(q.cost, usd)}`,
+    `Model cost (estimated full, list prices): ${span(q.cost, usd)}`,
+    `  of which billed:    ${span(q.billed, usd)} (the rest is subscription lanes, not charged per use)`,
     `Calendar time:        ${span(q.days, plain, ' days')}`,
     `Your hours:           ${span(q.hours, plain, ' hours')}`,
     ...(q.gpu ? [`Rented GPU:          ${span(q.gpu, plain, ' hours')}`] : []),

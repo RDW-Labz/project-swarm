@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.121.0
+
+Quotes count subscription work: a quote's cost is the ESTIMATED FULL cost (billed plus the list value of flat-rate Codex/Cursor/Claude lanes), shown apart from what was billed (`docs/quotes.md`). `swarm quote record` keeps `estimatedFullUsd`; `swarm quote list` and `swarm quote SCOPE.md` show both; the price starts from the full cost. A record that cannot say its full cost gives no cost number. parts-request-app re-recorded: $26.77 full, $1.96 billed.
+
 ## 1.120.0
 
 Phase 19, part 3: quotes as ranges (`docs/quotes.md`).
