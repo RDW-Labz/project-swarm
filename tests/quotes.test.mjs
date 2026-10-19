@@ -26,7 +26,7 @@ test('hours: logged one entry at a time, validated, listed with a total, bad lin
   assert.equal(t2.skipped, 2);
   const list = await runTimeCommand(root, ['list']);
   assert.match(list.stdout, /2\.5 h  wiring the cart/);
-  assert.match(list.stdout, /total 3\.5 hours \(2 unreadable/);
+  assert.match(list.stdout, /entered 3\.5 hours \(2 unreadable/);
 });
 
 test('distance and ranges: log-size distance on shared traits only; middle half with 3+, lowest to highest with 2, one point with 1, nothing with 0', () => {

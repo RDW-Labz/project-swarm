@@ -57,7 +57,7 @@ export const COMMANDS = [
   command('projects', 'The projects on this machine (listed on the Swarm Watch board): list, add, remove.', 'none', ''),
   command('history', 'The machine-wide history of projects, stages, runs, PRs, merges, lessons and spend: filter, search, CSV.', 'none', '--project --kind --q --from --to --limit --csv --backfill'),
   command('models', 'Model watch: new open coding models that fit our GPUs and new API versions, into the inbox; compare models from eval runs.', 'none', '--force --json'),
-  command('time', 'Log your own hours on this project (private; used for quotes).', 'none'),
+  command('time', 'Log your own hours on this project (private; used for quotes), and the automatic estimate.', 'none', '--date --through --days'),
   command('quote', 'Cost, time and hours ranges for a scope from similar finished projects (price blank until rate and margin are set).', 'none', '--rate --margin --name --charged --change-orders --gpu-hours --backfill'),
   command('report', 'Weekly client progress report from the scope and the ticket progress (files only, a draft you approve).', 'none', '--client --since --preview --approve --status'),
   command('errors', 'Production errors become proposed tickets: pull (vercel logs), ingest, list, show, ignore, resolve, digest.', 'none', '--dry-run --status --reason --no-write'),

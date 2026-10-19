@@ -22,10 +22,25 @@ const clean = (t, n) => String(t ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').r
 
 // ---- the owner's hours -------------------------------------------------------------------------------------------------------------------------
 
-export async function logTime(root, hours, note, { now = Date.now } = {}) {
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+export const localDay = ms => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const validDay = day => DAY_RE.test(day) && localDay(new Date(`${day}T12:00:00`).getTime()) === day;
+
+// One manual entry. `date` puts it on a past day; `through` makes it a total for every day up to that date (it replaces the estimates for those days,
+// so "5.5 hours so far" is not counted on top of the estimate). Manual entries always win over estimates for the days they cover.
+export async function logTime(root, hours, note, { now = Date.now, date, through } = {}) {
   const h = Number(hours);
-  if (!/^\d+(\.\d{1,2})?$/.test(String(hours)) || !(h >= 0.05 && h <= 24)) return { ok: false, error: 'hours must be a number from 0.05 to 24 (at most two decimals), for one entry' };
-  const entry = { at: new Date(now()).toISOString(), hours: h, note: clean(note, 200) };
+  const limit = through ? 2000 : 24;
+  if (!/^\d+(\.\d{1,2})?$/.test(String(hours)) || !(h >= 0.05 && h <= limit)) return { ok: false, error: `hours must be a number from 0.05 to ${limit} (at most two decimals), for one entry` };
+  if (date !== undefined && through !== undefined) return { ok: false, error: 'use --date or --through, not both' };
+  const today = localDay(now());
+  for (const [flag, value] of [['--date', date], ['--through', through]]) {
+    if (value === undefined) continue;
+    if (!validDay(value)) return { ok: false, error: `${flag} must be a real date, YYYY-MM-DD` };
+    if (value > today) return { ok: false, error: `${flag} cannot be in the future` };
+    if (now() - new Date(`${value}T12:00:00`).getTime() > 400 * 86400000) return { ok: false, error: `${flag} is more than 400 days ago` };
+  }
+  const entry = { at: new Date(now()).toISOString(), hours: h, note: clean(note, 200), ...(date ? { day: date } : {}), ...(through ? { through } : {}) };
   const file = path.join(root, TIME_FILE);
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   await fs.appendFile(file, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
@@ -41,8 +56,14 @@ export async function readTime(root) {
     if (!line.trim()) continue;
     try {
       const e = JSON.parse(line);
-      if (isObj(e) && typeof e.hours === 'number' && e.hours > 0 && e.hours <= 24 && Number.isFinite(Date.parse(e.at))) entries.push({ at: e.at, hours: e.hours, note: clean(e.note, 200) });
-      else skipped += 1;
+      const okDay = v => v === undefined || (typeof v === 'string' && validDay(v));
+      const cap = e?.through !== undefined ? 2000 : 24;
+      if (isObj(e) && typeof e.hours === 'number' && e.hours > 0 && e.hours <= cap && Number.isFinite(Date.parse(e.at)) && okDay(e.day) && okDay(e.through)) {
+        const entry = { at: e.at, hours: e.hours, note: clean(e.note, 200) };
+        if (e.day) entry.day = e.day;
+        if (e.through) entry.through = e.through;
+        entries.push(entry);
+      } else skipped += 1;
     } catch { skipped += 1; }
   }
   return { entries, total: round(entries.reduce((s, e) => s + e.hours, 0)), skipped };
@@ -131,7 +152,7 @@ export function traitsOf(scope) {
   };
 }
 
-export async function buildRecord(root, { name, source = 'recorded', charged, changeOrders, gpuHours, now = Date.now } = {}) {
+export async function buildRecord(root, { name, source = 'recorded', charged, changeOrders, gpuHours, now = Date.now, activity } = {}) {
   const ledger = await readLedger(root).catch(() => null);
   const text = await scopeText(root, ledger);
   const traits = text === null ? { requirements: null, stages: null, screens: null, services: null } : traitsOf(parseScope(text));
@@ -139,7 +160,8 @@ export async function buildRecord(root, { name, source = 'recorded', charged, ch
   const runs = await readRuns(root);
   const cost = costOf(runs, now());
   const times = runs.flatMap(r => [Date.parse(r.state.startedAt ?? ''), Date.parse(r.state.finishedAt ?? '')]).filter(Number.isFinite);
-  const time = await readTime(root);
+  const { ownerHoursOf } = await import('./time-auto.mjs');
+  const hours = await ownerHoursOf(root, activity);
   const rentalHours = runs.reduce((s, r) => s + (num(r.state.rental?.hours) ?? 0), 0);
   return {
     id: slug(name), name: clean(name, 80), source, recordedAt: new Date(now()).toISOString(),
@@ -147,7 +169,8 @@ export async function buildRecord(root, { name, source = 'recorded', charged, ch
     billedUsd: runs.length ? round(cost.paidUsd, 4) : null, flatRateListUsd: runs.length ? round(cost.flatRateListUsd, 4) : null,
     estimatedFullUsd: runs.length ? round(cost.paidUsd + cost.flatRateListUsd, 4) : null,
     gpuHours: gpuHours !== undefined ? gpuHours : (rentalHours || null),
-    ownerHours: time.entries.length ? time.total : null,
+    ownerHours: hours.entries || hours.activity ? hours.total : null,
+    ownerHoursEstimated: hours.entries || hours.activity ? hours.estimatedPart : null,
     changeOrders: changeOrders ?? null,
     calendarDays: times.length > 1 ? Math.max(1, Math.ceil((Math.max(...times) - Math.min(...times)) / 86400000)) : null,
     chargedUsd: charged ?? null,
