@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1.0
+  },
+  "jobs": [
+    {
+      "id": "review-phone",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "a remote control for a machine that spends money and edits code: a hole here lets a stranger act as the owner",
+      "type": "review",
+      "prompt": "Review coordination/review/phone.diff (Phase 19 part 4: tools/phone.mjs, tools/phone-commands.mjs, wiring). The design: inbox decisions and proposed tickets become issues in one PRIVATE GitHub repo; the owner answers by commenting from the GitHub mobile app; swarm phone sync reads comments with the gh login. Promises: a comment counts only from the owner's own login, on an issue this tool made (recorded locally, never trusted from the issue), once, within 24 hours, unedited, one plain word that this issue offered; the phone can only choose a listed option, approve a proposed ticket that names files, decline, or stop all; it can NEVER merge, deploy, raise a spend cap, apply an override or accept unmet acceptance; borderline items and the panic button need a second one-time word; issue text is sanitised. Look hard for: (1) ways a non-owner or a stale/edited/forged comment triggers an action (login case tricks, bots, organisation members, comment from a deleted user (null user), updated_at checks, comments created before the issue but listed later, pagination beyond 100 comments hiding or reordering, comment ids reused, a comment arriving between the first and second step), (2) double execution or lost state (crash between marking answered and running, concurrent syncs (two processes), state file corruption or being rewritten by a second sync, secondStep decisions where the confirming word is guessed, wrong-word counting, word expiry vs issue expiry, Math/random: the word uses randomInt of a tiny list (about thirteen thousand combinations): is that enough with 3 tries, 1 hour and the comment visible only to the owner? what if the issue is visible to others), (3) injection: titles, options, file names or project names flowing into the issue body, the gh command arguments, the swarm command arguments (an option that begins with a dash passed to decide; a ticket id or decision id taken from untrusted text; itemId is clean()ed: can it still carry flags or path tricks), body markup, mentions (@user notifications), links, (4) things that could escalate: the decide command queues a goal when the choice changed (addGoal): does an answer from the phone therefore start work/spend? is that within 'never raise caps'? the panic runs swarm stop --all with no root: does that work from the sync process's cwd, (5) setup: public repo check races, repo name parsing, label creation, error handling with the real gh messages, (6) privacy: what is stored locally and what goes to GitHub (project names, ticket titles, file names): is anything sensitive leaving the machine, should sensitive projects be excluded, (7) test gaps. Real findings only, ranked, file:line, concrete failing scenario.",
+      "context": [
+        "tools/phone.mjs",
+        "tools/phone-commands.mjs",
+        "tests/phone.test.mjs",
+        "coordination/review/phone.diff",
+        "tools/inbox.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}

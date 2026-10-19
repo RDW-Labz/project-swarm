@@ -144,6 +144,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-18 | - | review-errors: Reviewed the Phase 19 part 1 errors diff; no files edited. Proposal gating holds in r | claude | opus | pass | 275,150 | $1.26 |
 | 2026-10-19 | - | review-client-report: complete | claude | opus | pass | 93,551 | $0.58 |
 | 2026-10-19 | - | review-quotes: Reviewed quotes.diff (quotes.mjs, quote-commands.mjs, swarm/completion wiring, tests) | claude | opus | pass | 85,088 | $0.46 |
+| 2026-10-19 | - | review-phone: Reviewed phone.diff (phone.mjs, phone-commands.mjs, tests, wiring) against inbox.mjs d | claude | opus | pass | 179,306 | $0.65 |
 
 ## Daily summary
 
@@ -157,5 +158,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-16 | claude | 1 | 0 | 1 | 46,296 | $0.42 |
 | 2026-10-16 | codex | 2 | 2 | 0 | 31,624 | subscription |
 | 2026-10-18 | claude | 14 | 14 | 0 | 6,874,167 | $13.02 |
-| 2026-10-19 | claude | 2 | 2 | 0 | 178,639 | $1.04 |
-| **total** | all | 140 | 125 | 15 | 12,228,965 | $18.99 (incl. estimates) |
+| 2026-10-19 | claude | 3 | 3 | 0 | 357,945 | $1.69 |
+| **total** | all | 141 | 126 | 15 | 12,408,271 | $19.64 (incl. estimates) |
