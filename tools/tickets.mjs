@@ -218,7 +218,8 @@ export async function logPrune(root, pruned, { cancelled, by } = {}, now = Date.
   await appendLog(root, { event: 'prune-deps', ...(cancelled ? { cancelled } : {}), ...(by ? { by } : {}), tickets: pruned.map(p => p.id) });
   const list = pruned.map(p => `${p.id} (no longer waits on ${p.removed.join(', ')})`).join('; ');
   try {
-    await appendEvent(root, { kind: 'human', id: `prune-${pruned[0].id}-${now}`, title: `FYI, no action needed: a cancelled ticket was dropped as a dependency of ${list}`, steps: [], unblocks: 0 }, { now: () => now });
+    // A note in the journal, not an inbox item: nothing here needs the owner.
+    await appendEvent(root, { kind: 'note', id: `prune-${pruned[0].id}-${now}`, text: `a cancelled ticket was dropped as a dependency of ${list}` }, { now: () => now });
   } catch { /* the note is a courtesy; the prune and its log line already happened */ }
 }
 

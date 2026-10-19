@@ -6,6 +6,8 @@
   var $ = function (id) { return document.getElementById(id); };
   var open = Object.create(null);          // lane open state the person chose, by project id
   var projects = [];
+  var showScratch = false;
+  try { showScratch = localStorage.getItem('swarm-scratch') === '1'; } catch (e) { /* the switch just starts off */ }
 
   function el(tag, cls, text) {
     var n = document.createElement(tag);
@@ -118,17 +120,25 @@
       row.appendChild(el('div', 'need-title', it.title || ''));
       if (it.choices && it.choices.length) { row.appendChild(el('div', 'board-note', 'Choices: ' + it.choices.join(', '))); }
       if (it.kind === 'proposed-ticket' && !it.filesNamed) { row.appendChild(el('div', 'board-note', 'Needs its files named before it can be approved' + (it.origin ? ' (from ' + it.origin + ')' : '') + '.')); }
-      if (it.command) {
+      if (it.next) { row.appendChild(el('div', 'need-next', it.next)); }
+      (it.commands || []).forEach(function (c) {
         var cmd = el('div', 'need-cmd');
-        cmd.appendChild(el('code', 'mono', it.command));
+        cmd.appendChild(el('span', 'need-label', c.label));
+        cmd.appendChild(el('code', 'mono', c.cmd));
         var btn = el('button', 'copy', 'Copy');
         btn.type = 'button';
-        btn.addEventListener('click', function () { if (navigator.clipboard) { navigator.clipboard.writeText(it.command).then(function () { btn.textContent = 'Copied'; }, function () {}); } });
+        btn.addEventListener('click', function () { if (navigator.clipboard) { navigator.clipboard.writeText(c.cmd).then(function () { btn.textContent = 'Copied'; }, function () {}); } });
         cmd.appendChild(btn);
         row.appendChild(cmd);
-      }
+      });
       box.appendChild(row);
     });
+    var fyi = inbox && inbox.fyi ? inbox.fyi : [];
+    var fy = $('fyi'); var fl = $('fyiList');
+    fl.textContent = '';
+    fy.hidden = !fyi.length;
+    $('fyiSummary').textContent = fyi.length + ' FYI note' + (fyi.length === 1 ? '' : 's') + ' (no action needed, not counted)';
+    fyi.forEach(function (n) { var r = el('div', 'need fyi-row'); r.appendChild(el('span', 'mono', n.project + ' | ' + ago(n.since))); r.appendChild(el('div', 'need-title', n.title || '')); fl.appendChild(r); });
     if (inbox && inbox.hidden) { box.appendChild(el('div', 'board-note', inbox.hidden + ' more not shown (the list is cut at 50 per project): swarm inbox --all')); }
     var ph = inbox && inbox.phone;
     note.textContent = 'Read-only: the board never answers anything. Run the command at your computer' + (ph ? ph.on ? ', or answer on your phone (' + ph.open + ' question' + (ph.open === 1 ? '' : 's') + ' open in ' + ph.repo + ').' : '. Phone questions are switched off.' : '. Phone answers are not set up (swarm phone setup).') + (inbox && inbox.problems && inbox.problems.length ? ' Could not read: ' + inbox.problems.map(function (p) { return p.project; }).join(', ') + '.' : '');
@@ -138,6 +148,9 @@
     renderInbox(data.inbox);
     projects = data.projects;
     $('count').textContent = projects.length + (projects.length === 1 ? ' project' : ' projects');
+    var sc = data.scratch || { hidden: 0, total: 0 };
+    $('scratchLabel').textContent = showScratch ? 'showing test/temp projects' : 'show test/temp projects' + (sc.hidden ? ' (' + sc.hidden + ' hidden)' : '');
+    $('scratch').checked = showScratch;
     $('updated').textContent = new Date().toLocaleTimeString();
     renderMachine(data.machine, projects);
     var lanes = $('lanes');
@@ -174,7 +187,7 @@
     var q = query();
     var csv = new URLSearchParams(q); csv.set('t', TOKEN);
     $('csv').href = '/history.csv?' + csv.toString();
-    var api = new URLSearchParams(q); api.set('t', TOKEN); api.set('limit', '100');
+    var api = new URLSearchParams(q); api.set('t', TOKEN); api.set('limit', '100'); if (showScratch) { api.set('scratch', '1'); csv.set('scratch', '1'); }
     fetch('/api/history?' + api.toString(), { headers: { 'x-watch-token': TOKEN } })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {
@@ -187,7 +200,7 @@
   }
 
   function poll() {
-    fetch('/api/board?t=' + T, { headers: { 'x-watch-token': TOKEN } })
+    fetch('/api/board?t=' + T + (showScratch ? '&scratch=1' : ''), { headers: { 'x-watch-token': TOKEN } })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) { if (data) { renderBoard(data); } })
       .catch(function () {});
@@ -196,6 +209,11 @@
   var debounce = null;
   $('filters').addEventListener('input', function () { clearTimeout(debounce); debounce = setTimeout(loadHistory, 300); });
   $('filters').addEventListener('submit', function (e) { e.preventDefault(); loadHistory(); });
+  $('scratch').addEventListener('change', function () {
+    showScratch = $('scratch').checked;
+    try { localStorage.setItem('swarm-scratch', showScratch ? '1' : '0'); } catch (e) { /* kept for this visit only */ }
+    poll(); loadHistory();
+  });
   poll(); loadHistory();
   setInterval(poll, 2000);
   setInterval(loadHistory, 10000);

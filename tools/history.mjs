@@ -72,11 +72,13 @@ export function appendHistory(events, { file = historyFile(), now = Date.now } =
 }
 
 // Newest first. Filters: project (name or id), kind, q (words, all must appear), from / to (dates or ISO times).
-export async function readHistory({ file = historyFile(), project, kind, q, from, to, limit = 200, offset = 0, cap = 1000 } = {}) {
+// `fold`: a pull request and its merge are one row (the merge, which links to the PR). `exclude`: project ids to leave out (test and temp projects).
+export async function readHistory({ file = historyFile(), project, kind, q, from, to, limit = 200, offset = 0, cap = 1000, fold = false, exclude } = {}) {
   const words = String(q ?? '').toLowerCase().split(/\s+/).filter(Boolean);
   const fromMs = from ? Date.parse(from) : null, toMs = to ? Date.parse(to.length === 10 ? `${to}T23:59:59.999Z` : to) : null;
   const rows = (await readAll(file)).filter(e => {
     if (project && e.project !== project && e.projectId !== project) return false;
+    if (exclude && exclude.has(e.projectId)) return false;
     if (kind && e.kind !== kind) return false;
     const t = Date.parse(e.at);
     if (fromMs !== null && Number.isFinite(fromMs) && t < fromMs) return false;
@@ -84,6 +86,10 @@ export async function readHistory({ file = historyFile(), project, kind, q, from
     if (words.length) { const hay = `${e.project} ${e.kind} ${e.title} ${e.ref ?? ''} ${e.run ?? ''}`.toLowerCase(); if (!words.every(w => hay.includes(w))) return false; }
     return true;
   }).sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+  if (fold) {
+    const merged = new Set(rows.filter(e => e.kind === 'merge' && e.ref).map(e => `${e.projectId}|${e.ref}`));
+    for (let i = rows.length - 1; i >= 0; i -= 1) if (rows[i].kind === 'pr' && rows[i].ref && merged.has(`${rows[i].projectId}|${rows[i].ref}`)) rows.splice(i, 1);
+  }
   return { total: rows.length, events: rows.slice(offset, offset + Math.min(Math.max(1, limit), cap)) };
 }
 

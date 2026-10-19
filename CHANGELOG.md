@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.128.0
+
+Board feedback (`docs/watch.md`).
+- "FYI, no action needed" notes no longer count as needing you: they are listed apart in a collapsed "FYI notes" list. At the source, dropping a dependency on a cancelled ticket now writes a journal note, not an inbox item.
+- Every blocker has a next step: a "do this" line and Copy commands. A security-gate manifest block gets "Approve that file and integrate" (`swarm integrate RUN --queue --approve-manifest FILE`), a no-scanner block says to add a lockfile or install osv-scanner, and every blocker has a dismiss command. New: `swarm resolve BLOCKER_ID` closes a blocker you dealt with (nothing could close one before); `swarm inbox` now prints it.
+- Text is cut at a word, never in the middle of one, and the board wraps it instead of cutting it.
+- History folds a pull request and its merge into one row (the CSV keeps every event).
+- Test and temp projects (under the temp directory, a `.tmp*` folder or a `.swarm` folder) are hidden from `swarm watch --all` by default, everywhere (lanes, totals, inbox, history), with a "show test/temp projects" switch and a count of what is hidden; they are no longer registered when they live in a `.tmp*` folder.
+- Tests: `tests/board-inbox.test.mjs`.
+
 ## 1.127.0
 
 A mistyped command can no longer start a paid run (`docs/plan-preview.md`).

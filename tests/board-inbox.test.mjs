@@ -50,7 +50,8 @@ test('the panel lists what waits in each project: decisions, human tasks, blocke
   assert.equal(by('T-0002').filesNamed, true);
   assert.match(by('T-0003').command, /tickets T-0003 --files FILE\[,FILE\] --yes$/);
   assert.equal(by('T-0003').filesNamed, false);
-  assert.equal(by('b-1').command, null);
+  assert.equal(by('b-1').command, `swarm --root ${w.B.root} resolve b-1`, 'a blocker can always be dismissed');
+  assert.match(by('b-1').next, /Read the message, fix the cause, then dismiss it/);
   assert.equal(inbox.items[0].id, 'h-dns', 'the item that unblocks the most comes first within a project');
 });
 
@@ -89,7 +90,8 @@ test('the text view says how many need you, with the command, and stays quiet wh
   const text = inboxText(await boardInbox({ projects: [w.A, w.B], now: NOW, phoneDirectory: w.phoneDirectory }));
   assert.match(text, /^Needs you: 5/);
   assert.match(text, /\[decision\] shop: Which logo\?  \(asked on your phone, confirming\)/);
-  assert.match(text, /at the computer: swarm --root .* decide logo blue/);
+  assert.match(text, /Choose: swarm --root .* decide logo blue/);
+  assert.match(text, /do this: Read the message/);
   assert.equal(inboxText({ total: 0, items: [] }), '');
   assert.equal(inboxText(null), '');
 });
@@ -104,7 +106,9 @@ test('the board serves it read-only behind the token: /api/board carries inbox, 
   t.after(() => server.close());
   const token = new URL(url).searchParams.get('t');
   const get = (p, headers = {}) => new Promise((resolve, reject) => http.get(new URL(p, url), { headers }, res => { let b = ''; res.on('data', d => { b += d; }); res.on('end', () => resolve({ status: res.statusCode, body: b })); }).on('error', reject));
-  const board = await get(`/api/board?t=${token}`);
+  const hiddenByDefault = await get(`/api/board?t=${token}`);
+  assert.deepEqual([JSON.parse(hiddenByDefault.body).projects.length, JSON.parse(hiddenByDefault.body).inbox.total], [0, 0], 'these projects live in the temp directory: hidden unless asked for');
+  const board = await get(`/api/board?t=${token}&scratch=1`);
   assert.equal(board.status, 200);
   const data = JSON.parse(board.body);
   assert.equal(data.inbox.total, 5);
@@ -150,4 +154,137 @@ test('review fixes: a choice that reads as a flag or holds look-alike characters
   assert.equal(by('d2').phone.status, 'expired');
   assert.deepEqual(inbox.items.map(i => i.id), ['d4', 'old', 'd3', 'd2', 'd1'], 'most blocking first, then oldest, across projects');
   assert.doesNotMatch(JSON.stringify(inbox), /\u202e/);
+});
+
+test('feedback 1: "FYI, no action needed" notes are listed apart and never counted; nothing is shown as needing you for them', async t => {
+  const home = await tmp(t);
+  const A = proj(home, 'a');
+  await fs.mkdir(path.join(A.root, '.swarm/project'), { recursive: true });
+  const collect = async () => [
+    { kind: 'human', id: 'prune-T-0184-1', title: 'FYI, no action needed: a cancelled ticket was dropped as a dependency of T-0184', steps: [], unblocks: 0, since: new Date(NOW).toISOString() },
+    { kind: 'human', id: 'other-fyi', title: 'FYI, no action needed: something else', steps: [], unblocks: 0, since: new Date(NOW).toISOString() },
+    { kind: 'human', id: 'real', title: 'Point the domain', steps: [], unblocks: 1, since: new Date(NOW).toISOString() },
+  ];
+  const inbox = await boardInbox({ projects: [A], now: NOW, collect, ledgerOf: async () => null, phoneDirectory: path.join(home, 'none') });
+  assert.deepEqual([inbox.total, inbox.items.map(i => i.id)], [1, ['real']]);
+  assert.deepEqual(inbox.fyi.map(f => f.id).sort(), ['other-fyi', 'prune-T-0184-1']);
+  assert.match(inboxText(inbox), /\(2 FYI notes not counted\)/);
+  assert.equal(inboxText(await boardInbox({ projects: [A], now: NOW, collect: async () => [collect()[0] && (await collect())[0]], ledgerOf: async () => null, phoneDirectory: path.join(home, 'none') })), '', 'only FYI notes: the text view stays quiet');
+});
+
+test('feedback 1 at the source: pruning a dependency on a cancelled ticket writes a journal note, not an inbox item', async t => {
+  const { logPrune } = await import('../tools/tickets.mjs');
+  const { readJournal, openItems } = await import('../tools/journal.mjs');
+  const root = await tmp(t);
+  await logPrune(root, [{ id: 'T-0184', removed: ['T-0183'] }], { cancelled: ['T-0183'] }, NOW);
+  const events = await readJournal(root, { limit: Infinity });
+  assert.deepEqual(events.map(e => e.kind), ['note']);
+  assert.deepEqual(openItems(events), [], 'nothing waits for the owner');
+});
+
+test('feedback 2: every blocker has a next step: a security-gate manifest block gets an approve command and a do-this line, a no-scanner block says what to install, any blocker can be dismissed with swarm resolve', async t => {
+  const home = await tmp(t);
+  const A = proj(home, 'shop');
+  const run = '1792361091514-109d277d';
+  const blockers = [
+    { kind: 'blocker', id: `security-${run}-T-0047`, title: 'Security gate blocked T-0047: high unsupported-manifest: .github/workflows/ci.yml changed: ci workflow dependencies are not parsed yet; the owner must review it' },
+    { kind: 'blocker', id: `security-${run}-T-0037`, title: 'Security gate blocked T-0037: high vulnerability: could not verify vulnerabilities: no scanner ran (needs a lockfile with npm, or pip-audit, or osv-scanner)' },
+    { kind: 'blocker', id: 'job-x', title: `Job a of run ${run} needs a person (local triage): swarm inspect ${run} --results` },
+    { kind: 'blocker', id: 'security-other', title: 'Security gate blocked T-1: high secret: a key in src/a.ts' },
+    { kind: 'blocker', id: 'plain', title: 'Something odd happened' },
+  ].map(b => ({ ...b, steps: [], unblocks: 0, since: new Date(NOW).toISOString() }));
+  const inbox = await boardInbox({ projects: [A], now: NOW, collect: async () => blockers, ledgerOf: async () => null, phoneDirectory: path.join(home, 'none') });
+  const by = id => inbox.items.find(i => i.id === id);
+  const m = by(`security-${run}-T-0047`);
+  assert.deepEqual(m.commands.map(c => c.label), ['Approve that file and integrate', 'Dismiss (you dealt with it)']);
+  assert.equal(m.commands[0].cmd, `swarm --root ${A.root} integrate ${run} --queue --approve-manifest .github/workflows/ci.yml`);
+  assert.match(m.next, /Read \.github\/workflows\/ci\.yml yourself first/);
+  assert.match(by(`security-${run}-T-0037`).next, /Add a lockfile \(run npm install/);
+  assert.match(by('job-x').commands[0].cmd, new RegExp(`inspect ${run} --results$`));
+  assert.match(by('security-other').next, /Fix what the finding names/);
+  for (const it of inbox.items) {
+    assert.ok(it.next, `${it.id} has a do-this line`);
+    assert.equal(it.commands.at(-1).cmd, `swarm --root ${A.root} resolve ${it.id}`, `${it.id} can be dismissed`);
+  }
+  assert.match(inboxText(inbox), /do this: Read \.github\/workflows\/ci\.yml/);
+});
+
+test('feedback 2: swarm resolve closes an open blocker (and only a blocker), and it leaves the inbox', async t => {
+  const { runInboxCommand } = await import('../tools/inbox-commands.mjs');
+  const root = await tmp(t);
+  await appendEvent(root, { kind: 'blocker', id: 'b-1', text: 'Stripe key missing' }, { now: () => NOW });
+  await appendEvent(root, { kind: 'human', id: 'h-1', title: 'Do a thing' }, { now: () => NOW });
+  assert.match((await runInboxCommand(root, 'inbox', [], { now: () => NOW })).stdout, /resolve b-1/);
+  assert.equal((await runInboxCommand(root, 'resolve', ['h-1'])).exitCode, 1, 'a human task is not a blocker');
+  assert.equal((await runInboxCommand(root, 'resolve', ['nope'])).exitCode, 1);
+  assert.equal((await runInboxCommand(root, 'resolve', ['--force'])).exitCode, 1);
+  assert.equal((await runInboxCommand(root, 'resolve', [])).exitCode, 1);
+  const done = await runInboxCommand(root, 'resolve', ['b-1'], { now: () => NOW });
+  assert.deepEqual([done.exitCode, done.stdout], [0, 'resolved: b-1\n']);
+  assert.doesNotMatch((await runInboxCommand(root, 'inbox', [], { now: () => NOW })).stdout, /Stripe/);
+  assert.equal((await runInboxCommand(root, 'resolve', ['b-1'])).exitCode, 1, 'already closed');
+});
+
+test('feedback 3: text is cut at a word, never in the middle of one, and the page wraps it', async t => {
+  const home = await tmp(t);
+  const A = proj(home, 'a');
+  const long = Array.from({ length: 200 }, (_, i) => `word${i}`).join(' ');
+  const inbox = await boardInbox({ projects: [A], now: NOW, collect: async () => [{ kind: 'blocker', id: 'b', title: long, steps: [], unblocks: 0, since: new Date(NOW).toISOString() }], ledgerOf: async () => null, phoneDirectory: path.join(home, 'none') });
+  const shown = inbox.items[0].title;
+  assert.ok(shown.endsWith('…') && shown.length < long.length);
+  assert.match(shown.slice(0, -1), /word\d+$/, 'ends on a whole word');
+  assert.equal(long.startsWith(shown.slice(0, -1)), true);
+  const css = await fs.readFile(path.join(assets, 'board.css'), 'utf8');
+  assert.match(css, /\.need-title[^{]*\{[^}]*overflow-wrap:break-word/);
+  assert.doesNotMatch(css.split('\n').filter(l => /need-title/.test(l)).join('\n'), /text-overflow:\s*ellipsis|overflow-wrap:anywhere/);
+});
+
+test('feedback 4: a pull request and its merge are one row (the merge); an unmerged PR stays; filtering by type still finds the PR rows', async t => {
+  const { appendHistory, readHistory } = await import('../tools/history.mjs');
+  const file = path.join(await tmp(t), 'history.ndjson');
+  const at = n => new Date(NOW - n * 60000).toISOString();
+  await appendHistory([
+    { at: at(10), project: 'p', projectId: 'p1', kind: 'pr', key: 'pr:p1:172', title: 'Pull request #172', ref: '#172', url: 'https://github.com/o/r/pull/172' },
+    { at: at(9), project: 'p', projectId: 'p1', kind: 'merge', key: 'merge:p1:172', title: 'Merged #172', ref: '#172', url: 'https://github.com/o/r/pull/172' },
+    { at: at(8), project: 'p', projectId: 'p1', kind: 'pr', key: 'pr:p1:173', title: 'Pull request #173', ref: '#173', url: 'https://github.com/o/r/pull/173' },
+    { at: at(7), project: 'q', projectId: 'p2', kind: 'pr', key: 'pr:p2:172', title: 'Pull request #172 in another project', ref: '#172' },
+    { at: at(6), project: 'q', projectId: 'p2', kind: 'merge', key: 'merge:p2:5', title: 'Merged #5', ref: '#5' },
+  ], { file, now: () => NOW });
+  const folded = await readHistory({ file, fold: true });
+  assert.deepEqual(folded.events.map(e => e.key).sort(), ['merge:p1:172', 'merge:p2:5', 'pr:p1:173', 'pr:p2:172']);
+  assert.equal(folded.total, 4);
+  assert.equal((await readHistory({ file })).total, 5, 'the raw log (and the CSV) keep every event');
+  assert.deepEqual((await readHistory({ file, fold: true, kind: 'pr' })).events.map(e => e.key).sort(), ['pr:p1:172', 'pr:p1:173', 'pr:p2:172']);
+  assert.deepEqual((await readHistory({ file, fold: true, exclude: new Set(['p2']) })).events.map(e => e.key).sort(), ['merge:p1:172', 'pr:p1:173']);
+});
+
+test('feedback 5: test and temp projects are left out by default (lanes, totals, inbox, history) with a switch to show them, and a count of what is hidden', async t => {
+  const { isScratchRoot } = await import('../tools/projects.mjs');
+  assert.equal(isScratchRoot('/Users/me/project-swarm/.tmp-test-x/field-lessons-x-Ng9Cw2'), true);
+  assert.equal(isScratchRoot('/private/var/folders/cy/x/T/board-abc'), true);
+  assert.equal(isScratchRoot('/tmp/anything'), true);
+  assert.equal(isScratchRoot('/Users/me/project-repos/parts-request-app'), false);
+  assert.equal(isScratchRoot('/Users/me/project-swarm'), false);
+  assert.equal(isScratchRoot('/Users/me/work/tmp-tools'), false, 'a folder that merely starts with tmp is a project');
+  const home = await tmp(t);
+  const real = { id: projectId('/Users/me/real-app'), name: 'real-app', root: '/Users/me/real-app' };
+  const test = { id: projectId('/Users/me/x/.tmp-test-x/field-lessons-x-Ng9Cw2'), name: 'field-lessons-x-Ng9Cw2', root: '/Users/me/x/.tmp-test-x/field-lessons-x-Ng9Cw2' };
+  const env = { ...process.env, SWARM_PROJECTS_FILE: path.join(home, 'projects.json'), SWARM_HISTORY_FILE: path.join(home, 'history.ndjson'), SWARM_PHONE_DIR: path.join(home, 'phone'), SWARM_LANES_DIR: path.join(home, 'lanes') };
+  await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({ version: 1, projects: [real, test].map(p => ({ ...p, addedAt: new Date(NOW).toISOString(), lastSeen: new Date(NOW).toISOString() })) }));
+  await fs.writeFile(env.SWARM_HISTORY_FILE, [real, test].map(p => JSON.stringify({ at: new Date(NOW).toISOString(), project: p.name, projectId: p.id, kind: 'run', key: `run:${p.id}:1`, title: `Run in ${p.name}` })).join('\n') + '\n');
+  const api = createBoardApi({ env, now: () => NOW, live: async () => [], cacheMs: 0 });
+  const hidden = await api.snapshot({});
+  assert.deepEqual(hidden.projects.map(p => p.name), ['real-app']);
+  assert.deepEqual(hidden.scratch, { shown: false, hidden: 1, total: 1 });
+  const shown = await api.snapshot({ scratch: '1' });
+  assert.deepEqual(shown.projects.map(p => p.name).sort(), ['field-lessons-x-Ng9Cw2', 'real-app']);
+  assert.deepEqual(shown.scratch, { shown: true, hidden: 0, total: 1 });
+  assert.deepEqual(Object.keys(hidden.machine.cost.byProject), [real.id], 'the totals only count what is shown, so they still add up');
+  assert.deepEqual((await api.history({})).events.map(e => e.project), ['real-app']);
+  assert.equal((await api.history({ scratch: '1' })).events.length, 2);
+  assert.doesNotMatch(await api.historyCsv({}), /field-lessons/);
+  assert.match(await api.historyCsv({ scratch: '1' }), /field-lessons/);
+  const html = await fs.readFile(path.join(assets, 'board.html'), 'utf8');
+  assert.match(html, /id="scratch"/);
+  assert.match(await fs.readFile(path.join(assets, 'board.js'), 'utf8'), /scratch=1/);
 });

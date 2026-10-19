@@ -133,14 +133,15 @@ test('eval 34.3: cancelling a ticket removes it from the dependencies of the oth
   assert.equal(isApproved(ledger), true);
   const log = await fs.readFile(path.join(second, '.swarm/project/tickets.log'), 'utf8');
   assert.match(log, /"event":"prune-deps"/);
-  // The owner is told, without being blocked: one inbox note names the affected ticket.
+  // The owner is told, without being blocked: one journal note names the affected ticket (an FYI, never an inbox item that needs them).
   const { collectInbox } = await import('../tools/inbox.mjs');
   const { inboxDeps } = await import('../tools/inbox-commands.mjs');
+  const { readJournal } = await import('../tools/journal.mjs');
   const items = await collectInbox([root], inboxDeps());
-  const note = items.find(i => /no action needed/.test(i.title));
-  assert.ok(note, 'a cancel that drops a dependency leaves an inbox note');
-  assert.match(note.title, /T-0002/);
-  assert.equal(note.unblocks, 0);
+  assert.equal(items.find(i => /no action needed/.test(i.title)), undefined, 'nothing is added to what waits for the owner');
+  const note = (await readJournal(root, { limit: Infinity })).find(e => e.kind === 'note' && /dropped as a dependency/.test(e.text));
+  assert.ok(note, 'a cancel that drops a dependency leaves a journal note');
+  assert.match(note.text, /T-0002/);
 });
 
 const runState = (root, state) => fs.mkdir(path.join(root, '.swarm/runs/r9'), { recursive: true }).then(() => fs.writeFile(path.join(root, '.swarm/runs/r9/state.json'), JSON.stringify(state)));

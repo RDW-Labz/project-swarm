@@ -2,7 +2,7 @@
 // `swarm inbox | done | decide | decision | backlog`: the owner's side of Phase 10c. Plain commands, no model.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { appendEvent, readJournal, sanitizeText } from './journal.mjs';
+import { appendEvent, readJournal, sanitizeText, openItems } from './journal.mjs';
 import { collectInbox, formatInbox, markDone, decide } from './inbox.mjs';
 import { readStore, updateGroup, groupAsState } from './human-jobs.mjs';
 import { readBacklog, addGoal, removeGoal } from './backlog.mjs';
@@ -11,6 +11,7 @@ const USAGE = {
   inbox: 'Usage: swarm inbox [--json] [--all]\n',
   done: 'Usage: swarm done ID\n',
   decide: 'Usage: swarm decide ID CHOICE\n',
+  resolve: 'Usage: swarm resolve BLOCKER_ID   (closes a blocker you have dealt with; swarm inbox shows the ids)\n',
   decision: 'Usage: swarm decision "TEXT" --choice CHOICE [--option OPTION]... [--id ID]\n',
   backlog: 'Usage: swarm backlog | backlog add "GOAL" [--paths a/,b/] [--max-usd N] | backlog remove ID\n',
 };
@@ -80,6 +81,13 @@ export async function runInboxCommand(root, command, args, { installRoot, now = 
       if (args.length !== 2) return bad(command);
       const out = await decide(root, args[0], args[1], inboxDeps({ now }));
       return { stdout: out.changed ? `decided ${out.id}: ${out.choice}; added to backlog: ${out.goal}\n` : `decided ${out.id}: ${out.choice}\n`, exitCode: 0 };
+    }
+    if (command === 'resolve') {
+      if (args.length !== 1 || args[0].startsWith('-')) return bad(command);
+      const open = openItems(await readJournal(root, { limit: Infinity })).find(event => event.kind === 'blocker' && String(event.id) === args[0]);
+      if (!open) return { stdout: `no open blocker ${sanitizeText(args[0])} in this project (swarm inbox lists them)\n`, exitCode: 1 };
+      await appendEvent(root, { kind: 'blocker', id: open.id, resolved: true, text: sanitizeText(open.text ?? '') }, { now });
+      return { stdout: `resolved: ${open.id}\n`, exitCode: 0 };
     }
     if (command === 'decision') {
       const choice = flagValues(args, '--choice');
