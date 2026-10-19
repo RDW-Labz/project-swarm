@@ -245,7 +245,7 @@ test('the board: every data route needs the token, only GET, wrong host refused;
   const projectPage = await get(port, `/project?id=${A.id}&t=${token}`);
   assert.equal(projectPage.status, 200);
   assert.match(projectPage.body, /assets\/project\.js/);
-  const data = JSON.parse((await get(port, `/api/board?t=${token}`)).body);
+  const data = JSON.parse((await get(port, `/api/board?scratch=1&t=${token}`)).body);
   assert.equal(data.projects.length, 2);
   assert.equal(data.machine.agents.total, 2);
   assert.equal((await get(port, `/api/project?id=${A.id}&t=${token}`)).status, 200);
@@ -283,14 +283,14 @@ test('the board: every data route needs the token, only GET, wrong host refused;
 test('the board: history search, filters and CSV over HTTP, and history survives a restart of the server', async t => {
   const ctx = await twoProjects(t);
   const first = await boardServer(t, ctx);
-  const all = JSON.parse((await get(first.port, `/api/history?t=${first.token}`)).body);
+  const all = JSON.parse((await get(first.port, `/api/history?scratch=1&t=${first.token}`)).body);
   assert.ok(all.total >= 6);
-  const onlyB = JSON.parse((await get(first.port, `/api/history?project=${ctx.B.id}&t=${first.token}`)).body);
+  const onlyB = JSON.parse((await get(first.port, `/api/history?scratch=1&project=${ctx.B.id}&t=${first.token}`)).body);
   assert.ok(onlyB.events.length > 0 && onlyB.events.every(e => e.projectId === ctx.B.id), 'filtered by project');
-  const stages = JSON.parse((await get(first.port, `/api/history?kind=stage&t=${first.token}`)).body);
+  const stages = JSON.parse((await get(first.port, `/api/history?scratch=1&kind=stage&t=${first.token}`)).body);
   assert.ok(stages.events.every(e => e.kind === 'stage'));
-  assert.equal(JSON.parse((await get(first.port, `/api/history?q=run-old&t=${first.token}`)).body).events.every(e => /run-old/.test(`${e.title} ${e.run}`)), true);
-  const csv = await get(first.port, `/history.csv?kind=stage&t=${first.token}`);
+  assert.equal(JSON.parse((await get(first.port, `/api/history?scratch=1&q=run-old&t=${first.token}`)).body).events.every(e => /run-old/.test(`${e.title} ${e.run}`)), true);
+  const csv = await get(first.port, `/history.csv?scratch=1&kind=stage&t=${first.token}`);
   assert.match(csv.headers['content-type'], /text\/csv/);
   assert.match(csv.headers['content-disposition'], /attachment/);
   assert.match(csv.body, /^at,project,kind,title,ref,run,usd,url\n/);
@@ -298,7 +298,7 @@ test('the board: history search, filters and CSV over HTTP, and history survives
   // restart: a new server over the same files shows the same history
   await first.server.close(); await first.api.close();
   const second = await boardServer(t, ctx);
-  const again = JSON.parse((await get(second.port, `/api/history?t=${second.token}`)).body);
+  const again = JSON.parse((await get(second.port, `/api/history?scratch=1&t=${second.token}`)).body);
   assert.equal(again.total, all.total, 'nothing lost, nothing doubled by the restart');
 });
 

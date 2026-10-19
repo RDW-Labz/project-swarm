@@ -31,7 +31,12 @@
 
 .need{border:1px solid rgba(128,128,128,.3);border-left:4px solid #d9a400;border-radius:10px;padding:10px 12px;display:grid;gap:6px}
 .need-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.need-title{overflow-wrap:anywhere}
+.need-title,.need-next,.board-entry>span,.board-lane .name{overflow-wrap:break-word;word-break:normal;white-space:normal;min-width:0}
+.need-next{opacity:.9;border-left:3px solid rgba(128,128,128,.4);padding-left:8px}
+.need-label{font-size:12px;opacity:.8}
+.fyi{margin-top:10px}.fyi>summary{cursor:pointer;opacity:.75}
+.fyi-row{border-left-color:rgba(128,128,128,.4);opacity:.85}
+.scratch-toggle{display:inline-flex;gap:6px;align-items:center;cursor:pointer}
 .need-cmd{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .need-cmd code{padding:3px 6px;border-radius:6px;background:rgba(128,128,128,.15);overflow-wrap:anywhere}
 .chip.needs-some{background:#d9a400;color:#111}

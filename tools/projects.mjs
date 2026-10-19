@@ -50,8 +50,17 @@ async function write(file, projects) {
 // Scratch places: the temp directory (as the OS and as /private/tmp), and anything inside a .swarm folder (worker copies, worktrees).
 const inTmp = async real => {
   const bases = new Set([path.resolve(os.tmpdir()), await fs.realpath(os.tmpdir()).catch(() => null), '/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp'].filter(Boolean));
-  return [...bases].some(tmp => real === tmp || real.startsWith(tmp + path.sep)) || real.split(path.sep).includes('.swarm');
+  return [...bases].some(tmp => real === tmp || real.startsWith(tmp + path.sep)) || real.split(path.sep).includes('.swarm') || real.split(path.sep).some(p => p.startsWith('.tmp'));
 };
+
+// A test or temp project, by its path alone (no disk access): inside the temp directory, a hidden .tmp* folder (the tests' scratch base), or a .swarm folder.
+// The board hides these by default (with a switch to show them).
+export function isScratchRoot(root, { tmpdir = os.tmpdir() } = {}) {
+  const real = String(root);
+  const parts = real.split(path.sep);
+  const bases = [path.resolve(tmpdir), '/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp', '/private/var/folders', '/var/folders'];
+  return bases.some(b => real === b || real.startsWith(b + path.sep)) || parts.includes('.swarm') || parts.some(p => p.startsWith('.tmp'));
+}
 
 // Adds the project (or refreshes its lastSeen). Returns { project, added } or null when the folder is not a project to list.
 export function registerProject(root, { file = projectsFile(), env = process.env, now = Date.now, name } = {}) {

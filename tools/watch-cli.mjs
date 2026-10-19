@@ -18,7 +18,7 @@ import { buildCommandList, contextCommands } from './watch-command-meta.mjs';
 import { COMMANDS } from './completion.mjs';
 import { readLedger } from './tickets.mjs';
 import { boardSummary, listLiveRuns } from './board.mjs';
-import { listProjects, projectsFile, projectId } from './projects.mjs';
+import { listProjects, projectsFile, projectId, isScratchRoot } from './projects.mjs';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { readHistory, historyCsv, historyFile } from './history.mjs';
@@ -271,23 +271,30 @@ const BOARD_RUN_IDLE_MS = 10 * 60 * 1000;
 export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000 } = {}) {
   const watchers = new Map();                // `${projectId}/${runId}` -> { server, url, closed }
   let boardUrl = null;
-  let cached = null;
+  const cachedBy = new Map();                // by whether test/temp projects are shown
+  const showsScratch = q => q?.scratch === '1' || q?.scratch === true;
+  const scratchIds = async () => new Set((await listProjects({ file: projectsFile(env) })).filter(p => isScratchRoot(p.root)).map(p => p.id));
   const find = async id => (await listProjects({ file: projectsFile(env) })).find(p => p.id === id) ?? null;
   const api = {
     // One snapshot at a time: requests that arrive while one is being built share it.
-    snapshot() {
+    snapshot(q = {}) {
+      const scratch = showsScratch(q);
+      const cached = cachedBy.get(scratch);
       if (cached && now() - cached.at < cacheMs) return cached.promise;
       const promise = (async () => {
         let max = null, invalid = false;
         try { max = machineConcurrency(loadLocalConfig({ env })); } catch { invalid = true; /* the runs that read it refuse to start; the board says so */ }
-        const projects = await listProjects({ file: projectsFile(env) });
+        const all = await listProjects({ file: projectsFile(env) });
+        // Test and temp projects are left out of everything (lanes, totals, the inbox) unless asked for, so the numbers still add up.
+        const projects = scratch ? all : all.filter(p => !isScratchRoot(p.root));
         const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: now(), workers: await workersHeld({ dir: lanesDir(env), max, invalid }) });
         // What waits for the owner (read-only); a failure here never hides the rest of the board.
         snapshot.inbox = await boardInbox({ projects, now: now(), env }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
+        snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : all.length - projects.length, total: all.filter(p => isScratchRoot(p.root)).length };
         return snapshot;
       })();
-      cached = { at: now(), promise };
-      promise.catch(() => { if (cached?.promise === promise) cached = null; });
+      cachedBy.set(scratch, { at: now(), promise });
+      promise.catch(() => { if (cachedBy.get(scratch)?.promise === promise) cachedBy.delete(scratch); });
       return promise;
     },
     async project(id) {
@@ -297,10 +304,10 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)) });
     },
     async history(q = {}) {
-      return readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: Number(q.limit) || 100, offset: Number(q.offset) || 0 });
+      return readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: Number(q.limit) || 100, offset: Number(q.offset) || 0, fold: true, exclude: showsScratch(q) ? undefined : await scratchIds() });
     },
     async historyCsv(q = {}) {
-      const { events } = await readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: 1e6, cap: 1e6 });
+      const { events } = await readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: 1e6, cap: 1e6, exclude: showsScratch(q) ? undefined : await scratchIds() });
       return historyCsv(events);
     },
     // Starts the run's own Watch server (or reuses the one already up) and returns its address, with that server's token. Null for anything not a run of a listed project.

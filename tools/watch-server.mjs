@@ -212,7 +212,7 @@ export function createWatchServer(opts) {
     if (isBoardRoute) {
       const q = Object.fromEntries(u.searchParams);
       if (pathname === '/project') return sendAsset(res, method, 'project.html');
-      if (pathname === '/api/board') return sendJson(res, method, await board.snapshot());
+      if (pathname === '/api/board') return sendJson(res, method, await board.snapshot(q));
       if (pathname === '/api/project') { const detail = await board.project(String(q.id ?? '')); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
       if (pathname === '/api/history') return sendJson(res, method, await board.history(q));
       if (pathname === '/history.csv') return send(res, method, 200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="swarm-history.csv"' }, await board.historyCsv(q));

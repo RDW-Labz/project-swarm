@@ -156,7 +156,7 @@ function closeCommand(item, root) {
     const choice = item.default ?? item.choices?.[0] ?? 'CHOICE';
     return `close: ${swarm} decide ${item.id} ${choice}`;
   }
-  return 'close: resolve the blocker, then run swarm inbox again';
+  return `close (once you have dealt with it): ${swarm} resolve ${item.id}`;
 }
 
 export function formatInbox(items, { now, root } = {}) {
