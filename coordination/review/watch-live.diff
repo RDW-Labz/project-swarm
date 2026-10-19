@@ -1,0 +1,774 @@
+diff --git a/tests/board-live.test.mjs b/tests/board-live.test.mjs
+new file mode 100644
+index 0000000..ae67451
+--- /dev/null
++++ b/tests/board-live.test.mjs
+@@ -0,0 +1,214 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import vm from 'node:vm';
++import { fileURLToPath } from 'node:url';
++import { combineLive, liveOverview } from '../tools/board-live.mjs';
++import { createBoardApi } from '../tools/watch-cli.mjs';
++import { createWatchServer } from '../tools/watch-server.mjs';
++
++const NOW = Date.parse('2026-10-19T12:00:00Z');
++const iso = ms => new Date(NOW - ms).toISOString();
++const job = (id, agent, model, status, o = {}) => ({ id, agent, model, lane: agent, status, startedAt: iso(500000), finishedAt: ['running', 'queued', 'held'].includes(status) ? undefined : iso(100000), costUsd: status === 'queued' ? 0 : 0.1, attempts: [{ agent, status }], progress: status === 'running' ? { lastOutputAt: iso(o.quiet ? 300000 : 10000) } : undefined, ...o });
++const run = (id, status, jobs, extra = {}) => ({ id, state: { id, status, startedAt: iso(900000), ...(['complete', 'failed'].includes(status) ? { finishedAt: iso(100000) } : {}), jobs, ...extra }, manifest: { goal: `goal ${id}`, jobs: jobs.filter(Boolean).map(j => ({ id: j.id })) } });
++const project = { id: 'p1', name: 'parts-request-app' };
++const RA = '1792400000001-aaaa1111', RB = '1792400000002-bbbb2222', RC = '1792400000003-cccc3333';
++
++test('two live runs combine: jobs, progress, first-try, retries, merged, ETA, lanes with ticket and run', () => {
++  const a = run(RA, 'running', [job('T-1', 'anthropic', 'claude-haiku-5-5', 'complete'), job('T-2', 'claude', 'sonnet', 'running'), job('T-3', 'claude', 'sonnet', 'queued')], { mergeQueue: { batches: [{}, {}], integrated: ['x'], conflicts: [] } });
++  const b = run(RB, 'running', [job('T-4', 'claude', 'opus', 'running', { quiet: true }), job('T-5', 'codex', 'gpt', 'complete', { attempts: [{ status: 'failed' }, { status: 'complete' }] }), job('T-6', 'codex', 'gpt', 'held')], { mergeQueue: { batches: [{}], integrated: ['y', 'z'], conflicts: ['c'] } });
++  const d = combineLive({ project, runs: [b, a], tickets: [{ id: 'T-2', title: 'Fix the retry' }], cost: { todayUsd: 1.5, allUsd: 7 }, capUsd: 10, lastActivityAt: iso(1000), now: NOW });
++  assert.equal(d.header.runsLive, 2);
++  assert.deepEqual(d.header.jobs, { running: 2, queued: 1, blocked: 1 });
++  assert.equal(d.header.spendTodayUsd, 1.5); assert.equal(d.header.capUsd, 10);
++  assert.equal(d.empty, null);
++  assert.deepEqual(d.runs.map(r => r.runId), [RA, RB], 'runs in a stable order');
++  assert.deepEqual(d.runs.map(r => r.idx), [0, 1]);
++  assert.equal(d.stats.done, 2); assert.equal(d.stats.total, 6);
++  assert.equal(d.stats.finished, 2); assert.equal(d.stats.firstTry, 1); assert.equal(d.stats.firstTryRate, 0.5);
++  assert.equal(d.stats.retries, 1);
++  assert.equal(d.stats.merged, 3); assert.equal(d.stats.queue, 3); assert.equal(d.stats.conflicts, 1);
++  assert.equal(d.map.length, 6);
++  assert.deepEqual([...new Set(d.map.map(j => j.run))], [RA, RB]);
++  const lanes = Object.fromEntries(d.lanes.map(l => [l.lane, l]));
++  assert.equal(lanes.Sonnet.agents[0].job, 'T-2'); assert.equal(lanes.Sonnet.agents[0].ticket, 'T-2'); assert.equal(lanes.Sonnet.agents[0].title, 'Fix the retry'); assert.equal(lanes.Sonnet.agents[0].run, RA);
++  assert.equal(lanes.Opus.agents[0].state, 'thinking', 'quiet for longer than 90 s');
++  assert.equal(lanes.Sonnet.agents[0].state, 'working');
++  assert.equal(lanes.Opus.agents[0].ticket, null, 'no ticket with that id: none is invented');
++  assert.ok(d.runs.every(r => r.spendUsd >= 0));
++});
++
++test('combined ETA is the slowest live run, unknown when a run has none yet', () => {
++  const a = run(RA, 'running', [job('T-1', 'claude', 'sonnet', 'complete'), job('T-2', 'claude', 'sonnet', 'running')]);
++  const b = run(RB, 'running', [job('T-3', 'claude', 'sonnet', 'queued')]);   // nothing finished: no rate, no estimate
++  const both = combineLive({ project, runs: [a, b], now: NOW });
++  assert.equal(both.header.etaMs, null);
++  const only = combineLive({ project, runs: [a], now: NOW });
++  assert.ok(only.header.etaMs > 0);
++});
++
++test('a run that finishes while the page is open: it leaves Live and the live numbers at once (even if its process still runs) and shows under Recent', () => {
++  const finishing = run(RA, 'complete', [job('T-1', 'claude', 'sonnet', 'complete'), job('T-2', 'claude', 'sonnet', 'running')]);   // state says over; a leftover running job must not show as a live agent
++  const other = run(RB, 'running', [job('T-3', 'claude', 'sonnet', 'running')]);
++  const mid = combineLive({ project, runs: [finishing, other], now: NOW });
++  assert.equal(mid.header.runsLive, 1);
++  assert.deepEqual(mid.runs.map(r => r.runId), [RB]);
++  assert.equal(mid.stats.total, 1, 'the finished run is not in the combined numbers');
++  assert.equal(mid.header.jobs.running, 1);
++  assert.equal(mid.map.length, 1);
++  assert.equal(mid.lanes.flatMap(l => l.agents).length, 1, 'no head for the finished run');
++  assert.equal(mid.recent.length, 1);
++  assert.deepEqual({ id: mid.recent[0].runId, status: mid.recent[0].status }, { id: RA, status: 'complete' });
++  assert.equal(mid.empty, null);
++  // The next poll: its process is gone, so it comes from the finished-today list instead: the same Recent row.
++  const after = combineLive({ project, runs: [other], finishedToday: [finishing], now: NOW });
++  assert.equal(after.recent.length, 1);
++  assert.equal(after.recent[0].done, 1); assert.equal(after.recent[0].total, 2);
++  // And when the last live run ends the view is the empty state with the last activity and the run under Recent.
++  const none = combineLive({ project, runs: [finishing], lastActivityAt: iso(100000), now: NOW });
++  assert.deepEqual(none.empty, { lastActivityAt: iso(100000) });
++  assert.equal(none.header.runsLive, 0); assert.equal(none.header.etaMs, null);
++  assert.equal(none.recent.length, 1); assert.equal(none.finishedCount, 1);
++});
++
++test('spend: a run row and a Recent row use the run total (the number the Overview tab shows), not a partial sum', () => {
++  const a = run(RA, 'running', [job('T-1', 'anthropic', 'claude-haiku-5-5', 'complete', { costUsd: 0.25 }), job('T-2', 'claude', 'sonnet', 'running', { costUsd: 0.1 })]);
++  const d = combineLive({ project, runs: [a], now: NOW });
++  const total = a.state.jobs.reduce((n, j) => n + j.costUsd, 0);
++  assert.ok(Math.abs(d.runs[0].spendUsd - total) < 1e-9, `${d.runs[0].spendUsd} vs ${total}`);
++});
++
++test('a paused run makes the combined ETA unknown (it is not progressing)', () => {
++  const a = run(RA, 'running', [job('T-1', 'claude', 'sonnet', 'complete'), job('T-2', 'claude', 'sonnet', 'queued')]);
++  a.state.pause = { reason: 'rate limit' };
++  const d = combineLive({ project, runs: [a], now: NOW });
++  assert.equal(d.runs[0].status, 'paused');
++  assert.equal(d.header.etaMs, null);
++});
++
++test('heads are built only for the jobs the numbers count; lanes and heads are capped; names are cleaned', () => {
++  const bad = run(RA, 'running', [job('', 'claude', 'sonnet', 'running'), job('<img src=x>', 'claude', 'sonnet', 'running'), job('J-ok', 'claude', 'sonnet', 'running')]);
++  const d = combineLive({ project, runs: [bad], now: NOW });
++  const heads = d.lanes.flatMap(l => l.agents);
++  assert.deepEqual(heads.map(h => h.job), ['J-ok'], 'a job with no id or a markup id gets no head, and is not counted either');
++  assert.equal(d.stats.total, 1);
++  const many = run(RB, 'running', Array.from({ length: 400 }, (_, i) => job(`J-${i}`, `agent-${i}`, 'm', 'running')));
++  const m = combineLive({ project, runs: [many], now: NOW });
++  assert.ok(m.lanes.length <= 13, `lanes ${m.lanes.length}`);
++  assert.ok(m.lanes.flatMap(l => l.agents).length <= 200);
++  assert.equal(m.lanes.reduce((n, l) => n + l.count, 0), 400, 'counts still add up');
++  const odd = run(RC, 'running', [job('J-1', 'bad\u202eagent', 'm', 'running')]);
++  assert.doesNotMatch(JSON.stringify(combineLive({ project, runs: [odd], now: NOW }).lanes), /\u202e/);
++});
++
++test('a failed run: its failed jobs and error heads are real, it is not counted as live, and the failure shows in Recent', () => {
++  const failing = run(RC, 'running', [job('T-9', 'codex', 'gpt', 'failed', { finishedAt: iso(60000), attempts: [{ status: 'failed' }, { status: 'failed' }] }), job('T-10', 'claude', 'sonnet', 'running')]);
++  const d = combineLive({ project, runs: [failing], now: NOW });
++  assert.equal(d.stats.failed, 1);
++  assert.equal(d.stats.retries, 1);
++  assert.equal(d.runs[0].failed, 1);
++  const codex = d.lanes.find(l => l.lane === 'Codex');
++  assert.equal(codex.agents[0].state, 'error');
++  assert.equal(codex.agents[0].ended, iso(60000));
++  const dead = run(RB, 'failed', [job('T-1', 'claude', 'sonnet', 'failed', { finishedAt: iso(120000) })]);
++  const after = combineLive({ project, runs: [], finishedToday: [dead], now: NOW });
++  assert.equal(after.recent[0].status, 'failed'); assert.equal(after.recent[0].failed, 1);
++  assert.equal(after.empty !== null, true);
++});
++
++test('hostile text: a lane or job named __proto__ cannot pollute, job text is cleaned, a null job is skipped', () => {
++  const evil = run(RA, 'running', [job('T-1', '__proto__', 'x', 'running'), null, job('constructor', 'claude', 'opus', 'running')]);
++  const d = combineLive({ project, runs: [evil], now: NOW });
++  const round = JSON.parse(JSON.stringify(d));
++  assert.ok(round.lanes.some(l => l.lane === '__proto__' || l.lane.startsWith('__proto')), 'the lane is an ordinary entry');
++  assert.equal(Object.keys(Object.prototype).length, 0);
++  assert.equal(Object.getPrototypeOf(round.stats), Object.prototype);
++  assert.equal(round.lanes.flatMap(l => l.agents).length, 2);
++});
++
++test('the combined map is capped, and says so', () => {
++  const many = run(RA, 'running', Array.from({ length: 3200 }, (_, i) => job(`J-${i}`, 'claude', 'sonnet', 'queued')));
++  const d = combineLive({ project, runs: [many], now: NOW });
++  assert.equal(d.map.length, 3000);
++  assert.equal(d.mapTruncated, true);
++});
++
++test('liveOverview reads only this project: its runs, spend today, cap, recent runs and last activity', async t => {
++  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'live-')));
++  t.after(() => fs.rm(root, { recursive: true, force: true }));
++  const write = async (id, state, manifest) => { const dir = path.join(root, '.swarm', 'runs', id); await fs.mkdir(dir, { recursive: true }); await fs.writeFile(path.join(dir, 'state.json'), JSON.stringify(state)); if (manifest) await fs.writeFile(path.join(dir, 'manifest.json'), JSON.stringify(manifest)); };
++  const now = Date.now(); const ago = ms => new Date(now - ms).toISOString();
++  const mk = (id, status, jobs) => ({ id, status, startedAt: ago(900000), ...(status === 'running' ? {} : { finishedAt: ago(100000) }), jobs });
++  const J = (id, status) => ({ id, agent: 'anthropic', model: 'claude-haiku-5-5', status, startedAt: ago(500000), finishedAt: status === 'running' ? undefined : ago(100000), costUsd: 0.1, attempts: [{}], progress: status === 'running' ? { lastOutputAt: ago(5000) } : undefined });
++  await write(RA, mk(RA, 'running', [J('T-1', 'complete'), J('T-2', 'running')]), { goal: 'first' });
++  await write(RB, mk(RB, 'running', [J('T-3', 'running')]), { goal: 'second' });
++  await write(RC, mk(RC, 'complete', [J('T-4', 'complete')]));
++  await write('1792000000000-old00000', { ...mk('1792000000000-old00000', 'complete', [J('T-0', 'complete')]), finishedAt: ago(3 * 86400000) });
++  const d = await liveOverview({ id: 'p1', name: 'x', root }, [{ runId: RA }, { runId: RB }], { now, summary: async () => ({ capUsd: 5 }) });
++  assert.equal(d.header.runsLive, 2);
++  assert.equal(d.header.capUsd, 5);
++  assert.equal(d.header.jobs.running, 2);
++  assert.deepEqual(d.recent.map(r => r.runId), [RC], 'only runs that finished today');
++  assert.ok(d.runs.every(r => r.goal));
++  assert.equal(d.header.spendTodayUsd > 0, true);
++  const idle = await liveOverview({ id: 'p1', name: 'x', root }, [], { now, summary: async () => ({ capUsd: null }) });
++  assert.equal(idle.empty !== null, true);
++  assert.ok(idle.empty.lastActivityAt);
++  assert.equal(idle.header.noCap, true);
++});
++
++test('/api/live is read-only and token-protected, 404 for an unknown project, and the page serves', async t => {
++  const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'live-api-')));
++  t.after(() => fs.rm(home, { recursive: true, force: true }));
++  const root = path.join(home, 'proj'); await fs.mkdir(path.join(root, '.swarm', 'runs', RA), { recursive: true });
++  await fs.writeFile(path.join(root, '.swarm', 'runs', RA, 'state.json'), JSON.stringify({ id: RA, status: 'running', startedAt: new Date().toISOString(), jobs: [{ id: 'T-1', agent: 'claude', model: 'sonnet', status: 'running', attempts: [{}] }] }));
++  const { projectId } = await import('../tools/projects.mjs');
++  const file = path.join(home, 'projects.json');
++  await fs.writeFile(file, JSON.stringify({ version: 1, projects: [{ id: projectId(root), name: 'proj', root, addedAt: new Date().toISOString(), lastSeen: new Date().toISOString() }] }));
++  const env = { ...process.env, SWARM_PROJECTS_FILE: file, SWARM_HISTORY_FILE: path.join(home, 'h.ndjson'), SWARM_CONFIG: path.join(home, 'c.json'), SWARM_LANES_DIR: path.join(home, 'l'), SWARM_SPEND_DIR: path.join(home, 's') };
++  const api = createBoardApi({ env, live: async () => [{ runId: RA, root: path.resolve(root), startedAt: new Date().toISOString() }] });
++  const server = createWatchServer({ root: home, getRunSnapshot: async () => null, getPlanSnapshot: async () => ({ present: false }), getGallery: async () => ({ schema: 1, screens: [] }), getBoard: async () => ({ runs: [] }), board: api, indexName: 'board.html', commandList: [], contextCommands: () => [], assetDir: fileURLToPath(new URL('../tools/watch-assets/', import.meta.url)), deltaFile: fileURLToPath(new URL('../tools/watch-delta.mjs', import.meta.url)) });
++  const { url } = await server.listen();
++  t.after(async () => { await server.close(); await api.close(); });
++  const u = new URL(url); const id = projectId(root);
++  const get = async p => fetch(`${u.origin}${p}`, { redirect: 'manual' });
++  assert.equal((await get(`/api/live?id=${id}`)).status, 403);
++  const ok = await get(`/api/live?id=${id}&t=${u.searchParams.get('t')}`);
++  assert.equal(ok.status, 200);
++  const body = await ok.json();
++  assert.equal(body.header.runsLive, 1); assert.equal(body.lanes[0].agents[0].job, 'T-1');
++  assert.equal((await get(`/api/live?id=nope&t=${u.searchParams.get('t')}`)).status, 404);
++  assert.equal((await fetch(`${u.origin}/api/live?id=${id}&t=${u.searchParams.get('t')}`, { method: 'POST' })).status, 405);
++  const page = await get(`/project?id=${id}&t=${u.searchParams.get('t')}`);
++  assert.match(await page.text(), /id="pane-live"/);
++  assert.equal((await get('/assets/project-live.js')).status, 200);
++});
++
++test('the Live tab page: tabs with Live first, controls named, no inline script, module and classic scripts present', async () => {
++  const dir = new URL('../tools/watch-assets/', import.meta.url);
++  const html = await fs.readFile(new URL('project.html', dir), 'utf8');
++  assert.match(html, /role="tablist"/);
++  assert.ok(html.indexOf('data-tab="live"') < html.indexOf('data-tab="overview"'));
++  assert.match(html, /id="tab-live-btn"[^>]*aria-selected="true"/);
++  assert.doesNotMatch(html, /<script(?![^>]*src=)[^>]*>/);
++  assert.match(html, /<script type="module" src="assets\/project-live\.js">/);
++  const js = await fs.readFile(new URL('project-live.js', dir), 'utf8');
++  assert.doesNotMatch(js, /innerHTML|insertAdjacentHTML|document\.write|eval\(/);
++  assert.match(js, /\/open\/run\?id=/);
++  // The head cap and reduced motion are the board's: heads come from robot-head.js, which owns the budget.
++  assert.match(js, /from '\.\/robot-head\.js'/);
++  assert.match(js, /reducedMotion\(\)/);
++  // Review fixes: tabs update the address in place (Back must leave the page), time-based fields do not redraw the tab, a fetch has a limit, polling follows the visible tab,
++  // run-file text never becomes a CSS class, and a failed first load says so.
++  assert.match(js, /history\.replaceState/);
++  assert.doesNotMatch(js, /location\.hash\s*=/);
++  assert.match(js, /VOLATILE = \{[^}]*elapsedMs[^}]*etaMs[^}]*since/);
++  assert.match(js, /AbortController/);
++  assert.match(js, /\$\('pane-live'\)\.hidden/);
++  assert.match(js, /STATE_COLORS\[j\.status\] \? j\.status : 'other'/);
++  assert.match(js, /Project not found/);
++});
+diff --git a/tools/board-data.mjs b/tools/board-data.mjs
+index 02afc71..0fe0a1b 100644
+--- a/tools/board-data.mjs
++++ b/tools/board-data.mjs
+@@ -34,7 +34,7 @@ export function laneLabel(agent, model) {
+ 
+ // Parsed run states are remembered by path, size and modification time: a poll costs one stat per run, and a run that finished is read once.
+ const stateCache = new Map();
+-async function readRunStates(root, { limit = 5000 } = {}) {
++export async function readRunStates(root, { limit = 5000 } = {}) {
+   const dir = path.join(root, '.swarm', 'runs');
+   let ids = [];
+   try { ids = (await fs.readdir(dir)).filter(id => RUN_ID.test(id)).sort().slice(-limit); } catch { return []; }
+diff --git a/tools/board-live.mjs b/tools/board-live.mjs
+new file mode 100644
+index 0000000..5bef5bd
+--- /dev/null
++++ b/tools/board-live.mjs
+@@ -0,0 +1,125 @@
++// SPDX-License-Identifier: Apache-2.0
++// The live project overview: every run that is alive in ONE project, combined. The numbers come from the same run files the run pages read
++// (state.json, manifest.json, through buildRunSnapshot), so a number here is the sum of the numbers on those pages. Nothing is estimated beyond
++// what a run page already estimates; with nothing running it says so and shows what the project did last.
++import { buildRunSnapshot } from './watch-state.mjs';
++import { readRunStates, laneLabel, agentState, costOf } from './board-data.mjs';
++import { runTotals } from './spend.mjs';
++import { readLedger } from './tickets.mjs';
++import { projectSummary } from './project-spend.mjs';
++import { sanitizeWorkerText } from './worker-text.mjs';
++
++const txt = (v, n = 160) => (v === null || v === undefined ? null : sanitizeWorkerText(v, n));
++const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
++const BLOCKED = new Set(['held', 'blocked']);
++const MAP_CAP = 3000;          // squares on the combined map
++const AGENT_CAP = 200;         // heads in all
++const LANE_CAP = 12;           // bays; further lane names are folded into 'other'
++const RECENT_CAP = 12;
++const KNOWN_STATUS = new Set(['queued', 'running', 'complete', 'failed', 'timeout', 'held', 'blocked', 'cancelled']);
++export const FINISHED = new Set(['complete', 'integrated', 'integrated-with-failures', 'failed', 'cancelled', 'error', 'timeout']);
++
++const short = id => String(id).replace(/^(\d{4})\d{9}-/, '').slice(0, 14);
++
++// Pure: the combined view of the runs given. `runs` are { id, state, manifest } for the runs alive now; `finishedToday` the same for runs that ended today.
++export function combineLive({ project, runs, finishedToday = [], tickets = [], cost = null, capUsd = null, capError = null, lastActivityAt = null, now = Date.now() }) {
++  const byTicket = new Map(tickets.filter(t => t && typeof t.id === 'string').map(t => [t.id, t]));
++  const ordered = runs.slice().sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
++  const jobsTotal = { running: 0, queued: 0, blocked: 0 };
++  const stats = { done: 0, total: 0, running: 0, queued: 0, failed: 0, retries: 0, finished: 0, firstTry: 0, merged: 0, queue: 0, conflicts: 0 };
++  const laneAgents = new Map();
++  const laneCount = new Map();
++  let heads = 0;
++  const map = [];
++  const runRows = [];
++  const endedHere = [];   // a run whose process is still winding down but whose state says it is over: Recent, not Live, and not in the live numbers
++  let etaMs = 0, etaKnown = true;
++  ordered.forEach((run, idx) => {
++    const snap = buildRunSnapshot(run.state, { manifest: run.manifest, now });
++    if (snap.status !== 'live' && snap.status !== 'paused') { endedHere.push(run); return; }
++    const jobs = Array.isArray(run.state.jobs) ? run.state.jobs.filter(j => j && typeof j === 'object') : [];
++    const validIds = new Set(snap.jobs.map(j => j.id));
++    for (const j of snap.jobs) {
++      const st = j.status;
++      if (st === 'running') jobsTotal.running += 1;
++      else if (st === 'queued') jobsTotal.queued += 1;
++      else if (BLOCKED.has(st)) jobsTotal.blocked += 1;
++      const done = st === 'complete';
++      const failed = st === 'failed' || st === 'timeout';
++      if (done || failed) { stats.finished += 1; if (done && j.attempts <= 1) stats.firstTry += 1; }
++      if (map.length < MAP_CAP) map.push({ run: run.id, idx, job: j.id, status: KNOWN_STATUS.has(st) ? st : 'other', lane: txt(laneLabel(j.agent, j.model), 20) });
++    }
++    for (const raw of jobs) {
++      const id = txt(raw.id, 60);
++      if (!validIds.has(id)) continue;   // the same jobs the counts use: no head for a job the numbers skip
++      const st = agentState(raw, now);
++      if (!st) continue;
++      let label = txt(laneLabel(raw.agent, raw.model), 20);
++      if (!laneCount.has(label) && laneCount.size >= LANE_CAP) label = 'other';
++      laneCount.set(label, (laneCount.get(label) ?? 0) + 1);
++      if (heads >= AGENT_CAP) continue;
++      heads += 1;
++      const t = byTicket.get(id);
++      const list = laneAgents.get(label) ?? [];
++      list.push({ run: run.id, runShort: short(run.id), idx, job: id, ticket: t ? txt(t.id, 20) : null, title: t ? txt(t.title, 100) : null, state: st, since: raw.startedAt ?? null, ...(st === 'error' ? { ended: raw.finishedAt ?? null } : {}) });
++      laneAgents.set(label, list);
++    }
++    stats.done += snap.kpi.done; stats.total += snap.kpi.total; stats.running += snap.kpi.running; stats.queued += snap.kpi.queued;
++    stats.failed += snap.kpi.failed; stats.retries += snap.kpi.retries;
++    stats.merged += snap.mergeQueue?.integrated ?? 0; stats.queue += snap.mergeQueue?.batches ?? 0; stats.conflicts += snap.mergeQueue?.conflicts ?? 0;
++    // Runs go on side by side, so all of them are done when the slowest is: the largest of the runs' own estimates. Unknown if a run has none, or is paused (not progressing).
++    if (snap.status === 'paused' || snap.kpi.etaMs === null) etaKnown = false; else etaMs = Math.max(etaMs, snap.kpi.etaMs);
++    const mine = jobs.map(j => txt(j.id, 60)).filter(id => byTicket.has(id));
++    runRows.push({
++      runId: run.id, short: short(run.id), idx, status: snap.status, startedAt: snap.startedAt, elapsedMs: snap.elapsedMs, branch: snap.branch,
++      goal: snap.goal, tickets: mine.slice(0, 3), ticketCount: mine.length,
++      done: snap.kpi.done, total: snap.kpi.total, running: snap.kpi.running, queued: snap.kpi.queued, failed: snap.kpi.failed,
++      spendUsd: Math.round(runTotals(run.state).usd * 1e6) / 1e6, etaMs: snap.kpi.etaMs,
++    });
++  });
++  const lanes = [...laneAgents.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([lane, agents]) => ({ lane, count: laneCount.get(lane) ?? agents.length, agents }));
++  // Recent: the runs that ended (newest first), snapshots only for the few shown. Spend is the run's own total, the number the Overview tab uses.
++  const ended = [...endedHere, ...finishedToday].sort((a, b) => (Date.parse(b.state.finishedAt ?? '') || 0) - (Date.parse(a.state.finishedAt ?? '') || 0));
++  const recent = ended.slice(0, RECENT_CAP).map(({ id, state }) => {
++    const jobs = (state.jobs ?? []).filter(j => j && typeof j === 'object');
++    const snap = buildRunSnapshot(state, { now });
++    return { runId: id, short: short(id), status: snap.status, result: txt(state.status, 30), finishedAt: state.finishedAt ?? null, done: snap.kpi.done, total: jobs.length, failed: snap.kpi.failed, costUsd: Math.round(runTotals(state).usd * 1e6) / 1e6 };
++  });
++  return {
++    project: { id: project.id, name: txt(project.name, 80) },
++    now: new Date(now).toISOString(),
++    empty: runRows.length === 0 ? { lastActivityAt } : null,
++    header: {
++      jobs: jobsTotal, runsLive: runRows.length,
++      spendTodayUsd: cost ? cost.todayUsd : null, spendUsd: cost ? cost.allUsd : null, capUsd, noCap: capUsd === null && !capError, capInvalid: Boolean(capError),
++      etaMs: runRows.length ? (etaKnown ? etaMs : null) : null,
++    },
++    runs: runRows,
++    lanes,
++    map,
++    mapTruncated: runRows.reduce((n, r) => n + r.total, 0) > map.length,
++    stats: { ...stats, firstTryRate: stats.finished ? stats.firstTry / stats.finished : null },
++    recent,
++    finishedCount: ended.length,
++  };
++}
++
++// The IO around it: reads this project's own folder only. `liveRuns` are the alive runs of this project (their process exists).
++export async function liveOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, readManifest } = {}) {
++  const all = await readRunStates(project.root, { limit: 400 });
++  const liveIds = new Set(liveRuns.map(r => r.runId));
++  const fs = await import('node:fs/promises');
++  const path = await import('node:path');
++  const manifestOf = readManifest ?? (async id => { try { return JSON.parse(await fs.readFile(path.join(project.root, '.swarm', 'runs', id, 'manifest.json'), 'utf8')); } catch { return null; } });
++  const live = [];
++  for (const r of all.filter(x => liveIds.has(x.id))) live.push({ id: r.id, state: r.state, manifest: await manifestOf(r.id) });
++  const startOfDay = new Date(now); startOfDay.setUTCHours(0, 0, 0, 0);
++  const finishedToday = all.filter(r => !liveIds.has(r.id) && FINISHED.has(r.state.status) && (Date.parse(r.state.finishedAt ?? '') || 0) >= startOfDay.getTime());
++  const ledger = await readLedger(project.root).catch(() => null);
++  const spend = await summary(project.root).catch(error => ({ capUsd: null, capError: String(error.message).slice(0, 120) }));
++  const lastMs = Math.max(0, ...all.map(r => r.mtimeMs), Date.parse(ledger?.updatedAt ?? '') || 0);
++  return combineLive({
++    project, runs: live, finishedToday, tickets: (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 2000),
++    cost: costOf(all, now), capUsd: spend.capUsd ?? null, capError: spend.capError ?? null, lastActivityAt: lastMs ? new Date(lastMs).toISOString() : null, now,
++  });
++}
+diff --git a/tools/watch-assets/project-live.js b/tools/watch-assets/project-live.js
+new file mode 100644
+index 0000000..723ca03
+--- /dev/null
++++ b/tools/watch-assets/project-live.js
+@@ -0,0 +1,255 @@
++// SPDX-License-Identifier: Apache-2.0
++// The project page's Live tab: every run that is alive in this project, combined (data: /api/live, the same run files the run pages read).
++// Every state shown is one a run recorded: nothing is animated for show, a sleeping head means no agent is running in that lane.
++import { mountRobotHead, setAnimationPaused, animationPaused, reducedMotion } from './robot-head.js';
++
++var L = self.BoardLib;
++var params = new URLSearchParams(location.search);
++var TOKEN = params.get('t') || '';
++var ID = params.get('id') || '';
++var T = encodeURIComponent(TOKEN);
++var $ = function (id) { return document.getElementById(id); };
++function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined) { n.textContent = text; } return n; }
++function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
++function pct(v) { return typeof v === 'number' && isFinite(v) ? Math.round(v * 100) + '%' : '-'; }
++function ago(iso) { var t = Date.parse(iso || ''); if (!isFinite(t)) { return 'never'; } var s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 90 ? s + ' s ago' : s < 5400 ? Math.round(s / 60) + ' min ago' : s < 129600 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' days ago'; }
++var store = { get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage may be off */ } } };
++
++var RUN_COLORS = ['#60a5fa', '#f472b6', '#fbbf24', '#a78bfa', '#34d399', '#fb923c'];
++var STATE_COLORS = { queued: '#3f3f4a', running: '#60a5fa', complete: '#34d399', failed: '#fb7185', timeout: '#fb7185', held: '#fbbf24', blocked: '#fbbf24', cancelled: '#4a4a56' };
++var runColor = function (idx) { return RUN_COLORS[idx % RUN_COLORS.length]; };
++
++// ---- tabs (hash: #live, #overview) ----------------------------------------------------------------------------------------------------------
++
++function go(name) {
++  if (name !== 'live' && name !== 'overview') { name = 'live'; }
++  ['live', 'overview'].forEach(function (n) {
++    var on = n === name;
++    $('pane-' + n).hidden = !on;
++    var b = $('tab-' + n + '-btn'); b.setAttribute('aria-selected', on ? 'true' : 'false'); b.tabIndex = on ? 0 : -1;
++  });
++  // Tabs are not history entries: the address is updated in place, so Back leaves the page instead of bouncing between tabs.
++  if (location.hash !== '#' + name) { try { history.replaceState(null, '', '#' + name); } catch (e) { /* the tab still switched */ } }
++}
++document.querySelectorAll('#tabs [data-tab]').forEach(function (b) { b.addEventListener('click', function () { go(b.getAttribute('data-tab')); }); });
++$('tabs').addEventListener('keydown', function (e) {
++  var order = ['live', 'overview'], cur = order.indexOf(document.activeElement && document.activeElement.getAttribute('data-tab'));
++  if (cur < 0 || (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft')) { return; }
++  var next = order[(cur + (e.key === 'ArrowRight' ? 1 : order.length - 1)) % order.length];
++  go(next); $('tab-' + next + '-btn').focus(); e.preventDefault();
++});
++window.addEventListener('hashchange', function () { go(location.hash.replace(/^#/, '')); });
++
++// ---- motion (the same rules as the board) ---------------------------------------------------------------------------------------------------
++
++function applyPause(paused) { setAnimationPaused(paused); document.body.classList.toggle('paused-motion', paused); var b = $('pauseMotion'); b.setAttribute('aria-pressed', paused ? 'true' : 'false'); b.textContent = paused ? 'Resume motion' : 'Pause motion'; }
++$('pauseMotion').addEventListener('click', function () { var next = !(animationPaused() && store.get('swarm-paused') === '1'); store.set('swarm-paused', next ? '1' : '0'); applyPause(next); });
++applyPause(store.get('swarm-paused') === '1');
++if (reducedMotion()) { $('pauseMotion').hidden = true; }
++
++// ---- rendering ----------------------------------------------------------------------------------------------------------------------------
++
++var mapMode = store.get('swarm-live-map') || 'state';
++if (['state', 'lane', 'run'].indexOf(mapMode) === -1) { mapMode = 'state'; }
++var last = null;
++
++function tile(l, v, s, extra) { var t = el('div', 'card kpi'); t.appendChild(el('div', 'l', l)); t.appendChild(el('div', 'v num', v)); t.appendChild(el('div', 's', s)); if (extra) { t.appendChild(extra); } return t; }
++function meter(p, hot) { var m = el('div', 'meter' + (hot ? ' hot' : '')); var i = el('i'); i.style.width = Math.max(0, Math.min(100, p)) + '%'; m.appendChild(i); return m; }
++function ring(done, total, color) {
++  var NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg');
++  svg.setAttribute('viewBox', '0 0 44 44'); svg.setAttribute('class', 'ring2'); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', done + ' of ' + total + ' jobs done');
++  var r = 17, c = 2 * Math.PI * r, frac = total ? done / total : 0;
++  [['#23232a', c], [color, c * frac]].forEach(function (p, i) {
++    var k = document.createElementNS(NS, 'circle'); k.setAttribute('cx', '22'); k.setAttribute('cy', '22'); k.setAttribute('r', String(r)); k.setAttribute('fill', 'none'); k.setAttribute('stroke', p[0]); k.setAttribute('stroke-width', '5');
++    k.setAttribute('stroke-dasharray', p[1].toFixed(1) + ' ' + c.toFixed(1)); if (i) { k.setAttribute('stroke-linecap', 'round'); k.setAttribute('transform', 'rotate(-90 22 22)'); } svg.appendChild(k);
++  });
++  var t = document.createElementNS(NS, 'text'); t.setAttribute('x', '22'); t.setAttribute('y', '26'); t.setAttribute('text-anchor', 'middle'); t.setAttribute('font-size', '11'); t.setAttribute('fill', '#ececf1'); t.textContent = total ? Math.round(frac * 100) + '%' : '-'; svg.appendChild(t);
++  return svg;
++}
++function elapsedText(startedAt) { var t = Date.parse(startedAt || ''); return isFinite(t) ? L.duration(Math.max(0, Date.now() - t)) + ' elapsed' : '-'; }
++function linkTo(href, cls, text, title) { var a = el('a', cls, text); a.href = href; if (title) { a.title = title; } return a; }
++
++function renderKpis(d) {
++  var box = $('liveKpis'); box.textContent = '';
++  var h = d.header;
++  box.appendChild(tile('Jobs', h.jobs.running + ' running', h.jobs.queued + ' queued, ' + h.jobs.blocked + ' blocked'));
++  box.appendChild(tile('Runs live now', String(h.runsLive), h.runsLive ? 'ETA ' + (h.etaMs === null ? 'unknown yet' : h.etaMs === 0 ? 'nothing left' : L.duration(h.etaMs)) + ' (the slowest run)' : 'nothing running'));
++  box.appendChild(tile('Spend today', usd(h.spendTodayUsd), 'billed lanes; flat-rate lanes are not billed'));
++  var hasCap = typeof h.capUsd === 'number' && h.capUsd > 0;
++  var capText = hasCap ? 'of ' + usd(h.capUsd) + ' cap' : h.capInvalid ? 'CAP INVALID' : 'NO CAP';
++  box.appendChild(tile('Project spend', usd(h.spendUsd), capText, hasCap ? meter(100 * h.spendUsd / h.capUsd, h.spendUsd / h.capUsd > 0.75) : null));
++}
++
++function headKey(a) { return a.run + '|' + a.job; }
++function renderBays(d) {
++  var host = $('liveBays');
++  var flat = [], counts = Object.create(null); d.lanes.forEach(function (ln) { counts[ln.lane] = ln.count; ln.agents.forEach(function (a) { flat.push({ lane: ln.lane, state: a.state, a: a }); }); });
++  var bays = L.bays(flat, []);
++  var map = host.__bays || (host.__bays = new Map());
++  var names = Object.create(null); bays.forEach(function (b) { names[b.lane] = true; });
++  map.forEach(function (v, lane) { if (!names[lane]) { v.heads.forEach(function (h) { h.handle.destroy(); }); v.node.remove(); map.delete(lane); } });
++  var total = 0;
++  bays.forEach(function (b) {
++    var hit = map.get(b.lane);
++    if (!hit) {
++      var node = el('div', 'bay'); node.style.setProperty('--c', L.laneColor(b.lane));
++      var top = el('div', 'top'); var n = el('span', 'n num', '0'); top.appendChild(el('span', 'name', b.lane)); top.appendChild(n);
++      var heads = el('div', 'heads'); node.appendChild(top); node.appendChild(heads);
++      hit = { node: node, n: n, hostEl: heads, heads: new Map() }; map.set(b.lane, hit); host.appendChild(node);
++    }
++    var shown = counts[b.lane] === undefined ? b.running : counts[b.lane] - (b.agents.length - b.running);
++    hit.n.textContent = String(shown); total += shown;
++    hit.node.classList.toggle('idle', b.idle);
++    var specs = b.idle ? [{ key: 'sleep|' + b.lane, state: 'sleeping', label: '', sub: '', title: b.lane + ': no agent running', color: L.laneColor(b.lane) }]
++      : b.agents.slice(0, 10).map(function (x) { var a = x.a; return { key: headKey(a), state: a.state, label: (a.ticket || a.job), sub: a.runShort, title: (a.ticket || a.job) + (a.title ? ': ' + a.title : '') + ' · run ' + a.run + ' · ' + a.state, color: L.laneColor(b.lane) }; });
++    var keep = Object.create(null);
++    specs.forEach(function (s) {
++      keep[s.key] = true;
++      var h = hit.heads.get(s.key);
++      if (h) { h.handle.setState(s.state); h.label.textContent = s.label; h.sub.textContent = s.sub; h.wrap.title = s.title; return; }
++      var wrap = el('div', 'agent'); wrap.title = s.title; var holder = el('div'); wrap.appendChild(holder);
++      var handle = mountRobotHead(holder, { state: s.state, size: 34, color: s.color, screenColor: s.state === 'error' ? '#ffc4c4' : '#e8f2ff', id: s.key, label: b.lane + ' agent, ' + s.state + (s.label ? ', ' + s.label + ', run ' + s.sub : '') });
++      var label = el('div', 'jid mono', s.label); wrap.appendChild(label);
++      var sub = el('div', 'jid mono run-s', s.sub); wrap.appendChild(sub);
++      hit.hostEl.insertBefore(wrap, hit.hostEl.querySelector('.more'));
++      hit.heads.set(s.key, { wrap: wrap, handle: handle, label: label, sub: sub });
++    });
++    hit.heads.forEach(function (v, k) { if (!keep[k]) { v.handle.destroy(); v.wrap.remove(); hit.heads.delete(k); } });
++    var more = (counts[b.lane] || b.agents.length) - 10, extra = hit.hostEl.querySelector('.more');
++    if (more > 0) { if (!extra) { extra = el('span', 'sub more'); hit.hostEl.appendChild(extra); } extra.textContent = '+' + more; } else if (extra) { extra.remove(); }
++    host.appendChild(hit.node);
++  });
++  $('agentCount').textContent = String(total);
++}
++
++function renderMap(d) {
++  var box = $('liveMap'); box.textContent = '';
++  var legend = $('runLegend'); legend.textContent = '';
++  d.runs.forEach(function (r) { var c = el('span', 'runchip'); var i = el('i'); i.style.setProperty('--run', runColor(r.idx)); c.appendChild(i); c.appendChild(document.createTextNode(r.short + ' (' + r.done + '/' + r.total + ')')); c.title = r.runId; legend.appendChild(c); });
++  d.map.forEach(function (j) {
++    var q = el('span', 'sq ' + (STATE_COLORS[j.status] ? j.status : 'other'));
++    var fill = mapMode === 'state' ? (STATE_COLORS[j.status] || '#3f3f4a') : mapMode === 'lane' ? L.laneColor(j.lane) : runColor(j.idx);
++    q.style.setProperty('--q', fill); if (mapMode !== 'run') { q.style.setProperty('--run', runColor(j.idx)); }
++    q.title = j.job + ' · ' + j.status + ' · ' + j.lane + ' · run ' + j.run;
++    box.appendChild(q);
++  });
++  $('mapCount').textContent = String(d.map.length);
++  var lg = $('mapLegend'); lg.textContent = '';
++  var entries = mapMode === 'state' ? [['queued', STATE_COLORS.queued], ['running', STATE_COLORS.running], ['done', STATE_COLORS.complete], ['failed', STATE_COLORS.failed], ['held', STATE_COLORS.held]]
++    : mapMode === 'lane' ? Object.keys(d.map.reduce(function (o, j) { o[j.lane] = 1; return o; }, Object.create(null))).map(function (k) { return [k, L.laneColor(k)]; })
++    : d.runs.map(function (r) { return [r.short, runColor(r.idx)]; });
++  entries.forEach(function (e) { var s = el('span'); var i = el('i', 'dot'); i.style.background = e[1]; i.style.animation = 'none'; s.appendChild(i); s.appendChild(document.createTextNode(' ' + e[0])); lg.appendChild(s); });
++  $('mapNote').textContent = (mapMode === 'run' ? 'Fill = run. ' : 'Fill = ' + mapMode + ', outline = run. ') + 'One square per job, from every live run' + (d.mapTruncated ? ' (the first ' + d.map.length + ' are drawn)' : '') + '.';
++  document.querySelectorAll('#mapMode button').forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-mode') === mapMode ? 'true' : 'false'); });
++}
++
++function renderStats(d) {
++  var s = d.stats, box = $('liveStats'); box.textContent = '';
++  function stat(l, v, sub) { var n = el('div', 'stat'); n.appendChild(el('div', 'l', l)); n.appendChild(el('div', 'v', v)); n.appendChild(el('div', 's', sub)); box.appendChild(n); }
++  stat('Progress', s.done + ' / ' + s.total, s.total ? Math.round(100 * s.done / s.total) + '% of all jobs' : 'no jobs');
++  stat('In flight', String(s.running + s.queued), s.running + ' running, ' + s.queued + ' queued');
++  stat('First-try pass', pct(s.firstTryRate), 'of ' + s.finished + ' finished');
++  stat('Retries / failed', s.retries + ' / ' + s.failed, 'across all runs');
++  stat('Merged', String(s.merged), 'batches queued ' + s.queue);
++  stat('Conflicts', String(s.conflicts), 'in the merge queues');
++}
++
++function renderRuns(d) {
++  var box = $('liveRuns'); box.textContent = '';
++  var live = d.runs.filter(function (r) { return r.status === 'live' || r.status === 'paused'; });
++  if (!live.length) { box.appendChild(el('p', 'sub', 'None.')); }
++  live.forEach(function (r) {
++    var row = el('div', 'runrow'); row.style.setProperty('--run', runColor(r.idx));
++    row.appendChild(ring(r.done, r.total, runColor(r.idx)));
++    var who = el('div', 'who');
++    var name = r.tickets.length ? r.tickets.join(', ') + (r.ticketCount > r.tickets.length ? ' +' + (r.ticketCount - r.tickets.length) : '') : (r.goal || 'Run ' + r.short);
++    who.appendChild(el('b', '', name));
++    var meta = el('div', 'meta');
++    [r.tickets.length || r.goal ? r.short : null, r.status === 'paused' ? 'paused' : null, r.done + '/' + r.total + ' jobs', usd(r.spendUsd), 'ELAPSED', r.failed ? r.failed + ' failed' : null].forEach(function (t) {
++      if (t === 'ELAPSED') { var e = el('span', 'mono elapsed', elapsedText(r.startedAt)); e.setAttribute('data-started', r.startedAt || ''); meta.appendChild(e); }
++      else if (t) { meta.appendChild(el('span', 'mono', t)); }
++    });
++    who.appendChild(meta);
++    var acts = el('div', 'acts');
++    acts.appendChild(linkTo('/open/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId) + '&t=' + T, 'btn primary', 'Open run page', 'The run\'s own live page'));
++    acts.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId) + '&t=' + T, 'btn', 'Inspector', 'Graph, journal, compare'));
++    who.appendChild(acts); row.appendChild(who); box.appendChild(row);
++  });
++  var rec = $('liveRecent'); rec.textContent = '';
++  if (!d.recent.length) { rec.appendChild(el('p', 'sub', 'No run finished today.')); }
++  d.recent.forEach(function (r) {
++    var row = el('div', 'runrow recent'); var who = el('div', 'who');
++    var top = el('div', 'meta'); top.appendChild(el('span', 'pill ' + (r.status === 'complete' ? 'good' : 'bad'), r.status === 'complete' ? 'complete' : (r.result || r.status)));
++    [r.short, r.done + '/' + r.total + ' jobs', r.failed ? r.failed + ' failed' : null, usd(r.costUsd), ago(r.finishedAt)].forEach(function (t) { if (t) { top.appendChild(el('span', 'mono', t)); } });
++    who.appendChild(top);
++    who.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId) + '&t=' + T, 'board-link sub', 'Open in the inspector'));
++    row.appendChild(who); rec.appendChild(row);
++  });
++}
++
++function renderEmpty(d) {
++  var box = $('liveEmpty'); box.textContent = '';
++  box.appendChild(el('h2', '', 'No live runs'));
++  box.appendChild(el('div', 'sub', 'Last activity in this project: ' + (d.empty.lastActivityAt ? ago(d.empty.lastActivityAt) : 'none yet') + '.'));
++  var links = el('div', 'links');
++  var ov = el('button', 'btn primary', 'Overview'); ov.type = 'button'; ov.addEventListener('click', function () { go('overview'); }); links.appendChild(ov);
++  if (d.recent[0]) { links.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(d.recent[0].runId) + '&t=' + T, 'btn', 'Last run: ' + d.recent[0].short)); }
++  links.appendChild(linkTo('/?t=' + T, 'btn', 'All projects'));
++  box.appendChild(links);
++  if (d.finishedCount) { box.appendChild(el('div', 'sub', 'Finished today: ' + d.finishedCount + (d.finishedCount === 1 ? ' run' : ' runs') + (d.finishedCount === d.recent.length ? ', ' + usd(d.recent.reduce(function (n, r) { return n + (r.costUsd || 0); }, 0)) : ' (the latest ' + d.recent.length + ' are listed)') + '.')); }
++}
++
++function render(d) {
++  var empty = Boolean(d.empty);
++  $('liveEmpty').hidden = !empty; $('liveBody').hidden = empty;
++  if (empty) { renderEmpty(d); }
++  $('liveCount').textContent = String(d.header.runsLive);
++  if (!empty) { renderKpis(d); renderBays(d); renderMap(d); renderStats(d); renderRuns(d); }
++  else { renderBays({ lanes: [] }); }
++}
++
++// ---- polling: one request at a time (10 s limit), only while the Live tab is showing, drawn only when the data really changed -------------------------------
++
++var inflight = false, lastOkAt = 0, lastSig = '', lastAnnounce = '', rendered = false;
++// What changes just because time passes (elapsed time, estimates, when an agent started) does not redraw the tab: elapsed time is kept current in the page.
++var VOLATILE = { now: 1, elapsedMs: 1, etaMs: 1, since: 1 };
++function chip() {
++  var l = L.liveness(lastOkAt, Date.now());
++  $('liveText').textContent = l.state === 'live' ? 'Live' : lastOkAt ? 'Stale (' + l.ageS + ' s)' : 'connecting';
++  $('liveDot').className = 'dot ' + (l.state === 'live' ? '' : 'off');
++  document.querySelectorAll('.elapsed[data-started]').forEach(function (n) { n.textContent = elapsedText(n.getAttribute('data-started')); });
++}
++function problem(text) {
++  if (rendered) { return; }   // data is on the screen: the chip says Stale, the data stays
++  $('liveBody').hidden = true; $('liveEmpty').hidden = false;
++  var box = $('liveEmpty'); box.textContent = ''; box.appendChild(el('h2', '', text)); box.appendChild(el('div', 'sub', 'Reload the page, or open the board again from swarm watch --all.'));
++}
++function load() {
++  if (inflight || document.hidden || $('pane-live').hidden) { return; }
++  inflight = true;
++  var ctl = new AbortController(), timer = setTimeout(function () { ctl.abort(); }, 10000);
++  fetch('/api/live?id=' + encodeURIComponent(ID) + '&t=' + T, { headers: { 'x-watch-token': TOKEN }, signal: ctl.signal })
++    .then(function (res) {
++      if (res.ok) { return res.json(); }
++      problem(res.status === 404 ? 'Project not found' : res.status === 403 ? 'This page\'s link has expired' : 'Could not load (' + res.status + ')');
++      return null;
++    })
++    .then(function (d) {
++      if (!d) { return; }
++      var sig = JSON.stringify(d, function (k, v) { return VOLATILE[k] ? undefined : v; });
++      if (sig !== lastSig) {
++        render(d); rendered = true; lastSig = sig;
++        var say = d.header.runsLive + ' live run' + (d.header.runsLive === 1 ? '' : 's') + ', ' + d.header.jobs.running + ' jobs running';
++        if (say !== lastAnnounce) { lastAnnounce = say; $('announce').textContent = say; }
++      }
++      lastOkAt = Date.now();
++    })
++    .catch(function () { problem('Could not reach the board'); })
++    .then(function () { clearTimeout(timer); inflight = false; chip(); });
++}
++document.querySelectorAll('#mapMode button').forEach(function (b) { b.addEventListener('click', function () { mapMode = b.getAttribute('data-mode'); store.set('swarm-live-map', mapMode); lastSig = ''; load(); }); });
++document.addEventListener('visibilitychange', load);
++go(location.hash.replace(/^#/, ''));
++load();
++setInterval(load, 3000);
++setInterval(chip, 1000);
+diff --git a/tools/watch-assets/project.html b/tools/watch-assets/project.html
+index 93054f9..27a9692 100644
+--- a/tools/watch-assets/project.html
++++ b/tools/watch-assets/project.html
+@@ -8,20 +8,50 @@
+ <link rel="stylesheet" href="assets/swarm-ui.css">
+ </head>
+ <body>
+-<div class="wrap">
++<div class="app">
++  <div class="sr" id="announce" role="status" aria-live="polite" aria-atomic="true"></div>
+   <nav id="crumbs" class="crumbs" aria-label="Breadcrumb"><a id="crumbBack" class="back" href="#">← All projects</a><a id="crumbAll" href="#">All projects</a><span class="sep">›</span><span id="crumbProject" class="here">project</span></nav>
+-  <header class="top hud">
+-    <div class="brand"><div class="logo" aria-hidden="true"><i>SW</i></div><div><h1 id="title">Project</h1><div class="goal" id="root">-</div></div></div>
++  <header class="topbar">
++    <div class="brand"><div class="logo" aria-hidden="true">SW</div><div><h1 id="title">Project</h1><div class="crumb" id="root">-</div></div></div>
+     <div class="spacer"></div>
+-    <div class="chips"><a class="chip mono" id="back" href="#">All projects</a></div>
++    <div class="chips"><span class="chip" id="liveChip"><span class="dot off" id="liveDot" aria-hidden="true"></span><span id="liveText">connecting</span></span><button class="chip btn" id="pauseMotion" type="button" aria-pressed="false">Pause motion</button><a class="chip mono" id="back" href="#">All projects</a></div>
+   </header>
+-  <main class="pane">
+-    <section class="card hud"><h2 class="board-h">Spend</h2><div id="spend" class="board-totals"></div></section>
+-    <section class="card hud"><h2 class="board-h">Tickets</h2><div id="tickets" class="board-list"></div></section>
+-    <section class="card hud"><h2 class="board-h">Runs</h2><div id="runs" class="board-list"></div></section>
+-    <section class="card hud"><h2 class="board-h">Lessons</h2><div id="lessons" class="board-list"></div></section>
++  <nav class="tabs" id="tabs" role="tablist" aria-label="Project sections">
++    <button class="tab" role="tab" id="tab-live-btn" aria-controls="pane-live" aria-selected="true" data-tab="live" type="button">Live <span class="badge quiet" id="liveCount">0</span></button>
++    <button class="tab" role="tab" id="tab-overview-btn" aria-controls="pane-overview" aria-selected="false" tabindex="-1" data-tab="overview" type="button">Overview</button>
++  </nav>
++  <main>
++    <section id="pane-live" role="tabpanel" aria-labelledby="tab-live-btn" class="stack">
++      <div id="liveEmpty" class="card empty-live" hidden></div>
++      <div id="liveBody" class="stack">
++        <div class="kpis" id="liveKpis"></div>
++        <div class="layout">
++          <div class="stack">
++            <section class="card" aria-label="Lanes"><h2>Lanes <span class="badge quiet" id="agentCount">0</span></h2><div class="bays" id="liveBays"></div>
++              <p class="board-note">One head per agent running in any live run of this project, labeled with its ticket and run. A sleeping head means no agent is running in that lane. At most 12 heads move at once.</p></section>
++            <section class="card" aria-label="Combined swarm map"><h2>Swarm map <span class="badge quiet" id="mapCount">0</span>
++              <span class="toggle-group" role="group" aria-label="Color squares by" id="mapMode"><button type="button" data-mode="state" aria-pressed="true">State</button><button type="button" data-mode="lane" aria-pressed="false">Lane</button><button type="button" data-mode="run" aria-pressed="false">Run</button></span></h2>
++              <div class="runlegend" id="runLegend"></div><div class="livemap" id="liveMap" role="img" aria-label="One square per job"></div><div class="legend" id="mapLegend"></div>
++              <p class="board-note" id="mapNote"></p></section>
++          </div>
++          <aside class="stack">
++            <section class="card" aria-label="Combined stats"><h2>Combined stats</h2><div class="statgrid" id="liveStats"></div></section>
++            <section class="card" aria-label="Live runs"><h2>Live runs</h2><div id="liveRuns" class="runlist"></div></section>
++            <section class="card" aria-label="Recent runs"><h2>Recent today</h2><div id="liveRecent" class="runlist"></div></section>
++          </aside>
++        </div>
++      </div>
++    </section>
++    <section id="pane-overview" role="tabpanel" aria-labelledby="tab-overview-btn" class="pane stack" hidden>
++      <section class="card"><h2 class="board-h">Spend</h2><div id="spend" class="board-totals"></div></section>
++      <section class="card"><h2 class="board-h">Tickets</h2><div id="tickets" class="board-list"></div></section>
++      <section class="card"><h2 class="board-h">Runs</h2><div id="runs" class="board-list"></div></section>
++      <section class="card"><h2 class="board-h">Lessons</h2><div id="lessons" class="board-list"></div></section>
++    </section>
+   </main>
+ </div>
++<script src="assets/board-lib.js"></script>
+ <script src="assets/project.js"></script>
++<script type="module" src="assets/project-live.js"></script>
+ </body>
+ </html>
+diff --git a/tools/watch-assets/swarm-ui.css b/tools/watch-assets/swarm-ui.css
+index f5f46ba..52bbe56 100644
+--- a/tools/watch-assets/swarm-ui.css
++++ b/tools/watch-assets/swarm-ui.css
+@@ -196,3 +196,33 @@ body.paused-motion *, body.paused-motion *::before, body.paused-motion *::after
+   *, *::before, *::after { animation: none !important; transition: none !important; }
+   .dot { box-shadow: none; }
+ }
++
++/* project page: the Live tab (every live run of one project, combined) */
++.toggle-group { display: inline-flex; padding: 3px; gap: 2px; border-radius: var(--pill); background: var(--bg); border: 1px solid var(--line); margin-left: auto; text-transform: none; letter-spacing: 0; }
++.toggle-group button { cursor: pointer; padding: 4px 12px; border-radius: var(--pill); border: 0; background: none; font: inherit; font-size: 12px; font-weight: 600; color: var(--muted); }
++.toggle-group button:hover { color: var(--fg); } .toggle-group button[aria-pressed="true"] { background: var(--card-2); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line); }
++.empty-live { text-align: center; padding: 34px 16px; display: grid; gap: 10px; justify-items: center; }
++.empty-live h2 { font-size: 20px; text-transform: none; letter-spacing: 0; color: var(--fg); margin: 0; }
++.empty-live .links { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
++.livemap { display: grid; grid-template-columns: repeat(auto-fill, 14px); gap: 3px; margin: 10px 0 6px; }
++.sq { width: 14px; height: 14px; border-radius: 3px; background: var(--q, #3f3f4a); box-shadow: inset 0 0 0 2px var(--run, transparent); }
++.sq.running { animation: sqpulse 1.8s ease-in-out infinite; }
++@keyframes sqpulse { 50% { opacity: .55; } }
++.paused-motion .sq.running { animation: none; }
++.runlegend { display: flex; flex-wrap: wrap; gap: 6px; }
++.runchip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: var(--pill); padding: 2px 10px 2px 6px; font-size: 11px; color: var(--muted); }
++.runchip i { width: 10px; height: 10px; border-radius: 50%; background: var(--run); display: inline-block; }
++.statgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
++.stat { border: 1px solid var(--line-soft); border-radius: var(--r-sm); padding: 8px 10px; background: var(--card); min-width: 0; }
++.stat .l { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; } .stat .v { font-size: 18px; font-weight: 700; font-family: var(--mono); font-variant-numeric: tabular-nums; } .stat .s { color: var(--faint); font-size: 11px; overflow-wrap: anywhere; }
++.runlist { display: grid; gap: 8px; }
++.runrow { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: center; border: 1px solid var(--line-soft); border-left: 4px solid var(--run, var(--line)); border-radius: var(--r-sm); padding: 8px 10px; background: var(--card); }
++.runrow .who { min-width: 0; display: grid; gap: 2px; } .runrow .who b { overflow-wrap: anywhere; } .runrow .meta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--muted); font-size: 12px; }
++.runrow .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
++.runrow.recent { grid-template-columns: minmax(0, 1fr); }
++.ring2 { width: 44px; height: 44px; }
++@media (max-width: 960px) { .toggle-group button, .runrow .acts .btn, .empty-live .links .btn, .runrow.recent a, #tabs .tab { min-height: 44px; } .toggle-group button { padding: 4px 14px; } .runrow.recent a { display: inline-flex; align-items: center; } }
++.sq.other { background: #4a4a56; }
++
++.agent .run-s { color: var(--faint); font-size: 9px; }
++@media (max-width: 960px) { #pane-live .layout > aside { order: 0; } }
+diff --git a/tools/watch-cli.mjs b/tools/watch-cli.mjs
+index 6239a20..512297c 100644
+--- a/tools/watch-cli.mjs
++++ b/tools/watch-cli.mjs
+@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
+ import { buildRunSnapshot } from './watch-state.mjs';
+ import { sanitizeWorkerText, UNTRUSTED_LABEL } from './worker-text.mjs';
+ import { buildPlanSnapshot } from './watch-plan.mjs';
++import { liveOverview } from './board-live.mjs';
+ import { createWatchServer } from './watch-server.mjs';
+ import { renderTui } from './watch-tui.mjs';
+ import { readGallery, approveScreens, addComment } from './watch-gallery.mjs';
+@@ -306,6 +307,13 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
+       const liveRuns = (await live()).filter(r => r.root === project.root);
+       return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)) });
+     },
++    // Every run alive in one project, combined (the Live tab of the project page).
++    async live(id) {
++      const project = await find(id);
++      if (!project) return null;
++      const liveRuns = (await live()).filter(r => r.root === project.root);
++      return liveOverview(project, liveRuns, { now: now() });
++    },
+     // One run's jobs, graph and journal; with `compare`, that run beside another run of the same project.
+     async run(id, runId, compare = null) {
+       const project = await find(id);
+diff --git a/tools/watch-server.mjs b/tools/watch-server.mjs
+index 06393bd..d15254a 100644
+--- a/tools/watch-server.mjs
++++ b/tools/watch-server.mjs
+@@ -185,7 +185,7 @@ export function createWatchServer(opts) {
+     const isJob = parts.length === 3 && parts[1] === 'job' && typeof getJobReport === 'function';
+     const isBoard = pathname === '/board' && typeof getBoard === 'function';
+     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
+-    const boardRoutes = board ? ['/api/board', '/api/project', '/api/history', '/history.csv', '/open/run', '/project', '/run', '/api/run'] : [];
++    const boardRoutes = board ? ['/api/board', '/api/project', '/api/live', '/api/history', '/history.csv', '/open/run', '/project', '/run', '/api/run'] : [];
+     const isBoardRoute = boardRoutes.includes(pathname);
+     // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
+     const isNav = Boolean(nav) && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
+@@ -216,6 +216,7 @@ export function createWatchServer(opts) {
+       if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
+       if (pathname === '/api/board') return sendJson(res, method, await board.snapshot(q));
+       if (pathname === '/api/project') { const detail = await board.project(String(q.id ?? '')); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
++      if (pathname === '/api/live') { const live = await board.live(String(q.id ?? '')); return live ? sendJson(res, method, live) : sendText(res, method, 404, 'not found'); }
+       if (pathname === '/api/history') return sendJson(res, method, await board.history(q));
+       if (pathname === '/history.csv') return send(res, method, 200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="swarm-history.csv"' }, await board.historyCsv(q));
+       // /open/run?id=PROJECT&run=RUN: starts the run's own Watch server (or reuses it) and sends the browser to it. The target address carries that server's own token.

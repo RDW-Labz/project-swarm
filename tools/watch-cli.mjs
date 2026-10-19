@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { buildRunSnapshot } from './watch-state.mjs';
 import { sanitizeWorkerText, UNTRUSTED_LABEL } from './worker-text.mjs';
 import { buildPlanSnapshot } from './watch-plan.mjs';
+import { liveOverview } from './board-live.mjs';
 import { createWatchServer } from './watch-server.mjs';
 import { renderTui } from './watch-tui.mjs';
 import { readGallery, approveScreens, addComment } from './watch-gallery.mjs';
@@ -305,6 +306,13 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       if (!project) return null;
       const liveRuns = (await live()).filter(r => r.root === project.root);
       return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)) });
+    },
+    // Every run alive in one project, combined (the Live tab of the project page).
+    async live(id) {
+      const project = await find(id);
+      if (!project) return null;
+      const liveRuns = (await live()).filter(r => r.root === project.root);
+      return liveOverview(project, liveRuns, { now: now() });
     },
     // One run's jobs, graph and journal; with `compare`, that run beside another run of the same project.
     async run(id, runId, compare = null) {
