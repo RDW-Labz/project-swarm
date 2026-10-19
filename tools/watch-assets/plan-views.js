@@ -114,7 +114,7 @@
 
   function renderRequirements(container, plan) {
     container.textContent = '';
-    var bar = el('div', 'seg');
+    var bar = el('div', 'toggle-group');
     bar.setAttribute('role', 'group');
     bar.setAttribute('aria-label', 'Filter requirements');
     [['all', 'All'], ['missing', 'Missing'], ['partial', 'Partial']].forEach(function (f) {
@@ -235,7 +235,7 @@
       var isBlocked = !!(blocked[e.from] && (blocked[e.to] || statusOf[e.to] === 'blocked'));
       svg.appendChild(svgEl('line', {
         x1: b.x + 130, y1: b.y + 15, x2: a.x, y2: a.y + 15,
-        stroke: isBlocked ? '#ff5f6f' : '#66739f',
+        stroke: isBlocked ? '#fb7185' : '#82828d',
         'stroke-width': isBlocked ? 2 : 1,
         opacity: isBlocked ? 1 : 0.35
       }));
@@ -247,11 +247,11 @@
       var label = String(n.id);
       g.appendChild(svgEl('rect', {
         x: p.x, y: p.y, width: 130, height: 30, rx: 8, ry: 8,
-        fill: '#15214a',
-        stroke: isBlocked ? '#ff5f6f' : '#33468a',
+        fill: '#111114',
+        stroke: isBlocked ? '#fb7185' : '#3a3a44',
         'stroke-width': isBlocked ? 2 : 1
       }));
-      var t = svgEl('text', { x: p.x + 8, y: p.y + 19, 'font-size': 11, fill: '#dfe6fb' });
+      var t = svgEl('text', { x: p.x + 8, y: p.y + 19, 'font-size': 11, fill: '#ececf1' });
       t.textContent = label.length > 18 ? label.slice(0, 17) + '…' : label;
       g.appendChild(t);
       var title = document.createElementNS(SVG_NS, 'title');

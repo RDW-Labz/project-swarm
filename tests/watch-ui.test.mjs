@@ -360,3 +360,27 @@ test('review fixes in the page: one poll at a time, nothing rebuilt when nothing
   assert.doesNotMatch(html, /id="liveChip"[^>]*role="status"/, 'a clock-like chip is not a live region');
   assert.match(html, /id="deeplink" hidden/);
 });
+
+test('the per-run page uses the board design system: shared tokens first, no navy palette, no corner brackets', async () => {
+  const dir = new URL('../tools/watch-assets/', import.meta.url);
+  const names = (await fs.readdir(dir)).filter(n => /\.(css|js|html)$/.test(n) && !/^(swarm-ui\.css|board\.(js|html)|project\.(js|html)|run\.(js|html)|robot-.*|board-lib\.js)$/.test(n));
+  const files = {};
+  for (const n of names) files[n] = await fs.readFile(new URL(n, dir), 'utf8');
+  const read = n => files[n];
+  const html = read('index.html');
+  assert.ok(html.indexOf('assets/swarm-ui.css') > -1 && html.indexOf('assets/swarm-ui.css') < html.indexOf('assets/watch.css'));
+  assert.doesNotMatch(html, /class="[^"]*\bhud\b/);
+  assert.match(html, /<header class="topbar">/);
+  assert.equal((html.match(/<button class="tab" role="tab"/g) ?? []).length, 4);
+  assert.match(html, /class="toggle-group"/);
+  // The old navy/lime palette and fonts are gone from every run-page file (the board's own files are out of this list).
+  const old = /#(?:0c1430|101b3e|15214a|1a2856|273770|33468a|dfe6fb|94a2cf|66739f|b9f25c|5aa8ff|3fd6c4|ffb547|ff8a6b|c39bff|f2d26b|ff5f6f)\b|rgba\((?:12, ?20, ?48|26, ?40, ?86|21, ?33, ?74|185, ?242, ?92|90, ?168, ?255)/i;
+  for (const n of names) { assert.doesNotMatch(read(n), old, n); assert.doesNotMatch(read(n), /Unbounded|JetBrains Mono|Figtree/, n); }
+  assert.doesNotMatch(read('watch.css'), /\.hud\b/);
+  assert.match(read('watch.css'), /prefers-reduced-motion/);
+  // Class names that swarm-ui.css gives another meaning (.seg is the board's 6px stacked bar) are not used as buttons by any run-page script.
+  for (const n of names.filter(x => x.endsWith('.js'))) assert.doesNotMatch(read(n), /el\('div', 'seg'\)|className = 'seg'/, n);
+  // The wrapper keeps the phone's safe-area padding (a `.wrap` class would override it).
+  assert.match(html, /<div class="app run">/);
+  assert.doesNotMatch(html, /class="app wrap"/);
+});

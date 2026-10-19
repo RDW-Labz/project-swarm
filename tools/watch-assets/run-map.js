@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 'use strict';
 (function () {
-var LANE_COL = { hermes: '#3fd6c4', cursor: '#5aa8ff', codex: '#ffb547', anthropic: '#ff8a6b', openrouter: '#c39bff', claude: '#f2d26b', other: '#94a2cf' };
-var STATE_COL = { queued: '#3a4d8a', running: '#5aa8ff', retry: '#ffb547', failed: '#ff5f6f', done: '#b9f25c' };
+var LANE_COL = { hermes: '#22d3ee', cursor: '#60a5fa', codex: '#fbbf24', anthropic: '#fb923c', openrouter: '#a78bfa', claude: '#fcd34d', other: '#a3a3ae' };
+var STATE_COL = { queued: '#3f3f4a', running: '#60a5fa', retry: '#fbbf24', failed: '#fb7185', done: '#34d399' };
 var STATE_ORDER = ['queued', 'running', 'retry', 'failed', 'done'];
 var canvas = document.getElementById('map');
 if (!canvas || !canvas.getContext) return;
@@ -71,12 +71,12 @@ function ensureLayout() {
 function draw(now) {
   var w = canvas.width / dpr, h = canvas.height / dpr;
   ctx.clearRect(0, 0, w, h);
-  ctx.font = '500 11px "JetBrains Mono", monospace';
+  ctx.font = '500 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
   ctx.textBaseline = 'top';
   groups.forEach(function (g) {
     var d = 0;
     for (var k = g.from; k < g.to; k++) if (stateOf(jobs[cells[k].i]) === 'done') d++;
-    ctx.fillStyle = '#94a2cf';
+    ctx.fillStyle = '#a3a3ae';
     ctx.fillText(g.name.toUpperCase() + '  ·  ' + d + '/' + (g.to - g.from), 0, g.y + 2);
   });
   var pulse = reduce ? 1 : 0.55 + 0.45 * Math.sin(now / 220);

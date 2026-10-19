@@ -90,7 +90,7 @@
     path.setAttribute('stroke-width', '2');
     path.setAttribute('vector-effect', 'non-scaling-stroke');
     if (vals.length > 1) svg.appendChild(path);
-    svg.appendChild(labelSvg(4, 12, 'start', '#94a2cf', 'max ' + max.toFixed(dec)));
+    svg.appendChild(labelSvg(4, 12, 'start', '#a3a3ae', 'max ' + max.toFixed(dec)));
     svg.appendChild(labelSvg(296, 116, 'end', color, 'now ' + last.toFixed(dec)));
   }
 
@@ -211,8 +211,8 @@
     setText('branch', run.branch || '–');
     recordSample(run, k);
     renderKpis(run, k);
-    drawSeries($('chFlight'), flightHist, '#5aa8ff', 0);
-    drawSeries($('chRate'), rateHist, '#b9f25c', 1);
+    drawSeries($('chFlight'), flightHist, '#60a5fa', 0);
+    drawSeries($('chRate'), rateHist, '#34d399', 1);
     renderBanner(run);
   }
 

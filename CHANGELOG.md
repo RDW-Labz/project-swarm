@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.131.0
+
+The per-run Watch page (`swarm watch RUN`) is restyled to match the board (`docs/design/swarm-watch-design-system.md`).
+- Same design system as the board: neutral dark surfaces, one emerald accent, pill tabs and chips, the board's headings and meters. The old navy palette, the corner brackets and the display font are gone from the Run, Build Plan, Commands and Gallery tabs (every colour in those files and in the swarm map, waves and lanes now comes from the same tokens).
+- `index.html` loads `swarm-ui.css` first; `watch.css` is now only this page's own layout. The By state / By lane switch is `.toggle-group` (the board's `.seg` is its stacked bar). Phone widths: one column, 44 px touch targets on buttons and the breadcrumb.
+- No behaviour change: same data, same scripts, same tabs. Not touched: the run page's per-tab scripts.
+- Tests: `tests/watch-ui.test.mjs`.
+
 ## 1.130.0
 
 `swarm remote` (`docs/remote.md`): the Swarm Watch board on your phone over Tailscale.
