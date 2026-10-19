@@ -56,6 +56,7 @@ import { appendEvent, readJournal, safeWritableDir, assertRegularOrMissing } fro
 import { loadRuns } from './brief.mjs';
 import { zeroTestGuard } from './zero-tests.mjs';
 import { projectStatus, formatStatus } from './status.mjs';
+import { commandLikeMessage } from './goal-guard.mjs';
 import { zshCompletion, completeRuns } from './completion.mjs';
 import { checkSwarmCommand } from './swarm-bin.mjs';
 import { autoInit, GOAL_BUDGET, isGoalArgument, manifestForGoal, goGoal, goalRunId, topLevelFolders, trackedFiles, worktreeDirty, createGoBranch } from './goal.mjs';
@@ -8486,6 +8487,8 @@ async function mainInner() {
     goFlags=parseGoFlags(flags);
     { const noCap=await noCapWarning(root).catch(()=>null); if(noCap)process.stderr.write(`${noCap}\n`); }
     planFlagsFromCli={maxUsd:goFlags.maxUsd,maxTokens:goFlags.maxTokens};
+    // Before anything is planned or spent: a mistyped command is never a goal.
+    { const lookalike=typeof argument==='string'&&isGoalArgument(argument)&&!(await existingManifestFile(root,argument))?commandLikeMessage(argument):null; if(lookalike)fail(lookalike,'goal-looks-like-command'); }
   }
   // validate/run's --evidence names a local file whose failures block is appended to every job
   // prompt before validation/execution; stripped here for the same reason as monitor/integrate above.
@@ -8674,7 +8677,7 @@ async function mainInner() {
       for(const key of ['maxUsd','maxTokens']){const limit=tighter(planFlagsFromCli[key],saved[key]);if(Number.isFinite(limit))goFlags[key]=limit;}
     }
     if(plan&&!planError)process.stderr.write(`${formatPreview(plan.preview)}\nplan: ${plan.id}\n`);
-    const approval=planError?{approved:false,code:'plan-failed',reason:planError.message}:await approveRun({yes:planOpts.yes,interactive:Boolean(process.stdin.isTTY&&process.stdout.isTTY),hasBudget:(typeof planFlagsFromCli.maxUsd==='number'&&planFlagsFromCli.maxUsd>0)||Boolean(planned),ask:question=>new Promise(resolve=>{const rl=readline.createInterface({input:process.stdin,output:process.stderr});let answered=false;rl.on('close',()=>{if(!answered)resolve('');});rl.question(question,answer=>{answered=true;rl.close();resolve(answer);});})});
+    const approval=planError?{approved:false,code:'plan-failed',reason:planError.message}:await approveRun({capUsd:plan?.preview?.budget?.maxUsd,yes:planOpts.yes,interactive:Boolean(process.stdin.isTTY&&process.stdout.isTTY),hasBudget:(typeof planFlagsFromCli.maxUsd==='number'&&planFlagsFromCli.maxUsd>0)||Boolean(planned),ask:question=>new Promise(resolve=>{const rl=readline.createInterface({input:process.stdin,output:process.stderr});let answered=false;rl.on('close',()=>{if(!answered)resolve('');});rl.question(question,answer=>{answered=true;rl.close();resolve(answer);});})});
     if(approval.approved&&!planned){try{await savePlan(root,plan);}catch{/* the preview still stood; the run goes on */}}
     if(approval.approved&&planned){try{await markPlanRun(root,planned.id);}catch(error){approval.approved=false;approval.code='plan-failed';approval.reason=error.message;}}
     if(!approval.approved){

@@ -42,13 +42,15 @@ export async function buildGoalPlan(root, goal, flags, deps) {
 }
 
 // The owner's yes or no. A person at a terminal is asked; anything else needs --yes and a budget.
-export async function approveRun({ yes, interactive, hasBudget, ask }) {
+export async function approveRun({ yes, interactive, hasBudget, ask, capUsd }) {
   if (yes) {
     if (!interactive && !hasBudget) return { approved: false, code: 'plan-budget-required', reason: 'an unattended run needs --yes with --max-usd (or --plan)' };
     return { approved: true };
   }
   if (!interactive) return { approved: false, code: 'plan-approval-required', reason: 'no terminal to ask on: pass --yes with --max-usd, or run swarm plan first and use swarm go --plan ID' };
-  const answer = String(await ask('Run? [y/N] ')).trim().toLowerCase();
+  // The question names the cap: the most this run may spend, not the estimate.
+  const cap = typeof capUsd === 'number' && Number.isFinite(capUsd) ? `spending at most $${capUsd.toFixed(2)} (the cap)` : 'with NO dollar cap';
+  const answer = String(await ask(`Run, ${cap}? [y/N] `)).trim().toLowerCase();
   return answer === 'y' || answer === 'yes' ? { approved: true } : { approved: false, code: 'plan-declined', reason: 'not approved' };
 }
 
