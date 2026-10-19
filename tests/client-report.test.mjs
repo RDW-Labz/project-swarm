@@ -83,7 +83,7 @@ test('the scan finds each kind of internal content, and lets ordinary client wor
 test('the text of the scope is escaped: markup in a requirement never becomes markup in the page', () => {
   const data = { name: '<script>alert(1)</script>', periodStart: 'a', periodEnd: 'b', percent: 10, done: 1, total: 10, byStage: [{ id: 'S1', title: '"><img src=x onerror=1>', total: 1, done: 0 }], doneThisWeek: ['<b>x</b> & "y"'], inProgress: [], next: [], decisions: [], previewUrl: 'https://a.dev/"onmouseover="x' };
   const html = renderHtml(data);
-  assert.doesNotMatch(html, /<script>|<img|<b>|onmouseover="x/);
+  assert.doesNotMatch(html, /<script>|<img|<b>|onmouseover="x/i);
   assert.match(html, /&lt;script&gt;/);
   assert.doesNotMatch(html, /<script|javascript:|<img|<link|@import|url\(/i, 'no script, no external load');
 });
