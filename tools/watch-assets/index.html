@@ -3,7 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
 <title>Swarm Watch</title>
+<link rel="stylesheet" href="assets/swarm-ui.css">
 <link rel="stylesheet" href="assets/watch.css">
 <link rel="stylesheet" href="assets/tabs.css">
 <link rel="stylesheet" href="assets/plan.css">
@@ -12,11 +14,11 @@
 <link rel="stylesheet" href="assets/board.css">
 </head>
 <body>
-<div class="wrap">
+<div class="app run">
 <nav id="crumbs" class="crumbs" aria-label="Breadcrumb" hidden></nav>
-<header class="top hud">
+<header class="topbar">
     <div class="brand">
-      <div class="logo" aria-hidden="true"><i>SW</i></div>
+      <div class="logo" aria-hidden="true">SW</div>
       <div style="min-width:0">
         <h1>Swarm Watch</h1>
         <div class="goal" id="goal">go-7f3a · "Add order history, invoices and refunds to the dealer portal"</div>
@@ -24,29 +26,29 @@
     </div>
     <div class="spacer"></div>
     <div class="chips">
-      <span class="chip live" id="status"><span class="dot pulse"></span>LIVE</span>
+      <span class="chip live" id="status"><span class="dot pulse" aria-hidden="true"></span>LIVE</span>
       <span class="chip mono num" id="clock">00:00 elapsed</span>
       <span class="chip mono" id="branch">branch -</span>
     </div>
   </header>
   <nav class="tabs" id="tabs" role="tablist" aria-label="Views">
-    <button role="tab" data-tab="run" aria-selected="true">Run</button>
-    <button role="tab" data-tab="plan" aria-selected="false">Build Plan</button>
-    <button role="tab" data-tab="commands" aria-selected="false">Commands</button>
-    <button role="tab" data-tab="gallery" aria-selected="false">Gallery</button>
+    <button class="tab" role="tab" data-tab="run" aria-selected="true" type="button">Run</button>
+    <button class="tab" role="tab" data-tab="plan" aria-selected="false" type="button">Build Plan</button>
+    <button class="tab" role="tab" data-tab="commands" aria-selected="false" type="button">Commands</button>
+    <button class="tab" role="tab" data-tab="gallery" aria-selected="false" type="button">Gallery</button>
   </nav>
   <main id="pane-run" class="pane" role="tabpanel">
-  <section id="doneBanner" class="card hud" hidden></section>
+  <section id="doneBanner" class="card" hidden></section>
 
 
   <section class="kpis" aria-label="Run summary">
     <div class="kpi"><span class="label">Progress</span>
       <div class="ringwrap">
-        <svg class="ring" viewBox="0 0 54 54" aria-hidden="true"><circle cx="27" cy="27" r="22" fill="none" stroke="#0c1430" stroke-width="7"/><circle id="ringArc" cx="27" cy="27" r="22" fill="none" stroke="url(#rg)" stroke-width="7" stroke-linecap="round" stroke-dasharray="0 200" transform="rotate(-90 27 27)"/><defs><linearGradient id="rg" x1="0" x2="1"><stop offset="0" stop-color="#3fd6c4"/><stop offset="1" stop-color="#b9f25c"/></linearGradient></defs></svg>
+        <svg class="ring" viewBox="0 0 54 54" aria-hidden="true"><circle cx="27" cy="27" r="22" fill="none" stroke="#23232a" stroke-width="7"/><circle id="ringArc" cx="27" cy="27" r="22" fill="none" stroke="url(#rg)" stroke-width="7" stroke-linecap="round" stroke-dasharray="0 200" transform="rotate(-90 27 27)"/><defs><linearGradient id="rg" x1="0" x2="1"><stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#34d399"/></linearGradient></defs></svg>
         <div><div class="v num" id="kDone">0<small>/ 1,200</small></div><div class="sub" id="kPct">0% done</div></div>
       </div>
     </div>
-    <div class="kpi"><span class="label">In flight</span><div class="v num" id="kFlight">0</div><div class="sub"><span id="kPeak">peak 0</span><svg id="spark" width="80" height="22" viewBox="0 0 80 22" aria-hidden="true"><path id="sparkPath" fill="none" stroke="#5aa8ff" stroke-width="2"/></svg></div></div>
+    <div class="kpi"><span class="label">In flight</span><div class="v num" id="kFlight">0</div><div class="sub"><span id="kPeak">peak 0</span><svg id="spark" width="80" height="22" viewBox="0 0 80 22" aria-hidden="true"><path id="sparkPath" fill="none" stroke="#60a5fa" stroke-width="2"/></svg></div></div>
     <div class="kpi"><span class="label">First-try pass</span><div class="v num" id="kPass">–</div><div class="sub" id="kPassSub">retries 0 · failed 0</div></div>
     <div class="kpi"><span class="label">Spend</span><div class="v num" id="kSpend">$0.00<small>/ $5</small></div><div class="bar"><span id="kSpendBar" style="width:0%; background:linear-gradient(90deg,var(--teal),var(--lime))"></span></div><div class="sub" id="kForecast">forecast –</div></div>
     <div class="kpi"><span class="label">ETA</span><div class="v num" id="kEta">–</div><div class="sub" id="kRate">0 jobs/s</div></div>
@@ -54,10 +56,10 @@
   </section>
 
   <section class="grid-main">
-    <div class="card hud">
+    <div class="card">
       <div class="card-head">
         <div><h2>Swarm map</h2><div class="label" style="margin-top:4px">one square per job · grouped by lead</div></div>
-        <div class="seg" role="group" aria-label="Color squares by">
+        <div class="toggle-group" role="group" aria-label="Color squares by">
           <button id="cState" aria-pressed="true">By state</button>
           <button id="cLane" aria-pressed="false">By lane</button>
         </div>

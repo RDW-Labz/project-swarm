@@ -21,15 +21,17 @@
 .board-entry .kind{font-size:12px;text-transform:uppercase;opacity:.8}
 .board-link{color:inherit;text-decoration:underline}
 
-.crumbs{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 0;font-size:13px}
+.crumbs{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--muted)}
 .crumbs[hidden]{display:none}
-.crumbs a{color:inherit}
-.crumbs .back{padding:4px 10px;border-radius:999px;border:1px solid rgba(128,128,128,.4);text-decoration:none}
-.crumbs .back:hover{background:rgba(128,128,128,.12)}
+.crumbs a{color:inherit;text-decoration:none}
+.crumbs a:hover{color:var(--fg);text-decoration:underline}
+.crumbs .back{display:inline-flex;align-items:center;min-height:32px;padding:4px 12px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--fg);text-decoration:none}
+.crumbs .back:hover{background:var(--card-2);text-decoration:none}
 .crumbs .sep{opacity:.5}
-.crumbs .here{opacity:.8;overflow-wrap:anywhere}
+.crumbs .here{color:var(--fg);overflow-wrap:anywhere}
+@media (max-width:640px){.crumbs .back{min-height:44px}}
 
-.need{border:1px solid rgba(128,128,128,.3);border-left:4px solid #d9a400;border-radius:10px;padding:10px 12px;display:grid;gap:6px}
+.need{border:1px solid rgba(128,128,128,.3);border-left:4px solid var(--warn);border-radius:10px;padding:10px 12px;display:grid;gap:6px}
 .need-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .need-title,.need-next,.board-entry>span,.board-lane .name{overflow-wrap:break-word;word-break:normal;white-space:normal;min-width:0}
 .need-next{opacity:.9;border-left:3px solid rgba(128,128,128,.4);padding-left:8px}
@@ -39,4 +41,4 @@
 .scratch-toggle{display:inline-flex;gap:6px;align-items:center;cursor:pointer}
 .need-cmd{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .need-cmd code{padding:3px 6px;border-radius:6px;background:rgba(128,128,128,.15);overflow-wrap:anywhere}
-.chip.needs-some{background:#d9a400;color:#111}
+.chip.needs-some{background:var(--warn);color:#1a1202}

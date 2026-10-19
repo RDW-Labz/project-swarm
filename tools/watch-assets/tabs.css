@@ -1,11 +1,4 @@
 :root{--drawer-w:420px}
-.tabs{display:flex;gap:6px;align-items:center;padding:6px;margin-bottom:16px;border-radius:999px;background:linear-gradient(180deg,rgba(12,20,48,.9),rgba(12,20,48,.6));border:1px solid var(--line);overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none;max-width:100%}
-.tabs::-webkit-scrollbar{display:none}
-.tabs button{all:unset;cursor:pointer;flex:none;position:relative;padding:9px 16px;border-radius:999px;font-family:var(--body);font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap;transition:color .2s,background .2s}
-.tabs button:hover{color:var(--fg);background:rgba(90,168,255,.08)}
-.tabs button:focus-visible{outline:2px solid var(--sky);outline-offset:2px;box-shadow:0 0 0 4px rgba(90,168,255,.25)}
-.tabs button[aria-selected="true"]{color:var(--fg);background:linear-gradient(180deg,var(--card2),var(--card));box-shadow:inset 0 0 0 1px var(--line2)}
-.tabs button[aria-selected="true"]::after{content:"";position:absolute;left:14px;right:14px;bottom:-4px;height:3px;border-radius:3px;background:var(--lime);box-shadow:0 0 12px rgba(185,242,92,.5)}
 .pane{display:grid;gap:16px;min-width:0;padding:4px 0}
 .pane[hidden]{display:none!important}
 .drawer{position:fixed;top:0;right:0;bottom:0;width:var(--drawer-w);max-width:100vw;z-index:50;display:flex;flex-direction:column;background:linear-gradient(180deg,var(--card2),var(--bg) 85%);border-left:1px solid var(--line2);box-shadow:-18px 0 40px rgba(0,0,0,.4);color:var(--fg);transform:translateX(0);transition:transform .25s ease}
@@ -16,18 +9,16 @@
 .drawer-close:hover{color:var(--fg);border-color:var(--sky)}
 .drawer-close:focus-visible{outline:2px solid var(--sky);outline-offset:2px}
 .drawer-body{flex:1;overflow-y:auto;padding:16px 18px 28px;display:grid;gap:14px;align-content:start;overscroll-behavior:contain}
-#doneBanner{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px;padding:16px 20px;border-radius:var(--r);border:1px solid rgba(185,242,92,.35);background:linear-gradient(120deg,rgba(185,242,92,.16),rgba(63,214,196,.08) 60%,rgba(21,33,74,.9));box-shadow:0 0 28px rgba(185,242,92,.12);color:var(--fg)}
+#doneBanner{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px;padding:16px 20px;border-radius:var(--r);border:1px solid rgba(52,211,153,.35);background:linear-gradient(120deg,rgba(52,211,153,.16),rgba(34,211,238,.08) 60%,rgba(17,17,20,.9));box-shadow:0 0 28px rgba(52,211,153,.12);color:var(--fg)}
 #doneBanner[hidden]{display:none!important}
 #doneBanner .label{color:var(--lime)}
-.copy,.cm-copy,.gl-copy{all:unset;cursor:pointer;flex:none;align-self:center;display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;font-family:var(--mono);font-size:11px;font-weight:700;color:var(--fg);background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line2);white-space:nowrap;transition:border-color .2s,color .2s,background .2s}
-.copy:hover,.cm-copy:hover,.gl-copy:hover{border-color:var(--sky)}
+.copy,button.copy,.cm-copy,.gl-copy{all:unset;cursor:pointer;flex:none;align-self:center;display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;font-family:var(--mono);font-size:11px;font-weight:700;color:var(--fg);background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line2);white-space:nowrap;transition:border-color .2s,color .2s,background .2s}
+.copy:hover,button.copy:hover,.cm-copy:hover,.gl-copy:hover{border-color:var(--sky)}
 .copy:focus-visible,.cm-copy:focus-visible,.gl-copy:focus-visible{outline:2px solid var(--sky);outline-offset:2px}
-.copy.copied,.cm-copy.copied,.gl-copy.copied{color:#0c1430;background:var(--lime);border-color:transparent}
+.copy.copied,button.copy.copied,.cm-copy.copied,.gl-copy.copied{color:#04130d;background:var(--lime);border-color:transparent}
 .mono-box,.cm-cmd,.gl-cmd{display:flex;flex-direction:row;align-items:center;gap:10px;justify-content:space-between;min-width:0;padding:10px 12px;border-radius:var(--r-sm);background:var(--bg);border:1px solid var(--line);font-family:var(--mono);font-size:12px;color:var(--fg)}
 .mono-box code,.cm-cmd-box,.gl-cmd-text{flex:1 1 auto;min-width:0;font-family:var(--mono);white-space:normal;overflow-wrap:anywhere;word-break:break-word}
 @media (max-width:640px){
-  .tabs{border-radius:var(--r-sm);padding:4px}
-  .tabs button{padding:8px 13px;font-size:12px}
   .drawer{width:100vw;max-width:100vw;border-left:none}
   .drawer-head{padding:14px 16px}
   .drawer-body{padding:14px 16px 24px}

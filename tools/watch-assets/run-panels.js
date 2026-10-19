@@ -2,12 +2,12 @@
 (function () {
   'use strict';
 
-  var COLORS = { hermes: '#3fd6c4', cursor: '#5aa8ff', codex: '#ffb547', anthropic: '#ff8a6b', openrouter: '#c39bff', claude: '#f2d26b' };
-  var OTHER = '#94a2cf';
+  var COLORS = { hermes: '#22d3ee', cursor: '#60a5fa', codex: '#fbbf24', anthropic: '#fb923c', openrouter: '#a78bfa', claude: '#fcd34d' };
+  var OTHER = '#a3a3ae';
   var STRIPE = { error: 'var(--red)', warn: 'var(--amber)', info: 'var(--sky)' };
-  var BATCH = { ok: '#b9f25c', bisect: '#ffb547', conflict: '#ff8a6b' };
+  var BATCH = { ok: '#34d399', bisect: '#fbbf24', conflict: '#fb923c' };
   var BATCH_SYM = { ok: '\u2713', bisect: '\u00bd', conflict: '!' };
-  var WAVE_COL = ['#3fd6c4', '#5aa8ff', '#b9f25c'];
+  var WAVE_COL = ['#22d3ee', '#60a5fa', '#34d399'];
   var LEAD_PILL = { running: 'info', failed: 'bad', done: 'good', queued: 'lav' };
 
   function $(id) { return document.getElementById(id); }
