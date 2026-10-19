@@ -64,9 +64,15 @@ export function createWatchServer(opts) {
     deltaFile,
     idleMs = 1800000,
     now = Date.now,
+    // A fixed port and token, for a board that stays up between restarts (swarm remote). Without them: a free port and a fresh token every start.
+    port: wantedPort = 0,
+    token: fixedToken,
+    // swarm remote: the board is also reached through `tailscale serve`, which proxies from the tailnet to this loopback port. `hosts` are the names it is
+    // reached by and `login` is the tailnet login allowed to use it (Tailscale sets that header on what it proxies). Nothing else is ever listened on.
+    remote,
   } = opts;
 
-  const token = randomBytes(24).toString('hex');
+  const token = fixedToken ?? randomBytes(24).toString('hex');
   const assets = new Map();
   const streams = new Set();
   let server = null;
@@ -172,7 +178,14 @@ export function createWatchServer(opts) {
     }
     if (!server) return sendText(res, method, 421, 'misdirected request');
     const host = req.headers.host;
-    if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
+    const local = host === `127.0.0.1:${port}` || host === `localhost:${port}`;
+    if (remote) {
+      // Every request, whatever its Host, must come through tailscale serve as the owner: it sets the login header itself (a client cannot forge it past Tailscale) and a
+      // Funnel request carries none, so a Host spoofed to the loopback address gets nothing. Every refusal is the same 403, so the port cannot be probed for.
+      const login = req.headers['tailscale-user-login'];
+      const named = local || remote.hosts.includes(String(host).toLowerCase());
+      if (!named || req.headers['tailscale-funnel-request'] !== undefined || typeof login !== 'string' || login.toLowerCase() !== String(remote.login ?? '').toLowerCase()) return sendText(res, method, 403, 'forbidden');
+    } else if (!local) {
       return sendText(res, method, 421, 'misdirected request');
     }
     const u = new URL(req.url || '/', 'http://127.0.0.1');
@@ -185,10 +198,11 @@ export function createWatchServer(opts) {
     const isJob = parts.length === 3 && parts[1] === 'job' && typeof getJobReport === 'function';
     const isBoard = pathname === '/board' && typeof getBoard === 'function';
     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
-    const boardRoutes = board ? ['/api/board', '/api/project', '/api/history', '/history.csv', '/open/run', '/project', '/run', '/api/run'] : [];
+    // The remote board only reads: it never starts a run's own page on the computer ('/open/run') or a board.
+    const boardRoutes = board ? ['/api/board', '/api/project', '/api/history', '/history.csv', ...(remote ? [] : ['/open/run']), '/project', '/run', '/api/run'] : [];
     const isBoardRoute = boardRoutes.includes(pathname);
     // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
-    const isNav = Boolean(nav) && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
+    const isNav = Boolean(nav) && !remote && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
     const isShot = parts.length === 4 && parts[1] === 'shot' && (parts[3] === 'mockup' || parts[3] === 'page');
     if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav) return sendText(res, method, 404, 'not found');
     const q = u.searchParams.get('t');
@@ -288,7 +302,7 @@ export function createWatchServer(opts) {
     });
     await new Promise((resolve, reject) => {
       server.once('error', reject);
-      server.listen(0, '127.0.0.1', () => resolve());
+      server.listen(wantedPort, '127.0.0.1', () => resolve());
     });
     port = server.address().port;
     url = `http://127.0.0.1:${port}/?t=${token}`;

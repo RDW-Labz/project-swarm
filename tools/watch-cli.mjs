@@ -354,7 +354,9 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
 }
 
 // Starts the board server in this process and records its address for run pages that want to go back to it.
-export async function startBoardServer({ env = process.env, root }) {
+// `remote` ({ port, token, hosts, login }): the board `swarm remote` keeps up behind tailscale serve. It is not the board run pages go back to, so it records no address,
+// and it does not stop when idle.
+export async function startBoardServer({ env = process.env, root, remote }) {
   const api = createBoardApi({ env });
   backfillHistory({ env }).catch(() => {});
   const server = createWatchServer({
@@ -369,10 +371,11 @@ export async function startBoardServer({ env = process.env, root }) {
     contextCommands,
     assetDir: path.join(here, 'watch-assets'),
     deltaFile: path.join(here, 'watch-delta.mjs'),
+    ...(remote ? { port: remote.port, token: remote.token, remote: { hosts: remote.hosts, login: remote.login }, idleMs: Infinity } : {}),
   });
   const { url } = await server.listen();
-  api.setBoardUrl(url);
-  await writeBoardFile(url, { env }).catch(() => {});
+  api.setBoardUrl(remote ? null : url);
+  if (!remote) await writeBoardFile(url, { env }).catch(() => {});
   server.done.then(async () => {
     // The run pages this board opened must not point back at a board that is gone, and they close with it.
     api.setBoardUrl(null);

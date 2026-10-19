@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.0 },
+  "jobs": [
+    {
+      "id": "review-remote",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "a network-facing feature: it exposes the local board beyond the machine through Tailscale, so a mistake can publish it",
+      "type": "review",
+      "prompt": "Review coordination/review/remote.diff (swarm remote: the Swarm Watch board on a phone over Tailscale, tailnet only). Promises: the board listens on 127.0.0.1 only; tailscale funnel is never run and the setup refuses or tears down if Funnel is on for the board address; the board stays read-only and the token is required; only the owner's tailnet login (header Tailscale-User-Login) is let in through the proxy; off removes the serve entry, stops the board and deletes the token; rotate makes the old token stop working; off by default; a tailscale serve entry that is not ours is never changed or removed. Look hard for: (1) any way the board becomes reachable from a non-loopback address or the public internet (host check in tools/watch-server.mjs, Host header spoofing on the loopback port by a local web page, DNS rebinding, a request that carries a forged Tailscale-User-Login header directly to the loopback port from another local process or browser, funnel detection gaps such as AllowFunnel keys with other host forms or other ports on the same host, serve status JSON shapes), (2) token handling (file mode, race, token printed by status, token in logs, constant-time compare, token in a URL query), (3) takeDown and rotate correctness (stale pid reuse killing an unrelated process, ports history, a failed rotate leaving the old entry, removing an entry that is not ours), (4) the self-check logic and what it can falsely pass, (5) the QR encoder correctness and limits in tools/qr.mjs (it was checked by decoding with CoreImage for versions 1 to 10), (6) test gaps, unhandled errors, and behavior when the tailscale CLI answers unexpectedly. Real findings only, ranked, file and line, with a concrete input.",
+      "context": [
+        "tools/remote.mjs",
+        "tools/qr.mjs",
+        "tools/watch-server.mjs",
+        "tools/watch-cli.mjs",
+        "tests/remote.test.mjs",
+        "tests/fixtures/mock-tailscale.mjs",
+        "docs/remote.md",
+        "coordination/review/remote.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}
