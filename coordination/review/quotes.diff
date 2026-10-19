@@ -1,0 +1,584 @@
+diff --git a/docs/quotes.md b/docs/quotes.md
+new file mode 100644
+index 0000000..ed05727
+--- /dev/null
++++ b/docs/quotes.md
+@@ -0,0 +1,24 @@
++# Quotes: hours, cost and time as ranges
++
++Private to you. Never part of a client report. Nothing here calls a model or the network.
++
++## Your hours
++
++- `swarm time log HOURS "note"` adds one entry (0.05 to 24 hours) to `.swarm/project/time.ndjson` in the project.
++- `swarm time list` shows the entries and the total.
++
++## What is kept for each finished project
++
++`swarm quote record [--name NAME] [--charged USD] [--change-orders N] [--gpu-hours H] [--backfill]`, run in the project folder, writes one entry to `~/.project-swarm/quotes/projects.json` (change the folder with `SWARM_QUOTES_DIR`). Recording again with the same name updates the entry.
++
++It keeps: requirements, stages, screens and services (from the scope), tickets, model cost **billed** (per-use lanes and rented GPUs) apart from the **flat-rate list value** (Codex, Cursor and Claude subscriptions, which cost nothing extra), rented GPU hours, your logged hours, change orders, calendar days from the first run to the last, and what you charged. A number it cannot know is stored as `?`, never as 0. `--backfill` marks work recorded after the fact. `swarm quote list` shows what is kept.
++
++## A quote for a new scope
++
++`swarm quote SCOPE.md` sizes the scope (requirements, stages, screens, services), finds the nearest finished projects (up to 5, by how far apart the sizes are on a log scale, using only the sizes both have), and prints:
++
++- model cost (billed), calendar time, your hours, rented GPU hours, each as a **range**: the middle half of the similar projects; the lowest to the highest with two; one value, marked "no range", with one; **no number at all** with none.
++- **Confidence** with the reason: none, low (fewer than 3 similar projects), medium, high (5 close ones). Backfilled projects and projects without logged hours are named in the reason.
++- **Price:** blank until you set both an hourly rate and a margin: `swarm quote config --rate USD_PER_HOUR --margin PERCENT`. Then it is `(cost + hours x rate) / (1 - margin)`, as a low-to-high range. No default rate or margin is ever invented. `swarm quote config` alone shows what is set.
++
++The ranges are not scaled for size, so they get better as more projects are recorded.
+diff --git a/tests/quotes.test.mjs b/tests/quotes.test.mjs
+new file mode 100644
+index 0000000..68cdd6d
+--- /dev/null
++++ b/tests/quotes.test.mjs
+@@ -0,0 +1,173 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { createLedger, writeLedger } from '../tools/tickets.mjs';
++import { distance, rangeOf, buildQuote, renderQuote, readTime, readRecords, saveRecord, readQuoteConfig } from '../tools/quotes.mjs';
++import { runTimeCommand, runQuoteCommand } from '../tools/quote-commands.mjs';
++
++const NOW = Date.UTC(2026, 9, 18, 12, 0, 0);
++const tmp = async t => { const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'quotes-'))); t.after(() => fs.rm(d, { recursive: true, force: true })); return d; };
++const rec = (name, over = {}) => ({ id: name, name, source: 'recorded', requirements: 10, stages: 3, screens: 8, services: 2, billedUsd: 20, ownerHours: 30, calendarDays: 20, gpuHours: null, ...over });
++const scopeOf = n => ['# Scope: X', 'Version: 1', '## Stages', '- S1: A', '- S2: B', '## S1 A', ...Array.from({ length: n }, (_, i) => `### R-${String(i + 1).padStart(3, '0')} Thing ${i}.\nAcceptance:\n- ok`), '## Screens', '- Home', '- Cart', '## External', '- Resend: email'].join('\n');
++const env = dir => ({ SWARM_QUOTES_DIR: dir });
++
++test('hours: logged one entry at a time, validated, listed with a total, bad lines skipped', async t => {
++  const root = await tmp(t);
++  assert.equal((await runTimeCommand(root, ['log', '2.5', 'wiring', 'the', 'cart'], { now: () => NOW })).exitCode, 0);
++  await runTimeCommand(root, ['log', '1'], { now: () => NOW });
++  for (const bad of ['0', '-1', '25', 'abc', '1.234', '1e2']) assert.equal((await runTimeCommand(root, ['log', bad])).exitCode, 2, bad);
++  await fs.appendFile(path.join(root, '.swarm/project/time.ndjson'), 'not json\n{"hours":99,"at":"x"}\n');
++  const t2 = await readTime(root);
++  assert.equal(t2.total, 3.5);
++  assert.equal(t2.skipped, 2);
++  const list = await runTimeCommand(root, ['list']);
++  assert.match(list.stdout, /2\.5 h  wiring the cart/);
++  assert.match(list.stdout, /total 3\.5 hours \(2 unreadable/);
++});
++
++test('distance and ranges: log-size distance on shared traits only; middle half with 3+, lowest to highest with 2, one point with 1, nothing with 0', () => {
++  assert.equal(distance({ requirements: 10, stages: 3 }, { requirements: 10, stages: 3 }), 0);
++  assert.ok(distance({ requirements: 10 }, { requirements: 20 }) > distance({ requirements: 10 }, { requirements: 12 }));
++  assert.equal(distance({ requirements: 10 }, { screens: 5 }), null, 'nothing in common is not comparable');
++  assert.equal(distance({ requirements: null }, { requirements: 5 }), null);
++  assert.deepEqual(rangeOf([]), null);
++  assert.deepEqual(rangeOf([null, undefined]), null);
++  assert.deepEqual(rangeOf([5]), { low: 5, high: 5, n: 1, single: true });
++  assert.deepEqual(rangeOf([9, 3]), { low: 3, high: 9, n: 2, single: false });
++  assert.deepEqual(rangeOf([1, 2, 3, 4, 100]), { low: 2, high: 4, n: 5, single: false }, 'an outlier does not stretch the middle half');
++});
++
++test('the quote: no history = no number; few similar = low confidence with the reason; backfilled projects are named', () => {
++  const traits = { requirements: 10, stages: 3, screens: 8, services: 2 };
++  const none = renderQuote(buildQuote({ traits, records: [], config: { hourlyRate: 100, margin: 0.3 } }));
++  assert.match(none, /Confidence: none/);
++  assert.doesNotMatch(none, /\$\d/);
++  assert.match(none, /Price: blank/);
++  const one = buildQuote({ traits, records: [rec('a', { source: 'backfill' })], config: { hourlyRate: null, margin: null } });
++  assert.equal(one.confidence, 'low');
++  assert.match(one.why, /only 1 similar/);
++  assert.match(one.why, /backfilled/);
++  assert.match(renderQuote(one), /one project, no range/);
++  const nothingShared = buildQuote({ traits: { requirements: 10 }, records: [rec('b', { requirements: null })], config: {} });
++  assert.equal(nothingShared.confidence, 'none');
++  const many = buildQuote({ traits, records: ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((n, i) => rec(n, { billedUsd: 10 + i, requirements: 10 + (i % 2) })), config: {} });
++  assert.equal(many.confidence, 'high');
++  assert.equal(many.similar.length, 5, 'the five nearest only');
++});
++
++test('the price stays blank until BOTH rate and margin are set, then is (cost + hours x rate) / (1 - margin) as a range', async t => {
++  const traits = { requirements: 10, stages: 3, screens: 8, services: 2 };
++  const records = [rec('a', { billedUsd: 10, ownerHours: 20 }), rec('b', { billedUsd: 20, ownerHours: 30 }), rec('c', { billedUsd: 30, ownerHours: 40 })];
++  for (const config of [{ hourlyRate: null, margin: null }, { hourlyRate: 100, margin: null }, { hourlyRate: null, margin: 0.3 }]) {
++    const q = buildQuote({ traits, records, config });
++    assert.equal(q.price, null);
++    assert.match(renderQuote(q), /Price:\s+blank until you set both/);
++    assert.ok(q.cost && q.hours, 'the cost and hours ranges show anyway');
++  }
++  const q = buildQuote({ traits, records, config: { hourlyRate: 100, margin: 0.5 } });
++  assert.deepEqual(q.price, { low: Math.round((15 + 25 * 100) / 0.5), high: Math.round((25 + 35 * 100) / 0.5) });
++  const dir = await tmp(t);
++  assert.equal((await runQuoteCommand(dir, ['config', '--rate', '0'], { env: env(dir) })).exitCode, 2);
++  assert.equal((await runQuoteCommand(dir, ['config', '--margin', '95'], { env: env(dir) })).exitCode, 2);
++  assert.match((await runQuoteCommand(dir, ['config'], { env: env(dir) })).stdout, /rate: not set[\s\S]*blank until both/);
++  await runQuoteCommand(dir, ['config', '--rate', '120'], { env: env(dir) });
++  await runQuoteCommand(dir, ['config', '--margin', '40%'], { env: env(dir) });
++  assert.deepEqual(await readQuoteConfig(dir), { hourlyRate: 120, margin: 0.4 });
++});
++
++test('quote SCOPE.md reads the sizes from the scope and prints ranges; an empty scope or a missing file is refused', async t => {
++  const root = await tmp(t);
++  const dir = path.join(root, 'q');
++  for (const [i, n] of [8, 10, 12].entries()) await saveRecord(dir, rec(`p${i}`, { requirements: n, stages: 2, screens: 2, services: 1, billedUsd: 10 * (i + 1), ownerHours: 10 * (i + 1) }));
++  await fs.writeFile(path.join(root, 'scope.md'), scopeOf(10));
++  const res = await runQuoteCommand(root, ['scope.md'], { env: env(dir) });
++  assert.equal(res.exitCode, 0, res.stdout);
++  assert.match(res.stdout, /requirements 10, stages 2, screens 2, services 1/);
++  assert.match(res.stdout, /Model cost \(billed\):\s+\$15 to \$25/);
++  assert.match(res.stdout, /Your hours:\s+15 to 25 hours/);
++  assert.match(res.stdout, /Price:\s+blank/);
++  assert.match(res.stdout, /Confidence: medium/);
++  assert.equal((await runQuoteCommand(root, ['nope.md'], { env: env(dir) })).exitCode, 2);
++  await fs.writeFile(path.join(root, 'empty.md'), '# Scope: Y\n');
++  assert.equal((await runQuoteCommand(root, ['empty.md'], { env: env(dir) })).exitCode, 1);
++});
++
++test('record keeps a project\'s numbers (scope sizes, tickets, billed vs flat-rate cost, owner hours, calendar days), updates by name, and backfill is marked', async t => {
++  const root = await tmp(t);
++  const dir = path.join(root, 'q');
++  await fs.mkdir(path.join(root, 'docs/scope'), { recursive: true });
++  await fs.writeFile(path.join(root, 'docs/scope/scope.md'), scopeOf(3));
++  const mk = (id, status) => ({ id, title: 't', type: 'build', epic: 'E', scopeRefs: ['R-001'], acceptance: ['ok'], files: [], context: [], contracts: [], dependsOn: [], size: 'S', risk: 'low', sensitive: false, status, stage: 'S1' });
++  await writeLedger(root, { ...createLedger({ scope: { name: 'X', version: 1, hash: 'a'.repeat(64) }, tickets: [mk('T-0001', 'done'), mk('T-0002', 'proposed'), mk('T-0003', 'cancelled')] }) });
++  const run = (id, start, end, jobs, rental) => fs.mkdir(path.join(root, '.swarm/runs', id), { recursive: true }).then(() => fs.writeFile(path.join(root, '.swarm/runs', id, 'state.json'), JSON.stringify({ id, startedAt: start, finishedAt: end, jobs, ...(rental ? { rental } : {}) })));
++  await run('r1', '2026-10-01T00:00:00Z', '2026-10-02T00:00:00Z', [{ id: 'a', agent: 'anthropic', status: 'complete', costUsd: 2, usage: { total_tokens: 10 }, finishedAt: '2026-10-02T00:00:00Z' }, { id: 'b', agent: 'codex', status: 'complete', costUsd: 5, usage: { total_tokens: 10 }, finishedAt: '2026-10-02T00:00:00Z' }]);
++  await run('r2', '2026-10-09T00:00:00Z', '2026-10-11T00:00:00Z', [], { usd: 3, hours: 1.5 });
++  await fs.mkdir(path.join(root, '.swarm/runs/broken'), { recursive: true });
++  await fs.writeFile(path.join(root, '.swarm/runs/broken/state.json'), '{');
++  await runTimeCommand(root, ['log', '4']);
++  const first = await runQuoteCommand(root, ['record', '--name', 'Dealer Portal', '--charged', '9000', '--change-orders', '2', '--backfill'], { env: env(dir), now: () => NOW });
++  assert.equal(first.exitCode, 0, first.stdout);
++  const [r] = await readRecords(dir);
++  assert.deepEqual([r.name, r.source, r.requirements, r.stages, r.screens, r.services, r.tickets], ['Dealer Portal', 'backfill', 3, 2, 2, 1, 1]);
++  assert.equal(r.billedUsd, 5, 'per-use anthropic 2 + rented gpu 3; the flat-rate codex 5 is not billed');
++  assert.equal(r.flatRateListUsd, 5);
++  assert.deepEqual([r.ownerHours, r.calendarDays, r.chargedUsd, r.changeOrders, r.gpuHours], [4, 10, 9000, 2, 1.5]);
++  const again = await runQuoteCommand(root, ['record', '--name', 'Dealer Portal'], { env: env(dir), now: () => NOW });
++  assert.match(again.stdout, /^updated/);
++  assert.equal((await readRecords(dir)).length, 1);
++  assert.equal((await runQuoteCommand(root, ['record', '--charged', '-5'], { env: env(dir) })).exitCode, 2);
++  assert.equal((await runQuoteCommand(root, ['record', '--change-orders', '1.5'], { env: env(dir) })).exitCode, 2);
++  assert.match((await runQuoteCommand(root, ['list'], { env: env(dir) })).stdout, /Dealer Portal.*billed \$5.*owner hours 4/);
++});
++
++test('a project with no scope, ledger or hours still records (missing numbers are ?, never 0) and is not used to match on traits it lacks', async t => {
++  const root = await tmp(t);
++  const dir = path.join(root, 'q');
++  const res = await runQuoteCommand(root, ['record', '--name', 'bare'], { env: env(dir), now: () => NOW });
++  assert.equal(res.exitCode, 0, res.stdout);
++  const [r] = await readRecords(dir);
++  assert.deepEqual([r.requirements, r.tickets, r.ownerHours, r.calendarDays], [null, null, null, null]);
++  assert.equal(buildQuote({ traits: { requirements: 5 }, records: [r], config: {} }).confidence, 'none');
++});
++
++test('the quote files are private, the quote code makes no network call, and nothing is added to a client report', async () => {
++  const src = await fs.readFile(new URL('../tools/quotes.mjs', import.meta.url), 'utf8') + await fs.readFile(new URL('../tools/quote-commands.mjs', import.meta.url), 'utf8');
++  assert.doesNotMatch(src, /fetch\(|node:https?|node:net|child_process|resend/i);
++  const report = await fs.readFile(new URL('../tools/client-report.mjs', import.meta.url), 'utf8');
++  assert.doesNotMatch(report, /quotes|ownerHours|hourlyRate/);
++});
++
++test('review fixes: a damaged record file is never overwritten; names that slug alike stay separate; no runs = billed unknown; 0.3 margin is refused; thin cost/hours data lowers confidence; far-off projects are not similar', async t => {
++  const root = await tmp(t);
++  const dir = path.join(root, 'q');
++  await fs.mkdir(dir, { recursive: true });
++  await fs.writeFile(path.join(dir, 'projects.json'), '{ half a file');
++  const refused = await runQuoteCommand(root, ['record', '--name', 'a'], { env: env(dir), now: () => NOW });
++  assert.equal(refused.exitCode, 1);
++  assert.match(refused.stdout, /not valid JSON; nothing was changed/);
++  assert.equal(await fs.readFile(path.join(dir, 'projects.json'), 'utf8'), '{ half a file');
++  assert.equal((await runQuoteCommand(root, ['list'], { env: env(dir) })).exitCode, 1);
++  await fs.writeFile(path.join(root, 'scope.md'), scopeOf(3));
++  assert.equal((await runQuoteCommand(root, ['scope.md'], { env: env(dir) })).exitCode, 1, 'no quote from damaged history');
++  await fs.rm(path.join(dir, 'projects.json'));
++  await runQuoteCommand(root, ['record', '--name', 'Shop!'], { env: env(dir), now: () => NOW });
++  await runQuoteCommand(root, ['record', '--name', 'shop'], { env: env(dir), now: () => NOW });
++  const list = await readRecords(dir);
++  assert.equal(list.length, 2);
++  assert.ok(list.every(r => r.billedUsd === null && r.flatRateListUsd === null), 'no runs here: unknown, not $0');
++  for (const bad of ['0.3', '95', '-1']) assert.equal((await runQuoteCommand(root, ['config', '--margin', bad], { env: env(dir) })).exitCode, 2, bad);
++  assert.equal((await runQuoteCommand(root, ['config', '--margin', '0.3%'], { env: env(dir) })).exitCode, 0);
++  assert.equal((await readQuoteConfig(dir)).margin, 0.003);
++  assert.equal((await runQuoteCommand(root, ['config', '--margin', '30'], { env: env(dir) })).exitCode, 0);
++  assert.equal((await readQuoteConfig(dir)).margin, 0.3);
++  const traits = { requirements: 10, stages: 3, screens: 8, services: 2 };
++  const thin = buildQuote({ traits, records: [rec('a'), rec('b', { ownerHours: null }), rec('c', { ownerHours: null }), rec('d', { ownerHours: null })], config: { hourlyRate: 100, margin: 0.3 } });
++  assert.equal(thin.confidence, 'low');
++  assert.match(thin.why, /only 1 have owner hours/);
++  const far = buildQuote({ traits, records: [rec('huge', { requirements: 200, stages: 20, screens: 150, services: 12 })], config: {} });
++  assert.equal(far.confidence, 'none');
++});
+diff --git a/tools/completion.mjs b/tools/completion.mjs
+index b7688d2..9a4711a 100644
+--- a/tools/completion.mjs
++++ b/tools/completion.mjs
+@@ -57,6 +57,8 @@ export const COMMANDS = [
+   command('projects', 'The projects on this machine (listed on the Swarm Watch board): list, add, remove.', 'none', ''),
+   command('history', 'The machine-wide history of projects, stages, runs, PRs, merges, lessons and spend: filter, search, CSV.', 'none', '--project --kind --q --from --to --limit --csv --backfill'),
+   command('models', 'Model watch: new open coding models that fit our GPUs and new API versions, into the inbox; compare models from eval runs.', 'none', '--force --json'),
++  command('time', 'Log your own hours on this project (private; used for quotes).', 'none'),
++  command('quote', 'Cost, time and hours ranges for a scope from similar finished projects (price blank until rate and margin are set).', 'none', '--rate --margin --name --charged --change-orders --gpu-hours --backfill'),
+   command('report', 'Weekly client progress report from the scope and the ticket progress (files only, a draft you approve).', 'none', '--client --since --preview --approve --status'),
+   command('errors', 'Production errors become proposed tickets: pull (vercel logs), ingest, list, show, ignore, resolve, digest.', 'none', '--dry-run --status --reason --no-write'),
+   command('budgets', 'Speed and accessibility budgets: check a preview with Lighthouse and axe, show status.', 'none', '--url --screens'),
+diff --git a/tools/quote-commands.mjs b/tools/quote-commands.mjs
+new file mode 100644
+index 0000000..300ea7f
+--- /dev/null
++++ b/tools/quote-commands.mjs
+@@ -0,0 +1,92 @@
++// SPDX-License-Identifier: Apache-2.0
++// swarm time log HOURS "note" | list      swarm quote SCOPE.md | record | list | config
++import fs from 'node:fs/promises';
++import path from 'node:path';
++import { parseScope } from './scope.mjs';
++import { logTime, readTime, readQuoteConfig, writeQuoteConfig, readRecords, recordsDamaged, saveRecord, buildRecord, buildQuote, renderQuote, traitsOf, quotesDir } from './quotes.mjs';
++
++export const TIME_USAGE = 'Usage: swarm time log HOURS ["note"]     swarm time list';
++export const QUOTE_USAGE = [
++  'Usage: swarm quote SCOPE.md                                  ranges from the most similar finished projects (price blank until rate and margin are set)',
++  '       swarm quote record [--name NAME] [--charged USD] [--change-orders N] [--gpu-hours H] [--backfill]   keep this project\'s numbers',
++  '       swarm quote list                                      the finished projects kept so far',
++  '       swarm quote config [--rate USD_PER_HOUR] [--margin PERCENT]   show or set your rate and margin (no default is invented)',
++].join('\n');
++const out = (stdout, exitCode = 0) => ({ stdout: stdout.endsWith('\n') ? stdout : `${stdout}\n`, exitCode });
++
++export async function runTimeCommand(root, args, { now = Date.now } = {}) {
++  const [sub, ...rest] = args;
++  if (sub === 'log') {
++    if (rest[0] === undefined) return out(TIME_USAGE, 2);
++    const result = await logTime(root, rest[0], rest.slice(1).join(' '), { now });
++    return result.ok ? out(`logged ${result.entry.hours} hours (${(await readTime(root)).total} total on this project)`) : out(result.error, 2);
++  }
++  if (sub === 'list') {
++    const t = await readTime(root);
++    const lines = t.entries.map(e => `${e.at.slice(0, 10)}  ${String(e.hours).padStart(5)} h  ${e.note}`.trimEnd());
++    return out(t.entries.length ? [...lines, `total ${t.total} hours${t.skipped ? ` (${t.skipped} unreadable line(s) skipped)` : ''}`].join('\n') : 'No hours logged yet. swarm time log HOURS "note"');
++  }
++  return out(TIME_USAGE, 2);
++}
++
++export async function runQuoteCommand(root, args, { now = Date.now, env = process.env } = {}) {
++  const dir = quotesDir(env);
++  const [sub, ...rest] = args;
++  if (sub === 'config') {
++    const flags = {};
++    for (let i = 0; i < rest.length; i += 1) {
++      if ((rest[i] === '--rate' || rest[i] === '--margin') && rest[i + 1] !== undefined) flags[rest[i].slice(2)] = rest[++i];
++      else return out(`Unknown argument: ${rest[i]}\n${QUOTE_USAGE}`, 2);
++    }
++    if (flags.rate !== undefined || flags.margin !== undefined) {
++      const result = await writeQuoteConfig(dir, flags);
++      if (!result.ok) return out(result.error, 2);
++    }
++    const c = await readQuoteConfig(dir);
++    return out([`hourly rate: ${c.hourlyRate === null ? 'not set' : `$${c.hourlyRate}`}`, `margin:      ${c.margin === null ? 'not set' : `${Math.round(c.margin * 1000) / 10}% of the price`}`, c.hourlyRate === null || c.margin === null ? 'The price line stays blank until both are set.' : 'Quotes now show a price range.'].join('\n'));
++  }
++  if (sub === 'list') {
++    const damaged = await recordsDamaged(dir);
++    if (damaged) return out(`${damaged}; fix it or move it aside`, 1);
++    const list = await readRecords(dir);
++    if (!list.length) return out('No finished projects kept yet. In a project folder: swarm quote record');
++    const f = v => (v === null || v === undefined ? '?' : v);
++    return out(list.map(p => `${p.name}${p.source === 'backfill' ? ' (backfilled)' : ''}: requirements ${f(p.requirements)}, tickets ${f(p.tickets)}, billed ${p.billedUsd === null || p.billedUsd === undefined ? '?' : `$${p.billedUsd}`}, owner hours ${f(p.ownerHours)}, days ${f(p.calendarDays)}${p.chargedUsd === null ? '' : `, charged $${p.chargedUsd}`}`).join('\n'));
++  }
++  if (sub === 'record') {
++    const flags = {};
++    for (let i = 0; i < rest.length; i += 1) {
++      const a = rest[i];
++      if (a === '--backfill') flags.backfill = true;
++      else if (['--name', '--charged', '--change-orders', '--gpu-hours'].includes(a) && rest[i + 1] !== undefined) flags[a.slice(2)] = rest[++i];
++      else return out(`Unknown argument: ${a}\n${QUOTE_USAGE}`, 2);
++    }
++    const numeric = (key, int) => {
++      if (flags[key] === undefined) return undefined;
++      const v = Number(flags[key]);
++      if (!Number.isFinite(v) || v < 0 || (int && !Number.isInteger(v))) throw new Error(`--${key} must be a ${int ? 'whole number' : 'number'} of 0 or more`);
++      return v;
++    };
++    let record;
++    try {
++      record = await buildRecord(root, { name: flags.name ?? path.basename(root), source: flags.backfill ? 'backfill' : 'recorded', charged: numeric('charged'), changeOrders: numeric('change-orders', true), gpuHours: numeric('gpu-hours'), now });
++    } catch (error) { return out(error.message, 2); }
++    let saved;
++    try { saved = await saveRecord(dir, record); } catch (error) { return out(error.message, 1); }
++    return out([`${saved.replaced ? 'updated' : 'kept'}: ${record.name}${record.source === 'backfill' ? ' (backfilled)' : ''}`, `requirements ${record.requirements ?? '?'}, tickets ${record.tickets ?? '?'}, billed ${record.billedUsd === null ? '? (no runs here)' : `$${record.billedUsd}`}, flat-rate list value ${record.flatRateListUsd === null ? '?' : `$${record.flatRateListUsd}`}, owner hours ${record.ownerHours ?? 'none logged'}, calendar days ${record.calendarDays ?? '?'}`].join('\n'));
++  }
++  if (sub && !sub.startsWith('--')) {
++    let text;
++    try { text = await fs.readFile(path.resolve(root, sub), 'utf8'); } catch { return out(`cannot read the scope file: ${sub}`, 2); }
++    const scope = parseScope(text);
++    const traits = traitsOf(scope);
++    if (!TRAITSET.some(k => traits[k])) return out('that scope has no requirements, stages, screens or services to size a quote from', 1);
++    const damaged = await recordsDamaged(dir);
++    if (damaged) return out(`${damaged}; fix it or move it aside (a quote from damaged history would be wrong)`, 1);
++    const quote = buildQuote({ traits, records: await readRecords(dir), config: await readQuoteConfig(dir) });
++    return out(renderQuote(quote));
++  }
++  return out(QUOTE_USAGE, 2);
++}
++
++const TRAITSET = ['requirements', 'stages', 'screens', 'services'];
+diff --git a/tools/quotes.mjs b/tools/quotes.mjs
+new file mode 100644
+index 0000000..a71e4f4
+--- /dev/null
++++ b/tools/quotes.mjs
+@@ -0,0 +1,230 @@
++// SPDX-License-Identifier: Apache-2.0
++// Better quotes (Phase 19, part 3): the owner's hours per project, the numbers kept for each finished project, and a quote for a new scope
++// as RANGES taken from the most similar finished projects. The price line stays blank until the owner sets an hourly rate and a margin.
++// Nothing here calls a model or the network. Private to the owner: never part of a client report.
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { createHash } from 'node:crypto';
++import { parseScope } from './scope.mjs';
++import { readLedger } from './tickets.mjs';
++import { costOf } from './board-data.mjs';
++
++export const quotesDir = (env = process.env, home = os.homedir()) => env.SWARM_QUOTES_DIR || path.join(home, '.project-swarm', 'quotes');
++const recordsFile = dir => path.join(dir, 'projects.json');
++const configFile = dir => path.join(dir, 'config.json');
++export const TIME_FILE = '.swarm/project/time.ndjson';
++
++const isObj = v => typeof v === 'object' && v !== null && !Array.isArray(v);
++const num = v => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
++const round = (v, d = 2) => Math.round(v * 10 ** d) / 10 ** d;
++const clean = (t, n) => String(t ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
++
++// ---- the owner's hours -------------------------------------------------------------------------------------------------------------------------
++
++export async function logTime(root, hours, note, { now = Date.now } = {}) {
++  const h = Number(hours);
++  if (!/^\d+(\.\d{1,2})?$/.test(String(hours)) || !(h >= 0.05 && h <= 24)) return { ok: false, error: 'hours must be a number from 0.05 to 24 (at most two decimals), for one entry' };
++  const entry = { at: new Date(now()).toISOString(), hours: h, note: clean(note, 200) };
++  const file = path.join(root, TIME_FILE);
++  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
++  await fs.appendFile(file, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
++  return { ok: true, entry };
++}
++
++export async function readTime(root) {
++  let text = '';
++  try { text = await fs.readFile(path.join(root, TIME_FILE), 'utf8'); } catch { return { entries: [], total: 0, skipped: 0 }; }
++  const entries = [];
++  let skipped = 0;
++  for (const line of text.split('\n')) {
++    if (!line.trim()) continue;
++    try {
++      const e = JSON.parse(line);
++      if (isObj(e) && typeof e.hours === 'number' && e.hours > 0 && e.hours <= 24 && Number.isFinite(Date.parse(e.at))) entries.push({ at: e.at, hours: e.hours, note: clean(e.note, 200) });
++      else skipped += 1;
++    } catch { skipped += 1; }
++  }
++  return { entries, total: round(entries.reduce((s, e) => s + e.hours, 0)), skipped };
++}
++
++// ---- rate and margin (the owner's numbers: no default is invented) -----------------------------------------------------------------------------
++
++export async function readQuoteConfig(dir = quotesDir()) {
++  try {
++    const c = JSON.parse(await fs.readFile(configFile(dir), 'utf8'));
++    const rate = isObj(c) && typeof c.hourlyRate === 'number' && c.hourlyRate > 0 && c.hourlyRate <= 10000 ? c.hourlyRate : null;
++    const margin = isObj(c) && typeof c.margin === 'number' && c.margin >= 0 && c.margin <= 0.9 ? c.margin : null;
++    return { hourlyRate: rate, margin };
++  } catch { return { hourlyRate: null, margin: null }; }
++}
++
++export async function writeQuoteConfig(dir, { rate, margin }) {
++  const current = await readQuoteConfig(dir);
++  const next = { ...current };
++  if (rate !== undefined) { const r = Number(rate); if (!(r > 0 && r <= 10000)) return { ok: false, error: '--rate must be dollars per hour, above 0 and at most 10000' }; next.hourlyRate = r; }
++  if (margin !== undefined) { const m = Number(String(margin).replace(/%$/, '')); if (!(m >= 0 && m <= 90) || (m > 0 && m < 1 && !/%$/.test(String(margin)))) return { ok: false, error: '--margin must be a percent from 0 to 90 of the price, like 30 or 30% (0.3 is refused: it could mean 0.3% or 30%)' }; next.margin = round(m / 100, 4); }
++  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
++  await fs.writeFile(configFile(dir), `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
++  return { ok: true, config: next };
++}
++
++// ---- the numbers kept for each project ---------------------------------------------------------------------------------------------------------
++
++// A file that exists but cannot be read is "damaged", not "empty": saving over it would silently lose every kept project.
++export async function recordsDamaged(dir = quotesDir()) {
++  let text;
++  try { text = await fs.readFile(recordsFile(dir), 'utf8'); } catch (error) { return error.code === 'ENOENT' ? null : `cannot read ${recordsFile(dir)}`; }
++  try { const d = JSON.parse(text); return isObj(d) && Array.isArray(d.projects) ? null : `${recordsFile(dir)} has the wrong shape`; } catch { return `${recordsFile(dir)} is not valid JSON`; }
++}
++
++export async function readRecords(dir = quotesDir()) {
++  try {
++    const data = JSON.parse(await fs.readFile(recordsFile(dir), 'utf8'));
++    return (isObj(data) && Array.isArray(data.projects) ? data.projects : []).filter(p => isObj(p) && typeof p.id === 'string' && typeof p.name === 'string');
++  } catch { return []; }
++}
++
++// Two names that slug alike ("Shop!" and "shop") keep separate entries: the id carries a short hash of the exact name.
++const slug = t => `${String(t).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'project'}-${createHash('sha256').update(String(t)).digest('hex').slice(0, 6)}`;
++
++export async function saveRecord(dir, record) {
++  const damaged = await recordsDamaged(dir);
++  if (damaged) throw new Error(`${damaged}; nothing was changed. Fix it or move it aside, then record again.`);
++  const list = await readRecords(dir);
++  const next = list.filter(p => p.id !== record.id);
++  next.push(record);
++  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
++  const tmp = `${recordsFile(dir)}.${process.pid}.tmp`;
++  await fs.writeFile(tmp, `${JSON.stringify({ version: 1, projects: next }, null, 2)}\n`, { mode: 0o600 });
++  await fs.rename(tmp, recordsFile(dir));
++  return { replaced: next.length === list.length };
++}
++
++async function readRuns(root) {
++  const dir = path.join(root, '.swarm', 'runs');
++  let ids = [];
++  try { ids = await fs.readdir(dir); } catch { return []; }
++  const runs = [];
++  for (const id of ids) {
++    try { const state = JSON.parse(await fs.readFile(path.join(dir, id, 'state.json'), 'utf8')); if (isObj(state)) runs.push({ id, state }); } catch { /* an unreadable run is skipped */ }
++  }
++  return runs;
++}
++
++export async function scopeText(root, ledger) {
++  for (const file of ['.swarm/project/scope.snapshot.md', ledger?.scope?.file ?? 'docs/scope/scope.md']) {
++    try { return await fs.readFile(path.join(root, file), 'utf8'); } catch { /* the next one */ }
++  }
++  return null;
++}
++
++// What a scope says about size: counts only (a missing section is null, not 0, so it does not pull a match toward "none").
++export function traitsOf(scope) {
++  const screens = scope.sections.find(s => /^screens?$/i.test(s.title.trim()));
++  const top = text => String(text ?? '').split('\n').filter(l => /^- \S/.test(l)).length;
++  return {
++    requirements: scope.requirements.length || null,
++    stages: scope.stages.length || null,
++    screens: screens ? top(screens.text) || null : null,
++    services: scope.external.length || null,
++  };
++}
++
++export async function buildRecord(root, { name, source = 'recorded', charged, changeOrders, gpuHours, now = Date.now } = {}) {
++  const ledger = await readLedger(root).catch(() => null);
++  const text = await scopeText(root, ledger);
++  const traits = text === null ? { requirements: null, stages: null, screens: null, services: null } : traitsOf(parseScope(text));
++  const tickets = (ledger?.tickets ?? []).filter(t => t.status !== 'cancelled' && t.status !== 'proposed').length;
++  const runs = await readRuns(root);
++  const cost = costOf(runs, now());
++  const times = runs.flatMap(r => [Date.parse(r.state.startedAt ?? ''), Date.parse(r.state.finishedAt ?? '')]).filter(Number.isFinite);
++  const time = await readTime(root);
++  const rentalHours = runs.reduce((s, r) => s + (num(r.state.rental?.hours) ?? 0), 0);
++  return {
++    id: slug(name), name: clean(name, 80), source, recordedAt: new Date(now()).toISOString(),
++    ...traits, tickets: tickets || null,
++    billedUsd: runs.length ? round(cost.paidUsd, 4) : null, flatRateListUsd: runs.length ? round(cost.flatRateListUsd, 4) : null,
++    gpuHours: gpuHours !== undefined ? gpuHours : (rentalHours || null),
++    ownerHours: time.entries.length ? time.total : null,
++    changeOrders: changeOrders ?? null,
++    calendarDays: times.length > 1 ? Math.max(1, Math.ceil((Math.max(...times) - Math.min(...times)) / 86400000)) : null,
++    chargedUsd: charged ?? null,
++    runs: runs.length,
++  };
++}
++
++// ---- the quote ---------------------------------------------------------------------------------------------------------------------------------
++
++const TRAITS = ['requirements', 'stages', 'screens', 'services'];
++const MAX_DISTANCE = 0.7;   // about twice the size on average: further than that is not "similar"
++
++// How far apart two projects are: the average of |ln(a/b)| over the traits both have. No shared trait = not comparable (null).
++export function distance(a, b) {
++  const ds = TRAITS.filter(k => a[k] > 0 && b[k] > 0).map(k => Math.abs(Math.log(a[k] / b[k])));
++  return ds.length ? ds.reduce((s, d) => s + d, 0) / ds.length : null;
++}
++
++function quantile(sorted, q) {
++  const pos = (sorted.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos);
++  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
++}
++
++// A range from the values the similar projects have: the middle half with three or more, the lowest and highest with two, one point with one (no range), nothing with none.
++export function rangeOf(values) {
++  const v = values.filter(x => typeof x === 'number' && Number.isFinite(x) && x >= 0).sort((a, b) => a - b);
++  if (!v.length) return null;
++  if (v.length === 1) return { low: v[0], high: v[0], n: 1, single: true };
++  if (v.length === 2) return { low: v[0], high: v[1], n: 2, single: false };
++  return { low: quantile(v, 0.25), high: quantile(v, 0.75), n: v.length, single: false };
++}
++
++export function buildQuote({ traits, records, config, k = 5 }) {
++  const ranked = records.map(r => ({ r, d: distance(traits, r) })).filter(x => x.d !== null).sort((a, b) => a.d - b.d || a.r.id.localeCompare(b.r.id));
++  const similar = ranked.filter(x => x.d <= MAX_DISTANCE).slice(0, k);
++  const items = similar.map(x => x.r);
++  const cost = rangeOf(items.map(r => r.billedUsd));
++  const hours = rangeOf(items.map(r => r.ownerHours));
++  const days = rangeOf(items.map(r => r.calendarDays));
++  const gpu = rangeOf(items.map(r => r.gpuHours));
++  const medianD = similar.length ? similar[Math.floor(similar.length / 2)].d : null;
++  let confidence = 'none', why = records.length ? 'no finished project shares a size measure with this scope' : 'no finished project has been recorded yet (swarm quote record)';
++  if (similar.length) {
++    const backfilled = items.filter(r => r.source === 'backfill').length;
++    const thin = Math.min(...[cost, hours].filter(Boolean).map(r => r.n));
++    if (similar.length < 3) { confidence = 'low'; why = `only ${similar.length} similar finished project${similar.length === 1 ? '' : 's'}`; }
++    else if (thin < 3) { confidence = 'low'; why = `${similar.length} similar projects, but only ${thin} have ${cost && hours && cost.n === thin && hours.n === thin ? 'cost and hours' : hours && hours.n === thin ? 'owner hours' : 'a billed cost'} recorded`; }
++    else if (similar.length >= 5 && medianD < 0.35) { confidence = 'high'; why = `${similar.length} similar projects, close in size`; }
++    else { confidence = 'medium'; why = `${similar.length} similar projects${medianD >= 0.35 ? ', but not close in size' : ''}`; }
++    if (backfilled) why += `; ${backfilled} backfilled from earlier work, not recorded as they happened`;
++    if (!hours) why += '; none of them has owner hours logged';
++    if (!cost) why += '; none of them has a billed cost recorded';
++  }
++  let price = null;
++  const priceBlank = config.hourlyRate === null || config.margin === null;
++  if (!priceBlank && cost && hours) {
++    const at = (c, h) => round((c + h * config.hourlyRate) / (1 - config.margin), 0);
++    price = { low: at(cost.low, hours.low), high: at(cost.high, hours.high) };
++  }
++  return { traits, confidence, why, similar: similar.map(x => ({ name: x.r.name, source: x.r.source, distance: round(x.d, 2) })), cost, hours, days, gpu, price, priceBlank };
++}
++
++const usd = v => `$${v >= 100 ? Math.round(v) : round(v, 2)}`;
++const span = (r, fmt, unit = '') => (!r ? 'no data' : r.single ? `${fmt(r.low)}${unit} (one project, no range)` : `${fmt(r.low)} to ${fmt(r.high)}${unit}`);
++const plain = v => String(round(v, 1));
++
++export function renderQuote(q) {
++  const t = TRAITS.map(k => `${k} ${q.traits[k] ?? '?'}`).join(', ');
++  if (!q.similar.length) return [`Scope size: ${t}`, `Confidence: none. ${q.why}.`, 'No number is given without similar finished projects.', 'Price: blank (also set your rate and margin: swarm quote config --rate USD_PER_HOUR --margin PERCENT)'].join('\n');
++  return [
++    `Scope size: ${t}`,
++    `Similar finished projects: ${q.similar.map(s => `${s.name}${s.source === 'backfill' ? ' (backfilled)' : ''}`).join(', ')}`,
++    `Model cost (billed):  ${span(q.cost, usd)}`,
++    `Calendar time:        ${span(q.days, plain, ' days')}`,
++    `Your hours:           ${span(q.hours, plain, ' hours')}`,
++    ...(q.gpu ? [`Rented GPU:          ${span(q.gpu, plain, ' hours')}`] : []),
++    q.price ? `Price:                ${usd(q.price.low)} to ${usd(q.price.high)} (cost plus hours at your rate, with your margin)` : `Price:                blank until you set both: swarm quote config --rate USD_PER_HOUR --margin PERCENT${q.cost && q.hours ? '' : ' (and the similar projects need cost and hours)'}`,
++    `Confidence: ${q.confidence}. ${q.why}.`,
++    'Ranges are the middle half of the similar projects (the lowest to the highest when there are only two). They are not scaled for size.',
++  ].join('\n');
++}
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index 06ea63f..b5af70f 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -7595,6 +7595,14 @@ async function mainInner() {
+     if(res.exitCode)process.exitCode=res.exitCode;
+     return;
+   }
++  if(args[0]==='time'||args[0]==='quote'){
++    root=await fs.realpath(root);
++    const {runTimeCommand,runQuoteCommand}=await import('./quote-commands.mjs');
++    const res=await(args[0]==='time'?runTimeCommand:runQuoteCommand)(root,args.slice(1));
++    process.stdout.write(res.stdout);
++    if(res.exitCode)process.exitCode=res.exitCode;
++    return;
++  }
+   if(args[0]==='report'){
+     root=await fs.realpath(root);
+     const {runReportCommand}=await import('./report-commands.mjs');
+@@ -7966,7 +7974,7 @@ async function mainInner() {
+   // `swarm "goal sentence"` is shorthand for `swarm go "goal sentence"`. Only one argument with
+   // whitespace counts, so a mistyped one-word command never starts a paid run.
+   if(!args[0].startsWith('-')&&/\s/.test(args[0])&&isGoalArgument(args[0]))args.unshift('go');
+-  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] [--skip-skeleton] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | tickets --mark-deps [ID...] [--yes] | change "REASON" [FILE] [--yes] | merge PR [--repo OWNER/NAME] | stop --all|--status|--clear | backup [list|verify ID] [--reason TEXT] | restore ID [--yes] | migrations [check [--yes]|approve FILE [--note TEXT]] | projects [list|add PATH|remove ID] | history [--project P] [--kind K] [--q TEXT] [--from D] [--to D] [--csv] [--backfill] | budgets check [--url URL] [--screens a,b] | budgets status | errors pull [--dry-run] | errors ingest [FILE|-] | errors list|show|ignore|resolve|digest | report --client [--since DAYS] [--preview URL] [--approve [DIR]] [--status] | models watch [--force] [--json] | models list | models compare CURRENT CANDIDATE | ui check [SCREEN_ID...] [--base-url URL] [--json] | ui list | watch [RUN] [--all] [--tui] [--open] [--json] | gallery list|approve ID...|comment ID "text" | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
++  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] [--skip-skeleton] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | tickets --mark-deps [ID...] [--yes] | change "REASON" [FILE] [--yes] | merge PR [--repo OWNER/NAME] | stop --all|--status|--clear | backup [list|verify ID] [--reason TEXT] | restore ID [--yes] | migrations [check [--yes]|approve FILE [--note TEXT]] | projects [list|add PATH|remove ID] | history [--project P] [--kind K] [--q TEXT] [--from D] [--to D] [--csv] [--backfill] | budgets check [--url URL] [--screens a,b] | budgets status | errors pull [--dry-run] | errors ingest [FILE|-] | errors list|show|ignore|resolve|digest | report --client [--since DAYS] [--preview URL] [--approve [DIR]] [--status] | time log HOURS [NOTE] | time list | quote SCOPE.md | quote record|list|config | models watch [--force] [--json] | models list | models compare CURRENT CANDIDATE | ui check [SCREEN_ID...] [--base-url URL] [--json] | ui list | watch [RUN] [--all] [--tui] [--open] [--json] | gallery list|approve ID...|comment ID "text" | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+   if(args[0]==='lesson'){
+     try{
+       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');

@@ -11,7 +11,7 @@ Done:
 Running: none
 Needs the owner: none
 Next 3 actions:
-  1. swarm integrate 1792368688752-5ec5187a --queue
+  1. swarm integrate 1792370825506-8b8568f4 --queue
   2. swarm "describe the goal in one sentence"
   3. swarm status
 Rules:

@@ -143,6 +143,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-18 | - | review-board-nav: No HIGH issues. Token separation, GET/HEAD only, Host check, server-side project i | claude | opus | pass | 129,750 | $0.50 |
 | 2026-10-18 | - | review-errors: Reviewed the Phase 19 part 1 errors diff; no files edited. Proposal gating holds in r | claude | opus | pass | 275,150 | $1.26 |
 | 2026-10-19 | - | review-client-report: complete | claude | opus | pass | 93,551 | $0.58 |
+| 2026-10-19 | - | review-quotes: Reviewed quotes.diff (quotes.mjs, quote-commands.mjs, swarm/completion wiring, tests) | claude | opus | pass | 85,088 | $0.46 |
 
 ## Daily summary
 
@@ -156,5 +157,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-16 | claude | 1 | 0 | 1 | 46,296 | $0.42 |
 | 2026-10-16 | codex | 2 | 2 | 0 | 31,624 | subscription |
 | 2026-10-18 | claude | 14 | 14 | 0 | 6,874,167 | $13.02 |
-| 2026-10-19 | claude | 1 | 1 | 0 | 93,551 | $0.58 |
-| **total** | all | 139 | 124 | 15 | 12,143,877 | $18.53 (incl. estimates) |
+| 2026-10-19 | claude | 2 | 2 | 0 | 178,639 | $1.04 |
+| **total** | all | 140 | 125 | 15 | 12,228,965 | $18.99 (incl. estimates) |

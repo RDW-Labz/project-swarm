@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1.0
+  },
+  "jobs": [
+    {
+      "id": "review-quotes",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "numbers that will become prices; wrong ranges or a leaked private number cost money",
+      "type": "review",
+      "prompt": "Review coordination/review/quotes.diff (Phase 19 part 3: tools/quotes.mjs, tools/quote-commands.mjs, wiring in swarm.mjs/completion.mjs). The promise: the owner's hours and per-project numbers produce cost/time/hours RANGES from the nearest finished projects with an honest confidence; NO number when there is no history; the PRICE stays blank until BOTH hourly rate and margin are set (no default invented); billed cost is kept apart from flat-rate list value; unknown values are null/?, never 0; private to the owner, no network or model calls, never in a client report. Look for: (1) wrong math: quantile/range edge cases, distance with null/0/negative traits, NaN/Infinity, price formula cost plus hours times rate, divided by one minus margin at margin 0 or 0.9, rate/margin validation (strings, '1e2', negative, '%'), floating point; ranges that mislead (confidence too high, one project shown as a range, backfilled or no-hours projects hiding); k nearest tie-breaking; (2) robustness: corrupt or hand-edited projects.json / config.json / time.ndjson (wrong types, huge numbers, __proto__ keys, strings where numbers expected flowing into output), concurrent record writes (atomic rename, lost update), path handling of the scope argument (reading any file, symlinks), SWARM_QUOTES_DIR; the record's name slug collisions (two different names same id overwriting); buildRecord reading run states (costOf double counting, rental hours, calendarDays from bad dates); (3) privacy: anything written that holds notes, paths or secrets; file modes; (4) CLI: argument parsing holes, usage errors with exit code 2, 'quote' as a scope filename like 'config'/'list'/'record' being shadowed; (5) test gaps. Report real findings only, ranked, with file:line and a concrete failing input.",
+      "context": [
+        "tools/quotes.mjs",
+        "tools/quote-commands.mjs",
+        "tests/quotes.test.mjs",
+        "coordination/review/quotes.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}

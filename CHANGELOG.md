@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.120.0
+
+Phase 19, part 3: quotes as ranges (`docs/quotes.md`).
+- `swarm time log HOURS "note"` / `swarm time list`: your own hours per project (private file in the project).
+- `swarm quote record [--name N] [--charged USD] [--change-orders N] [--gpu-hours H] [--backfill]` keeps a finished project's numbers in `~/.project-swarm/quotes/projects.json`: scope sizes, tickets, model cost billed apart from flat-rate list value, hours, calendar days, what you charged. Unknown numbers are `?`, never 0.
+- `swarm quote SCOPE.md` prints cost, calendar time and your hours as ranges from the nearest finished projects (middle half; no number without history), with a confidence and the reason. The price line stays blank until you set both `swarm quote config --rate` and `--margin`; no default is invented.
+- Opus review fixes: a damaged `projects.json` is never overwritten (record/list/quote refuse and say why); names that slug alike keep separate entries; a folder with no runs records billed cost as unknown, not $0; `--margin 0.3` is refused (30 or 30% only); confidence drops when few similar projects have cost or hours; projects more than about twice the size are not "similar".
+- Never read by a client report, no network or model call. Tests: `tests/quotes.test.mjs`.
+
 ## 1.119.0
 
 Phase 19, part 2: client progress reports, files only (`docs/client-report.md`).
