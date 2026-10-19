@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.0 },
+  "jobs": [
+    {
+      "id": "review-installed-swarm",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner standing rule: an Opus review on every PR; this changes what swarm update modifies",
+      "type": "review",
+      "prompt": "Review coordination/review/installed-swarm.diff: swarm --version, a swarm update that always targets the installed swarm found through the launcher in the home folder, unknown-command messages, and a test that installs into a throwaway home and runs the launcher from PATH. Look hard for: (1) swarm update changing the wrong folder (a development checkout detached or reset, a project folder, a path from a launcher text that is wrong or hostile, symlinks, the explicit root option, projects mode), (2) the launcher reader parsing (quoting, a launcher that is not ours, runner paths without the current folder, a relative path), (3) the new version flag colliding with a project goal or another command, the unknown-command message for words that are real commands in a newer version, the help interception list now catching a command that has its own useful help or arguments, (4) the test: leaks into the real home folder or the real install, flakiness (timeouts, git identity, network), cleanup of temp folders, skipped coverage of documented commands, assertions that cannot fail, (5) anything that makes a failed update look successful (warning text, the command version check). Real findings only, ranked, file and line, concrete input.",
+      "context": ["tools/swarm.mjs", "tools/swarm-bin.mjs", "tools/install.mjs", "tests/installed-swarm.test.mjs", "tools/completion.mjs", "coordination/review/installed-swarm.diff"],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}

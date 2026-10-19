@@ -148,6 +148,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-19 | - | review-board-inbox: Read-only, textContent-only rendering and the token check hold. Main problems: t | claude | opus | pass | 59,636 | $0.33 |
 | 2026-10-19 | - | review-watch-ui: Read-only review of the watch-ui diff; no files edited. 1 high-severity finding (a | claude | opus | pass | 454,439 | $1.22 |
 | 2026-10-19 | - | review-remote: Reviewed swarm remote (remote.mjs, watch-server.mjs, qr.mjs, tests, docs). Main issue | claude | opus | pass | 253,259 | $0.89 |
+| 2026-10-19 | - | review-installed-swarm: Review of installed-swarm.diff: no edits made, nothing executed (shell not p | claude | opus | pass | 621,677 | $0.96 |
 
 ## Daily summary
 
@@ -161,5 +162,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-16 | claude | 1 | 0 | 1 | 46,296 | $0.42 |
 | 2026-10-16 | codex | 2 | 2 | 0 | 31,624 | subscription |
 | 2026-10-18 | claude | 14 | 14 | 0 | 6,874,167 | $13.02 |
-| 2026-10-19 | claude | 6 | 6 | 0 | 1,125,279 | $4.13 |
-| **total** | all | 144 | 129 | 15 | 13,175,605 | $22.08 (incl. estimates) |
+| 2026-10-19 | claude | 7 | 7 | 0 | 1,746,956 | $5.09 |
+| **total** | all | 145 | 130 | 15 | 13,797,282 | $23.04 (incl. estimates) |

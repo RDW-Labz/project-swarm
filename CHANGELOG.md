@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.133.0
+
+The installed `swarm` command: `--version`, a real `swarm update`, and a test that runs it from PATH.
+- Cause of "swarm remote on says Invalid arguments": the `swarm` on PATH (`~/.local/bin/swarm`) runs the INSTALL at `~/.project-swarm` (1.128.0 there), and the updates reported as done had been run with `node tools/swarm.mjs update` from the development checkout, which only looked at the checkout. Nothing had updated the install.
+- `swarm update` now always moves the installed swarm: it finds the install through the launcher (falling back to `~/.project-swarm`), and run from a development checkout it says so (`note`) and leaves that checkout and its branch alone. The result names the `target`, the swarm `command` (path, runner, version) and warns if the command still runs an older version. `--root` is refused for update (it always means the install), and an install made with `node tools/install.mjs --user --dev` (a development checkout) is never moved to a release.
+- `swarm --version`, `-v` and `-V` print the same as `swarm version`. A word swarm does not know now says `Unknown command "x"`, which swarm this is and its version, and to run `swarm update`; an unknown flag says `Unknown option`. `swarm CMD --help` now answers with usage for every documented command (it used to print "Invalid arguments" or a parse error for about 30 of them).
+- `tests/installed-swarm.test.mjs`: a real install into a throwaway HOME, the launcher found on PATH and run as a process: `--version`, `-v`, `-V`, `version`, `status`, bare `swarm`, `remote status|show|off|bogus`, an unknown command and flag, `--help` for every documented command, and `swarm update` from a second checkout (up to date, then a newer release: the install moves, the command runs it, `swarm --version` says so, the checkout's branch is untouched), a `--dev` install refused, and a launcher with an odd runner not guessed at.
+
 ## 1.132.0
 
 Live project overview (`docs/watch.md`): a project's page on the `--all` board opens on a **Live** tab that combines every live run in that project.

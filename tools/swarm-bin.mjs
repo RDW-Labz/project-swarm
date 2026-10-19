@@ -28,6 +28,21 @@ exec "$NODE" ${quote(runner)} "$@"
 `;
 }
 
+// Where the `swarm` command on this machine really runs from: the runner its launcher execs, and the install root that owns it (<root>/current/tools/swarm.mjs).
+// Null when there is no launcher of ours.
+export async function readLauncher(home) {
+  let text;
+  try { text = await fs.readFile(swarmBinPath(home), 'utf8'); } catch { return null; }
+  if (!managed(text)) return null;
+  const m = /^exec "\$NODE" '((?:[^']|'\\'')*)'/m.exec(text);
+  if (!m) return null;
+  const runner = m[1].replaceAll("'\\''", "'");
+  const current = path.dirname(path.dirname(runner));
+  // Only an absolute runner under <root>/current names an install; anything else is not guessed at.
+  const installRoot = path.isAbsolute(runner) && path.basename(current) === 'current' ? path.dirname(current) : null;
+  return { path: swarmBinPath(home), runner, installRoot };
+}
+
 async function statOrNull(file) {
   try { return await fs.lstat(file); }
   catch (error) {

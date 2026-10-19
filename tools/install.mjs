@@ -153,7 +153,7 @@ export async function installUser({source=packageRoot,home=os.homedir(),dev=fals
  const completionFile=path.join(home,'.project-swarm','completions','_swarm');
  await fs.mkdir(path.dirname(completionFile),{recursive:true});
  await fs.writeFile(completionFile,zshCompletion());
- const record={version:pkg.version,installedAt:new Date().toISOString(),skillTargets:written,versionDir,runner,swarmCommand:swarmCommand.path,completion:completionFile};
+ const record={version:pkg.version,dev,installedAt:new Date().toISOString(),skillTargets:written,versionDir,runner,swarmCommand:swarmCommand.path,completion:completionFile};
  const recordPath=path.join(source,'.swarm-install.json');
  await fs.writeFile(recordPath,`${JSON.stringify(record,null,2)}\n`);
  return {status:'installed',version:pkg.version,source,skillTargets:written,skipped,installRecord:recordPath,versionDir,runner,swarmCommand,completionFile};
