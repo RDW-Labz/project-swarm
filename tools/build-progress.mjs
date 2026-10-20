@@ -114,12 +114,23 @@ async function readJournalSafe(root, notes) {
   }
 }
 
+const historyCache = new Map(); // history path -> { mtimeMs, size, events }: shared by board polls
 async function readHistorySafe(projectId, historyFile, notes) {
   const file = historyFile ?? defaultHistoryFile();
   try {
-    const result = await readHistory({ file, project: projectId, limit: 1000, cap: 1000 });
-    if (!(await exists(file))) { notes.push('history unavailable'); return null; }
-    return result.events.filter(event => event.kind === 'pr' || event.kind === 'merge');
+    let stat;
+    try { stat = await fs.stat(file); } catch (error) {
+      if (error.code === 'ENOENT') { notes.push('history unavailable'); return null; }
+      throw error;
+    }
+    const hit = historyCache.get(file);
+    let events = hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size ? hit.events : null;
+    if (!events) {
+      const result = await readHistory({ file, limit: 100000, cap: 100000 });
+      events = result.events.filter(event => event.kind === 'pr' || event.kind === 'merge');
+      historyCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, events });
+    }
+    return events.filter(event => event.projectId === projectId || event.project === projectId);
   } catch (error) {
     notes.push(`history unavailable: ${text(error.message)}`);
     return null;

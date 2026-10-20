@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { buildProgress, progressSummary } from '../tools/build-progress.mjs';
+import { projectDetail, projectOverview } from '../tools/board-data.mjs';
 import { approveLedger, createLedger, writeLedger } from '../tools/tickets.mjs';
 import { scopeHash } from '../tools/scope.mjs';
 
@@ -129,4 +130,41 @@ test('missing ledger, scope, journal and history never throws and records notes'
   assert.ok(p.notes.some(note => /scope/i.test(note)));
   assert.ok(p.notes.some(note => /journal/i.test(note)));
   assert.ok(p.notes.some(note => /history/i.test(note)));
+});
+
+test('project detail keeps full progress and uses injected family spend while overview stays summarized', async t => {
+  const data = await fixture(t, { tickets: [ticket('T-0001', 'done')] });
+  const project = { id: data.projectId, name: 'Fixture', root: data.root };
+  const summary = async () => ({ spendUsd: 3, capUsd: 10, reached: false, why: null });
+  const detail = await projectDetail(project, { now: NOW, historyFile: data.historyFile, summary });
+  assert.ok(detail.progress);
+  assert.ok(detail.progress.percent);
+  assert.ok(Array.isArray(detail.progress.milestones));
+  assert.ok(Array.isArray(detail.progress.stages));
+  assert.equal(detail.progress.spend.usd, 3);
+  assert.equal(detail.progress.spend.capUsd, 10);
+  assert.equal(detail.progress.spend.reached, false);
+  assert.equal(detail.progress.spend.why, null);
+
+  const overview = await projectOverview(project, [], { now: NOW, historyFile: data.historyFile, summary });
+  assert.deepEqual(Object.keys(overview.progress).sort(), ['current', 'eta', 'finished', 'overall', 'ticketsPct'].sort());
+  assert.deepEqual(overview.progress, { overall: 50, ticketsPct: 100, current: 'PR open', eta: null, finished: false });
+});
+
+test('shared history cache filters projects and refreshes after an append', async t => {
+  const aData = await fixture(t, { tickets: [ticket('T-1001', 'todo')] });
+  const bData = await fixture(t, { tickets: [ticket('T-1002', 'todo')] });
+  const historyFile = path.join(aData.root, 'shared-history.ndjson');
+  await fs.writeFile(historyFile, [
+    { kind: 'pr', projectId: 'project-a', at: iso(NOW - DAY), ref: '#A1', title: 'A PR' },
+    { kind: 'pr', projectId: 'project-b', at: iso(NOW - DAY), ref: '#B1', title: 'B PR' },
+  ].map(event => JSON.stringify(event)).join('\n') + '\n');
+  const a = await buildProgress({ ...aData, projectId: 'project-a', now: NOW, historyFile });
+  const b = await buildProgress({ ...bData, projectId: 'project-b', now: NOW, historyFile });
+  assert.equal(a.milestones.find(item => item.key === 'pr').evidence, '#A1');
+  assert.equal(b.milestones.find(item => item.key === 'pr').evidence, '#B1');
+
+  await fs.appendFile(historyFile, `${JSON.stringify({ kind: 'pr', projectId: 'project-a', at: iso(NOW + 1000), ref: '#A2', title: 'A PR 2' })}\n`);
+  const refreshed = await buildProgress({ ...aData, projectId: 'project-a', now: NOW, historyFile });
+  assert.equal(refreshed.milestones.find(item => item.key === 'pr').evidence, '#A2');
 });
