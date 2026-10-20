@@ -39,7 +39,9 @@
         "tests/review-retry.test.mjs",
         "tests/s13-live-bugs.test.mjs",
         "tests/scope-commands.test.mjs",
+        "tests/scope-delete-tickets.test.mjs",
         "tests/scope-loop.test.mjs",
+        "tests/scope-ownership.test.mjs",
         "tests/splitter-lesson-55.test.mjs",
         "tests/ticket-lane-risk.test.mjs",
         "tests/ui-check.test.mjs"

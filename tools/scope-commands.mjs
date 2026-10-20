@@ -27,13 +27,14 @@ import { ensureGitignore } from './gitignore-defaults.mjs';
 import { workTreeFingerprint } from './work-tree.mjs';
 import { otherManagerLockfile } from './ticket-manifest.mjs';
 import { loadLocalConfig } from './local-config.mjs';
-import { doneEvidence, ticketTests, failedRunChecks } from './verify-config.mjs';
+import { doneEvidence, ticketTests, failedRunChecks, validateVerifyConfig } from './verify-config.mjs';
+import { countTests, detectTestCommand } from './zero-tests.mjs';
+import { runCheckArgv } from './init.mjs';
 import { deriveQualityChecks, qualityEvidence } from './quality-checks.mjs';
 import { nextStep, sizeTicket } from './escalation.mjs';
 import { unlockReady, releaseReady } from './ticket-unlock.mjs';
 import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, orderTestsAfterBuild, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets } from './wiring.mjs';
 import { parseEnvNames, envNamesLine } from './env-names.mjs';
-import { detectTestCommand } from './zero-tests.mjs';
 import { execFile } from 'node:child_process';
 import { existsSync, statSync, lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
@@ -187,6 +188,94 @@ export async function qualityFor(root, profile) {
   let pkg = null;
   try { pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); } catch { /* no package.json */ }
   return deriveQualityChecks({ pkg, hasTsconfig: existsSync(path.join(root, 'tsconfig.json')), manager: packageManagerOf(profile) ?? 'npm', config: profile?.quality ?? {} });
+}
+
+const SPEC_TESTS_TOKEN = '{tests}';
+const SPEC_AFFECTED_TOKEN = '{affected}';
+const E2E_SPEC_PATH = /(?:(^|\/)(e2e|playwright|cypress\/e2e)\/|\.e2e\.[cm]?[jt]sx?$)/i;
+const specTestArg = p => `./${p}`;
+
+async function readProjectChecks(root) {
+  try {
+    const parsed = JSON.parse(await fs.readFile(path.join(root, 'coordination/checks.json'), 'utf8'));
+    return Array.isArray(parsed?.checks) ? parsed.checks : [];
+  } catch { return []; }
+}
+
+function isE2eSpecPath(file) {
+  return E2E_SPEC_PATH.test(file);
+}
+
+function argvLooksE2e(argv) {
+  return Array.isArray(argv) && /\be2e\b|playwright|cypress/i.test(argv.join(' '));
+}
+
+function expandSpecArgv(argv, files) {
+  const specs = files.map(specTestArg);
+  return argv.flatMap(a => (a === SPEC_TESTS_TOKEN || a === SPEC_AFFECTED_TOKEN ? specs : [a]));
+}
+
+// De-duplicated test and spec paths a ticket may run in sync (same later-owner and deletion rules as the missing-file gate).
+export function ticketSpecPaths(t, ledger, laterIds) {
+  if (!['build', 'test', 'migration'].includes(t.type)) return [];
+  const named = [...new Set([...(t.tests ?? []), ...ticketTests(t)])].filter(f => looksLikeTestFile(f) && !/[*?]|\/$/.test(f) && !(t.deletes ?? []).includes(f));
+  const ownersOf = f => ledger.tickets.filter(o => o.id !== t.id && o.status !== 'cancelled' && ((o.files ?? []).includes(f) || (o.type === 'test' && (o.tests ?? []).includes(f))));
+  const ownerOf = f => ownersOf(f).find(o => !laterIds.has(o.id)) ?? ownersOf(f)[0];
+  return named.filter(f => {
+    if ((t.files ?? []).includes(f)) return true;
+    const owners = ownersOf(f);
+    if (owners.length > 0 && owners.every(o => laterIds.has(o.id))) return false;
+    const o = ownerOf(f);
+    return !(o && o.status !== 'done' && !laterIds.has(o.id));
+  });
+}
+
+// The argv to run one ticket-owned test file, from profile verify and coordination checks (lesson 39 e2e commands).
+export function argvForTicketSpec(file, { profile, checks, pkg, files = [] } = {}) {
+  if (!looksLikeTestFile(file)) return null;
+  const list = Array.isArray(checks) ? checks : [];
+  const e2e = isE2eSpecPath(file);
+  if (e2e) {
+    const hit = list.find(c => Array.isArray(c?.argv) && argvLooksE2e(c.argv));
+    if (hit) {
+      const template = (Array.isArray(hit.affectedArgv) && hit.affectedArgv.includes(SPEC_AFFECTED_TOKEN)) ? hit.affectedArgv
+        : (hit.argv.includes(SPEC_TESTS_TOKEN) ? hit.argv : null);
+      if (template) return expandSpecArgv(template, [file]);
+      return [...hit.argv, specTestArg(file)];
+    }
+  }
+  const verified = validateVerifyConfig(profile?.verify);
+  if (verified.ok && verified.value?.command) {
+    const cmd = verified.value.command;
+    if (cmd.includes(SPEC_TESTS_TOKEN)) return expandSpecArgv(cmd, [file]);
+    return [...cmd, specTestArg(file)];
+  }
+  const named = list.find(c => c?.name === 'tests' || c?.name === 'test');
+  if (named) {
+    if (Array.isArray(named.affectedArgv) && named.affectedArgv.includes(SPEC_AFFECTED_TOKEN)) return expandSpecArgv(named.affectedArgv, [file]);
+    if (Array.isArray(named.argv) && named.argv.includes(SPEC_TESTS_TOKEN)) return expandSpecArgv(named.argv, [file]);
+    if (Array.isArray(named.argv) && named.argv.length) return [...named.argv, specTestArg(file)];
+  }
+  const detected = detectTestCommand({ pkg, files });
+  if (detected?.command) return expandSpecArgv(detected.command, [file]);
+  return null;
+}
+
+export async function runTicketSpec(root, file, { profile, checks, pkg, files, timeoutMs } = {}) {
+  const argv = argvForTicketSpec(file, { profile, checks, pkg, files });
+  if (!argv?.length) return { ok: false, reason: `no runner configured for ${file}` };
+  const limit = timeoutMs ?? (validateVerifyConfig(profile?.verify).value?.timeoutSec ?? 900) * 1000;
+  try {
+    const { exitCode, stdout, stderr } = await runCheckArgv(argv, { cwd: root, timeoutMs: limit });
+    const tail = [stdout, stderr].filter(Boolean).join('\n').slice(-8000);
+    if (exitCode !== 0) return { ok: false, failed: true, tail };
+    const { count } = countTests(tail);
+    if (count === 0) return { ok: false, failed: true, tail: `${tail}\nno-tests: the check passed but ran 0 tests (wrong test runner for these files?)` };
+    return { ok: true };
+  } catch (error) {
+    const tail = String(error?.message ?? error);
+    return { ok: false, failed: true, tail: /timed out/i.test(tail) ? tail : tail };
+  }
 }
 
 // Check output and job errors go back into a worker prompt (and, when a ticket escalates, to another vendor): credentials are removed first.
@@ -1153,7 +1242,7 @@ async function cmdAcceptanceReview(root, { rest }, deps = {}) {
   return out(lines.length ? `acceptance review recorded:\n${lines.map(x => `  ${x}`).join('\n')}\nRun swarm scope sync RUN --integrated to move the tickets whose lines all pass to done and send the failed ones back.` : 'the review named none of the tickets in this ledger', 0);
 }
 
-async function cmdSync(root, { rest, flags }) {
+async function cmdSync(root, { rest, flags }, deps = {}) {
   if (rest.length !== 1) return bad('scope sync needs a run id');
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger', 1);
@@ -1165,6 +1254,12 @@ async function cmdSync(root, { rest, flags }) {
     const integrated = queue ? new Set((queue.integrated ?? []).map(entry => (typeof entry === 'string' ? entry : entry?.job))) : null;
     const failedChecks = new Map((queue?.checkFailed ?? []).map(entry => [entry.job, entry]));
     const profile = await readProfile(root);
+    const projectChecks = await readProjectChecks(root);
+    let projectPkg = null;
+    let projectFiles = [];
+    try { projectPkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); } catch { /* no package.json */ }
+    try { projectFiles = await projectFileList(root, execFileAsync); } catch { /* not a git repo */ }
+    const runSpec = deps.runTicketSpec ?? ((r, file, ctx) => runTicketSpec(r, file, { ...ctx, pkg: ctx.pkg ?? projectPkg, files: ctx.files ?? projectFiles }));
     // A profile that names a verify block but does not validate must not turn the test gate off.
     const rawPointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? 'null');
     if (rawPointer?.profile?.verify !== undefined && !profile?.verify) {
@@ -1303,6 +1398,21 @@ async function cmdSync(root, { rest, flags }) {
         const result = await applyRetry(root, t.id, `failed checks: named test files missing: ${missingTests.join(', ')}; write them (they are in your outputs) and make them pass`, rest[0]);
         (result === 'blocked' ? blocked : retried).push(t.id);
         continue;
+      }
+      const specPaths = ticketSpecPaths(t, ledger, laterIds).filter(f => existsSync(path.join(root, f)));
+      if (specPaths.length) {
+        let specStop = false;
+        for (const f of specPaths) {
+          const outcome = await runSpec(root, f, { profile, checks: projectChecks, pkg: projectPkg, files: projectFiles });
+          if (outcome?.failed) {
+            const result = await applyRetry(root, t.id, `failed checks: ticket spec ${f}${outcome.tail ? `; ${String(outcome.tail).slice(-500)}` : ''}`, rest[0]);
+            (result === 'blocked' ? blocked : retried).push(t.id);
+            specStop = true;
+            break;
+          }
+          if (!outcome?.ok) { unverified.push(`${t.id} (ticket spec ${f}: ${outcome?.reason ?? 'not run'})`); specStop = true; break; }
+        }
+        if (specStop) continue;
       }
       // A ticket with tests is done only when the runner itself saw them pass (a worker's own report is not evidence).
       if (profile?.verify && ticketTests(t).length) {
@@ -1849,7 +1959,7 @@ export async function runScopeCommand(root, command, args, deps = {}) {
     if (verb === 'check') return await cmdCheck(root, sub);
     if (verb === 'split') return await cmdSplit(root, sub);
     if (verb === 'approve') return await cmdApprove(root, sub);
-    if (verb === 'sync') return await cmdSync(root, sub);
+    if (verb === 'sync') return await cmdSync(root, sub, deps);
     if (verb === 'security-review') return await cmdSecurityReview(root, sub, deps);
     if (verb === 'acceptance-review') return await cmdAcceptanceReview(root, sub, deps);
     if (verb === 'contracts') return await cmdContracts(root, sub);
