@@ -148,7 +148,7 @@ async function readDoneTimes(root, notes) {
   }
 }
 
-function buildMilestones({ ledger, tickets, history, historyKnown }) {
+function buildMilestones({ ledger, tickets, history, historyKnown, deploy = null }) {
   let approved = false;
   try { approved = Boolean(ledger && isApproved(ledger)); } catch { approved = false; }
   const counted = tickets.filter(COUNTED);
@@ -160,13 +160,23 @@ function buildMilestones({ ledger, tickets, history, historyKnown }) {
   const newestMerge = merges.slice().sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0] ?? null;
   const prDone = Boolean(newestPr);
   const mergeDone = Boolean(newestPr && newestMerge && Date.parse(newestMerge.at) >= Date.parse(newestPr.at));
+  const deploySuccess = deploy?.lastSuccess;
+  const deployedAfterMerge = Boolean(deploySuccess && (!mergeDone || Date.parse(deploySuccess.at) >= Date.parse(newestMerge?.at ?? '')));
+  const deployedEvidence = deploySuccess ? `${deploySuccess.environment || 'deploy'}${deploySuccess.url ? ` ${deploySuccess.url}` : ''}` : null;
+  const deployed = deployedAfterMerge
+    ? milestone('deployed', 'Deployed', 'done', deploySuccess.at, deployedEvidence)
+    : deploy?.latest?.state === 'failure' || deploy?.latest?.state === 'error'
+      ? milestone('deployed', 'Deployed', 'todo', null, `last deploy failed ${deploy.latest.at}`)
+      : deploy?.latest
+        ? milestone('deployed', 'Deployed', 'todo', null, `latest deploy ${deploy.latest.state}`)
+        : milestone('deployed', 'Deployed', 'unknown', null, deploy?.error ? `not tracked: ${deploy.error}` : 'not tracked');
   const raw = [
     ledger ? milestone('scope', 'Scope approved', approved ? 'done' : 'todo', approved ? iso(ledger.approved?.at) : null, approved ? 'ledger approval' : null) : milestone('scope', 'Scope approved', 'unknown'),
     ledger ? milestone('building', 'Building', building ? 'done' : 'todo', null, building ? 'ticket activity' : null) : milestone('building', 'Building', 'unknown'),
     ledger ? milestone('e2e', 'E2E green', e2e ? 'done' : 'todo', null, e2e ? 'all counted tickets done' : null) : milestone('e2e', 'E2E green', 'unknown'),
     historyKnown ? milestone('pr', 'PR open', prDone ? 'done' : 'todo', prDone ? iso(newestPr.at) : null, prDone ? (newestPr.ref ?? null) : null) : milestone('pr', 'PR open', 'unknown'),
     historyKnown ? milestone('merged', 'Merged', mergeDone ? 'done' : 'todo', mergeDone ? iso(newestMerge.at) : null, mergeDone ? (newestMerge.ref ?? null) : null) : milestone('merged', 'Merged', 'unknown'),
-    milestone('deployed', 'Deployed', 'unknown', null, 'not tracked yet'),
+    deployed,
   ];
   let current = false;
   for (const item of raw) {
@@ -176,7 +186,7 @@ function buildMilestones({ ledger, tickets, history, historyKnown }) {
   return raw;
 }
 
-export async function buildProgress({ root, projectId, now = Date.now(), historyFile, spend = null } = {}) {
+export async function buildProgress({ root, projectId, now = Date.now(), historyFile, spend = null, deploy = null } = {}) {
   const notes = [];
   try {
     const ledger = await readLedgerSafe(root, notes);
@@ -207,7 +217,7 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
     const etaCount = etaTimes.length;
     const perDay = etaCount >= 2 ? Math.round((etaCount / 14) * 100) / 100 : null;
     const eta = perDay === null ? null : { remaining: openTickets.length, perDay, days: openTickets.length === 0 ? 0 : Math.ceil(openTickets.length / perDay), basis: `${etaCount} done in the last 14 days` };
-    const milestones = buildMilestones({ ledger, tickets: allTickets, history, historyKnown: history !== null });
+    const milestones = buildMilestones({ ledger, tickets: allTickets, history, historyKnown: history !== null, deploy });
     const e2e = milestones.find(item => item.key === 'e2e')?.state === 'done';
     const merged = milestones.find(item => item.key === 'merged')?.state === 'done';
     const finished = Boolean((requirements ? requirements.covered === requirements.total : ticketDone === tickets.length && tickets.length > 0) && e2e && merged);

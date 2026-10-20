@@ -92,6 +92,31 @@ test('milestones have one current item and an older merge does not satisfy merge
   assert.equal(progressSummary(p).current, 'Merged');
 });
 
+test('deployment status lights the deployed milestone without changing finished', async t => {
+  const plain = await fixture(t, { tickets: [ticket('T-0001', 'done')] });
+  assert.deepEqual((await buildProgress({ ...plain, now: NOW })).milestones.find(item => item.key === 'deployed'), {
+    key: 'deployed', label: 'Deployed', state: 'unknown', at: null, evidence: 'not tracked',
+  });
+
+  const merged = await fixture(t, {
+    tickets: [ticket('T-0001', 'done')],
+    history: [
+      { kind: 'pr', projectId: 'project-fixture', at: iso(NOW - 2 * DAY), ref: '#1' },
+      { kind: 'merge', projectId: 'project-fixture', at: iso(NOW - DAY), ref: '#1' },
+    ],
+  });
+  const deployed = await buildProgress({ ...merged, now: NOW, deploy: { latest: { state: 'success' }, lastSuccess: { state: 'success', environment: 'production', at: iso(NOW), url: null } } });
+  const deployedMilestone = deployed.milestones.find(item => item.key === 'deployed');
+  assert.equal(deployedMilestone.state, 'done');
+  assert.match(deployedMilestone.evidence, /production/);
+
+  const old = await buildProgress({ ...merged, now: NOW, deploy: { latest: { state: 'success', at: iso(NOW - 2 * DAY) }, lastSuccess: { state: 'success', environment: 'stale', at: iso(NOW - 2 * DAY), url: null } } });
+  assert.notEqual(old.milestones.find(item => item.key === 'deployed').state, 'done');
+
+  const failed = await buildProgress({ ...plain, now: NOW, deploy: { latest: { state: 'failure', at: iso(NOW - 1000) }, lastSuccess: null } });
+  assert.match(failed.milestones.find(item => item.key === 'deployed').evidence, /^last deploy failed/);
+});
+
 test('eta needs two recent done times and calculates days from a fourteen-day rate', async t => {
   const data = await fixture(t, {
     tickets: [ticket('T-0001', 'done'), ticket('T-0002', 'done'), ticket('T-0003', 'todo')],

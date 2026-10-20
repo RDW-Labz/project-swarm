@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "deploy-events",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "TASK (owner item: deploy events). The board's build-progress milestone 'Deployed' (tools/build-progress.mjs) is always state 'unknown' with evidence 'not tracked yet'. Make it light up from GitHub deployment statuses for the repo's main branch (Vercel posts these). READ-ONLY toward GitHub, no new secrets, nothing written to disk. Do NOT touch tools/swarm.mjs, package.json, CHANGELOG.md or README.md.\n\n1) New tools/deploy-status.mjs (ESM, SPDX header, short header comment):\n- `async githubRepo(root)`: fs only, no git process. Find the git config: if <root>/.git is a directory use <root>/.git/config; if it is a file `gitdir: X`, use the common dir (X/commondir if present, else dirname(dirname(X))) + '/config'. Parse the `[remote \"origin\"]` section's `url =` line. Accept https://github.com/OWNER/NAME(.git), git@github.com:OWNER/NAME(.git), ssh://git@github.com/OWNER/NAME(.git). OWNER and NAME must match /^[A-Za-z0-9._-]{1,100}$/. Return 'OWNER/NAME' or null.\n- `async fetchDeployStatus({ repo, ref = 'main', run, env = process.env, timeoutMs = 15000 })`: `run` defaults to an execFile-based runner `(cmd, args, opts) => Promise<{code, stdout, stderr}>` with shell:false. Call `gh api -H 'Accept: application/vnd.github+json' repos/OWNER/NAME/deployments?ref=<ref>&per_page=10` (ref URL-encoded), then for up to the 5 newest deployments `gh api repos/OWNER/NAME/deployments/<id>/statuses?per_page=1`. Child env = a copy of env with GITHUB_TOKEN and GH_TOKEN deleted (gh uses its own stored login, as tools/sweep.mjs does) and GH_PROMPT_DISABLED=1. Every argv is an array; never a shell string. Parse JSON defensively. Return { checkedAt: ISO, repo, ref, latest: {state, environment, at, url, sha, id} | null, lastSuccess: {same shape} | null, error: string | null }, where latest = the newest deployment's newest status and lastSuccess = the newest deployment whose newest status state is 'success'. at = the status created_at; url = status environment_url or target_url only when it starts with 'https://', else null; strings trimmed to 200 chars. gh missing / non-zero exit / bad JSON -> latest and lastSuccess null and error set to a short message (no stdout dump). Never throws.\n- `createDeployTracker({ run, env, ttlMs = 300000, now = Date.now, repoOf = githubRepo })` returns `{ get(root) }`: get returns the cached value for root immediately (or null if none yet) and, when there is no cache or it is older than ttlMs and no refresh is in flight for that root, starts ONE background refresh (repoOf(root) -> null repo caches {repo:null, latest:null, lastSuccess:null, error:'no GitHub remote', checkedAt}). Refresh errors are cached too (so a broken gh is retried only after ttlMs). Expose `refresh(root)` returning the promise, for tests.\n\n2) tools/build-progress.mjs: buildProgress accepts `deploy = null` (the tracker's cached value). Deployed milestone: if deploy?.lastSuccess and (the merged milestone is not done OR Date.parse(lastSuccess.at) >= merged.at) -> 'done', at = lastSuccess.at, evidence = `${environment || 'deploy'}${url ? ' ' + url : ''}`. Else if deploy?.latest?.state is 'failure' or 'error' -> not done, evidence `last deploy failed ${latest.at}`. Else if deploy?.latest -> not done, evidence `latest deploy ${latest.state}`. Else (deploy null, no repo, error, or no deployments) -> state 'unknown', evidence 'not tracked' (or the error text when deploy.error is set, e.g. 'not tracked: no GitHub remote'). A not-done deployed milestone with known data takes part in the 'current'/'todo' assignment like the others. `finished` keeps its definition (requirements, e2e, merged); do not add deploy to it.\n\n3) tools/board-data.mjs: projectOverview, projectDetail and boardSnapshot accept `deployStatus = null` (a function root -> cached value or null) and pass `deploy: deployStatus ? deployStatus(project.root) : null` into buildProgress. Default null: tests and other callers never spawn gh.\n\n4) tools/watch-cli.mjs: where the server builds the board snapshot and the project detail, create ONE tracker per server (createDeployTracker({ env })) and pass `deployStatus: root => isScratchRoot(root) ? null : tracker.get(root)` into boardSnapshot and projectDetail. Nothing else in watch-cli changes.\n\n5) tools/watch-assets/project.js: the milestone li gets a `title` attribute with the milestone's evidence (and at) when present, so hovering 'Deployed' shows where and when. textContent/setAttribute only.\n\nTests: new tests/deploy-status.test.mjs (node:test, assert/strict, temp dirs cleaned up, NO real gh or network: a fake `run` records calls and returns canned JSON): githubRepo for https/ssh/scp-style URLs, a .git file worktree, no origin -> null, a non-GitHub host -> null, a bad owner -> null; fetchDeployStatus picks latest and lastSuccess correctly across 3 deployments (newest failure, older success), strips GITHUB_TOKEN/GH_TOKEN from the child env, passes argv arrays and never shell:true, drops a non-https url, returns error (not throw) on non-zero exit and on bad JSON; the tracker returns null first then the value after refresh(), does not start a second refresh while one is in flight, refreshes again only after ttl. In tests/build-progress.test.mjs add: deploy null -> Deployed 'unknown' 'not tracked'; lastSuccess after the merge -> 'done' with evidence containing the environment; lastSuccess older than the merge -> not done; latest failure -> evidence starts with 'last deploy failed'. Run `node --import ./tests/_isolate-config.mjs --test tests/deploy-status.test.mjs tests/build-progress.test.mjs tests/board-page.test.mjs tests/board.test.mjs tests/board-worktrees.test.mjs tests/watch-ui.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests use these modules for unrelated behavior; the coordinator runs the full suite after integration.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/sweep.mjs",
+        "tools/projects.mjs",
+        "tools/project-spend.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "outputs": [
+        "tools/deploy-status.mjs",
+        "tests/deploy-status.test.mjs",
+        "tools/build-progress.mjs",
+        "tests/build-progress.test.mjs",
+        "tools/board-data.mjs",
+        "tools/watch-cli.mjs",
+        "tools/watch-assets/project.js"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/autopilot-lock.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/completion.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10b-cli.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs"
+      ]
+    }
+  ]
+}
