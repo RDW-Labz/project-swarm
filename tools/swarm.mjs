@@ -50,6 +50,7 @@ import { readBacklog, nextStartable, markStarted as markBacklogStarted } from '.
 import { pendingNotifications, macNotify } from './notify.mjs';
 import { resolveDefaultRoot, INSTALL_COMMANDS, runBriefCommand, runHandoffCommand, runCheckpointCommand, journalAfterCommand } from './project-commands.mjs';
 import { runAutopilot } from './autopilot.mjs';
+import { readyAutopilotDeps } from './autopilot-ready-deps.mjs';
 import { acquireAutopilotLock } from './autopilot-lock.mjs';
 import { looseKillCommands, LOOSE_KILL_RULE } from './process-guard.mjs';
 import { appendEvent, readJournal, safeWritableDir, assertRegularOrMissing } from './journal.mjs';
@@ -84,7 +85,7 @@ import { SCAFFOLD_USAGE, parseScaffoldArgs, scaffoldJob, scaffoldPr, commandHand
 import { prepareWorkspaceEnvironment, prepareViteCaches, isDesignOnlyCodexJob, createAdapterLogSink, runCodexWithRetry } from './codex-adapter.mjs';
 import { readCursorKey, CURSOR_MODEL, CURSOR_BLIP_RE, requireCursorPlatform, requireCursorApiKey, resolveCursorBinary, cursorConfig, cursorProfile, cursorLaunchArgs, cursorMessage, cursorEnvironment, resolveCursorEnvelope, parseCursorOutput, redactCursorKey, cursorDoctor } from './cursor-adapter.mjs';
 import { classifyCheckEnvironment, swarmCheckWarnings } from './ship.mjs';
-import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary, listLiveRuns, repoKey, repoPaths } from './board.mjs';
+import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary, listLiveRuns, liveDir, repoKey, repoPaths } from './board.mjs';
 import { BUSY_MARKER_VERBS, writeBusyMarker, liveBusyMarkers, busyDir } from './busy-marker.mjs';
 import { acquireIntegrationLock } from './integration-lock.mjs';
 export { acquireIntegrationLock } from './integration-lock.mjs';
@@ -7501,8 +7502,29 @@ function autopilotCaps(...budgets) {
   return { maxUsd: pick('maxUsd') ?? GOAL_BUDGET.maxUsd, maxTokens: pick('maxTokens') ?? GOAL_BUDGET.maxTokens };
 }
 
-function autopilotDeps() {
+function autopilotDeps(root) {
   const readPlan = async root => { try { return JSON.parse(await fs.readFile(path.join(root, '.swarm', 'project', 'plan.json'), 'utf8')); } catch { return null; } };
+  const readyInject = {
+    env: process.env,
+    spawnImpl: spawn,
+    selfPid: process.pid,
+    liveBusyMarkers: () => liveBusyMarkers(),
+    listLiveRuns: () => listLiveRuns({ dir: liveDir(process.env) }),
+    checkProjectCap,
+    readTickets: async projectRoot => {
+      try { const { readLedger } = await import('./tickets.mjs'); return (await readLedger(projectRoot)).tickets ?? []; }
+      catch { return []; }
+    },
+    readPending: async projectRoot => {
+      try {
+        const { readLedger } = await import('./tickets.mjs');
+        const ledger = await readLedger(projectRoot);
+        return (ledger?.tickets ?? [])
+          .filter(ticket => ticket && ticket.status === 'proposed')
+          .map(ticket => ({ status: 'pending', files: Array.isArray(ticket.files) ? ticket.files.map(String) : [] }));
+      } catch { return []; }
+    },
+  };
   const manifestAt = async (root, relative) => {
     if (typeof relative !== 'string' || !relative || path.isAbsolute(relative) || relative.split(/[\\/]/).includes('..')) fail(`autopilot-manifest-invalid: ${relative}`);
     return JSON.parse(await fs.readFile(path.join(root, relative), 'utf8'));
@@ -7590,6 +7612,7 @@ function autopilotDeps() {
       for (const message of out.messages) await macNotify(message);
       if (out.messages.length) { const temp = `${file}.${process.pid}.${Date.now()}.tmp`; await fs.writeFile(temp, `${JSON.stringify(out.notified)}\n`, { flag: 'wx', mode: 0o600 }); await fs.rename(temp, file); }
     },
+    ...readyAutopilotDeps(root, readyInject),
   };
 }
 
@@ -8235,7 +8258,7 @@ async function mainInner() {
     let release;
     try{release=await acquireAutopilotLock(root);}catch(error){if(error.code==='autopilot-running')fail(error.message,'autopilot-running');throw error;}
     let steps;
-    try{steps=await runAutopilot(root,autopilotDeps(),{once,intervalMs,maxSteps,signal:controller.signal});}finally{await release();}
+    try{steps=await runAutopilot(root,autopilotDeps(root),{once,intervalMs,maxSteps,signal:controller.signal});}finally{await release();}
     process.stdout.write(`${JSON.stringify({status:'ok',steps:steps.length,actions:steps.flatMap(step=>step.actions.map(action=>({action:action.action,run:action.run??action.wave,ok:action.ok}))),blocked:[...new Set(steps.flatMap(step=>step.blocked))]})}\n`);
     return;
   }
