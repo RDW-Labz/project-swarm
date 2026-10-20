@@ -10,6 +10,70 @@ import path from 'node:path';
 import { insideProject, ORCHESTRATOR_OWN, WRITE_TOOLS } from './orchestrator-events.mjs';
 import { execFileSync } from 'node:child_process';
 import { analyzeShell, writesAnything, TOOL_DIRS, tokenize } from './shell-writes.mjs';
+import { isRoutingPath } from './routing-paths.mjs';
+import { swarmProducedFiles } from './swarm-produced.mjs';
+
+export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D']);
+const ALLOWED_GH = new Set(['pr create', 'pr view', 'pr list', 'pr checks', 'pr diff', 'run list', 'run watch', 'run view']);
+const READ_GIT_SUBS = new Set(['fetch', 'status', 'log', 'diff', 'show']);
+const WRITE_HTTP = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/** Current branch name; detached HEAD returns `HEAD`. */
+export function branchOf(root) {
+  try { return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, encoding: 'utf8', timeout: 3000 }).trim(); }
+  catch { return 'HEAD'; }
+}
+
+export const isProtectedBranch = b => b === 'main' || b === 'master' || b === 'HEAD';
+
+const normBranch = b => String(b ?? '').replace(/^refs\/heads\//, '');
+const isUnderScratchpad = abs => abs.split(path.sep).includes('scratchpad');
+const allowedOutsideDelete = (abs, home) => {
+  const n = path.resolve(abs);
+  const scratch = path.join(home, '.project-swarm-scratch');
+  const tmp = os.tmpdir();
+  if (n === scratch || n.startsWith(`${scratch}${path.sep}`)) return true;
+  if (n === tmp || n.startsWith(`${tmp}${path.sep}`)) return true;
+  return isUnderScratchpad(n);
+};
+
+const ghApiWrite = (command, ops) => {
+  if (!ops.some(o => o.tool === 'gh' && String(o.sub ?? '').startsWith('api'))) return false;
+  for (const words of tokenize(command)) {
+    const gi = words.findIndex(w => path.basename(w) === 'gh');
+    if (gi === -1) continue;
+    const rest = words.slice(gi + 1);
+    if (rest[0] !== 'api') continue;
+    for (let i = 1; i < rest.length; i += 1) {
+      const w = rest[i];
+      if (w === '-X' || w === '--method') {
+        const m = String(rest[i + 1] ?? 'GET').toUpperCase();
+        if (WRITE_HTTP.has(m)) return true;
+      } else if (w.startsWith('--method=')) {
+        if (WRITE_HTTP.has(w.slice(9).toUpperCase())) return true;
+      } else if (WRITE_HTTP.has(String(w).toUpperCase()) && (rest[i - 1] === '-X' || rest[i - 1] === '--method')) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return false;
+};
+
+const movesToScratchpad = (command, { root, cwd }) => {
+  for (const words of tokenize(command)) {
+    const mi = words.findIndex(w => w === 'mv');
+    if (mi === -1) continue;
+    const dest = words.slice(mi + 1).filter(w => w && !w.startsWith('-')).pop();
+    if (!dest) continue;
+    const raw = dest === '~' || dest.startsWith('~/') ? path.join(os.homedir(), dest.slice(2)) : path.isAbsolute(dest) ? dest : path.resolve(cwd || root, dest);
+    const base = path.basename(raw.replace(/\/$/, ''));
+    if (base === 'scratchpad') return true;
+    const rel = insideProject(root, raw);
+    if (rel !== null && (rel === 'scratchpad' || rel.startsWith('scratchpad/') || rel.split('/').includes('scratchpad'))) return true;
+  }
+  return false;
+};
 
 export const STATE_FILE = '.swarm/handbuild/state.json';
 export const LOG_FILE = '.swarm/handbuild/log.ndjson';
@@ -119,7 +183,7 @@ export function createRequest(root, { kind, reason, files, minutes, git }, { now
   const mins = minutes === undefined ? DEFAULT_MINUTES : Number(minutes);
   if (!Number.isInteger(mins) || mins < 1 || mins > MAX_MINUTES) throw Error(`handbuild-minutes: --minutes must be a whole number from 1 to ${MAX_MINUTES}`);
   const ops = (Array.isArray(git) ? git : String(git ?? '').split(',')).map(g => g.trim()).filter(Boolean);
-  for (const g of ops) if (!['commit', 'push'].includes(g)) throw Error('handbuild-git: --git may name commit and push only');
+  for (const g of ops) if (!GIT_REQUEST_OPS.includes(g)) throw Error('handbuild-git: --git may name commit and push only');
   return withStateLock(root, () => {
   const state = readState(root);
   const id = newId(now());
@@ -169,14 +233,18 @@ const underAbs = (abs, list) => list.some(prefix => abs === prefix || abs.starts
 const AllowRel = rel => { const r = rel.toLowerCase(); return ORCHESTRATOR_OWN.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix)) || TOOL_DIRS.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix)); };
 
 /** { allow, reason, files, approval } for one tool call. `input` is the hook input (tool_name, tool_input, cwd). */
-export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home }) {
+export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home, branchOf: branchOfFn = branchOf } = {}) {
   const ti = toolInput && typeof toolInput === 'object' ? toolInput : {};
+  const h = home ?? os.homedir();
   const approvals = activeApprovals(root, now());
+  const produced = swarmProducedFiles(root);
+  const swarmOk = rel => isRoutingPath(rel) || produced.has(rel);
   const covers = (rels, gitOps = []) => {
     // every file and every git operation must be covered by one live approval
     for (const rel of rels) if (!approvals.some(a => matchesFile(a.files, rel))) return { ok: false, missing: rel };
-    for (const op of gitOps) if (!approvals.some(a => a.git.includes(op) || (op !== 'push' && a.git.includes('commit') && ['add'].includes(op)))) return { ok: false, missing: `git ${op}` };
-    const used = approvals.find(a => rels.some(rel => matchesFile(a.files, rel)) || gitOps.some(op => a.git.includes(op)));
+    const gitCovered = op => approvals.some(a => a.git.includes(op) || (op === 'add' && a.git.includes('commit')));
+    for (const op of gitOps) if (!gitCovered(op)) return { ok: false, missing: `git ${op}` };
+    const used = approvals.find(a => rels.some(rel => matchesFile(a.files, rel)) || gitOps.some(op => gitCovered(op)));
     return { ok: true, approval: used?.id };
   };
   if (WRITE_TOOLS.includes(tool)) {
@@ -187,22 +255,67 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (rel === null && typeof raw === 'string' && raw && underAbs(path.resolve(path.isAbsolute(raw) ? raw : path.join(cwd || root, raw)), protectedAbsolute(home))) return { allow: false, files: [], reason: `Hand-build guard: ${raw} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
     if (rel !== null && isProtected(rel)) return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
     if (rel === null || AllowRel(rel)) return { allow: true };
+    if (rel !== null && isRoutingPath(rel)) return { allow: true, files: [rel] };
     const c = covers([rel]);
     return c.ok ? { allow: true, files: [rel], approval: c.approval } : { allow: false, files: [rel], reason: `${DENY_ADVICE} (blocked: ${tool} ${rel})` };
   }
   if (tool === 'Bash') {
-    const a = analyzeShell(ti.command, { root, cwd, home: home ?? os.homedir(), protectedAbs: protectedAbsolute(home ?? os.homedir()) });
+    const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
+    const current = branchOfFn(root);
+    const protBranch = isProtectedBranch(current);
     if (a.selfApproval) return { allow: false, files: [], reason: 'Hand-build guard: approving or denying a hand-build, or switching the guard off, is the owner\'s alone (swarm handbuild approve, or the phone). An orchestrator session cannot approve its own request.' };
     if (a.protectedOutside.length) return { allow: false, files: [], reason: `Hand-build guard: ${a.protectedOutside.join(', ')} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
     if (a.writes.some(isProtected)) return { allow: false, files: a.writes, reason: `Hand-build guard: ${a.writes.filter(isProtected).join(', ')} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
+    if (a.outsideDeletes?.length && !a.outsideDeletes.every(p => allowedOutsideDelete(p, h))) {
+      return { allow: false, files: [], reason: 'Hand-build guard: deletes outside the scratchpad are the owner\'s.' };
+    }
+    const policyGitOps = [];
+    let commitStagedCheck = null;
+    for (const op of a.ops) {
+      if (op.tool === 'git') {
+        if (READ_GIT_SUBS.has(op.sub)) continue;
+        if (op.sub === 'branch') {
+          if (op.delete === 'safe') continue;
+          if (op.delete === 'force') { policyGitOps.push('branch-D'); continue; }
+        }
+        if (op.sub === 'rebase') {
+          if (protBranch) policyGitOps.push('commit');
+          continue;
+        }
+        if (op.sub === 'merge') { policyGitOps.push('merge'); continue; }
+        if (op.sub === 'push') {
+          if (op.force) { policyGitOps.push('force-push'); continue; }
+          const target = normBranch(op.branch ?? current);
+          if (protBranch || isProtectedBranch(target)) policyGitOps.push('push');
+          continue;
+        }
+        if (op.sub === 'commit') {
+          if (protBranch) policyGitOps.push('commit');
+          else commitStagedCheck = 'allowlist';
+          continue;
+        }
+      } else if (op.tool === 'gh') {
+        if (ALLOWED_GH.has(op.sub)) continue;
+        if (op.sub === 'pr merge') { policyGitOps.push('merge'); continue; }
+      } else if (op.tool === 'vercel' && op.sub === 'deploy') {
+        policyGitOps.push('deploy');
+      } else if (op.tool === 'swarm' && op.sub === 'merge') {
+        policyGitOps.push('merge');
+      }
+    }
+    if (ghApiWrite(ti.command, a.ops)) policyGitOps.push('gh-api-write');
+    if (policyGitOps.length && !covers([], policyGitOps).ok) {
+      const label = policyGitOps[0] === 'gh-api-write' ? 'gh api write' : `git ${policyGitOps[0]}`;
+      return { allow: false, files: [], reason: `${DENY_ADVICE} (blocked: ${label})` };
+    }
     if (!writesAnything(a)) return { allow: true };
     if (a.inline || a.unknown) {
       const need = [a.inline ? 'an inline script that writes files' : null, a.unknown ? 'a write whose target is a variable or substitution' : null].filter(Boolean).join(' and ');
       return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${need}; the guard cannot tell what it writes, so it needs an approval that names the files, or a ticket)` };
     }
     let staged = [];
-    if (a.git.includes('commit')) {
-      // files added by the same command line, and a commit's own pathspec after `--`; an add of everything cannot be checked against an approval
+    const hasCommit = a.ops.some(o => o.tool === 'git' && o.sub === 'commit') || a.git.includes('commit');
+    if (hasCommit) {
       const added = [];
       let everything = false;
       for (const words of tokenize(ti.command)) {
@@ -211,7 +324,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
         const rest = words.slice(gi + 1);
         const ai = rest.indexOf('add');
         const ci = rest.indexOf('commit');
-        const list = ai !== -1 ? rest.slice(ai + 1) : ci !== -1 && rest.includes('--') ? rest.slice(rest.indexOf('--') + 1) : [];
+        const list = ai !== -1 ? rest.slice(ai + 1, ci === -1 ? undefined : ci) : ci !== -1 && rest.includes('--') ? rest.slice(rest.indexOf('--') + 1) : [];
         for (const w of list) {
           if (['-A', '--all', '-u', '--update', '.', ':/', '-p', '--patch', '-i', '--interactive'].includes(w) || /[*?[{]/.test(w)) everything = true;
           else if (!w.startsWith('-') && w !== '--') { const rel = insideProject(root, path.isAbsolute(w) ? w : path.resolve(cwd || root, w)); if (rel) added.push(rel); }
@@ -219,14 +332,37 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       }
       if (everything) return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: a git add of everything, or of a pattern, cannot be checked against an approval; add the approved files by name)` };
       staged.push(...added);
-      // a commit may carry only the files the approval names: the staged files (and, for -a, the tracked files with changes) are checked against it
       const all = /\bcommit\b[^;&|]*\s-[A-Za-z]*a|--all\b/.test(String(ti.command ?? ''));
       try { staged = [...staged, ...execFileSync('git', ['diff', all ? '--name-only' : '--cached', ...(all ? ['HEAD'] : ['--name-only'])], { cwd: root, encoding: 'utf8', timeout: 3000 }).split('\n').filter(Boolean)]; }
       catch { return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: git commit, and the guard could not read which files it would carry)` }; }
+      if (commitStagedCheck === 'allowlist' && staged.length && staged.every(swarmOk)) {
+        if (!policyGitOps.length) return { allow: true, files: staged };
+      }
+      if (commitStagedCheck === 'allowlist' && staged.some(f => !swarmOk(f) && !AllowRel(f))) {
+        policyGitOps.push('commit');
+      }
     }
-    const c = covers([...a.writes, ...staged], a.git);
+    const needsFileApproval = a.writes.filter(w => !swarmOk(w) && !AllowRel(w));
+    const fileRels = [...new Set([...needsFileApproval, ...staged.filter(f => !swarmOk(f) && !AllowRel(f))])];
+    if (policyGitOps.length) {
+      const c = covers(fileRels, policyGitOps);
+      if (c.ok) return { allow: true, files: [...a.writes, ...staged], approval: c.approval };
+      const label = policyGitOps[0] === 'gh-api-write' ? 'gh api write' : `git ${policyGitOps[0]}`;
+      return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${label})` };
+    }
+    const residualGit = a.git.filter(g => {
+      if (g === 'rebase' && !protBranch) return false;
+      if (g === 'push') return false;
+      if (g === 'branch' && a.ops.some(o => o.tool === 'git' && o.sub === 'branch' && o.delete === 'safe')) return false;
+      if (g === 'commit' && commitStagedCheck === 'allowlist' && staged.length && staged.every(swarmOk)) return false;
+      return true;
+    });
+    if (movesToScratchpad(ti.command, { root, cwd })) return { allow: true, files: a.writes };
+    if (!fileRels.length && !residualGit.length) return { allow: true, files: [...a.writes, ...staged] };
+    if (a.writes.length && a.writes.every(w => swarmOk(w) || AllowRel(w)) && !residualGit.length) return { allow: true, files: a.writes };
+    const c = covers(fileRels, residualGit);
     if (c.ok) return { allow: true, files: [...a.writes, ...staged], approval: c.approval };
-    return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${[...a.writes.map(w => `writes ${w}`), ...a.git.map(g => `git ${g}`)].join(', ')})` };
+    return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${[...fileRels.map(w => `writes ${w}`), ...residualGit.map(g => `git ${g}`)].join(', ')})` };
   }
   return { allow: true };
 }

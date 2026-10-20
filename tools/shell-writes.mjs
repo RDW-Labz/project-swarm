@@ -189,12 +189,12 @@ const READ_ONLY_GIT = new Set(['status', 'diff', 'log', 'show', 'rev-parse', 'ls
 
 /** { writes, git, inline, unknown, protectedOutside, selfApproval } for one command line. `protectedAbs`: absolute path prefixes (the install, the user's own Claude settings) no write may touch. */
 export function analyzeShell(command, { root, cwd = root, home = process.env.HOME || '/', protectedAbs = [], depth = 0 } = {}) {
-  const writes = new Set(), git = new Set(), protectedOutside = new Set(), ops = [];
+  const writes = new Set(), git = new Set(), protectedOutside = new Set(), outsideDeletes = new Set(), ops = [];
   let inline = false, unknown = false, selfApproval = false;
   let here = cwd;           // the directory relative paths mean: `cd DIR` moves it, an unreadable cd makes it unknown
   const heres = [cwd];      // every place a relative path may mean (a cd may not happen: the old ones stay)
   let hereKnown = true;
-  const merge = r => { r.writes.forEach(w => writes.add(w)); r.git.forEach(g => git.add(g)); r.protectedOutside.forEach(p => protectedOutside.add(p)); (r.ops ?? []).forEach(o => ops.push(o)); inline ||= r.inline; unknown ||= r.unknown; selfApproval ||= r.selfApproval; };
+  const merge = r => { r.writes.forEach(w => writes.add(w)); r.git.forEach(g => git.add(g)); r.protectedOutside.forEach(p => protectedOutside.add(p)); (r.outsideDeletes ?? []).forEach(p => outsideDeletes.add(p)); (r.ops ?? []).forEach(o => ops.push(o)); inline ||= r.inline; unknown ||= r.unknown; selfApproval ||= r.selfApproval; };
   // The orchestrator's own folders and build output are free to write, except the guard's own state, and never the folders that contain it (.swarm itself).
   const lowerRel = rel => rel.toLowerCase();
   const allowedRel = rel => {
@@ -323,6 +323,16 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
     if (cmd === 'find' && args.some(a => ['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprintf', '-fls'].includes(a))) {
       const at = args.findIndex(a => a === '-exec' || a === '-execdir' || a === '-ok' || a === '-okdir');
       if (at !== -1) { const inner = args.slice(at + 1).filter(a => a !== ';' && a !== '+' && a !== '\\;'); recurse(inner.join(' ')); if (inner.some(a => WRITERS.has(path.basename(a)) || isInterpreter(path.basename(a)))) unknown = true; }
+      else if (args.includes('-delete')) {
+        const pos = args.filter(a => a !== '' && !a.startsWith('-'));
+        for (const p of pos) {
+          for (const r of resolveAll(p, false)) {
+            if (r.unknown) { unknown = true; continue; }
+            if (r.outside) { outsideDeletes.add(r.abs); if (isProtectedAbs(r)) protectedOutside.add(r.abs); }
+            else if (r.rel !== undefined && !allowedRel(r.rel)) writes.add(r.rel === '' ? '.' : r.rel);
+          }
+        }
+      }
       else unknown = true;
       continue;
     }
@@ -356,7 +366,15 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
       if (t !== -1 && args[t + 1]) targetDir(args[t + 1], argExp[t + 1]); else if (operands.length) target(operands[operands.length - 1], operandExp[operandExp.length - 1]);
       // a link made in a free folder can point into the checkout: the place it points at counts too
       if (cmd === 'ln' && operands.length >= 2) target(operands[0], operandExp[0]);
-    } else if (['rm', 'rmdir', 'unlink', 'touch', 'mkdir', 'truncate', 'chmod', 'chown', 'ed', 'ex'].includes(cmd)) operands.forEach((o, oi) => target(o, operandExp[oi]));
+    } else if (['rm', 'rmdir', 'unlink'].includes(cmd)) {
+      operands.forEach((o, oi) => {
+        for (const r of resolveAll(o, operandExp[oi])) {
+          if (r.unknown) { unknown = true; continue; }
+          if (r.outside) { outsideDeletes.add(r.abs); if (isProtectedAbs(r)) protectedOutside.add(r.abs); continue; }
+          if (r.rel !== undefined && !allowedRel(r.rel)) writes.add(r.rel === '' ? '.' : r.rel);
+        }
+      });
+    } else if (['touch', 'mkdir', 'truncate', 'chmod', 'chown', 'ed', 'ex'].includes(cmd)) operands.forEach((o, oi) => target(o, operandExp[oi]));
     else if (cmd === 'patch') { const explicit = operands.length >= 1; if (!explicit) unknown = true; else operands.forEach((o, oi) => target(o, operandExp[oi])); }
     else if (cmd === 'dd') args.filter(a => a.startsWith('of=')).forEach(a => target(a.slice(3)));
     else if (cmd === 'curl' || cmd === 'wget') {
@@ -427,8 +445,8 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
       scriptRule(plain[k], plainExp[k]);
     }
   }
-  return { writes: [...writes].sort(), git: [...git].sort(), ops, inline, unknown, protectedOutside: [...protectedOutside].sort(), selfApproval };
+  return { writes: [...writes].sort(), git: [...git].sort(), ops, inline, unknown, protectedOutside: [...protectedOutside].sort(), outsideDeletes: [...outsideDeletes].sort(), selfApproval };
 }
 
 /** True when a command writes anything the guard cares about. */
-export const writesAnything = a => a.writes.length > 0 || a.git.length > 0 || a.inline || a.unknown || a.protectedOutside.length > 0 || a.selfApproval;
+export const writesAnything = a => a.writes.length > 0 || a.git.length > 0 || a.inline || a.unknown || a.protectedOutside.length > 0 || (a.outsideDeletes?.length > 0) || a.selfApproval;
