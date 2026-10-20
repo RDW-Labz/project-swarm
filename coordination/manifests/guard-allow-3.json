@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "guard-channels",
+      "agent": "auto",
+      "prompt": "Add the owner's limits to the hand-build request flow. The elevated git ops are merge, deploy, force-push and branch-D (see ELEVATED below). (1) Computer only: a hand-build request whose git list names any elevated op can be approved only at the computer. In tools/inbox.mjs decide() and decideHandbuild() add a channel field to deps (deps.channel); approving such a request is refused with an error starting 'handbuild-computer-only:' unless deps.channel === 'computer'; denying is allowed from any channel; a missing or unknown channel counts as NOT the computer (fail closed). tools/inbox-commands.mjs (the swarm decide command) passes channel 'computer'. Every other caller that can reach decide (the phone and board paths in tools/phone.mjs, tools/board-inbox.mjs, tools/phone-commands.mjs and anything in tools/ that calls decide or decideRequest for a request) must pass its own channel ('phone', 'board' or 'remote-control') or none, and tools/phone.mjs must also refuse server-side, before calling anything: a choose action on a hand-build request that names an elevated op returns the not-allowed error (extend the existing allow-list logic and NEVER_FROM_PHONE text with force-push and branch-D if missing); hiding the button is not the protection. Also make decideRequest in tools/handbuild.mjs itself refuse approving an elevated request when its options argument has no computer flag, so a future caller cannot skip the check: decideRequest(root, id, choice, {now, by, channel}) throws handbuild-computer-only unless channel === 'computer'. (2) Force-push to a protected branch (main, master, or the branch a push names with +SRC:main) is NEVER approvable: in guardDecision, a git push with force true whose pushed branch is protected is blocked even when a live approval names force-push; the message says it is never approvable. createRequest must refuse a request that names force-push together with a protected branch is not needed (requests name files and ops, not branches), so enforce only in guardDecision. (3) Chat approval for merge: the owner's own 'merge #N' typed in chat counts as the approval, as before the guard existed. Add to tools/handbuild.mjs recordChatMerge(root, pr, {now}) storing, in the guard's state file under a new key merges, the PR number with an expiry 60 minutes later (the state file is protected from the orchestrator but the hook process may write it; use the same atomic write helper as the rest), and a pruning of expired entries; extend guardDecision so that gh pr merge N and swarm merge N (the ops need a new field target: the first positional word after the sub, as a string, add it in tools/shell-writes.mjs for gh and swarm ops) are allowed when merges holds an unexpired entry for exactly that N, and that entry is consumed (removed) when the command is allowed; any other merge still needs an approval naming merge. In tools/orchestrator-hook.mjs, for the prompt kind only, read the prompt text from the hook input and, for each line of it that starts (after optional spaces, a list marker such as 1. or - or *) with the word merge followed by #N or N (case-insensitive, N digits only), call recordChatMerge for N; a line that merely contains the word merge later in the sentence does not count; at most 5 per prompt; never throw from the hook. Write the matching tests in a new file tests/handbuild-channel.test.mjs (node:test, strict assert): approve of an elevated request from channel phone, board, remote-control and from no channel is refused; from computer is allowed; deny from phone is allowed; a non-elevated request (commit, push) is approvable from any channel as before; phone.mjs refuses a choose action for an elevated request; force push to main is blocked even with an approval naming force-push; force push to a feature branch with an approval naming force-push is allowed; chat merge: recordChatMerge then gh pr merge 5 allowed once and then blocked, gh pr merge 6 blocked, expired entry blocked, the hook with a prompt line '1. merge #203' records 203, 'please merge #5 soon' records nothing, and a line 'merge 7' records 7. Keep every existing test passing. Write only tools/handbuild.mjs, tools/inbox.mjs, tools/inbox-commands.mjs, tools/phone.mjs, tools/board-inbox.mjs, tools/phone-commands.mjs, tools/orchestrator-hook.mjs, tools/shell-writes.mjs and tests/handbuild-channel.test.mjs (touch a file only if it needs the change).",
+      "context": [
+        "tools/handbuild.mjs",
+        "tools/inbox.mjs",
+        "tools/inbox-commands.mjs",
+        "tools/phone.mjs",
+        "tools/board-inbox.mjs",
+        "tools/phone-commands.mjs",
+        "tools/orchestrator-hook.mjs",
+        "tools/shell-writes.mjs",
+        "tools/orchestrator-events.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-guard.test.mjs"
+      ],
+      "outputs": [
+        "tools/handbuild.mjs",
+        "tools/inbox.mjs",
+        "tools/inbox-commands.mjs",
+        "tools/phone.mjs",
+        "tools/board-inbox.mjs",
+        "tools/phone-commands.mjs",
+        "tools/orchestrator-hook.mjs",
+        "tools/shell-writes.mjs",
+        "tests/handbuild-channel.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/inbox.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/model-watch.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10b-init.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/phone.test.mjs",
+        "tests/shell-writes-quotes.test.mjs"
+      ]
+    }
+  ]
+}
