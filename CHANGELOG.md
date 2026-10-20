@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.141.0
+
+Two scope-quality fixes from S13.
+- **Workers no longer try to run the test runner.** The worker sandbox cannot start vitest (it cannot create `node_modules/.vitest/.vitest-secret-token`, and the build needs secrets the worker never gets). A routed ticket's prompt now says the merge queue runs its tests after it finishes and not to run the runner or the build; it checks its code against the tests by reading. The shell worker (`after` tickets and tickets whose tests need setup or a database) still runs them.
+- **Gating tickets are flagged.** `swarm scope check` warns (`gating-ticket`) when one ticket gates many others (8 or a quarter of its stage), naming the shared files that usually cause it (CSS, layout, i18n, types); the splitter is told to split shared work early into one small ticket per component or file group.
+- Tests: `tests/s13-live-bugs.test.mjs`.
+
 ## 1.140.0
 
 Unblocks the S13 run: escalated tickets and pinned lanes plan on real wave manifests, a ticket no lane can take no longer aborts the wave, and test tickets see what they test.

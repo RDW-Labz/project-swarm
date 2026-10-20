@@ -122,3 +122,21 @@ test('a test ticket sees the files under test, the runner config, tsconfig and o
   const byName = buildTicketContext({ ticket: t('T-0012', { type: 'test', files: ['tests/price.test.ts'] }), allTickets: [], exists: p => have.has(p), listFiles: d => tree[d] ?? [] });
   assert.ok(byName.context.includes('src/lib/price.ts'), 'matched by the name of the test file when no ticket names it');
 });
+
+test('a ticket whose tests the merge queue runs tells its worker not to run the test runner', () => {
+  const tk = t('T-0020', { tests: ['tests/a.test.ts'] });
+  const job = ticketsToManifest([tk], { ledger: { tickets: [tk] }, verify, contextEnv }).manifest.jobs[0];
+  assert.match(job.prompt, /The merge queue runs them/);
+  assert.match(job.prompt, /do NOT run the test runner or the build yourself/);
+});
+
+test('scope check flags a ticket that gates many others, naming its shared files', () => {
+  const root = t('T-0100', { files: ['src/styles/shared.css'], stage: 'S1' });
+  const behind = Array.from({ length: 9 }, (_, i) => t(`T-01${String(i + 1).padStart(2, '0')}`, { dependsOn: ['T-0100'], stage: 'S1' }));
+  const out = checkTicketTree({ scope: { requirements: [] }, tickets: [root, ...behind] });
+  const w = out.warnings.find(x => x.code === 'gating-ticket');
+  assert.ok(w, JSON.stringify(out.warnings));
+  assert.match(w.message, /T-0100 gates 9 tickets \(shared files: src\/styles\/shared\.css\)/);
+  const small = checkTicketTree({ scope: { requirements: [] }, tickets: [root, ...behind.slice(0, 3)] });
+  assert.ok(!small.warnings.some(x => x.code === 'gating-ticket'));
+});

@@ -123,6 +123,9 @@ export function verifyJobFields(ticket, verify) {
   if (Object.keys(cfg.testEnv).length > 0) fields.testEnv = cfg.testEnv;
   fields.timeoutMs = cfg.timeoutSec * 1000;
   fields.promptLine = `Tests for this ticket: ${specs.join(', ')}. Run ${argv.map(shellQuote).join(' ')}. The ticket is done only when they pass; report what you ran.`;
+  // For a ticket whose worker is routed (Cursor, Codex, Haiku): the worker's sandbox cannot start the test runner (vitest cannot create its cache and secret token there, and the build
+  // needs secrets the worker never gets), so the merge queue runs the tests on every batch and the worker is told not to.
+  fields.queuePromptLine = `Tests for this ticket: ${specs.join(', ')}. The merge queue runs them (${argv.map(shellQuote).join(' ')}) after you finish; do NOT run the test runner or the build yourself, it cannot start in your sandbox. Check the tests against your code by reading them: import paths, names and expected values.`;
   return fields;
 }
 

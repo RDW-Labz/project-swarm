@@ -146,7 +146,7 @@ export function ticketsToManifest(tickets,opts={}){
     // The engine integrates a deletion only for a path that is both an output and in `deletes`: the worker's copy holds the file, the worker removes it, integrate removes it from the project.
     for(const f of deletes)if(!outputs.includes(f))outputs.push(f);
     context=context.filter(p=>!deletes.includes(p));
-    const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:isSensitiveJob(t,scope,reqs),prompt:promptFor(t,reqs,lessons,{envLine:['build','migration','contract'].includes(t.type)?contextEnv?.envLine:undefined,promptLine:vfields?.promptLine,kind,hasPackageJson:context.includes('package.json'),packageManager}),context,outputs,acceptance:t.acceptance||[],timeoutMs:600000};
+    const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:isSensitiveJob(t,scope,reqs),prompt:promptFor(t,reqs,lessons,{envLine:['build','migration','contract'].includes(t.type)?contextEnv?.envLine:undefined,promptLine:vfields?((t.dependsOn||[]).some(d=>inSet.has(d))||vfields.setup||vfields.testEnv?vfields.promptLine:vfields.queuePromptLine):undefined,kind,hasPackageJson:context.includes('package.json'),packageManager}),context,outputs,acceptance:t.acceptance||[],timeoutMs:600000};
     if(deletes.length)job.deletes=deletes;
     if((t.dependencies||[]).length)job.dependencies=[...t.dependencies];
     if(shared.length)job.cacheContext=shared;
