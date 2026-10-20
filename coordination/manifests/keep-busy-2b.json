@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "rule-wiring",
+      "agent": "auto",
+      "prompt": "Wire tools/lanes-rule.mjs (writeRuleFiles(root)) into the project commands. In tools/init.mjs initProject, after the project is set up call writeRuleFiles(root) and add the result to what initProject returns as ruleFiles (never fail init if it throws: record the error text in ruleFilesError instead); a re-run of init must leave the files unchanged. In tools/swarm.mjs updateProjects (swarm update --projects), for each project it handles (including ones already up to date, but only when --yes is given or the project is being updated; a dry run without --yes must not write anything) call writeRuleFiles(projectRoot) and include ruleFiles per project in the result. Add docs: a short section in docs/new-project.md titled 'Keep the lanes busy' saying that swarm init and swarm update --projects --yes write the rule into CLAUDE.md and AGENTS.md between markers, that autopilot starts ready tickets when nothing is running, and that the board shows a red flag when a project is idle with ready tickets. Tests in a new file tests/rule-wiring.test.mjs: initProject on a temp git project writes CLAUDE.md with the marker block and returns ruleFiles, a second initProject leaves the bytes unchanged, an existing CLAUDE.md keeps its text outside the markers, updateProjects without yes writes nothing and with yes writes the block. Write only tools/init.mjs, tools/swarm.mjs, docs/new-project.md and tests/rule-wiring.test.mjs.",
+      "context": [
+        "tools/lanes-rule.mjs",
+        "tools/init.mjs",
+        "docs/new-project.md",
+        "tests/update.test.mjs",
+        "tools/swarm.mjs"
+      ],
+      "outputs": [
+        "tools/init.mjs",
+        "tools/swarm.mjs",
+        "docs/new-project.md",
+        "tests/rule-wiring.test.mjs"
+      ],
+      "timeoutMs": 1500000
+    }
+  ]
+}
