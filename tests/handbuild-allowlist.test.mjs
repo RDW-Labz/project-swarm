@@ -6,11 +6,14 @@ import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import { guardDecision, createRequest, decideRequest, branchOf } from '../tools/handbuild.mjs';
 import { swarmProducedFiles } from '../tools/swarm-produced.mjs';
 import { isRoutingPath } from '../tools/routing-paths.mjs';
 
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0);
+const swarmBytes = Buffer.from('swarm\n');
+const integratedHashesFor = rels => Object.fromEntries(rels.map(rel => [rel, crypto.createHash('sha256').update(swarmBytes).digest('hex')]));
 const tmp = async t => { const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-hb-allow-'))); t.after(() => fs.rm(d, { recursive: true, force: true })); return d; };
 
 async function project(t, { branch = 'feature/x', produced = [] } = {}) {
@@ -28,12 +31,8 @@ async function project(t, { branch = 'feature/x', produced = [] } = {}) {
       integratedAt: '2026-01-01T00:00:00.000Z',
       integratedFiles: produced,
       integratedNewFiles: [],
+      integratedHashes: integratedHashesFor(produced),
     }));
-    for (const rel of produced) {
-      const abs = path.join(root, rel);
-      await fs.mkdir(path.dirname(abs), { recursive: true });
-      await fs.writeFile(abs, 'swarm\n');
-    }
   }
   git('add', '-A');
   git('commit', '-q', '-m', 'base');
@@ -44,6 +43,13 @@ async function project(t, { branch = 'feature/x', produced = [] } = {}) {
     git('checkout', '-q', '-b', branch);
   }
   git('update-ref', 'refs/remotes/origin/main', baseRef);
+  if (produced.length) {
+    for (const rel of produced) {
+      const abs = path.join(root, rel);
+      await fs.mkdir(path.dirname(abs), { recursive: true });
+      await fs.writeFile(abs, 'swarm\n');
+    }
+  }
   const branchOfFn = () => branch;
   const decide = (tool, toolInput, extra = {}) => guardDecision({ tool, toolInput, root, cwd: root, now: () => T0, branchOf: branchOfFn, ...extra });
   const bash = (command, extra = {}) => decide('Bash', { command }, extra);
@@ -98,7 +104,6 @@ test('ALLOWED shell writes to routing paths and mv untracked file into scratchpa
 
 test('ALLOWED commit and push on feature branch for swarm-produced files only', async t => {
   const { bash, git, root } = await project(t, { branch: 'feature/x', produced: ['src/swarm.ts'] });
-  await fs.writeFile(path.join(root, 'src', 'swarm.ts'), 'v2\n');
   git('add', 'src/swarm.ts');
   assert.equal(bash('git commit -m "integrate"').allow, true);
   assert.equal(bash('git push origin feature/x').allow, true);
@@ -169,7 +174,6 @@ test('outside deletes: session scratchpad dir allowed, home path blocked', async
 
 test('quoted commit message with backtick, $HOME, and > is allowed on feature branch', async t => {
   const { bash, git, root } = await project(t, { branch: 'feature/x', produced: ['src/swarm.ts'] });
-  await fs.writeFile(path.join(root, 'src', 'swarm.ts'), 'v3\n');
   git('add', 'src/swarm.ts');
   assert.equal(bash('git commit -m "fix `x` for $HOME > y"').allow, true);
 });

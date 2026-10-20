@@ -6,10 +6,13 @@ import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import { guardDecision, createRequest, decideRequest, recordChatMerge } from '../tools/handbuild.mjs';
 import { isRoutingPathResolved } from '../tools/routing-paths.mjs';
 
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0);
+const swarmBytes = Buffer.from('swarm\n');
+const integratedHashesFor = rels => Object.fromEntries(rels.map(rel => [rel, crypto.createHash('sha256').update(swarmBytes).digest('hex')]));
 const tmp = async t => { const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-hb-hard-'))); t.after(() => fs.rm(d, { recursive: true, force: true })); return d; };
 
 async function project(t, { branch = 'feature/x', produced = ['src/core.mjs'] } = {}) {
@@ -27,12 +30,8 @@ async function project(t, { branch = 'feature/x', produced = ['src/core.mjs'] } 
       integratedAt: '2026-01-01T00:00:00.000Z',
       integratedFiles: produced,
       integratedNewFiles: [],
+      integratedHashes: integratedHashesFor(produced),
     }));
-    for (const rel of produced) {
-      const abs = path.join(root, rel);
-      await fs.mkdir(path.dirname(abs), { recursive: true });
-      await fs.writeFile(abs, 'swarm\n');
-    }
   }
   git('add', '-A');
   git('commit', '-q', '-m', 'base');
@@ -41,6 +40,13 @@ async function project(t, { branch = 'feature/x', produced = ['src/core.mjs'] } 
   git('remote', 'add', 'origin', root);
   git('update-ref', 'refs/remotes/origin/main', baseRef);
   if (branch !== 'main') git('checkout', '-q', '-b', branch);
+  if (produced.length) {
+    for (const rel of produced) {
+      const abs = path.join(root, rel);
+      await fs.mkdir(path.dirname(abs), { recursive: true });
+      await fs.writeFile(abs, 'swarm\n');
+    }
+  }
   const branchOfFn = () => branch;
   const bash = (command, extra = {}) => guardDecision({ tool: 'Bash', toolInput: { command }, root, cwd: root, now: () => T0, branchOf: branchOfFn, ...extra });
   const write = rel => guardDecision({ tool: 'Write', toolInput: { file_path: path.join(root, rel) }, root, cwd: root, now: () => T0, branchOf: branchOfFn });
@@ -62,11 +68,13 @@ test('(1) compound writes and mv: redirect blocked; tmp mv free; tracked mv to s
   assert.match(tracked.reason, /src\/core\.mjs/);
 });
 
-test('(2) swarm-produced files are free for commit only, not shell sed -i', async t => {
+test('(2) swarm-produced files are free for commit only when staged bytes match integrate hash, not shell sed -i', async t => {
   const { bash, git, root } = await project(t, { produced: ['src/core.mjs'] });
-  await fs.writeFile(path.join(root, 'src', 'core.mjs'), 'v2\n');
   git('add', 'src/core.mjs');
   assert.equal(bash('git commit -m integrate').allow, true);
+  await fs.writeFile(path.join(root, 'src', 'core.mjs'), 'v2\n');
+  git('add', 'src/core.mjs');
+  assert.equal(bash('git commit -m hand-edit').allow, false);
   assert.equal(bash('sed -i "" "s/a/b/" src/core.mjs').allow, false);
   assert.equal(bash('printf x > src/core.mjs').allow, false);
 });
@@ -97,7 +105,6 @@ test('(4) git commit pathspec must be routing or swarm-produced', async t => {
 
 test('(5) free push on feature branch requires carried diff to be swarm or routing only', async t => {
   const { bash, git, root } = await project(t, { produced: ['src/core.mjs'] });
-  await fs.writeFile(path.join(root, 'src', 'core.mjs'), 'v2\n');
   await fs.writeFile(path.join(root, 'src', 'extra.mjs'), 'x\n');
   git('add', 'src/core.mjs', 'src/extra.mjs');
   git('commit', '-q', '-m', 'both');

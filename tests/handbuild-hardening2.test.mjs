@@ -6,11 +6,14 @@ import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import { guardDecision } from '../tools/handbuild.mjs';
 import { swarmProducedFiles } from '../tools/swarm-produced.mjs';
 import { isSelfApprovalCommand } from '../tools/self-approval.mjs';
 
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0);
+const swarmBytes = Buffer.from('swarm\n');
+const integratedHashesFor = rels => Object.fromEntries(rels.map(rel => [rel, crypto.createHash('sha256').update(swarmBytes).digest('hex')]));
 const tmp = async t => { const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-hb-hard2-'))); t.after(() => fs.rm(d, { recursive: true, force: true })); return d; };
 
 async function project(t, { branch = 'feature/x', produced = ['src/core.mjs'] } = {}) {
@@ -26,12 +29,8 @@ async function project(t, { branch = 'feature/x', produced = ['src/core.mjs'] } 
       integratedAt: '2026-01-01T00:00:00.000Z',
       integratedFiles: produced,
       integratedNewFiles: [],
+      integratedHashes: integratedHashesFor(produced),
     }));
-    for (const rel of produced) {
-      const abs = path.join(root, rel);
-      await fs.mkdir(path.dirname(abs), { recursive: true });
-      await fs.writeFile(abs, 'swarm\n');
-    }
   }
   git('add', '-A');
   git('commit', '-q', '-m', 'base');
@@ -40,6 +39,13 @@ async function project(t, { branch = 'feature/x', produced = ['src/core.mjs'] } 
   git('remote', 'add', 'origin', root);
   git('update-ref', 'refs/remotes/origin/main', baseRef);
   if (branch !== 'main') git('checkout', '-q', '-b', branch);
+  if (produced.length) {
+    for (const rel of produced) {
+      const abs = path.join(root, rel);
+      await fs.mkdir(path.dirname(abs), { recursive: true });
+      await fs.writeFile(abs, 'swarm\n');
+    }
+  }
   const branchOfFn = () => branch;
   const bash = (command, extra = {}) => guardDecision({ tool: 'Bash', toolInput: { command }, root, cwd: root, now: () => T0, branchOf: branchOfFn, ...extra });
   const write = rel => guardDecision({ tool: 'Write', toolInput: { file_path: path.join(root, rel) }, root, cwd: root, now: () => T0, branchOf: branchOfFn });

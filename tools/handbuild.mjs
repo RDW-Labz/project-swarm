@@ -11,7 +11,7 @@ import { insideProject, ORCHESTRATOR_OWN, WRITE_TOOLS } from './orchestrator-eve
 import { execFileSync } from 'node:child_process';
 import { analyzeShell, writesAnything, TOOL_DIRS, tokenize } from './shell-writes.mjs';
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
-import { swarmProducedFiles } from './swarm-produced.mjs';
+import { swarmProducedFiles, isSwarmProducedContent } from './swarm-produced.mjs';
 import { isSelfApprovalCommand, SELF_APPROVAL_REASON } from './self-approval.mjs';
 
 export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D']);
@@ -165,7 +165,7 @@ const mvTrackedSourcesNeedingApproval = (command, { root, cwd, home }, produced)
       if (rel === null || !isTracked(root, rel)) continue;
       const rlow = rel.toLowerCase();
       const allow = ORCHESTRATOR_OWN.some(prefix => rlow === prefix.slice(0, -1) || rlow.startsWith(prefix)) || TOOL_DIRS.some(prefix => rlow === prefix.slice(0, -1) || rlow.startsWith(prefix));
-      if (isRoutingPathResolved(root, rel) || produced.has(rel) || allow) continue;
+      if (carryBytesOk(root, rel, readWorkingTreeBytes(root, rel)) || allow) continue;
       need.push(rel);
     }
   }
@@ -402,6 +402,42 @@ const isFreeGitRebase = (op, protBranch) => {
 };
 
 const isFreeReadGit = op => !op.globalOpts && !op.hasConfig && !(op.flags ?? []).some(f => f === '--output' || f.startsWith('--output='));
+
+const GIT_SHOW_MAX = 16 * 1024 * 1024;
+const readGitShowBytes = (root, object) => {
+  try { return execFileSync('git', ['show', object], { cwd: root, encoding: 'buffer', timeout: 3000, maxBuffer: GIT_SHOW_MAX }); }
+  catch { return null; }
+};
+const readWorkingTreeBytes = (root, rel) => {
+  try {
+    const abs = path.isAbsolute(rel) ? rel : path.join(root, rel);
+    const inside = insideProject(root, abs);
+    if (inside === null) return null;
+    return fs.readFileSync(abs);
+  } catch { return null; }
+};
+const carryBytesOk = (root, rel, bytes) => isRoutingPathResolved(root, rel) || AllowRel(rel) || (bytes !== null && isSwarmProducedContent(root, rel, bytes));
+
+const gitAddPaths = (command, root, cwd) => {
+  const paths = [];
+  for (const words of tokenize(command)) {
+    const plain = plainWords(words);
+    const gi = plain.findIndex(w => path.basename(w) === 'git');
+    if (gi === -1) continue;
+    const rest = plain.slice(gi + 1);
+    const ai = rest.indexOf('add');
+    if (ai === -1) continue;
+    const after = rest.slice(ai + 1);
+    const ci = after.indexOf('commit');
+    const slice = ci === -1 ? after : after.slice(0, ci);
+    for (const w of slice) {
+      if (w.startsWith('-') || w === '--') continue;
+      const rel = insideProject(root, path.isAbsolute(w) ? w : path.resolve(cwd || root, w));
+      if (rel) paths.push(rel);
+    }
+  }
+  return paths;
+};
 
 const commitCarriedPaths = (command, root, cwd) => {
   const paths = [];
@@ -707,7 +743,9 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
   const h = home ?? os.homedir();
   const approvals = activeApprovals(root, now());
   const produced = swarmProducedFiles(root);
-  const gitCarryOk = rel => isRoutingPathResolved(root, rel) || produced.has(rel) || AllowRel(rel);
+  const stagedCarryOk = rel => carryBytesOk(root, rel, readGitShowBytes(root, `:${rel}`));
+  const headCarryOk = rel => carryBytesOk(root, rel, readGitShowBytes(root, `HEAD:${rel}`));
+  const workingCarryOk = rel => carryBytesOk(root, rel, readWorkingTreeBytes(root, rel));
   const writeFree = rel => AllowRel(rel) || isRoutingPathResolved(root, rel);
   const covers = (rels, gitOps = []) => {
     // every file and every git operation must be covered by one live approval
@@ -787,6 +825,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
           else commitStagedCheck = 'allowlist';
           continue;
         }
+        if (op.sub === 'add') continue;
         if (op.sub) policyGitOps.push(op.sub);
       } else if (op.tool === 'gh') {
         if (op.globalOpts) { policyGitOps.push('merge'); continue; }
@@ -852,22 +891,25 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       try { staged = [...staged, ...execFileSync('git', ['diff', all ? '--name-only' : '--cached', ...(all ? ['HEAD'] : ['--name-only'])], { cwd: root, encoding: 'utf8', timeout: 3000 }).split('\n').filter(Boolean)]; }
       catch { return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: git commit, and the guard could not read which files it would carry)` }; }
       staged.push(...commitPathspecs);
-      if (commitStagedCheck === 'allowlist' && staged.length && staged.every(gitCarryOk)) {
+      if (commitStagedCheck === 'allowlist' && staged.length && staged.every(stagedCarryOk)) {
         if (!policyGitOps.length) return finishAllow({ allow: true, files: staged });
       }
-      if (commitStagedCheck === 'allowlist' && staged.some(f => !gitCarryOk(f))) {
+      if (commitStagedCheck === 'allowlist' && staged.some(f => !stagedCarryOk(f))) {
         policyGitOps.push('commit');
       }
     }
     if (pushNeedsCarryCheck && !protBranch) {
       const carried = pushDiffFiles(root);
-      if (carried === null || carried.some(f => !gitCarryOk(f))) policyGitOps.push('push');
+      if (carried === null || carried.some(f => !headCarryOk(f))) policyGitOps.push('push');
     }
+    const explicitAdds = gitAddPaths(ti.command, root, cwd);
+    const addNeedsApproval = explicitAdds.filter(f => !workingCarryOk(f));
+    if (addNeedsApproval.length) policyGitOps.push('add');
     const scratchDests = mvScratchpadDests(ti.command, { root, cwd, home: h });
     const mvUntrackedFree = mvUntrackedSourcesToScratchpad(ti.command, { root, cwd, home: h });
     const mvApprovals = mvTrackedSourcesNeedingApproval(ti.command, { root, cwd, home: h }, produced);
     const needsFileApproval = a.writes.filter(w => !writeFree(w) && !scratchDests.has(w) && !mvUntrackedFree.has(w));
-    const fileRels = [...new Set([...needsFileApproval, ...mvApprovals, ...staged.filter(f => !gitCarryOk(f))])];
+    const fileRels = [...new Set([...needsFileApproval, ...mvApprovals, ...staged.filter(f => !stagedCarryOk(f)), ...addNeedsApproval])];
     if (policyGitOps.length) {
       const c = covers(fileRels, policyGitOps);
       if (c.ok) return finishAllow({ allow: true, files: [...a.writes, ...staged], approval: c.approval });
@@ -878,7 +920,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       if (g === 'rebase' && policyOps.some(o => o.tool === 'git' && o.sub === 'rebase' && isFreeGitRebase(o, protBranch))) return false;
       if (g === 'push' && policyOps.some(o => o.tool === 'git' && o.sub === 'push' && isFreeGitPush(o, current))) return false;
       if (g === 'branch' && policyOps.some(o => o.tool === 'git' && o.sub === 'branch' && o.delete === 'safe')) return false;
-      if (g === 'commit' && commitStagedCheck === 'allowlist' && staged.length && staged.every(gitCarryOk)) return false;
+      if (g === 'commit' && commitStagedCheck === 'allowlist' && staged.length && staged.every(stagedCarryOk)) return false;
       return true;
     });
     if (!fileRels.length && !residualGit.length) return finishAllow({ allow: true, files: [...a.writes, ...staged] });
