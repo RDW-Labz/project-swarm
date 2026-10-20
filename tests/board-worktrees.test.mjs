@@ -9,7 +9,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { projectId } from '../tools/projects.mjs';
 import { boardSnapshot } from '../tools/board-data.mjs';
-import { checkProjectCap, mainWorktreeRoot, projectSpend, projectSummary } from '../tools/project-spend.mjs';
+import { checkProjectCap, mainWorktreeRoot, projectSpend, projectSummary, worktreeFamily } from '../tools/project-spend.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -153,6 +153,23 @@ test('a plain repository keeps the old spend totals and has one tree', async t =
   assert.equal(spent.runs, 1);
   assert.equal(spent.trees.length, 1);
   assert.equal(spent.trees[0].root, root);
+});
+
+test('a job worktree under SWARM_SCRATCH_ROOT is excluded from the family but counted when scratch env points elsewhere', async t => {
+  const root = await tempDir(t);
+  await initRepo(root);
+  const scratchDir = await tempDir(t);
+  const otherScratch = await tempDir(t);
+  const jobPath = path.join(scratchDir, 'job-worktree');
+  await fs.mkdir(scratchDir, { recursive: true });
+  await git(root, ['worktree', 'add', '-q', '-b', 'swarm-scratch-job', jobPath]);
+  const jobRoot = await fs.realpath(jobPath);
+
+  const excluded = await worktreeFamily(root, { env: { SWARM_SCRATCH_ROOT: scratchDir } });
+  assert.deepEqual(excluded, [root]);
+
+  const included = await worktreeFamily(root, { env: { SWARM_SCRATCH_ROOT: otherScratch } });
+  assert.deepEqual(included, [root, jobRoot]);
 });
 
 test('worktree metadata under .swarm is ignored so a swarm job worktree is not counted twice', async t => {

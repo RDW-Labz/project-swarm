@@ -2,9 +2,11 @@
 // Project-wide spend: the total of every run in this repository (.swarm/runs/*/state.json), and the optional cap on it.
 // --max-usd stays per run; this cap refuses NEW runs once the project total has reached it. A review re-ask is a run, so it counts.
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { runTotals } from './spend.mjs';
 import { loadLocalConfig } from './local-config.mjs';
+import { scratchRootDir } from './claude-shell.mjs';
 
 const finite = value => typeof value === 'number' && Number.isFinite(value) && value > 0;
 
@@ -68,14 +70,16 @@ export async function mainWorktreeRoot(root) {
 
 const realOrResolved = async root => await fs.realpath(root).catch(() => path.resolve(root));
 const hasSwarmSegment = root => path.resolve(root).split(path.sep).includes('.swarm');
+const insidePath = (child, parent) => child === parent || child.startsWith(`${parent}${path.sep}`);
 
 // The cap is shared by the main checkout and every linked worktree recorded by git. This reads
 // only the worktree metadata; it deliberately does not invoke git, and malformed entries are
 // ignored so a missing or half-written entry cannot make cap inspection throw.
-export async function worktreeFamily(root) {
+export async function worktreeFamily(root, { env = process.env, home = os.homedir() } = {}) {
   const requested = await realOrResolved(root);
   const mainCandidate = (await mainWorktreeRoot(root)) ?? root;
   const main = await realOrResolved(mainCandidate);
+  const scratchRoot = await realOrResolved(scratchRootDir({ env, home }));
   let gitStat;
   try { gitStat = await fs.stat(path.join(main, '.git')); } catch { return [requested]; }
   if (!gitStat.isDirectory()) return [requested];
@@ -93,6 +97,7 @@ export async function worktreeFamily(root) {
     let member;
     try { member = await fs.realpath(path.dirname(gitdir)); } catch { continue; }
     if (hasSwarmSegment(member)) continue;
+    if (insidePath(member, scratchRoot)) continue;
     if (member !== main) discovered.add(member);
   }
   return [main, ...[...new Set([...discovered, requested])].filter(member => member !== main).sort()];
