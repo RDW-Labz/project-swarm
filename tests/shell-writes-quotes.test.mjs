@@ -32,12 +32,20 @@ test('tokenizer records per-word expansion inside double quotes', () => {
   assert.equal(w2.expands[w2.indexOf('literal $HOME')], false);
 });
 
+test('ansi-c dollar-quote is one word; backslash escapes a quote', () => {
+  const [words] = tokenize("echo $'it\\'s; rm -rf x'");
+  assert.equal(words[1], "it's; rm -rf x");
+  assert.equal(words.expands[1], false);
+  const tok = tokenize("echo $'git'");
+  assert.equal(tok[0][1], 'git');
+});
+
 const op = (extra, base) => ({ args: [], globalOpts: false, hasConfig: false, ...base, ...extra });
 
 test('ops describe git, gh, vercel, and swarm commands', () => {
-  assert.deepEqual(a('git push --force origin x').ops[0], op({ args: ['origin', 'x'] }, { tool: 'git', sub: 'push', flags: ['--force'], branch: 'x', force: true, delete: null }));
-  assert.deepEqual(a('git push origin main').ops[0], op({ args: ['origin', 'main'] }, { tool: 'git', sub: 'push', flags: [], branch: 'main', force: false, delete: null }));
-  assert.deepEqual(a('git push origin HEAD:refs/heads/feat').ops[0], op({ args: ['origin', 'HEAD:refs/heads/feat'] }, { tool: 'git', sub: 'push', flags: [], branch: 'feat', force: false, delete: null }));
+  assert.deepEqual(a('git push --force origin x').ops[0], op({ args: ['origin', 'x'], positionals: 2, refspecs: [{ src: null, dst: 'x', force: false, delete: false }] }, { tool: 'git', sub: 'push', flags: ['--force'], branch: 'x', force: true, delete: null }));
+  assert.deepEqual(a('git push origin main').ops[0], op({ args: ['origin', 'main'], positionals: 2, refspecs: [{ src: null, dst: 'main', force: false, delete: false }] }, { tool: 'git', sub: 'push', flags: [], branch: 'main', force: false, delete: null }));
+  assert.deepEqual(a('git push origin HEAD:refs/heads/feat').ops[0], op({ args: ['origin', 'HEAD:refs/heads/feat'], positionals: 2, refspecs: [{ src: 'HEAD', dst: 'feat', force: false, delete: false }] }, { tool: 'git', sub: 'push', flags: [], branch: 'feat', force: false, delete: null }));
   assert.deepEqual(a('git branch -d a').ops[0], op({ args: [] }, { tool: 'git', sub: 'branch', flags: ['-d'], branch: 'a', force: false, delete: 'safe' }));
   assert.deepEqual(a('git branch -D a').ops[0], op({ args: [] }, { tool: 'git', sub: 'branch', flags: ['-D'], branch: 'a', force: false, delete: 'force' }));
   assert.deepEqual(a('git commit -m x').ops[0], op({ args: ['x'] }, { tool: 'git', sub: 'commit', flags: ['-m'], branch: null, force: false, delete: null }));

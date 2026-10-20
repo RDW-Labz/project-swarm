@@ -101,21 +101,39 @@ test('chat merge: record, consume once, wrong PR and expiry', async t => {
   assert.equal(bash('swarm merge 9', T0 + CHAT_MERGE_MS + 1).allow, false);
 });
 
+async function fakeClaudeHome(t) {
+  const home = await tmp(t);
+  await fs.mkdir(path.join(home, '.claude', 'projects', 'hb-channel-test'), { recursive: true });
+  return home;
+}
+
+async function writeTranscript(home, lastUserText, rel) {
+  const transcriptPath = path.join(home, '.claude', 'projects', 'hb-channel-test', rel);
+  await fs.writeFile(transcriptPath, `${JSON.stringify({ type: 'user', message: { content: lastUserText } })}\n`);
+  return transcriptPath;
+}
+
 test('orchestrator prompt hook records merge lines only at line start', async t => {
+  const home = await fakeClaudeHome(t);
   const { root } = await project(t);
   await installOrchestratorHook(root);
-  const runHook = (prompt, hookEventName = 'UserPromptSubmit') => spawnSync(process.execPath, [HOOK, 'prompt'], {
-    input: JSON.stringify({
-      session_id: 's',
-      cwd: root,
-      transcript_path: '/home/.claude/projects/p/s.jsonl',
-      prompt,
-      hook_event_name: hookEventName,
-    }),
-    encoding: 'utf8',
-  });
+  let seq = 0;
+  const runHook = async (prompt, hookEventName = 'UserPromptSubmit') => {
+    const transcript_path = await writeTranscript(home, prompt, `s-${seq++}.jsonl`);
+    return spawnSync(process.execPath, [HOOK, 'prompt'], {
+      input: JSON.stringify({
+        session_id: 's',
+        cwd: root,
+        transcript_path,
+        prompt,
+        hook_event_name: hookEventName,
+      }),
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home },
+    });
+  };
   for (const prompt of ['merge #203', 'Merge 7', 'merge pr #5']) {
-    assert.equal(runHook(prompt).status, 0);
+    assert.equal((await runHook(prompt)).status, 0);
   }
   for (const [prompt, event] of [
     ['1. merge #99', 'UserPromptSubmit'],
@@ -124,7 +142,7 @@ test('orchestrator prompt hook records merge lines only at line start', async t 
     ['merge #96\nsecond line', 'UserPromptSubmit'],
     ['merge #95', 'SessionStart'],
   ]) {
-    assert.equal(runHook(prompt, event).status, 0);
+    assert.equal((await runHook(prompt, event)).status, 0);
   }
   const state = readState(root);
   assert.ok(state.merges['203'] > T0);

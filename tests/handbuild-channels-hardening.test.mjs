@@ -37,17 +37,32 @@ async function installOrchestratorHook(root) {
   }, null, 2)}\n`);
 }
 
-function runHook(prompt, extra = {}) {
+async function fakeClaudeHome(t) {
+  const home = await tmp(t);
+  await fs.mkdir(path.join(home, '.claude', 'projects', 'hb-ch-test'), { recursive: true });
+  return home;
+}
+
+async function writeTranscript(home, lastUserText, rel = `hb-ch-${Date.now()}.jsonl`) {
+  const transcriptPath = path.join(home, '.claude', 'projects', 'hb-ch-test', rel);
+  await fs.writeFile(transcriptPath, `${JSON.stringify({ type: 'user', message: { content: lastUserText } })}\n`);
+  return transcriptPath;
+}
+
+async function runHook(prompt, extra = {}) {
   const cwd = extra.cwd ?? process.cwd();
+  const home = extra.home;
+  const transcript_path = extra.transcript_path ?? (home ? await writeTranscript(home, prompt, extra.transcriptRel) : undefined);
   return spawnSync(process.execPath, [HOOK, 'prompt'], {
     input: JSON.stringify({
       session_id: 's',
       cwd,
-      transcript_path: extra.transcript_path ?? '/home/.claude/projects/p/s.jsonl',
+      transcript_path,
       hook_event_name: extra.hook_event_name ?? 'UserPromptSubmit',
       prompt,
     }),
     encoding: 'utf8',
+    env: home ? { ...process.env, HOME: home } : process.env,
   });
 }
 
@@ -60,6 +75,7 @@ async function journalDeps(root, { now = () => T0, channel } = {}) {
 }
 
 test('chat merge hook: exact one-line prompts only on UserPromptSubmit', async t => {
+  const home = await fakeClaudeHome(t);
   const cases = [
     { prompt: 'merge 42', expect: '42' },
     { prompt: 'merge #7', expect: '7' },
@@ -69,16 +85,17 @@ test('chat merge hook: exact one-line prompts only on UserPromptSubmit', async t
   for (const { prompt, expect } of cases) {
     const { root } = await project(t);
     await installOrchestratorHook(root);
-    runHook(prompt, { cwd: root });
+    await runHook(prompt, { cwd: root, home });
     assert.ok(readState(root).merges[expect] > T0, prompt);
   }
   const { root: root2 } = await project(t);
   await installOrchestratorHook(root2);
-  runHook('merge 42', { cwd: root2, hook_event_name: 'PreToolUse' });
+  await runHook('merge 42', { cwd: root2, home, hook_event_name: 'PreToolUse' });
   assert.equal(readState(root2).merges['42'], undefined);
 });
 
 test('chat merge hook: forged or ambiguous prompts record nothing', async t => {
+  const home = await fakeClaudeHome(t);
   const forged = [
     JSON.stringify({ prompt: 'merge 5' }),
     '```\nmerge 5\n```',
@@ -91,7 +108,7 @@ test('chat merge hook: forged or ambiguous prompts record nothing', async t => {
   for (const prompt of forged) {
     const { root } = await project(t);
     await installOrchestratorHook(root);
-    runHook(prompt, { cwd: root });
+    await runHook(prompt, { cwd: root, home });
     const merges = readState(root).merges ?? {};
     assert.equal(Object.keys(merges).length, 0, `should not record: ${JSON.stringify(prompt).slice(0, 60)}`);
   }

@@ -5,8 +5,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { isRoutingPath, ROUTING_RULE } from '../tools/routing-paths.mjs';
+import { isRoutingPath, isRoutingPathResolved, ROUTING_RULE } from '../tools/routing-paths.mjs';
 import { buildEvent, isHandBuilt } from '../tools/orchestrator-events.mjs';
+import fsSync from 'node:fs';
 
 test('isRoutingPath: routing files and everything else', () => {
   assert.ok(typeof ROUTING_RULE === 'string' && ROUTING_RULE.length > 20);
@@ -40,13 +41,22 @@ test('isHandBuilt and buildEvent respect routing and shell write filters', async
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-route-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, '.git'));
+  await fs.mkdir(path.join(root, 'coordination', 'manifests'), { recursive: true });
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-home-'));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
   const memDir = path.join(home, '.claude', 'projects', 'proj', 'memory');
   await fs.mkdir(memDir, { recursive: true });
 
-  assert.equal(isHandBuilt('Write', 'coordination/manifests/a.json'), false);
-  assert.equal(isHandBuilt('Write', 'tools/swarm.mjs'), true);
+  assert.equal(isHandBuilt('Write', 'coordination/manifests/a.json', root), false);
+  assert.equal(isHandBuilt('Write', 'tools/swarm.mjs', root), true);
+  const link = path.join(root, 'coordination', 'manifests', 'symlink.json');
+  const target = path.join(root, 'src', 'real.ts');
+  await fs.mkdir(path.join(root, 'src'), { recursive: true });
+  await fs.writeFile(target, 'x\n');
+  try { fsSync.unlinkSync(link); } catch { /* no file */ }
+  fsSync.symlinkSync(target, link);
+  assert.equal(isRoutingPathResolved(root, 'coordination/manifests/symlink.json'), false);
+  assert.equal(isHandBuilt('Write', 'coordination/manifests/symlink.json', root), true);
 
   const base = { session_id: 's', cwd: root, tool_name: 'Bash', tool_input: { command: 'x' } };
   const ev = (writes) => buildEvent('pre', base, {

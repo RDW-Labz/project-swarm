@@ -27,21 +27,36 @@ const WRITERS = new Set(['rm', 'rmdir', 'unlink', 'touch', 'mkdir', 'truncate', 
 export function tokenize(command) {
   const commands = [];
   let words = [], expands = [], word = '', quote = null, hasWord = false, wordExpands = false;
-  const markExpand = () => { if (quote !== "'") wordExpands = true; };
-  const endWord = () => { if (hasWord) { words.push(word); expands.push(wordExpands); } word = ''; hasWord = false; wordExpands = false; };
+  const markExpand = () => { if (quote !== "'" && quote !== 'ansi-c') wordExpands = true; };
+  const endWord = () => {
+    if (hasWord) {
+      words.push(word);
+      expands.push(wordExpands);
+      if (words[0] === 'find' && ['-exec', '-execdir', '-ok', '-okdir'].includes(word)) findExec = true;
+    }
+    word = ''; hasWord = false; wordExpands = false;
+  };
   let piped = false;
   let sepAfter = null;
-  const endCommand = (pipe = false, sep = ';') => { endWord(); if (words.length) { words.piped = piped; words.sepAfter = sep; words.expands = expands; commands.push(words); } words = []; expands = []; piped = pipe; };
+  let findExec = false;
+  const endCommand = (pipe = false, sep = ';') => { endWord(); if (words.length) { words.piped = piped; words.sepAfter = sep; words.expands = expands; commands.push(words); } words = []; expands = []; piped = pipe; findExec = false; };
   const text = String(command ?? '');
   const heredocs = [];
   for (let i = 0; i < text.length; i += 1) {
     const c = text[i], next = text[i + 1];
     if (quote) {
+      if (quote === 'ansi-c') {
+        if (c === "'") quote = null;
+        else if (c === '\\' && next !== undefined) { word += next; i += 1; }
+        else word += c;
+        continue;
+      }
       if (c === quote) quote = null;
       else if (c === '\\' && quote === '"' && next !== undefined) { word += next; i += 1; }
       else { if (c === '$' || c === '`') markExpand(); word += c; }
       continue;
     }
+    if (c === '$' && next === "'") { quote = 'ansi-c'; hasWord = true; i += 1; continue; }
     if (c === '"' || c === "'") { quote = c; hasWord = true; continue; }
     if (c === '\\' && next !== undefined) { word += next; hasWord = true; i += 1; continue; }
     if (c === ' ' || c === '\t') { endWord(); continue; }
@@ -61,7 +76,14 @@ export function tokenize(command) {
       }
       continue;
     }
-    if (c === ';') { endCommand(); continue; }
+    if (c === ';') {
+      if (findExec) { word = ';'; hasWord = true; endWord(); findExec = false; continue; }
+      endCommand();
+      continue;
+    }
+    if (c === '+' && findExec && !hasWord && (next === ' ' || next === '\t' || next === undefined || next === '\n')) {
+      word = '+'; hasWord = true; endWord(); findExec = false; continue;
+    }
     if (c === '(' || c === ')') { endCommand(false, c); continue; }
     if (c === '{' && !hasWord && (next === ' ' || next === '\n')) { endCommand(); continue; }
     if (c === '}' && !hasWord && (next === undefined || next === ' ' || next === ';' || next === '\n')) { endCommand(); continue; }
@@ -95,6 +117,7 @@ export function tokenize(command) {
     word += c; hasWord = true;
   }
   endCommand();
+  if (quote) commands.unclosedQuote = true;
   return commands;
 }
 
@@ -104,8 +127,24 @@ const normBranch = b => {
   return s.startsWith('refs/heads/') ? s.slice('refs/heads/'.length) : s;
 };
 
-const CONFIG_ANYWHERE = new Set(['-c', '--config', '--output', '--exec', '-x', '--exec-path', '--upload-pack', '--receive-pack', '--ext-diff']);
-const hasConfigInArgs = args => args.some(a => CONFIG_ANYWHERE.has(a) || a.startsWith('--config=') || a.startsWith('--output='));
+const CONFIG_ANYWHERE = new Set(['-c', '--config', '--config-env', '--output', '--exec', '-x', '--exec-path', '--upload-pack', '--receive-pack', '--ext-diff']);
+const hasConfigInArgs = args => args.some(a => CONFIG_ANYWHERE.has(a) || a.startsWith('--config=') || a.startsWith('--output=') || a.startsWith('--exec-path=') || a.startsWith('--exec-path ')
+  || a.startsWith('--upload-pack=') || a.startsWith('--receive-pack=')
+  || /=upload-pack/.test(a) || /=receive-pack/.test(a) || /=exec/.test(a) || /=config/.test(a));
+
+const PIPE_DYNAMIC = new Set(['sh', 'bash', 'zsh', 'node', 'python', 'python3', 'perl']);
+const base64Decodes = args => args.some(a => a === '-d' || a === '-D' || a === '--decode' || /^--decode=/.test(a) || (a.startsWith('-') && !a.startsWith('--') && a.slice(1).includes('d')));
+const shellCodeDynamic = code => /\$[\({]/.test(String(code ?? '')) || /`/.test(String(code ?? '')) || /\bbase64\b.*\b-d\b|\bbase64\b.*--decode/.test(String(code ?? ''));
+const parseRefspec = a => {
+  let force = false, deleteRef = false, raw = a;
+  if (raw.startsWith('+')) { force = true; raw = raw.slice(1); }
+  if (raw.startsWith(':')) { deleteRef = true; raw = raw.slice(1); }
+  if (raw.includes(':')) {
+    const [src, dst] = raw.split(':');
+    return { src: src || null, dst: normBranch(dst || null), force, delete: deleteRef || dst === '' };
+  }
+  return { src: null, dst: normBranch(raw), force, delete: deleteRef && raw !== '' };
+};
 
 const opFields = (op, { args: opArgs, globalOpts, allArgs }) => ({
   ...op,
@@ -119,22 +158,28 @@ const shortFlagHas = (flag, ch) => flag.startsWith('-') && !flag.startsWith('--'
 const gitPushOp = (rest, meta = {}) => {
   const flags = rest.filter(a => a.startsWith('-'));
   const pos = rest.filter(a => a !== '' && !a.startsWith('-'));
+  const mirrorOrPrune = flags.some(a => a === '--mirror' || a === '--prune');
   let force = flags.some(a => a === '--force' || a === '-f' || a === '--force-with-lease' || a === '--force-if-includes' || a.startsWith('--force-with-lease=') || shortFlagHas(a, 'f'))
     || pos.some(a => a.startsWith('+'));
-  let deleteMode = null;
-  if (rest.some(a => a === '--delete' || a === '-d')) deleteMode = 'remote';
+  let deleteMode = mirrorOrPrune ? true : null;
+  if (!deleteMode && rest.some(a => a === '--delete' || a === '-d')) deleteMode = 'remote';
   let branch = null;
+  const remote = pos[0] ?? null;
+  const afterRemote = remote !== null ? pos.slice(1) : pos;
+  const refspecs = afterRemote.map(parseRefspec);
   for (const a of pos) {
     if (a.startsWith('+')) { const spec = a.slice(1); branch = normBranch(spec.includes(':') ? spec.split(':').pop() : spec); }
-    else if (a.startsWith(':') && a.length > 1) { deleteMode = 'remote'; branch = normBranch(a.slice(1)); }
+    else if (a.startsWith(':') && a.length > 1) { if (!deleteMode) deleteMode = 'remote'; branch = normBranch(a.slice(1)); }
     else if (a.includes(':')) {
       const rhs = a.split(':').pop();
-      if (rhs === '') deleteMode = 'remote';
+      if (rhs === '') { if (!deleteMode) deleteMode = 'remote'; }
       else branch = normBranch(rhs);
     }
-    else if (a !== 'origin' && a !== 'HEAD') branch = normBranch(a);
+    else if (a !== 'origin' && a !== 'HEAD' && a !== remote) branch = normBranch(a);
   }
-  return opFields({ tool: 'git', sub: 'push', flags, branch, force, delete: deleteMode }, { ...meta, args: pos });
+  return opFields({
+    tool: 'git', sub: 'push', flags, branch, force, delete: deleteMode, refspecs, positionals: pos.length,
+  }, { ...meta, args: pos });
 };
 
 const gitBranchOp = (rest, meta = {}) => {
@@ -261,11 +306,12 @@ const READ_ONLY_GIT = new Set(['status', 'diff', 'log', 'show', 'rev-parse', 'ls
 /** { writes, git, inline, unknown, protectedOutside, selfApproval } for one command line. `protectedAbs`: absolute path prefixes (the install, the user's own Claude settings) no write may touch. */
 export function analyzeShell(command, { root, cwd = root, home = process.env.HOME || '/', protectedAbs = [], depth = 0 } = {}) {
   const writes = new Set(), git = new Set(), protectedOutside = new Set(), outsideDeletes = new Set(), ops = [];
-  let inline = false, unknown = false, selfApproval = false;
+  let inline = false, unknown = false, dynamic = false, selfApproval = false;
+  const markDynamic = () => { dynamic = true; unknown = true; };
   let here = cwd;           // the directory relative paths mean: `cd DIR` moves it, an unreadable cd makes it unknown
   const heres = [...new Set([cwd, root].map(d => path.resolve(d)))];      // relative paths may mean cwd or the project root
   let hereKnown = true;
-  const merge = r => { r.writes.forEach(w => writes.add(w)); r.git.forEach(g => git.add(g)); r.protectedOutside.forEach(p => protectedOutside.add(p)); (r.outsideDeletes ?? []).forEach(p => outsideDeletes.add(p)); (r.ops ?? []).forEach(o => ops.push(o)); inline ||= r.inline; unknown ||= r.unknown; selfApproval ||= r.selfApproval; };
+  const merge = r => { r.writes.forEach(w => writes.add(w)); r.git.forEach(g => git.add(g)); r.protectedOutside.forEach(p => protectedOutside.add(p)); (r.outsideDeletes ?? []).forEach(p => outsideDeletes.add(p)); (r.ops ?? []).forEach(o => ops.push(o)); inline ||= r.inline; unknown ||= r.unknown; dynamic ||= r.dynamic; selfApproval ||= r.selfApproval; };
   // The orchestrator's own folders and build output are free to write, except the guard's own state, and never the folders that contain it (.swarm itself).
   const lowerRel = rel => rel.toLowerCase();
   const allowedRel = rel => {
@@ -328,7 +374,9 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
   };
   const recurse = text => { if (depth < 4) merge(analyzeShell(text, { root, cwd: here, home, protectedAbs, depth: depth + 1 })); else unknown = true; };
   for (const sub of substitutions(command)) recurse(sub);
-  for (const words of tokenize(command)) {
+  const tokenized = tokenize(command);
+  if (tokenized.unclosedQuote) unknown = true;
+  for (const words of tokenized) {
     const wordExp = words.expands ?? [];
     const redirectedInput = words.some(w => w === '<' || w === '<<' || w === '<<<');
     for (let i = 0; i < words.length; i += 1) {
@@ -363,8 +411,9 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
     }
     if (k >= plain.length) continue;
     // a command word that is a variable or a substitution cannot be read
-    if (plainExp[k]) { unknown = true; continue; }
+    if (plainExp[k] || /^\$[A-Za-z_][A-Za-z0-9_]*$/.test(plain[k]) || /^\$\{/.test(plain[k])) { markDynamic(); continue; }
     const cmd = path.basename(plain[k]);
+    if (words.piped && PIPE_DYNAMIC.has(cmd)) markDynamic();
     const args = plain.slice(k + 1);
     const argExp = plainExp.slice(k + 1);
     const operands = [], operandExp = [];
@@ -398,9 +447,15 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
     }
     if (SHELLS.has(cmd)) {
       const at = args.findIndex(codeFlagFor(cmd));
-      if (at !== -1) { if (args[at + 1] !== undefined) recurse(args[at + 1]); continue; }
+      if (at !== -1) {
+        const code = args[at + 1] ?? '';
+        if (shellCodeDynamic(code)) markDynamic();
+        else recurse(code);
+        continue;
+      }
     }
-    if (cmd === 'eval') { recurse(args.join(' ')); continue; }
+    if (cmd === 'eval') { markDynamic(); recurse(args.join(' ')); continue; }
+    if (cmd === 'base64' && base64Decodes(args)) markDynamic();
     if (cmd === 'find' && args.some(a => ['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprintf', '-fls'].includes(a))) {
       const searchPaths = [];
       for (let fj = 0; fj < args.length; fj += 1) {
@@ -408,16 +463,27 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
         if (fa.startsWith('-')) break;
         if (fa !== '') searchPaths.push({ p: fa, exp: argExp[fj] ?? false });
       }
-      const execRm = () => {
-        const at = args.findIndex(a => a === '-exec' || a === '-execdir' || a === '-ok' || a === '-okdir');
-        if (at === -1) return false;
-        const inner = args.slice(at + 1).filter(a => a !== ';' && a !== '+' && a !== '\\;');
-        return inner.some(a => path.basename(a) === 'rm' || WRITERS.has(path.basename(a)));
+      const execIsWriter = innerWords => innerWords.some(a => WRITERS.has(path.basename(a)) || isInterpreter(path.basename(a)));
+      const sliceExec = start => {
+        const out = [];
+        for (let j = start; j < args.length; j += 1) {
+          const a = args[j];
+          if (a === ';' || a === '+' || a === '\\;') break;
+          out.push(a);
+        }
+        return out;
       };
-      if ((args.includes('-delete') || execRm()) && searchPaths.length === 0) unknown = true;
-      const at = args.findIndex(a => a === '-exec' || a === '-execdir' || a === '-ok' || a === '-okdir');
-      if (at !== -1) { const inner = args.slice(at + 1).filter(a => a !== ';' && a !== '+' && a !== '\\;'); recurse(inner.join(' ')); if (inner.some(a => WRITERS.has(path.basename(a)) || isInterpreter(path.basename(a)))) unknown = true; }
-      else if (args.includes('-delete')) {
+      let hasDelete = args.includes('-delete');
+      let hasWriterExec = false;
+      for (let fj = 0; fj < args.length; fj += 1) {
+        if (['-exec', '-execdir', '-ok', '-okdir'].includes(args[fj])) {
+          const inner = sliceExec(fj + 1);
+          recurse(inner.join(' '));
+          if (execIsWriter(inner)) hasWriterExec = true;
+        }
+      }
+      if ((hasDelete || hasWriterExec) && searchPaths.length === 0) unknown = true;
+      if (hasDelete) {
         for (const { p, exp } of searchPaths) {
           if (exp) { unknown = true; continue; }
           if (globPatternUnknown(p, exp)) continue;
@@ -428,7 +494,12 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
           }
         }
       }
-      else unknown = true;
+      for (let fj = 0; fj < args.length; fj += 1) {
+        if (args[fj] === '-fprint' || args[fj] === '-fprintf' || args[fj] === '-fls') {
+          const fp = args[fj + 1];
+          if (fp !== undefined) target(fp, argExp[fj + 1] ?? false);
+        }
+      }
       continue;
     }
     if (wrappers.includes('xargs') && (WRITERS.has(cmd) || isInterpreter(cmd))) unknown = true;
@@ -464,10 +535,18 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
     } else if (['rm', 'rmdir', 'unlink'].includes(cmd)) {
       operands.forEach((o, oi) => {
         if (operandExp[oi]) { unknown = true; return; }
-        if (globPatternUnknown(o, operandExp[oi])) {
+        if (/[*?\[{]/.test(String(o))) {
           const fixed = String(o).replace(/[*?\[{].*$/, '');
-          for (const r of resolveAll(fixed || '.', operandExp[oi])) {
-            if (r.outside && isProtectedAbs(r)) protectedOutside.add(r.abs);
+          const rs = resolveAll(fixed || '.', operandExp[oi]);
+          const free = rs.every(r => r.skip || (r.rel !== undefined && r.rel !== '' && allowedRel(r.rel) && !String(o).split('/').includes('..') && !lowerRel(r.rel).startsWith('.swarm/handbuild') && lowerRel(r.rel) !== '.swarm')) && (fixed === '' ? false : /\/$/.test(fixed));
+          if (!free) {
+            if (rs.some(r => r.rel !== undefined) || fixed === '' || fixed === '.') { unknown = true; return; }
+          }
+          for (const r of rs) {
+            if (r.outside) {
+              outsideDeletes.add(r.abs);
+              if (isProtectedAbs(r)) protectedOutside.add(r.abs);
+            }
           }
           return;
         }
@@ -553,7 +632,7 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
       scriptRule(plain[k], plainExp[k]);
     }
   }
-  return { writes: [...writes].sort(), git: [...git].sort(), ops, inline, unknown, protectedOutside: [...protectedOutside].sort(), outsideDeletes: [...outsideDeletes].sort(), selfApproval };
+  return { writes: [...writes].sort(), git: [...git].sort(), ops, inline, unknown, dynamic, protectedOutside: [...protectedOutside].sort(), outsideDeletes: [...outsideDeletes].sort(), selfApproval };
 }
 
 /** True when a command writes anything the guard cares about. */

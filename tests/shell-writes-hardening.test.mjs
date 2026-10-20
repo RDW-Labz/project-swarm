@@ -14,6 +14,8 @@ test('rm unlink rmdir: glob targets are unknown unless under a free folder', () 
   assert.equal(a('rm -rf .swarm/*').unknown, true);
   assert.equal(a('rm -rf .swarm/notes?').unknown, true);
   assert.equal(a('rm -rf .swarm/{a,b}').unknown, true);
+  assert.equal(a('rm -rf src/*').unknown, true);
+  assert.equal(a('rm -rf *').unknown, true);
   assert.deepEqual(a('rm -rf dist/*').writes, []);
   assert.equal(a('rm -rf dist/*').unknown, false);
 });

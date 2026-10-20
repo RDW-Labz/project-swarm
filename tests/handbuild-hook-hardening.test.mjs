@@ -36,17 +36,32 @@ async function installOrchestratorHook(root) {
   }, null, 2)}\n`);
 }
 
-function runHook(root, extra = {}) {
+async function fakeClaudeHome(t) {
+  const home = await tmp(t);
+  await fs.mkdir(path.join(home, '.claude', 'projects', 'hb-hook-test'), { recursive: true });
+  return home;
+}
+
+async function writeTranscript(home, lastUserText, rel = `hb-hook-${Date.now()}.jsonl`) {
+  const transcriptPath = path.join(home, '.claude', 'projects', 'hb-hook-test', rel);
+  await fs.writeFile(transcriptPath, `${JSON.stringify({ type: 'user', message: { content: lastUserText } })}\n`);
+  return transcriptPath;
+}
+
+async function runHook(root, extra = {}) {
+  const prompt = extra.prompt ?? 'merge 7';
+  const home = extra.home;
+  const transcript_path = extra.transcript_path ?? (home ? await writeTranscript(home, prompt) : undefined);
   return spawnSync(process.execPath, [HOOK, 'prompt'], {
     input: JSON.stringify({
       session_id: 'sess-owner',
       cwd: extra.cwd ?? root,
       hook_event_name: 'UserPromptSubmit',
-      transcript_path: extra.transcript_path ?? '/home/.claude/projects/p/sess-owner.jsonl',
-      prompt: extra.prompt ?? 'merge 7',
-      ...extra,
+      transcript_path,
+      prompt,
     }),
     encoding: 'utf8',
+    env: home ? { ...process.env, HOME: home } : process.env,
   });
 }
 
@@ -70,24 +85,26 @@ async function openHandbuildDecision(root, ref, { now = () => T0 } = {}) {
 }
 
 test('chat merge hook: worker cwd and missing transcript record nothing', async t => {
+  const home = await fakeClaudeHome(t);
   const { root } = await project(t);
   await installOrchestratorHook(root);
   const workerCwd = path.join(root, '.swarm', 'workspaces', 'run1', 'job1');
   await fs.mkdir(workerCwd, { recursive: true });
-  runHook(root, { cwd: workerCwd, prompt: 'merge 7' });
+  await runHook(root, { cwd: workerCwd, prompt: 'merge 7', home });
   assert.equal(readState(root).merges?.['7'], undefined);
 
   const { root: root2 } = await project(t);
   await installOrchestratorHook(root2);
-  runHook(root2, { transcript_path: undefined, prompt: 'merge 7' });
+  await runHook(root2, { transcript_path: undefined, prompt: 'merge 7' });
   assert.equal(readState(root2).merges?.['7'], undefined);
 });
 
 test('chat merge hook: valid owner prompt records merge expiry about 60 minutes ahead', async t => {
+  const home = await fakeClaudeHome(t);
   const { root } = await project(t);
   await installOrchestratorHook(root);
   const before = Date.now();
-  runHook(root, { prompt: 'merge 7' });
+  await runHook(root, { prompt: 'merge 7', home });
   const after = Date.now();
   const exp = readState(root).merges?.['7'];
   assert.ok(Number.isFinite(exp));

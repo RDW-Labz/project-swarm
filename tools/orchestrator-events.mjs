@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { isRoutingPath } from './routing-paths.mjs';
+import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 
 export const EVENT_KINDS = Object.freeze(['pre', 'post', 'stop', 'prompt', 'blocked']);
 export const WRITE_TOOLS = Object.freeze(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -57,9 +57,10 @@ export function insideProject(root, file) {
 }
 
 /** True when an edit lands in the project outside .swarm/, docs/plans/, and routing paths: the orchestrator built it by hand. */
-export function isHandBuilt(tool, relPath) {
+export function isHandBuilt(tool, relPath, root = null) {
   if (!WRITE_TOOLS.includes(tool) || typeof relPath !== 'string') return false;
-  if (isRoutingPath(relPath)) return false;
+  if (root && isRoutingPathResolved(root, relPath)) return false;
+  else if (!root && isRoutingPath(relPath)) return false;
   return !ORCHESTRATOR_OWN.some(prefix => relPath === prefix.slice(0, -1) || relPath.startsWith(prefix));
 }
 
@@ -67,10 +68,14 @@ const isPlausibleWriteTarget = w => {
   const s = String(w ?? '');
   return s.length > 0 && !/[\n\r]/.test(s);
 };
+const realAbs = abs => {
+  try { return fs.realpathSync.native(abs); } catch { return path.resolve(abs); }
+};
+
 const isSessionScratchpadPath = (file, home = os.homedir()) => {
   if (typeof file !== 'string' || !file) return false;
   const expanded = file.startsWith('~/') ? path.join(home, file.slice(2)) : file;
-  const abs = path.isAbsolute(expanded) ? path.resolve(expanded) : null;
+  const abs = path.isAbsolute(expanded) ? realAbs(path.resolve(expanded)) : null;
   if (!abs) return false;
   const tmp = os.tmpdir();
   const n = norm(abs);
@@ -85,7 +90,7 @@ const isSessionScratchpadPath = (file, home = os.homedir()) => {
 const isClaudeMemoryPath = (file, home = os.homedir()) => {
   if (typeof file !== 'string' || !file) return false;
   const expanded = file.startsWith('~/') ? path.join(home, file.slice(2)) : file;
-  const abs = path.isAbsolute(expanded) ? path.resolve(expanded) : null;
+  const abs = path.isAbsolute(expanded) ? realAbs(path.resolve(expanded)) : null;
   if (!abs) return false;
   const under = norm(path.relative(path.join(home, '.claude', 'projects'), abs));
   if (under.startsWith('../') || path.isAbsolute(under)) return false;
@@ -100,7 +105,7 @@ function bashWriteCountsAsHandBuilt(root, write, home = os.homedir()) {
   const abs = path.isAbsolute(write) ? path.resolve(write) : path.resolve(root, write);
   const rel = insideProject(root, abs);
   if (rel === null) return false;
-  return isHandBuilt('Write', rel);
+  return isHandBuilt('Write', rel, root);
 }
 
 // A session that runs inside a swarm worker workspace is a worker, not an orchestrator.
@@ -145,7 +150,7 @@ export function buildEvent(kind, input, { root, now = Date.now, analyze } = {}) 
     }
     else {
       const rel = insideProject(root, ti.file_path ?? ti.notebook_path ?? ti.path);
-      if (rel) { event.f = rel.slice(0, 200); if (isHandBuilt(tool, rel)) event.hb = 1; }
+      if (rel) { event.f = rel.slice(0, 200); if (isHandBuilt(tool, rel, root)) event.hb = 1; }
       else if (typeof (ti.file_path ?? ti.notebook_path ?? ti.path) === 'string') event.out = 1;   // a path outside the project: noted, never stored
     }
     if (kind === 'post' && input.tool_response && typeof input.tool_response === 'object' && (input.tool_response.is_error === true || input.tool_response.success === false)) event.err = 1;

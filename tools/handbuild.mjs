@@ -19,7 +19,7 @@ export const ELEVATED_GIT_OPS = Object.freeze(['merge', 'deploy', 'force-push', 
 const CHAT_MERGE_MS = 60 * 60000;
 const ALLOWED_GH = new Set(['pr create', 'pr view', 'pr list', 'pr checks', 'pr diff', 'run list', 'run watch', 'run view']);
 const ALLOWED_VERCEL = new Set(['ls', 'inspect', 'logs', 'whoami', '--version']);
-const READ_GIT_SUBS = new Set(['fetch', 'status', 'log', 'diff', 'show']);
+const READ_GIT_SUBS = new Set(['status', 'log', 'diff', 'show']);
 const WRITE_HTTP = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const CONFIG_FLAGS = new Set(['-c', '--config', '--output', '--exec', '-x', '--exec-path', '--upload-pack', '--receive-pack', '--ext-diff']);
 const PLAIN_REF = /^[A-Za-z0-9._/-]+$/;
@@ -35,7 +35,87 @@ export function branchOf(root) {
 export const isProtectedBranch = b => b === 'main' || b === 'master' || b === 'HEAD';
 
 const normBranch = b => String(b ?? '').replace(/^refs\/heads\//, '');
-const hasConfigInWords = words => words.some(w => CONFIG_FLAGS.has(w) || w.startsWith('--config=') || w.startsWith('--output=') || /^--exec=/.test(w));
+const hasConfigInWords = words => words.some(w => CONFIG_FLAGS.has(w) || w === '--config-env' || w.startsWith('--config=') || w.startsWith('--output=')
+  || /=upload-pack$|=receive-pack$|=exec$|=config$/.test(w) || /^--exec=/.test(w) || /^--upload-pack=/.test(w) || /^--receive-pack=/.test(w)
+  || w === '--exec-path' || w.startsWith('--exec-path='));
+
+/** Configured remotes; null when git remote cannot be read in time. */
+export const gitRemotesOf = root => {
+  try {
+    return execFileSync('git', ['remote'], { cwd: root, encoding: 'utf8', timeout: 3000 }).split('\n').map(s => s.trim()).filter(Boolean);
+  } catch { return null; }
+};
+
+const isConfiguredRemote = (name, root) => {
+  const remotes = gitRemotesOf(root);
+  if (remotes === null) return false;
+  return remotes.includes(name);
+};
+
+const commandHasGitEnv = command => {
+  for (const words of tokenize(command)) {
+    for (const w of words) {
+      if (/^GIT_[A-Z0-9_]+=/.test(w)) return true;
+    }
+  }
+  return false;
+};
+
+const parsePushRefspecWord = raw => {
+  let spec = String(raw ?? '');
+  let force = false;
+  if (spec.startsWith('+')) { force = true; spec = spec.slice(1); }
+  let del = false;
+  let src = null;
+  let dst = null;
+  if (spec.startsWith(':') && spec.length > 1) {
+    del = true;
+    dst = normBranch(spec.slice(1));
+    src = '';
+  } else if (spec.includes(':')) {
+    const colon = spec.indexOf(':');
+    src = spec.slice(0, colon);
+    const rhs = spec.slice(colon + 1);
+    if (rhs === '') { del = true; dst = normBranch(src); src = ''; }
+    else { dst = normBranch(rhs); if (!src) src = dst; }
+  } else {
+    dst = normBranch(spec);
+    src = dst;
+  }
+  return { src, dst, force, delete: del };
+};
+
+const isClaudeProjectTranscriptAbs = (abs, home) => {
+  const base = path.join(home, '.claude', 'projects');
+  const rel = path.relative(base, path.resolve(abs));
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  const parts = rel.split(path.sep);
+  if (parts.length !== 2 || parts[1] === 'memory') return false;
+  return /\.jsonl$/i.test(parts[1]);
+};
+
+const isClaudeMemoryPathOutside = (abs, home) => {
+  const base = path.join(home, '.claude', 'projects');
+  const rel = path.relative(base, path.resolve(abs));
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  const parts = rel.split(path.sep);
+  return parts.length >= 2 && parts[1] === 'memory';
+};
+
+const bashTranscriptWrites = (command, home) => {
+  const hits = [];
+  for (const words of tokenize(command)) {
+    for (let i = 0; i < words.length; i += 1) {
+      if (['>', '>>', '>|', '>&', '&>'].includes(words[i]) && words[i + 1] !== undefined && !/^&?\d+$/.test(words[i + 1])) {
+        let p = words[i + 1];
+        if (p.startsWith('~/')) p = path.join(home, p.slice(2));
+        const abs = path.isAbsolute(p) ? path.resolve(p) : null;
+        if (abs && isClaudeProjectTranscriptAbs(abs, home)) hits.push(p);
+      }
+    }
+  }
+  return hits;
+};
 
 const realOfAbs = abs => {
   let cur = abs;
@@ -231,8 +311,23 @@ const gitPushPolicy = (rest, meta) => {
   const force = flags.some(a => a === '--force' || a === '-f' || a === '--force-with-lease' || a === '--force-if-includes' || a.startsWith('--force-with-lease=') || shortFlagHas(a, 'f'))
     || pos.some(a => a.startsWith('+'));
   let deleteMode = null;
-  if (rest.some(a => a === '--delete' || a === '-d')) deleteMode = 'remote';
+  if (rest.some(a => a === '--delete' || a === '-d') || flags.includes('--mirror') || flags.includes('--prune')) deleteMode = 'remote';
+  const refspecs = [];
   let branch = null;
+  if (pos.length >= 2) {
+    for (const a of pos.slice(1)) {
+      const rs = parsePushRefspecWord(a);
+      refspecs.push(rs);
+      if (rs.dst) branch = rs.dst;
+      if (rs.delete) deleteMode = 'remote';
+      if (rs.force) { /* force stays on op */ }
+    }
+  } else if (pos.length === 1 && (pos[0].includes(':') || pos[0].startsWith('+') || (pos[0].startsWith(':') && pos[0].length > 1))) {
+    const rs = parsePushRefspecWord(pos[0]);
+    refspecs.push(rs);
+    if (rs.dst) branch = rs.dst;
+    if (rs.delete) deleteMode = 'remote';
+  }
   for (const a of pos) {
     if (a.startsWith('+')) { const spec = a.slice(1); branch = normBranch(spec.includes(':') ? spec.split(':').pop() : spec); }
     else if (a.startsWith(':') && a.length > 1) { deleteMode = 'remote'; branch = normBranch(a.slice(1)); }
@@ -240,9 +335,15 @@ const gitPushPolicy = (rest, meta) => {
       const rhs = a.split(':').pop();
       if (rhs === '') deleteMode = 'remote';
       else branch = normBranch(rhs);
-    } else if (a !== 'origin' && a !== 'HEAD') branch = normBranch(a);
+    } else if (pos.length === 2 && a === pos[1]) branch = normBranch(a);
   }
-  return { tool: 'git', sub: 'push', args: pos, flags, branch, force, delete: deleteMode, ...meta };
+  return { tool: 'git', sub: 'push', args: pos, flags, branch, force, delete: deleteMode, positionals: pos.length, refspecs, ...meta };
+};
+
+const gitFetchPolicy = (rest, meta) => {
+  const flags = rest.filter(a => a.startsWith('-'));
+  const pos = rest.filter(a => a !== '' && !a.startsWith('-'));
+  return { tool: 'git', sub: 'fetch', args: pos, flags, branch: null, force: false, delete: null, positionals: pos.length, ...meta };
 };
 
 const gitBranchPolicy = (rest, meta) => {
@@ -293,8 +394,10 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
     }
     const sub = i < args.length && !args[i].startsWith('-') ? args[i] : null;
     const rest = sub ? args.slice(i + 1) : [];
-    const meta = { globalOpts, hasConfig, target: null };
+    const gitEnv = plain.slice(0, k).some(w => /^GIT_[A-Z0-9_]+=/.test(w));
+    const meta = { globalOpts, hasConfig, gitEnv, target: null };
     if (sub === 'push') ops.push(gitPushPolicy(rest, meta));
+    else if (sub === 'fetch') ops.push(gitFetchPolicy(rest, meta));
     else if (sub === 'branch') ops.push(gitBranchPolicy(rest, meta));
     else {
       const pos = rest.filter(a => a && !a.startsWith('-'));
@@ -370,25 +473,57 @@ const pushBlockedOnProtected = (pos, forceOrDelete) => {
   return false;
 };
 
-const isFreeGitPush = (op, current) => {
-  if (op.globalOpts || op.hasConfig) return false;
-  if (op.delete === 'remote' || op.force) return false;
+const isFreeGitPush = (op, current, root) => {
+  if (op.globalOpts || op.hasConfig || op.gitEnv) return false;
   const flags = op.flags ?? [];
+  if (flags.some(f => ['--mirror', '--prune', '--delete', '-d', '--all'].includes(f))) return false;
+  if (op.delete === 'remote') return false;
+  const refspecs = op.refspecs ?? [];
+  if (refspecs.some(r => r.delete)) return false;
+  if (op.force || refspecs.some(r => r.force)) return false;
   if (flags.some(f => !['-u', '--set-upstream'].includes(f))) return false;
-  if (flags.some(f => ['--all', '--mirror', '--delete', '-d', '-f', '--force'].includes(f) || shortFlagHas(f, 'f'))) return false;
+  if (flags.some(f => ['-f', '--force'].includes(f) || shortFlagHas(f, 'f'))) return false;
   const pos = op.args ?? [];
+  const positionals = op.positionals ?? pos.length;
+  if (positionals > 2) return false;
+  if (refspecs.some(r => r.src !== r.dst)) return false;
   if (pos.some(a => a.startsWith('+') || a.includes(':'))) return false;
-  if (pushBlockedOnProtected(pos, false)) return false;
-  let remote = null; let branch = current;
-  if (pos.length === 1) {
-    if (!PLAIN_REF.test(pos[0])) return false;
-    branch = normBranch(pos[0]);
-  } else if (pos.length >= 2) {
-    if (!PLAIN_REF.test(pos[0]) || !PLAIN_REF.test(pos[1])) return false;
-    remote = pos[0];
-    branch = normBranch(pos[1]);
+  if (positionals === 0) {
+    if (isProtectedBranch(current)) return false;
+    return true;
   }
-  if (isProtectedBranch(branch)) return false;
+  if (positionals === 1) {
+    if (!PLAIN_REF.test(pos[0]) || !isConfiguredRemote(pos[0], root)) return false;
+    if (isProtectedBranch(current)) return false;
+    return true;
+  }
+  if (positionals === 2) {
+    if (!PLAIN_REF.test(pos[0]) || !isConfiguredRemote(pos[0], root)) return false;
+    const branchWord = pos[1];
+    if (!PLAIN_REF.test(branchWord) || branchWord.includes(':') || branchWord.startsWith('+')) return false;
+    const branch = normBranch(branchWord);
+    if (isProtectedBranch(branch)) return false;
+    return true;
+  }
+  return false;
+};
+
+const FREE_FETCH_FLAGS = new Set(['--all', '--prune', '--tags', '--quiet']);
+const isFreeGitFetch = (op, root) => {
+  if (op.globalOpts || op.hasConfig || op.gitEnv) return false;
+  const flags = op.flags ?? [];
+  for (const f of flags) {
+    if (FREE_FETCH_FLAGS.has(f)) continue;
+    if (f === '-p' || f === '-q') continue;
+    if (f.startsWith('-') && !f.startsWith('--') && (shortFlagHas(f, 'p') || shortFlagHas(f, 'q'))) continue;
+    return false;
+  }
+  if (flags.some(f => f.includes('=')) || (op.args ?? []).some(a => a.includes('='))) return false;
+  const pos = op.args ?? [];
+  const positionals = op.positionals ?? pos.length;
+  if (positionals > 1) return false;
+  if (pos.some(a => a.includes(':') || a === '.')) return false;
+  if (positionals === 1 && !isConfiguredRemote(pos[0], root)) return false;
   return true;
 };
 
@@ -401,7 +536,7 @@ const isFreeGitRebase = (op, protBranch) => {
   return true;
 };
 
-const isFreeReadGit = op => !op.globalOpts && !op.hasConfig && !(op.flags ?? []).some(f => f === '--output' || f.startsWith('--output='));
+const isFreeReadGit = op => !op.globalOpts && !op.hasConfig && !op.gitEnv && !(op.flags ?? []).some(f => f === '--output' || f.startsWith('--output='));
 
 const GIT_SHOW_MAX = 16 * 1024 * 1024;
 const readGitShowBytes = (root, object) => {
@@ -760,7 +895,9 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     // a relative path means relative to the folder the session is in
     const raw = typeof raw0 === 'string' && raw0 && !path.isAbsolute(raw0) ? path.resolve(cwd || root, raw0) : raw0;
     const rel = insideProject(root, raw);
-    if (rel === null && typeof raw === 'string' && raw && underAbs(path.resolve(path.isAbsolute(raw) ? raw : path.join(cwd || root, raw)), protectedAbsolute(home))) return { allow: false, files: [], reason: `Hand-build guard: ${raw} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
+    const absRaw = typeof raw === 'string' && raw ? path.resolve(path.isAbsolute(raw) ? raw : path.join(cwd || root, raw)) : null;
+    if (rel === null && absRaw && isClaudeProjectTranscriptAbs(absRaw, h)) return { allow: false, files: [], reason: `Hand-build guard: ${raw} belongs to the owner (session transcripts under .claude/projects); no approval covers it.` };
+    if (rel === null && typeof raw === 'string' && raw && underAbs(absRaw, protectedAbsolute(h)) && !isClaudeMemoryPathOutside(absRaw, h)) return { allow: false, files: [], reason: `Hand-build guard: ${raw} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
     if (rel !== null && isSwarmRunRecord(rel)) return { allow: false, files: [rel], reason: swarmRecordReason(rel) };
     if (rel !== null && isProtected(rel)) return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
     if (rel === null || AllowRel(rel)) return { allow: true };
@@ -777,6 +914,8 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     const current = branchOfFn(root);
     const protBranch = isProtectedBranch(current);
     if (a.selfApproval || isSelfApprovalCommand(ti.command)) return { allow: false, files: [], reason: SELF_APPROVAL_REASON };
+    const transcriptHits = bashTranscriptWrites(ti.command, h);
+    if (transcriptHits.length) return { allow: false, files: [], reason: `Hand-build guard: ${transcriptHits[0]} belongs to the owner (session transcripts under .claude/projects); no approval covers it.` };
     if (a.protectedOutside.length) return { allow: false, files: [], reason: `Hand-build guard: ${a.protectedOutside.join(', ')} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
     const swarmRunWrites = [...new Set([...a.writes.filter(isSwarmRunRecord), ...orchestratorSwarmRunWrites(ti.command, root, cwd)])];
     if (swarmRunWrites.length) return { allow: false, files: [...a.writes, ...swarmRunWrites], reason: swarmRecordReason(swarmRunWrites[0]) };
@@ -785,6 +924,12 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       return { allow: false, files: [], reason: 'Hand-build guard: deletes outside the scratchpad are the owner\'s.' };
     }
     const policyOps = buildPolicyOps(ti.command);
+    const gitEnvCmd = commandHasGitEnv(ti.command);
+    if (gitEnvCmd) {
+      for (const op of policyOps) {
+        if (op.tool === 'git') op.gitEnv = true;
+      }
+    }
     const policyGitOps = [];
     let commitStagedCheck = null;
     let pushNeedsCarryCheck = false;
@@ -792,6 +937,10 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     for (const op of policyOps) {
       if (op.opaque) { policyGitOps.push('commit'); continue; }
       if (op.tool === 'git') {
+        if (op.sub === 'fetch') {
+          if (!isFreeGitFetch(op, root)) policyGitOps.push('config');
+          continue;
+        }
         if (READ_GIT_SUBS.has(op.sub)) {
           if (!isFreeReadGit(op)) policyGitOps.push(op.sub === 'diff' && (op.flags ?? []).some(f => f.startsWith('--output')) ? 'output' : 'config');
           continue;
@@ -808,12 +957,16 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
         if (op.sub === 'merge') { policyGitOps.push('merge'); continue; }
         if (op.sub === 'push') {
           const pos = op.args ?? [];
-          const deletePush = op.delete === 'remote' || pos.some(a => a.includes(':') && (a.startsWith(':') || a.split(':')[0] === ''));
-          if (pushBlockedOnProtected(pos, op.force || deletePush)) {
+          const flags = op.flags ?? [];
+          const refspecs = op.refspecs ?? [];
+          const deletePush = op.delete === 'remote' || refspecs.some(r => r.delete) || flags.includes('--mirror') || flags.includes('--prune');
+          const forceOnProtected = (op.force || refspecs.some(r => r.force)) && (isProtectedBranch(current) || refspecs.some(r => protectedBranchName(r.dst)) || (pos.length >= 2 && protectedBranchName(pos[1])));
+          if (pushBlockedOnProtected(pos, op.force || deletePush) || (deletePush && pushBlockedOnProtected(pos, true)) || forceOnProtected) {
             return { allow: false, files: [], reason: 'Hand-build guard: force push to a protected branch (main or master) is never approvable, even with a hand-build approval that names force-push.' };
           }
-          if (op.force) { policyGitOps.push('force-push'); continue; }
-          if (isFreeGitPush(op, current)) {
+          if (op.force || refspecs.some(r => r.force)) { policyGitOps.push('force-push'); continue; }
+          if (deletePush || flags.includes('--mirror') || flags.includes('--prune')) { policyGitOps.push('push'); continue; }
+          if (isFreeGitPush(op, current, root)) {
             pushNeedsCarryCheck = true;
             continue;
           }
@@ -821,11 +974,14 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
           continue;
         }
         if (op.sub === 'commit') {
-          if (protBranch || op.globalOpts || op.hasConfig) policyGitOps.push('commit');
+          if (protBranch || op.globalOpts || op.hasConfig || op.gitEnv) policyGitOps.push('commit');
           else commitStagedCheck = 'allowlist';
           continue;
         }
-        if (op.sub === 'add') continue;
+        if (op.sub === 'add') {
+          if (op.globalOpts || op.gitEnv) policyGitOps.push('add');
+          continue;
+        }
         if (op.sub) policyGitOps.push(op.sub);
       } else if (op.tool === 'gh') {
         if (op.globalOpts) { policyGitOps.push('merge'); continue; }
@@ -863,8 +1019,8 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       return result;
     };
     if (!writesAnything(a)) return finishAllow({ allow: true });
-    if (a.inline || a.unknown) {
-      const need = [a.inline ? 'an inline script that writes files' : null, a.unknown ? 'a write whose target is a variable or substitution' : null].filter(Boolean).join(' and ');
+    if (a.dynamic || a.inline || a.unknown) {
+      const need = [a.dynamic ? 'a dynamic shell command' : null, a.inline ? 'an inline script that writes files' : null, a.unknown ? 'a write whose target is a variable or substitution' : null].filter(Boolean).join(' and ');
       return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${need}; the guard cannot tell what it writes, so it needs an approval that names the files, or a ticket)` };
     }
     let staged = [];
@@ -892,7 +1048,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       catch { return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: git commit, and the guard could not read which files it would carry)` }; }
       staged.push(...commitPathspecs);
       if (commitStagedCheck === 'allowlist' && staged.length && staged.every(stagedCarryOk)) {
-        if (!policyGitOps.length) return finishAllow({ allow: true, files: staged });
+        /* fall through: same-line writes and other git ops must still pass */
       }
       if (commitStagedCheck === 'allowlist' && staged.some(f => !stagedCarryOk(f))) {
         policyGitOps.push('commit');
@@ -918,7 +1074,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     }
     const residualGit = a.git.filter(g => {
       if (g === 'rebase' && policyOps.some(o => o.tool === 'git' && o.sub === 'rebase' && isFreeGitRebase(o, protBranch))) return false;
-      if (g === 'push' && policyOps.some(o => o.tool === 'git' && o.sub === 'push' && isFreeGitPush(o, current))) return false;
+      if (g === 'push' && policyOps.some(o => o.tool === 'git' && o.sub === 'push' && isFreeGitPush(o, current, root))) return false;
       if (g === 'branch' && policyOps.some(o => o.tool === 'git' && o.sub === 'branch' && o.delete === 'safe')) return false;
       if (g === 'commit' && commitStagedCheck === 'allowlist' && staged.length && staged.every(stagedCarryOk)) return false;
       return true;
