@@ -64,6 +64,8 @@ export const SCOPE_USAGE = [
 export const DEFAULT_SCOPE_FILE = 'docs/scope/scope.md';
 const SNAPSHOT = ['.swarm', 'project', 'scope.snapshot.md'];
 const SPLIT_DIR = 'docs/scope/split';
+const OPEN_FILE_OWNER = new Set(['todo', 'ready', 'running', 'review', 'blocked']);
+const isOpenFileOwner = (t) => t && OPEN_FILE_OWNER.has(t.status);
 const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -347,9 +349,9 @@ function splitPrompt(scope, stage, only, layout = '', wire = null, existing = nu
     'Each ticket object has these fields:',
     'key (short unique name in this file), title (under 140 characters), type (build, test, docs, migration, design, contract or human),',
     'epic (a feature group name), scopeRefs (requirement ids, at least one for build, test, docs, migration), acceptance (1 to 5 observable checks; required for build, test, migration),',
-    'files (the files this ticket writes: repo-relative paths WITH their folders, for example src/app/page.tsx or supabase/migrations/0001_init.sql, never a bare file name unless the file really lives at the repo root; never a folder, never an absolute path, never a dot-env file: use env.example.txt for an env template), deletes (existing files this ticket must delete, each named exactly; omit when none), dependencies (new npm packages the ticket needs, like zod or zod@^3.23.0; the runner installs them and the change goes through the security gate; omit when none), context (files it reads), contracts (contract files it uses), tests (the test files that prove this ticket: a build ticket lists the test files owned by its test ticket and depends on that test ticket; a test ticket lists its own), screens (only on UI tickets: the ids of the design screens the ticket renders, from the profile ui screens), dependsOn (keys of other tickets in this file),',
+    'files (the files this ticket writes: repo-relative paths WITH their folders, for example src/app/page.tsx or supabase/migrations/0001_init.sql, never a bare file name unless the file really lives at the repo root; never a folder, never an absolute path, never a dot-env file: use env.example.txt for an env template), deletes (existing files this ticket must delete, each named exactly; omit when none), dependencies (new npm packages the ticket needs, like zod or zod@^3.23.0; the runner installs them and the change goes through the security gate; omit when none), context (files it reads), contracts (contract files it uses), tests (the test files that prove this ticket: a build ticket lists the test files owned by its test ticket and depends on that test ticket; a test ticket lists its own), screens (only on UI tickets: the ids of the design screens the ticket renders, from the profile ui screens), dependsOn (keys of other tickets in this file, or ids of existing open tickets when listed below),',
     'size (S or M; never larger: split instead), risk (low, medium or high), sensitive (true for payments, auth or customer data), steps (only for human tickets: 1 to 30 short imperative steps), skeleton (true only on the tickets of the thinnest vertical slice of the first stage: database, API, screen and test, the smallest path through the product; omit it elsewhere).',
-    'Rules: no ticket may gate more than 8 others: shared work (shared CSS, layout, i18n keys, types) is split early into one small ticket per component or file group, so one blocked ticket cannot hold half a stage; every requirement is covered by at least one ticket; every ticket traces to a requirement; two tickets that can run at the same time never write the same file;',
+    'Rules: no ticket may gate more than 8 others: shared work (shared CSS, layout, i18n keys, types) is split early into one small ticket per component or file group, so one blocked ticket cannot hold half a stage; every requirement is covered by at least one ticket; every ticket traces to a requirement; two open tickets that can run at the same time never write the same file unless one depends on the other (dependsOn);',
     'put shared types or contracts first and make the tickets that use them depend on them; add a test ticket for each requirement group.',
     'Every build, test and migration ticket has at least one acceptance line (copy the requirement\'s own acceptance line when you have nothing more exact). A test never runs before the module it imports exists: prefer listing a module\'s test files in that build ticket\'s "tests" field over a separate test ticket, and when a separate test ticket is needed it is written to run after the build tickets it tests (the runner orders it after them).',
     'A ticket of type contract writes exactly one OpenAPI 3 JSON file under contracts/ (for example contracts/api.json) using only paths (get, post, put, patch, delete, each with an operationId), components.schemas and local $ref; TypeScript, SQL and YAML types belong in build tickets that depend on the contract ticket.',
@@ -360,10 +362,12 @@ function splitPrompt(scope, stage, only, layout = '', wire = null, existing = nu
     ...(wire ? [WIRE_ONLY_PROMPT, ...wire.filter(w => w.stage === stage.id).map(w => `Existing module tickets of ${w.req}: ${w.modules.map(m => `${m.id} ${m.title} (${(m.files ?? []).join(', ')})`).join('; ')}`)] : []),
     ...(layout ? ['Project layout (use these folders):', layout] : []),
     ...(existing ? [
-      'This is a change to a project that already has tickets. Write tickets ONLY for the requirements listed below; never repeat, rewrite or replace an existing ticket, and never write a file an existing ticket already owns.',
+      'This is a change to a project that already has tickets. Write tickets ONLY for the requirements listed below; never repeat, rewrite or replace an existing ticket.',
       'Use real paths: take them from the file list below, and put a new file next to the files it belongs with.',
+      'You may reuse files that only a done ticket owns. When a new ticket writes a file an open ticket also writes, list that open ticket\'s id in dependsOn so it runs after the owner.',
       ...(existing.files.length ? ['Files in the repository:', ...existing.files] : []),
-      ...(existing.tickets.length ? ['Existing tickets (read-only; depend on them by writing their id in context, not dependsOn):', ...existing.tickets] : []),
+      ...(existing.openCandidates?.length ? ['Existing open tickets (you may list their id in dependsOn when you share their files or must wait for them):', ...existing.openCandidates] : []),
+      ...(existing.doneContext?.length ? ['Done tickets (context only; you may reuse their files; do not put done ticket ids in dependsOn):', ...existing.doneContext] : []),
     ] : []),
     'Work only from the requirements below.',
     '',
@@ -427,6 +431,28 @@ async function projectLayout(root, scope, profile) {
 // The requirements that still need tickets: none of their tickets is alive. A merge adds tickets for these and nothing else.
 const pendingRequirements = (scope, tickets) => new Set(scope.requirements.filter(r => !tickets.some(t => t.status !== 'cancelled' && t.scopeRefs.includes(r.id))).map(r => r.id));
 
+function formatOpenCandidate(t) {
+  const files = (t.files ?? []).map(hideSecretMentions).join(', ') || 'nothing';
+  const dels = (t.deletes ?? []).map(hideSecretMentions).join(', ');
+  const delPart = dels ? `; deletes ${dels}` : '';
+  const human = t.type === 'human' ? '; human prerequisite' : '';
+  return `- ${t.id} [${t.status}] ${hideSecretMentions(t.title)} (${t.scopeRefs?.join(',') || 'no refs'}) writes ${files}${delPart}${human}`;
+}
+
+function formatDoneContext(t) {
+  const files = (t.files ?? []).map(hideSecretMentions).join(', ') || 'nothing';
+  const dels = (t.deletes ?? []).map(hideSecretMentions).join(', ');
+  const delPart = dels ? `; deleted ${dels}` : '';
+  return `- ${t.id} [done] ${hideSecretMentions(t.title)} wrote ${files}${delPart}`;
+}
+
+export function existingSplitContext(tickets) {
+  const alive = (tickets ?? []).filter(t => t.status !== 'cancelled' && t.status !== 'proposed');
+  const openCandidates = alive.filter(isOpenFileOwner).slice(0, 300).map(formatOpenCandidate);
+  const doneContext = alive.filter(t => t.status === 'done').slice(0, 300).map(formatDoneContext);
+  return { openCandidates, doneContext };
+}
+
 // What a split worker of a change order needs to see: the real tracked files (not a guess from two folder levels) and the tickets already there.
 async function changeContext(root, tickets) {
   let files = [];
@@ -434,20 +460,22 @@ async function changeContext(root, tickets) {
     const { stdout } = await execFileAsync('git', ['-C', root, 'ls-files'], { maxBuffer: 16 * 1024 * 1024 });
     files = stdout.split('\n').filter(f => f && !f.startsWith('.') && !f.startsWith('node_modules/') && !isSecretLooking(f)).slice(0, 400).map(f => `- ${hideSecretMentions(f)}`);
   } catch { /* not a git project: only the tickets are listed */ }
-  const list = tickets.filter(t => t.status !== 'cancelled' && t.type !== 'human').slice(0, 300)
-    .map(t => `- ${t.id} ${hideSecretMentions(t.title)} [${t.scopeRefs.join(',')}] writes ${(t.files ?? []).map(hideSecretMentions).join(', ') || 'nothing'}`);
-  return { files, tickets: list };
+  return { files, ...existingSplitContext(tickets) };
 }
 
 const ARRAY_FIELDS = ['scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'tests', 'screens', 'dependsOn', 'steps', 'deletes', 'dependencies'];
 const isStrings = v => Array.isArray(v) && v.every(x => typeof x === 'string');
 const strings = v => (isStrings(v) ? v : []);
 
-export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManager = null } = {}) {
+export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManager = null, ledger = null } = {}) {
   const keyToId = new Map();
   const tickets = [];
   const errors = [];
   const notes = [];
+  const ledgerTickets = ledger?.tickets ?? [];
+  const existingOpenIds = new Set(ledgerTickets.filter(isOpenFileOwner).map(t => t.id));
+  const existingDoneIds = new Set(ledgerTickets.filter(t => t.status === 'done').map(t => t.id));
+  const existingIds = new Set(ledgerTickets.filter(t => t.status !== 'cancelled').map(t => t.id));
   let n = startAt;
   for (const { stage, items } of lists) for (const raw of items) {
     const id = `T-${String(n).padStart(4, '0')}`;
@@ -466,10 +494,23 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
     if (wrong.length) { errors.push(`${id}: ${wrong.join(', ')} must be ${wrong.every(f => ARRAY_FIELDS.includes(f)) ? 'arrays of strings' : 'strings (and lists of strings)'}`); continue; }
     const refs = strings(raw.scopeRefs).map(r => requirementText(scope, r)).filter(Boolean).flatMap(r => [r.text, ...r.acceptance]);
     const text = [raw.title, raw.epic, ...strings(raw.acceptance), ...strings(raw.files), ...refs].filter(x => typeof x === 'string').join('\n');
-    const deps = strings(raw.dependsOn).map(k => keyToId.get(`${stage}/${k}`)).filter(Boolean);
-    const unknown = strings(raw.dependsOn).filter(k => !keyToId.has(`${stage}/${k}`));
-    // A worker sometimes invents dependency keys (a ticket that is not in its file): they are dropped and reported, the split is not refused.
-    if (unknown.length) notes.push(`${id}: dropped dependsOn keys that name no ticket in the file: ${unknown.join(', ')}`);
+    const deps = [];
+    const droppedKeys = [];
+    const unknownIds = [];
+    for (const k of strings(raw.dependsOn)) {
+      const local = keyToId.get(`${stage}/${k}`);
+      if (local) { deps.push(local); continue; }
+      if (/^T-[0-9]{4,}$/.test(k)) {
+        if (existingOpenIds.has(k)) { deps.push(k); continue; }
+        if (existingDoneIds.has(k)) { notes.push(`${id}: dependsOn ${k} is done (context only); dependency dropped`); continue; }
+        if (existingIds.has(k)) { unknownIds.push(k); continue; }
+        unknownIds.push(k);
+        continue;
+      }
+      if (!keyToId.has(`${stage}/${k}`)) droppedKeys.push(k);
+    }
+    if (droppedKeys.length) notes.push(`${id}: dropped dependsOn keys that name no ticket in the file: ${droppedKeys.join(', ')}`);
+    for (const k of unknownIds) errors.push(`${id}: unknown dependsOn ticket ${k}`);
     // A worker (a small model especially) sometimes leaves a TEST ticket without acceptance lines (parts-app lesson 55): they are copied from its
     // requirements' own acceptance, which is what a test checks. A build or migration ticket is not given them (the lines of a requirement are usually route-level
     // and a module cannot meet them before it is wired): it is refused as before. With none to copy, the test ticket is refused too.
@@ -669,7 +710,7 @@ async function cmdSplit(root, { rest, flags }) {
   const { lists, errors, notes } = await readStageFiles(root, flags.ingest);
   const profile = await readProfile(root);
   const startAt = existing ? Math.max(0, ...existing.tickets.filter(t => t.id < 'T-9000').map(t => Number(t.id.slice(2)))) + 1 : 1;
-  const built = ticketsFromStageLists(lists, scope, { startAt, packageManager: packageManagerOf(profile) });
+  const built = ticketsFromStageLists(lists, scope, { startAt, packageManager: packageManagerOf(profile), ledger: existing });
   const all = [...errors, ...built.errors];
   if (startAt + built.tickets.length > 9000) all.push('too many tickets: ids T-9000 and up are reserved for day 0 tickets');
   if (all.length) return out(`split refused; fix and rerun the failed stages:\n${all.slice(0, 15).map(e => `  ${e}`).join('\n')}`, 1);
@@ -1572,13 +1613,22 @@ async function editTicketFiles(root, ledger, rest, flags) {
         if (key === 'files' && base.startsWith('.env')) problems.push(`${f} is a reserved name; use env.example.txt for an env template`);
         else if (key === 'files' && !f.includes('/') && !ROOT_FILE_OK.test(f)) problems.push(`${f} has no folder; give it its real path`);
         if ((ticket[key] ?? []).includes(f)) continue;
-        const owners = fresh.tickets.filter(x => x.id !== ticket.id && x.status !== 'cancelled' && ((x.files ?? []).includes(f) || (x.deletes ?? []).includes(f)));
-        if (!owners.length) continue;
-        // A file can move when every one of its owners is named in --take-from and the role is kept: a written file moves into --files, a deleted file into --deletes (a deletion is never turned into a write).
-        if (sources.length && owners.every(o => sourceIds.has(o.id) && (o.files ?? []).includes(f) === (key === 'files'))) { if (!moved.includes(f)) moved.push(f); movedFrom.set(f, owners.map(o => o.id)); continue; }
-        const first = owners[0];
+        const pathOwners = fresh.tickets.filter(x => x.id !== ticket.id && x.status !== 'cancelled' && ((x.files ?? []).includes(f) || (x.deletes ?? []).includes(f)));
+        const blockingOwners = pathOwners.filter(isOpenFileOwner);
+        const canMove = (owners) => sources.length && owners.length && owners.every(o => sourceIds.has(o.id) && (o.files ?? []).includes(f) === (key === 'files'));
+        if (canMove(pathOwners)) { if (!moved.includes(f)) moved.push(f); movedFrom.set(f, pathOwners.map(o => o.id)); continue; }
+        if (!blockingOwners.length) {
+          const named = pathOwners.filter(o => sourceIds.has(o.id));
+          if (named.some(o => (o.deletes ?? []).includes(f) && key === 'files' && !(o.files ?? []).includes(f))) {
+            problems.push(`${f} is already deleted by ${named.filter(o => (o.deletes ?? []).includes(f)).map(o => o.id).join(', ')}`);
+            continue;
+          }
+          continue;
+        }
+        if (canMove(blockingOwners)) { if (!moved.includes(f)) moved.push(f); movedFrom.set(f, blockingOwners.map(o => o.id)); continue; }
+        const first = blockingOwners[0];
         const writes = (first.files ?? []).includes(f);
-        problems.push(`${f} is already ${writes ? 'written' : 'deleted'} by ${owners.map(o => o.id).join(', ')}${takeFrom ? ` (not ${takeFrom} alone)` : `; to move it use --take-from ${owners.map(o => o.id).join(',')}`}`);
+        problems.push(`${f} is already ${writes ? 'written' : 'deleted'} by ${blockingOwners.map(o => o.id).join(', ')}${takeFrom ? ` (not ${takeFrom} alone)` : `; to move it use --take-from ${blockingOwners.map(o => o.id).join(',')}`}`);
       }
       if (takeFrom && sources.length === takeFromList.length && !moved.length && !problems.length) problems.push(`${takeFrom} does not own any of the files named in --files/--deletes`);
       const strip = x => ({ ...x, files: (x.files ?? []).filter(f => !(movedFrom.get(f) ?? []).includes(x.id)), ...(x.deletes ? { deletes: x.deletes.filter(f => !(movedFrom.get(f) ?? []).includes(x.id)) } : {}) });
