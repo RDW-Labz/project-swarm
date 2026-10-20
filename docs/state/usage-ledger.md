@@ -151,8 +151,19 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-19 | - | review-installed-swarm: Review of installed-swarm.diff: no edits made, nothing executed (shell not p | claude | opus | pass | 621,677 | $0.96 |
 | 2026-10-19 | - | review-kit-interview: Kit install can write outside the project via a linked root .gitignore and edi | claude | opus | pass | 498,760 | $0.92 |
 | 2026-10-19 | - | review-hard-caps: Reviewed hard-caps.diff. Spend can still pass a cap: subscription reservations are | claude | opus | pass | 190,440 | $0.72 |
-| 2026-10-20 | - | ship-ignore-generated: Exported SHIP_IGNORED_DIRTY_PATHS, dirtyBlockers(), isShipIgnoredDirtyPath(); | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-20 | - | ship-reason-field: complete | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-20 | - | review3-p1: Reviewed the first third of the shell-writes.mjs diff only. Found 8 concrete gaps: $'... | claude | opus | pass | 27,851 | $0.26 |
+| 2026-10-20 | - | review3-p2: Six concrete misreads in the middle third of the diff. find: -delete is ignored when -ex | claude | opus | pass | 24,893 | $0.22 |
+| 2026-10-20 | - | review3-p3: Reviewed the last third of shell-writes.mjs from p3.diff. Here-document, eval, sh -c and | claude | opus | pass | 28,408 | $0.18 |
+| 2026-10-20 | - | review3-p4: Four reproducible findings. A symlinked routing path hides edits because isHandBuilt use | claude | opus | pass | 21,402 | $0.16 |
+| 2026-10-20 | - | review3-h1: Reviewed h1.diff only (first half of handbuild.mjs); nothing edited and nothing run. App | claude | opus | pass | 44,802 | $0.50 |
+| 2026-10-20 | - | review3-h2: I reviewed the second half of handbuild.mjs from h2.diff by reading it only; no files ch | claude | opus | pass | 30,980 | $0.29 |
+| 2026-10-20 | - | review3-h3: self-approval.mjs is a regex denylist that misses direct node tools/swarm.mjs handbuild | claude | opus | pass | 21,727 | $0.18 |
+| 2026-10-20 | - | review3-c1: Found 5 ways around the c1 checks. Worst: the chat-merge hook trusts stdin it can't veri | claude | opus | pass | 24,830 | $0.20 |
+| 2026-10-20 | - | w8-policy: Tightened git push/fetch policy (refspecs, remote validation, GIT_ env, no early allow af | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-20 | - | w8-parser: analyzeShell: dynamic flag; git push refspecs/positionals; expanded hasConfig; find -exec | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-20 | - | w8-selfapproval: complete | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-20 | - | y2-git-hooks: complete | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-20 | - | w8-docs: complete | cursor | composer-2.5 | pass | - | subscription |
 
 ## Daily summary
 
@@ -167,5 +178,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-16 | codex | 2 | 2 | 0 | 31,624 | subscription |
 | 2026-10-18 | claude | 14 | 14 | 0 | 6,874,167 | $13.02 |
 | 2026-10-19 | claude | 9 | 9 | 0 | 2,436,156 | $6.73 |
-| 2026-10-20 | cursor | 2 | 2 | 0 | 0 | subscription |
-| **total** | all | 149 | 134 | 15 | 14,486,482 | $24.68 (incl. estimates) |
+| 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
+| 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
+| **total** | all | 160 | 145 | 15 | 14,711,375 | $26.67 (incl. estimates) |
