@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { writeBusyMarker } from '../tools/busy-marker.mjs';
 
@@ -79,32 +79,4 @@ test('update --force is not refused over a live busy marker', async t => {
   } finally {
     await remove();
   }
-});
-
-test('a BUSY_MARKER_VERBS command writes a marker while running and removes it on exit', async t => {
-  const busyDir = await tempDir(t);
-  const home = await tempDir(t);
-  const child = spawn(process.execPath, [swarmPath, 'ship', '--help'], {
-    cwd: packageRoot,
-    env: swarmEnv(busyDir, home),
-    stdio: 'ignore',
-  });
-  const markerPath = path.join(busyDir, `${child.pid}.json`);
-  let sawMarker = false;
-  const deadline = Date.now() + 5000;
-  while (Date.now() < deadline && child.exitCode === null) {
-    try {
-      await fs.access(markerPath);
-      sawMarker = true;
-      break;
-    } catch { /* not yet */ }
-    await new Promise(resolve => setTimeout(resolve, 5));
-  }
-  const code = await new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('close', resolve);
-  });
-  assert.equal(code, 0);
-  assert.equal(sawMarker, true, 'expected a busy marker while ship --help was running');
-  await assert.rejects(fs.access(markerPath));
 });

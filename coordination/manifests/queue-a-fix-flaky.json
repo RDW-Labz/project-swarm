@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "busy-test-deflake",
+      "agent": "auto",
+      "prompt": "In tests/update-busy-marker.test.mjs delete the last test, the one named 'a BUSY_MARKER_VERBS command writes a marker while running and removes it on exit'. It is racy: ship --help can exit before the close listener is attached, so the promise never resolves and CI cancels the file. Remove any import or helper that only that test used (for example spawn) so nothing is left unused. Keep every other test unchanged. Marker write and removal are already covered by tests/busy-marker.test.mjs. Write only that file.",
+      "context": [
+        "tests/update-busy-marker.test.mjs",
+        "tests/busy-marker.test.mjs"
+      ],
+      "outputs": [
+        "tests/update-busy-marker.test.mjs"
+      ],
+      "timeoutMs": 300000
+    }
+  ]
+}
