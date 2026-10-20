@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "hook-tests-fields",
+      "agent": "auto",
+      "prompt": "The chat merge hook (tools/orchestrator-hook.mjs) now records a merge approval only for a real owner prompt event: hook_event_name must be UserPromptSubmit and the input must carry a string session_id and a string transcript_path and a cwd that is the project root, exactly like the input Claude Code sends. Two older tests build hook inputs without those fields and now fail: the test named 'orchestrator prompt hook records merge lines only at line start' in tests/handbuild-channel.test.mjs and the test named 'chat merge hook: exact one-line prompts only on UserPromptSubmit' in tests/handbuild-channels-hardening.test.mjs. Fix only the test inputs: add session_id, transcript_path and the right cwd to every hook input those tests build for the cases that must be accepted, and keep every assertion and every refusal case exactly as it is (the refusals must still refuse for their own reason, for example a wrong event name or a multi-line prompt, so give those inputs the full fields too so they fail only for the reason the test names). Do not change any tools file. Write only tests/handbuild-channel.test.mjs and tests/handbuild-channels-hardening.test.mjs.",
+      "context": [
+        "tools/orchestrator-hook.mjs",
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs"
+      ],
+      "outputs": [
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}

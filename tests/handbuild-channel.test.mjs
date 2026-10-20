@@ -37,6 +37,14 @@ async function journalDeps(root, { now = () => T0, channel } = {}) {
   };
 }
 
+async function installOrchestratorHook(root) {
+  await fs.mkdir(path.join(root, '.claude'), { recursive: true });
+  const command = `test -f ${JSON.stringify(HOOK)} && node ${JSON.stringify(HOOK)} prompt || true`;
+  await fs.writeFile(path.join(root, '.claude', 'settings.local.json'), `${JSON.stringify({
+    hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command }] }] },
+  }, null, 2)}\n`);
+}
+
 async function openHandbuildDecision(root, req, { now = () => T0 } = {}) {
   await appendEvent(root, {
     kind: 'decision',
@@ -95,8 +103,15 @@ test('chat merge: record, consume once, wrong PR and expiry', async t => {
 
 test('orchestrator prompt hook records merge lines only at line start', async t => {
   const { root } = await project(t);
+  await installOrchestratorHook(root);
   const runHook = (prompt, hookEventName = 'UserPromptSubmit') => spawnSync(process.execPath, [HOOK, 'prompt'], {
-    input: JSON.stringify({ session_id: 's', cwd: root, prompt, hook_event_name: hookEventName }),
+    input: JSON.stringify({
+      session_id: 's',
+      cwd: root,
+      transcript_path: '/home/.claude/projects/p/s.jsonl',
+      prompt,
+      hook_event_name: hookEventName,
+    }),
     encoding: 'utf8',
   });
   for (const prompt of ['merge #203', 'Merge 7', 'merge pr #5']) {
