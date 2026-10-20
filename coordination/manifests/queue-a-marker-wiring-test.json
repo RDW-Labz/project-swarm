@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "busy-wiring-test",
+      "agent": "auto",
+      "prompt": "Add a non-racy end-to-end test to tests/update-busy-marker.test.mjs that proves the wiring in main() of tools/swarm.mjs: a swarm command whose verb is in BUSY_MARKER_VERBS writes a busy marker named PID.json in the busy directory (SWARM_BUSY_DIR, a temp dir) while it runs, and removes it when it exits. Rules: no sleeps, no timing guesses, no deadlines shorter than the test timeout. Attach the child close and error listeners in the same tick as spawn (a promise created right after spawn) so an early exit can never be missed. Use a command that stays alive until the test lets it go: for example swarm with-concurrency 1 -- node -e with a script that waits on stdin end, run with the config isolated the way tests/concurrency-guard.test.mjs and tests/_isolate-config.mjs do it so no real machine config is touched (read those to copy the technique; if with-concurrency cannot be isolated safely pick another verb in BUSY_MARKER_VERBS that can be held open the same way). Wait for the marker by watching the directory with fs.watch plus one check after the watcher is set up (never a polling loop with sleeps), assert it names the child pid and the verb in its command, then end the child stdin so it exits, await the close promise, and assert the marker file is gone. Add a second test for an early exit: a verb command that fails at once (for example swarm run with a manifest path that does not exist, in a temp root) leaves no marker behind after it exits, again awaiting the close promise created at spawn. Keep the existing tests in the file unchanged. The test must not touch the real install, real config or real busy directory. Write only tests/update-busy-marker.test.mjs.",
+      "context": [
+        "tests/update-busy-marker.test.mjs",
+        "tests/busy-marker.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/_isolate-config.mjs",
+        "tools/busy-marker.mjs",
+        "tools/concurrency-guard.mjs",
+        "tools/swarm.mjs"
+      ],
+      "outputs": [
+        "tests/update-busy-marker.test.mjs"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}
