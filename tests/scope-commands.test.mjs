@@ -89,7 +89,7 @@ test('split, approve, go --scope preparation, sync and change order work end to 
   assert.match((await runScopeCommand(root, 'scope', ['sync', 'r2', '--integrated'])).stdout, /1 ticket\(s\) marked done/);
   const list = await runScopeCommand(root, 'tickets', ['--status', 'done', '--json']);
   assert.equal(JSON.parse(list.stdout).length, 1);
-  assert.equal((await runScopeCommand(root, 'tickets', ['T-0003', '--set', 'blocked'])).exitCode, 0);
+  assert.equal((await runScopeCommand(root, 'tickets', ['T-0003', '--set', 'blocked', '--yes'])).exitCode, 0);
   assert.equal((await runScopeCommand(root, 'tickets', ['T-0003', '--set', 'done'])).exitCode, 1);
 
   const scopePath = path.join(root, 'docs/scope/scope.md');
