@@ -1,0 +1,188 @@
+diff --git a/docs/manifest-reference.md b/docs/manifest-reference.md
+index 8845bc3..f61452e 100644
+--- a/docs/manifest-reference.md
++++ b/docs/manifest-reference.md
+@@ -293,11 +293,14 @@ The `monitor` command is a single read-only snapshot, suitable for periodic coor
+ - `timeoutMs`: optional integer 1,000–1,800,000; default 300,000.
+ - `repeat`: optional integer 1–20, default 1. See [Repeat](#repeat) below.
+ - `flakeRuns`: optional integer 1–20, overriding `repeat` as the number of base-commit reruns used to measure a pre-existing flake. See [Flake on base](#flake-on-base) below.
++- `base`: optional boolean, default `true`. `false` keeps this check out of `run`'s base-check gate (below); `integrate` still runs it.
+ 
+ Up to 10 checks per manifest. Inside `argv`, a whole item of exactly `{integrated}` expands to the run's integrated file paths (relative to the project root) as separate argv items; `{integrated:.py}` (or any other extension) expands to only the integrated files with that extension. If a placeholder expands to zero files, that check is skipped (`status: "skipped"`) rather than run with nothing to act on.
+ 
+ The text `{root}` may also appear anywhere inside a `checks` or `mutantCheck` argv item — not only as a whole item — and is replaced with the run's absolute project root, for example `"CARGO_TARGET_DIR={root}/src-tauri/target"`. This keeps a project-relative build directory unique per run so two parallel runs never share (and corrupt) the same build folder. `{integrated}`/`{integrated:.ext}` still only expand a whole item, unchanged.
+ 
++**Base-check gate.** Before dispatching any job, `run` runs the same `checks` once against the committed base, in the live project root, and refuses a red base unless `--accept-red-base --reason TEXT` is passed. The verdict is cached in `.swarm/base-checks/<sha>.json` for that sha and that exact set of checks. At base there is no integrated file list, so a check whose `argv` contains `{integrated}`, `{integrated:.ext}`, `{new}` or `{new:.ext}` is never spawned there; it is recorded under the record's `skipped` as `{"name", "reason": "integrate-only placeholder {integrated}"}`, never as a failure. `{root}` is expanded as it is at integrate. A check that should not run in the live root before every dispatch (a slow end-to-end suite, or one whose test runner reuses whatever server is already listening on its port) can set `"base": false`; it is recorded as skipped with reason `base: false`.
++
+ Checks run with `cwd` at the project root, the coordinator's inherited environment plus `SWARM_PORT_BASE` (see [Ports](#ports) below), and each check's own timeout; a later check still runs even if an earlier one fails, so a formatter can run before the tests that depend on its output. **Formatters may rewrite the files integration just wrote, and a failing check never rolls back the integration** — checks are reported, not a transactional gate. `integrate`'s own process exit code stays 0 when files integrate successfully regardless of check outcome; pass `--require-checks` to exit 1 when any check fails, times out, or errors. Pass `--no-checks` to skip them entirely (the result shows `checks: []`, `checksSkipped: true`, and `failures: []`).
+ 
+ The result also gains `failures`: one compact entry per check whose status is `failed`, `timeout`, or `error` — `{"name", "lines": [...]}`, the last few lines of that check's own `tail` that look like a failure (matching `fail`/`error`/`assert`/`expected`/`✗`/`✕`, capped at 5) — so a coordinator does not need to open the full tail to see what broke. `failures` is `[]` when every check passed or was skipped. This same shape is what `--evidence` (above) expects a local JSON file to contain.
+diff --git a/tests/base-checks-placeholders.test.mjs b/tests/base-checks-placeholders.test.mjs
+new file mode 100644
+index 0000000..4737423
+--- /dev/null
++++ b/tests/base-checks-placeholders.test.mjs
+@@ -0,0 +1,97 @@
++// SPDX-License-Identifier: Apache-2.0
++// `run`'s base-check gate (field lesson #253) runs the manifest's `checks` in the live project
++// root before any dispatch. A check whose argv names an integrate-only placeholder
++// ({integrated}, {integrated:.ext}, {new}, {new:.ext}) has no file list to expand to at base, so
++// it must never be spawned with the literal placeholder (e.g. `prettier --write {integrated}`
++// reads the pattern as a file name and fails, turning every base red). It is recorded as skipped,
++// with its reason, never as a failure. `{root}` is expanded at base exactly as integrate does,
++// and a check may opt out of the base gate with `"base": false`.
++import { describe, test } from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { spawn } from 'node:child_process';
++import { runBaseChecks, runManifest, validateManifest } from '../tools/swarm.mjs';
++
++async function fixture(t) {
++  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'base-checks-placeholders-')));
++  await fs.writeFile(path.join(root, 'input.txt'), 'original');
++  t.after(() => fs.rm(root, { recursive: true, force: true }));
++  return root;
++}
++const job = (overrides = {}) => ({ id: 'writer', agent: 'claude', model: 'sonnet', prompt: 'Update the assigned file.', context: ['input.txt'], outputs: ['input.txt'], timeoutMs: 5000, ...overrides });
++const manifest = (jobs, overrides = {}) => ({ version: 1, concurrency: 2, jobs: jobs ?? [job()], ...overrides });
++const done = `console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'Worker complete'}));`;
++const fake = script => (_command, _args, options) => spawn(process.execPath, ['--input-type=module', '-e', `import fs from 'node:fs';\n${script}`], options);
++// Fails exactly when it is handed an unexpanded integrate-only placeholder, the way a formatter
++// given `{integrated}` as a literal file name does.
++const placeholderCheck = (name, placeholder) => ({ name, argv: [process.execPath, '-e', 'process.exit(process.argv.slice(1).some(a => /^\\{(integrated|new)/.test(a)) ? 2 : 0)', placeholder] });
++
++describe('base checks never run with an unexpanded integrate-only placeholder', () => {
++  for (const placeholder of ['{integrated}', '{integrated:.ts}', '{new}', '{new:.py}']) {
++    test(`a ${placeholder} check is skipped at base (never spawned) and recorded with its reason; the base stays green`, async t => {
++      const root = await fixture(t);
++      const spawned = [];
++      const recording = (command, args, options) => { spawned.push(args); return spawn(command, args, options); };
++      const record = await runBaseChecks(root, manifest([], { checks: [placeholderCheck('format', placeholder)] }), { spawnImpl: recording, baseSha: `sha-${placeholder.replace(/\W/g, '')}` });
++      assert.equal(record.status, 'green', JSON.stringify(record));
++      assert.deepEqual(record.failures, []);
++      assert.equal(spawned.length, 0, 'the placeholder check must not be spawned at base');
++      assert.deepEqual(record.skipped, [{ name: 'format', reason: `integrate-only placeholder ${placeholder}` }]);
++    });
++  }
++
++  test('other checks in the same manifest still run at base, and a real failure still reads red', async t => {
++    const root = await fixture(t);
++    const checks = [placeholderCheck('format', '{integrated}'), { name: 'ok', argv: [process.execPath, '-e', 'process.exit(0)'] }, { name: 'broken', argv: [process.execPath, '-e', 'process.exit(1)'] }];
++    const record = await runBaseChecks(root, manifest([], { checks }), { spawnImpl: spawn, baseSha: 'sha-mixed' });
++    assert.equal(record.status, 'red');
++    assert.deepEqual(record.failures, ['broken']);
++    assert.deepEqual(record.skipped.map(item => item.name), ['format']);
++  });
++
++  test('{root} inside an argv item is expanded to the project root at base, as integrate does', async t => {
++    const root = await fixture(t);
++    const check = { name: 'rooted', argv: [process.execPath, '-e', 'process.exit(process.argv[1] === process.argv[2] + "/target" ? 0 : 3)', '{root}/target', root] };
++    const record = await runBaseChecks(root, manifest([], { checks: [check] }), { spawnImpl: spawn, baseSha: 'sha-root' });
++    assert.equal(record.status, 'green', JSON.stringify(record));
++  });
++
++  test('a check with "base": false is skipped at base with its reason; validate accepts only a boolean', async t => {
++    const root = await fixture(t);
++    const spawned = [];
++    const recording = (command, args, options) => { spawned.push(args); return spawn(command, args, options); };
++    const heavy = { name: 'e2e', argv: [process.execPath, '-e', 'process.exit(1)'], base: false };
++    validateManifest(manifest(undefined, { checks: [heavy] }));
++    assert.throws(() => validateManifest(manifest(undefined, { checks: [{ ...heavy, base: 'no' }] })), /Check base must be true or false: e2e/);
++    const record = await runBaseChecks(root, manifest([], { checks: [heavy] }), { spawnImpl: recording, baseSha: 'sha-optout' });
++    assert.equal(record.status, 'green');
++    assert.equal(spawned.length, 0);
++    assert.deepEqual(record.skipped, [{ name: 'e2e', reason: 'base: false' }]);
++  });
++
++  test('a cached verdict is reused only for the same checks: a stale red record from other checks is recomputed', async t => {
++    const root = await fixture(t);
++    // What an earlier runner left at this sha: red, because it ran the placeholder literally.
++    await fs.mkdir(path.join(root, '.swarm/base-checks'), { recursive: true });
++    await fs.writeFile(path.join(root, '.swarm/base-checks/sha-stale.json'), JSON.stringify({ baseSha: 'sha-stale', status: 'red', failures: ['format'], failureLocations: { format: [] } }));
++    const checks = [placeholderCheck('format', '{integrated}')];
++    const first = await runBaseChecks(root, manifest([], { checks }), { spawnImpl: spawn, baseSha: 'sha-stale' });
++    assert.equal(first.status, 'green', JSON.stringify(first));
++    let spawns = 0;
++    const counting = (...args) => { spawns++; return spawn(...args); };
++    const ok = [{ name: 'ok', argv: [process.execPath, '-e', 'process.exit(0)'] }];
++    await runBaseChecks(root, manifest([], { checks: ok }), { spawnImpl: counting, baseSha: 'sha-cache' });
++    await runBaseChecks(root, manifest([], { checks: ok }), { spawnImpl: counting, baseSha: 'sha-cache' });
++    assert.equal(spawns, 1, 'same sha and same checks still hit the cache');
++    await runBaseChecks(root, manifest([], { checks: [...ok, { name: 'ok2', argv: [process.execPath, '-e', 'process.exit(0)'] }] }), { spawnImpl: counting, baseSha: 'sha-cache' });
++    assert.equal(spawns, 3, 'different checks at the same sha are recomputed');
++  });
++
++  test('run is not refused when the only base "failure" would have been an unexpanded placeholder', async t => {
++    const root = await fixture(t);
++    const state = await runManifest(root, manifest([job()], { checks: [placeholderCheck('format', '{integrated}')] }), { spawnImpl: fake(`fs.writeFileSync('input.txt','updated');${done}`), checkBase: true, baseChecks: { spawnImpl: spawn, baseSha: 'sha-run' } });
++    assert.equal(state.jobs[0].status, 'complete');
++  });
++});
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index 33dfb49..3f81b89 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -792,7 +792,7 @@ export function validateManifest(manifest) {
+     if (!Array.isArray(manifest.checks) || manifest.checks.length > 10) fail('checks must be an array of at most 10 checks');
+     for (const check of manifest.checks) {
+       if (!check || typeof check !== 'object') fail('Invalid check');
+-      for (const key of Object.keys(check)) if (!['name', 'argv', 'timeoutMs', 'repeat', 'flakeRuns', 'integrateOnly'].includes(key)) fail(`Unknown check field: ${key}`);
++      for (const key of Object.keys(check)) if (!['name', 'argv', 'timeoutMs', 'repeat', 'flakeRuns', 'integrateOnly', 'base'].includes(key)) fail(`Unknown check field: ${key}`);
+       if (typeof check.name !== 'string' || !CHECK_NAME.test(check.name)) fail(`Invalid check name: ${check?.name}`);
+       if (!Array.isArray(check.argv) || !check.argv.length) fail(`Check argv must be a non-empty array: ${check.name}`);
+       if (check.argv.some(item => typeof item !== 'string')) fail(`Check argv items must be strings: ${check.name}`);
+@@ -802,6 +802,8 @@ export function validateManifest(manifest) {
+       // Field lesson #238: a check that only ever runs outside the sandbox (needs network the
+       // shell worker never gets) is skipped there and reported skipped-integrate-only, never a fail.
+       if (check.integrateOnly !== undefined && typeof check.integrateOnly !== 'boolean') fail(`Check integrateOnly must be true or false: ${check.name}`);
++      // `base: false` keeps a check out of `run`'s own base-check gate (it still runs at integrate).
++      if (check.base !== undefined && typeof check.base !== 'boolean') fail(`Check base must be true or false: ${check.name}`);
+     }
+   }
+   // Field lesson 109: env-sync commands to run before `checks` whenever integration touches a
+@@ -1626,23 +1628,40 @@ const FAILURE_LOCATION_RE = /[A-Za-z0-9_.\/-]+\.[A-Za-z0-9]+(?::\d+(?:-\d+)?)?/g
+ function extractFailureLocations(text) {
+   return [...new Set([...String(text ?? '').matchAll(FAILURE_LOCATION_RE)].map(match => match[0].replace(/:\d+(-\d+)?$/, '')))];
+ }
++// A base check has no integrated/new file list, so a check naming one of those placeholders is
++// never spawned at base (the literal `{integrated}` would reach the tool as a file name and read
++// red); it is recorded as skipped with its reason. So is a check that opts out with `base: false`.
++const INTEGRATE_ONLY_PLACEHOLDER_RE = /^\{(?:integrated|new)(?::[^}]+)?\}$/;
++function baseCheckSkipReason(check) {
++  if (check.base === false) return 'base: false';
++  const placeholder = check.argv.find(arg => INTEGRATE_ONLY_PLACEHOLDER_RE.test(arg));
++  return placeholder ? `integrate-only placeholder ${placeholder}` : null;
++}
+ export async function runBaseChecks(root, manifest, { spawnImpl = spawn, gitImpl, baseSha: baseShaOverride, env = process.env } = {}) {
+   const checks = manifest.checks ?? [];
+   if (!checks.length) return { baseSha: null, status: 'green', failures: [] };
+   const baseSha = baseShaOverride ?? (await (gitImpl ?? git)(root, ['rev-parse', 'HEAD'])).trim();
+   const cacheRel = `.swarm/base-checks/${baseSha}.json`;
++  // The cached verdict belongs to one set of checks: a record from different checks (or from an
++  // older runner that ran placeholders literally, with no checksKey at all) is recomputed.
++  const checksKey = digest(JSON.stringify(checks.map(check => [check.name, check.argv, check.base ?? true])));
+   const cached = await bytesAt(root, cacheRel, true);
+-  if (cached) { try { return JSON.parse(cached.toString('utf8')); } catch { /* recompute below */ } }
++  if (cached) {
++    try { const record = JSON.parse(cached.toString('utf8')); if (record.checksKey === checksKey) return record; } catch { /* recompute below */ }
++  }
+   const failures = [];
+   const failureLocations = {};
++  const skipped = [];
+   for (const check of checks) {
+-    const outcome = await runCheck(check.name, check.argv, root, check.timeoutMs ?? 300000, spawnImpl, false, () => {}, env);
++    const skipReason = baseCheckSkipReason(check);
++    if (skipReason) { skipped.push({ name: check.name, reason: skipReason }); continue; }
++    const outcome = await runCheck(check.name, expandRootArgv(check.argv, root), root, check.timeoutMs ?? 300000, spawnImpl, false, () => {}, env);
+     if (outcome.status !== 'passed') {
+       failures.push(check.name);
+       failureLocations[check.name] = extractFailureLocations(`${outcome.tail ?? ''}\n${outcome.hint ?? ''}`);
+     }
+   }
+-  const record = { baseSha, status: failures.length ? 'red' : 'green', failures, failureLocations };
++  const record = { baseSha, checksKey, status: failures.length ? 'red' : 'green', failures, failureLocations, skipped };
+   await jsonWrite(root, cacheRel, record);
+   return record;
+ }
