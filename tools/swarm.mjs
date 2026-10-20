@@ -486,7 +486,10 @@ function promptPathCovered(candidate, covered) {
 }
 export async function promptPathsNotInWorkspaceWarnings(root, job, context, { trackedFiles = [], resources = [], access = file => fs.access(file) } = {}) {
   const covered = new Set([...trackedFiles, ...context, ...resources]);
-  const candidates = new Set([...String(job.prompt ?? '').matchAll(PROMPT_PATH_RE)]
+  // Only what the manifest declares is checked. A retry note, a reviewer's evidence or an owner comment is quoted into the prompt between <<< and >>> as untrusted prose ("pr-part-*" in a
+  // sentence is not a file glob): those blocks are left out before looking for paths.
+  const promptText = String(job.prompt ?? '').replace(/<<<[\s\S]*?>>>/g, ' ');
+  const candidates = new Set([...promptText.matchAll(PROMPT_PATH_RE)]
     .map(m => m[1]).filter(value => (value.includes('/') || value.includes('*')) && !value.includes('***'))
     .map(value => value.replace(/^\.\//, '').replace(/\/$/, '')));
   const hits = [];

@@ -38,11 +38,20 @@ test('writePointer refuses a file it cannot read as a JSON object and leaves it 
   assert.equal((await writePointer(root, { install: '/n', version: '1' })).backup, null, 'a new pointer needs no backup');
 });
 
-test('a failed write never leaves a partial pointer: the temp file is renamed over, or the old file stays', async t => {
+test('two writes in the same millisecond keep two different backups (no name collision)', async t => {
+  const root = await tmp(t);
+  const file = path.join(root, '.project-swarm.json');
+  await fs.writeFile(file, JSON.stringify({ install: '/a', version: '1', profile }));
+  const realNow = Date.now; Date.now = () => 1792470482270;
+  try { await writePointer(root, { install: '/a', version: '2' }); await writePointer(root, { install: '/a', version: '3' }); } finally { Date.now = realNow; }
+  assert.equal((await fs.readdir(root)).filter(n => n.includes('.bak-')).length, 2);
+  assert.equal(JSON.parse(await fs.readFile(file, 'utf8')).version, '3');
+});
+
+test('a rewritten pointer is always the whole object, never half of one', async t => {
   const root = await tmp(t);
   const file = path.join(root, '.project-swarm.json');
   await fs.writeFile(file, JSON.stringify({ install: '/old', version: '1', profile }));
-  await fs.mkdir(`${file}.bak-${Date.now()}`).catch(() => {});
   const before = await fs.readFile(file, 'utf8');
   await writePointer(root, { install: '/n', version: '2' });
   const parsed = JSON.parse(await fs.readFile(file, 'utf8'));

@@ -4,6 +4,7 @@
 import fs from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import os from 'node:os';
+import nodeCrypto from 'node:crypto';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -241,7 +242,7 @@ export async function writePointer(root,{install,version}){
   try{existing=JSON.parse(before);}catch{throw Error(`.project-swarm.json in ${root} is not valid JSON; fix it by hand (a backup was not needed, nothing was changed)`);}
   if(!existing||typeof existing!=='object'||Array.isArray(existing))throw Error(`.project-swarm.json in ${root} is not a JSON object; fix it by hand (nothing was changed)`);
   if(existing.install===install&&existing.version===version)return {changed:false,backup:null};
-  const backup=`${destination}.bak-${Date.now()}`;
+  const backup=`${destination}.bak-${Date.now()}-${nodeCrypto.randomBytes(3).toString('hex')}`;
   await fs.writeFile(backup,before,{flag:'wx',mode:0o600});
   const temp=`${destination}.tmp-${process.pid}-${Date.now()}`;
   await fs.writeFile(temp,`${JSON.stringify({...existing,install,version},null,2)}\n`);

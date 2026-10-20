@@ -11,6 +11,9 @@ Board fixes from the S13 run, safe project pointers, and database context for mi
 - **Under-filled waves.** Three or more runs in a row with one job each, on a machine with room for four or more, show "waves under-filled: 1 job of N slots" on the project.
 - **Project pointers are safe and kept current.** Linking or updating a project rewrites `.project-swarm.json` as a whole object with only `install` and `version` changed, after copying the old file beside it and through a temp file renamed into place; a file that is not a JSON object is refused and left alone (the old relink could wipe the profile). `swarm update` now moves the version of every linked project whose pointer is behind.
 - **Database context for migration, RLS and pgTAP tickets.** They see the existing migrations (newest first, the ones named by the ticket first), `seed.sql`, `config.toml`, policy, grant and function files, and an existing pgTAP test.
+- **A retry note is not a path.** The `prompt-path-not-in-workspace` check no longer reads text quoted in the prompt as untrusted prose (a retry note, reviewer evidence, an owner comment: everything between `<<<` and `>>>`); "pr-part-*" in a sentence no longer fails a wave at planning. Only declared context and output paths are checked.
+- **`swarm tickets ID --clear-note`** drops a ticket's retry note, `--retry-note TEXT` replaces it, and **`--reopen --reason "why"`** puts a done ticket back to ready (blocked while a dependency is open) with the reason in the journal, no change order needed.
+- Backup file names of a rewritten pointer carry a random suffix (two writes in one millisecond collided).
 - Tests: `tests/pointer-safety.test.mjs`, `tests/watch-ui.test.mjs`, `tests/s13-live-bugs.test.mjs`.
 
 ## 1.141.0
