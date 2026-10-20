@@ -151,6 +151,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-19 | - | review-installed-swarm: Review of installed-swarm.diff: no edits made, nothing executed (shell not p | claude | opus | pass | 621,677 | $0.96 |
 | 2026-10-19 | - | review-kit-interview: Kit install can write outside the project via a linked root .gitignore and edi | claude | opus | pass | 498,760 | $0.92 |
 | 2026-10-19 | - | review-hard-caps: Reviewed hard-caps.diff. Spend can still pass a cap: subscription reservations are | claude | opus | pass | 190,440 | $0.72 |
+| 2026-10-20 | - | docs-test-isolation: New developer guide for npm test / _isolate-config.mjs, assertTestIsolation, an | cursor | composer-2.5 | pass | - | subscription |
 
 ## Daily summary
 
@@ -165,4 +166,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-16 | codex | 2 | 2 | 0 | 31,624 | subscription |
 | 2026-10-18 | claude | 14 | 14 | 0 | 6,874,167 | $13.02 |
 | 2026-10-19 | claude | 9 | 9 | 0 | 2,436,156 | $6.73 |
-| **total** | all | 147 | 132 | 15 | 14,486,482 | $24.68 (incl. estimates) |
+| 2026-10-20 | cursor | 1 | 1 | 0 | 0 | subscription |
+| **total** | all | 148 | 133 | 15 | 14,486,482 | $24.68 (incl. estimates) |
