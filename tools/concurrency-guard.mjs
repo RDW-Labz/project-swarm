@@ -76,12 +76,29 @@ export function apply(configFile, value, { pid = process.pid, now = Date.now } =
 
 /** The watcher: waits for `pid` to die, then restores. Runs as its own process so a crash or SIGKILL of the wrapper cannot leave the value changed. */
 function watch(pid, configFile) {
-  const timer = setInterval(() => {
+  const timer = setInterval(async () => {
     if (alive(pid)) return;
     clearInterval(timer);
-    try { const marker = readJson(markerPath(configFile)); if (marker && marker.pid === pid) restore(configFile); } catch { /* the next command restores it */ }
+    try {
+      const marker = readJson(markerPath(configFile));
+      if (marker && marker.pid === pid) {
+        // The wrapper died but its command may still be running at the raised value: stop it first (it would go on starting workers at the old setting), then put the value back.
+        const child = marker.childPid;
+        if (Number.isInteger(child) && child > 0 && alive(child)) {
+          try { process.kill(child, 'SIGTERM'); } catch { /* gone */ }
+          for (let i = 0; i < 100 && alive(child); i += 1) await new Promise(resolve => setTimeout(resolve, 100));
+          if (alive(child)) { try { process.kill(child, 'SIGKILL'); } catch { /* gone */ } }
+        }
+        restore(configFile);
+      }
+    } catch { /* the next command restores it */ }
     process.exit(0);
   }, 300);
+}
+
+/** Records the command's pid in the marker, so a watcher that outlives a crashed wrapper can stop it. */
+function noteChild(configFile, pid, childPid) {
+  try { const marker = readJson(markerPath(configFile)); if (marker?.pid === pid) writeJsonAtomic(markerPath(configFile), { ...marker, childPid }); } catch { /* best effort */ }
 }
 
 /** Runs `swarm ARGS` with the value set; resolves with the child's exit code once the value is back. `spawnImpl` and `startWatcher` are replaceable for tests. */
@@ -91,7 +108,10 @@ export async function runGuarded({ value, args, env = process.env, configFile = 
   let child = null;
   let pending = null;
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-  const handlers = signals.map(sig => [sig, () => { pending = pending ?? sig; try { child?.kill(sig); } catch { /* already gone */ } }]);
+  // Ctrl-C at a terminal reaches the whole foreground group, the command included: it gets a moment to end on its own before the signal is passed on (it would get SIGINT twice).
+  let childExited = false;
+  const passOn = sig => { try { if (!childExited) child?.kill(sig); } catch { /* already gone */ } };
+  const handlers = signals.map(sig => [sig, () => { pending = pending ?? sig; if (!child) return; if (sig === 'SIGTERM') passOn(sig); else setTimeout(() => passOn(sig), 200).unref(); }]);
   for (const [sig, h] of handlers) process.on(sig, h);
   const dropHandlers = () => { for (const [sig, h] of handlers) process.off(sig, h); };
   let done = false;
@@ -107,6 +127,8 @@ export async function runGuarded({ value, args, env = process.env, configFile = 
   if (pending) code = codes[pending];
   else {
     child = spawnImpl(process.execPath, [SWARM, ...args], { stdio, env });
+    child.on('exit', () => { childExited = true; });
+    noteChild(configFile, process.pid, child.pid);
     // A signal that arrived while the command was starting is passed on now.
     if (pending) { try { child.kill(pending); } catch { /* already gone */ } }
     code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, sig) => resolve(c ?? (sig ? 128 + ({ SIGINT: 2, SIGTERM: 15, SIGHUP: 1 }[sig] ?? 1) : 1))); });

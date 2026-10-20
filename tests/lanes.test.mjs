@@ -501,3 +501,21 @@ test('1,500 callers in one process take their turn at the lanes store: none time
     assert.equal(await withLaneStore(async store => store.slots.claude.length, { dir }), 1500);
   } finally { await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
+
+test('lane store queue: a hung holder times waiters out (and they never run), the queue recovers, and a re-entrant call fails at once', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lane-queue-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  let release;
+  const hung = withLaneStore(() => new Promise(resolve => { release = resolve; }), { dir, timeoutMs: 300 });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  let ran = false;
+  const started = Date.now();
+  await assert.rejects(withLaneStore(async () => { ran = true; }, { dir, timeoutMs: 300 }), { code: 'lanes-store-locked' });
+  assert.ok(Date.now() - started < 3000, 'gave up in about the timeout, not never');
+  release();
+  await hung;
+  assert.equal(ran, false, 'a waiter that gave up never runs its work');
+  assert.equal(await withLaneStore(async () => 'ok', { dir, timeoutMs: 300 }), 'ok', 'the queue works again once the holder is done');
+  await assert.rejects(withLaneStore(async () => withLaneStore(async () => 1, { dir }), { dir }), { code: 'lanes-store-reentrant' });
+  assert.equal(await withLaneStore(async () => 'after', { dir }), 'after');
+});

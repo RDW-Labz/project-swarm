@@ -165,10 +165,13 @@ test('process: the wrapper killed outright (SIGKILL, a crash) is restored by the
   t.after(() => killGroup(p));
   assert.ok(await until(() => { try { return f.read().machineConcurrency === 16 && fs.existsSync(markerPath(f.file)); } catch { return false; } }));
   await sleep(500);   // the watcher is up
+  const childPid = await (async () => { for (let i = 0; i < 100; i += 1) { try { const c = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).childPid; if (c) return c; } catch { /* not yet */ } await sleep(50); } return null; })();
+  assert.ok(childPid, 'the marker names the command\'s pid');
   process.kill(p.child.pid, 'SIGKILL');
   await p.exited;
   assert.ok(await until(() => { try { return f.read().machineConcurrency === 4; } catch { return false; } }, 10000), 'restored by the watcher');
   assert.ok(await until(() => !fs.existsSync(markerPath(f.file)), 5000));
+  assert.ok(await until(() => { try { process.kill(childPid, 0); return false; } catch { return true; } }, 5000), 'the orphaned command was stopped before the value went back');
 });
 
 test('process: after a power cut (a leftover marker, its owner gone) the next swarm command puts the value back', async t => {
@@ -190,4 +193,25 @@ test('a Ctrl-C in the moment between raising the value and the command starting 
   assert.equal(child.killed, 'SIGINT');
   assert.equal(result.code, 130);
   assert.equal(f.read().machineConcurrency, 4);
+});
+
+test('Ctrl-C: a command that ends on its own after the terminal signal gets no second signal; one that keeps running gets exactly one', async t => {
+  const f = await fixture(t);
+  const ends = fakeChild(() => {});
+  const kills = [];
+  ends.kill = sig => kills.push(sig);
+  const first = runGuarded({ value: 16, args: ['watch'], env: f.env, configFile: f.file, startWatcher: false, spawnImpl: () => ends });
+  await sleep(30);
+  process.emit('SIGINT');
+  setTimeout(() => ends.emit('exit', 130, null), 60);   // the terminal's own SIGINT ended it
+  assert.equal((await first).code, 130);
+  await sleep(300);
+  assert.deepEqual(kills, [], 'no forwarded signal');
+  const stays = fakeChild(() => {});
+  const f2 = await fixture(t);
+  const second = runGuarded({ value: 16, args: ['watch'], env: f2.env, configFile: f2.file, startWatcher: false, spawnImpl: () => stays });
+  await sleep(30);
+  process.emit('SIGINT');
+  assert.equal((await second).code, 130);
+  assert.equal(stays.killed, 'SIGINT');
 });

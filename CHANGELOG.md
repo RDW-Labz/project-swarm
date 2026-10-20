@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.138.0
+
+The three review findings left open in 1.137.0.
+- **Lane store queue timeout.** A caller waiting in the in-process lane store queue gives up with `lanes-store-locked` when no turn has started or finished for 10 seconds (a hung holder used to block every worker forever); its own turn is skipped. A call from inside a turn of the same store fails at once with `lanes-store-reentrant` instead of waiting for itself.
+- **One Ctrl-C, one signal.** `swarm with-concurrency` lets the command end on its own for 200 ms after SIGINT or SIGHUP (a terminal already sent it) and only then passes the signal on.
+- **A killed wrapper stops its command.** The marker names the command's pid; if the wrapper is killed, the watcher stops the command (SIGTERM, then SIGKILL after 10 s) before putting `machineConcurrency` back, so nothing keeps starting workers at the raised value.
+- Test fix: the installed-swarm tests copied the checkout while another test file created and removed a `.tmp-test-*` folder in it (ENOENT); the copy now skips `.tmp-*` folders.
+- Tests: `tests/lanes.test.mjs` (hung holder, recovery, re-entrancy), `tests/concurrency-guard.test.mjs` (single signal, orphan stopped).
+
 ## 1.137.0
 
 Fixes for the parts app S13 run, plus the practice-run tooling.

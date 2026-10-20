@@ -35,7 +35,7 @@ before(async () => {
   home = path.join(base, 'home'); install = path.join(base, 'install'); project = path.join(base, 'project');
   await fs.mkdir(home); await fs.mkdir(project);
   // The install is a git checkout of this source (top-level folders that are not needed to run swarm are left out, docs/design is large).
-  await fs.cp(SOURCE, install, { recursive: true, filter: src => { const rel = path.relative(SOURCE, src); return !(SKIP.has(rel.split(path.sep)[0]) || rel.startsWith(path.join('docs', 'design'))); } });
+  await fs.cp(SOURCE, install, { recursive: true, filter: src => { const rel = path.relative(SOURCE, src); const top = rel.split(path.sep)[0]; return !(SKIP.has(top) || top.startsWith('.tmp-') || rel.startsWith(path.join('docs', 'design'))); } });
   version = JSON.parse(await fs.readFile(path.join(install, 'package.json'), 'utf8')).version;
   git(install, 'init', '-q'); git(install, 'add', '-A'); git(install, 'commit', '-qm', 'install');
   git(install, 'tag', `v${version}`);
