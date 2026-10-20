@@ -92,7 +92,7 @@ test('a project under its cap, or without one, still runs', async t => {
 test('project summary for swarm watch shows the total, the cap and whether it is reached', async t => {
   const fx = await repo(t, { profile: { budget: { projectMaxUsd: 4 } } });
   await oldRun(fx.root, 'old-1', [3]);
-  assert.deepEqual(await projectSummary(fx.root, { env: fx.env, ttlMs: 0 }), { spendUsd: 3, runs: 1, capUsd: 4, noCap: false, reached: false, unknownUsd: 0, unreadable: 0 });
+  assert.deepEqual(await projectSummary(fx.root, { env: fx.env, ttlMs: 0 }), { spendUsd: 3, runs: 1, capUsd: 4, noCap: false, reached: false, unknownUsd: 0, unreadable: 0, capSource: 'profile budget.projectMaxUsd', capInherited: false, inheritedFrom: null, why: null });
   await oldRun(fx.root, 'old-2', [1.5]);
   const summary = await projectSummary(fx.root, { env: fx.env, ttlMs: 0 });
   assert.equal(summary.spendUsd, 4.5);

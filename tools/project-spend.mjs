@@ -39,13 +39,43 @@ export async function projectSpend(root) {
 
 const invalidCap = source => Object.assign(new Error(`project-cap-invalid: ${source} must be a number above 0`), { code: 'project-cap-invalid' });
 
+// A linked worktree has a .git file pointing at its private git dir. Resolve that git dir back to
+// the main checkout without invoking git; malformed or non-worktree layouts are simply unknown.
+export async function mainWorktreeRoot(root) {
+  try {
+    const gitFile = path.join(root, '.git');
+    const stat = await fs.lstat(gitFile);
+    if (!stat.isFile()) return null;
+    const pointer = (await fs.readFile(gitFile, 'utf8')).trim();
+    const match = /^gitdir:\s*(.+)$/i.exec(pointer);
+    if (!match) return null;
+    const gitDir = path.resolve(root, match[1].trim());
+    let commonDir;
+    try {
+      const commonText = (await fs.readFile(path.join(gitDir, 'commondir'), 'utf8')).trim();
+      if (!commonText) return null;
+      commonDir = path.resolve(gitDir, commonText);
+    } catch (error) {
+      if (error.code !== 'ENOENT') return null;
+      commonDir = path.dirname(path.dirname(gitDir));
+    }
+    if (path.basename(commonDir) !== '.git') return null;
+    return await fs.realpath(path.dirname(commonDir));
+  } catch {
+    return null;
+  }
+}
+
 // The lower of the profile cap and the local-config cap, with where it came from; null when neither is set. null or a bad value is an error, never "no cap".
-export function projectCapInfo({ profile, config } = {}) {
+export function projectCapInfo({ profile, config, inheritedFrom = null } = {}) {
   let best = null;
   for (const [source, value] of [['profile budget.projectMaxUsd', profile?.budget?.projectMaxUsd], ['config spend.projectMaxUsd', config?.spend?.projectMaxUsd]]) {
     if (value === undefined) continue;
     if (!finite(value)) throw invalidCap(source);
     if (!best || value < best.cap) best = { cap: value, source };
+  }
+  if (best && inheritedFrom && best.source === 'profile budget.projectMaxUsd') {
+    best = { ...best, inheritedFrom, source: `${best.source} (inherited from ${path.basename(inheritedFrom)})` };
   }
   return best;
 }
@@ -53,10 +83,26 @@ export const projectCap = input => projectCapInfo(input)?.cap ?? null;
 
 // Reads the cap for a project. A missing pointer file means no profile; any other read or parse problem is an error, never "no cap".
 export async function readProjectCap(root, { env = process.env } = {}) {
+  const pointerFile = path.join(root, '.project-swarm.json');
   let pointer = null;
-  try { pointer = JSON.parse(await fs.readFile(path.join(root, '.project-swarm.json'), 'utf8')); }
-  catch (error) { if (error.code !== 'ENOENT') throw Object.assign(new Error(`project-cap-invalid: .project-swarm.json cannot be read (${error.code ?? 'bad JSON'}); the project cap cannot be checked`), { code: 'project-cap-invalid' }); }
-  return projectCapInfo({ profile: pointer?.profile, config: loadLocalConfig({ env }) });
+  let inheritedFrom = null;
+  try {
+    pointer = JSON.parse(await fs.readFile(pointerFile, 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw Object.assign(new Error(`project-cap-invalid: .project-swarm.json cannot be read (${error.code ?? 'bad JSON'}; file ${pointerFile}); the project cap cannot be checked`), { code: 'project-cap-invalid' });
+    const mainRoot = await mainWorktreeRoot(root);
+    if (mainRoot && path.resolve(mainRoot) !== path.resolve(root)) {
+      inheritedFrom = mainRoot;
+      const mainPointerFile = path.join(mainRoot, '.project-swarm.json');
+      try {
+        pointer = JSON.parse(await fs.readFile(mainPointerFile, 'utf8'));
+      } catch (mainError) {
+        if (mainError.code !== 'ENOENT') throw Object.assign(new Error(`project-cap-invalid: .project-swarm.json cannot be read (${mainError.code ?? 'bad JSON'}; file ${mainPointerFile}); the project cap cannot be checked`), { code: 'project-cap-invalid' });
+        pointer = null;
+      }
+    }
+  }
+  return projectCapInfo({ profile: pointer?.profile, config: loadLocalConfig({ env }), inheritedFrom });
 }
 
 export function projectCapDecision({ spent, cap, source = 'profile budget.projectMaxUsd' }) {
@@ -84,8 +130,8 @@ export async function projectSummary(root, { env = process.env, now = Date.now, 
     let info = null, capError = null;
     try { info = await readProjectCap(root, { env }); } catch (error) { capError = error.message; }
     const decision = info ? projectCapDecision({ spent, cap: info.cap, source: info.source }) : null;
-    value = { spendUsd: Math.round(spent.usd * 100) / 100, runs: spent.runs, capUsd: info?.cap ?? null, noCap: !info && !capError, reached: Boolean(decision), unknownUsd: spent.unknownUsd, unreadable: spent.unreadable.length, ...(capError ? { capError } : {}) };
-  } catch (error) { value = { spendUsd: null, runs: 0, capUsd: null, reached: false, unknownUsd: 0, unreadable: 0, capError: String(error.message).slice(0, 200) }; }
+    value = { spendUsd: Math.round(spent.usd * 100) / 100, runs: spent.runs, capUsd: info?.cap ?? null, noCap: !info && !capError, reached: Boolean(decision), unknownUsd: spent.unknownUsd, unreadable: spent.unreadable.length, capSource: info?.source ?? null, capInherited: Boolean(info?.inheritedFrom), inheritedFrom: info?.inheritedFrom ?? null, why: capError ? `cap invalid: ${capError}` : decision?.message ?? null, ...(capError ? { capError } : {}) };
+  } catch (error) { const capError = String(error.message).slice(0, 200); value = { spendUsd: null, runs: 0, capUsd: null, reached: false, unknownUsd: 0, unreadable: 0, capSource: null, capInherited: false, inheritedFrom: null, why: `cap invalid: ${capError}`, capError }; }
   summaryCache.set(root, { at: now(), value });
   return value;
 }
