@@ -232,7 +232,7 @@ test('L7 ship checks base and --no-flake-check suppresses probing without passin
   const f = await shipping(t);
   const check = { name: 'unit', repeat: 2, argv: [process.execPath, '-e', "const fs=require('fs');if(fs.readFileSync('input.txt','utf8')==='updated'){console.error('widget.test.mjs');process.exit(1)}"] };
   const state = await runManifest(f.root, manifest({}, { checks: [check] }), { spawnImpl: fake() });
-  const integrated = await integrateRun(f.root, state.id, { noFlakeCheck: true });
+  const integrated = await integrateRun(f.root, state.id, { noFlakeCheck: true, acceptFailedChecks: true });
   assert.equal(integrated.checks[0].flakeOnBase, undefined);
   const shipped = await shipRun(f.root, state.id, { payloadPath: f.options.payloadPath }, f.options);
   assert.equal(shipped.status, 'checks-failed');
