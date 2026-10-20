@@ -37,3 +37,7 @@ Hand-built means an `Edit`, `Write`, `MultiEdit` or `NotebookEdit` outside `.swa
 `swarm init` and `swarm update` put the hooks in the project's **`.claude/settings.local.json`** (the personal file Claude Code reads, which is git-ignored), next to the existing checkpoint hook; they are never pushed onto collaborators who do not run swarm. The command points at the install's `current` folder, so it keeps working after an update; an entry from an older install is replaced, any other hook or setting is kept, and a settings file that is not valid JSON is left alone and reported. `swarm update` refreshes the hooks only in projects that were set up with agent files (they already have the checkpoint hook or these hooks); it never adds them to a project without. To switch the lane off in a project, create the empty file `.swarm/orchestrator/off`: nothing is installed or refreshed there. To remove the hooks, delete the four entries whose command names `orchestrator-hook.mjs`.
 
 The transcript reader opens only files whose real path is under Claude Code's own folder (`~/.claude`), and counts each message once even when a session appears in two projects or was resumed.
+
+## See also
+
+[orchestrator-up.md](orchestrator-up.md) — a second always-on Remote Control seat on a Mac (tmux + optional launchd).
