@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Run inspector: one run's job graph, a replayable journal with the cost of each job, and a side-by-side compare. Read-only; all data from /api/run.
+import { renderOrchestrator } from './orchestrator-view.js';
+
 var L = self.BoardLib;
 var params = new URLSearchParams(location.search);
 var TOKEN = params.get('t') || '';
@@ -141,6 +143,9 @@ api().then(function (r) {
   if (!r) { $('title').textContent = 'Run not found'; $('subtitle').textContent = 'No run ' + RUN + ' in this project.'; return; }
   run = r;
   renderSummary(r); renderGraph(r);
+  var orch = r.orchestrator || []; $('orchCard').hidden = !orch.length; if (orch.length) { renderOrchestrator($('orchBay'), orch, { now: Date.now() }); }
+  // The remote board never starts a run's own page on the computer: no link to it there.
+  $('watchLink').hidden = r.openRun === false;
   $('scrub').max = String(r.journal.length);
   setPos(r.journal.length);
 });

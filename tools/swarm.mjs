@@ -506,6 +506,19 @@ export async function promptPathsNotInWorkspaceWarnings(root, job, context, { tr
   return hits;
 }
 
+// In-source tests (`if (import.meta.vitest)` blocks) in production files under src/: they ship in the build and break it. Tests live in their own files.
+export function inSourceTestHits(writes) {
+  const hits = [];
+  for (const { file, bytes } of writes) {
+    if (!/^src\//.test(file) || isTestFile(file) || bytes === null || bytes.includes(0)) continue;
+    const lines = bytes.toString('utf8').split('\n');
+    for (const [index, line] of lines.entries()) {
+      if (/import\.meta\.vitest\b/.test(line)) { hits.push({ code: 'in-source-test', file, line: index + 1, message: `in-source-test: ${file}:${index + 1} has an import.meta.vitest block; tests go in their own test file (the build ships src/), so remove it` }); break; }
+    }
+  }
+  return hits;
+}
+
 export function workFolderReferenceHits(writes) {
   const hits = [];
   for (const { file, bytes } of writes) {
@@ -5210,8 +5223,8 @@ async function integrateRunLocked(root, id, options = {}) {
       }
       if (queue) {
         const plannedWrites = writes.splice(writeStart);
-        const hits = workFolderReferenceHits(plannedWrites);
-        if (hits.length) fail(hits.map(hit => hit.message).join('\n'), 'work-folder-reference');
+        const hits = [...workFolderReferenceHits(plannedWrites), ...inSourceTestHits(plannedWrites)];
+        if (hits.length) fail(hits.map(hit => hit.message).join('\n'), hits[0].code === 'in-source-test' ? 'in-source-test' : 'work-folder-reference');
         if (conflictingFiles.length) queueConflicts.push({ job: job.id, files: conflictingFiles, reason: conflictReason });
         else queuePlans.push({ job: job.id, writes: plannedWrites, snapshots, alreadyApplied: state.mergeQueue?.state === 'running' && !plannedWrites.length });
       }
@@ -5265,8 +5278,8 @@ async function integrateRunLocked(root, id, options = {}) {
     }
     // Field lesson #159: a change to packaging keys that no check builds is named up front.
     const packagingWarnings = packagingChangeWarnings(writes.filter(change => isPackagingFile(change.file)).map(change => ({ file: change.file, keys: packagingKeyChanges(change.file, change.previous?.toString('utf8') ?? '', change.bytes.toString('utf8')) })), [...(manifest.checks ?? []).map(check => check.argv), ...(manifest.preChecks ?? [])]);
-    const workFolderHits = workFolderReferenceHits(writes);
-    if (workFolderHits.length) fail(workFolderHits.map(hit => hit.message).join('\n'), 'work-folder-reference');
+    const workFolderHits = [...workFolderReferenceHits(writes), ...inSourceTestHits(writes)];
+    if (workFolderHits.length) fail(workFolderHits.map(hit => hit.message).join('\n'), workFolderHits[0].code === 'in-source-test' ? 'in-source-test' : 'work-folder-reference');
     if (queue) {
       if (acceptedDeviations.length) state.acceptedDeviations = acceptedDeviations;
       if (resultShapeWarnings.length) state.resultShapeWarnings = resultShapeWarnings;
@@ -6848,18 +6861,21 @@ export async function updateProjects(root,{projects,yes=false}={}){
 export async function bumpPointers(root){
   root=await fs.realpath(root);
   const version=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8')).version;
-  const bumped=[],failed=[];
+  const bumped=[],failed=[],hooksSet=[];
   for(const projectDir of await readProjectsRegistry(root)){
     let project;
     try{project=await fs.realpath(projectDir);}catch{continue;}
     if(project===root)continue;
     let pointer;
     try{pointer=JSON.parse(await fs.readFile(path.join(project,'.project-swarm.json'),'utf8'));}catch(error){if(error.code==='ENOENT')continue;failed.push({project,error:'the pointer file is not valid JSON; not changed'});continue;}
-    if(!pointer||typeof pointer!=='object'||pointer.version===version)continue;
+    if(!pointer||typeof pointer!=='object')continue;
+    // The Orchestrator lane's hooks are put (back) in place for every linked project on each update, whatever the pointer says.
+    try{const {ensureOrchestratorHooks}=await import('./install.mjs');const hooks=await ensureOrchestratorHooks(project,root,{refreshOnly:true});if(hooks.status==='created'||hooks.status==='updated')hooksSet.push(project);else if(hooks.status==='skipped')failed.push({project,error:`orchestrator hooks not installed: ${hooks.reason}`});}catch(error){failed.push({project,error:`orchestrator hooks: ${String(error.message).slice(0,160)}`});}
+    if(pointer.version===version)continue;
     try{const {writePointer}=await import('./install.mjs');const written=await writePointer(project,{install:root,version});if(written.changed)bumped.push({project,from:pointer.version??null,to:version});}
     catch(error){failed.push({project,error:String(error.message).slice(0,200)});}
   }
-  return {bumped,failed};
+  return {bumped,failed,hooks:hooksSet};
 }
 
 function agentReadiness(agent,result){

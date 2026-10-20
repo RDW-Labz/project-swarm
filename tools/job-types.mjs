@@ -38,7 +38,12 @@ export function applyJobType(job, { skillNames = null } = {}) {
       message: `job-type-skill-unavailable: Job ${job.id} (type ${job.type}) wants skill ${type.skill}; configure a skills dir that has it`,
     });
   }
-  const suffix = `\n\nJob type ${job.type}: ${type.promptLine}`;
+  // A build or fix job that owns no test file writes none (the line that asks for tests inside the outputs would send it to put a test in a production file, or to refuse).
+  const ownsNoTest = ['build', 'fix'].includes(job.type) && Array.isArray(job.outputs) && job.outputs.length > 0 && !job.outputs.some(isTestFile);
+  const promptLine = ownsNoTest
+    ? (job.type === 'fix' ? 'Reproduce the failure first and fix the cause inside your outputs. You own no test file here: write no tests or test blocks; prove the fix with the type check and by reading your code.' : 'Implement the change inside your declared outputs. You own no test file here: write no tests or test blocks (never import.meta.vitest in a source file); prove your work with the type check.')
+    : type.promptLine;
+  const suffix = `\n\nJob type ${job.type}: ${promptLine}`;
   if (!job.prompt.endsWith(suffix)) newJob.prompt = job.prompt + suffix;
   newJob.typeRoute = type.route;
   return { job: newJob, warnings };

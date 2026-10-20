@@ -2,6 +2,7 @@
 // The project page's Live tab: every run that is alive in this project, combined (data: /api/live, the same run files the run pages read).
 // Every state shown is one a run recorded: nothing is animated for show, a sleeping head means no agent is running in that lane.
 import { mountRobotHead, setAnimationPaused, animationPaused, reducedMotion } from './robot-head.js';
+import { renderOrchestrator, buildMixText } from './orchestrator-view.js';
 
 var L = self.BoardLib;
 var params = new URLSearchParams(location.search);
@@ -199,7 +200,14 @@ function renderEmpty(d) {
   if (d.finishedCount) { box.appendChild(el('div', 'sub', 'Finished today: ' + d.finishedCount + (d.finishedCount === 1 ? ' run' : ' runs') + (d.finishedCount === d.recent.length ? ', ' + usd(d.recent.reduce(function (n, r) { return n + (r.costUsd || 0); }, 0)) : ' (the latest ' + d.recent.length + ' are listed)') + '.')); }
 }
 
+function renderOrch(d) {
+  var o = d.orchestrator || { sessions: [] };
+  $('orchCount').textContent = String(o.sessions.filter(function (x) { return x.state !== 'idle'; }).length);
+  renderOrchestrator($('orchBay'), o.sessions, { now: Date.now() });
+  $('orchNote').textContent = buildMixText(o) || '';
+}
 function render(d) {
+  renderOrch(d);
   var empty = Boolean(d.empty);
   $('liveEmpty').hidden = !empty; $('liveBody').hidden = empty;
   if (empty) { renderEmpty(d); }

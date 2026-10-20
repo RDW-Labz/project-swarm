@@ -224,6 +224,53 @@ async function ensureCheckpointHook(root){
  return {status:before.trim()?'updated':'created'};
 }
 
+// The Orchestrator lane's hooks (PreToolUse, PostToolUse, Stop, UserPromptSubmit) go in the same personal settings file: each runs tools/orchestrator-hook.mjs, which appends one small event
+// (session, tool, a path inside the project) to .swarm/orchestrator/events.ndjson and prints nothing. The command points at the install's `current` folder, so it keeps working after
+// `swarm update`; an entry from an older install is replaced, anything else in the file is kept, and an unreadable settings file is left alone.
+export const ORCHESTRATOR_HOOK_EVENTS=Object.freeze({PreToolUse:'pre',PostToolUse:'post',Stop:'stop',UserPromptSubmit:'prompt'});
+const isOrchestratorHook=hook=>typeof hook?.command==='string'&&hook.command.includes('orchestrator-hook.mjs');
+export function stableInstallDir(installRoot){
+ const parent=path.dirname(installRoot);
+ return path.basename(parent)==='versions'?path.join(path.dirname(parent),'current'):installRoot;
+}
+// An owner who does not want the lane creates `.swarm/orchestrator/off`: nothing is installed or refreshed there. `refreshOnly` (used by `swarm update` on linked projects) only touches a
+// project that already has the checkpoint hook or the Orchestrator hooks, i.e. one that was set up with agent files.
+export async function ensureOrchestratorHooks(root,installRoot,{refreshOnly=false}={}){
+ try{await fs.access(path.join(root,'.swarm','orchestrator','off'));return {status:'off'};}catch{/* not switched off */}
+ const script=path.join(stableInstallDir(installRoot),'tools','orchestrator-hook.mjs');
+ const destination=await safeTarget(root,'.claude/settings.local.json',{createParents:true});
+ const before=await readOptional(destination);
+ let settings={};
+ if(before.trim()){
+  try{settings=JSON.parse(before);}catch{return {status:'skipped',reason:'settings.local.json is not valid JSON'};}
+  if(!settings||typeof settings!=='object'||Array.isArray(settings))return {status:'skipped',reason:'settings.local.json is not an object'};
+ }
+ if(settings.hooks!==undefined&&(typeof settings.hooks!=='object'||settings.hooks===null||Array.isArray(settings.hooks)))return {status:'skipped',reason:'hooks is not an object'};
+ if(refreshOnly){
+  const commands=Object.values(settings.hooks??{}).flatMap(list=>Array.isArray(list)?list:[]).flatMap(entry=>Array.isArray(entry?.hooks)?entry.hooks:[]).map(hook=>String(hook?.command??''));
+  if(!commands.some(c=>c===CHECKPOINT_HOOK||c.includes('orchestrator-hook.mjs')))return {status:'absent'};
+ }
+ settings.hooks??={};
+ let changed=false;
+ for(const [name,kind] of Object.entries(ORCHESTRATOR_HOOK_EVENTS)){
+  if(settings.hooks[name]!==undefined&&!Array.isArray(settings.hooks[name]))return {status:'skipped',reason:`hooks.${name} is not a list`};
+  const command=`node ${JSON.stringify(script)} ${kind}`;
+  const list=settings.hooks[name]??=[];
+  let found=false;
+  for(const entry of list)for(const hook of Array.isArray(entry?.hooks)?entry.hooks:[])if(isOrchestratorHook(hook)){found=true;if(hook.command!==command){hook.command=command;changed=true;}}
+  if(!found){list.push({...(name==='PreToolUse'||name==='PostToolUse'?{matcher:'*'}:{}),hooks:[{type:'command',command}]});changed=true;}
+ }
+ if(!changed)return {status:'unchanged'};
+ // A temp file with its own name, created exclusively (a planted link at a fixed name cannot redirect the write), with the old file's mode, then renamed over.
+ let mode=0o600;
+ try{mode=(await fs.stat(destination)).mode&0o777;}catch{/* a new file */}
+ const temp=`${destination}.swarm-tmp-${process.pid}-${nodeCrypto.randomBytes(4).toString('hex')}`;
+ await fs.writeFile(temp,`${JSON.stringify(settings,null,2)}\n`,{flag:'wx',mode});
+ await fs.rename(temp,destination);
+ await ensureLocalSettingsIgnored(root);
+ return {status:before.trim()?'updated':'created'};
+}
+
 async function ensureLocalSettingsIgnored(root){
  const destination=await safeTarget(root,'.gitignore');
  const before=await readOptional(destination);
@@ -317,8 +364,9 @@ export async function installProject(targetDirectory,{source=packageRoot,agentFi
   agentPaths.push(to);
  }
  const claudeHook=agentFiles?await ensureCheckpointHook(root):null;
+ const orchestratorHooks=agentFiles?await ensureOrchestratorHooks(root,installRoot):null;
  const gitignoreAdded=await ensureSwarmIgnore(root);
- return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,claudeHook,gitignoreAdded};
+ return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,claudeHook,orchestratorHooks,gitignoreAdded};
 }
 
 if(process.argv[1]&&realpathSync(process.argv[1])===fileURLToPath(import.meta.url)){

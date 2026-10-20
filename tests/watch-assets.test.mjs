@@ -103,7 +103,7 @@ test('every js file parses as a classic script (syntax only)', () => {
 });
 
 test('tab scripts register under one of the four tab names', () => {
-  const tabFiles = files.filter((f) => f.endsWith('.js') && f !== 'app.js' && f !== 'run-drawer.js' && f !== 'board.js' && f !== 'project.js' && f !== 'project-live.js' && f !== 'nav.js' && f !== 'run.js' && f !== 'board-lib.js' && !f.startsWith('robot-'));
+  const tabFiles = files.filter((f) => f.endsWith('.js') && f !== 'app.js' && f !== 'run-drawer.js' && f !== 'board.js' && f !== 'project.js' && f !== 'project-live.js' && f !== 'nav.js' && f !== 'run.js' && f !== 'board-lib.js' && f !== 'orchestrator-view.js' && !f.startsWith('robot-'));
   assert.ok(tabFiles.length > 0, 'no tab scripts found');
   const re = /register\(\s*['"](run|plan|commands|gallery)['"]/;
   for (const name of tabFiles) {

@@ -8,6 +8,7 @@ import { runTotals } from './spend.mjs';
 import { readLedger } from './tickets.mjs';
 import { projectSummary } from './project-spend.mjs';
 import { sanitizeWorkerText } from './worker-text.mjs';
+import { projectOrchestrator } from './board-orchestrator.mjs';
 
 const txt = (v, n = 160) => (v === null || v === undefined ? null : sanitizeWorkerText(v, n));
 const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
@@ -118,8 +119,10 @@ export async function liveOverview(project, liveRuns, { now = Date.now(), summar
   const ledger = await readLedger(project.root).catch(() => null);
   const spend = await summary(project.root).catch(error => ({ capUsd: null, capError: String(error.message).slice(0, 120) }));
   const lastMs = Math.max(0, ...all.map(r => r.mtimeMs), Date.parse(ledger?.updatedAt ?? '') || 0);
-  return combineLive({
+  const orchestrator = (() => { try { return projectOrchestrator(project, { runs: all, now }); } catch { return null; } })();
+  const combined = combineLive({
     project, runs: live, finishedToday, tickets: (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 2000),
     cost: costOf(all, now), capUsd: spend.capUsd ?? null, capError: spend.capError ?? null, lastActivityAt: lastMs ? new Date(lastMs).toISOString() : null, now,
   });
+  return { ...combined, orchestrator };
 }

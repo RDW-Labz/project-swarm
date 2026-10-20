@@ -202,3 +202,22 @@ test('swarm tickets --clear-note / --retry-note / --reopen', async t2 => {
   const after = (await readLedger(root)).tickets;
   assert.equal(after[0].status, 'ready');
 });
+
+import { applyJobType } from '../tools/job-types.mjs';
+test('a ticket that owns no test file tells its worker to write no tests and prove with the type check; one that owns tests keeps the tag rule', () => {
+  const noTests = t('T-0040', { files: ['src/submit-request.ts'], acceptance: ['rejects a bad host'] });
+  const withTests = t('T-0041', { files: ['src/a.ts', 'tests/a.test.ts'], acceptance: ['rejects a bad host'] });
+  const testTicket = t('T-0042', { type: 'test', files: ['tests/b.test.ts'], acceptance: ['rejects a bad host'] });
+  const prompt = tk => ticketsToManifest([tk], { ledger: { tickets: [tk] }, contextEnv: { ...contextEnv, exists: () => false } }).manifest.jobs[0].prompt;
+  assert.match(prompt(noTests), /This ticket owns no test file: do not write tests, test blocks or import\.meta\.vitest/);
+  assert.doesNotMatch(prompt(noTests), /Put the tag in the title of the test/);
+  assert.match(prompt(withTests), /Put the tag in the title of the test/);
+  assert.doesNotMatch(prompt(withTests), /owns no test file/);
+  assert.match(prompt(testTicket), /Put the tag in the title of the test/);
+  // the job type's own line follows the outputs
+  const built = applyJobType({ id: 'j', agent: 'auto', type: 'build', prompt: 'p', outputs: ['src/a.ts'] }).job.prompt;
+  assert.match(built, /You own no test file here: write no tests or test blocks/);
+  assert.doesNotMatch(built, /and its tests inside your declared outputs/);
+  assert.match(applyJobType({ id: 'j', agent: 'auto', type: 'build', prompt: 'p', outputs: ['src/a.ts', 'src/a.test.ts'] }).job.prompt, /Implement the change and its tests inside your declared outputs\./);
+  assert.match(applyJobType({ id: 'j', agent: 'auto', type: 'fix', prompt: 'p', outputs: ['src/a.ts'] }).job.prompt, /write no tests or test blocks/);
+});
