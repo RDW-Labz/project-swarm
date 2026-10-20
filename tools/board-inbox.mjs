@@ -65,7 +65,7 @@ function nextFor(item, root) {
   return { commands, next };
 }
 
-export async function boardInbox({ projects, now = Date.now(), env = process.env, collect = collectInbox, deps = inboxDeps(), ledgerOf = readLedger, phoneDirectory = phoneDir(env), projectMs = PROJECT_MS } = {}) {
+export async function boardInbox({ projects, now = Date.now(), env = process.env, collect = collectInbox, deps = inboxDeps({ channel: 'board' }), ledgerOf = readLedger, phoneDirectory = phoneDir(env), projectMs = PROJECT_MS } = {}) {
   const config = await readPhoneConfig(phoneDirectory).catch(() => null);
   const state = config ? await readPhoneState(phoneDirectory, config.repo).catch(() => ({ issues: {} })) : { issues: {} };
   const asked = new Map();

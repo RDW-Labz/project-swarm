@@ -232,13 +232,18 @@ export async function decide(root, ref, choice, deps) {
 // A hand-build request is answered through the same inbox as everything else (the board's Needs you, the phone's one-time word, `swarm decide`): approve or deny. The choice is applied to
 // the guard's state, with no backlog goal made (it is not a plan decision).
 async function decideHandbuild(root, ref, picked, deps) {
-  const { readJournal, appendEvent, now } = deps;
+  const { readJournal, appendEvent, now, channel } = deps;
   const events = await readJournal(root, { limit: Infinity });
   const item = openDecisions(events).find(event => String(event.id) === ref);
   if (!item) throw new Error(`inbox-unknown: ${ref}`);
   if (!['approve', 'deny'].includes(picked)) throw new Error(`inbox-choice-invalid: ${picked}`);
-  const { decideRequest } = await import('./handbuild.mjs');
-  decideRequest(root, ref.slice('handbuild-'.length), picked, { now, by: 'owner' });
+  const { decideRequest, readState, ELEVATED_GIT_OPS } = await import('./handbuild.mjs');
+  const hbId = ref.slice('handbuild-'.length);
+  const req = readState(root).requests[hbId];
+  if (picked === 'approve' && req && (req.git ?? []).some(g => ELEVATED_GIT_OPS.includes(g)) && channel !== 'computer') {
+    throw new Error('handbuild-computer-only: merge, deploy, force-push and branch -D need the owner at the computer (swarm decide), not from the phone or board');
+  }
+  decideRequest(root, hbId, picked, { now, by: 'owner', channel });
   await appendEvent(root, { kind: 'decision', id: ref, confirmed: true, choice: picked, text: sanitizeText(item.text ?? '') }, { now });
   return { id: ref, choice: picked, changed: false, goal: null };
 }

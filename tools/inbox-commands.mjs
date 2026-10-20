@@ -19,10 +19,11 @@ const bad = command => ({ stdout: USAGE[command], exitCode: 1 });
 
 // The inbox library reads and writes human items through these functions; here they are backed by
 // .swarm/project/human-jobs.json and the project journal.
-export function inboxDeps({ now = Date.now, onNote } = {}) {
+export function inboxDeps({ now = Date.now, onNote, channel } = {}) {
   return {
     now,
     onNote,
+    channel,
     listRuns: async root => (await readStore(root)).groups.map(group => group.id),
     readState: async (root, id) => {
       const group = (await readStore(root)).groups.find(item => item.id === id);
@@ -79,7 +80,7 @@ export async function runInboxCommand(root, command, args, { installRoot, now = 
     }
     if (command === 'decide') {
       if (args.length !== 2) return bad(command);
-      const out = await decide(root, args[0], args[1], inboxDeps({ now }));
+      const out = await decide(root, args[0], args[1], inboxDeps({ now, channel: 'computer' }));
       return { stdout: out.changed ? `decided ${out.id}: ${out.choice}; added to backlog: ${out.goal}\n` : `decided ${out.id}: ${out.choice}\n`, exitCode: 0 };
     }
     if (command === 'resolve') {

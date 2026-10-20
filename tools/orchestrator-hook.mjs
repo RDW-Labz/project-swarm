@@ -4,6 +4,7 @@
 // .swarm/orchestrator/events.ndjson and prints nothing. It never blocks or changes anything: whatever goes wrong, it exits 0 so a tool call is never held up by it.
 import { buildEvent, appendEvent, projectRootOf } from './orchestrator-events.mjs';
 import { analyzeShell } from './shell-writes.mjs';
+import { recordChatMerge } from './handbuild.mjs';
 
 const kind = process.argv[2];
 let raw = '';
@@ -16,6 +17,17 @@ process.stdin.on('end', () => {
     if (root) {
       const event = buildEvent(kind, input, { root, analyze: analyzeShell });
       if (event) appendEvent(root, event);
+      if (kind === 'prompt') {
+        try {
+          const prompt = typeof input.prompt === 'string' ? input.prompt : (typeof input.user_prompt === 'string' ? input.user_prompt : '');
+          let recorded = 0;
+          for (const line of prompt.split('\n')) {
+            if (recorded >= 5) break;
+            const m = line.match(/^\s*(?:(?:\d+\.|[-*])\s+)?merge\s+#?(\d+)\s*$/i);
+            if (m) { recordChatMerge(root, m[1], { now: Date.now }); recorded += 1; }
+          }
+        } catch { /* never throw from the hook */ }
+      }
     }
   } catch { /* an unreadable input is dropped */ }
   process.exit(0);

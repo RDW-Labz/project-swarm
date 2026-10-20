@@ -14,6 +14,8 @@ import { isRoutingPath } from './routing-paths.mjs';
 import { swarmProducedFiles } from './swarm-produced.mjs';
 
 export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D']);
+export const ELEVATED_GIT_OPS = Object.freeze(['merge', 'deploy', 'force-push', 'branch-D']);
+const CHAT_MERGE_MS = 60 * 60000;
 const ALLOWED_GH = new Set(['pr create', 'pr view', 'pr list', 'pr checks', 'pr diff', 'run list', 'run watch', 'run view']);
 const READ_GIT_SUBS = new Set(['fetch', 'status', 'log', 'diff', 'show']);
 const WRITE_HTTP = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -97,14 +99,49 @@ const isLink = p => { try { return fs.lstatSync(p).isSymbolicLink(); } catch { r
 const safeDir = root => { const d = path.join(root, '.swarm', 'handbuild'); if (isLink(path.join(root, '.swarm')) || isLink(d)) throw Error('handbuild-path-unsafe'); fs.mkdirSync(d, { recursive: true }); return d; };
 const cleanText = (v, n) => String(v ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
 
+function pruneMerges(state, now) {
+  if (!state.merges || typeof state.merges !== 'object' || Array.isArray(state.merges)) { state.merges = {}; return; }
+  for (const [k, exp] of Object.entries(state.merges)) if (!Number.isFinite(exp) || exp <= now) delete state.merges[k];
+}
+
 export function readState(root) {
   try {
     const file = path.join(root, STATE_FILE);
-    if (isLink(file)) return { version: 1, requests: {} };
+    if (isLink(file)) return { version: 1, requests: {}, merges: {} };
     const state = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return state && typeof state === 'object' && state.requests && typeof state.requests === 'object' && !Array.isArray(state.requests) ? state : { version: 1, requests: {} };
-  } catch { return { version: 1, requests: {} }; }
+    const base = state && typeof state === 'object' && state.requests && typeof state.requests === 'object' && !Array.isArray(state.requests) ? state : { version: 1, requests: {} };
+    if (!base.merges || typeof base.merges !== 'object' || Array.isArray(base.merges)) base.merges = {};
+    return base;
+  } catch { return { version: 1, requests: {}, merges: {} }; }
 }
+
+/** Owner typed `merge #N` in chat: allows one `gh pr merge N` / `swarm merge N` without a hand-build approval naming merge. */
+export function recordChatMerge(root, pr, { now = Date.now } = {}) {
+  const n = Number(String(pr ?? '').replace(/^#/, ''));
+  if (!Number.isInteger(n) || n < 1) return;
+  withStateLock(root, () => {
+    const state = readState(root);
+    pruneMerges(state, now());
+    state.merges[String(n)] = now() + CHAT_MERGE_MS;
+    writeState(root, state);
+  });
+}
+
+function tryConsumeChatMerge(root, pr, now) {
+  const key = String(pr ?? '').replace(/^#/, '');
+  if (!/^\d+$/.test(key)) return false;
+  return withStateLock(root, () => {
+    const state = readState(root);
+    pruneMerges(state, now);
+    const exp = state.merges?.[key];
+    if (!Number.isFinite(exp) || exp <= now) return false;
+    delete state.merges[key];
+    writeState(root, state);
+    return true;
+  });
+}
+
+const requestElevated = r => (r?.git ?? []).some(g => ELEVATED_GIT_OPS.includes(g));
 // One writer at a time: the lock file is created exclusively (a stale one, from a process that died, is taken over after 10 seconds), and the state is read again under it.
 function withStateLock(root, fn) {
   const dir = safeDir(root);
@@ -198,7 +235,7 @@ export function createRequest(root, { kind, reason, files, minutes, git }, { now
 }
 
 /** approve | deny a pending request. An approval runs for `minutes` from now and covers only the files (and git operations) it names. */
-export function decideRequest(root, id, choice, { now = Date.now, by = 'owner' } = {}) {
+export function decideRequest(root, id, choice, { now = Date.now, by = 'owner', channel } = {}) {
   return withStateLock(root, () => {
   const state = readState(root);
   const r = state.requests[id];
@@ -206,6 +243,9 @@ export function decideRequest(root, id, choice, { now = Date.now, by = 'owner' }
   if (r.status !== 'pending') throw Error(`handbuild-not-pending: ${id} is already ${r.status}`);
   if (now() - Date.parse(r.requestedAt) > PENDING_MS) { r.status = 'expired'; writeState(root, state); throw Error(`handbuild-expired: ${id} waited more than 24 hours and expired; ask again if it is still needed`); }
   if (!['approve', 'deny'].includes(choice)) throw Error('handbuild-choice: approve or deny');
+  if (choice === 'approve' && requestElevated(r) && channel !== undefined && channel !== 'computer') {
+    throw Error('handbuild-computer-only: merge, deploy, force-push and branch -D need the owner at the computer (swarm decide), not from the phone or board');
+  }
   r.status = choice === 'approve' ? 'approved' : 'denied';
   r.decidedAt = new Date(now()).toISOString();
   r.decidedBy = cleanText(by, 40);
@@ -284,8 +324,11 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
         }
         if (op.sub === 'merge') { policyGitOps.push('merge'); continue; }
         if (op.sub === 'push') {
-          if (op.force) { policyGitOps.push('force-push'); continue; }
           const target = normBranch(op.branch ?? current);
+          if (op.force && isProtectedBranch(target)) {
+            return { allow: false, files: [], reason: 'Hand-build guard: force push to a protected branch (main or master) is never approvable, even with a hand-build approval that names force-push.' };
+          }
+          if (op.force) { policyGitOps.push('force-push'); continue; }
           if (protBranch || isProtectedBranch(target)) policyGitOps.push('push');
           continue;
         }
@@ -296,10 +339,15 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
         }
       } else if (op.tool === 'gh') {
         if (ALLOWED_GH.has(op.sub)) continue;
-        if (op.sub === 'pr merge') { policyGitOps.push('merge'); continue; }
+        if (op.sub === 'pr merge') {
+          if (op.target && tryConsumeChatMerge(root, op.target, now())) continue;
+          policyGitOps.push('merge');
+          continue;
+        }
       } else if (op.tool === 'vercel' && op.sub === 'deploy') {
         policyGitOps.push('deploy');
       } else if (op.tool === 'swarm' && op.sub === 'merge') {
+        if (op.target && tryConsumeChatMerge(root, op.target, now())) continue;
         policyGitOps.push('merge');
       }
     }

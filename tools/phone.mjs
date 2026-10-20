@@ -33,9 +33,17 @@ const TICKET_ID = /^T-\d{4}$/;
 
 // The only things a phone may ask for. Anything else is not offered, so it cannot be asked for.
 export const PHONE_ACTIONS = Object.freeze(['choose', 'approve-ticket', 'decline', 'stop-all']);
-export const NEVER_FROM_PHONE = Object.freeze(['merge', 'deploy', 'raise a spend cap', 'a security or migration override', 'accepting an unmet acceptance line']);
+export const NEVER_FROM_PHONE = Object.freeze(['merge', 'deploy', 'force-push', 'branch-D', 'raise a spend cap', 'a security or migration override', 'accepting an unmet acceptance line']);
 
 const SECOND_STEP = /\b(pay\w*|billing|bill|charge|price|prices|auth\w*|log-?in|sign-?in|passwords?|secrets?|tokens?|keys?|delete|drop|wipe|migrat\w*|deploy\w*|production|prod|refund)\b/i;
+const HANDBUILD_COMPUTER_ONLY = 'handbuild-computer-only: merge, deploy, force-push and branch -D need the owner at the computer (swarm decide), not from the phone or board';
+
+async function refuseElevatedHandbuildChoose(root, itemId, choice) {
+  if (!String(itemId ?? '').startsWith('handbuild-') || String(choice ?? '') !== 'approve') return;
+  const { readState, ELEVATED_GIT_OPS } = await import('./handbuild.mjs');
+  const req = readState(root).requests[String(itemId).slice('handbuild-'.length)];
+  if (req && (req.git ?? []).some(g => ELEVATED_GIT_OPS.includes(g))) throw new Error(HANDBUILD_COMPUTER_ONLY);
+}
 const clean = (text, n = 120) => sanitizeText(String(text ?? '')).replace(/[`<>\[\]|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
 
 async function readJson(file, fallback) { try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return fallback; throw error; } }
@@ -248,7 +256,11 @@ async function syncUnlocked({ dir, deps, dryRun }) {
     let result;
     try {
       if (!PHONE_ACTIONS.includes(action.type)) throw new Error('not an allowed phone action');
-      if (action.type === 'choose') result = await deps.runSwarm(rec.root, ['decide', rec.itemId, action.choice]);
+      if (action.type === 'choose') {
+        await refuseElevatedHandbuildChoose(rec.root, rec.itemId, action.choice);
+        if (typeof deps.decideInbox === 'function') result = await deps.decideInbox(rec.root, rec.itemId, action.choice);
+        else result = await deps.runSwarm(rec.root, ['decide', rec.itemId, action.choice]);
+      }
       else if (action.type === 'approve-ticket') result = await deps.runSwarm(rec.root, ['tickets', rec.itemId, '--approve', '--yes']);
       else result = await deps.runSwarm(null, ['stop', '--all']);
     } catch (error) { result = { ok: false, text: String(error.message ?? error) }; }

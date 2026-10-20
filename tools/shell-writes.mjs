@@ -148,7 +148,8 @@ const ghOpFromArgs = args => {
   const flags = args.filter(a => a.startsWith('-'));
   const pos = args.filter(a => a !== '' && !a.startsWith('-'));
   const sub = pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null;
-  return { tool: 'gh', sub, flags, branch: null, force: false, delete: null };
+  const target = sub === 'pr merge' && pos[2] !== undefined ? String(pos[2]) : null;
+  return { tool: 'gh', sub, flags, branch: null, force: false, delete: null, target };
 };
 
 /** The text inside $(...) and `...` (one level, not inside single quotes), so a command run by substitution is read too. */
@@ -426,7 +427,7 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
     } else if (cmd === 'vercel' && (args.length === 0 || args.some(a => a === 'deploy' || a === '--prod') || args.every(a => a.startsWith('-')))) {
       ops.push({ tool: 'vercel', sub: 'deploy', flags: args.filter(a => a.startsWith('-')), branch: null, force: false, delete: null });
     } else if (cmd === 'swarm' && operands[0] === 'merge') {
-      ops.push({ tool: 'swarm', sub: 'merge', flags: args.filter(a => a.startsWith('-')), branch: null, force: false, delete: null });
+      ops.push({ tool: 'swarm', sub: 'merge', flags: args.filter(a => a.startsWith('-')), branch: null, force: false, delete: null, target: operands[1] !== undefined ? String(operands[1]) : null });
     } else if (isInterpreter(cmd)) {
       const isCode = codeFlagFor(cmd);
       const at = args.findIndex(isCode);
