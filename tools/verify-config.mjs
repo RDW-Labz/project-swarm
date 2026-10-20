@@ -1,7 +1,11 @@
 import { scanSecrets } from './security-scan.mjs';
-const AGENTS = new Set(['codex', 'claude', 'none']);
+const AGENTS = new Set(['codex', 'claude', 'local', 'none']);
 const TEST_TYPES = new Set(['build', 'test', 'migration']);
-const KEYS = new Set(['command', 'setup', 'testEnv', 'agent', 'model', 'timeoutSec']);
+const KEYS = new Set(['command', 'setup', 'testEnv', 'agent', 'model', 'timeoutSec', 'timeoutMs']);
+const SHELL_META_IN_PROGRAM = /[;&|`$<>(){}[\]*?~#%!\\\n\r]/;
+const LOCAL_TIMEOUT_MIN = 1000;
+const LOCAL_TIMEOUT_MAX = 1_800_000;
+const LOCAL_TIMEOUT_DEFAULT = 600_000;
 const TESTS_TOKEN = '{tests}';
 const SECRET_NAME_PARTS = ['KEY', 'JWT', 'DSN', 'SESSION', 'COOKIE', 'CERT', 'SIGN', 'PASS', 'AUTH', 'SECRET', 'TOKEN', 'PRIVATE', 'CREDENTIAL'];
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
@@ -78,9 +82,18 @@ export function validateVerifyConfig(verify) {
 
   const agent = verify.agent ?? 'claude';
   if (AGENTS.has(agent)) value.agent = agent;
-  else errors.push('verify.agent must be codex, claude or none');
+  else errors.push('verify.agent must be codex, claude, local or none');
+  if (agent === 'local') {
+    if (isArgv(verify.command) && SHELL_META_IN_PROGRAM.test(verify.command[0])) {
+      errors.push('verify.command program name must not contain shell metacharacters');
+    }
+    const tms = verify.timeoutMs ?? LOCAL_TIMEOUT_DEFAULT;
+    if (Number.isInteger(tms) && tms >= LOCAL_TIMEOUT_MIN && tms <= LOCAL_TIMEOUT_MAX) value.timeoutMs = tms;
+    else errors.push(`verify.timeoutMs must be an integer from ${LOCAL_TIMEOUT_MIN} to ${LOCAL_TIMEOUT_MAX}`);
+  }
   if (verify.model !== undefined) {
     if (agent === 'none') errors.push('verify.model is not used with agent none');
+    else if (agent === 'local') errors.push('verify.model is not used with agent local');
     else if (!isStr(verify.model) || !/^[A-Za-z0-9._:-]{1,80}$/.test(verify.model)) errors.push('verify.model must be a model name of letters, digits and . _ : -');
     else value.model = verify.model;
   }
