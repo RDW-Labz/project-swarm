@@ -1065,10 +1065,65 @@ function positiveTargetedPass(output, file, runner) {
   return false;
 }
 
+// Swarm rewrites these on many commands; they must not block `swarm ship` (same set as the hand-build guard routing files, plus the usage ledger).
+export const SHIP_IGNORED_DIRTY_PATHS = new Set([
+  'coordination/HANDOFF.md',
+  'coordination/HANDOFF.previous.md',
+  'coordination/HANDOFF.previous-2.md',
+  'TASK.md',
+  'coordination/TASK.md',
+  'build-plan.md',
+  'coordination/build-plan.md',
+  'docs/state/usage-ledger.md',
+]);
+
+function unquotePorcelainPath(token) {
+  const s = String(token ?? '').trim();
+  if (s.startsWith('"') && s.endsWith('"')) return s.slice(1, -1).replace(/\\(["\\])/g, '$1');
+  return s;
+}
+
+function pathsFromPorcelainLine(line) {
+  const raw = String(line ?? '');
+  if (!raw.trim()) return [];
+  const body = raw.length >= 2 ? raw.slice(2).trimStart() : raw.trim();
+  if (body.includes(' -> ')) {
+    const splitAt = body.indexOf(' -> ');
+    return [unquotePorcelainPath(body.slice(0, splitAt)), unquotePorcelainPath(body.slice(splitAt + 4))];
+  }
+  return [unquotePorcelainPath(body)];
+}
+
+function normalizeRepoPath(file) {
+  return String(file ?? '').replace(/\\/g, '/');
+}
+
+export function isShipIgnoredDirtyPath(file) {
+  return SHIP_IGNORED_DIRTY_PATHS.has(normalizeRepoPath(file));
+}
+
+export function dirtyBlockers(porcelainLines) {
+  const lines = Array.isArray(porcelainLines) ? porcelainLines : String(porcelainLines ?? '').split('\n');
+  const blockers = new Set();
+  for (const line of lines) {
+    if (!String(line ?? '').trim()) continue;
+    const paths = pathsFromPorcelainLine(line);
+    const blocking = paths.filter(file => !isShipIgnoredDirtyPath(file));
+    if (blocking.length) for (const file of blocking) blockers.add(normalizeRepoPath(file));
+  }
+  return [...blockers].sort();
+}
+
+function commitFirstRefusal(stdout) {
+  const blockers = dirtyBlockers(String(stdout ?? '').split('\n'));
+  if (!blockers.length) return null;
+  return `commit first: ${blockers.join(', ')}`;
+}
+
 async function cleanHeadAt(exec, root, expectedSha) {
   try {
-    const status = await exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root });
-    if (!status || status.code !== 0 || String(status.stdout ?? '').trim() !== '') return false;
+    const status = await exec('git', ['status', '--porcelain'], { cwd: root });
+    if (!status || status.code !== 0 || dirtyBlockers(String(status.stdout ?? '').split('\n')).length) return false;
     const head = await exec('git', ['rev-parse', 'HEAD'], { cwd: root });
     return Boolean(head && head.code === 0 && head.stdout.trim() === expectedSha);
   } catch {
@@ -1662,9 +1717,10 @@ export async function ship(options) {
   if (mutantsSkippedRedBase && requireSections.some(name => name.toLowerCase() === 'mutation check')) {
     return { ...base, status: 'refused', reason: 'mutants skipped: red base (checks failed); required Mutation check section cannot be satisfied' };
   }
-  const statusRes = await exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root });
+  const statusRes = await exec('git', ['status', '--porcelain'], { cwd: root });
   if (statusRes.code !== 0) return { ...base, status: 'refused', reason: 'git status failed' };
-  if (statusRes.stdout.trim() !== '') return { ...base, status: 'refused', reason: 'commit first' };
+  const commitFirst = commitFirstRefusal(statusRes.stdout);
+  if (commitFirst) return { ...base, status: 'refused', reason: commitFirst };
   const shaRes = await exec('git', ['rev-parse', 'HEAD'], { cwd: root });
   if (shaRes.code !== 0 || shaRes.stdout.trim() === '') return { ...base, status: 'refused', reason: stepFailed('rev-parse', shaRes) };
   const sha = shaRes.stdout.trim();
