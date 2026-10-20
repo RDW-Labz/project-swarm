@@ -235,10 +235,11 @@ export async function releaseSpend({ dir, key }) {
   return withSpendStore(store => { delete store.entries[key]; }, { dir });
 }
 export function finalCost({ lane, record, reservation, rates }) {
-  if (typeof record.costUsd === 'number') return { usd: record.costUsd, kind: 'actual', flagged: false, costSource: record.costSource ?? 'reported' };
+  const job = object(record) ? record : {};
+  if (typeof job.costUsd === 'number') return { usd: job.costUsd, kind: 'actual', flagged: false, costSource: job.costSource ?? 'reported' };
   if (!PAID_LANES.includes(lane)) return { usd: 0, kind: 'actual', flagged: false, costSource: null };
-  const input = record.usage?.input_tokens ?? record.usage?.prompt_tokens;
-  const output = record.usage?.output_tokens ?? record.usage?.completion_tokens;
+  const input = job.usage?.input_tokens ?? job.usage?.prompt_tokens;
+  const output = job.usage?.output_tokens ?? job.usage?.completion_tokens;
   if ((typeof input === 'number' || typeof output === 'number') && rates?.inUsdPerToken != null && rates?.outUsdPerToken != null) {
     const usd = (input ?? 0) * rates.inUsdPerToken + (output ?? 0) * rates.outUsdPerToken;
     if (usd > 0) return { usd, kind: 'estimated', flagged: true, costSource: 'estimated-from-tokens' };
