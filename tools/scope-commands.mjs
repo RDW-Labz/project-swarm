@@ -9,7 +9,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { appTypes, runInterview, scopeFromAnswers } from './scope-interview.mjs';
 import readline from 'node:readline';
 import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText, isSensitiveText } from './scope.mjs';
-import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS } from './tickets.mjs';
+import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, validateSetTransition, ticketActor, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS } from './tickets.mjs';
 import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
 import { missingToolConfigs, toolConfigLines, projectFileList, existsIn, e2eSpecWarnings } from './tool-config.mjs';
 import { isSecretLooking } from './ignored-artifacts.mjs';
@@ -54,7 +54,8 @@ export const SCOPE_USAGE = [
   '       swarm tickets ID --approve [--yes]     (a ticket made from a gallery comment is proposed: you read it, name its files, approve it; no worker runs it before)',
   '       swarm tickets ID --clear-note | --retry-note TEXT | --reopen --reason "why"   (drop or replace the note a failed attempt left; put a done ticket back to ready, logged)',
   '       swarm tickets ID --lane auto|claude|codex|cursor|anthropic[:MODEL] | --risk low|medium|high [--yes]   (logged; an approved ledger is sealed again)',
-  '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high (filter; with an ID use the --risk line above)] [--set STATUS] [--note TEXT] [--json]',
+  '       swarm tickets ID --set STATUS [--yes|--force] [--dry-run] [--note TEXT]     (hand status change: previews the move; --yes or --force applies; reviews for done are never skipped)',
+  '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high (filter; with an ID use the --risk line above)] [--json]',
   '       swarm tickets ID --files a,b [--take-from TICKET] [--deletes x,y] [--dependencies pkg,pkg@^1] [--context c,d] [--tests t] [--acceptance "one || two"] [--add-acceptance TEXT] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
   '       swarm tickets ID... --release [--note TEXT]     (clean release of held tickets: blocked, todo or review go back to ready with attempts, escalation and retry notes cleared)',
   '       swarm tickets --mark-deps [ID...] [--yes]     (one time, older ledgers: mark blocked tickets with no reason as dependency-blocked so they unlock)',
@@ -1884,6 +1885,96 @@ async function reopenTicket(root, rest, flags) {
   } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
 }
 
+const setPreviewLine = ({ id, from, to }) => `${id}: ${from} -> ${to}`;
+
+// Done by hand never skips the Opus security or acceptance reviews that integrated sync requires.
+async function doneReviewRefusals(root, ledger, ticket) {
+  const reasons = [];
+  const reviewReason = securityReviewReason(ticket);
+  if (reviewReason) {
+    const reviewRecords = await readReviewRecords(root);
+    const record = reviewRecords.tickets[ticket.id];
+    const now = await filesHash(root, [...(ticket.files ?? []), ...(ticket.deletes ?? [])]);
+    if (ticket.securityReview?.state === 'blocked' && !(record && Date.parse(record.at) > Date.parse(ticket.securityReview.at))) {
+      reasons.push(`Opus security review (${reviewReason}): the last review gave no result. Run swarm go --scope or swarm scope sync RUN --integrated to queue a new review, then swarm scope security-review <run id>.`);
+    } else if (record?.verdict === 'fail' && record.filesHash === now) {
+      reasons.push(`Opus security review (${reviewReason}): the review failed on the current code. Fix the findings and run swarm scope sync RUN --integrated or swarm go --scope to queue a new review.`);
+    } else if (!(record?.verdict === 'pass' && record.filesHash === now)) {
+      reasons.push(`Opus security review (${reviewReason}): no passing review on the current code. Run swarm go --scope or swarm scope sync RUN --integrated to queue it, then swarm scope security-review <run id>.`);
+    }
+  }
+  const rawPointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? 'null');
+  const profile = await readProfile(root);
+  if (rawPointer?.profile && !profile) {
+    const { errors } = validateProfile(rawPointer.profile);
+    reasons.push(`acceptance lines cannot be checked: ${errors[0] ?? 'the project profile is invalid'}`);
+  } else {
+    const acceptanceOn = Boolean(rawPointer?.profile) && rawPointer.profile.acceptance?.enforce !== false;
+    if (acceptanceOn && ['build', 'test', 'migration', 'contract'].includes(ticket.type) && ticket.origin !== 'ci' && acceptanceLines(ticket).length) {
+      const tests = ticketTests(ticket).filter(f => looksLikeTestFile(f) && !/[*?]|\/$/.test(f));
+      const sources = new Map();
+      for (const f of tests) {
+        try {
+          const full = path.join(root, f);
+          const info = lstatSync(full);
+          if (info.isFile() && info.size <= 1_000_000) sources.set(f, readFileSync(full, 'utf8'));
+        } catch { /* missing */ }
+      }
+      const hashTests = [...new Set([...(ticket.tests ?? []), ...tests])];
+      const hash = await filesHash(root, [...(ticket.files ?? []), ...(ticket.deletes ?? []), ...hashTests]);
+      const accRecords = await readAcceptanceRecords(root);
+      const rec = accRecords.tickets[ticket.id];
+      const lineHash = n => sha256Text(String(ticket.acceptance?.[n - 1] ?? ''));
+      const record = rec ? { ...rec, lines: (rec.lines ?? []).filter(l => l.h === lineHash(l.n)) } : undefined;
+      const cov = coverage({ ...ticket, tests }, sources);
+      const ev = evaluate({ ticket, cov, record, filesHash: hash, testsPassed: false });
+      if (ev.state === 'failed') {
+        reasons.push(`acceptance review: line(s) ${ev.failing.join(', ')} failed. Run swarm scope sync RUN --integrated or swarm go --scope, then swarm scope acceptance-review <run id>.`);
+      } else if (ev.state === 'review') {
+        reasons.push(`acceptance review: line(s) ${ev.missing.join(', ')} are not covered by a passing test or acceptance review. Run swarm scope sync RUN --integrated or swarm go --scope to queue one, then swarm scope acceptance-review <run id>.`);
+      }
+    }
+  }
+  return reasons;
+}
+
+async function setTicketStatus(root, rest, flags) {
+  if (rest.length !== 1) return bad('tickets --set needs one ticket id');
+  const to = flags.set;
+  const ledger = await readLedger(root);
+  if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
+  const check = validateSetTransition(ledger, rest[0], to);
+  if (!check.ok) return out(check.message, 1);
+  const ticket = ledger.tickets.find(t => t.id === rest[0]);
+  const preview = setPreviewLine(check.preview);
+  if (to === 'done') {
+    const reviewBlock = await doneReviewRefusals(root, ledger, ticket);
+    if (reviewBlock.length) {
+      const msg = [`refused: cannot set ${ticket.id} to done without required reviews:`, ...reviewBlock.map(r => `  ${r}`)].join('\n');
+      if (flags['dry-run'] === true) return out(`${msg}\n(dry-run: nothing changed)`, 1);
+      return out(msg, 1);
+    }
+  }
+  if (flags['dry-run'] === true) return out(`${preview}\n(dry-run: nothing changed)`);
+  const confirmation = flags.force === true ? 'force' : flags.yes === true ? 'yes' : null;
+  if (!confirmation) return out(`${preview}\nRerun with --yes or --force to apply.`, 1);
+  try {
+    const t = await lockedTransition(root, rest[0], to, {
+      by: 'owner',
+      note: flags.note,
+      actor: ticketActor(),
+      source: 'tickets-set',
+      confirmation,
+    });
+    await refreshPlan(root);
+    return out(`${t.id} is now ${t.status}`);
+  } catch (error) {
+    if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1);
+    if (['ticket-transition', 'ticket-deps', 'ticket-unapproved', 'ticket-missing'].includes(error.code)) return out(error.message, 1);
+    throw error;
+  }
+}
+
 export async function runTicketsCommand(root, args) {
   const { flags, rest } = parseArgs(args);
   const ledger = await readLedger(root);
@@ -1895,14 +1986,7 @@ export async function runTicketsCommand(root, args) {
   if (flags.approve === true) return approveProposed(root, rest, flags);
   if (flags.lane !== undefined || (flags.risk !== undefined && rest.length === 1 && flags.set === undefined)) return setTicketRoute(root, rest, flags);
   if (['files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from'].some(k => flags[k] !== undefined)) return editTicketFiles(root, ledger, rest, flags);
-  if (flags.set !== undefined) {
-    if (rest.length !== 1) return bad('tickets --set needs one ticket id');
-    if (!STATUSES.includes(flags.set)) return out(`status must be one of: ${STATUSES.join(', ')}`, 1);
-    if (ledger.tickets.find(t => t.id === rest[0])?.status === 'proposed' && flags.set !== 'cancelled') return out(`${rest[0]} is proposed: approve it with swarm tickets ${rest[0]} --approve (or cancel it with --set cancelled)`, 1);
-    const t = await lockedTransition(root, rest[0], flags.set, { by: 'owner', note: flags.note });
-    await refreshPlan(root);
-    return out(`${t.id} is now ${t.status}`);
-  }
+  if (flags.set !== undefined) return setTicketStatus(root, rest, flags);
   if (rest.length === 1) {
     const t = ledger.tickets.find(x => x.id === rest[0]);
     if (!t) return out(`no ticket ${rest[0]}`, 1);

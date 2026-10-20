@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { validDependencySpec } from './dep-install.mjs';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import { randomBytes, createHash } from 'node:crypto';
 import path from 'node:path';
 import { safeWritableDir, assertRegularOrMissing, appendEvent } from './journal.mjs';
@@ -10,7 +11,7 @@ import { isSensitivePath } from './sensitive-paths.mjs';
 
 // Tickets made from outside text (a gallery comment, a production error) are proposals: no worker runs one until the owner approves it.
 export const PROPOSAL_ORIGINS = ['comment', 'error', 'handoff'];
-const unapprovedProposal = t => PROPOSAL_ORIGINS.includes(t?.origin) && t.approvedBy !== 'owner';
+export const unapprovedProposal = t => PROPOSAL_ORIGINS.includes(t?.origin) && t.approvedBy !== 'owner';
 export const STATUSES = ['proposed', 'todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled'];
 export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'contract', 'human'];
 const RISKS = ['low', 'medium', 'high'];
@@ -48,6 +49,27 @@ const MOVES = {
 // Day 0 and other human tickets are done by a person, at any time.
 const HUMAN_MOVES = { todo: ['done'], ready: ['done'], running: ['done'], blocked: ['done'] };
 const legalMoves = ticket => [...(MOVES[ticket.status] ?? []), ...(ticket.type === 'human' ? HUMAN_MOVES[ticket.status] ?? [] : [])];
+
+export function ticketActor() {
+  const fromEnv = process.env.SWARM_ACTOR;
+  if (typeof fromEnv === 'string' && fromEnv.trim()) return fromEnv.trim().slice(0, 120);
+  try { return os.userInfo().username || 'owner'; } catch { return 'owner'; }
+}
+
+// Legality checks for `swarm tickets ID --set` (no lock; does not judge security or acceptance reviews).
+export function validateSetTransition(ledger, id, to) {
+  if (!STATUSES.includes(to)) return { ok: false, message: `status must be one of: ${STATUSES.join(', ')}` };
+  const ticket = ledger?.tickets?.find(t => t.id === id);
+  if (!ticket) return { ok: false, message: `no ticket ${id}` };
+  if (ticket.status === 'proposed' && to !== 'cancelled') return { ok: false, message: `${id} is proposed: approve it with swarm tickets ${id} --approve (or cancel it with --set cancelled)` };
+  if (!legalMoves(ticket).includes(to)) return { ok: false, message: `${id}: ${ticket.status} -> ${to} is not allowed; legal next statuses: ${legalMoves(ticket).join(', ') || 'none'}` };
+  if (unapprovedProposal(ticket) && ['todo', 'ready', 'running'].includes(to)) return { ok: false, message: `${id} came from outside text (a gallery comment, a production error or a handoff check); the owner approves it with swarm tickets ${id} --approve` };
+  if (to === 'ready') {
+    const waiting = (ticket.dependsOn ?? []).filter(d => ledger.tickets.find(x => x.id === d)?.status !== 'done');
+    if (waiting.length) return { ok: false, message: `${id} waits on ${waiting.join(', ')}` };
+  }
+  return { ok: true, preview: { id: ticket.id, from: ticket.status, to } };
+}
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const isStrArr = v => Array.isArray(v) && v.every(s => typeof s === 'string');
@@ -188,7 +210,7 @@ export function createLedger({ scope, tickets = [], now = Date.now() } = {}) {
   return { version: 1, scope, tickets, changeOrders: [], approved: null, createdAt: at, updatedAt: at };
 }
 
-export async function transition(root, id, to, { by = 'system', note, now = Date.now(), reason } = {}) {
+export async function transition(root, id, to, { by = 'system', note, now = Date.now(), reason, actor, source, confirmation } = {}) {
   const ledger = await readLedger(root);
   if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
   const ticket = ledger.tickets.find(t => t.id === id);
@@ -207,7 +229,17 @@ export async function transition(root, id, to, { by = 'system', note, now = Date
   const pruned = to === 'cancelled' ? pruneCancelledDeps(ledger).pruned : [];
   ledger.updatedAt = new Date(now).toISOString();
   await writeLedger(root, ledger);
-  await appendLog(root, { event: 'transition', id, from, to, by, note: note ?? null });
+  await appendLog(root, {
+    event: 'transition',
+    id,
+    from,
+    to,
+    by,
+    note: note ?? null,
+    ...(actor ? { actor } : {}),
+    ...(source ? { source } : {}),
+    ...(confirmation ? { confirmation } : {}),
+  });
   await logPrune(root, pruned, { cancelled: id, by }, now);
   return ticket;
 }
