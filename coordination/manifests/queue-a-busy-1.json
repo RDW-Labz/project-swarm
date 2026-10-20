@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "busy-marker-module",
+      "agent": "auto",
+      "prompt": "Create tools/busy-marker.mjs, a small ES module (SPDX-License-Identifier: Apache-2.0 header like tools/live-processes.mjs). It records that a long-running swarm command is alive. Exports: BUSY_MARKER_VERBS (a Set: go, run, integrate, autopilot, ship, scale, with-concurrency, ticket, sweep, resume); busyDir(env, home) returning a directory next to the live-run directory (see liveDir in tools/board.mjs for how that one is chosen, and honor the same env override style so tests can point it at a temp dir); async writeBusyMarker({command, root, pid = process.pid, dir}) that writes one JSON file named by pid with {pid, command, root, startedAt} atomically (temp file then rename, mode 0o700 dir) and returns an async remove() that deletes it and ignores ENOENT; async liveBusyMarkers({dir, isAlive}) that reads every marker, deletes the ones whose pid is not alive (default isAlive uses process.kill(pid, 0), EPERM counts as alive) or whose file is unreadable, and returns the live ones as [{pid, command, root}]. Never throw because the directory is missing: return []. Also write tests/busy-marker.test.mjs (node:test, node:assert/strict, same style as tests/update.test.mjs) using a temp dir: a marker written for the current pid shows as live; a marker whose pid is dead (use an injected isAlive returning false) is not returned and its file is deleted; remove() deletes the file and is safe to call twice; a missing directory returns []. Keep the code short and match the surrounding style. Do not edit any other file.",
+      "context": [
+        "tools/live-processes.mjs",
+        "tools/board.mjs",
+        "tests/update.test.mjs"
+      ],
+      "outputs": [
+        "tools/busy-marker.mjs",
+        "tests/busy-marker.test.mjs"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}

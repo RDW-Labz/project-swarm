@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.0 },
+  "jobs": [
+    {
+      "id": "review-pr202",
+      "agent": "claude",
+      "model": "sonnet",
+      "type": "review",
+      "prompt": "Review coordination/review/pr202.diff: busy markers for the swarm update guard. Promises: every long-running swarm command (go, run, integrate, autopilot, ship, scale, with-concurrency, ticket, sweep, resume) writes a marker with pid, command and root at start and removes it on exit; swarm update refuses while any marker pid is alive, ignores and deletes dead markers, and --force overrides. Look for concrete bugs: a marker that can be left behind or removed by the wrong process, a pid reuse false positive that blocks forever, a race between writing and checking, a path that writes outside the busy directory, a command in the verb list that never gets a marker (for example when --root comes first), the update refusal skipping the check when it should not, secrets or full command lines with tokens ending up in the marker, and tests that are racy or do not prove what they claim. Report only real findings with file and line, most severe first, or say none found.",
+      "context": ["coordination/review/pr202.diff"],
+      "outputs": [],
+      "timeoutMs": 600000
+    }
+  ]
+}

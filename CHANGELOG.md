@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.147.0
+
+swarm update waits for busy swarm commands.
+- **Busy markers:** every long-running swarm command (go, run, integrate, autopilot, ship, scale, with-concurrency, ticket, sweep, resume) writes a marker with its pid and the text swarm VERB (never the full command line) and removes it on exit. swarm update refuses while a marker pid is alive; a marker whose pid is gone or not a positive integer is deleted. --force overrides. This closes the gap where a go --scope loop between two waves registers no run and the update installed under it (parts-app wave 43).
+- **Known limit:** a reused pid keeps blocking until that process ends (it fails safe); --force overrides.
+- **Tests:** tests/busy-marker.test.mjs, tests/update-busy-marker.test.mjs.
+
 ## 1.146.0
 
 Integration no longer keeps files whose checks failed.
