@@ -224,43 +224,31 @@ async function ensureCheckpointHook(root){
  return {status:before.trim()?'updated':'created'};
 }
 
-// The Orchestrator lane's hooks (PreToolUse, PostToolUse, Stop, UserPromptSubmit) go in the same personal settings file: each runs tools/orchestrator-hook.mjs, which appends one small event
-// (session, tool, a path inside the project) to .swarm/orchestrator/events.ndjson and prints nothing. The command points at the install's `current` folder, so it keeps working after
-// `swarm update`; an entry from an older install is replaced, anything else in the file is kept, and an unreadable settings file is left alone.
+// Hooks installed into the personal settings file `.claude/settings.local.json` (git-ignored, like the checkpoint hook): the Orchestrator lane's observer hooks (PreToolUse, PostToolUse,
+// Stop, UserPromptSubmit: tools/orchestrator-hook.mjs appends one small event, prints nothing) and the hand-build guard (a PreToolUse hook: tools/handbuild-guard.mjs). Each command points at
+// the install's `current` folder, so it keeps working after `swarm update`, and is wrapped so that a missing script (before the update that brings it) is a no-op, never an error.
+// An entry from an older install is replaced, anything else in the file is kept, and an unreadable settings file is left alone.
 export const ORCHESTRATOR_HOOK_EVENTS=Object.freeze({PreToolUse:'pre',PostToolUse:'post',Stop:'stop',UserPromptSubmit:'prompt'});
-const isOrchestratorHook=hook=>typeof hook?.command==='string'&&hook.command.includes('orchestrator-hook.mjs');
+export const GUARD_MATCHER='Edit|Write|MultiEdit|NotebookEdit|Bash';
+const hookCommand=(script,arg)=>`test -f ${JSON.stringify(script)} && node ${JSON.stringify(script)}${arg?` ${arg}`:''} || true`;
+const commandOf=hook=>typeof hook?.command==='string'?hook.command:'';
 export function stableInstallDir(installRoot){
  const parent=path.dirname(installRoot);
  return path.basename(parent)==='versions'?path.join(path.dirname(parent),'current'):installRoot;
 }
-// An owner who does not want the lane creates `.swarm/orchestrator/off`: nothing is installed or refreshed there. `refreshOnly` (used by `swarm update` on linked projects) only touches a
-// project that already has the checkpoint hook or the Orchestrator hooks, i.e. one that was set up with agent files.
-export async function ensureOrchestratorHooks(root,installRoot,{refreshOnly=false}={}){
- try{await fs.access(path.join(root,'.swarm','orchestrator','off'));return {status:'off'};}catch{/* not switched off */}
- const script=path.join(stableInstallDir(installRoot),'tools','orchestrator-hook.mjs');
+async function readSettings(root){
  const destination=await safeTarget(root,'.claude/settings.local.json',{createParents:true});
  const before=await readOptional(destination);
  let settings={};
  if(before.trim()){
-  try{settings=JSON.parse(before);}catch{return {status:'skipped',reason:'settings.local.json is not valid JSON'};}
-  if(!settings||typeof settings!=='object'||Array.isArray(settings))return {status:'skipped',reason:'settings.local.json is not an object'};
+  try{settings=JSON.parse(before);}catch{return {destination,before,problem:'settings.local.json is not valid JSON'};}
+  if(!settings||typeof settings!=='object'||Array.isArray(settings))return {destination,before,problem:'settings.local.json is not an object'};
  }
- if(settings.hooks!==undefined&&(typeof settings.hooks!=='object'||settings.hooks===null||Array.isArray(settings.hooks)))return {status:'skipped',reason:'hooks is not an object'};
- if(refreshOnly){
-  const commands=Object.values(settings.hooks??{}).flatMap(list=>Array.isArray(list)?list:[]).flatMap(entry=>Array.isArray(entry?.hooks)?entry.hooks:[]).map(hook=>String(hook?.command??''));
-  if(!commands.some(c=>c===CHECKPOINT_HOOK||c.includes('orchestrator-hook.mjs')))return {status:'absent'};
- }
+ if(settings.hooks!==undefined&&(typeof settings.hooks!=='object'||settings.hooks===null||Array.isArray(settings.hooks)))return {destination,before,problem:'hooks is not an object'};
  settings.hooks??={};
- let changed=false;
- for(const [name,kind] of Object.entries(ORCHESTRATOR_HOOK_EVENTS)){
-  if(settings.hooks[name]!==undefined&&!Array.isArray(settings.hooks[name]))return {status:'skipped',reason:`hooks.${name} is not a list`};
-  const command=`node ${JSON.stringify(script)} ${kind}`;
-  const list=settings.hooks[name]??=[];
-  let found=false;
-  for(const entry of list)for(const hook of Array.isArray(entry?.hooks)?entry.hooks:[])if(isOrchestratorHook(hook)){found=true;if(hook.command!==command){hook.command=command;changed=true;}}
-  if(!found){list.push({...(name==='PreToolUse'||name==='PostToolUse'?{matcher:'*'}:{}),hooks:[{type:'command',command}]});changed=true;}
- }
- if(!changed)return {status:'unchanged'};
+ return {destination,before,settings};
+}
+async function writeSettings(root,destination,settings,before){
  // A temp file with its own name, created exclusively (a planted link at a fixed name cannot redirect the write), with the old file's mode, then renamed over.
  let mode=0o600;
  try{mode=(await fs.stat(destination)).mode&0o777;}catch{/* a new file */}
@@ -269,6 +257,63 @@ export async function ensureOrchestratorHooks(root,installRoot,{refreshOnly=fals
  await fs.rename(temp,destination);
  await ensureLocalSettingsIgnored(root);
  return {status:before.trim()?'updated':'created'};
+}
+// specs: [{event, matcher?, script, arg?}]. marker: the script name that identifies this feature's entries.
+async function ensureHookSpecs(root,installRoot,specs,{refreshOnly=false}={}){
+ const read=await readSettings(root);
+ if(read.problem)return {status:'skipped',reason:read.problem};
+ const {destination,before,settings}=read;
+ if(refreshOnly){
+  const commands=Object.values(settings.hooks).flatMap(list=>Array.isArray(list)?list:[]).flatMap(entry=>Array.isArray(entry?.hooks)?entry.hooks:[]).map(commandOf);
+  if(!commands.some(c=>c.includes(CHECKPOINT_HOOK)||specs.some(sp=>c.includes(sp.script))))return {status:'absent'};
+ }
+ let changed=false;
+ for(const sp of specs){
+  if(settings.hooks[sp.event]!==undefined&&!Array.isArray(settings.hooks[sp.event]))return {status:'skipped',reason:`hooks.${sp.event} is not a list`};
+  const command=hookCommand(path.join(stableInstallDir(installRoot),'tools',sp.script),sp.arg);
+  const list=settings.hooks[sp.event]??=[];
+  let found=false;
+  for(const entry of list)for(const hook of Array.isArray(entry?.hooks)?entry.hooks:[])if(commandOf(hook).includes(sp.script)&&(!sp.arg||commandOf(hook).includes(` ${sp.arg} `)||commandOf(hook).includes(` ${sp.arg}`))){found=true;if(hook.command!==command){hook.command=command;changed=true;}if(sp.matcher&&entry.matcher!==sp.matcher){entry.matcher=sp.matcher;changed=true;}}
+  if(!found){list.push({...(sp.matcher?{matcher:sp.matcher}:{}),hooks:[{type:'command',command}]});changed=true;}
+ }
+ if(!changed)return {status:'unchanged'};
+ return writeSettings(root,destination,settings,before);
+}
+const ORCHESTRATOR_SPECS=Object.entries(ORCHESTRATOR_HOOK_EVENTS).map(([event,arg])=>({event,matcher:event==='PreToolUse'||event==='PostToolUse'?'*':undefined,script:'orchestrator-hook.mjs',arg}));
+// An owner who does not want the lane creates `.swarm/orchestrator/off`: nothing is installed or refreshed there. `refreshOnly` (used by `swarm update` on linked projects) only touches a
+// project that already has the checkpoint hook or the Orchestrator hooks, i.e. one that was set up with agent files.
+export async function ensureOrchestratorHooks(root,installRoot,{refreshOnly=false}={}){
+ try{await fs.access(path.join(root,'.swarm','orchestrator','off'));return {status:'off'};}catch{/* not switched off */}
+ return ensureHookSpecs(root,installRoot,ORCHESTRATOR_SPECS,{refreshOnly});
+}
+// The hand-build guard: installed on request (`swarm handbuild install`) and by `swarm init` for a new project; `swarm update` only refreshes where it is already installed.
+export async function ensureHandbuildGuard(root,installRoot,{refreshOnly=false,honorRemoved=false}={}){
+ // `swarm handbuild uninstall` leaves a marker: a later `swarm init` does not bring the guard back (only `swarm handbuild install` does).
+ if(honorRemoved){try{await fs.access(path.join(root,'.swarm','handbuild','removed'));return {status:'removed-by-owner'};}catch{/* no marker */}}
+ await fs.rm(path.join(root,'.swarm','handbuild','removed'),{force:true}).catch(()=>{});
+ if(refreshOnly){
+  const read=await readSettings(root);
+  if(read.problem)return {status:'skipped',reason:read.problem};
+  const has=Object.values(read.settings.hooks).flatMap(list=>Array.isArray(list)?list:[]).flatMap(entry=>Array.isArray(entry?.hooks)?entry.hooks:[]).some(hook=>commandOf(hook).includes('handbuild-guard.mjs'));
+  if(!has)return {status:'absent'};
+ }
+ return ensureHookSpecs(root,installRoot,[{event:'PreToolUse',matcher:GUARD_MATCHER,script:'handbuild-guard.mjs'}],{refreshOnly:false});
+}
+export async function removeHandbuildGuard(root){
+ const read=await readSettings(root);
+ if(read.problem)return {status:`not removed: ${read.problem}`};
+ const {destination,before,settings}=read;
+ let changed=false;
+ for(const [event,list] of Object.entries(settings.hooks)){
+  if(!Array.isArray(list))continue;
+  const kept=list.map(entry=>Array.isArray(entry?.hooks)?{...entry,hooks:entry.hooks.filter(hook=>!commandOf(hook).includes('handbuild-guard.mjs'))}:entry).filter(entry=>!Array.isArray(entry?.hooks)||entry.hooks.length>0);
+  if(kept.length!==list.length||JSON.stringify(kept)!==JSON.stringify(list)){settings.hooks[event]=kept;changed=true;}
+ }
+ // the owner's choice is remembered: init does not bring the guard back
+ try{await fs.mkdir(path.join(root,'.swarm','handbuild'),{recursive:true});await fs.writeFile(path.join(root,'.swarm','handbuild','removed'),'');}catch{/* best effort */}
+ if(!changed)return {status:'was not installed'};
+ await writeSettings(root,destination,settings,before);
+ return {status:'removed'};
 }
 
 async function ensureLocalSettingsIgnored(root){
@@ -365,8 +410,9 @@ export async function installProject(targetDirectory,{source=packageRoot,agentFi
  }
  const claudeHook=agentFiles?await ensureCheckpointHook(root):null;
  const orchestratorHooks=agentFiles?await ensureOrchestratorHooks(root,installRoot):null;
+ const handbuildGuard=agentFiles?await ensureHandbuildGuard(root,installRoot,{honorRemoved:true}):null;
  const gitignoreAdded=await ensureSwarmIgnore(root);
- return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,claudeHook,orchestratorHooks,gitignoreAdded};
+ return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,claudeHook,orchestratorHooks,handbuildGuard,gitignoreAdded};
 }
 
 if(process.argv[1]&&realpathSync(process.argv[1])===fileURLToPath(import.meta.url)){

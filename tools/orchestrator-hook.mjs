@@ -3,6 +3,7 @@
 // Claude Code hook for the Orchestrator lane: `node orchestrator-hook.mjs pre|post|stop|prompt`, the hook input as JSON on stdin. Writes one small event to the project's
 // .swarm/orchestrator/events.ndjson and prints nothing. It never blocks or changes anything: whatever goes wrong, it exits 0 so a tool call is never held up by it.
 import { buildEvent, appendEvent, projectRootOf } from './orchestrator-events.mjs';
+import { analyzeShell } from './shell-writes.mjs';
 
 const kind = process.argv[2];
 let raw = '';
@@ -13,7 +14,7 @@ process.stdin.on('end', () => {
     const input = JSON.parse(raw);
     const root = projectRootOf(input.cwd);
     if (root) {
-      const event = buildEvent(kind, input, { root });
+      const event = buildEvent(kind, input, { root, analyze: analyzeShell });
       if (event) appendEvent(root, event);
     }
   } catch { /* an unreadable input is dropped */ }

@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const EVENT_KINDS = Object.freeze(['pre', 'post', 'stop', 'prompt']);
+export const EVENT_KINDS = Object.freeze(['pre', 'post', 'stop', 'prompt', 'blocked']);
 export const WRITE_TOOLS = Object.freeze(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 // Paths an orchestrator may write without the swarm having built them: tickets and plans.
 export const ORCHESTRATOR_OWN = Object.freeze(['.swarm/', 'docs/plans/']);
@@ -44,12 +44,14 @@ export function maskCommand(command, max = 80) {
 
 const norm = p => String(p).replace(/\\/g, '/');
 /** The path relative to the project when it is really inside it (symlinks resolved on the nearest existing parent); null when it is outside (or not a path). */
+export function realOf(p) { let cur = p; const tail = []; for (let i = 0; i < 64; i += 1) { try { return path.join(fs.realpathSync.native(cur), ...tail.reverse()); } catch { const up = path.dirname(cur); if (up === cur) return p; tail.push(path.basename(cur)); cur = up; } } return p; }
 export function insideProject(root, file) {
   if (typeof file !== 'string' || !file) return null;
-  const realOf = p => { let cur = p; const tail = []; for (let i = 0; i < 64; i += 1) { try { return path.join(fs.realpathSync(cur), ...tail.reverse()); } catch { const up = path.dirname(cur); if (up === cur) return p; tail.push(path.basename(cur)); cur = up; } } return p; };
+  const realOfLocal = p => { let cur = p; const tail = []; for (let i = 0; i < 64; i += 1) { try { return path.join(fs.realpathSync.native(cur), ...tail.reverse()); } catch { const up = path.dirname(cur); if (up === cur) return p; tail.push(path.basename(cur)); cur = up; } } return p; };
   const abs = path.isAbsolute(file) ? path.resolve(file) : path.resolve(root, file);
   const rel = norm(path.relative(realOf(root), realOf(abs)));
-  return rel && !rel.startsWith('../') && rel !== '..' && !path.isAbsolute(rel) ? rel : null;
+  // '' is the project folder itself
+  return !rel.startsWith('../') && rel !== '..' && !path.isAbsolute(rel) ? rel : null;
 }
 
 /** True when an edit lands in the project outside .swarm/ and docs/plans/: the orchestrator built it by hand. */
@@ -64,6 +66,9 @@ export const isWorkerCwd = cwd => /[\\/]\.swarm[\\/](workspaces|worktrees)[\\/]/
 /** Nearest folder at or above `cwd` that holds .project-swarm.json (or .git); null when there is none. */
 export function projectRootOf(cwd, exists = file => fs.existsSync(file)) {
   let dir = path.resolve(String(cwd ?? ''));
+  // a swarm worker workspace (.swarm/workspaces/RUN/JOB) belongs to the project above its .swarm folder, not to its own git worktree
+  const ws = dir.split(path.sep).lastIndexOf('.swarm');
+  if (ws > 0 && ['workspaces', 'worktrees'].includes(dir.split(path.sep)[ws + 1])) dir = dir.split(path.sep).slice(0, ws).join(path.sep) || path.sep;
   for (let i = 0; i < 40; i += 1) {
     if (exists(path.join(dir, '.project-swarm.json')) || exists(path.join(dir, '.git'))) return dir;
     const up = path.dirname(dir);
@@ -74,16 +79,27 @@ export function projectRootOf(cwd, exists = file => fs.existsSync(file)) {
 }
 
 /** One log line for a hook input, or null when the input is not a session event of an orchestrator. `kind` is pre | post | stop | prompt. */
-export function buildEvent(kind, input, { root, now = Date.now } = {}) {
+export function buildEvent(kind, input, { root, now = Date.now, analyze } = {}) {
   if (!EVENT_KINDS.includes(kind) || !input || typeof input !== 'object' || typeof input.session_id !== 'string' || !input.session_id) return null;
   if (isWorkerCwd(input.cwd)) return null;
   const event = { at: new Date(now()).toISOString(), s: input.session_id.slice(0, 80), e: kind };
-  if (kind === 'pre' || kind === 'post') {
+  if (kind === 'pre' || kind === 'post' || kind === 'blocked') {
     const tool = typeof input.tool_name === 'string' ? input.tool_name.slice(0, 60) : null;
     if (!tool) return null;
     event.t = tool;
     const ti = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
-    if (tool === 'Bash') event.c = maskCommand(ti.command);
+    if (tool === 'Bash') {
+      event.c = maskCommand(ti.command);
+      // A shell command that writes files in the project is a hand-built edit too (sed -i, a redirect, tee, mv, cp, rm...): the files are listed so the share built by hand is complete.
+      const a = typeof analyze === 'function' ? analyze(ti.command, { root, cwd: input.cwd }) : null;
+      if (a && (a.writes.length || a.git.length || a.inline || a.unknown)) {
+        if (a.writes.length) event.bf = a.writes.slice(0, 12).map(f => String(f).slice(0, 200));
+        if (a.git.length) event.bg = a.git.map(g => String(g).replace(/[^a-z-]/g, '').slice(0, 20)).slice(0, 6);
+        if (a.inline || a.unknown) event.bu = 1;
+        // only a write with named files is a hand-built edit; a command the guard could not read is noted (bu), not counted
+        if (a.writes.length) event.hb = 1;
+      }
+    }
     else {
       const rel = insideProject(root, ti.file_path ?? ti.notebook_path ?? ti.path);
       if (rel) { event.f = rel.slice(0, 200); if (isHandBuilt(tool, rel)) event.hb = 1; }
@@ -155,8 +171,8 @@ export function sessionsOf(events, now = Date.now()) {
   const bySession = new Map();
   for (const e of ordered) {
     let s = bySession.get(e.s);
-    if (!s) { s = { id: e.s, firstAt: e.at, lastAt: e.at, last: e, transcript: null, handBuilt: 0, edits: 0, turnStartedAt: null, running: new Map() }; bySession.set(e.s, s); }
-    s.lastAt = e.at; s.last = e;
+    if (!s) { s = { id: e.s, firstAt: e.at, lastAt: e.at, last: e, transcript: null, handBuilt: 0, edits: 0, blocked: 0, turnStartedAt: null, running: new Map() }; bySession.set(e.s, s); }
+    s.lastAt = e.at; if (e.e !== 'blocked') s.last = e;
     if (e.tp) s.transcript = e.tp;
     if (e.e === 'prompt') { s.turnStartedAt = e.at; s.running.clear(); }
     if (e.e === 'pre') s.running.set(e.u ?? `n:${e.t}:${e.at}`, { name: e.t, file: e.f ?? null, command: e.c ?? null, startedAt: e.at, byName: !e.u });
@@ -164,8 +180,10 @@ export function sessionsOf(events, now = Date.now()) {
       if (e.u && s.running.has(e.u)) s.running.delete(e.u);
       else { const hit = [...s.running.entries()].reverse().find(([k, v]) => v.name === e.t && (v.byName || !e.u)); if (hit) s.running.delete(hit[0]); }
     }
+    if (e.e === 'blocked') { const hit = [...s.running.entries()].reverse().find(([k, v]) => (e.u && k === e.u) || (!e.u && v.name === e.t)); if (hit) s.running.delete(hit[0]); }
     if (e.e === 'stop') { s.running.clear(); s.turnStartedAt = null; }
-    if (e.e === 'post' && WRITE_TOOLS.includes(e.t) && e.f) { s.edits += 1; if (e.hb) s.handBuilt += 1; }
+    if (e.e === 'post' && ((WRITE_TOOLS.includes(e.t) && e.f) || (e.t === 'Bash' && e.hb))) { s.edits += 1; if (e.hb) s.handBuilt += 1; }
+    if (e.e === 'blocked') s.blocked += 1;
   }
   const out = [];
   for (const s of bySession.values()) {
@@ -173,22 +191,28 @@ export function sessionsOf(events, now = Date.now()) {
     const tools = [...s.running.values()].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
     let state;
     if (tools.length) state = age <= WORKING_STALE_MS ? 'working' : 'idle';
-    else if (s.last.e === 'post' || s.last.e === 'prompt') state = age <= (s.last.e === 'prompt' ? WORKING_STALE_MS : THINKING_STALE_MS) ? 'thinking' : 'idle';
+    else if (s.last.e === 'post' || s.last.e === 'prompt' || s.last.e === 'pre') state = age <= (s.last.e === 'prompt' ? WORKING_STALE_MS : THINKING_STALE_MS) ? 'thinking' : 'idle';
     else state = age <= WAITING_SHOWN_MS ? 'waiting' : 'idle';
     const doing = state === 'working' ? tools[0] : null;
     out.push({
       id: s.id, state, lastAt: s.lastAt, since: state === 'working' ? doing.startedAt : state === 'thinking' ? (s.turnStartedAt ?? s.lastAt) : s.lastAt,
       doing: doing ? { tool: doing.name, file: doing.file, command: doing.command, startedAt: doing.startedAt, parallel: tools.length } : null,
-      transcript: s.transcript, edits: s.edits, handBuilt: s.handBuilt, shown: age <= SESSION_SHOWN_MS,
+      transcript: s.transcript, edits: s.edits, handBuilt: s.handBuilt, blocked: s.blocked, shown: age <= SESSION_SHOWN_MS,
     });
   }
   return out.sort((a, b) => Date.parse(b.lastAt) - Date.parse(a.lastAt));
 }
 
-/** Distinct files edited by hand (outside .swarm/ and docs/plans/) and how many edits in all, from the events. */
+/** Distinct files edited by hand (outside .swarm/ and docs/plans/, by an edit tool or a shell command) and how many edits in all, from the events; also the attempts the guard blocked. */
 export function handBuiltOf(events) {
   const files = new Set();
-  let edits = 0;
-  for (const e of events) if (e.e === 'post' && e.hb && e.f) { files.add(e.f); edits += 1; }
-  return { files: files.size, edits, list: [...files].slice(0, 50) };
+  let edits = 0, blocked = 0;
+  for (const e of events) {
+    if (e.e === 'blocked') { blocked += 1; continue; }
+    if (e.e !== 'post' || !e.hb) continue;
+    edits += 1;
+    if (e.f) files.add(e.f);
+    for (const f of Array.isArray(e.bf) ? e.bf : []) if (typeof f === 'string') files.add(f);
+  }
+  return { files: files.size, edits, blocked, list: [...files].slice(0, 50) };
 }

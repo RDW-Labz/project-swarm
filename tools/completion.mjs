@@ -78,6 +78,7 @@ export const COMMANDS = [
   command('brief', 'Print a short briefing so any agent can take over.', 'none', '--json'),
   command('handoff', 'Hand off to another agent (--to), or write the client handoff docs: generate, check, status, final.', 'none', '--to --stage --max-usd --yes --dry-run --url --propose'),
   command('checkpoint', 'Save a snapshot of the project state.', 'none', '--quiet'),
+  command('handbuild', 'The hand-build guard: request, approve or deny a hand-build, see its log, install it.', 'none', '--kind --reason --files --minutes --git --json'),
   command('inbox', 'List what is waiting on you, most-blocking first.', 'none', '--json --all'),
   command('done', 'Mark a human item done.', 'none'),
   command('decide', 'Confirm or change a decision.', 'none'),

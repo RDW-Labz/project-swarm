@@ -12,6 +12,7 @@ import { ticketsToManifest } from '../tools/ticket-manifest.mjs';
 import { validateManifest, editInPlaceOnlyJobs, withoutApiOnlyFields } from '../tools/swarm.mjs';
 import { checkTicketTree } from '../tools/scope-integrity.mjs';
 import { reviewManifest } from '../tools/acceptance.mjs';
+import { securityReviewManifest } from '../tools/security-review.mjs';
 
 const SWARM = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
 const t = (id, extra = {}) => ({ id, title: id, type: 'build', status: 'todo', files: [`src/${id}.ts`], acceptance: ['it works'], scopeRefs: [], dependsOn: [], size: 'S', ...extra });
@@ -102,8 +103,8 @@ test('update refuses while a run is live (naming it) and goes ahead with --force
   const env = { ...process.env, HOME: home, SWARM_LIVE_DIR: live };
   const refused = spawnSync(process.execPath, [SWARM, 'update', '--yes'], { encoding: 'utf8', env });
   assert.notEqual(refused.status, 0);
-  assert.match(refused.stdout + refused.stderr, /update-refused: 1 run\(s\) are live/);
-  assert.match(refused.stdout + refused.stderr, /1792466337986-cfef3f98/);
+  assert.match(refused.stdout + refused.stderr, /update-refused: swarm will not update while work is running/);
+  assert.match(refused.stdout + refused.stderr, /run 1792466337986-cfef3f98/);
   assert.match(refused.stdout + refused.stderr, /--force/);
   const forced = spawnSync(process.execPath, [SWARM, 'update', '--yes', '--force'], { encoding: 'utf8', env });
   assert.doesNotMatch(forced.stdout + forced.stderr, /update-refused/);
@@ -220,4 +221,35 @@ test('a ticket that owns no test file tells its worker to write no tests and pro
   assert.doesNotMatch(built, /and its tests inside your declared outputs/);
   assert.match(applyJobType({ id: 'j', agent: 'auto', type: 'build', prompt: 'p', outputs: ['src/a.ts', 'src/a.test.ts'] }).job.prompt, /Implement the change and its tests inside your declared outputs\./);
   assert.match(applyJobType({ id: 'j', agent: 'auto', type: 'fix', prompt: 'p', outputs: ['src/a.ts'] }).job.prompt, /write no tests or test blocks/);
+});
+
+import { runningSwarmCommands } from '../tools/live-processes.mjs';
+import { spawn } from 'node:child_process';
+test('update also refuses while a swarm go loop runs between waves (no run registered): the process list is read', async t2 => {
+  const ps = lines => () => lines.join('\n');
+  const found = runningSwarmCommands({ ps: ps(['  101 /usr/bin/node /h/.project-swarm/versions/1.142.0-x/tools/swarm.mjs go --scope --max-waves 2', '  102 node /h/.project-swarm/current/tools/swarm.mjs with-concurrency 12 -- go --scope', '  103 /usr/bin/node /h/p/tools/swarm.mjs --root /p run manifest.json', '  104 vim tools/swarm.mjs', '  105 node /x/tools/swarm.mjs watch --all', '  106 /usr/bin/node /h/.project-swarm/current/tools/swarm.mjs status', '  107 grep swarm.mjs go']), selfPid: 1 });
+  assert.deepEqual(found.map(f => [f.pid, f.verb]), [[101, 'go'], [102, 'with-concurrency'], [103, 'run']]);
+  assert.deepEqual(runningSwarmCommands({ ps: ps(['  101 node /x/tools/swarm.mjs go --scope']), selfPid: 101 }), [], 'not itself');
+  // for real: a process whose command line is a swarm go
+  const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-upd2-')));
+  t2.after(() => fs.rm(home, { recursive: true, force: true }));
+  const fake = spawn(process.execPath, ['-e', 'setTimeout(()=>{},20000)', path.join(home, '.project-swarm/versions/1.0.0-x/tools/swarm.mjs'), 'go', '--scope'], { stdio: 'ignore' });
+  t2.after(() => fake.kill());
+  await new Promise(r => setTimeout(r, 300));
+  assert.ok(runningSwarmCommands().some(f => f.pid === fake.pid), 'the real process list shows it');
+  assert.equal(runningSwarmCommands({ installDirs: ['/somewhere/else'] }).some(f => f.pid === fake.pid), false, 'a run from another install does not count');
+  assert.ok(runningSwarmCommands({ installDirs: [path.join(home, '.project-swarm')] }).some(f => f.pid === fake.pid));
+  const refused = spawnSync(process.execPath, [SWARM, 'update', '--yes'], { encoding: 'utf8', env: { ...process.env, HOME: home, SWARM_LIVE_DIR: path.join(home, 'live') } });
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stdout + refused.stderr, /update-refused: swarm will not update while work is running/);
+  assert.match(refused.stdout + refused.stderr, new RegExp(`process ${fake.pid}`));
+});
+
+test('both reviewers are told that an import.meta.vitest block in a production file under src/ is a defect', async () => {
+  const item = { ticket: t('T-0001', { files: ['src/submit-request.ts'] }), uncovered: ['it works'] };
+  assert.match(reviewManifest('r1', [item], { tickets: [] }).jobs[0].prompt, /src\/ that holds an import\.meta\.vitest block[^.]*is a defect/);
+  assert.match(reviewManifest('r1', [item], { tickets: [] }).jobs[0].prompt, /fail every line that file is the evidence for/);
+  const sec = await securityReviewManifest('/nonexistent-root', 'r1', [{ ticket: item.ticket }], []);
+  assert.match(sec.jobs[0].prompt, /import\.meta\.vitest block \(an in-source test\) in a production file under src\/ as a defect/);
+  assert.match(sec.jobs[0].prompt, /verdict fail/);
 });

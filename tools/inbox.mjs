@@ -207,6 +207,7 @@ export async function markDone(root, ref, deps) {
 }
 
 export async function decide(root, ref, choice, deps) {
+  if (String(ref ?? '').startsWith('handbuild-')) return decideHandbuild(root, String(ref), String(choice ?? '').trim(), deps);
   const { readJournal, appendEvent, addGoal, now } = deps;
   const id = String(ref ?? '');
   const picked = String(choice ?? '').trim();
@@ -226,4 +227,18 @@ export async function decide(root, ref, choice, deps) {
   }
   await appendEvent(root, { kind: 'decision', id, confirmed: true, choice: picked, text: sanitizeText(item.text ?? '') }, { now });
   return { id, choice: picked, changed, goal };
+}
+
+// A hand-build request is answered through the same inbox as everything else (the board's Needs you, the phone's one-time word, `swarm decide`): approve or deny. The choice is applied to
+// the guard's state, with no backlog goal made (it is not a plan decision).
+async function decideHandbuild(root, ref, picked, deps) {
+  const { readJournal, appendEvent, now } = deps;
+  const events = await readJournal(root, { limit: Infinity });
+  const item = openDecisions(events).find(event => String(event.id) === ref);
+  if (!item) throw new Error(`inbox-unknown: ${ref}`);
+  if (!['approve', 'deny'].includes(picked)) throw new Error(`inbox-choice-invalid: ${picked}`);
+  const { decideRequest } = await import('./handbuild.mjs');
+  decideRequest(root, ref.slice('handbuild-'.length), picked, { now, by: 'owner' });
+  await appendEvent(root, { kind: 'decision', id: ref, confirmed: true, choice: picked, text: sanitizeText(item.text ?? '') }, { now });
+  return { id: ref, choice: picked, changed: false, goal: null };
 }

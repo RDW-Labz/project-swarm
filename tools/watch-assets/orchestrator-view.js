@@ -24,7 +24,7 @@ export function doingText(s, now) {
 /** "swarm-built 83%, hand-built 17% (12 files)"; null when nothing was built yet. */
 export function buildMixText(o) {
   if (!o || o.swarmPct === null || o.swarmPct === undefined) { return null; }
-  return 'swarm-built ' + o.swarmPct + '%, hand-built ' + o.handPct + '% (' + o.handBuilt.files + ' file' + (o.handBuilt.files === 1 ? '' : 's') + ')';
+  return 'swarm-built ' + o.swarmPct + '%, hand-built ' + o.handPct + '% (' + o.handBuilt.files + ' file' + (o.handBuilt.files === 1 ? '' : 's') + (o.handBuilt.blocked ? ', ' + o.handBuilt.blocked + ' blocked' : '') + ')';
 }
 
 export function renderOrchestrator(host, sessions, opts) {
@@ -54,8 +54,8 @@ export function renderOrchestrator(host, sessions, opts) {
     hit.name.textContent = s.project + '  ' + s.id;
     hit.doing.textContent = doingText(s, now);
     hit.cost.textContent = (typeof s.tokensToday === 'number' ? tokens(s.tokensToday) + ' tokens, ' + usd(s.listUsdToday) + ' today' : 'tokens not read yet') + (typeof s.listUsdAll === 'number' ? '; ' + usd(s.listUsdAll) + ' all time' : '') + ' (list value, not billed' + (s.unpriced ? '; some model is unpriced' : '') + ')';
-    hit.hand.textContent = s.handBuilt ? s.handBuilt + ' hand-built edit' + (s.handBuilt === 1 ? '' : 's') + ' by this session' : '';
-    hit.hand.hidden = !s.handBuilt;
+    hit.hand.textContent = (s.handBuilt ? s.handBuilt + ' hand-built edit' + (s.handBuilt === 1 ? '' : 's') : '') + (s.handBuilt && s.blocked ? ', ' : '') + (s.blocked ? s.blocked + ' blocked by the guard' : '');
+    hit.hand.hidden = !(s.handBuilt || s.blocked);
   });
   map.forEach(function (v, k) { if (!keep[k]) { v.handle.destroy(); v.card.remove(); map.delete(k); } });
 }

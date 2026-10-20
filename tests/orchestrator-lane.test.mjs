@@ -88,7 +88,7 @@ test('session states from recorded events: working, thinking, waiting on you, id
   assert.equal(sessionsOf(events, T0 + 40 * 60000).find(s => s.id === 'B').state, 'idle', 'a long wait is idle');
   assert.equal(sessionsOf(events, T0 + 20 * 60000).find(s => s.id === 'A').state, 'idle', 'a tool with no end for a long time is not working');
   assert.equal(later.find(s => s.id === 'C').shown, false, 'a session quiet for over an hour is not in the bay');
-  assert.deepEqual(handBuiltOf(events), { files: 1, edits: 1, list: ['src/a.ts'] });
+  assert.deepEqual(handBuiltOf(events), { files: 1, edits: 1, blocked: 0, list: ['src/a.ts'] });
   const thinking = sessionsOf([ev('D', 0, 'post', { t: 'Read' })], T0 + 30000)[0];
   assert.equal(thinking.state, 'thinking');
 });
@@ -167,7 +167,7 @@ test('the board carries the orchestrator in the project overview and the machine
 test('the hooks are installed in the personal settings file: four events, idempotent, replaced on update, other hooks and settings kept, a broken file left alone', async t => {
   const root = await tmp(t);
   const install = await tmp(t);
-  const versioned = path.join(install, 'versions', '1.143.0-abc');
+  const versioned = path.join(install, 'versions', '1.144.0-abc');
   await fs.mkdir(versioned, { recursive: true });
   assert.equal(stableInstallDir(versioned), path.join(install, 'current'));
   assert.equal(stableInstallDir(install), install);
@@ -180,7 +180,8 @@ test('the hooks are installed in the personal settings file: four events, idempo
   assert.deepEqual(s.permissions, { allow: ['Bash(npm test)'] });
   for (const [name, kind] of [['PreToolUse', 'pre'], ['PostToolUse', 'post'], ['Stop', 'stop'], ['UserPromptSubmit', 'prompt']]) {
     const cmds = s.hooks[name].flatMap(e => e.hooks.map(h => h.command));
-    assert.ok(cmds.includes(`node ${JSON.stringify(path.join(install, 'current/tools/orchestrator-hook.mjs'))} ${kind}`), name);
+    const script = JSON.stringify(path.join(install, 'current/tools/orchestrator-hook.mjs'));
+    assert.ok(cmds.includes(`test -f ${script} && node ${script} ${kind} || true`), `${name}: ${cmds}`);
   }
   assert.ok(s.hooks.Stop.flatMap(e => e.hooks.map(h => h.command)).includes('echo mine'));
   assert.ok(s.hooks.PreToolUse.flatMap(e => e.hooks.map(h => h.command)).includes('my-own-guard'));

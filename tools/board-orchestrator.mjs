@@ -27,7 +27,7 @@ export function projectOrchestrator(project, { runs = [], now = Date.now(), usag
     return {
       id: String(s.id).replace(/[^A-Za-z0-9-]/g, '').slice(0, 8), project: txt(project.name, 80), projectId: project.id, state: s.state, lastAt: s.lastAt, since: s.since,
       doing: s.doing ? { tool: txt(s.doing.tool, 40), file: s.doing.file ? txt(s.doing.file, 120) : null, command: s.doing.command ? txt(s.doing.command, 80) : null, startedAt: s.doing.startedAt } : null,
-      edits: s.edits, handBuilt: s.handBuilt,
+      edits: s.edits, handBuilt: s.handBuilt, blocked: s.blocked,
       tokensToday: u?.todayTokens ?? null, listUsdToday: u?.todayListUsd ?? null, tokensAll: u?.allTokens ?? null, listUsdAll: u?.allListUsd ?? null, unpriced: Boolean(u?.unpricedTokens), models: u?.models ?? [],
     };
   });
@@ -40,7 +40,7 @@ export function projectOrchestrator(project, { runs = [], now = Date.now(), usag
   const total = swarm + hand.files;
   return {
     sessions,
-    handBuilt: { files: hand.files, edits: hand.edits, list: hand.list.map(f => txt(f, 120)) },
+    handBuilt: { files: hand.files, edits: hand.edits, blocked: hand.blocked, list: hand.list.map(f => txt(f, 120)) },
     swarmBuilt: { files: swarm },
     swarmPct: total ? Math.round((swarm * 100) / total) : null,
     handPct: total ? Math.round((hand.files * 100) / total) : null,
