@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "concurrency": 8,
+  "jobs": [
+    {
+      "id": "inv-e4",
+      "agent": "auto",
+      "prompt": "Read-only investigation, no edits, write no file. Item E4: reviews passed tickets T-0351 and T-0352 but their own end-to-end spec files still failed. Find where a ticket's review jobs (security and acceptance) are dispatched after its job output is integrated, and where a ticket's own test or end-to-end spec files (files it owns or names) could be run before the review; propose running each ticket's own e2e spec files at integration, before review, and failing the ticket when they fail. Report a short numbered list: the exact files and function names (with line numbers) to change, why the bug happens today, the smallest fix, and the tests that would prove it. If the answer needs a file outside the given context, name that file.",
+      "context": [
+        "tools/swarm.mjs",
+        "tools/pipeline.mjs",
+        "tools/router.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000,
+      "type": "review"
+    },
+    {
+      "id": "inv-e5",
+      "agent": "auto",
+      "prompt": "Read-only investigation, no edits, write no file. Items E5 and E5b: the planner counts DONE tickets as file owners, so new fix tickets cannot touch files from finished work in the same wave, and the scope split cannot list existing tickets as dependsOn so new tickets collide with done tickets on the same files. Find the planner and scope split code that computes file ownership and collisions between tickets and where dependsOn is chosen; propose that done tickets release their files, only open and running tickets block, and that the splitter sees existing open tickets as candidates for dependsOn (done ones as context). Report a short numbered list: the exact files and function names (with line numbers) to change, why the bug happens today, the smallest fix, and the tests that would prove it. If the answer needs a file outside the given context, name that file.",
+      "context": [
+        "tools/swarm.mjs",
+        "tools/scope-loop.mjs",
+        "tools/go.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000,
+      "type": "review"
+    },
+    {
+      "id": "inv-e6",
+      "agent": "auto",
+      "prompt": "Read-only investigation, no edits, write no file. Item E6: manifest runs (swarm run and swarm go with a manifest) skip the Opus security and Sonnet acceptance reviews that ledger tickets get. Find where ticket reviews are created and where manifest runs are dispatched, and propose a review flag that is on by default for code jobs with risk based tiers: security sensitive files (auth, database and migrations, server actions, service clients, secrets and env, payments, guard and hook code) get an Opus security review plus a Sonnet acceptance review; normal code gets a Sonnet security review plus a Haiku acceptance review; tests, docs and specs only get a Haiku acceptance review; a no-review option is logged and shown on the board; reviews count against project caps. Report a short numbered list: the exact files and function names (with line numbers) to change, why the bug happens today, the smallest fix, and the tests that would prove it. If the answer needs a file outside the given context, name that file.",
+      "context": [
+        "tools/swarm.mjs",
+        "tools/pipeline.mjs",
+        "tools/router.mjs",
+        "tools/escalation.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000,
+      "type": "review"
+    },
+    {
+      "id": "inv-e8",
+      "agent": "auto",
+      "prompt": "Read-only investigation, no edits, write no file. Item E8: on atlas-seafloor the project coordination checks file lists three checks (pytest, js-tests, secret-scan) but a wave ran only the managed pytest check. Find where merge batches run checks (the merge queue and integrate, runChecks, how manifest checks and the project checks file are merged) and why only one ran; propose that every entry of the checks file runs on every merge batch and a failing one fails the batch. Report a short numbered list: the exact files and function names (with line numbers) to change, why the bug happens today, the smallest fix, and the tests that would prove it. If the answer needs a file outside the given context, name that file.",
+      "context": [
+        "tools/swarm.mjs",
+        "tools/central-checks.mjs",
+        "tools/checks-from-ci.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000,
+      "type": "review"
+    },
+    {
+      "id": "inv-e10",
+      "agent": "auto",
+      "prompt": "Read-only investigation, no edits, write no file. Item E10: swarm go --scope accepts only docs/scope/scope.md. Find where the scope path is read for go --scope, the scope loop and scope commands, and where a change order such as CO-003 could record a scope path; propose accepting an explicit scope path argument or following the path recorded by the change order, with the default unchanged. Report a short numbered list: the exact files and function names (with line numbers) to change, why the bug happens today, the smallest fix, and the tests that would prove it. If the answer needs a file outside the given context, name that file.",
+      "context": [
+        "tools/go.mjs",
+        "tools/scope-loop.mjs",
+        "tools/swarm.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000,
+      "type": "review"
+    },
+    {
+      "id": "inv-b",
+      "agent": "auto",
+      "prompt": "Read-only investigation, no edits, write no file. Item B: delete-only tickets cannot finish: sync reports that job files are not in the integrated files. Find the scope sync code that compares a ticket's files with the integrated files and propose treating a ticket's deletes as its files, passing when they are gone from the repository. Report a short numbered list: the exact files and function names (with line numbers) to change, why the bug happens today, the smallest fix, and the tests that would prove it. If the answer needs a file outside the given context, name that file.",
+      "context": [
+        "tools/swarm.mjs",
+        "tools/scope-loop.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000,
+      "type": "review"
+    },
+    {
+      "id": "inv-c",
+      "agent": "auto",
+      "prompt": "Read-only investigation, no edits, write no file. Item C: the command to set a ticket status (swarm tickets ID --set STATUS) should need --force or a confirmation, log who set it, and support --dry-run. Find the tickets command handler and the ticket store write path and propose the change with the log format. Report a short numbered list: the exact files and function names (with line numbers) to change, why the bug happens today, the smallest fix, and the tests that would prove it. If the answer needs a file outside the given context, name that file.",
+      "context": [
+        "tools/swarm.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000,
+      "type": "review"
+    },
+    {
+      "id": "inv-f",
+      "agent": "auto",
+      "prompt": "Read-only investigation, no edits, write no file. Item F: after a failed integration a failed ticket's output file stays untracked and the retry stops at planning with prompt-path-not-in-workspace; one failing test held back seven good tickets. Find where a failed integration leaves files, the planning step that raises prompt-path-not-in-workspace, and go --scope's multi-ticket wave integration; propose moving failed outputs to a quarantine folder under the swarm folder, moving pre-existing untracked leftovers of a ticket's own outputs aside at planning with a warning, naming the quarantined file as read-only context in the retry prompt, and integrating multi-ticket waves through the merge queue so a failing ticket is bisected out. Report a short numbered list: the exact files and function names (with line numbers) to change, why the bug happens today, the smallest fix, and the tests that would prove it. If the answer needs a file outside the given context, name that file.",
+      "context": [
+        "tools/swarm.mjs",
+        "tools/scope-loop.mjs",
+        "tools/go.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000,
+      "type": "review"
+    }
+  ]
+}
