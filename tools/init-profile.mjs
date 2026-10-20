@@ -504,8 +504,12 @@ function profileItems(profile) {
 
 async function checksItem(root, deps) {
   const json = await quiet(() => deps.readJson('coordination/checks.json'));
-  const count = Array.isArray(json?.checks) ? json.checks.length : 0;
-  return count ? item('checks', 'ok', `${count} check(s) defined`) : item('checks', 'warn', 'coordination/checks.json has no checks');
+  const count = Array.isArray(json?.checks) ? json.checks.filter(check => Array.isArray(check?.argv) && check.argv.length).length : 0;
+  // No checks means nothing verifies the work (a ticket with tests is only done when a check saw them pass): that is a failure of the setup, not a warning.
+  if (count) return item('checks', 'ok', `${count} check(s) defined`);
+  return item('checks', 'fail', json === null || json === undefined
+    ? 'coordination/checks.json is missing: nothing will verify the work; add the project\'s test command (swarm init writes it from package.json scripts and CI)'
+    : 'coordination/checks.json has no checks: nothing will verify the work; add the project\'s test command, for example {"checks":[{"name":"tests","argv":["npm","test"]}]}');
 }
 
 function baseItems(profile, head) {

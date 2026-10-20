@@ -167,7 +167,7 @@ test('the board carries the orchestrator in the project overview and the machine
 test('the hooks are installed in the personal settings file: four events, idempotent, replaced on update, other hooks and settings kept, a broken file left alone', async t => {
   const root = await tmp(t);
   const install = await tmp(t);
-  const versioned = path.join(install, 'versions', '1.144.0-abc');
+  const versioned = path.join(install, 'versions', '1.145.0-abc');
   await fs.mkdir(versioned, { recursive: true });
   assert.equal(stableInstallDir(versioned), path.join(install, 'current'));
   assert.equal(stableInstallDir(install), install);

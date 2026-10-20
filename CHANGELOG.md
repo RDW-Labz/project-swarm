@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.145.0
+
+`swarm init --check` fails on an empty checks file, the guard follows first-time links only, and the docs match what the swarm does today.
+- **`swarm init --check` fails loudly** (exit 1, `FAIL checks`) when `coordination/checks.json` is missing, empty or lists nothing runnable; it used to warn, and a project with no checks verifies nothing.
+- **The hand-build guard is for a first-time link.** Re-running `swarm init` (or the installer) in an existing project never turns it on by itself; `swarm handbuild install` does.
+- **Docs.** `docs/new-project.md` (the exact steps for a new project: what to check first, the machine config, checks, profile and caps, hooks and the guard, the board and phone, the first scope run, a checklist); the README says how the swarm works today (lanes and routing, escalation, hard caps, checks, Swarm Watch and the Orchestrator lane, the guard, update rules) and no longer pins old tags; init, setup, handoff and providers docs match (route order, update rules, pointers).
+- Tests: `tests/init-profile.test.mjs`, `tests/handbuild-guard.test.mjs`.
+
 ## 1.144.0
 
 The hand-build guard (see `docs/handbuild-guard.md`) and a stricter update guard.

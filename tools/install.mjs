@@ -354,6 +354,8 @@ export async function installProject(targetDirectory,{source=packageRoot,agentFi
  if(!(await fs.stat(root)).isDirectory())throw Error('Target must be an existing project directory');
  const installRoot=await fs.realpath(source);
  const pkg=JSON.parse(await fs.readFile(path.join(installRoot,'package.json'),'utf8'));
+ // The hand-build guard is for a project that is linked for the first time: re-running init (or install) in an existing project never turns it on by itself.
+ const isNew=!(await fs.access(path.join(root,'.project-swarm.json')).then(()=>true,()=>false));
  await writePointer(root,{install:installRoot,version:pkg.version});
  const registryPath=path.join(installRoot,'.swarm-projects.json');
  let registry=[];
@@ -410,7 +412,7 @@ export async function installProject(targetDirectory,{source=packageRoot,agentFi
  }
  const claudeHook=agentFiles?await ensureCheckpointHook(root):null;
  const orchestratorHooks=agentFiles?await ensureOrchestratorHooks(root,installRoot):null;
- const handbuildGuard=agentFiles?await ensureHandbuildGuard(root,installRoot,{honorRemoved:true}):null;
+ const handbuildGuard=agentFiles&&isNew?await ensureHandbuildGuard(root,installRoot,{honorRemoved:true}):null;
  const gitignoreAdded=await ensureSwarmIgnore(root);
  return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,claudeHook,orchestratorHooks,handbuildGuard,gitignoreAdded};
 }

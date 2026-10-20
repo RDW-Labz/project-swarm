@@ -59,7 +59,13 @@ This writes `skills/project-swarm/SKILL.md` and its `references/` guides into `~
 
 ## Upgrading while runs are live
 
+`swarm update` now **refuses while work is running from the install**: a live run, or a swarm command in the process list (a `go --scope` loop between two waves has no registered run). It names each one; `--force` is the owner's alone. After an update it also moves the `version` field of every linked project's pointer (a backup is kept beside the file, the profile is never rewritten); a board or `swarm remote` that was already running keeps the old code until you restart it, and says so in a banner.
+
 Each install snapshots `tools/`, `package.json`, and the rendered skill with its reference guides into `versions/<version>-<hash>/` and atomically repoints a `current` symlink at that snapshot; the skill's runner path is `<install>/current/tools/swarm.mjs`, never a path directly under `tools/`. A run already in progress resolved its own version dir's real path when it started, so `git pull` plus a later `install.mjs --user` never rewrites files under a live run: `current` moves on to the new snapshot for the next run, while the in-progress one keeps importing the files it started with. Installing from unchanged runtime and skill/reference content reuses the existing snapshot instead of creating a new one. Old snapshots are pruned automatically, keeping the 5 newest plus whichever one `current` still points to.
+
+## Set up a new project
+
+The whole sequence (checks, caps, lanes, hooks, the guard, the first scope run) is in [new-project.md](new-project.md).
 
 ## Link a project
 

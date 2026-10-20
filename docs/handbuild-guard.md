@@ -48,7 +48,7 @@ Every request, approval, denial, use of an approval and **every blocked attempt*
 
 ## Installing it
 
-- `swarm init` installs it for a new project. `swarm update` only refreshes it where it is already installed (a project the owner has not chosen is never changed).
+- `swarm init` installs it for a project linked for the first time (re-running init in an existing project does not). `swarm update` only refreshes it where it is already installed (a project the owner has not chosen is never changed).
 - For an existing project: run `swarm handbuild install` in it (it applies to **new** Claude Code sessions there). `swarm handbuild uninstall` removes it; `swarm handbuild off` / `on` switch it without touching the settings (an orchestrator session cannot run those two).
 - `swarm handbuild uninstall` leaves a marker: a later `swarm init` does not bring the guard back (`swarm handbuild install` does).
 - The project is the one Claude Code names (`CLAUDE_PROJECT_DIR`), so a session that has moved to another folder, or into a swarm workspace, is still guarded for its project; a write inside a workspace is the swarm's, a write into the checkout from inside it is not. A tool call too large for the guard to read is refused.

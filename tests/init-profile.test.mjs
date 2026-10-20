@@ -321,11 +321,11 @@ test('a missing profile key warns and an invalid one fails', async () => {
   });
 });
 
-test('missing or empty coordination checks warn', async () => {
+test('missing or empty coordination checks fail (they used to warn)', async () => {
   for (const checks of [null, JSON.stringify({ checks: [] })]) {
     await withRoot(async root => {
       await writeSetup(root, { checks });
-      assert.equal(byId(await run(root), 'checks')[0].level, 'warn');
+      assert.equal(byId(await run(root), 'checks')[0].level, 'fail');
     });
   }
 });
@@ -399,3 +399,27 @@ test('checkSetup writes nothing', async () => withRoot(async root => {
   await checkSetup(root, deps(root));
   assert.deepEqual(await fs.readdir(root, { recursive: true }), before);
 }));
+
+test('init --check fails loudly when checks.json is missing, empty, or lists no runnable check', async () => {
+  for (const [label, checks, message] of [
+    ['missing', null, /is missing: nothing will verify the work/],
+    ['empty object', '{}', /has no checks: nothing will verify the work/],
+    ['empty list', JSON.stringify({ checks: [] }), /has no checks/],
+    ['entries without argv', JSON.stringify({ checks: [{ name: 'test' }, { name: 'lint', argv: [] }] }), /has no checks/],
+  ]) {
+    await withRoot(async root => {
+      await writeSetup(root, { checks });
+      const res = await run(root);
+      assert.equal(res.ok, false, label);
+      const item = byId(res, 'checks')[0];
+      assert.equal(item.level, 'fail', label);
+      assert.match(item.message, message, label);
+    });
+  }
+  await withRoot(async root => {
+    await writeSetup(root);
+    const res = await run(root);
+    assert.equal(res.ok, true);
+    assert.equal(byId(res, 'checks')[0].message, '1 check(s) defined');
+  });
+});
