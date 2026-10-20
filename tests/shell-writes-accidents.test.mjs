@@ -93,6 +93,12 @@ test('16 pipe into sh is dynamic', () => {
   assert.equal(r.unknown, true);
 });
 
+test('pipe into python3 -c with inline program is not dynamic', () => {
+  const r = a('echo "print(1)" | python3 -c "print(1 + 1)"');
+  assert.equal(r.dynamic, false);
+  assert.equal(r.unknown, false);
+});
+
 test('17 base64 decode piped to sh is dynamic', () => {
   const r = a('echo Zm9v | base64 -d | sh');
   assert.equal(r.dynamic, true);

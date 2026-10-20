@@ -40,8 +40,26 @@ export function stagedFileAllowed(root, rel, bytes, approvals) {
   return false;
 }
 
+const FILE_DENY_MAX_LISTED = 12;
+
 const fileDenyMessage = rel =>
   `Hand-build guard: ${rel} is not a routing file and its staged content is not a recorded swarm integrate hash. Ask the owner: swarm handbuild request --kind <swarm-cannot|emergency|secret|tiny> --reason "why the swarm cannot do it" --files "${rel}" --minutes 30`;
+
+const formatListedFiles = rels => {
+  const unique = [...new Set(rels.filter(Boolean))];
+  const shown = unique.slice(0, FILE_DENY_MAX_LISTED);
+  const rest = unique.length - shown.length;
+  const list = shown.join(', ');
+  return rest > 0 ? `${list}, and ${rest} more` : list;
+};
+
+const filesDenyMessage = rels => {
+  const unique = [...new Set(rels.filter(Boolean))];
+  if (unique.length === 1) return fileDenyMessage(unique[0]);
+  const listed = formatListedFiles(unique);
+  const filesArg = unique.join(',');
+  return `Hand-build guard: ${listed} are not routing files and their staged content is not a recorded swarm integrate hash. Ask the owner: swarm handbuild request --kind <swarm-cannot|emergency|secret|tiny> --reason "why the swarm cannot do it" --files "${filesArg}" --minutes 30`;
+};
 
 const commitDenyMain = `${DENY_ADVICE} (blocked: git commit on a protected branch)`;
 
@@ -54,11 +72,13 @@ export function checkPreCommit({ root, env, branch, staged, readBlob, approvals 
   try {
     const live = approvals ?? activeApprovals(root);
     const paths = [...new Set((staged ?? []).filter(Boolean))];
+    const denied = [];
     for (const rel of paths) {
       let bytes = null;
       try { bytes = readBlob(root, rel); } catch { bytes = null; }
-      if (!stagedFileAllowed(root, rel, bytes, live)) return { ok: false, message: fileDenyMessage(rel) };
+      if (!stagedFileAllowed(root, rel, bytes, live)) denied.push(rel);
     }
+    if (denied.length) return { ok: false, message: filesDenyMessage(denied) };
     const b = branch ?? branchOf(root);
     if (isProtectedBranch(b) && !gitCovered(live, 'commit')) return { ok: false, message: commitDenyMain };
     return { ok: true };
@@ -148,6 +168,7 @@ export function checkPrePush({ root, env, refs, readBlob, approvals }) {
       if (files === null) {
         return { ok: false, message: 'Hand-build guard: could not list files in this push against origin/main; refusing the push.' };
       }
+      const denied = [];
       for (const rel of files) {
         let bytes = null;
         if (readBlob) {
@@ -155,8 +176,9 @@ export function checkPrePush({ root, env, refs, readBlob, approvals }) {
         } else {
           bytes = readBlobAt(root, `${localSha}:${rel}`);
         }
-        if (!stagedFileAllowed(root, rel, bytes, live)) return { ok: false, message: fileDenyMessage(rel) };
+        if (!stagedFileAllowed(root, rel, bytes, live)) denied.push(rel);
       }
+      if (denied.length) return { ok: false, message: filesDenyMessage(denied) };
     }
     return { ok: true };
   } catch {

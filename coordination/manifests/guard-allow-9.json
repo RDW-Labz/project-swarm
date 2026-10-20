@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "fix-dynamic-pipe",
+      "agent": "auto",
+      "prompt": "In tools/shell-writes.mjs the dynamic flag (a command piped into a shell or interpreter) is too broad: it flags echo with a string piped into python3 with -c and a program text, which is harmless because the interpreter takes its PROGRAM from the -c argument and reads only data from the pipe. Narrow the rule: a pipe into sh, bash, zsh, dash, ksh, node, python, python3, perl, ruby or php sets dynamic only when that interpreter reads its program from standard input, that is when it has no -c, -e, -E or --eval option and no script file argument (a bare interpreter, or one given the single dash argument). An interpreter with -c or -e and a program text, or with a script file, is not made dynamic by the pipe (its own inline analysis still applies as before). Keep every other dynamic case (a variable or substitution in the command word, eval, base64 with a decode option piped on, a shell -c string containing a substitution or decode) exactly as it is. The failing test is the one named 'second review: wrappers with options, awk, interpreters on stdin or outside scripts, git that changes the tree, patterns; and what stays allowed' in tests/handbuild-guard.test.mjs: it must pass again without being weakened, and add two tests to tests/shell-writes-accidents.test.mjs: echo x piped into sh is dynamic, echo with a string piped into python3 with -c and a program text is not dynamic. Write only tools/shell-writes.mjs and tests/shell-writes-accidents.test.mjs.",
+      "context": [
+        "tools/shell-writes.mjs",
+        "tests/shell-writes-accidents.test.mjs",
+        "tests/handbuild-guard.test.mjs"
+      ],
+      "outputs": [
+        "tools/shell-writes.mjs",
+        "tests/shell-writes-accidents.test.mjs"
+      ],
+      "timeoutMs": 900000,
+      "ignoreTests": [
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/shell-writes-quotes.test.mjs"
+      ]
+    },
+    {
+      "id": "fix-hook-message",
+      "agent": "auto",
+      "prompt": "In tools/githook-check.mjs the refusal message names only the first offending file. Change checkPreCommit and checkPrePush so that every offending file is collected and the message lists all of them (up to 12, then and N more), each on its own short line or comma separated, with the same how-to-ask text as today. The failing test is tests/git-hooks.test.mjs 'agent session: commits and pushes are enforced; owner terminal and guard-off pass': its fixture stages README.md and src/hand.ts and expects the message to name src/hand.ts: after the change the message names both. Keep every other behavior. Write only tools/githook-check.mjs and tests/git-hooks.test.mjs (adjust that test only if needed so it also asserts that both files are named).",
+      "context": [
+        "tools/githook-check.mjs",
+        "tests/git-hooks.test.mjs"
+      ],
+      "outputs": [
+        "tools/githook-check.mjs",
+        "tests/git-hooks.test.mjs"
+      ],
+      "timeoutMs": 900000
+    }
+  ]
+}

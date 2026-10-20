@@ -18,6 +18,14 @@ const HOOK = fileURLToPath(new URL('../tools/orchestrator-hook.mjs', import.meta
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0);
 const tmp = async t => { const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-hb-hard-'))); t.after(() => fs.rm(d, { recursive: true, force: true })); return d; };
 
+function ownerTerminalEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  delete env.CLAUDECODE;
+  delete env.CLAUDE_CODE_ENTRYPOINT;
+  delete env.SWARM_AGENT_SESSION;
+  return env;
+}
+
 async function project(t) {
   const root = await tmp(t);
   const git = (...args) => spawnSync('git', ['-c', 'user.email=a@b', '-c', 'user.name=a', ...args], { cwd: root, encoding: 'utf8' });
@@ -62,7 +70,7 @@ async function runHook(prompt, extra = {}) {
       prompt,
     }),
     encoding: 'utf8',
-    env: home ? { ...process.env, HOME: home } : process.env,
+    env: ownerTerminalEnv(home ? { HOME: home } : {}),
   });
 }
 

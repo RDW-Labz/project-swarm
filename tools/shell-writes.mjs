@@ -132,7 +132,34 @@ const hasConfigInArgs = args => args.some(a => CONFIG_ANYWHERE.has(a) || a.start
   || a.startsWith('--upload-pack=') || a.startsWith('--receive-pack=')
   || /=upload-pack/.test(a) || /=receive-pack/.test(a) || /=exec/.test(a) || /=config/.test(a));
 
-const PIPE_DYNAMIC = new Set(['sh', 'bash', 'zsh', 'node', 'python', 'python3', 'perl']);
+const PIPE_STDIN_INTERPRETERS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'node', 'python', 'python3', 'perl', 'ruby', 'php']);
+const isPipeStdinInterpreter = cmd => PIPE_STDIN_INTERPRETERS.has(cmd) || /^python[\d.]*$/.test(cmd) || /^ruby[\d.]*$/.test(cmd) || /^php[\d.]*$/.test(cmd);
+const inlineProgramFlag = (cmd, a) => ['-c', '-e', '-E', '--eval'].includes(a) || a.startsWith('--eval=') || (/^php/.test(cmd) && a === '-r') || codeFlagFor(cmd)(a);
+/** True when a pipe into an interpreter should mark the command dynamic (program read from the pipe, not from -c/-e or a script path). */
+const pipeMakesInterpreterDynamic = (cmd, args) => {
+  if (!isPipeStdinInterpreter(cmd)) return false;
+  for (let i = 0; i < args.length; i += 1) {
+    if (inlineProgramFlag(cmd, args[i])) return false;
+  }
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (inlineProgramFlag(cmd, a)) { i += 1; continue; }
+    if (a.startsWith('-')) {
+      const bundledShellC = SHELLS.has(cmd) && /^-[A-Za-z]+$/.test(a) && a.slice(1).includes('c');
+      if (bundledShellC) { i += 1; continue; }
+      const next = args[i + 1];
+      const takesValue = bundledShellC || ['-m', '-r', '-i', '-l', '-U', '--require', '--import', '--module', '--command'].includes(a)
+        || (/^-[A-Za-z]*[rR]$/.test(a) && (cmd === 'node' || cmd === 'ruby'))
+        || (a.startsWith('--') && !a.includes('='));
+      if (takesValue && next !== undefined && !next.startsWith('-')) { i += 2; continue; }
+      i += 1;
+      continue;
+    }
+    if (a === '-') return true;
+    return false;
+  }
+  return true;
+};
 const base64Decodes = args => args.some(a => a === '-d' || a === '-D' || a === '--decode' || /^--decode=/.test(a) || (a.startsWith('-') && !a.startsWith('--') && a.slice(1).includes('d')));
 const shellCodeDynamic = code => /\$[\({]/.test(String(code ?? '')) || /`/.test(String(code ?? '')) || /\bbase64\b.*\b-d\b|\bbase64\b.*--decode/.test(String(code ?? ''));
 const parseRefspec = a => {
@@ -413,8 +440,8 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
     // a command word that is a variable or a substitution cannot be read
     if (plainExp[k] || /^\$[A-Za-z_][A-Za-z0-9_]*$/.test(plain[k]) || /^\$\{/.test(plain[k])) { markDynamic(); continue; }
     const cmd = path.basename(plain[k]);
-    if (words.piped && PIPE_DYNAMIC.has(cmd)) markDynamic();
     const args = plain.slice(k + 1);
+    if (words.piped && pipeMakesInterpreterDynamic(cmd, args)) markDynamic();
     const argExp = plainExp.slice(k + 1);
     const operands = [], operandExp = [];
     for (let ai = 0; ai < args.length; ai += 1) {

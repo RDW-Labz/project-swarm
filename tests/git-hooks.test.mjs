@@ -40,7 +40,15 @@ function hookPath(root, name) {
   return path.isAbsolute(rel) ? rel : path.join(root, rel);
 }
 
-const gitEnv = extra => ({ ...process.env, ...extra });
+function scrubAgentSessionEnv(env) {
+  const out = { ...env };
+  delete out.CLAUDECODE;
+  delete out.CLAUDE_CODE_ENTRYPOINT;
+  delete out.SWARM_AGENT_SESSION;
+  return out;
+}
+
+const gitEnv = extra => ({ ...scrubAgentSessionEnv(process.env), ...extra });
 
 function commit(root, env = {}) {
   return spawnSync('git', ['-c', 'user.email=a@b.c', '-c', 'user.name=ab', 'commit', '-m', 'm'], { cwd: root, encoding: 'utf8', env: gitEnv(env) });
@@ -79,9 +87,8 @@ test('agent session: commits and pushes are enforced; owner terminal and guard-o
   commit(root);
   git(root, 'push', '-u', 'origin', 'main');
 
-  const agent = { ...process.env, CLAUDECODE: '1' };
-  const noAgent = { ...process.env };
-  delete noAgent.CLAUDECODE;
+  const noAgent = scrubAgentSessionEnv(process.env);
+  const agent = { ...noAgent, CLAUDECODE: '1' };
 
   await fs.writeFile(path.join(root, 'src/hand.ts'), 'x\n');
   git(root, 'add', 'src/hand.ts');
@@ -141,8 +148,7 @@ test('agent session: commits and pushes are enforced; owner terminal and guard-o
     await fs.writeFile(path.join(root, 'src/free.ts'), `ok-${label}\n`);
     git(root, 'add', 'src/free.ts');
     const env = label === 'empty env' ? {} : noAgent;
-    const clean = { ...process.env, ...env };
-    delete clean.CLAUDECODE;
+    const clean = scrubAgentSessionEnv({ ...process.env, ...env });
     assert.equal(commit(root, clean).status, 0, label);
   }
 
@@ -171,7 +177,7 @@ test('install is idempotent, keeps a pre-existing hook, uninstall restores it', 
   git(root, 'checkout', '-b', 'feat');
   await fs.writeFile(path.join(root, 'coordination/handoff.md'), '# hi\n');
   git(root, 'add', 'coordination/handoff.md');
-  const r = commit(root, { ...process.env, CLAUDECODE: '1' });
+  const r = commit(root, { ...scrubAgentSessionEnv(process.env), CLAUDECODE: '1' });
   assert.equal(r.status, 0);
 
   removeGitHooks(root);

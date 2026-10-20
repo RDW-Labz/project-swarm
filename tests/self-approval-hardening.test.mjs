@@ -16,6 +16,14 @@ const tmp = async t => {
   return d;
 };
 
+function ownerTerminalEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  delete env.CLAUDECODE;
+  delete env.CLAUDE_CODE_ENTRYPOINT;
+  delete env.SWARM_AGENT_SESSION;
+  return env;
+}
+
 async function project(t) {
   const root = await tmp(t);
   const git = (...args) => spawnSync('git', ['-c', 'user.email=a@b', '-c', 'user.name=a', ...args], { cwd: root, encoding: 'utf8' });
@@ -57,7 +65,7 @@ function runHook(root, { prompt, transcript_path, home }) {
       prompt,
     }),
     encoding: 'utf8',
-    env: { ...process.env, HOME: home },
+    env: ownerTerminalEnv({ HOME: home }),
   });
 }
 
