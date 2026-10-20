@@ -370,3 +370,21 @@ test('L361 CLI prints a real timestamp and leaves note text inert', async t => {
   assert.match(help.stdout, /note \[--file TASK\.md\|HANDOFF\.md\]/);
   assert.match(help.stdout, /ask \(--tier cheap\|mid\|expensive/);
 });
+
+test('integration refuses an import.meta.vitest block in a production file under src/, before any write', async t => {
+  const root = await fixture(t);
+  await put(root, 'src/safe.mjs', 'old safe');
+  const id = await savedRun(root, [{ id: 'writer', outputs: { 'src/safe.mjs': 'new safe', 'src/submit-request.ts': 'export const f = () => 1;\nif (import.meta.vitest) {\n  const { it } = import.meta.vitest;\n}\n' } }]);
+  await assert.rejects(swarm.integrateRun(root, id, { noChecks: true }), error => {
+    assert.equal(error.code, 'in-source-test');
+    assert.ok(error.message.includes('src/submit-request.ts:2'));
+    assert.ok(!error.message.includes('const { it }'), 'the line itself is not echoed');
+    return true;
+  });
+  assert.equal(await fs.readFile(path.join(root, 'src/safe.mjs'), 'utf8'), 'old safe');
+  await assert.rejects(fs.access(path.join(root, 'src/submit-request.ts')));
+  const ok = await fixture(t);
+  const okId = await savedRun(ok, [{ id: 'writer', outputs: { 'src/a.test.ts': 'if (import.meta.vitest) {}', 'tests/b.test.ts': 'import.meta.vitest', 'docs/notes.md': 'import.meta.vitest is not used here', 'src/binary.dat': Buffer.from('\0import.meta.vitest') } }]);
+  assert.equal((await swarm.integrateRun(ok, okId, { noChecks: true })).status, 'integrated');
+  assert.deepEqual(swarm.inSourceTestHits([{ file: 'src/x.ts', bytes: Buffer.from('a\nimport.meta.vitest') }, { file: 'src/x.test.ts', bytes: Buffer.from('import.meta.vitest') }, { file: 'lib/y.ts', bytes: Buffer.from('import.meta.vitest') }, { file: 'src/gone.ts', bytes: null }]).map(h => [h.file, h.line]), [['src/x.ts', 2]]);
+});

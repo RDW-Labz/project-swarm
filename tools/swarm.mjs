@@ -506,6 +506,19 @@ export async function promptPathsNotInWorkspaceWarnings(root, job, context, { tr
   return hits;
 }
 
+// In-source tests (`if (import.meta.vitest)` blocks) in production files under src/: they ship in the build and break it. Tests live in their own files.
+export function inSourceTestHits(writes) {
+  const hits = [];
+  for (const { file, bytes } of writes) {
+    if (!/^src\//.test(file) || isTestFile(file) || bytes === null || bytes.includes(0)) continue;
+    const lines = bytes.toString('utf8').split('\n');
+    for (const [index, line] of lines.entries()) {
+      if (/import\.meta\.vitest\b/.test(line)) { hits.push({ code: 'in-source-test', file, line: index + 1, message: `in-source-test: ${file}:${index + 1} has an import.meta.vitest block; tests go in their own test file (the build ships src/), so remove it` }); break; }
+    }
+  }
+  return hits;
+}
+
 export function workFolderReferenceHits(writes) {
   const hits = [];
   for (const { file, bytes } of writes) {
@@ -5210,8 +5223,8 @@ async function integrateRunLocked(root, id, options = {}) {
       }
       if (queue) {
         const plannedWrites = writes.splice(writeStart);
-        const hits = workFolderReferenceHits(plannedWrites);
-        if (hits.length) fail(hits.map(hit => hit.message).join('\n'), 'work-folder-reference');
+        const hits = [...workFolderReferenceHits(plannedWrites), ...inSourceTestHits(plannedWrites)];
+        if (hits.length) fail(hits.map(hit => hit.message).join('\n'), hits[0].code === 'in-source-test' ? 'in-source-test' : 'work-folder-reference');
         if (conflictingFiles.length) queueConflicts.push({ job: job.id, files: conflictingFiles, reason: conflictReason });
         else queuePlans.push({ job: job.id, writes: plannedWrites, snapshots, alreadyApplied: state.mergeQueue?.state === 'running' && !plannedWrites.length });
       }
@@ -5265,8 +5278,8 @@ async function integrateRunLocked(root, id, options = {}) {
     }
     // Field lesson #159: a change to packaging keys that no check builds is named up front.
     const packagingWarnings = packagingChangeWarnings(writes.filter(change => isPackagingFile(change.file)).map(change => ({ file: change.file, keys: packagingKeyChanges(change.file, change.previous?.toString('utf8') ?? '', change.bytes.toString('utf8')) })), [...(manifest.checks ?? []).map(check => check.argv), ...(manifest.preChecks ?? [])]);
-    const workFolderHits = workFolderReferenceHits(writes);
-    if (workFolderHits.length) fail(workFolderHits.map(hit => hit.message).join('\n'), 'work-folder-reference');
+    const workFolderHits = [...workFolderReferenceHits(writes), ...inSourceTestHits(writes)];
+    if (workFolderHits.length) fail(workFolderHits.map(hit => hit.message).join('\n'), workFolderHits[0].code === 'in-source-test' ? 'in-source-test' : 'work-folder-reference');
     if (queue) {
       if (acceptedDeviations.length) state.acceptedDeviations = acceptedDeviations;
       if (resultShapeWarnings.length) state.resultShapeWarnings = resultShapeWarnings;
