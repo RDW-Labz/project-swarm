@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "busy-review-fixes",
+      "agent": "auto",
+      "prompt": "Fix three review findings in the busy marker code. (1) In tools/busy-marker.mjs, writeBusyMarker must not store the full command line (it can carry secrets and is printed by swarm update). Reduce the given command to the text swarm followed by the verb: walk the words, skip option words and the value after --root, and take the first word that is in BUSY_MARKER_VERBS; store that as swarm VERB; when no verb is found store just swarm. Nothing else from the command is kept. (2) In liveBusyMarkers, a marker whose pid is not a positive integer (0, negative, NaN, a string) counts as dead: delete its file and do not return it (process.kill(0, 0) would otherwise say alive forever). (3) In tests/busy-marker.test.mjs and tests/update-busy-marker.test.mjs, any test that needs a dead pid must get it from a real child process that was spawned and has fully exited (await its close), not a hard-coded number, so the test cannot pass vacuously. Add tests: a command with a token-like argument (for example ship --token abc123secret) is stored as swarm ship with no argument text; a marker with pid 0 and one with pid -5 are deleted and not returned. Keep all other tests. Write only these three files.",
+      "context": [
+        "tools/busy-marker.mjs",
+        "tests/busy-marker.test.mjs",
+        "tests/update-busy-marker.test.mjs"
+      ],
+      "outputs": [
+        "tools/busy-marker.mjs",
+        "tests/busy-marker.test.mjs",
+        "tests/update-busy-marker.test.mjs"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}

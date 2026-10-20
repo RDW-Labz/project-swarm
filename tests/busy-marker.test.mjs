@@ -4,7 +4,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import { writeBusyMarker, liveBusyMarkers } from '../tools/busy-marker.mjs';
+
+function spawnExitedPid() {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' });
+    child.on('error', reject);
+    child.on('close', () => resolve(child.pid));
+  });
+}
 
 async function tempDir(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-busy-'));
@@ -20,7 +29,7 @@ test('writeBusyMarker for current pid is listed by liveBusyMarkers', async t => 
   const live = await liveBusyMarkers({ dir });
   assert.equal(live.length, 1);
   assert.equal(live[0].pid, process.pid);
-  assert.equal(live[0].command, command);
+  assert.equal(live[0].command, 'swarm go');
   assert.equal(live[0].root, root);
   await remove();
 });
@@ -28,9 +37,9 @@ test('writeBusyMarker for current pid is listed by liveBusyMarkers', async t => 
 test('dead pid marker is removed and not returned', async t => {
   const dir = await tempDir(t);
   const root = await tempDir(t);
-  const deadPid = 424242;
+  const deadPid = await spawnExitedPid();
   await writeBusyMarker({ command: 'node tools/swarm.mjs run x', root, pid: deadPid, dir });
-  const live = await liveBusyMarkers({ dir, isAlive: pid => pid === process.pid });
+  const live = await liveBusyMarkers({ dir });
   assert.deepEqual(live, []);
   await assert.rejects(fs.access(path.join(dir, `${deadPid}.json`)));
 });
@@ -42,6 +51,29 @@ test('remove deletes the marker and is safe to call twice', async t => {
   await remove();
   await assert.rejects(fs.access(path.join(dir, `${process.pid}.json`)));
   await remove();
+});
+
+test('writeBusyMarker strips secrets from command and stores swarm verb only', async t => {
+  const dir = await tempDir(t);
+  const root = await tempDir(t);
+  const remove = await writeBusyMarker({ command: 'ship --token abc123secret', root, dir });
+  const live = await liveBusyMarkers({ dir });
+  assert.equal(live.length, 1);
+  assert.equal(live[0].command, 'swarm ship');
+  await remove();
+});
+
+test('liveBusyMarkers removes markers with pid 0 or negative and does not return them', async t => {
+  const dir = await tempDir(t);
+  const root = await tempDir(t);
+  for (const badPid of [0, -5]) {
+    await writeBusyMarker({ command: 'node tools/swarm.mjs go', root, pid: badPid, dir });
+    await fs.access(path.join(dir, `${badPid}.json`));
+  }
+  assert.deepEqual(await liveBusyMarkers({ dir }), []);
+  for (const badPid of [0, -5]) {
+    await assert.rejects(fs.access(path.join(dir, `${badPid}.json`)));
+  }
 });
 
 test('missing busy directory returns no markers', async t => {

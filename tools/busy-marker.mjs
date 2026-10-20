@@ -17,9 +17,32 @@ function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
 }
 
+function isPositiveIntegerPid(pid) {
+  return Number.isInteger(pid) && pid > 0;
+}
+
+export function reduceBusyCommand(command) {
+  const words = String(command).trim().split(/\s+/).filter(Boolean);
+  let skipNext = false;
+  for (const word of words) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (word === '--root') {
+      skipNext = true;
+      continue;
+    }
+    if (word.startsWith('-')) continue;
+    if (BUSY_MARKER_VERBS.has(word)) return `swarm ${word}`;
+  }
+  return 'swarm';
+}
+
 export async function writeBusyMarker({ command, root, pid = process.pid, dir = busyDir() }) {
   const realRoot = await fs.realpath(root);
-  const record = { pid, command, root: realRoot, startedAt: new Date().toISOString() };
+  const storedCommand = reduceBusyCommand(command);
+  const record = { pid, command: storedCommand, root: realRoot, startedAt: new Date().toISOString() };
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   await fs.chmod(dir, 0o700);
   const target = path.join(dir, `${pid}.json`);
@@ -45,7 +68,7 @@ export async function liveBusyMarkers({ dir = busyDir(), isAlive = pidAlive } = 
     const target = path.join(dir, entry);
     let record;
     try { record = JSON.parse(await fs.readFile(target, 'utf8')); } catch { await fs.unlink(target).catch(() => {}); continue; }
-    if (!isAlive(record.pid)) { await fs.unlink(target).catch(() => {}); continue; }
+    if (!isPositiveIntegerPid(record.pid) || !isAlive(record.pid)) { await fs.unlink(target).catch(() => {}); continue; }
     markers.push({ pid: record.pid, command: record.command, root: record.root });
   }
   return markers;

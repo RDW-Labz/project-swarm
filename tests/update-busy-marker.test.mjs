@@ -54,6 +54,14 @@ function spawnClosePromise(child) {
   });
 }
 
+function spawnExitedPid() {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' });
+    child.on('error', reject);
+    child.on('close', () => resolve(child.pid));
+  });
+}
+
 async function findBusyMarker(busyDir, predicate) {
   let entries;
   try {
@@ -127,7 +135,7 @@ test('update refuses when a live busy marker from another pid is present', async
   await assert.rejects(runUpdate(busyDir, home), error => {
     assert.match(error.stderr, /update-refused/);
     assert.match(error.stderr, new RegExp(`process\\s+${process.pid}`));
-    assert.match(error.stderr, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(error.stderr, /swarm go/);
     assert.match(error.stderr, new RegExp(`\\(${root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`));
     return true;
   });
@@ -137,7 +145,8 @@ test('update is not refused for a busy marker with a dead pid', async t => {
   const busyDir = await tempDir(t);
   const home = await tempDir(t);
   const root = await tempDir(t);
-  await writeBusyMarker({ command: 'node tools/swarm.mjs run x', root, pid: 424242, dir: busyDir });
+  const deadPid = await spawnExitedPid();
+  await writeBusyMarker({ command: 'node tools/swarm.mjs run x', root, pid: deadPid, dir: busyDir });
   try {
     const { stderr } = await runUpdate(busyDir, home);
     assert.doesNotMatch(stderr, /update-refused/);
@@ -181,7 +190,7 @@ test('with-concurrency writes a busy marker for the swarm pid while the wrapped 
   const marker = await waitForBusyMarker(f.busyDir, () => true);
   assert.equal(marker.entry, `${child.pid}.json`);
   assert.equal(marker.record.pid, child.pid);
-  assert.match(marker.record.command, /with-concurrency/);
+  assert.equal(marker.record.command, 'swarm with-concurrency');
 
   child.stdin.end();
   await closed;
