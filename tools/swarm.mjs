@@ -5765,6 +5765,20 @@ export async function editInPlaceOnlyJobs(root, manifest, { env = process.env, h
   return ids;
 }
 
+// Automatic jobs no lane can take right now (every lane paused or unconfigured, tier expensive with no claude model): reported one by one, so the caller can leave them out and
+// keep the rest of the wave instead of aborting it.
+export async function unroutableJobs(root, manifest, { env = process.env, home = os.homedir() } = {}) {
+  const resolved = resolveLanes({ config: loadLocalConfig({ env, home }), manifest, env });
+  const oversize = await editInPlaceOnlyJobs(root, manifest, { env, home });
+  const bad = [];
+  for (const job of manifest.jobs ?? []) {
+    if (job.agent !== 'auto') continue;
+    try { pickJobRoute(job, resolved, { contract: manifest.contract, ready: readyAutoJobs(manifest), editInPlaceOnly: oversize.has(job.id) }); }
+    catch (error) { if (error.code !== 'route-exhausted') throw error; bad.push({ id: job.id, reason: error.message }); }
+  }
+  return bad;
+}
+
 function pickJobRoute(job, lanes, options = {}) {
   const { editInPlaceOnly = false, ...routeOptions } = options;
   return routeJob(job, { lanes, ...routeOptions, accepts: candidate => {

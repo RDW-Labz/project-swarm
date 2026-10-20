@@ -108,3 +108,17 @@ test('update refuses while a run is live (naming it) and goes ahead with --force
   const forced = spawnSync(process.execPath, [SWARM, 'update', '--yes', '--force'], { encoding: 'utf8', env });
   assert.doesNotMatch(forced.stdout + forced.stderr, /update-refused/);
 });
+
+import { buildTicketContext } from '../tools/ticket-context.mjs';
+test('a test ticket sees the files under test, the runner config, tsconfig and one existing test as an example', () => {
+  const have = new Set(['src/lib/price.ts', 'src/lib/other.ts', 'vitest.config.ts', 'tsconfig.json', 'tests/old.test.ts', 'tests/mine.test.ts', 'package.json']);
+  const tree = { src: ['src/lib/price.ts', 'src/lib/other.ts'], tests: ['tests/old.test.ts', 'tests/mine.test.ts'] };
+  const build = t('T-0010', { files: ['src/lib/price.ts'], tests: ['tests/mine.test.ts'] });
+  const test2 = t('T-0011', { type: 'test', files: ['tests/mine.test.ts'], dependsOn: [] });
+  const r = buildTicketContext({ ticket: test2, allTickets: [build, test2], exists: p => have.has(p), listFiles: d => tree[d] ?? [] });
+  assert.equal(r.kind, 'test');
+  for (const p of ['src/lib/price.ts', 'vitest.config.ts', 'tsconfig.json', 'tests/old.test.ts']) assert.ok(r.context.includes(p), `${p} in ${r.context}`);
+  assert.ok(!r.context.includes('src/lib/other.ts'), 'unrelated implementation files stay out');
+  const byName = buildTicketContext({ ticket: t('T-0012', { type: 'test', files: ['tests/price.test.ts'] }), allTickets: [], exists: p => have.has(p), listFiles: d => tree[d] ?? [] });
+  assert.ok(byName.context.includes('src/lib/price.ts'), 'matched by the name of the test file when no ticket names it');
+});
