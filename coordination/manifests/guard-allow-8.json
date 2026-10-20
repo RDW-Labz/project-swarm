@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "concurrency": 5,
+  "jobs": [
+    {
+      "id": "w8-policy",
+      "agent": "auto",
+      "prompt": "SHARED CONTRACT (five jobs run in parallel and each edits only its own files; follow it exactly). Threat model: the orchestrator is honest but fallible, not an adversary; the guard exists to stop accidents. analyzeShell(...) in tools/shell-writes.mjs gains: (a) result.dynamic: true when the command word of any simple command is a variable, a substitution, or contains an expansion, or the command uses eval, or pipes into sh, bash, zsh, node, python or perl, or runs base64 with a decode option, or runs a shell -c whose string contains a substitution or a decode; dynamic also forces result.unknown to true so the policy treats it as not free; (b) every git push ops entry gains refspecs: an array with one {src, dst, force, delete} object per positional refspec or branch word after the remote (dst is the branch name with refs/heads/ stripped; force true for a leading plus or any force option; delete true for a leading colon, --delete or -d) and positionals: the count of positional words after push; flags --mirror and --prune set delete true on the entry; (c) hasConfig is also true for --config-env, for any option containing =upload-pack, =receive-pack, =exec, =config, and for --exec-path forms; (d) ops entries for ln and for ln -s are not git ops: instead ln and ln -s add the link path to writes. The policy side (tools/handbuild.mjs) uses these fields. JOB: tools/handbuild.mjs, tools/orchestrator-events.mjs, tools/routing-paths.mjs. Fix accident cases found by a security review: (1) git push is free only as: git push with zero positionals (pushes the current branch), git push REMOTE with exactly one positional that is a configured remote name (read git remote with a 3 second timeout; if it cannot be read, or the one positional is not a remote, the push is not free), or git push REMOTE BRANCH with exactly two positionals; more than two positionals or any refspec with src not equal to dst is not free; the branch pushed (explicit or the current branch when omitted) must not be main, master or HEAD; use the refspecs field. A push with delete true on any refspec, --mirror or --prune, or force on main or master is blocked and never approvable for main and master. (2) git fetch is free only with zero positionals, or one positional that is a configured remote, with options limited to --all, --prune, -p, --tags, -q, --quiet; any other form (a refspec containing a colon, a dot repository, options with an equals sign) is not free. (3) the early return after a passing content-hash check must not skip the other checks: the whole command line is judged first (file writes, git add working tree check, push check, global options) and a command is allowed only if every part is allowed. (4) git add, commit and push are not free when the command has any of -C, --git-dir, --work-tree, or an environment prefix word starting with GIT_ (globalOpts or an env assignment of that kind). (5) a command with result.dynamic or result.unknown is not free: it needs an approval that names the files or ops, or is blocked, exactly like an unknown write today. (6) protect transcripts: text-level writes to the top-level jsonl files of any project folder under the home .claude folder in projects are blocked like the settings files (the memory subfolders stay allowed). (7) tools/orchestrator-events.mjs isHandBuilt must use the symlink-resolving routing check (isRoutingPathResolved in tools/routing-paths.mjs; make sure it is exported and used) so a symlink named like a manifest does not hide a source edit, and the scratchpad and memory exemptions must resolve symlinks before judging. Update the existing tests that these changes alter (tests/handbuild-allowlist.test.mjs, tests/handbuild-hardening.test.mjs, tests/handbuild-hardening2.test.mjs, tests/handbuild-guard.test.mjs, tests/routing-paths.test.mjs) and add tests/handbuild-accidents.test.mjs with one test per item using these exact forms: git push origin on main ; git push origin feature main ; git push origin feature:main ; git push --mirror origin ; git push origin --delete feature ; git fetch . HEAD:refs/remotes/origin/main ; git fetch --upload-pack=x . ; printf evil > src/x.js && git add src/x.js && git commit -m x (src/x.js swarm-produced with matching staged bytes but the write in the same line) ; git --work-tree=/tmp/w add src/x.js ; GIT_WORK_TREE=/tmp/w git add src/x.js ; a dynamic command (a variable as the command word, eval, a pipe into sh, base64 -d into sh) ; a Write to a transcript jsonl under the home .claude projects folder ; a Write to a symlink named like a manifest that points at a source file. Write only tools/handbuild.mjs, tools/orchestrator-events.mjs, tools/routing-paths.mjs and the test files named above.",
+      "context": [
+        "tools/handbuild.mjs",
+        "tools/orchestrator-events.mjs",
+        "tools/routing-paths.mjs",
+        "tools/shell-writes.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-hardening.test.mjs",
+        "tests/handbuild-hardening2.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/routing-paths.test.mjs"
+      ],
+      "outputs": [
+        "tools/handbuild.mjs",
+        "tools/orchestrator-events.mjs",
+        "tools/routing-paths.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-hardening.test.mjs",
+        "tests/handbuild-hardening2.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/routing-paths.test.mjs",
+        "tests/handbuild-accidents.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/swarm-produced-hash.test.mjs"
+      ]
+    },
+    {
+      "id": "w8-parser",
+      "agent": "auto",
+      "prompt": "SHARED CONTRACT (five jobs run in parallel and each edits only its own files; follow it exactly). Threat model: the orchestrator is honest but fallible, not an adversary; the guard exists to stop accidents. analyzeShell(...) in tools/shell-writes.mjs gains: (a) result.dynamic: true when the command word of any simple command is a variable, a substitution, or contains an expansion, or the command uses eval, or pipes into sh, bash, zsh, node, python or perl, or runs base64 with a decode option, or runs a shell -c whose string contains a substitution or a decode; dynamic also forces result.unknown to true so the policy treats it as not free; (b) every git push ops entry gains refspecs: an array with one {src, dst, force, delete} object per positional refspec or branch word after the remote (dst is the branch name with refs/heads/ stripped; force true for a leading plus or any force option; delete true for a leading colon, --delete or -d) and positionals: the count of positional words after push; flags --mirror and --prune set delete true on the entry; (c) hasConfig is also true for --config-env, for any option containing =upload-pack, =receive-pack, =exec, =config, and for --exec-path forms; (d) ops entries for ln and for ln -s are not git ops: instead ln and ln -s add the link path to writes. The policy side (tools/handbuild.mjs) uses these fields. JOB: tools/shell-writes.mjs. Implement the contract and fix accident cases found by a security review: (1) find: handle -delete and -exec as independent actions: a find with both reports the delete; every -exec ... ; or -exec ... + action in one find is analyzed on its own; -fprint, -fprintf, -fls after an -exec are still checked; a find with no explicit starting directory that deletes or execs a writer is unknown. (2) rm, unlink and rmdir with a glob in the target: inside the project root the glob is unknown (rm -rf src/* and rm -rf *), outside the root the fixed prefix is added to outsideDeletes as well as reported protected when it is. (3) ANSI-C quoting: a word starting with dollar and a single quote is one quoted word in which a backslash escapes the next character (including a single quote), and an unclosed quote anywhere makes the whole command unknown; a command word written as dollar-quote git quote is the command git. (4) git push ops: implement refspecs, positionals, --mirror, --prune as in the contract. (5) hasConfig as in the contract. (6) ln and ln -s add the link path to writes (a link created inside the project is a write). (7) dynamic as in the contract: a variable, substitution or expansion in the command word, eval, a pipe into a shell or interpreter, base64 with a decode option, a shell -c string containing a substitution or a decode all set dynamic true and unknown true; ordinary quoted arguments, a plain variable as an argument and substitutions as arguments of read-only commands (echo, printf, cat, ls, grep, git log -m with a text) stay unflagged. Update the existing tests that these changes alter (tests/shell-writes-quotes.test.mjs, tests/shell-writes-hardening.test.mjs) and add tests/shell-writes-accidents.test.mjs with one test per numbered item using exact forms: find src -exec true ; -delete ; find . -exec true ; -exec rm -rf src ; ; rm -rf src/* ; rm -rf * ; rm -rf /tmp/scratch/* ; echo with ansi-c quotes containing an escaped single quote followed by a semicolon and rm -rf .swarm/runs ; a git command written with dollar-quote around git and a push --force origin main ; git push origin feature main (two refspecs) ; git push origin :main x ; git push --mirror origin ; git --config-env core.hooksPath=V push ; git fetch --upload-pack=x . ; ln -s ../../tools/guard.mjs coordination/manifests/g.json ; a=rm; $a -rf src ; eval with a string ; echo x | sh ; echo Zm9v | base64 -d | sh ; bash -c with a decode substitution; and for no false positives: git commit -m with a backtick and dollar text inside double quotes, echo with a variable argument, and cat with a substitution argument. Write only tools/shell-writes.mjs, tests/shell-writes-quotes.test.mjs, tests/shell-writes-hardening.test.mjs and tests/shell-writes-accidents.test.mjs.",
+      "context": [
+        "tools/shell-writes.mjs",
+        "tests/shell-writes-quotes.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/handbuild-guard.test.mjs"
+      ],
+      "outputs": [
+        "tools/shell-writes.mjs",
+        "tests/shell-writes-quotes.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/shell-writes-accidents.test.mjs"
+      ],
+      "timeoutMs": 2700000
+    },
+    {
+      "id": "w8-selfapproval",
+      "agent": "auto",
+      "prompt": "SHARED CONTRACT (five jobs run in parallel and each edits only its own files; follow it exactly). Threat model: the orchestrator is honest but fallible, not an adversary; the guard exists to stop accidents. analyzeShell(...) in tools/shell-writes.mjs gains: (a) result.dynamic: true when the command word of any simple command is a variable, a substitution, or contains an expansion, or the command uses eval, or pipes into sh, bash, zsh, node, python or perl, or runs base64 with a decode option, or runs a shell -c whose string contains a substitution or a decode; dynamic also forces result.unknown to true so the policy treats it as not free; (b) every git push ops entry gains refspecs: an array with one {src, dst, force, delete} object per positional refspec or branch word after the remote (dst is the branch name with refs/heads/ stripped; force true for a leading plus or any force option; delete true for a leading colon, --delete or -d) and positionals: the count of positional words after push; flags --mirror and --prune set delete true on the entry; (c) hasConfig is also true for --config-env, for any option containing =upload-pack, =receive-pack, =exec, =config, and for --exec-path forms; (d) ops entries for ln and for ln -s are not git ops: instead ln and ln -s add the link path to writes. The policy side (tools/handbuild.mjs) uses these fields. JOB: tools/self-approval.mjs and tools/orchestrator-hook.mjs. A security review found that the self-approval detector misses calls through the script path and through simple quoting. (1) isSelfApprovalCommand must first normalize the command text: remove backslashes before characters, remove single and double quote characters, remove dollar-quote prefixes, collapse whitespace, lower-case; then check the normalized text. (2) It must match, with or without the swarm word and with the swarm.mjs script path forms (node tools/swarm.mjs, node swarm.mjs, node with any path ending in swarm.mjs, the swarm launcher): handbuild followed by approve, deny, on, off, install or uninstall; decide followed by any arguments that include approve (any id, not only handbuild- ids); inbox-commands; orchestrator-hook; recordChatMerge; writing to the guard state folder; also python or node inline scripts that mention swarm together with decide or handbuild. (3) Keep false positives low: ordinary commands (git status, swarm go, swarm run, swarm tickets, swarm handbuild status, swarm handbuild request) must stay false; swarm handbuild request is the way the orchestrator asks and must be allowed. (4) The prompt hook: besides the existing checks, record a merge approval only when transcript_path is a regular file whose real path is under the home .claude projects folder and whose last user message text (read the last 64 KB of the jsonl, find the last line with type user, take its message content text) equals the prompt exactly after trimming; if the file cannot be read or does not match, record nothing. Never throw. Tests in tests/self-approval-hardening.test.mjs: true for node tools/swarm.mjs handbuild off, swarm handbuild o quote quote ff, node tools/swarm.mjs decide 42 approve, swarm decide handbuild-abc approve, quoted and backslash forms, bash -c with the command inside, python3 -c with subprocess run swarm decide approve; false for the ordinary commands above and for swarm handbuild request --kind tiny; hook: a forged transcript path in /tmp records nothing, a transcript under a fake home projects folder whose last user line equals the prompt records, one whose last user line differs records nothing. Update tests/handbuild-channels-hardening.test.mjs, tests/handbuild-hook-hardening.test.mjs and tests/handbuild-channel.test.mjs only where the transcript check changes their inputs (give those hook inputs a transcript file that matches). Write only tools/self-approval.mjs, tools/orchestrator-hook.mjs, tests/self-approval-hardening.test.mjs, tests/handbuild-channels-hardening.test.mjs, tests/handbuild-hook-hardening.test.mjs and tests/handbuild-channel.test.mjs.",
+      "context": [
+        "tools/self-approval.mjs",
+        "tools/orchestrator-hook.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/handbuild-channel.test.mjs"
+      ],
+      "outputs": [
+        "tools/self-approval.mjs",
+        "tools/orchestrator-hook.mjs",
+        "tests/self-approval-hardening.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/handbuild-channel.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-hardening2.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10b-init.test.mjs"
+      ]
+    },
+    {
+      "id": "y2-git-hooks",
+      "agent": "auto",
+      "prompt": "SHARED CONTRACT (five jobs run in parallel and each edits only its own files; follow it exactly). Threat model: the orchestrator is honest but fallible, not an adversary; the guard exists to stop accidents. analyzeShell(...) in tools/shell-writes.mjs gains: (a) result.dynamic: true when the command word of any simple command is a variable, a substitution, or contains an expansion, or the command uses eval, or pipes into sh, bash, zsh, node, python or perl, or runs base64 with a decode option, or runs a shell -c whose string contains a substitution or a decode; dynamic also forces result.unknown to true so the policy treats it as not free; (b) every git push ops entry gains refspecs: an array with one {src, dst, force, delete} object per positional refspec or branch word after the remote (dst is the branch name with refs/heads/ stripped; force true for a leading plus or any force option; delete true for a leading colon, --delete or -d) and positionals: the count of positional words after push; flags --mirror and --prune set delete true on the entry; (c) hasConfig is also true for --config-env, for any option containing =upload-pack, =receive-pack, =exec, =config, and for --exec-path forms; (d) ops entries for ln and for ln -s are not git ops: instead ln and ln -s add the link path to writes. The policy side (tools/handbuild.mjs) uses these fields. JOB (item Y, real enforcement): git hooks that see what git actually commits and pushes, whatever the command text looked like. Read tools/handbuild.mjs (activeApprovals, matchesFile, PROTECTED, protected branch handling), tools/swarm-produced.mjs (isSwarmProducedContent and swarmProducedHashes) and tools/routing-paths.mjs, and tools/handbuild-commands.mjs (swarm handbuild install, uninstall, off, on). Create tools/githook-check.mjs (SPDX header, ES module, runnable as node githook-check.mjs pre-commit or pre-push, reading what git passes on stdin for pre-push) with exported functions so tests can call them: checkPreCommit({root, env, branch, staged, readBlob, approvals}) and checkPrePush({root, env, refs, readBlob, approvals}). Rules, applied only when the environment variable CLAUDECODE is set (an agent session; the owner's own terminal has no such variable and is never affected) and the guard is not switched off (the existing off file): pre-commit refuses a commit on main or master (unless a live approval's git list names commit and covers it as today); every staged file must be a routing path, or have staged bytes whose sha256 matches a recorded integrate hash for that path, or be covered by a live file approval; otherwise refuse with a plain message that names the file and says how to ask (swarm handbuild request). pre-push refuses any ref update to refs/heads/main or refs/heads/master (a push, a delete, a force) unless a live approval names push and covers it, never for a delete or non-fast-forward of main or master; for pushes of other branches check the files changed in the pushed commits against origin main (git diff --name-only on the range given by the pushed oid and the remote main; if it cannot be computed, refuse) with the same file rule. Exit code 1 and a one-paragraph message on refusal, exit 0 otherwise; any internal error in an agent session refuses (fail closed) and any internal error outside an agent session allows. Create tools/git-hooks.mjs exporting installGitHooks(root, {fs, exec}) and removeGitHooks(root, {fs, exec}): write small shell scripts .git/hooks/pre-commit and .git/hooks/pre-push (resolve the real git dir with git rev-parse --git-dir, support linked worktrees through the common dir hooks folder) that run node with the absolute path of tools/githook-check.mjs from the swarm install, marked with a first-line marker comment; if a hook file already exists that is not ours, rename it to the same name plus .before-swarm and have our script call it first and keep its exit code; removeGitHooks restores the renamed file and only deletes files that carry our marker; both are idempotent. Wire them into swarm handbuild install and uninstall in tools/handbuild-commands.mjs (print one line that the git hooks were installed or removed) without changing anything else in those commands. Also protect the hooks from the text-level guard is handled elsewhere, do not edit tools/handbuild.mjs. Tests in tests/git-hooks.test.mjs (node:test, strict assert) using real temporary git repositories and the real hook scripts through child_process: in an agent session (env CLAUDECODE=1) a commit on main fails, a commit on a feature branch with a hand-edited file fails and names the file, a commit with only a routing path passes, a commit with a file whose bytes match a recorded hash (write a fake run state.json with integratedHashes under .swarm/runs/RUN, regular files) passes, a commit of that file after one byte changes fails, a push of main fails (use a local bare repository as the remote), a push of a feature branch with a hash-matching commit passes; without CLAUDECODE every one of those passes; with the guard off file present they pass; install twice leaves one script, install with a pre-existing hook keeps and calls it, uninstall restores it. Write only tools/githook-check.mjs, tools/git-hooks.mjs, tools/handbuild-commands.mjs and tests/git-hooks.test.mjs.",
+      "context": [
+        "tools/handbuild.mjs",
+        "tools/swarm-produced.mjs",
+        "tools/routing-paths.mjs",
+        "tools/handbuild-commands.mjs",
+        "tests/handbuild-guard.test.mjs"
+      ],
+      "outputs": [
+        "tools/githook-check.mjs",
+        "tools/git-hooks.mjs",
+        "tools/handbuild-commands.mjs",
+        "tests/git-hooks.test.mjs"
+      ],
+      "timeoutMs": 2700000
+    },
+    {
+      "id": "w8-docs",
+      "agent": "auto",
+      "prompt": "Update docs/handbuild-guard.md (and nothing else) so it states the guard honestly after wave 8. Read the file and the modules it documents (tools/handbuild.mjs, tools/shell-writes.mjs, tools/self-approval.mjs, tools/swarm-produced.mjs, tools/routing-paths.mjs, tools/orchestrator-hook.mjs). Add or rewrite these sections: Threat model (the orchestrator is honest but fallible, not an adversary: the guard stops accidents such as a stray commit to main, a hand edit of source, an unreviewed push; it is not a sandbox and cannot stop a determined attacker who can run arbitrary code); What is free (routing files: manifests, HANDOFF, TASK, build-plan, usage ledger; commit and push of swarm-produced files on non-main branches, judged by content hash; the short exact list of read-only and PR commands) and What needs the owner (hand edits to source, tests, docs, config; any commit or push on main or master; force push and delete of main never approvable; merge, deploy, branch -D and force push of other branches only with an approval at the computer; dynamic commands such as variables in the command position, eval, pipes into a shell and decoded text); Approvals (channels: computer only for elevated ops, never phone, board or remote control; the owner's chat line merge and a PR number as a one-time approval); Real enforcement (git pre-commit and pre-push hooks installed by swarm handbuild install, which check what git actually commits and pushes in an agent session, and GitHub branch protection on main as the server-side backstop); Known limits (obfuscated commands that execute decoded text are refused as dynamic but a determined agent can still do harm outside git; the hash check trusts the integrate records, which the guard protects from text-level writes; chat merge approval trusts the owner's prompt event and the transcript check; the guard reads command text and fails closed on what it cannot read). Keep the file's existing facts that are still true, remove anything that overclaims, and keep it under 250 lines. Write only docs/handbuild-guard.md.",
+      "context": [
+        "docs/handbuild-guard.md",
+        "tools/handbuild.mjs",
+        "tools/self-approval.mjs",
+        "tools/swarm-produced.mjs",
+        "tools/routing-paths.mjs",
+        "tools/orchestrator-hook.mjs"
+      ],
+      "outputs": [
+        "docs/handbuild-guard.md"
+      ],
+      "timeoutMs": 900000,
+      "ignoreTests": [
+        "tests/handbuild-guard.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/phase10b-init.test.mjs"
+      ]
+    }
+  ]
+}
