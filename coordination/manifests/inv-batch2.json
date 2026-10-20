@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "concurrency": 6,
+  "jobs": [
+    {
+      "id": "inv2-e4",
+      "agent": "auto",
+      "type": "review",
+      "prompt": "Read-only investigation, no edits, write no file. Item E4: reviews passed tickets T-0351 and T-0352 but their own end-to-end spec files still failed. Find where, after a ticket's job output is integrated, the security and acceptance reviews are dispatched and where a ticket's own test or e2e spec files (files it owns or names) could be run first; propose running them before review and failing the ticket when they fail. The scope and ticket modules are all in your context (tools/scope-commands.mjs holds prepareScopeRun and runScopeCommand, tools/scope-loop.mjs the loop, tools/tickets.mjs the ledger store). Report a short numbered list: the exact files and function names with line numbers to change, why it happens today, the smallest fix, and the tests that would prove it. State clearly whether the whole fix fits inside these files or also needs tools/swarm.mjs.",
+      "context": [
+        "tools/scope-commands.mjs",
+        "tools/scope-loop.mjs",
+        "tools/tickets.mjs",
+        "tools/ticket-unlock.mjs",
+        "tools/ticket-manifest.mjs",
+        "tools/ticket-context.mjs",
+        "tools/scope.mjs",
+        "tools/scope-integrity.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "inv2-e5",
+      "agent": "auto",
+      "type": "review",
+      "prompt": "Read-only investigation, no edits, write no file. Items E5 and E5b: the planner counts DONE tickets as file owners so new fix tickets cannot touch files from finished work in the same wave, and the scope split cannot list existing tickets as dependsOn so new tickets collide with done tickets on the same files. Find the code that computes file ownership and collisions and where dependsOn candidates are built; propose that done tickets release files, only open and running tickets block, and that the splitter sees existing open tickets as dependsOn candidates (done tickets as context only). The scope and ticket modules are all in your context (tools/scope-commands.mjs holds prepareScopeRun and runScopeCommand, tools/scope-loop.mjs the loop, tools/tickets.mjs the ledger store). Report a short numbered list: the exact files and function names with line numbers to change, why it happens today, the smallest fix, and the tests that would prove it. State clearly whether the whole fix fits inside these files or also needs tools/swarm.mjs.",
+      "context": [
+        "tools/scope-commands.mjs",
+        "tools/scope-loop.mjs",
+        "tools/tickets.mjs",
+        "tools/ticket-unlock.mjs",
+        "tools/ticket-manifest.mjs",
+        "tools/ticket-context.mjs",
+        "tools/scope.mjs",
+        "tools/scope-integrity.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "inv2-b",
+      "agent": "auto",
+      "type": "review",
+      "prompt": "Read-only investigation, no edits, write no file. Item B: delete-only tickets cannot finish: the scope sync reports that job files are not in the integrated files. Find the sync comparison and propose treating a ticket's declared deletes as its files and passing when they are gone from the repository (only ENOENT counts as absent). The scope and ticket modules are all in your context (tools/scope-commands.mjs holds prepareScopeRun and runScopeCommand, tools/scope-loop.mjs the loop, tools/tickets.mjs the ledger store). Report a short numbered list: the exact files and function names with line numbers to change, why it happens today, the smallest fix, and the tests that would prove it. State clearly whether the whole fix fits inside these files or also needs tools/swarm.mjs.",
+      "context": [
+        "tools/scope-commands.mjs",
+        "tools/scope-loop.mjs",
+        "tools/tickets.mjs",
+        "tools/ticket-unlock.mjs",
+        "tools/ticket-manifest.mjs",
+        "tools/ticket-context.mjs",
+        "tools/scope.mjs",
+        "tools/scope-integrity.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "inv2-c",
+      "agent": "auto",
+      "type": "review",
+      "prompt": "Read-only investigation, no edits, write no file. Item C: setting a ticket status by hand (swarm tickets ID --set STATUS) should need --force or a confirmation, log who set it, and support --dry-run. Find the handler and the ledger write path and propose the change with the log line format. The scope and ticket modules are all in your context (tools/scope-commands.mjs holds prepareScopeRun and runScopeCommand, tools/scope-loop.mjs the loop, tools/tickets.mjs the ledger store). Report a short numbered list: the exact files and function names with line numbers to change, why it happens today, the smallest fix, and the tests that would prove it. State clearly whether the whole fix fits inside these files or also needs tools/swarm.mjs.",
+      "context": [
+        "tools/scope-commands.mjs",
+        "tools/scope-loop.mjs",
+        "tools/tickets.mjs",
+        "tools/ticket-unlock.mjs",
+        "tools/ticket-manifest.mjs",
+        "tools/ticket-context.mjs",
+        "tools/scope.mjs",
+        "tools/scope-integrity.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "inv2-e10",
+      "agent": "auto",
+      "type": "review",
+      "prompt": "Read-only investigation, no edits, write no file. Item E10: swarm go --scope accepts only docs/scope/scope.md. Find where the scope path is read and where a change order such as CO-003 records a scope path; propose --scope-file FILE (and following the path recorded by the change order) with the default unchanged. The scope and ticket modules are all in your context (tools/scope-commands.mjs holds prepareScopeRun and runScopeCommand, tools/scope-loop.mjs the loop, tools/tickets.mjs the ledger store). Report a short numbered list: the exact files and function names with line numbers to change, why it happens today, the smallest fix, and the tests that would prove it. State clearly whether the whole fix fits inside these files or also needs tools/swarm.mjs.",
+      "context": [
+        "tools/scope-commands.mjs",
+        "tools/scope-loop.mjs",
+        "tools/tickets.mjs",
+        "tools/ticket-unlock.mjs",
+        "tools/ticket-manifest.mjs",
+        "tools/ticket-context.mjs",
+        "tools/scope.mjs",
+        "tools/scope-integrity.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "inv2-f",
+      "agent": "auto",
+      "type": "review",
+      "prompt": "Read-only investigation, no edits, write no file. Item F: after a failed integration a failed ticket's output file stays untracked and the retry stops at planning with prompt-path-not-in-workspace; one failing test held back seven good tickets. Find prepareScopeRun's handling of pre-existing untracked outputs, the retry prompt construction, and how multi-ticket waves integrate; propose moving leftovers to a quarantine folder with a warning, naming the quarantined file as read-only context in the retry prompt, and integrating multi-ticket waves through the merge queue so a failing ticket is bisected out. The scope and ticket modules are all in your context (tools/scope-commands.mjs holds prepareScopeRun and runScopeCommand, tools/scope-loop.mjs the loop, tools/tickets.mjs the ledger store). Report a short numbered list: the exact files and function names with line numbers to change, why it happens today, the smallest fix, and the tests that would prove it. State clearly whether the whole fix fits inside these files or also needs tools/swarm.mjs.",
+      "context": [
+        "tools/scope-commands.mjs",
+        "tools/scope-loop.mjs",
+        "tools/tickets.mjs",
+        "tools/ticket-unlock.mjs",
+        "tools/ticket-manifest.mjs",
+        "tools/ticket-context.mjs",
+        "tools/scope.mjs",
+        "tools/scope-integrity.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}
