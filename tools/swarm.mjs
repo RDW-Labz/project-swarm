@@ -6833,10 +6833,30 @@ export async function updateProjects(root,{projects,yes=false}={}){
         await fs.rename(from,to);
       }
     }
-    await fs.writeFile(path.join(project,'.project-swarm.json'),`${JSON.stringify({install:root,version},null,2)}\n`);
-    reports.push({project,found,action:'replaced',backup});
+    const {writePointer}=await import('./install.mjs');
+    const written=await writePointer(project,{install:root,version});
+    reports.push({project,found,action:'replaced',backup,pointerBackup:written.backup});
   }
   return {projects:reports};
+}
+
+// After `swarm update`: every linked project whose pointer is behind gets its version field moved (nothing else in the file changes; the old file is kept beside it as a backup).
+// A project that cannot be read or written is reported, never skipped silently.
+export async function bumpPointers(root){
+  root=await fs.realpath(root);
+  const version=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8')).version;
+  const bumped=[],failed=[];
+  for(const projectDir of await readProjectsRegistry(root)){
+    let project;
+    try{project=await fs.realpath(projectDir);}catch{continue;}
+    if(project===root)continue;
+    let pointer;
+    try{pointer=JSON.parse(await fs.readFile(path.join(project,'.project-swarm.json'),'utf8'));}catch(error){if(error.code==='ENOENT')continue;failed.push({project,error:'the pointer file is not valid JSON; not changed'});continue;}
+    if(!pointer||typeof pointer!=='object'||pointer.version===version)continue;
+    try{const {writePointer}=await import('./install.mjs');const written=await writePointer(project,{install:root,version});if(written.changed)bumped.push({project,from:pointer.version??null,to:version});}
+    catch(error){failed.push({project,error:String(error.message).slice(0,200)});}
+  }
+  return {bumped,failed};
 }
 
 function agentReadiness(agent,result){
@@ -8209,6 +8229,8 @@ async function mainInner() {
     }
     const result=useProjects?await updateProjects(target,{projects:dirs.length?dirs:undefined,yes}):await updateInstall(target);
     if(!useProjects){
+      if(result.to&&result.from&&result.to!==result.from)result.restart='A board (swarm watch --all) or swarm remote that is already running keeps the old version until you stop it and start it again.';
+      try{result.pointers=await bumpPointers(target);}catch(error){result.pointers={bumped:[],failed:[],error:String(error.message).slice(0,200)};}
       const after=await bin.readLauncher(os.homedir());
       const runnerVersion=after?await fs.readFile(path.join(path.dirname(path.dirname(after.runner)),'package.json'),'utf8').then(t=>JSON.parse(t).version,()=>null):null;
       result.target=target;

@@ -25,7 +25,7 @@ function ago(iso) {
 }
 function clock(ms) { return new Date(ms).toLocaleTimeString([], { hour12: false }); }
 function runHref(projectId, runId) { return '/run?id=' + encodeURIComponent(projectId) + '&run=' + encodeURIComponent(runId) + '&t=' + T; }
-function watchHref(projectId, runId) { return '/open/run?id=' + encodeURIComponent(projectId) + '&run=' + encodeURIComponent(runId) + '&t=' + T; }
+function watchHref(projectId, runId) { if (state.data && state.data.openRun === false) { return runHref(projectId, runId); } return '/open/run?id=' + encodeURIComponent(projectId) + '&run=' + encodeURIComponent(runId) + '&t=' + T; }
 function projectHref(projectId) { return '/project?id=' + encodeURIComponent(projectId) + '&t=' + T; }
 function link(href, cls, parts) { var a = el('a', cls); a.href = href; parts.forEach(function (p) { a.appendChild(p); }); return a; }
 function pill(text, cls) { return el('span', 'pill ' + (cls || 'info'), text); }
@@ -153,7 +153,7 @@ function renderKpis(m) {
   var c = m.cost;
   var seg = el('div', 'seg');
   Object.keys(m.agents.byLane).forEach(function (lane) { if (m.agents.byLane[lane]) { var i = el('i'); i.style.flex = String(m.agents.byLane[lane]); i.style.background = L.laneColor(lane); seg.appendChild(i); } });
-  box.appendChild(tile('Live agents', String(m.agents.total), m.liveRuns + ' live run' + (m.liveRuns === 1 ? '' : 's'), m.agents.total ? seg : null));
+  box.appendChild(tile('Live agents', String(m.agents.total), m.liveRuns + ' live run' + (m.liveRuns === 1 ? '' : 's') + (L.agentCounts(m).unshown ? ', ' + L.agentCounts(m).held + ' worker slots held' : ''), m.agents.total ? seg : null));
   box.appendChild(tile('Spend today', usd(c.todayUsd), 'last 7 days ' + usd(c.weekUsd)));
   box.appendChild(tile('Billed, all time', usd(c.paidUsd), 'of which estimated ' + usd(c.paidEstimatedUsd) + ' | flat-rate list value ' + usd(c.flatRateListUsd)));
   var w = m.workers;
@@ -235,6 +235,7 @@ function renderProjects(projects) {
   sorted.forEach(function (p) {
     var tr = el('tr');
     var name = el('div'); name.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)])); name.appendChild(document.createTextNode(' ')); name.appendChild(el('span', 'stage', p.stage ? 'stage ' + p.stage : 'no stage'));
+    (p.warnings || []).forEach(function (w) { name.appendChild(el('div', 'sub', '')); name.lastChild.appendChild(pill(w.text, 'warn')); });
     tr.appendChild(td(name)); tr.appendChild(td(liveCell(p), 'wrap'));
     tr.appendChild(td(p.agents.jobs.running + ' run, ' + p.agents.jobs.queued + ' q, ' + p.agents.jobs.blocked + ' blk', 'mono'));
     tr.appendChild(td(p.tickets.open + ' open' + (p.tickets.blocked ? ', ' + p.tickets.blocked + ' blocked' : ''), 'mono'));
@@ -242,6 +243,7 @@ function renderProjects(projects) {
     body.appendChild(tr);
     var c = el('div', 'pcard');
     var head = el('div', 'row'); head.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)])); head.appendChild(el('span', 'stage', p.stage ? 'stage ' + p.stage : 'no stage')); c.appendChild(head);
+    (p.warnings || []).forEach(function (w) { var wl = el('div', 'sub'); wl.appendChild(pill(w.text, 'warn')); c.appendChild(wl); });
     c.appendChild(liveCell(p));
     var meta = el('div', 'row'); meta.appendChild(el('span', 'mono', p.tickets.open + ' open' + (p.tickets.blocked ? ', ' + p.tickets.blocked + ' blocked' : ''))); meta.appendChild(el('span', 'mono', ago(p.lastActivityAt))); c.appendChild(meta);
     c.appendChild(capCell(p));
@@ -349,15 +351,16 @@ function renderCost(data) {
   k.appendChild(tile('Estimated full cost', usd(c.paidUsd + c.flatRateListUsd), 'billed plus list value: what the work would cost at list prices'));
   var t = $('laneTable'); t.textContent = '';
   var lanes = data.machine.lanes || [];
-  if (!lanes.length) { t.appendChild(el('caption', 'empty', 'No lane has spent anything today, has a daily cap, or is paused.')); }
+  if (!lanes.length) { t.appendChild(el('caption', 'empty', 'No lane is configured and none ran a job today.')); }
   else {
-    t.appendChild(th(['Lane', 'Kind', 'Today', 'Daily cap', 'Status']));
+    t.appendChild(th(['Lane', 'Kind', 'Jobs today', 'List value / cost today', 'Daily cap', 'Status']));
     var body = el('tbody');
     lanes.forEach(function (l) {
       var tr = el('tr');
       var nameCell = el('div', 'livebar'); var sw = el('i'); sw.style.cssText = 'width:10px;height:10px;border-radius:3px;display:block;background:' + L.laneColor(l.label); nameCell.appendChild(sw); nameCell.appendChild(el('span', 'name', l.label));
       tr.appendChild(td(nameCell)); tr.appendChild(td(l.kind === 'billed' ? pill('billed', 'good') : pill('flat-rate, list value', 'info')));
-      tr.appendChild(td(usd(l.todayUsd), 'mono'));
+      tr.appendChild(td(String(l.jobsToday || 0), 'mono'));
+      tr.appendChild(td(l.todayUsd ? usd(l.todayUsd) : (l.kind === 'flat-rate' && l.jobsToday ? 'not reported' : usd(0)), 'mono'));
       var cap = el('div');
       if (l.dailyCapUsd) { cap.appendChild(meter(100 * l.todayUsd / l.dailyCapUsd, l.todayUsd / l.dailyCapUsd > 0.75)); cap.appendChild(el('span', 'mono sub', usd(l.todayUsd) + ' of ' + usd(l.dailyCapUsd))); } else { cap.appendChild(el('span', 'sub', 'no daily cap')); }
       tr.appendChild(td(cap));
@@ -394,6 +397,7 @@ setInterval(tickCountdowns, 1000);
 function renderAgents(data) {
   var list = data.machine.agents.list;
   $('agentsCount').textContent = String(data.machine.agents.total);
+  var slots = $('agentsSlots'); var st0 = L.slotsText(data.machine); slots.hidden = !st0; slots.textContent = st0;
   var host = $('agentsGrid');
   var specs = list.slice(0, 80).map(function (a) { return { key: a.runId + '|' + a.jobId, state: HEAD_STATE[a.state] || 'idle', lane: a.lane, a: a }; });
   var idleLanes = L.bays(list, []).filter(function (b) { return b.idle; }).map(function (b) { return { key: 'sleep|' + b.lane, state: 'sleeping', lane: b.lane, a: null }; });
@@ -432,6 +436,19 @@ function query() {
 function entryNode(e, projects) {
   var parts = [el('span', 'when mono', e.at.slice(0, 16).replace('T', ' ')), el('span', 'kind', e.kind), el('span', 'what', e.project + ': ' + e.title)];
   if (typeof e.usd === 'number') { parts.push(el('span', 'num mono', usd(e.usd))); }
+  if (e.kind === 'run' && e.jobs && e.jobs.length) {
+    var box = el('span', 'runjobs');
+    e.jobs.slice(0, 4).forEach(function (j) {
+      var line = el('span', 'runjob');
+      line.appendChild(el('b', 'mono', j.id)); line.appendChild(el('span', 'what', ' ' + (j.title || '')));
+      line.appendChild(el('span', 'sub', ' ' + j.lane + (j.model ? '/' + j.model : '')));
+      line.appendChild(pill(j.outcome === 'pass' ? 'pass' : j.outcome === 'fail' ? 'fail' : j.outcome, j.outcome === 'pass' ? 'good' : j.outcome === 'fail' ? 'warn' : 'info'));
+      if (j.outcome === 'fail') { line.appendChild(el('span', 'sub', ' ' + (j.reason || 'no reason recorded') + (j.retries ? ', ' + j.retries + ' retr' + (j.retries === 1 ? 'y' : 'ies') : ''))); }
+      box.appendChild(line);
+    });
+    if ((e.jobCount || e.jobs.length) > 4) { box.appendChild(el('span', 'sub', ' +' + ((e.jobCount || e.jobs.length) - 4) + ' more')); }
+    parts.push(box);
+  }
   var known = projects.some(function (p) { return p.id === e.projectId; });
   var node;
   if (e.run && known && (e.kind === 'run' || e.kind === 'spend')) { node = link(runHref(e.projectId, e.run), 'entry', parts); }
@@ -480,6 +497,8 @@ function renderBoard(data) {
   $('scratch').checked = state.scratch;
   // The chip and title stay current on every tab; the panels render where they are visible.
   renderNeeds(data.inbox);
+  var banner = $('staleBanner');
+  if (data.server && data.server.stale) { banner.hidden = false; banner.textContent = 'This board is running swarm ' + data.server.version + ' but ' + data.server.installedVersion + ' is installed. It started before the last swarm update, so it may show old behaviour. Stop it and start it again (Ctrl-C then swarm watch --all, or swarm remote off then swarm remote on).'; } else { banner.hidden = true; banner.textContent = ''; }
   renderTab();
   state.firstRender = false;
   if (state.tab === 'events' && !state.eventsLoaded) { state.eventsLoaded = true; loadHistory(); }

@@ -25,7 +25,7 @@ import { randomBytes } from 'node:crypto';
 import { readHistory, historyCsv, historyFile } from './history.mjs';
 import { boardInbox, inboxText } from './board-inbox.mjs';
 import { runDetail, compareRuns } from './board-run.mjs';
-import { boardSnapshot, projectDetail, workersHeld, laneUsage } from './board-data.mjs';
+import { boardSnapshot, projectDetail, workersHeld, laneUsage, enrichRunEvents } from './board-data.mjs';
 import { resolveBudget, spendDir } from './spend.mjs';
 import { lanesDir, machineConcurrency } from './lanes.mjs';
 import { loadLocalConfig } from './local-config.mjs';
@@ -291,7 +291,8 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
         // Test and temp projects are left out of everything (lanes, totals, the inbox) unless asked for, so the numbers still add up.
         const projects = scratch ? all : all.filter(p => !isScratchRoot(p.root));
         const caps = (() => { try { const lanes = resolveBudget({ config: loadLocalConfig({ env }) }).lanes ?? {}; return Object.fromEntries(Object.entries(lanes).map(([k, v]) => [k, v?.dailyUsd])); } catch { return {}; } })();
-        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: now(), workers: await workersHeld({ dir: lanesDir(env), max, invalid }), lanes: laneToday => laneUsage({ laneToday, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: now() }) });
+        const configured = (() => { try { return Object.entries(loadLocalConfig({ env }).lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k]) => k); } catch { return []; } })();
+        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: now(), workers: await workersHeld({ dir: lanesDir(env), max, invalid }), lanes: (laneToday, jobsToday) => laneUsage({ laneToday, jobsToday, configured, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: now() }) });
         // What waits for the owner (read-only); a failure here never hides the rest of the board.
         snapshot.inbox = await boardInbox({ projects, now: now(), env }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
         snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : all.length - projects.length, total: all.filter(p => isScratchRoot(p.root)).length };
@@ -325,7 +326,9 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       return b ? { run: a, compare: compareRuns(a, b) } : null;
     },
     async history(q = {}) {
-      return readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: Number(q.limit) || 100, offset: Number(q.offset) || 0, fold: true, exclude: showsScratch(q) ? undefined : await scratchIds() });
+      const page = await readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: Number(q.limit) || 100, offset: Number(q.offset) || 0, fold: true, exclude: showsScratch(q) ? undefined : await scratchIds() });
+      if (page && Array.isArray(page.events)) page.events = await enrichRunEvents(page.events, await listProjects({ file: projectsFile(env) }).catch(() => []));
+      return page;
     },
     async historyCsv(q = {}) {
       const { events } = await readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: 1e6, cap: 1e6, exclude: showsScratch(q) ? undefined : await scratchIds() });

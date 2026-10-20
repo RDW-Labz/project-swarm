@@ -11,6 +11,7 @@
 <div class="app">
   <div class="sr" id="announce" role="status" aria-live="polite" aria-atomic="true"></div>
   <div class="card" id="deeplink" hidden><span id="deeplinkText"></span> <a class="btn primary" id="deeplinkGo" href="#">Open the run inspector</a></div>
+  <div class="card" id="staleBanner" role="alert" hidden></div>
   <header class="topbar">
     <div class="brand"><div class="logo" aria-hidden="true">SW</div><div><h1>Swarm Watch</h1><div class="crumb">Every project on this machine</div></div></div>
     <div class="spacer"></div>
@@ -53,6 +54,7 @@
     </section>
     <section id="tab-agents" role="tabpanel" aria-labelledby="tab-agents-btn" class="stack" hidden>
       <section class="card"><h2>Live agents <span class="badge quiet" id="agentsCount">0</span></h2><div class="agents-grid" id="agentsGrid"></div>
+        <p class="board-note" id="agentsSlots" hidden></p>
         <p class="board-note">One head per agent that is running (or failed in the last 10 minutes). Working: it produced output in the last 90 seconds. Thinking: running, no output yet or quiet for longer. Error: its job failed. Sleeping head: no agent is running in that lane.</p></section>
     </section>
     <section id="tab-events" role="tabpanel" aria-labelledby="tab-events-btn" class="stack" hidden>

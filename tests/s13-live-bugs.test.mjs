@@ -140,3 +140,17 @@ test('scope check flags a ticket that gates many others, naming its shared files
   const small = checkTicketTree({ scope: { requirements: [] }, tickets: [root, ...behind.slice(0, 3)] });
   assert.ok(!small.warnings.some(x => x.code === 'gating-ticket'));
 });
+
+test('a migration, RLS or pgTAP ticket sees the existing migrations, named functions, seed.sql and an example pgTAP test', () => {
+  const files = ['supabase/migrations/0001_init.sql', 'supabase/migrations/0002_requests.sql', 'supabase/migrations/0003_submit_request.sql', 'supabase/migrations/0004_policies.sql', 'supabase/seed.sql', 'supabase/tests/old.test.sql', 'supabase/tests/mine.test.sql', 'supabase/config.toml'];
+  const have = new Set(files);
+  const base = { exists: p => have.has(p), listFiles: d => (d === 'supabase' ? files : []), sizes: {} };
+  const mig = buildTicketContext({ ticket: t('T-0030', { type: 'migration', files: ['supabase/migrations/0005_grants.sql'], title: 'Grant execute on submit_request' }), ...base });
+  assert.equal(mig.kind, 'db');
+  for (const p of ['supabase/migrations/0003_submit_request.sql', 'supabase/migrations/0004_policies.sql', 'supabase/migrations/0001_init.sql', 'supabase/seed.sql', 'supabase/config.toml']) assert.ok(mig.context.includes(p), p);
+  assert.ok(mig.context.some(p => p.startsWith('supabase/tests/')), 'an existing pgTAP test as an example');
+  assert.equal(mig.context[0] === 'supabase/migrations/0003_submit_request.sql' || mig.context.slice(0, 3).includes('supabase/migrations/0003_submit_request.sql'), true, 'the file named by the ticket comes first');
+  const pgtap = buildTicketContext({ ticket: t('T-0031', { type: 'test', files: ['supabase/tests/mine.test.sql'], acceptance: ['pgTAP: anon cannot read requests'] }), ...base });
+  for (const p of ['supabase/migrations/0004_policies.sql', 'supabase/tests/old.test.sql', 'supabase/seed.sql']) assert.ok(pgtap.context.includes(p), `pgTAP: ${p}`);
+  assert.ok(!pgtap.context.includes('supabase/tests/mine.test.sql'), 'its own test is an output, not context');
+});
