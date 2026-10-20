@@ -473,14 +473,50 @@ export async function runBaseChecks(root, checks, { run, head, now, timeoutMs = 
   return { status: results.every(result => result.ok) ? 'green' : 'red', ranAt, head: head ?? null, checks: results };
 }
 
+function tailDetailLines(tail) {
+  return String(tail ?? '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .slice(-3)
+    .map(line => (line.length > 160 ? line.slice(0, 160) : line));
+}
+
+export function formatFailingBaseCheckDetails(failingChecks) {
+  const failing = Array.isArray(failingChecks) ? failingChecks : [];
+  if (!failing.length) return '';
+  const maxShow = 5;
+  const lines = [];
+  for (const check of failing.slice(0, maxShow)) {
+    const exitLabel = check.exitCode === null || check.exitCode === undefined
+      ? 'did not start'
+      : `exit ${check.exitCode}`;
+    lines.push(`  ${check.name} (${exitLabel})`);
+    for (const line of tailDetailLines(check.tail)) lines.push(`    ${line}`);
+  }
+  const rest = failing.length - Math.min(failing.length, maxShow);
+  if (rest > 0) lines.push(`  and ${rest} more`);
+  return lines.join('\n');
+}
+
+export function formatBaseRedWarningMessage(baseCheck) {
+  const checks = Array.isArray(baseCheck?.checks) ? baseCheck.checks : [];
+  const failing = checks.filter(check => !check.ok);
+  const first = `base-red: checks already fail before any change: ${failing.map(check => check.name).join(', ') || 'unknown'}`;
+  const details = formatFailingBaseCheckDetails(failing);
+  return details ? `${first}\n${details}` : first;
+}
+
 export function formatBaseCheck(baseCheck) {
   const status = baseCheck?.status;
   if (!status || status === 'skipped') return 'Base checks: not run';
   if (status === 'none') return 'Base checks: none defined';
   const checks = Array.isArray(baseCheck.checks) ? baseCheck.checks : [];
   if (status === 'red') {
-    const failing = checks.filter(check => !check.ok).map(check => check.name);
-    return `Base checks: RED, already failing before any change: ${failing.join(', ') || 'unknown'}`;
+    const failing = checks.filter(check => !check.ok);
+    const first = `Base checks: RED, already failing before any change: ${failing.map(check => check.name).join(', ') || 'unknown'}`;
+    const details = formatFailingBaseCheckDetails(failing);
+    return details ? `${first}\n${details}` : first;
   }
   const when = baseCheck.ranAt ? `, ${baseCheck.ranAt}` : '';
   return `Base checks: ${status} (${checks.length} checks${when})`;

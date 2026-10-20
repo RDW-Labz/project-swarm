@@ -164,6 +164,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | - | w8-selfapproval: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-20 | - | y2-git-hooks: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-20 | - | w8-docs: complete | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-20 | - | init-base-detail: Added formatFailingBaseCheckDetails and formatBaseRedWarningMessage; formatBaseChe | cursor | composer-2.5 | pass | - | subscription |
 
 ## Daily summary
 
@@ -179,5 +180,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-18 | claude | 14 | 14 | 0 | 6,874,167 | $13.02 |
 | 2026-10-19 | claude | 9 | 9 | 0 | 2,436,156 | $6.73 |
 | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
-| 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
-| **total** | all | 160 | 145 | 15 | 14,711,375 | $26.67 (incl. estimates) |
+| 2026-10-20 | cursor | 6 | 6 | 0 | 0 | subscription |
+| **total** | all | 161 | 146 | 15 | 14,711,375 | $26.67 (incl. estimates) |

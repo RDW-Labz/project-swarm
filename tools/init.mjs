@@ -12,7 +12,7 @@ import { randomBytes } from 'node:crypto';
 import { assertRegularOrMissing } from './journal.mjs';
 import { loadChecksFromCi, DEFAULT_CI_PATH } from './checks-from-ci.mjs';
 import { detectMigrationsDir } from './migration-gate.mjs';
-import { DEFAULT_PROFILE_BUDGET, detectProtectedPaths, normalizeProtectedPath, validateProfile, runBaseChecks, checkSetup } from './init-profile.mjs';
+import { DEFAULT_PROFILE_BUDGET, detectProtectedPaths, normalizeProtectedPath, validateProfile, runBaseChecks, checkSetup, formatBaseRedWarningMessage } from './init-profile.mjs';
 import { buildRepoMap, readRepoMap, writeRepoMap, summarizeMap } from './repo-map.mjs';
 import { trackedFiles } from './goal.mjs';
 
@@ -265,7 +265,7 @@ export async function initProject(root, { source = installSource(), install = in
   else if (gitignoreResult.changed) warnings.push(`gitignore-defaults-added: ${gitignoreResult.added.length} line(s) for ${stack.map(entry => entry.name).join(', ')}`);
   if (valid.migrations && priorPointer?.profile === undefined) warnings.push(`migrations-check-on: ${valid.migrations.dir} has migrations, so every changed migration needs a down step and destructive SQL needs swarm migrations approve (see docs/safety.md; remove the profile.migrations block to turn it off)`);
   for (const skip of collected.skipped) warnings.push(`checks-from-ci-skipped (${skip.reason}): ${skip.raw}`);
-  if (valid.baseCheck.status === 'red') warnings.push(`base-red: checks already fail before any change: ${valid.baseCheck.checks.filter(check => !check.ok).map(check => check.name).join(', ')}`);
+  if (valid.baseCheck.status === 'red') warnings.push(formatBaseRedWarningMessage(valid.baseCheck));
   if (!runBase && baseCheck !== false && checksToRun.length) warnings.push('base-check-skipped: pass --base-check to run the project\'s own checks and record whether they already fail');
   let repoMap = null;
   if (map) { try { repoMap = summarizeMap(await refreshRepoMap(root, { now })); } catch (error) { warnings.push(`repo-map-failed: ${String(error.message).slice(0, 120)}`); } }
