@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "orch-up-core",
+      "agent": "auto",
+      "prompt": "Build the core of swarm orchestrator up as new modules only (do not edit tools/swarm.mjs). Create tools/orchestrator-up.mjs (SPDX header, ES module) and tests/orchestrator-up.test.mjs (node:test, strict assert). Goal: for every registered project on this machine start a named tmux session running: claude remote-control --name PROJECT-DOT-HOSTNAME --spawn session where the name is the project folder name, then a space, a middle dot, a space, then the machine hostname; a launchd agent runs it at login; swarm orchestrator status lists each one. Exports: sessionName(projectRoot) returning swarm- plus the sanitized folder name (letters digits dash only); planSessions({projects, hostname}) returning for each project {root, project, session, name, argv} where argv is the claude remote-control command as an argv array and cwd is the project root; tmuxStartArgv(plan) returning the tmux argv for new-session -d -s SESSION -c ROOT followed by the command; tmuxHasArgv(session); tmuxListArgv(); async orchestratorUp({projects, hostname, exec, log}) that first checks tmux exists with exec (command -v tmux style through an injected exec), and if it is missing returns {ok: false, error: 'tmux-missing', hint: 'install tmux (brew install tmux) and run swarm orchestrator up again'} without starting anything; otherwise for each project skips a session that already exists and starts the others, returning {ok: true, started: [...], skipped: [...]}; async orchestratorStatus({projects, hostname, exec, stateFile, fs}) returning rows {project, session, name, running, lastReconnect} where running comes from the tmux session list and lastReconnect is read from a small state file the module keeps (record the time when the pane output last contains a connected line; the pane text is read with tmux capture-pane through exec and only the matching timestamp is stored, never the pane text); launchdPlist({label, programArguments, logPath}) returning the plist XML string for a RunAtLoad agent (label com.projectswarm.orchestrator, runs the swarm command with orchestrator up) and launchdPaths(home) giving the LaunchAgents file path; installLaunchd and uninstallLaunchd taking injected fs and exec (launchctl bootstrap and bootout style) and never touching the real system in tests; a phone-rule note: export PHONE_RULE_TEXT, one sentence saying messages from Remote Control follow the phone rule (no merge, deploy, cap raise or override) and that the guard enforces it on the server side. Tests with fake exec and fake fs: planSessions names and argv for two projects; up with tmux missing returns the error and runs nothing; up starts one session per project and skips an existing one; status rows running and not running; lastReconnect is stored without pane text; the plist contains RunAtLoad and the label and escapes XML characters in paths; install and uninstall call the expected commands in order. Write only tools/orchestrator-up.mjs and tests/orchestrator-up.test.mjs.",
+      "context": [
+        "tools/live-processes.mjs",
+        "tools/phone.mjs",
+        "tools/board-orchestrator.mjs"
+      ],
+      "outputs": [
+        "tools/orchestrator-up.mjs",
+        "tests/orchestrator-up.test.mjs"
+      ],
+      "timeoutMs": 1200000
+    }
+  ]
+}
