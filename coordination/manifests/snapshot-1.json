@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "integrated-snapshot",
+      "agent": "auto",
+      "prompt": "Build the integrated-tree snapshot module as a new module only (do not edit tools/swarm.mjs). Problem: workers (Cursor and Codex lanes) are given the committed HEAD only, so a follow-up job cannot see the output of an earlier job that was integrated into the working tree but not committed. Create tools/integrated-snapshot.mjs (SPDX header, ES module) and tests/integrated-snapshot.test.mjs (node:test, strict assert, real temporary git repositories created in the test, no network). Exports: async snapshotIntegrated({root, paths, git}) where paths is the list of project-relative files that earlier integrated runs wrote (modified tracked files, new untracked files, and deletions) and git is an injectable runner (default: execFile of the git binary with a timeout, cwd root, returning stdout). It must build a temporary commit that equals HEAD plus those files as they are in the working tree, WITHOUT touching the real index, the real branch, HEAD, the stash list or the working tree: use a temporary index file through the GIT_INDEX_FILE environment variable (read-tree HEAD into it, then update-index add or remove only the given paths taken from the working tree, skipping any path that is ignored by gitignore, inside .git, inside the .swarm folder, a symlink pointing outside the repository, or larger than 5 MB), write-tree, then commit-tree with HEAD as the parent and a fixed author and message (swarm integrated snapshot), and store the commit under a temporary ref refs/swarm/snapshots/NAME (NAME unique) so it cannot be garbage collected while in use. It returns {commit, ref, included, skipped: [{path, reason}], cleanup} where cleanup() deletes the ref and the temporary index file and is safe to call twice. Also export async worktreeFromSnapshot({root, snapshot, dir, git}) that creates a detached worktree at dir from the snapshot commit with git worktree add --detach and returns {dir, remove()} where remove runs git worktree remove --force and tolerates a missing directory, and listSnapshotRefs(root, git) plus async sweepOldSnapshots({root, olderThanMs, now, git}) that deletes snapshot refs older than the limit (a crashed runner must not leave refs forever). Tests: a modified tracked file and a new untracked file appear with their working tree content in a worktree made from the snapshot while the same files in HEAD are old or absent; a deleted file is absent in the snapshot; an ignored path, a path under the swarm folder, a path outside the repo, an oversized file and a symlink to outside are skipped with a reason; the real index, HEAD, current branch, stash list and working tree are byte for byte unchanged (compare git status porcelain, rev-parse HEAD and the index file bytes before and after); two snapshots at the same time get different refs; cleanup removes the ref and can be called twice; sweepOldSnapshots removes only old refs. Write only tools/integrated-snapshot.mjs and tests/integrated-snapshot.test.mjs.",
+      "context": [
+        "tools/dep-install.mjs"
+      ],
+      "outputs": [
+        "tools/integrated-snapshot.mjs",
+        "tests/integrated-snapshot.test.mjs"
+      ],
+      "timeoutMs": 1500000
+    }
+  ]
+}
