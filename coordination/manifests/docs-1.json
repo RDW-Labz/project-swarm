@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "docs-board-approve",
+      "agent": "auto",
+      "prompt": "Write docs/board-approve.md (new file, nothing else) describing the board Approve and Deny design for a project owner: what the owner can answer from the board and phone, what is never answerable there (merge, deploy, publish, cap raise, force-push, branch -D, overrides, unmet acceptance), pairing with a one-time word, device tokens stored only as hashes, one-time decision ids bound to item, device and machine, the confirm step and csrf, replay and expiry refusals, and the audit log; say clearly that only the core module exists and the board buttons and server wiring are planned. Read tools/board-approve.mjs and tests/board-approve.test.mjs for the facts; do not invent behavior. Plain, short sentences, under 120 lines.",
+      "context": [
+        "tools/board-approve.mjs",
+        "tests/board-approve.test.mjs"
+      ],
+      "outputs": [
+        "docs/board-approve.md"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}
