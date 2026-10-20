@@ -26,7 +26,7 @@ test('the stub manifest is 500 ollama jobs with no model route', () => {
   assert.equal(manifest.concurrency, 500);
   assert.equal(manifest.jobs.every(job => job.agent === 'ollama' && job.model === 'stub'), true);
   assert.equal(new Set(manifest.jobs.flatMap(job => job.outputs)).size, 500);
-  assert.throws(() => stubManifest(501, 1), { code: 'scale-jobs' });
+  assert.throws(() => stubManifest(5001, 1), { code: 'scale-jobs' });
 });
 
 test('a stub scale run spends nothing, stays inside the cap, and merges the files', { timeout: 30000 }, async t => {

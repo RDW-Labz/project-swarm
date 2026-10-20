@@ -20,6 +20,8 @@ export const LANE_DEFAULTS = Object.freeze(Object.fromEntries(LANE_AGENTS.map(ag
   adaptive: agent === 'rented' ? Object.freeze({ min: 1, start: 4 }) : null,
 })])));
 
+// The claude lane also takes the models for tier "mid" and tier "expensive" jobs (the router falls back to `model`).
+const CLAUDE_TIER_FIELDS = Object.freeze(['midModel', 'expensiveModel']);
 function invalid(agent, field, reason) {
   return Object.assign(new Error(`lanes-invalid: ${agent}.${field} ${reason}`), { code: 'lanes-invalid' });
 }
@@ -42,6 +44,7 @@ function validate(agent, lane) {
     integer(agent, 'adaptive.min', lane.adaptive.min, 1, lane.concurrency);
     integer(agent, 'adaptive.start', lane.adaptive.start, lane.adaptive.min, lane.concurrency);
   }
+  for (const field of CLAUDE_TIER_FIELDS) if (Object.hasOwn(lane, field) && lane[field] !== null && (typeof lane[field] !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,119}$/.test(lane[field]))) throw invalid(agent, field, 'must be null or a valid model name');
   if (lane.model !== null && (typeof lane.model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,119}$/.test(lane.model))) {
     throw invalid(agent, 'model', 'must be null or a valid model name');
   }
@@ -64,7 +67,7 @@ export function resolveLanes({ config = {}, manifest = {}, env = process.env } =
       if (!LANE_AGENTS.includes(agent)) throw invalid(agent, 'agent', 'is unknown');
       if (!object(override)) throw invalid(agent, 'value', 'must be an object');
       for (const [field, value] of Object.entries(override)) {
-        if (!Object.hasOwn(LANE_DEFAULTS[agent], field)) throw invalid(agent, field, 'is unknown');
+        if (!Object.hasOwn(LANE_DEFAULTS[agent], field) && !(agent === 'claude' && CLAUDE_TIER_FIELDS.includes(field))) throw invalid(agent, field, 'is unknown');
         if (field === 'backoff') {
           if (!object(value)) throw invalid(agent, field, 'must be an object');
           for (const [key, entry] of Object.entries(value)) {
@@ -135,7 +138,20 @@ function validStore(store) {
   return true;
 }
 
-export async function withLaneStore(fn, { dir = lanesDir(), now = Date.now, isAlive = pidAlive, timeoutMs = 10000 } = {}) {
+// Callers in this process go through one queue per store, so a thousand workers starting or stopping at once do not all poll the lock file: one of them holds the file lock at a time and
+// the rest wait their turn here (found by the 1,000-worker practice run: cancelling 1,000 workers made them time out on lanes.lock). The file lock still keeps other processes out.
+const storeQueues = new Map();
+export function withLaneStore(fn, options = {}) {
+  const dir = options.dir ?? lanesDir();
+  const previous = storeQueues.get(dir) ?? Promise.resolve();
+  const turn = previous.then(() => withLaneStoreFile(fn, { ...options, dir }));
+  const tail = turn.catch(() => {});
+  storeQueues.set(dir, tail);
+  tail.then(() => { if (storeQueues.get(dir) === tail) storeQueues.delete(dir); });
+  return turn;
+}
+
+async function withLaneStoreFile(fn, { dir = lanesDir(), now = Date.now, isAlive = pidAlive, timeoutMs = 10000 } = {}) {
   const lock = path.join(dir, 'lanes.lock'), file = path.join(dir, 'lanes.json');
   const host = os.hostname(), started = Date.now();
   await fs.mkdir(dir, { recursive: true });

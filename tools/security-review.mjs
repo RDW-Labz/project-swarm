@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { isSensitivePath } from './sensitive-paths.mjs';
+import { expandTicketRefs } from './ticket-refs.mjs';
 
 const RECORDS = '.swarm/security-reviews/records.json';
 const AUTH_PATH = /(^|\/)(auth|authn|authz|session|sessions|login|logout|signup|oauth|middleware|permissions?|policies)(\/|\.|-|_|$)/i;
@@ -49,9 +50,9 @@ export async function writeReviewRecords(root, data) {
 }
 
 // One read-only Opus job for the whole run: it sees only the files of the tickets that need it.
-export async function securityReviewManifest(root, runId, items) {
+export async function securityReviewManifest(root, runId, items, tickets = []) {
   const context = [];
-  for (const { ticket } of items) for (const f of [...(ticket.files ?? []), ...(ticket.context ?? [])]) {
+  for (const { ticket } of items) for (const f of expandTicketRefs([...(ticket.files ?? []), ...(ticket.context ?? [])], tickets)) {
     if (isSensitivePath(f) && /(^|\/)\.project-swarm\.json$/.test(f)) continue;
     if (/(^|\/)\.env(\.|$)/.test(f) && !/example/i.test(f)) continue;
     if (!context.includes(f) && await fs.stat(path.join(root, f)).then(s => s.isFile(), () => false)) context.push(f);

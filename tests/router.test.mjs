@@ -15,12 +15,12 @@ const contracted = { ...job, sensitive: false, outputs: ['src/a.js'], context: [
 const rentedLanes = { ...lanes, rented: { model: 'rented-model' } };
 
 test('route orders are frozen, cheapest first, and leave Hermes out', () => {
-  assert.deepEqual(CHEAP_ORDER, ['anthropic', 'cursor', 'codex', 'openrouter']);
+  assert.deepEqual(CHEAP_ORDER, ['cursor', 'codex', 'anthropic', 'openrouter']);
   assert.deepEqual(ROUTE_ORDER, [...CHEAP_ORDER, 'claude']);
   assert.equal(Object.isFrozen(CHEAP_ORDER), true);
   assert.equal(Object.isFrozen(ROUTE_ORDER), true);
   assert.equal(CHEAP_ORDER.includes('hermes') || ROUTE_ORDER.includes('hermes'), false);
-  assert.deepEqual(routeJob(job, { lanes }), { agent: 'anthropic', model: 'anthropic-model', reason: 'cheapest healthy lane' });
+  assert.deepEqual(routeJob(job, { lanes }), { agent: 'cursor', model: 'cursor-model', reason: 'cheapest healthy lane' });
   for (let index = 0; index < CHEAP_ORDER.length; index++) {
     const available = Object.fromEntries(ROUTE_ORDER.slice(index).map(agent => [agent, lanes[agent]]));
     assert.equal(routeJob(bookkeeping, { lanes: available }).agent, CHEAP_ORDER[index]);
@@ -40,7 +40,7 @@ test('missing, null, and non-string models are skipped', () => {
 });
 
 test('Hermes never runs an untyped or code job, even when it is the only lane configured', () => {
-  assert.equal(routeJob(job, { lanes }).agent, 'anthropic');
+  assert.equal(routeJob(job, { lanes }).agent, 'cursor');
   assert.throws(() => routeJob(job, { lanes: { hermes: lanes.hermes } }), { code: 'route-exhausted' });
   assert.throws(() => routeJob(job, { lanes: { hermes: lanes.hermes, claude: lanes.claude } }), { code: 'route-exhausted' });
 });
@@ -80,7 +80,7 @@ test('failed lanes are dropped individually and Claude waits until cheap lanes a
   assert.equal(routeJob(bookkeeping, { lanes, failures }).agent, 'claude');
   failures.claude = 2;
   assert.throws(() => routeJob(bookkeeping, { lanes, failures }), { code: 'route-exhausted' });
-  assert.equal(routeJob(job, { lanes, failures: { codex: 3 } }).agent, 'anthropic');
+  assert.equal(routeJob(job, { lanes, failures: { codex: 3 } }).agent, 'cursor');
 });
 
 test('Claude requires two real cheap failures even when accepts rejects all cheap lanes', () => {
@@ -90,21 +90,21 @@ test('Claude requires two real cheap failures even when accepts rejects all chea
   assert.equal(routeJob(bookkeeping, { lanes: available, failures: { openrouter: 2 } }).agent, 'claude');
   const result = routeJob(job, { lanes, failures: { anthropic: 1, cursor: 1 }, accepts: resolved => resolved.agent === 'claude' });
   assert.equal(result.agent, 'claude');
-  assert.equal(result.reason, 'fallback after 2 failures on anthropic, cursor');
+  assert.equal(result.reason, 'fallback after 2 failures on cursor, anthropic');
   assert.throws(() => routeJob(bookkeeping, { lanes: available, failures: { openrouter: 2 }, accepts: () => false }), { code: 'route-exhausted' });
 });
 
 test('a research route runs on Hermes and stays cheap when Hermes is paused or unavailable', () => {
   const research = { ...job, typeRoute: ['hermes'] };
   assert.equal(routeJob(research, { lanes }).agent, 'hermes');
-  assert.equal(routeJob(research, { lanes, health: agent => ({ state: agent === 'hermes' ? 'paused' : 'ok' }) }).agent, 'anthropic');
-  assert.equal(routeJob(research, { lanes: { ...lanes, hermes: {} } }).agent, 'anthropic');
+  assert.equal(routeJob(research, { lanes, health: agent => ({ state: agent === 'hermes' ? 'paused' : 'ok' }) }).agent, 'cursor');
+  assert.equal(routeJob(research, { lanes: { ...lanes, hermes: {} } }).agent, 'cursor');
   assert.deepEqual(routeJob(research, { lanes, health: paused }), {
     agent: 'hermes', model: 'hermes-model', reason: 'cheapest healthy lane; lane hermes paused',
   });
   assert.equal(routeJob(research, { lanes: { hermes: lanes.hermes, claude: lanes.claude }, health: paused }).agent, 'hermes');
-  assert.equal(routeJob(research, { lanes, failures: { hermes: 2 } }).agent, 'anthropic');
-  assert.equal(routeJob(job, { lanes, health: () => ({ state: 'backoff' }) }).agent, 'anthropic');
+  assert.equal(routeJob(research, { lanes, failures: { hermes: 2 } }).agent, 'cursor');
+  assert.equal(routeJob(job, { lanes, health: () => ({ state: 'backoff' }) }).agent, 'cursor');
   assert.equal(routeJob(job, { lanes, failures: { anthropic: 2 }, health: paused }).agent, 'cursor');
 });
 
@@ -115,9 +115,9 @@ test('accepts receives the resolved job and filters rejected lanes', () => {
     return resolved.agent === 'codex';
   } });
   assert.equal(result.agent, 'codex');
-  assert.deepEqual(seen[0], { ...job, sensitive: true, agent: 'anthropic', model: 'anthropic-model' });
+  assert.deepEqual(seen[0], { ...job, sensitive: true, agent: 'cursor', model: 'cursor-model' });
   assert.equal(seen.some(candidate => candidate.agent === 'openrouter'), false);
-  assert.equal(routeJob(job, { lanes, accepts: () => undefined }).agent, 'anthropic');
+  assert.equal(routeJob(job, { lanes, accepts: () => undefined }).agent, 'cursor');
 });
 
 test('only Claude configured without failures exhausts with actionable message', () => {
@@ -137,7 +137,7 @@ test('typeRoute order is followed by remaining cheap lanes and skips Claude entr
     assert.equal(routeJob(typed, { lanes, failures }).agent, agent);
     failures[agent] = 2;
   }
-  assert.equal(routeJob({ ...job, typeRoute: [] }, { lanes }).agent, 'anthropic');
+  assert.equal(routeJob({ ...job, typeRoute: [] }, { lanes }).agent, 'cursor');
   assert.equal(routeJob({ ...job, typeRoute: ['claude', 'codex'] }, { lanes }).agent, 'codex');
 });
 
@@ -174,7 +174,7 @@ test('isBookkeepingJob refuses traversal, absolute paths, non-strings and holes'
 });
 
 test('rented lane is not chosen below the default threshold of 700 ready jobs', () => {
-  assert.deepEqual(routeJob(contracted, { lanes: rentedLanes, ready: 699 }), { agent: 'anthropic', model: 'anthropic-model', reason: 'cheapest healthy lane' });
+  assert.deepEqual(routeJob(contracted, { lanes: rentedLanes, ready: 699 }), { agent: 'cursor', model: 'cursor-model', reason: 'cheapest healthy lane' });
 });
 
 test('rented lane is chosen at exactly 700 ready jobs for a complete non-sensitive contract job', () => {
@@ -182,21 +182,21 @@ test('rented lane is chosen at exactly 700 ready jobs for a complete non-sensiti
 });
 
 test('rented lane is not chosen when ready is omitted', () => {
-  assert.equal(routeJob(contracted, { lanes: rentedLanes }).agent, 'anthropic');
+  assert.equal(routeJob(contracted, { lanes: rentedLanes }).agent, 'cursor');
 });
 
 test('rented lane needs a complete contract job', () => {
   const { acceptance, ...noAcceptance } = contracted;
-  assert.equal(routeJob(noAcceptance, { lanes: rentedLanes, ready: 1000 }).agent, 'anthropic');
-  assert.equal(routeJob({ ...contracted, contract: 'docs/other.md' }, { lanes: rentedLanes, ready: 1000 }).agent, 'anthropic');
+  assert.equal(routeJob(noAcceptance, { lanes: rentedLanes, ready: 1000 }).agent, 'cursor');
+  assert.equal(routeJob({ ...contracted, contract: 'docs/other.md' }, { lanes: rentedLanes, ready: 1000 }).agent, 'cursor');
 });
 
 test('lanes.rented.minReady overrides the default threshold', () => {
   const lowered = { ...rentedLanes, rented: { model: 'rented-model', minReady: 5 } };
   assert.equal(routeJob(contracted, { lanes: lowered, ready: 5 }).agent, 'rented');
-  assert.equal(routeJob(contracted, { lanes: lowered, ready: 4 }).agent, 'anthropic');
+  assert.equal(routeJob(contracted, { lanes: lowered, ready: 4 }).agent, 'cursor');
   const raised = { ...rentedLanes, rented: { model: 'rented-model', minReady: 2000 } };
-  assert.equal(routeJob(contracted, { lanes: raised, ready: 700 }).agent, 'anthropic');
+  assert.equal(routeJob(contracted, { lanes: raised, ready: 700 }).agent, 'cursor');
 });
 
 test('a sensitive job is never routed to the rented lane at any ready count', () => {
@@ -216,7 +216,7 @@ test('a hard job goes to codex first when codex is configured', () => {
 test('a hard job falls back to the next lane after 2 failures on codex', () => {
   const hard = { ...contracted, hard: true };
   assert.deepEqual(routeJob(hard, { lanes, failures: { codex: 1 } }), { agent: 'codex', model: 'codex-model', reason: 'hard ticket: codex first' });
-  assert.deepEqual(routeJob(hard, { lanes, failures: { codex: 2 } }), { agent: 'anthropic', model: 'anthropic-model', reason: 'fallback after 2 failures on codex' });
+  assert.deepEqual(routeJob(hard, { lanes, failures: { codex: 2 } }), { agent: 'cursor', model: 'cursor-model', reason: 'fallback after 2 failures on codex' });
 });
 
 test('a hard job with tier expensive keeps the claude-only rule', () => {
@@ -225,7 +225,19 @@ test('a hard job with tier expensive keeps the claude-only rule', () => {
   assert.throws(() => routeJob(hard, { lanes: { hermes: lanes.hermes } }), { code: 'route-exhausted' });
 });
 
-test('a job without hard is unchanged and goes to anthropic first', () => {
-  assert.deepEqual(routeJob(contracted, { lanes }), { agent: 'anthropic', model: 'anthropic-model', reason: 'cheapest healthy lane' });
-  assert.deepEqual(routeJob({ ...contracted, hard: false }, { lanes }), { agent: 'anthropic', model: 'anthropic-model', reason: 'cheapest healthy lane' });
+test('a job without hard is unchanged and goes to cursor first', () => {
+  assert.deepEqual(routeJob(contracted, { lanes }), { agent: 'cursor', model: 'cursor-model', reason: 'cheapest healthy lane' });
+  assert.deepEqual(routeJob({ ...contracted, hard: false }, { lanes }), { agent: 'cursor', model: 'cursor-model', reason: 'cheapest healthy lane' });
+});
+
+test('the claude lane serves expensive and mid tiers with their own models', () => {
+  const tiered = { ...lanes, claude: { model: 'sonnet', midModel: 'sonnet', expensiveModel: 'opus' } };
+  assert.equal(routeJob({ ...job, tier: 'expensive' }, { lanes: tiered }).model, 'opus');
+  assert.equal(routeJob({ ...job, tier: 'expensive' }, { lanes: { ...lanes, claude: { model: 'sonnet' } } }).model, 'sonnet');
+});
+
+test('flat-rate lanes run first and a paused one hands work to the next', () => {
+  const paused = agent => ({ state: agent === 'cursor' ? 'paused' : 'ok' });
+  assert.equal(routeJob(job, { lanes }).agent, 'cursor');
+  assert.equal(routeJob(job, { lanes, health: paused }).agent, 'codex');
 });

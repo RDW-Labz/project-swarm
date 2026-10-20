@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.137.0
+
+Fixes for the parts app S13 run, plus the practice-run tooling.
+- **Lane config.** The `claude` lane takes `model`, `midModel` and `expensiveModel` (tier "expensive" jobs, such as the Opus security review, use `expensiveModel`; without it they use `model`). The machine config at `~/.config/project-swarm/config.json` now names every lane.
+- **Routing.** Code jobs now go to the flat-rate lanes first (Cursor, then Codex), then paid Haiku; a paused lane hands work to the next. Before, paid Haiku was first and the flat-rate lanes never ran.
+- **Pins.** A ticket pinned to a lane other than `anthropic` no longer carries `cacheContext` (which only the Anthropic lane accepts), and a pin without a model takes the lane's model from the machine config.
+- **Ticket ids in context.** `T-0193` in a ticket's context becomes that ticket's files (and its tests) in ticket jobs, acceptance reviews and security reviews; an unknown id is dropped, not passed on as a path.
+- **Test files of later tickets.** `scope sync` no longer makes a build ticket wait for a test file owned by a ticket that depends on it (they waited for each other forever).
+- **`go --scope` ending.** The final line no longer fails with "say is not defined"; an acceptance review pass satisfies a covered line whose test was not seen passing.
+- **`swarm with-concurrency N -- COMMAND`** sets `machineConcurrency` for one command and puts the old value back on exit, error, Ctrl-C, kill, a crash of the wrapper, or the next command after a power cut. A new run's cap is clamped to what is left of the project's cap.
+- **`swarm scale --full`** runs a stub run plus a live second run, measured by the Watch API, with a panic stop and a backup check; the lane store queues its callers in process.
+- Opus review fixes: a ticket reference never hands on `.env` files, the project profile or globs (and at most 60 files); the guard marker is created exclusively, only its owner restores it on exit, and a marker from before the last boot is stale even if its pid was reused; `scope sync` skips a test file only when every other owner comes after the ticket; an acceptance review pass must name the same line text.
+- CI fixes: the guard's signal handlers are installed before the value is raised (a Ctrl-C in that gap used to kill the wrapper and leave the value to the watcher a moment later); the four-requests cancel test waits for the four calls instead of one fixed second (starting four workspaces takes 0.5 to 0.8 s here and more on CI).
+- Tests: `tests/s13-blockers.test.mjs`, `tests/concurrency-guard.test.mjs`, `tests/practice-tooling.test.mjs`, router and lesson-40 additions.
+
 ## 1.136.0
 
 Two bugs from the parts app: caps that did not hold, and estimates that were far too small.

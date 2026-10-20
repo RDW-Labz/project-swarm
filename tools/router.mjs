@@ -23,17 +23,26 @@ export function rentedContractProblem(job, contract = job?.contract) {
   return null;
 }
 
-// Code jobs: Haiku first, then Cursor, then Codex; the Claude subscription only after 2 failures.
+// Code jobs: the flat-rate subscriptions first (Cursor, then Codex: a job there costs nothing extra), then paid Haiku; the Claude subscription only after 2 failures or for tier
+// "expensive". A lane that is paused (rate limit, out of credit) is skipped, so work falls to the next lane on its own.
 // Hermes is not in this order: it runs only where a job type names it (research). OpenRouter runs
 // only bookkeeping jobs (PR payloads, changelogs, metrics) that are not sensitive. The order comes
 // from the lane benchmark (docs/state/lane-benchmark.md).
-export const CHEAP_ORDER = Object.freeze(['anthropic', 'cursor', 'codex', 'openrouter']);
+export const CHEAP_ORDER = Object.freeze(['cursor', 'codex', 'anthropic', 'openrouter']);
 export const ROUTE_ORDER = Object.freeze([...CHEAP_ORDER, 'claude']);
 
 // The Anthropic lane's model follows the job's tier: the lane model (Haiku) by default, Sonnet for
 // tier "mid". Opus is never picked here; it needs an explicit anthropic job with tier "expensive".
 const ANTHROPIC_MID_MODEL = 'claude-sonnet-5-5';
-const laneModel = (job, agent, lanes) => (agent === 'anthropic' && job.tier === 'mid' ? ANTHROPIC_MID_MODEL : lanes[agent].model);
+// The Claude subscription lane has three tiers: `model` is the everyday one, `expensiveModel` (default: `model`) serves tier "expensive" jobs, `midModel` serves tier "mid".
+const laneModel = (job, agent, lanes) => {
+  if (agent === 'anthropic' && job.tier === 'mid') return ANTHROPIC_MID_MODEL;
+  if (agent === 'claude') {
+    if (job.tier === 'expensive') return lanes.claude.expensiveModel ?? lanes.claude.model;
+    if (job.tier === 'mid' && lanes.claude.midModel) return lanes.claude.midModel;
+  }
+  return lanes[agent].model;
+};
 
 export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), failures = {}, accepts = () => true, contract, ready = 0 } = {}) {
   if (job?.agent !== 'auto') {

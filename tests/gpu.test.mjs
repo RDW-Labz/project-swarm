@@ -133,7 +133,7 @@ const lanes = { rented: { model: 'm' }, anthropic: { model: 'claude-haiku-5-5' }
 const full = { id: 'j', agent: 'auto', sensitive: false, type: 'build', outputs: ['a.js'], context: ['a.js', 'contract.md'], contract: 'contract.md', acceptance: ['tests/a.test.js passes'] };
 test('routing: a complete non-sensitive job goes to rented first once 700 auto jobs are ready; below that it does not; one failure escalates to Haiku, then Codex', () => {
   assert.equal(routeJob(full, { lanes, ready: 700 }).agent, 'rented');
-  assert.equal(routeJob(full, { lanes, ready: 699 }).agent, 'anthropic', 'with 699 ready auto jobs the rented lane is not used');
+  assert.equal(routeJob(full, { lanes, ready: 699 }).agent, 'cursor', 'with 699 ready auto jobs the rented lane is not used');
   assert.notEqual(routeJob(full, { lanes, ready: 699 }).agent, 'rented');
   assert.equal(routeJob(full, { lanes, ready: 700, failures: { rented: 1 } }).agent, 'anthropic');
   assert.match(routeJob(full, { lanes, ready: 700, failures: { rented: 1 } }).reason, /Haiku, then Codex/);
