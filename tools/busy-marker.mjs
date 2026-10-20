@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { liveDir } from './board.mjs';
 
 export const BUSY_MARKER_VERBS = new Set(['go', 'run', 'integrate', 'autopilot', 'ship', 'scale', 'with-concurrency', 'ticket', 'sweep', 'resume']);
@@ -19,6 +20,20 @@ function pidAlive(pid) {
 
 function isPositiveIntegerPid(pid) {
   return Number.isInteger(pid) && pid > 0;
+}
+
+function defaultProcStart(pid) {
+  try {
+    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+      encoding: 'utf8',
+      timeout: 2000,
+    });
+    const trimmed = out.trim();
+    if (!trimmed) return null;
+    return trimmed.replace(/\s+/g, ' ');
+  } catch {
+    return null;
+  }
 }
 
 export function reduceBusyCommand(command) {
@@ -39,10 +54,22 @@ export function reduceBusyCommand(command) {
   return 'swarm';
 }
 
-export async function writeBusyMarker({ command, root, pid = process.pid, dir = busyDir() }) {
+export async function writeBusyMarker({
+  command,
+  root,
+  pid = process.pid,
+  dir = busyDir(),
+  procStart = defaultProcStart,
+}) {
   const realRoot = await fs.realpath(root);
   const storedCommand = reduceBusyCommand(command);
-  const record = { pid, command: storedCommand, root: realRoot, startedAt: new Date().toISOString() };
+  const record = {
+    pid,
+    command: storedCommand,
+    root: realRoot,
+    startedAt: new Date().toISOString(),
+    procStart: procStart(pid),
+  };
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   await fs.chmod(dir, 0o700);
   const target = path.join(dir, `${pid}.json`);
@@ -59,7 +86,11 @@ export async function writeBusyMarker({ command, root, pid = process.pid, dir = 
   };
 }
 
-export async function liveBusyMarkers({ dir = busyDir(), isAlive = pidAlive } = {}) {
+export async function liveBusyMarkers({
+  dir = busyDir(),
+  isAlive = pidAlive,
+  procStart = defaultProcStart,
+} = {}) {
   let entries;
   try { entries = await fs.readdir(dir); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   const markers = [];
@@ -69,6 +100,14 @@ export async function liveBusyMarkers({ dir = busyDir(), isAlive = pidAlive } = 
     let record;
     try { record = JSON.parse(await fs.readFile(target, 'utf8')); } catch { await fs.unlink(target).catch(() => {}); continue; }
     if (!isPositiveIntegerPid(record.pid) || !isAlive(record.pid)) { await fs.unlink(target).catch(() => {}); continue; }
+    const storedStart = record.procStart ?? null;
+    if (typeof storedStart === 'string') {
+      const currentStart = procStart(record.pid);
+      if (currentStart != null && currentStart !== storedStart) {
+        await fs.unlink(target).catch(() => {});
+        continue;
+      }
+    }
     markers.push({ pid: record.pid, command: record.command, root: record.root });
   }
   return markers;

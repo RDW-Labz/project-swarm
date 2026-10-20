@@ -80,3 +80,84 @@ test('missing busy directory returns no markers', async t => {
   const dir = path.join(await tempDir(t), 'no-such-busy');
   assert.deepEqual(await liveBusyMarkers({ dir }), []);
 });
+
+test('matching procStart keeps marker alive', async t => {
+  const dir = await tempDir(t);
+  const root = await tempDir(t);
+  const start = 'Mon Oct 20 10:00:00 2025';
+  const procStart = () => start;
+  const remove = await writeBusyMarker({
+    command: 'node tools/swarm.mjs go',
+    root,
+    dir,
+    procStart,
+  });
+  const live = await liveBusyMarkers({ dir, procStart });
+  assert.equal(live.length, 1);
+  assert.equal(live[0].pid, process.pid);
+  await remove();
+});
+
+test('same pid with different procStart is dead and file is deleted', async t => {
+  const dir = await tempDir(t);
+  const root = await tempDir(t);
+  const remove = await writeBusyMarker({
+    command: 'node tools/swarm.mjs go',
+    root,
+    dir,
+    procStart: () => 'Mon Oct 20 10:00:00 2025',
+  });
+  const live = await liveBusyMarkers({
+    dir,
+    procStart: () => 'Mon Oct 20 11:00:00 2025',
+  });
+  assert.deepEqual(live, []);
+  await assert.rejects(fs.access(path.join(dir, `${process.pid}.json`)));
+  await remove();
+});
+
+test('marker without procStart is alive when pid is alive', async t => {
+  const dir = await tempDir(t);
+  const root = await tempDir(t);
+  const target = path.join(dir, `${process.pid}.json`);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    target,
+    `${JSON.stringify({ pid: process.pid, command: 'swarm go', root, startedAt: new Date().toISOString() })}\n`,
+  );
+  const live = await liveBusyMarkers({
+    dir,
+    procStart: () => 'Mon Oct 20 11:00:00 2025',
+  });
+  assert.equal(live.length, 1);
+  await fs.unlink(target);
+});
+
+test('unreadable current procStart keeps marker alive', async t => {
+  const dir = await tempDir(t);
+  const root = await tempDir(t);
+  const remove = await writeBusyMarker({
+    command: 'node tools/swarm.mjs go',
+    root,
+    dir,
+    procStart: () => 'Mon Oct 20 10:00:00 2025',
+  });
+  const live = await liveBusyMarkers({ dir, procStart: () => null });
+  assert.equal(live.length, 1);
+  await remove();
+});
+
+test('writeBusyMarker stores injected procStart in the marker file', async t => {
+  const dir = await tempDir(t);
+  const root = await tempDir(t);
+  const start = 'Tue Oct 20 12:00:00 2025';
+  const remove = await writeBusyMarker({
+    command: 'node tools/swarm.mjs go',
+    root,
+    dir,
+    procStart: () => start,
+  });
+  const raw = JSON.parse(await fs.readFile(path.join(dir, `${process.pid}.json`), 'utf8'));
+  assert.equal(raw.procStart, start);
+  await remove();
+});
