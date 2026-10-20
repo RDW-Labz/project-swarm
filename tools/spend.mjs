@@ -180,11 +180,11 @@ export function laneDayTotals(store, { day = utcDay(Date.now) } = {}) {
   return totals;
 }
 
-// What a subscription-lane job is expected to cost at list prices, reserved while it runs so the run cap counts work that is in flight (a flat-rate job reports its list cost
-// only when it finishes: counting nothing until then let a wave of parallel jobs all start under the cap and finish far over it). The estimate is the most a finished job of this
-// lane and model cost in the run (five or more of them), else a conservative default per lane.
-export const FLAT_RATE_RESERVE_DEFAULTS = Object.freeze({ claude: Object.freeze({ opus: 1.0, sonnet: 0.5, haiku: 0.2, other: 0.5 }), codex: 0.6, cursor: 0.4, hermes: 0, qwen: 0 });
+// In-flight work on codex, cursor, hermes, and qwen does not reserve against spend caps; only metered lanes reserve spend while a job runs. Claude still reserves a list-price
+// estimate below (the most a finished job of this lane and model cost in the run with five or more samples, else a conservative default per model) so parallel claude jobs count against the cap.
+export const FLAT_RATE_RESERVE_DEFAULTS = Object.freeze({ claude: Object.freeze({ opus: 1.0, sonnet: 0.5, haiku: 0.2, other: 0.5 }), codex: 0, cursor: 0, hermes: 0, qwen: 0 });
 export function flatRateReserve({ lane, model, history = [] }) {
+  if (lane === 'codex' || lane === 'cursor' || lane === 'hermes' || lane === 'qwen') return 0;
   const costs = history.filter(x => typeof x === 'number' && Number.isFinite(x) && x > 0);
   // Five or more finished jobs of this lane and model: the most any of them cost (never less than something already seen). Fewer: a conservative default.
   if (costs.length >= 5) return Math.max(...costs);

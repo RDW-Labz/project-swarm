@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "flat-rate-reserve",
+      "agent": "auto",
+      "prompt": "Owner rule: flat-rate lanes reserve zero dollars against the spend caps; only metered lanes reserve. Atlas-seafloor was at $0.00 of a $10 cap and a scope split was refused while one Codex run was in flight, because tools/spend.mjs reserves a list-price estimate (flatRateReserve, FLAT_RATE_RESERVE_DEFAULTS) for every lane that is not in PAID_LANES. Change flatRateReserve so that for the lanes codex, cursor, hermes and qwen it always returns 0, whatever the history or model (the history rule of five finished jobs does not apply to them). Leave the claude lane exactly as it is (the owner did not name it; do not change its numbers or its history rule) and leave every metered lane (PAID_LANES) exactly as it is. Update FLAT_RATE_RESERVE_DEFAULTS to match (codex 0, cursor 0, hermes 0, qwen 0, claude unchanged) and fix the comment above it to say what is reserved now and why: in-flight flat-rate work is not counted against the cap, only metered lanes reserve. Update the existing expectations in tests/hard-cap.test.mjs that pinned the old codex and cursor numbers (and any other test in that file that depends on them) so they expect 0 for codex and cursor and the unchanged numbers for claude. Add a new test file tests/flat-rate-reserve.test.mjs (node:test, strict assert; import estimateReservation, flatRateReserve, capDecision from tools/spend.mjs): codex, cursor, hermes and qwen jobs reserve usd 0 even with a history of five finished jobs that each cost 0.9; a claude opus job still reserves 1.0; an anthropic job (metered) still reserves its lane default 0.5; capDecision with budget maxUsd 10, run totals of 0 spent and one Codex run in flight (reservation usd 0) does not refuse another Codex job or a split of tickets into several Codex jobs, while with an anthropic reservation of 0.5 added a run already holding 9.8 reserved is refused. Write only tools/spend.mjs, tests/hard-cap.test.mjs and tests/flat-rate-reserve.test.mjs.",
+      "context": [
+        "tools/spend.mjs",
+        "tests/hard-cap.test.mjs"
+      ],
+      "outputs": [
+        "tools/spend.mjs",
+        "tests/hard-cap.test.mjs",
+        "tests/flat-rate-reserve.test.mjs"
+      ],
+      "timeoutMs": 900000,
+      "ignoreTests": [
+        "tests/api-short-report.test.mjs",
+        "tests/batch-run.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/phase12-cli.test.mjs",
+        "tests/phase14.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/rented-run.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tests/spend.test.mjs"
+      ]
+    }
+  ]
+}
