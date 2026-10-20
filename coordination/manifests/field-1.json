@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "jobs": [
+    {
+      "id": "field-export",
+      "agent": "auto",
+      "prompt": "Item J part 1: the field data export, as a new module only (do not edit tools/swarm.mjs). Create tools/field-export.mjs (SPDX header, ES module) and tests/field-export.test.mjs (node:test, strict assert, temp project fixtures). Purpose: use real projects as test data for the swarm without leaking anything: export run METADATA only. Read how runs, tickets and logs are stored (tools/board-data.mjs, tools/history.mjs, tools/inbox.mjs, tools/handbuild.mjs for the guard log and hand-build requests, tools/spend.mjs, the run state shape under the swarm runs folder, the project journal). Export: async buildFieldExport({root, machine, project, now, readers}) returning one plain object {version, machine, project, generatedAt, tickets: [{id, wave, lane, model, status, retries, retryNotes, failureCause, startedAt, finishedAt, durationMs}], jobs: [{runId, jobId, lane, model, tier, status, costUsd, costSource, durationMs, retries, failureCause}], waves: [{id, tickets, readyAtStart, slots}], guard: {blocks: [{at, kind, rule}], handbuildRequests: [{id, kind, status, decidedBy, decidedAt, reasonCategory}]}, totals: {perLane: {...}}} where failureCause is one of planning-error, collision, check-failure, review-reject, integration-failure, timeout, provider-limit, other. STRICT WHITELIST: build each record by copying named fields only; never copy source code, diffs, prompts, responses, file contents, env values, absolute paths (use project-relative paths only if a path is needed and drop anything outside the project), or free text beyond the three free-text fields: retry notes, failure messages and hand-build reasons. Each of those free-text fields is truncated to 300 characters and then scanned: drop the whole field (set to null and count it in export.dropped) if it matches a secret pattern (reuse the repo's secret scan: look at tools/security-scan.mjs and use its rules), an email address, a phone number (international or common national formats), or a long random-looking token. Then run the same scan over the final JSON text: if anything still matches, buildFieldExport throws an Error whose message starts with field-export-secret-hit and names only the kind and the field path, never the value. exportFieldFile({root, outFile, ...}) writes the JSON atomically to the swarm folder under field/PROJECT-MACHINE.json with mode 0o600 and returns {file, bytes, dropped}. Tests: a fixture project whose ticket notes contain an email, a phone number, a token-looking string and a 1000 character sentence: the email, phone and token fields are dropped, the long one is truncated to 300; nothing from a source file, diff or prompt appears anywhere in the output (assert on a canary string planted in those places); absolute paths never appear; a hit that slips past (inject a reader returning a record with an unexpected field holding a secret-looking string) makes the export throw with no value in the message; the output validates against the field list; the file is written with mode 0600. Write only tools/field-export.mjs and tests/field-export.test.mjs.",
+      "context": [
+        "tools/board-data.mjs",
+        "tools/handbuild.mjs",
+        "tools/security-scan.mjs",
+        "tools/spend.mjs"
+      ],
+      "outputs": [
+        "tools/field-export.mjs",
+        "tests/field-export.test.mjs"
+      ],
+      "timeoutMs": 1500000
+    },
+    {
+      "id": "field-report",
+      "agent": "auto",
+      "prompt": "Item J part 3: the field report, as a new module only (do not edit tools/swarm.mjs). Create tools/field-report.mjs (SPDX header, ES module) and tests/field-report.test.mjs (node:test, strict assert, in-memory fixtures). Input: a list of field export objects (version 1, as produced by a sibling module: {machine, project, generatedAt, tickets: [{id, wave, lane, model, status, retries, failureCause, durationMs}], jobs: [{runId, jobId, jobType, lane, model, status, costUsd, durationMs, retries, failureCause}], waves: [{id, tickets, readyAtStart, slots}], guard: {blocks: [{at, kind, rule, falsePositive}], handbuildRequests: [...]}}). Export buildFieldReport(exports, {now}) returning {projects, topFailureCauses: [{cause, count, share, projects}], lanePassRate: [{jobType, lane, model, jobs, passed, rate}] , costPerDoneTicket: [{project, lane, usdPerDone, doneTickets}], underFilledWaves: [{project, wave, ready, slots}] (waves where tickets ready at start are fewer than slots), guardFalsePositives: [{rule, count, projects}], routingHints: [{jobType, cheapestLaneThatPasses, rate, minSample}]} where routingHints applies the rule cheapest lane (by average cost, flat-rate lanes count as zero) whose pass rate is at least 0.8 over at least 5 jobs, else null; and formatFieldReport(report) returning a plain text report under 60 lines. Handle empty input, missing fields and exports from several machines for the same project (merge by project and de-duplicate jobs by runId and jobId). Tests for each section with small fixtures, the routing hint rule (a cheaper lane with 4 jobs is ignored, one with 5 jobs at 0.8 is chosen), de-duplication, empty input, and that formatFieldReport stays under 60 lines for a large fixture. Write only tools/field-report.mjs and tests/field-report.test.mjs.",
+      "context": [],
+      "outputs": [
+        "tools/field-report.mjs",
+        "tests/field-report.test.mjs"
+      ],
+      "timeoutMs": 1500000
+    },
+    {
+      "id": "field-collect",
+      "agent": "auto",
+      "prompt": "Item J part 2: collect field exports through a private git repository, as a new module only (do not edit tools/swarm.mjs). Create tools/field-collect.mjs (SPDX header, ES module) and tests/field-collect.test.mjs (node:test, strict assert, real temporary git repositories including a local bare repository as the remote, no network). Pattern: the same as the swarm inbox (read tools/inbox.mjs and any swarm-inbox git helper in tools for how a private repo is used): each machine pushes its export files to a private repository (default remote RDW-Labz/swarm-field, configurable, with a local path allowed for tests) under machines/MACHINE/PROJECT.json; no new paid service, git over the existing credentials only. Exports: async pushFieldExports({files, remote, machine, workDir, git, now}) which clones or fetches the remote into workDir (a cache folder under the swarm folder), copies each given export file to machines/MACHINE/NAME.json, refuses any file that is not a JSON object with version 1 and a project and machine field, refuses files over 2 MB, commits with the git user and the message field export MACHINE and the time (author must be the configured git user, never a made-up address), and pushes to the default branch with a rebase retry once; returns {pushed: [names], skipped: [{name, reason}], commit}; async pullFieldExports({remote, workDir, git}) returning the parsed export objects from all machines (skipping unreadable or invalid files with a reason); a dry-run option that lists what would be pushed. Never include anything but the files given; refuse a symlink. Tests with a bare remote: push from two simulated machines, pull returns both; an invalid file and an oversized file are skipped with reasons; a second push of an unchanged file creates no new commit; a non-fast-forward race is retried once; the commit author is the configured user; dry run changes nothing. Write only tools/field-collect.mjs and tests/field-collect.test.mjs.",
+      "context": [
+        "tools/inbox.mjs"
+      ],
+      "outputs": [
+        "tools/field-collect.mjs",
+        "tests/field-collect.test.mjs"
+      ],
+      "timeoutMs": 1500000
+    }
+  ]
+}
