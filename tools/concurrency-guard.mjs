@@ -86,19 +86,32 @@ function watch(pid, configFile) {
 
 /** Runs `swarm ARGS` with the value set; resolves with the child's exit code once the value is back. `spawnImpl` and `startWatcher` are replaceable for tests. */
 export async function runGuarded({ value, args, env = process.env, configFile = resolveConfigPath({ env }), spawnImpl = spawn, startWatcher = true, stdio = 'inherit', now = Date.now }) {
-  const applied = apply(configFile, value, { now });
-  let watcher = null;
-  if (startWatcher) { watcher = spawn(process.execPath, [SELF, '--watch', String(process.pid), configFile], { detached: true, stdio: 'ignore', env }); watcher.unref(); }
+  // The signal handlers go in BEFORE the value changes: a Ctrl-C in the moment between writing the value and starting the command must still reach the restore below
+  // (without a handler the wrapper would die on the spot and leave the value to the watcher a few hundred milliseconds later).
+  let child = null;
+  let pending = null;
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+  const handlers = signals.map(sig => [sig, () => { pending = pending ?? sig; try { child?.kill(sig); } catch { /* already gone */ } }]);
+  for (const [sig, h] of handlers) process.on(sig, h);
+  const dropHandlers = () => { for (const [sig, h] of handlers) process.off(sig, h); };
   let done = false;
+  let applied;
   const finish = () => { if (done) return; done = true; try { if (readJson(markerPath(configFile))?.pid === process.pid) restore(configFile); } catch { /* the next command restores it */ } };
   const onExit = () => finish();
+  try { applied = apply(configFile, value, { now }); } catch (error) { dropHandlers(); throw error; }
+  let watcher = null;
   process.on('exit', onExit);
-  const child = spawnImpl(process.execPath, [SWARM, ...args], { stdio, env });
-  const forward = signal => () => { try { child.kill(signal); } catch { /* already gone */ } };
-  const handlers = ['SIGINT', 'SIGTERM', 'SIGHUP'].map(sig => [sig, forward(sig)]);
-  for (const [sig, h] of handlers) process.on(sig, h);
-  const code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, sig) => resolve(c ?? (sig ? 128 + ({ SIGINT: 2, SIGTERM: 15, SIGHUP: 1 }[sig] ?? 1) : 1))); });
-  for (const [sig, h] of handlers) process.off(sig, h);
+  if (startWatcher) { watcher = spawn(process.execPath, [SELF, '--watch', String(process.pid), configFile], { detached: true, stdio: 'ignore', env }); watcher.unref(); }
+  const codes = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
+  let code;
+  if (pending) code = codes[pending];
+  else {
+    child = spawnImpl(process.execPath, [SWARM, ...args], { stdio, env });
+    // A signal that arrived while the command was starting is passed on now.
+    if (pending) { try { child.kill(pending); } catch { /* already gone */ } }
+    code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, sig) => resolve(c ?? (sig ? 128 + ({ SIGINT: 2, SIGTERM: 15, SIGHUP: 1 }[sig] ?? 1) : 1))); });
+  }
+  dropHandlers();
   finish();
   process.off('exit', onExit);
   try { watcher?.kill('SIGTERM'); } catch { /* it exits on its own once the pid is gone */ }

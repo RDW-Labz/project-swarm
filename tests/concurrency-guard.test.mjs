@@ -180,3 +180,14 @@ test('process: after a power cut (a leftover marker, its owner gone) the next sw
   assert.equal(f.read().machineConcurrency, 4);
   assert.equal(fs.existsSync(markerPath(f.file)), false);
 });
+
+test('a Ctrl-C in the moment between raising the value and the command starting is passed on, and the value still goes back', async t => {
+  const f = await fixture(t);
+  let child;
+  // apply() has written 16 by the time spawnImpl runs; the signal arrives right there, before the wrapper holds the child.
+  const running = runGuarded({ value: 16, args: ['watch', '--all'], env: f.env, configFile: f.file, startWatcher: false, spawnImpl: () => { child = fakeChild(() => {}); process.emit('SIGINT'); return child; } });
+  const result = await running;
+  assert.equal(child.killed, 'SIGINT');
+  assert.equal(result.code, 130);
+  assert.equal(f.read().machineConcurrency, 4);
+});

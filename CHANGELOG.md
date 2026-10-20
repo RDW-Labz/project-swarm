@@ -12,6 +12,7 @@ Fixes for the parts app S13 run, plus the practice-run tooling.
 - **`swarm with-concurrency N -- COMMAND`** sets `machineConcurrency` for one command and puts the old value back on exit, error, Ctrl-C, kill, a crash of the wrapper, or the next command after a power cut. A new run's cap is clamped to what is left of the project's cap.
 - **`swarm scale --full`** runs a stub run plus a live second run, measured by the Watch API, with a panic stop and a backup check; the lane store queues its callers in process.
 - Opus review fixes: a ticket reference never hands on `.env` files, the project profile or globs (and at most 60 files); the guard marker is created exclusively, only its owner restores it on exit, and a marker from before the last boot is stale even if its pid was reused; `scope sync` skips a test file only when every other owner comes after the ticket; an acceptance review pass must name the same line text.
+- CI fixes: the guard's signal handlers are installed before the value is raised (a Ctrl-C in that gap used to kill the wrapper and leave the value to the watcher a moment later); the four-requests cancel test waits for the four calls instead of one fixed second (starting four workspaces takes 0.5 to 0.8 s here and more on CI).
 - Tests: `tests/s13-blockers.test.mjs`, `tests/concurrency-guard.test.mjs`, `tests/practice-tooling.test.mjs`, router and lesson-40 additions.
 
 ## 1.136.0
