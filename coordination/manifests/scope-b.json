@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "scope-b-deletes",
+      "agent": "auto",
+      "prompt": "Item B: delete-only tickets cannot finish. Cause (from an investigation): ticketsToManifest in tools/ticket-manifest.mjs includes a ticket's deletes in the job outputs; in tools/scope-commands.mjs qualityOk (around line 262) rejects outputs that are absent from integratedFiles, and outputsMatchTree (around line 231) requires every output to exist as a regular file in both the workspace and the repository, so a successful deletion fails the sync with job files are not in the integrated files. Fix: give outputsMatchTree the ledger ticket (pass it from both cmdSync callers, around lines 1268 and 1285), compare the union of the job outputs and ticket.deletes, validate each path first, and accept a declared deletion only when the repository path no longer exists (lstat throws ENOENT); an existing file, a directory, a dangling symlink, or any other error must fail; keep the regular-file byte comparison for writes and every existing gate. Tests in a new file tests/scope-delete-tickets.test.mjs (follow the fixtures used by the existing scope sync tests; read tests/scope.test.mjs or the nearest existing sync test for the pattern): a delete-only ticket whose files are gone syncs to done; a delete ticket whose file still exists is refused; a delete of a directory path still present is refused; an ENOENT-like error other than missing (permission) fails; a ticket with writes and a delete passes only when both hold; a normal write ticket is unchanged. Write only tools/scope-commands.mjs and tests/scope-delete-tickets.test.mjs.",
+      "context": [
+        "tools/scope-commands.mjs",
+        "tools/scope-integrity.mjs",
+        "tools/scope-loop.mjs",
+        "tools/tickets.mjs",
+        "tools/ticket-manifest.mjs",
+        "tools/ticket-context.mjs"
+      ],
+      "outputs": [
+        "tools/scope-commands.mjs",
+        "tests/scope-delete-tickets.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/ui-check.test.mjs"
+      ]
+    }
+  ]
+}

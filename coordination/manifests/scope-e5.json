@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "scope-e5-ownership",
+      "agent": "auto",
+      "prompt": "Items E5 and E5b: done tickets must release file ownership and the splitter must see existing open tickets as dependsOn candidates. From an investigation: (1) tools/scope-integrity.mjs findConflicts (around line 46), called by checkTicketTree (around line 156), treats DONE tickets as concurrent owners because activeOf (around line 9) includes them, and tools/tickets.mjs wavesOf (around line 253) keeps done tickets in waves. Make only todo, ready, running, review and blocked tickets participate in collisions; keep done tickets for coverage, history and dependency validation (do not remove them from activeOf globally). (2) tools/scope-commands.mjs changeContext (around line 420) lists existing tickets without status and drops human tickets, and splitPrompt (around lines 339 and 352) allows only local dependency keys and forbids reusing existing owners' files: build explicit existing-open dependency candidates (ids, statuses, files, deletes, including human prerequisites), show done tickets separately as context only, allow existing open ticket ids in dependsOn, allow reuse of files of done tickets, and require ordering when sharing files with an open owner. (3) ticketsFromStageLists (around line 435) resolves dependsOn only against stage-local keys and silently drops existing ticket ids: pass the existing ledger from cmdSplit (around line 661) and resolve against local keys plus an allowlist of existing open or running ids; unknown ids stay diagnosed; done ids are context only. (4) editTicketFiles (around line 1564) treats every non-cancelled ticket, including done ones, as a blocking owner: use the same open and running ownership predicate that approveProposed (around line 2017) already uses. Tests in tests/scope-ownership.test.mjs (existing fixtures as in the nearest scope tests): a done ticket and a new todo ticket sharing a file pass the tree check; two open tickets sharing a file still conflict; ordered open tickets pass; the split prompt lists existing open tickets as candidates and done ones as context; a split output with dependsOn naming an existing open ticket id is resolved and persisted; an unknown id is diagnosed; editTicketFiles over a done owner succeeds and over an open owner is refused. Write only tools/scope-integrity.mjs, tools/scope-commands.mjs, tools/tickets.mjs (only if wavesOf needs it) and tests/scope-ownership.test.mjs, plus any existing test file whose expectation this behavior change must update.",
+      "context": [
+        "tools/scope-commands.mjs",
+        "tools/scope-integrity.mjs",
+        "tools/scope-loop.mjs",
+        "tools/tickets.mjs",
+        "tools/ticket-manifest.mjs",
+        "tools/ticket-context.mjs"
+      ],
+      "outputs": [
+        "tools/scope-integrity.mjs",
+        "tools/scope-commands.mjs",
+        "tools/tickets.mjs",
+        "tests/scope-ownership.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/_watch-fixture.mjs",
+        "tests/acceptance-sync.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/budgets.test.mjs",
+        "tests/ci-queue.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/day0.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/gallery-tickets.test.mjs",
+        "tests/handoff.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/practice-tooling.test.mjs",
+        "tests/quotes.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/scope-integrity.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/state-backup.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/tickets.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/ui-check.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/wiring.test.mjs"
+      ]
+    }
+  ]
+}

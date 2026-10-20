@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "scope-c-set-guard",
+      "agent": "auto",
+      "prompt": "Item C: setting a ticket status by hand needs a guard. From an investigation: runTicketsCommand in tools/scope-commands.mjs (around lines 1716 to 1733) handles --set without confirmation, parseArgs already accepts --force, --yes and --dry-run booleans but the handler ignores them, and --dry-run still takes the lock and writes. Fix: validate and preview the requested transition (show ID, from, to); with --dry-run return before any lock, write, plan refresh or log; otherwise require --force or --yes, and without either print the preview and refuse with a clear message that names the flag; --force only bypasses the confirmation, never transition legality, unapproved proposals or unmet dependencies; update SCOPE_USAGE. In tools/tickets.mjs extend transition options and its log event with actor, source and confirmation fields (actor from the OS user name or SWARM_ACTOR, source tickets-set), keeping by owner for compatibility; the log line stays one JSON object per line. Tests in tests/scope-set-guard.test.mjs: bare --set refuses with no writes (ledger and log unchanged); --force and --yes apply one legal transition with actor metadata in the log; --dry-run with and without --force changes nothing (no ledger, log, plan, lock); an illegal transition, an invalid id or status and an unapproved proposal are refused even with --force. Write only tools/scope-commands.mjs, tools/tickets.mjs, tests/scope-set-guard.test.mjs, and any existing test whose expectation this change must update.",
+      "context": [
+        "tools/scope-commands.mjs",
+        "tools/scope-integrity.mjs",
+        "tools/scope-loop.mjs",
+        "tools/tickets.mjs",
+        "tools/ticket-manifest.mjs",
+        "tools/ticket-context.mjs"
+      ],
+      "outputs": [
+        "tools/scope-commands.mjs",
+        "tools/tickets.mjs",
+        "tests/scope-set-guard.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/_watch-fixture.mjs",
+        "tests/acceptance-sync.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/budgets.test.mjs",
+        "tests/ci-queue.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/day0.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/gallery-tickets.test.mjs",
+        "tests/handoff.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/practice-tooling.test.mjs",
+        "tests/quotes.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/state-backup.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/tickets.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/ui-check.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/wiring.test.mjs"
+      ]
+    }
+  ]
+}

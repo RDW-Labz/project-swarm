@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "scope-e4-specs",
+      "agent": "auto",
+      "prompt": "Item E4: reviews passed tickets T-0351 and T-0352 but their own end-to-end spec files still failed. From an investigation: in tools/scope-commands.mjs cmdSync checks named test files for existence (around line 1254) and may consume done evidence from a configured suite (around line 1256) but never executes the ticket's own spec files, so passing suite evidence lets reviews proceed. Fix: after the missing-file gate, execute the de-duplicated concrete test and spec paths that the ticket owns or names, on the integrated tree, before the security review decision (around line 1298) and the acceptance evaluation (around line 1323); keep the existing later-owner and deletion exclusions; use the project's configured runner for the file type (look at how the profile verify and checks configuration names runners, and reuse that; inject the runner as a dependency of cmdSync through runScopeCommand's sync branch, around line 1791, so tests can fake it). On a failing ticket-specific spec call applyRetry (around line 802) from cmdSync and continue, so the ticket is not added to the review lists and not marked done, and a generic suite pass or an earlier review pass never overrides it. Tests in tests/scope-spec-gate.test.mjs (fake runner): a ticket whose owned spec fails gets retry evidence, no review request and no done transition even when the generic suite passed; a passing spec runs before both reviews; a ticket with no spec files is unchanged; a spec that times out or runs zero tests fails; a named spec owned by a later ticket is excluded as today; deletions are excluded. Write only tools/scope-commands.mjs, tests/scope-spec-gate.test.mjs, and any existing test whose expectation this change must update.",
+      "context": [
+        "tools/scope-commands.mjs",
+        "tools/scope-integrity.mjs",
+        "tools/scope-loop.mjs",
+        "tools/tickets.mjs",
+        "tools/ticket-manifest.mjs",
+        "tools/ticket-context.mjs"
+      ],
+      "outputs": [
+        "tools/scope-commands.mjs",
+        "tests/scope-spec-gate.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/ui-check.test.mjs"
+      ]
+    }
+  ]
+}
