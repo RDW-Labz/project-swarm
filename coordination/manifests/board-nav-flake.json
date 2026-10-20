@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "board-nav-flake",
+      "agent": "auto",
+      "prompt": "Fix a racy assertion in tests/board-nav.test.mjs, in the test whose name starts with 'review fixes: only our own board is reused' (around lines 143-180). After board.server.close() the test waits a fixed 100 ms (await new Promise(r => setTimeout(r, 100))) and then asserts that the board file entry no longer points at board.url. In tools/watch-cli.mjs startBoardServer, that file entry is removed asynchronously in server.done.then(...) (it also sets the board url to null and closes the api first), so on a slow runner 100 ms is not enough: the assertion at the end failed in CI with 'its file entry is not left behind'. Fix it in the test only, do not change tools/watch-cli.mjs. Replace the fixed wait with waiting on the real event: after board.server.close(), wait until the board file entry is gone or no longer has board.url by using fs.watch on the directory of boardFile(env), with one check right after the watcher is attached (so a removal that already happened is not missed) and a check on every watch event; resolve when the condition holds; close the watcher afterwards. No setTimeout sleeps, no polling loops, no Date.now deadlines (the test timeout is the limit). Keep the ECONNREFUSED assertion that follows: it must also not depend on a sleep, so run it after the file-entry wait (the api is closed before the entry is removed, so the nav page is already refused by then). Keep every other test and assertion unchanged. Write only tests/board-nav.test.mjs.",
+      "context": [
+        "tests/board-nav.test.mjs",
+        "tools/watch-cli.mjs"
+      ],
+      "outputs": ["tests/board-nav.test.mjs"],
+      "timeoutMs": 600000
+    }
+  ]
+}

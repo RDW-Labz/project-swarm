@@ -3,6 +3,7 @@ import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { watch } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -173,7 +174,20 @@ test('review fixes: only our own board is reused (shape checked, redirects not f
   const runUrl = open.headers.location;
   assert.equal((await get(portOf(runUrl), `/nav/board?t=${tokenOf(runUrl)}`)).status, 302);
   await board.server.close();
-  await new Promise(r => setTimeout(r, 100));
+  const boardPath = boardFile(env);
+  const boardDir = path.dirname(boardPath);
+  const boardName = path.basename(boardPath);
+  const boardEntryCleared = async () => {
+    try { return JSON.parse(await fs.readFile(boardPath, 'utf8')).url !== board.url; } catch { return true; }
+  };
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = fn => { if (settled) return; settled = true; watcher.close(); fn(); };
+    const probe = async () => { try { if (await boardEntryCleared()) settle(() => resolve()); } catch (err) { settle(() => reject(err)); } };
+    const watcher = watch(boardDir, (eventType, filename) => { if (filename !== null && filename !== boardName) return; void probe(); });
+    watcher.on('error', err => settle(() => reject(err)));
+    void probe();
+  });
   await assert.rejects(get(portOf(runUrl), `/nav/board?t=${tokenOf(runUrl)}`), { code: 'ECONNREFUSED' }, 'the run pages a board opened close with it, so none points at a dead board');
   assert.equal(await fs.readFile(boardFile(env), 'utf8').then(text => JSON.parse(text).url !== board.url, () => true), true, 'its file entry is not left behind');
 });
