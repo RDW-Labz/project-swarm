@@ -8,6 +8,7 @@ import { sanitizeWorkerText } from './worker-text.mjs';
 import { laneLabel } from './board-data.mjs';
 import { jobSpend } from './spend.mjs';
 import { sanitizeText } from './journal.mjs';
+import { projectOrchestrator } from './board-orchestrator.mjs';
 
 export const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
 // Secrets redacted, control characters removed, length bounded: job text came from a worker.
@@ -95,7 +96,10 @@ export async function runDetail(project, runId) {
   const totalUsd = jobs.reduce((s, j) => s + (j.costUsd ?? 0), 0);
   const lanes = dict();
   for (const j of jobs) { const l = lanes[j.lane] ??= { jobs: 0, usd: 0 }; l.jobs += 1; l.usd += j.costUsd ?? 0; }
+  // The Claude Code sessions driving this project (the Orchestrator lane), so a run page shows everything working in one place.
+  const orchestrator = (() => { try { return projectOrchestrator(project, { runs: [] }).sessions; } catch { return []; } })();
   return {
+    orchestrator,
     runId: txt(runId, 120), projectId: project.id, project: txt(project.name, 80), status: txt(state.status, 30),
     startedAt: iso(state.startedAt), finishedAt: iso(state.finishedAt),
     durationMs: iso(state.startedAt) && iso(state.finishedAt) ? Date.parse(state.finishedAt) - Date.parse(state.startedAt) : null,

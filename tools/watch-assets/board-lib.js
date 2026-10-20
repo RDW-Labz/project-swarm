@@ -4,7 +4,7 @@
   if (typeof module === 'object' && module.exports) { module.exports = factory(); } else { root.BoardLib = factory(); }
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
-  var LANE_COLORS = { Haiku: '#34d399', Sonnet: '#60a5fa', Opus: '#fbbf24', Codex: '#f472b6', Cursor: '#a3e635', GPU: '#fb923c', Claude: '#94a3b8' };
+  var LANE_COLORS = { Orchestrator: '#c084fc', Haiku: '#34d399', Sonnet: '#60a5fa', Opus: '#fbbf24', Codex: '#f472b6', Cursor: '#a3e635', GPU: '#fb923c', Claude: '#94a3b8' };
   var KNOWN_LANES = ['Haiku', 'Sonnet', 'Opus', 'Codex', 'Cursor', 'GPU'];
   var LIVE_MS = 6000;
 

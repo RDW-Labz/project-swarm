@@ -6848,18 +6848,21 @@ export async function updateProjects(root,{projects,yes=false}={}){
 export async function bumpPointers(root){
   root=await fs.realpath(root);
   const version=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8')).version;
-  const bumped=[],failed=[];
+  const bumped=[],failed=[],hooksSet=[];
   for(const projectDir of await readProjectsRegistry(root)){
     let project;
     try{project=await fs.realpath(projectDir);}catch{continue;}
     if(project===root)continue;
     let pointer;
     try{pointer=JSON.parse(await fs.readFile(path.join(project,'.project-swarm.json'),'utf8'));}catch(error){if(error.code==='ENOENT')continue;failed.push({project,error:'the pointer file is not valid JSON; not changed'});continue;}
-    if(!pointer||typeof pointer!=='object'||pointer.version===version)continue;
+    if(!pointer||typeof pointer!=='object')continue;
+    // The Orchestrator lane's hooks are put (back) in place for every linked project on each update, whatever the pointer says.
+    try{const {ensureOrchestratorHooks}=await import('./install.mjs');const hooks=await ensureOrchestratorHooks(project,root,{refreshOnly:true});if(hooks.status==='created'||hooks.status==='updated')hooksSet.push(project);else if(hooks.status==='skipped')failed.push({project,error:`orchestrator hooks not installed: ${hooks.reason}`});}catch(error){failed.push({project,error:`orchestrator hooks: ${String(error.message).slice(0,160)}`});}
+    if(pointer.version===version)continue;
     try{const {writePointer}=await import('./install.mjs');const written=await writePointer(project,{install:root,version});if(written.changed)bumped.push({project,from:pointer.version??null,to:version});}
     catch(error){failed.push({project,error:String(error.message).slice(0,200)});}
   }
-  return {bumped,failed};
+  return {bumped,failed,hooks:hooksSet};
 }
 
 function agentReadiness(agent,result){

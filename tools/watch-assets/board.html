@@ -36,6 +36,7 @@
       <div class="layout">
         <div class="stack">
           <section class="card" aria-label="Agents by lane"><h2>Agents now</h2><div class="bays" id="bays"></div></section>
+          <section class="card" aria-label="Orchestrator"><h2>Orchestrator <span class="badge quiet" id="orchCount">0</span></h2><div class="orch-grid" id="orchBay"></div><p class="board-note" id="orchNote"></p></section>
           <section class="card" aria-label="Projects"><h2>Projects</h2>
             <div class="tablewrap collapse"><table id="projTable"></table></div><div class="cards" id="projCards"></div>
             <p class="board-note">Open a project for its tickets, runs, spend and lessons. A run opens in the run inspector (graph, journal, compare).</p></section>
@@ -49,6 +50,7 @@
     </section>
     <section id="tab-cost" role="tabpanel" aria-labelledby="tab-cost-btn" class="stack" hidden>
       <div class="kpis" id="costKpis"></div>
+      <section class="card" aria-label="Orchestrator cost"><h2>Orchestrator sessions</h2><div class="tablewrap"><table id="orchTable"></table></div><p class="board-note">Claude Code sessions run on a subscription: nothing is billed. The dollars are what the same tokens would cost at list price, read from each session's own transcript, and are not part of the billed totals.</p></section>
       <section class="card"><h2>Lanes today</h2><div class="tablewrap"><table id="laneTable"></table></div><p class="board-note" id="laneNote"></p></section>
       <section class="card"><h2>Projects: spend against cap</h2><div class="tablewrap"><table id="spendTable"></table></div></section>
     </section>

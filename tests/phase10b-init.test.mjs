@@ -35,7 +35,9 @@ test('init installs the checkpoint hook once, keeps other settings and hooks, an
   assert.equal(settings.hooks.Stop[0].hooks[0].command, CHECKPOINT_HOOK);
   assert.match(CHECKPOINT_HOOK, /command -v swarm .* \|\| true$/);
   assert.equal((await installProject(root, { source: packageRoot })).claudeHook.status, 'unchanged');
-  assert.equal((await settingsOf(root)).hooks.Stop.length, 1);
+  const stopCommands = (await settingsOf(root)).hooks.Stop.flatMap(entry => entry.hooks.map(hook => hook.command));
+  assert.equal(stopCommands.filter(c => c === CHECKPOINT_HOOK).length, 1, 'the checkpoint hook is there once');
+  assert.equal(stopCommands.filter(c => c.includes('orchestrator-hook.mjs')).length, 1, 'and so is the Orchestrator lane hook');
 
   const other = await temp(t);
   await fs.mkdir(path.join(other, '.claude'));
@@ -43,8 +45,8 @@ test('init installs the checkpoint hook once, keeps other settings and hooks, an
   assert.equal((await installProject(other, { source: packageRoot })).claudeHook.status, 'updated');
   const merged = await settingsOf(other);
   assert.equal(merged.model, 'x');
-  assert.deepEqual(merged.hooks.PreToolUse, []);
-  assert.deepEqual(merged.hooks.Stop.map(entry => entry.hooks[0].command), ['echo mine', CHECKPOINT_HOOK]);
+  assert.deepEqual(merged.hooks.PreToolUse.flatMap(entry => entry.hooks.map(hook => hook.command)).filter(c => !c.includes('orchestrator-hook.mjs')), [], 'the empty list only gained the Orchestrator lane hook');
+  assert.deepEqual(merged.hooks.Stop.flatMap(entry => entry.hooks.map(hook => hook.command)).filter(c => !c.includes('orchestrator-hook.mjs')), ['echo mine', CHECKPOINT_HOOK]);
 
   const broken = await temp(t);
   await fs.mkdir(path.join(broken, '.claude'));

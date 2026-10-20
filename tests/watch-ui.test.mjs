@@ -460,6 +460,11 @@ test('every Watch link on the board resolves, locally and on the remote board; a
     assert.equal(board.openRun, !remote);
     assert.equal(typeof board.server.version, 'string');
     assert.equal(board.server.stale, false, 'a development checkout has no install to be older than');
+    const runDetail = JSON.parse((await fetchPath(`/api/run?id=${project.id}&run=run-1&t=${token}`)).body);
+    assert.equal(runDetail.openRun, !remote, 'the run page knows whether it may link to the run\'s own page');
+    assert.ok(Array.isArray(runDetail.orchestrator));
+    const liveTab = JSON.parse((await fetchPath(`/api/live?id=${project.id}&t=${token}`)).body);
+    assert.ok(liveTab.orchestrator && Array.isArray(liveTab.orchestrator.sessions), 'the Live tab carries the orchestrator');
     const links = hrefs(board).map(h => h.replace('TOKEN', token));
     assert.ok(links.length > 0, 'the fixture has a live run with a Watch link');
     for (const link of links) {

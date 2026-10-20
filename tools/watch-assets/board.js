@@ -2,6 +2,7 @@
 // The board (swarm watch --all): Overview, Cost, Agents, Events. Read-only; every number and every agent state comes from /api/board and /api/history.
 // Text is always set with textContent (never as HTML). Nothing here invents progress: an empty list says so.
 import { mountRobotHead, setAnimationPaused, animationPaused, reducedMotion } from './robot-head.js';
+import { renderOrchestrator, buildMixText, doingText } from './orchestrator-view.js';
 
 var L = self.BoardLib;
 var TOKEN = new URLSearchParams(location.search).get('t') || '';
@@ -163,6 +164,13 @@ function renderKpis(m) {
     box.appendChild(tile('Workers held', limit, w.invalid ? 'fix machineConcurrency: runs will not start' : w.max ? 'machine limit ' + w.max + ', shared fairly between active projects, ' + (w.free === null ? 0 : w.free) + ' free' : 'no machine limit', bar));
   }
 }
+function renderOrch(m) {
+  var o = m.orchestrator || { sessions: [] };
+  $('orchCount').textContent = String(o.sessions.filter(function (x) { return x.state !== 'idle'; }).length);
+  renderOrchestrator($('orchBay'), o.sessions, { now: Date.now() });
+  var mix = o.swarmPct === null || o.swarmPct === undefined ? '' : 'All projects: swarm-built ' + o.swarmPct + '%, hand-built ' + o.handPct + '% (' + o.handBuiltFiles + ' file' + (o.handBuiltFiles === 1 ? '' : 's') + ' edited by hand).';
+  $('orchNote').textContent = mix;
+}
 function renderBays(m) {
   var host = $('bays');
   var bays = L.bays(m.agents.list, Object.keys(m.agents.byLane));
@@ -236,6 +244,7 @@ function renderProjects(projects) {
     var tr = el('tr');
     var name = el('div'); name.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)])); name.appendChild(document.createTextNode(' ')); name.appendChild(el('span', 'stage', p.stage ? 'stage ' + p.stage : 'no stage'));
     (p.warnings || []).forEach(function (w) { name.appendChild(el('div', 'sub', '')); name.lastChild.appendChild(pill(w.text, 'warn')); });
+    var mixText = buildMixText(p.orchestrator); if (mixText) { name.appendChild(el('div', 'sub', '')); name.lastChild.appendChild(pill(mixText, p.orchestrator.handPct > 0 ? 'warn' : 'good')); }
     tr.appendChild(td(name)); tr.appendChild(td(liveCell(p), 'wrap'));
     tr.appendChild(td(p.agents.jobs.running + ' run, ' + p.agents.jobs.queued + ' q, ' + p.agents.jobs.blocked + ' blk', 'mono'));
     tr.appendChild(td(p.tickets.open + ' open' + (p.tickets.blocked ? ', ' + p.tickets.blocked + ' blocked' : ''), 'mono'));
@@ -244,6 +253,7 @@ function renderProjects(projects) {
     var c = el('div', 'pcard');
     var head = el('div', 'row'); head.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)])); head.appendChild(el('span', 'stage', p.stage ? 'stage ' + p.stage : 'no stage')); c.appendChild(head);
     (p.warnings || []).forEach(function (w) { var wl = el('div', 'sub'); wl.appendChild(pill(w.text, 'warn')); c.appendChild(wl); });
+    var mixCard = buildMixText(p.orchestrator); if (mixCard) { var ml = el('div', 'sub'); ml.appendChild(pill(mixCard, p.orchestrator.handPct > 0 ? 'warn' : 'good')); c.appendChild(ml); }
     c.appendChild(liveCell(p));
     var meta = el('div', 'row'); meta.appendChild(el('span', 'mono', p.tickets.open + ' open' + (p.tickets.blocked ? ', ' + p.tickets.blocked + ' blocked' : ''))); meta.appendChild(el('span', 'mono', ago(p.lastActivityAt))); c.appendChild(meta);
     c.appendChild(capCell(p));
@@ -348,7 +358,24 @@ function renderCost(data) {
   k.appendChild(tile('Last 7 days', usd(c.weekUsd), 'billed'));
   k.appendChild(tile('Billed, all time', usd(c.paidUsd), 'estimated part ' + usd(c.paidEstimatedUsd)));
   k.appendChild(tile('Flat-rate list value', usd(c.flatRateListUsd), 'Codex, Cursor, Claude subscription: not billed'));
+  var oc = data.machine.orchestrator || { todayListUsd: 0, allListUsd: 0 };
+  k.appendChild(tile('Orchestrator, list value', usd(oc.todayListUsd), 'today; ' + usd(oc.allListUsd) + ' all time. Subscription: not billed, not in the totals above'));
   k.appendChild(tile('Estimated full cost', usd(c.paidUsd + c.flatRateListUsd), 'billed plus list value: what the work would cost at list prices'));
+  var ot = $('orchTable'); ot.textContent = '';
+  var os = (data.machine.orchestrator && data.machine.orchestrator.sessions) || [];
+  if (!os.length) { ot.appendChild(el('caption', 'empty', 'No orchestrator session has been seen yet.')); }
+  else {
+    ot.appendChild(th(['Project', 'Session', 'State', 'Tokens today', 'List value today', 'List value all time', 'Hand-built edits']));
+    var obody = el('tbody');
+    os.forEach(function (x) {
+      var tr = el('tr');
+      tr.appendChild(td(x.project)); tr.appendChild(td(x.id, 'mono')); tr.appendChild(td(doingText(x, Date.now()), 'mono'));
+      tr.appendChild(td(typeof x.tokensToday === 'number' ? String(x.tokensToday) : '-', 'mono'));
+      tr.appendChild(td(usd(x.listUsdToday) + ' (list value)', 'mono')); tr.appendChild(td(usd(x.listUsdAll) + ' (list value)', 'mono')); tr.appendChild(td(String(x.handBuilt || 0), 'mono'));
+      obody.appendChild(tr);
+    });
+    ot.appendChild(obody);
+  }
   var t = $('laneTable'); t.textContent = '';
   var lanes = data.machine.lanes || [];
   if (!lanes.length) { t.appendChild(el('caption', 'empty', 'No lane is configured and none ran a job today.')); }
@@ -483,7 +510,7 @@ $('filters').addEventListener('submit', function (e) { e.preventDefault(); loadH
 function renderTab() {
   var d = state.data;
   if (!d) { return; }
-  if (state.tab === 'overview') { renderKpis(d.machine); renderBays(d.machine); renderProjects(d.projects); }
+  if (state.tab === 'overview') { renderKpis(d.machine); renderBays(d.machine); renderOrch(d.machine); renderProjects(d.projects); }
   else if (state.tab === 'cost') { renderCost(d); }
   else if (state.tab === 'agents') { renderAgents(d); }
   tickCountdowns();

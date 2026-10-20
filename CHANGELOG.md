@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.143.0
+
+The Orchestrator lane in Swarm Watch (see `docs/orchestrator-lane.md`).
+- **Capture.** `swarm init` and `swarm update` install Claude Code hooks (`PreToolUse`, `PostToolUse`, `Stop`, `UserPromptSubmit`) in each project's `.claude/settings.local.json` (the personal, git-ignored file, like the checkpoint hook). Each appends one small event (session, tool, a path inside the project or a masked command start, time) to `.swarm/orchestrator/events.ndjson`: never contents, prompt text, tool output or outside paths.
+- **Tokens and cost** come from each session's transcript, once per message, as list value (subscription: marked as such, never added to billed spend).
+- **The board** shows an Orchestrator card (a robot head per session: working, thinking, waiting on you, idle, labelled by project, with the current tool and file or command and how long), orchestrator list value on the Cost tab, the share of each project built by the swarm against by hand, and the same on the project Live tab and run pages.
+- The run page no longer shows the "Open the live Watch page" button on the remote board.
+- Opus review fixes: shell masking now covers `--api-key X`, `-p`/`-u`, URL credentials and header values; only the transcript's file name is stored; the log refuses symlinks and rotates under a lock; a path through a link out of the project is outside; rotated events and long-idle sessions stay in the totals; tools running at once are tracked by id and events are folded in time order; each message is counted once across projects and resumed sessions; transcripts are opened by real path in bounded reads; the settings temp file is unique, exclusive and keeps the mode; `swarm update` refreshes hooks only where agent files were set up, and `.swarm/orchestrator/off` switches the lane off.
+- Tests: `tests/orchestrator-lane.test.mjs` (recorded fake hook events, a fake transcript, the hook as a real process, the installer, the board data and page code).
+
 ## 1.142.0
 
 Board fixes from the S13 run, safe project pointers, and database context for migration tickets.

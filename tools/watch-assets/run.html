@@ -14,6 +14,7 @@
     <div class="chips"><a class="chip btn" id="watchLink" href="#">Open the live Watch page</a></div></header>
   <main class="stack">
     <div class="kpis" id="kpis"></div>
+    <section class="card" aria-label="Orchestrator" id="orchCard" hidden><h2>Orchestrator</h2><div class="orch-grid" id="orchBay"></div></section>
     <section class="card"><h2>Job graph</h2><div id="graphNote" class="note"></div><div class="graph" id="graph" tabindex="0" aria-label="Job graph, scrollable"></div>
       <div class="legend"><span><i class="dot" style="animation:none;background:var(--accent)"></i> running</span><span><i class="dot bad"></i> failed</span><span>dashed amber outline: tried more than once (a retry, or sent up to another lane)</span></div>
       <div id="detail" class="note" role="status"></div></section>
