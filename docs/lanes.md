@@ -133,3 +133,7 @@ Router rule (owner decision):
 ```json
 { "lanes": { "anthropic": { "concurrency": 200, "adaptive": true } } }
 ```
+
+## The spend cap is hard
+
+A job starts only if what the run has spent, plus what is reserved for jobs already running, plus this job's own worst case, stays within the cap (`--max-usd`, the manifest budget, a lane's daily cap). API lanes reserve their worst case from the model price; subscription lanes (Claude, Codex, Cursor) reserve an estimate while they run: the most a finished job of that lane and model cost in the run (five or more), else a default (Claude Opus $1.00, Sonnet $0.50, Haiku $0.20, Codex $0.60, Cursor $0.40; Hermes and Qwen free). A job that would pass the cap is held (the run pauses; `swarm resume ... --raise` is the owner's decision). Token caps are unchanged.

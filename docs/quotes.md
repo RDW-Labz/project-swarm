@@ -29,4 +29,4 @@ It keeps: requirements, stages, screens and services (from the scope), tickets, 
 - **Confidence** with the reason: none, low (fewer than 3 similar projects), medium, high (5 close ones). Backfilled projects and projects without logged hours are named in the reason.
 - **Price:** blank until you set both an hourly rate and a margin: `swarm quote config --rate USD_PER_HOUR --margin PERCENT`. Then it is `(cost + hours x rate) / (1 - margin)`, as a low-to-high range. No default rate or margin is ever invented. `swarm quote config` alone shows what is set.
 
-The ranges are not scaled for size, so they get better as more projects are recorded.
+Each similar project is scaled to the scope's size first (cost, hours and GPU time by the ratio of requirements, calendar time by its square root), then the range is taken, so a small scope is not quoted as a whole earlier project. The ranges get better as more projects are recorded.

@@ -180,10 +180,25 @@ export function laneDayTotals(store, { day = utcDay(Date.now) } = {}) {
   return totals;
 }
 
-export function estimateReservation({ job, lane, model, inputChars, rates, laneDefaults = LANE_RESERVE_DEFAULTS }) {
+// What a subscription-lane job is expected to cost at list prices, reserved while it runs so the run cap counts work that is in flight (a flat-rate job reports its list cost
+// only when it finishes: counting nothing until then let a wave of parallel jobs all start under the cap and finish far over it). The estimate is the most a finished job of this
+// lane and model cost in the run (five or more of them), else a conservative default per lane.
+export const FLAT_RATE_RESERVE_DEFAULTS = Object.freeze({ claude: Object.freeze({ opus: 1.0, sonnet: 0.5, haiku: 0.2, other: 0.5 }), codex: 0.6, cursor: 0.4, hermes: 0, qwen: 0 });
+export function flatRateReserve({ lane, model, history = [] }) {
+  const costs = history.filter(x => typeof x === 'number' && Number.isFinite(x) && x > 0);
+  // Five or more finished jobs of this lane and model: the most any of them cost (never less than something already seen). Fewer: a conservative default.
+  if (costs.length >= 5) return Math.max(...costs);
+  const d = FLAT_RATE_RESERVE_DEFAULTS[lane];
+  if (d === undefined) return 0;
+  if (typeof d === 'number') return d;
+  const m = String(model ?? '').toLowerCase();
+  return m.includes('opus') ? d.opus : m.includes('sonnet') ? d.sonnet : m.includes('haiku') ? d.haiku : d.other;
+}
+
+export function estimateReservation({ job, lane, model, inputChars, rates, laneDefaults = LANE_RESERVE_DEFAULTS, flatHistory }) {
   const maxOut = job.maxOutputTokens ?? (lane === 'openrouter' ? defaultMaxOutputTokens(model) : 8192);
   const tokens = maxOut + Math.ceil(inputChars / 4);
-  if (!PAID_LANES.includes(lane)) return { usd: 0, tokens, source: 'unpaid' };
+  if (!PAID_LANES.includes(lane)) return { usd: flatRateReserve({ lane, model, history: flatHistory }), tokens, source: 'unpaid' };
   let usd, source;
   if (job.maxCredits != null && rates?.creditUsd != null) { usd = job.maxCredits * rates.creditUsd; source = 'max-credits'; }
   else if (rates?.inUsdPerToken != null && rates?.outUsdPerToken != null) { usd = inputChars * rates.inUsdPerToken + maxOut * rates.outUsdPerToken; source = 'rate'; }
@@ -196,7 +211,7 @@ export function estimateReservation({ job, lane, model, inputChars, rates, laneD
 export async function reserveSpend({ dir, key, lane, runId, root, jobId, usd, tokens, budget, runTotals, now = Date.now, isAlive }) {
   return withSpendStore(store => {
     const day = utcDay(now);
-    const decision = capDecision({ budget, run: runTotals, laneToday: laneDayTotals(store, { day }), agent: lane });
+    const decision = capDecision({ budget, run: runTotals, laneToday: laneDayTotals(store, { day }), agent: lane, add: { usd, tokens } });
     if (decision) return { decision };
     store.entries[key] = { day, lane, runId, root, jobId, usd, tokens, kind: 'reservation', pid: process.pid, host: os.hostname(), at: new Date(now()).toISOString(), flagged: false };
     return { decision: null };
@@ -261,17 +276,22 @@ export function laneDailyTotals(states, { now = () => new Date(), excludeRunId }
   }
   return totals;
 }
-export function capDecision({ budget, run, laneToday, agent }) {
+// `add` is what the job about to start is expected to cost (its reservation). The cap is HARD: a job is refused when what has been spent and what is already
+// reserved, plus this job's own worst case, would pass the cap (and as before when the cap is already reached).
+export function capDecision({ budget, run, laneToday, agent, add }) {
   for (const [reason, target, limits, prefix, keys] of [
     ['run-cap', run, budget, 'run', ['maxUsd', 'maxTokens']],
     ['lane-cap', laneToday?.[agent] ?? {}, budget.lanes?.[agent] ?? {}, `lane ${agent}`, ['dailyUsd', 'dailyTokens']],
   ]) {
     for (const field of keys) {
       const usd = field.endsWith('Usd'), spent = target?.[usd ? 'usd' : 'tokens'] ?? 0, limit = limits[field];
-      if (limit === null || limit === undefined || spent < limit) continue;
+      // The hard rule is for dollars; a token cap keeps its earlier meaning (refuse once reached; in-flight reservations are already counted).
+      const extra = usd ? Number(add?.usd) || 0 : 0;
+      if (limit === null || limit === undefined || (spent < limit && spent + extra <= limit + 1e-9)) continue;
       const key = reason === 'run-cap' ? field : `lane.${agent}.${field}`;
       const amount = value => usd ? `$${value.toFixed(2)}` : String(value);
-      return { reason, key, spent, cap: limit, message: `spend-cap: ${prefix} spent ${amount(spent)}${reason === 'lane-cap' ? ' today' : ''} >= ${field} ${amount(limit)}; resume with --raise ${key}=<N> --reason TEXT` };
+      const would = spent < limit ? ` plus this job's worst case ${amount(extra)} would pass` : ' >=';
+      return { reason, key, spent, cap: limit, message: `spend-cap: ${prefix} spent ${amount(spent)}${reason === 'lane-cap' ? ' today' : ''}${would} ${field} ${amount(limit)}; resume with --raise ${key}=<N> --reason TEXT` };
     }
   }
   return null;

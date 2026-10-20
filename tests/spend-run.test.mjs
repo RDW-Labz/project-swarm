@@ -256,13 +256,12 @@ test('unreported paid costs are estimated from tokens or retained from the reser
 
 test('a paid job refused before a completion request releases its reservation', async t => {
   const options = paidOptions(await fixture(t)), calls = [];
-  // The adapter's existing per-job guard refuses this worst case after public pricing,
-  // before the completion endpoint is contacted.
+  // The worst case of this job alone is above the lane's daily cap: the cap is hard, so it is held at admission (a clear spend-cap message), before the completion endpoint is contacted.
   const state = await runManifest(options.root, manifest([paidJob(0, { maxOutputTokens: 20000 })]), { ...options, fetchImpl: paidWorker(calls) });
-  assert.equal(state.jobs[0].status, 'failed');
-  assert.match(state.jobs[0].error, /job cap/);
+  assert.equal(state.jobs[0].status, 'held');
+  assert.match(state.jobs[0].heldReason ?? state.jobs[0].error ?? state.pause?.reason ?? '', /lane-cap|run-cap|worst case|spend-cap/);
   assert.deepEqual(calls, []);
-  assert.deepEqual(await storeEntries(options), []);
+  assert.deepEqual(await storeEntries(options).catch(error => (error.code === 'ENOENT' ? [] : Promise.reject(error))), [], 'nothing was reserved');
 });
 
 test('2,048 paid jobs starting at once never reserve or spend more than the $1 run cap and $1 lane day cap, plus one job\'s reservation', { timeout: 180000 }, async t => {

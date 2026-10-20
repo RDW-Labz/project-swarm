@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-const USD_PER_TICKET = 0.003;
+import { estimateWork } from './estimates.mjs';
 const uniq = (a) => [...new Set(a)];
 const norm = (r) => JSON.stringify({ t: r?.text ?? '', a: r?.acceptance ?? [] });
 
@@ -16,7 +16,8 @@ export function diffScopes(oldScope, newScope) {
   return { added, removed, changed, stagesAdded, stagesRemoved };
 }
 
-export function impactAnalysis({ diff, tickets = [] } = {}) {
+// `stages` is the project's finished-stage history (see estimates.mjs): the estimate is requirements times the tickets a requirement has turned into, times what a ticket has cost.
+export function impactAnalysis({ diff, tickets = [], history = {} } = {}) {
   const removed = new Set(diff?.removed ?? []);
   const changed = new Set(diff?.changed ?? []);
   const live = tickets.filter((t) => t.status !== 'cancelled');
@@ -62,11 +63,10 @@ export function impactAnalysis({ diff, tickets = [] } = {}) {
     needTickets,
     affected,
     dependentsReset,
-    estimate: {
-      newTickets: needTickets.length,
-      usd: needTickets.length * USD_PER_TICKET,
-      dependentsReset: dependentsReset.length,
-    },
+    estimate: (() => {
+      const work = estimateWork({ requirements: needTickets.length, stages: history.stages ?? [], lanes: history.lanes ?? null });
+      return { requirements: needTickets.length, newTickets: work.tickets.mid, ticketsRange: work.tickets, usd: work.usd?.high ?? null, usdRange: work.usd, byLane: work.byLane, basis: work.basis, learned: work.learned, dependentsReset: dependentsReset.length };
+    })(),
   };
 }
 

@@ -2768,6 +2768,8 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
     accruedTotal = Math.max(accruedTotal, total);
     await accrueSpend({ dir: spendDirectory, key: `${rentalKey}/${day}`, lane: 'rented', runId: id, root, jobId: 'rental', usd: Math.max(0, total - dayBases.get(day)), now }).catch(() => {});
   };
+  const releaseWaiters = [];
+  const notifyRelease = () => releaseWaiters.splice(0).forEach(resolve => resolve());
   const reservedRunTotals = () => {
     const totals = runTotals(state);
     // The meter is live; the saved copy lags by up to a save interval.
@@ -3018,6 +3020,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
       const finishSpend = async () => {
         if (!spendEntry) return;
         const entry = spendEntry;
+        if (entry.local) { inFlight.delete(entry.key); spendEntry = null; notifyRelease(); return; }   // reserved for this run only: nothing in the machine-wide store
         if (!adapterStarted || attemptResult?.refusedBeforeStart || attemptResult?.setupFailed) {
           await releaseSpend({ dir: spendDirectory, key: entry.key });
         } else {
@@ -3028,7 +3031,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
           }
           await settleSpend({ dir: spendDirectory, key: entry.key, ...cost, tokens: jobSpend(attemptResult).tokens ?? entry.reservation.tokens, now });
         }
-        inFlight.delete(entry.key); spendEntry = null;
+        inFlight.delete(entry.key); spendEntry = null; notifyRelease();
       };
       const failures = record.routeFailures ??= {};
       try {
@@ -3068,9 +3071,22 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
           if (!waitingJobs.size) { clearInterval(waitPoll); waitPoll = null; }
         }
         if (await cancelled()) fail('cancelled');
-        // An unpaid lane with no token cap has nothing to reserve in the machine-wide store.
-        const unreserved = !PAID_LANES.includes(job.agent) && state.budget.maxTokens === null && state.budget.lanes[job.agent]?.dailyTokens == null;
-        const admit = unreserved ? Promise.resolve(capDecision({ budget: state.budget, run: reservedRunTotals(), laneToday: {}, agent: job.agent })) : admissions.then(async () => {
+        // An unpaid lane with no token or daily dollar cap has nothing to keep in the machine-wide store.
+        const unreserved = !PAID_LANES.includes(job.agent) && state.budget.maxTokens === null && state.budget.lanes[job.agent]?.dailyTokens == null && state.budget.lanes[job.agent]?.dailyUsd == null;
+        let lastReservation = null;
+        // One attempt to admit: reserve the job's worst case (a subscription-lane job is reserved for this run only: its list cost is known at the end) or be refused by a cap.
+        const tryAdmit = async () => {
+          if (unreserved) {
+            const history = state.jobs.filter(r => r.agent === job.agent && r.model === job.model && r.status === 'complete').map(r => jobSpend(r).usd);
+            const reservation = lastReservation = estimateReservation({ job, lane: job.agent, model: job.model, inputChars: 0, rates: null, laneDefaults: state.budget.lanes, flatHistory: history });
+            const decision = capDecision({ budget: state.budget, run: reservedRunTotals(), laneToday: {}, agent: job.agent, add: reservation });
+            if (!decision) {
+              const baseline = jobSpend(record), key = `local/${id}/${job.id}#${record.attempts.length + 1}`;
+              spendEntry = { key, reservation, rates: null, record, local: true, baseline: { usd: baseline.usd ?? 0, tokens: baseline.tokens ?? 0 } };
+              inFlight.set(key, spendEntry);
+            }
+            return decision;
+          }
           // A rented job first passes the rental guard (hours, run cap and day cap including the time the node has been needed).
           if (job.agent === 'rented') { const held = await rentalGate(); if (held) return held; }
           const rates = await ratesFor(job);
@@ -3080,7 +3096,8 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
             // A cache write costs 1.25 times the plain input rate, so cached files are reserved at 1.25 times their size.
             inputChars += (job.cacheContext ?? []).includes(file) ? Math.ceil(length * 1.25) : length;
           }
-          const reservation = estimateReservation({ job, lane: job.agent, model: job.model, inputChars, rates, laneDefaults: state.budget.lanes });
+          const history = state.jobs.filter(r => r.agent === job.agent && r.model === job.model && r.status === 'complete').map(r => jobSpend(r).usd);
+          const reservation = lastReservation = estimateReservation({ job, lane: job.agent, model: job.model, inputChars, rates, laneDefaults: state.budget.lanes, flatHistory: history });
           const key = `${crypto.createHash('sha256').update(root).digest('hex').slice(0, 12)}/${id}/${job.id}#${record.attempts.length + 1}`;
           const { decision } = await reserveSpend({ dir: spendDirectory, key, lane: job.agent, runId: id, root, jobId: job.id, ...reservation, budget: state.budget, runTotals: reservedRunTotals(), now });
           if (!decision) {
@@ -3089,8 +3106,19 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
             inFlight.set(key, spendEntry);
           }
           return decision;
-        });
-        if (!unreserved) admissions = admit.catch(() => {});
+        };
+        // Admissions go one at a time (subscription and paid lanes in the same queue), so each sees every earlier reservation. A refusal that exists only because of money reserved
+        // for jobs still running is not final: it waits for one of them to finish and tries again; money already spent holds the job.
+        const admit = (async () => {
+          for (;;) {
+            const attempt = admissions.then(tryAdmit);
+            admissions = attempt.catch(() => {});
+            const decision = await attempt;
+            if (!decision || decision.reason !== 'run-cap' || !inFlight.size || await cancelled()) return decision;
+            if (capDecision({ budget: state.budget, run: runTotals(state), laneToday: {}, agent: job.agent, add: lastReservation })) return decision;
+            await new Promise(resolve => releaseWaiters.push(resolve));
+          }
+        })();
         const decision = await admit;
         if (decision) {
           await release(); release = null;

@@ -13,6 +13,8 @@ import { readLedger, writeLedger, appendLog, createLedger, transition, readyTick
 import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
 import { missingToolConfigs, toolConfigLines, projectFileList, existsIn, e2eSpecWarnings } from './tool-config.mjs';
 import { isSecretLooking } from './ignored-artifacts.mjs';
+import { stageHistory, laneRates } from './estimates.mjs';
+import { readRuns } from './quotes.mjs';
 import { diffScopes, impactAnalysis, nextChangeOrderId, applyChangeOrder } from './change-orders.mjs';
 import { day0Checklist, checklistToTickets } from './day0.mjs';
 import { validateApprovalPolicy, needsHuman } from './approval-policy.mjs';
@@ -1690,10 +1692,12 @@ async function cmdChange(root, { rest, flags }) {
   const checked = checkScope(cur.scope);
   if (!checked.ok) return out(`the new scope has errors; run swarm scope check ${cur.file}`, 1);
   const diff = diffScopes(parseScope(snapshot), cur.scope);
-  const impact = impactAnalysis({ diff, tickets: ledger.tickets });
+  const runs = await readRuns(root);
+  const impact = impactAnalysis({ diff, tickets: ledger.tickets, history: { stages: stageHistory({ tickets: ledger.tickets, runs }), lanes: laneRates({ tickets: ledger.tickets, runs }) } });
   const reset = impact.dependentsReset?.length ?? 0;
   const summary = [`change order: +${diff.added.length} added, -${diff.removed.length} removed, ~${diff.changed.length} changed requirements`,
-    `cancels ${impact.cancel.length} tickets, reopens ${impact.reopen.length}${reset ? ` (and resets ${reset} that depend on them)` : ''}, needs tickets for ${impact.needTickets.length} requirements (about ${impact.estimate.newTickets} tickets, about $${impact.estimate.usd.toFixed(2)})`].join('\n');
+    `cancels ${impact.cancel.length} tickets, reopens ${impact.reopen.length}${reset ? ` (and resets ${reset} that depend on them)` : ''}, needs tickets for ${impact.needTickets.length} requirements`,
+    `estimate: ${impact.estimate.ticketsRange.low} to ${impact.estimate.ticketsRange.high} tickets (about ${impact.estimate.newTickets}), ${impact.estimate.usdRange ? `$${impact.estimate.usdRange.low.toFixed(2)} to $${impact.estimate.usdRange.high.toFixed(2)} at list prices (about $${impact.estimate.usdRange.mid.toFixed(2)})` : 'cost unknown (no cost history yet)'}; based on ${impact.estimate.basis}`].join('\n');
   const policy = await readApprovalPolicy(root);
   const big = needsHuman(policy, { kind: 'change-order', usd: impact.estimate.usd });
   if (flags.yes !== true) return out(`${summary}\nReview it, then rerun with --yes to record it${big ? ' (over the change-order limit: needs you)' : ''}.`);
