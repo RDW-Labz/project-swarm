@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "jobs": [
+    {
+      "id": "flaky-lanes-run",
+      "agent": "auto",
+      "prompt": "In tests/lanes-run.test.mjs fix the test named '500 API jobs respect lane caps, retry 429s, pause quota lanes, and prepare lazily'. Goal: this test must not be able to fail because the machine is busy. Remove every wall-clock expectation: assertions on elapsed milliseconds (for example Date.now() minus a start time below a limit), sleeps used as synchronization, polling with fixed deadlines, and logic that compares Date.now() to a time computed from a pause length. Replace them with events: await the real promises, resolve and await deferred promises that fake workers or fake servers control, count and order events with sequence numbers instead of timestamps, and use an injectable clock or fake timers when the code under test accepts one (look for now, clock, sleep or setTimer options on the functions the test calls). A generous timeout may only act as an upper bound that fails with a clear message (the node test timeout is fine), never as part of what is asserted. Keep what the test proves (the same behavior and the same numbers of jobs, lanes and caps) and keep every other test in the file unchanged. Prove it: the changed test must pass 5 runs in a row, also while the machine is busy. The test checks that nothing is served on a paused lane during the pause (a Date.now comparison with a pause length) and ends with an assertion that the whole run took under 60000 ms: make the pause check event ordered (record a sequence number when the 402 response is returned and when the pause is lifted, as observed through the fake server and the run's own events or state) and drop the elapsed assertion. Write only tests/lanes-run.test.mjs.",
+      "context": [
+        "tests/lanes-run.test.mjs"
+      ],
+      "outputs": [
+        "tests/lanes-run.test.mjs"
+      ],
+      "timeoutMs": 1200000
+    },
+    {
+      "id": "flaky-spend-run",
+      "agent": "auto",
+      "prompt": "In tests/spend-run.test.mjs fix the test named '64 concurrent paid launches reserve under the machine-wide daily cap'. Goal: this test must not be able to fail because the machine is busy. Remove every wall-clock expectation: assertions on elapsed milliseconds (for example Date.now() minus a start time below a limit), sleeps used as synchronization, polling with fixed deadlines, and logic that compares Date.now() to a time computed from a pause length. Replace them with events: await the real promises, resolve and await deferred promises that fake workers or fake servers control, count and order events with sequence numbers instead of timestamps, and use an injectable clock or fake timers when the code under test accepts one (look for now, clock, sleep or setTimer options on the functions the test calls). A generous timeout may only act as an upper bound that fails with a clear message (the node test timeout is fine), never as part of what is asserted. Keep what the test proves (the same behavior and the same numbers of jobs, lanes and caps) and keep every other test in the file unchanged. Prove it: the changed test must pass 5 runs in a row, also while the machine is busy. Check how many launches were admitted against the cap by counting reservations and admissions from the spend store and the run state after all jobs settle, not by timing; use a deferred barrier so the 64 launches really are in flight at once before any of them settles. Write only tests/spend-run.test.mjs.",
+      "context": [
+        "tests/spend-run.test.mjs"
+      ],
+      "outputs": [
+        "tests/spend-run.test.mjs"
+      ],
+      "timeoutMs": 1200000
+    },
+    {
+      "id": "flaky-concurrency-guard",
+      "agent": "auto",
+      "prompt": "In tests/concurrency-guard.test.mjs fix the test named 'process: the wrapper killed outright (SIGKILL, a crash) is restored by the watcher within seconds'. Goal: this test must not be able to fail because the machine is busy. Remove every wall-clock expectation: assertions on elapsed milliseconds (for example Date.now() minus a start time below a limit), sleeps used as synchronization, polling with fixed deadlines, and logic that compares Date.now() to a time computed from a pause length. Replace them with events: await the real promises, resolve and await deferred promises that fake workers or fake servers control, count and order events with sequence numbers instead of timestamps, and use an injectable clock or fake timers when the code under test accepts one (look for now, clock, sleep or setTimer options on the functions the test calls). A generous timeout may only act as an upper bound that fails with a clear message (the node test timeout is fine), never as part of what is asserted. Keep what the test proves (the same behavior and the same numbers of jobs, lanes and caps) and keep every other test in the file unchanged. Prove it: the changed test must pass 5 runs in a row, also while the machine is busy. The test waits for a watcher to restore a setting after a SIGKILL of the wrapper within a few seconds: wait on the watcher's observable effect instead (an event, a file change notification via fs.watch plus an initial check, or a promise the watcher process resolves through its exit), with no fixed deadline in the assertion. Write only tests/concurrency-guard.test.mjs.",
+      "context": [
+        "tests/concurrency-guard.test.mjs"
+      ],
+      "outputs": [
+        "tests/concurrency-guard.test.mjs"
+      ],
+      "timeoutMs": 1200000
+    },
+    {
+      "id": "flaky-swarm-cancel",
+      "agent": "auto",
+      "prompt": "In tests/swarm.test.mjs fix the test named 'cancelling four live CLI processes closes them and never launches queued workers'. Goal: this test must not be able to fail because the machine is busy. Remove every wall-clock expectation: assertions on elapsed milliseconds (for example Date.now() minus a start time below a limit), sleeps used as synchronization, polling with fixed deadlines, and logic that compares Date.now() to a time computed from a pause length. Replace them with events: await the real promises, resolve and await deferred promises that fake workers or fake servers control, count and order events with sequence numbers instead of timestamps, and use an injectable clock or fake timers when the code under test accepts one (look for now, clock, sleep or setTimer options on the functions the test calls). A generous timeout may only act as an upper bound that fails with a clear message (the node test timeout is fine), never as part of what is asserted. Keep what the test proves (the same behavior and the same numbers of jobs, lanes and caps) and keep every other test in the file unchanged. Prove it: the changed test must pass 5 runs in a row, also while the machine is busy. Wait for each of the four fake worker processes to report started (a ready file, a stdout line or an ipc message awaited as a promise), then cancel, then await each process exit event and assert none of the queued workers was ever started; no sleeps or timing thresholds. This test file is large: change only that one test and any helper used only by it. Write only tests/swarm.test.mjs.",
+      "context": [
+        "tests/swarm.test.mjs"
+      ],
+      "outputs": [
+        "tests/swarm.test.mjs"
+      ],
+      "timeoutMs": 1200000
+    }
+  ]
+}
