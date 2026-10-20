@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "guard-policy",
+      "agent": "auto",
+      "prompt": "Implement the owner's allow/block policy in the hand-build guard. Files: tools/handbuild.mjs (guardDecision, createRequest), a new tools/swarm-produced.mjs, tools/shell-writes.mjs only for the item marked (S), and a new test file tests/handbuild-allowlist.test.mjs. Already available: tools/routing-paths.mjs isRoutingPath(rel); analyzeShell now returns ops, an array of {tool, sub, flags, branch, force, delete} for git, gh, vercel and swarm commands (see tests/shell-writes-quotes.test.mjs for the shapes). RULES. (1) Write tools (Edit, Write, MultiEdit, NotebookEdit): a project-relative path for which isRoutingPath is true is allowed without an approval; other source, tests, docs and config still need an approval that names the file (unchanged). Paths outside the project (the scratchpad, memory notes) stay allowed as today; protected paths stay blocked. (2) New module tools/swarm-produced.mjs exports swarmProducedFiles(root) returning a Set of project-relative paths: the union of integratedFiles and integratedNewFiles from every .swarm/runs/*/state.json whose integratedAt is set (ignore unreadable files, never throw). It only knows file lists, not content hashes. (3) Bash, using a.ops and the current branch (new guardDecision parameter branchOf(root), default runs git rev-parse --abbrev-ref HEAD with a 3 s timeout in root; main and master and a detached HEAD count as protected; tests inject it). ALLOWED with no approval and no request: git fetch, status, log, diff, show, branch -d (delete 'safe'), rebase while the current branch is not protected, git add of named files that are routing paths or swarm-produced, git commit when the current branch is not protected and every file it carries (the existing staged-file computation) is a routing path or swarm-produced, git push when the current branch is not protected, no force, and the pushed branch (branch field, or the current branch when null, and for a SRC:DST refspec the DST) is not protected; gh pr create, pr view, pr list, pr checks, pr diff, run list, run watch, run view; writing routing paths by shell; moving files into a directory named scratchpad. BLOCKED unless a live approval covers it, with a plain reason naming the rule: any git commit or push on a protected branch (the existing approval git list covers these), any commit that carries a file that is neither a routing path nor swarm-produced (existing file approval rules apply), git push with force true, git branch with delete 'force', git merge, gh pr merge, swarm merge, vercel deploy, gh api with a write method. To let the owner approve those through the same request flow, extend createRequest so --git may also name merge, deploy, force-push and branch-D (the check currently allows commit and push only), and have guardDecision treat an approval whose git list names the op as covering it. (S) In tools/shell-writes.mjs report deletes (rm, rmdir, unlink, find -delete) whose target resolves outside the project root in a new field outsideDeletes (array of absolute paths); in guardDecision block them unless every path is under a directory named scratchpad, under the user's ~/.project-swarm-scratch, or under the system temp directory of this session; the block message says deletes outside the scratchpad are the owner's. Keep every existing behavior and test passing: the old hand-build rules for source, tests, docs and config are unchanged. TESTS in tests/handbuild-allowlist.test.mjs (node:test, strict assert, import guardDecision and the helpers; build a temp project with git init and a fake .swarm/runs/RUN/state.json): one test per ALLOWED item and one per BLOCKED item above, plus: a manifest written by Write is allowed, tools/swarm.mjs written by Write is blocked, a commit carrying a swarm-produced file on a feature branch is allowed, the same commit on main is blocked, a commit carrying a hand-edited non-produced file on a feature branch is blocked, git push --force origin feature is blocked, git push origin main is blocked, git push origin HEAD:main is blocked, an approval naming merge lets gh pr merge 5 through, rm of a file in a temp scratchpad directory outside the project is allowed and rm of ~/something outside it is blocked, and a command with a backtick or $HOME or a > inside a quoted commit message is allowed on a feature branch. Write only tools/handbuild.mjs, tools/swarm-produced.mjs, tools/shell-writes.mjs and tests/handbuild-allowlist.test.mjs.",
+      "context": [
+        "tools/handbuild.mjs",
+        "tools/routing-paths.mjs",
+        "tools/shell-writes.mjs",
+        "tools/orchestrator-events.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/shell-writes-quotes.test.mjs"
+      ],
+      "outputs": [
+        "tools/handbuild.mjs",
+        "tools/swarm-produced.mjs",
+        "tools/shell-writes.mjs",
+        "tests/handbuild-allowlist.test.mjs"
+      ],
+      "timeoutMs": 1200000
+    }
+  ]
+}

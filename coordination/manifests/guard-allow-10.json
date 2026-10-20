@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "scrub-agent-env",
+      "agent": "auto",
+      "prompt": "tests/git-hooks.test.mjs fails when it is run from inside a Claude Code session: the environment used for the owner terminal case (noAgent) is copied from process.env, which in such a session already contains CLAUDECODE (and CLAUDE_CODE_ENTRYPOINT), so the hook treats the owner terminal as an agent session and refuses. Fix the tests only: build the noAgent environment from process.env with CLAUDECODE, CLAUDE_CODE_ENTRYPOINT and SWARM_AGENT_SESSION deleted, and build the agent environment from the same base with CLAUDECODE set to 1 explicitly, so the tests give the same result inside and outside a Claude Code session. Apply the same scrub to every other test file that builds an owner-terminal or non-agent environment from process.env and relies on those variables being absent: look in tests/handbuild-hook-hardening.test.mjs, tests/handbuild-channels-hardening.test.mjs, tests/handbuild-channel.test.mjs and tests/self-approval-hardening.test.mjs. Do not change any tools file. Write only the test files you change.",
+      "context": [
+        "tests/git-hooks.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-channel.test.mjs",
+        "tests/self-approval-hardening.test.mjs"
+      ],
+      "outputs": [
+        "tests/git-hooks.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-channel.test.mjs",
+        "tests/self-approval-hardening.test.mjs"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}

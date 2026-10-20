@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "ops-test-target",
+      "agent": "auto",
+      "prompt": "tools/shell-writes.mjs ops entries for gh and swarm commands now also carry a target field (the first positional word after the sub, as a string, or null). The test named 'ops describe git, gh, vercel, and swarm commands' in tests/shell-writes-quotes.test.mjs fails because it pins the exact objects. Update only that test's expectations so they match the current ops output (read tools/shell-writes.mjs to see exactly what target is for each case, for example gh pr merge 5 has target '5' and swarm merge 5 has target '5'; fields that do not apply stay as the current code produces them). Do not change any other test and do not change tools. Write only tests/shell-writes-quotes.test.mjs.",
+      "context": ["tests/shell-writes-quotes.test.mjs", "tools/shell-writes.mjs"],
+      "outputs": ["tests/shell-writes-quotes.test.mjs"],
+      "timeoutMs": 400000
+    }
+  ]
+}

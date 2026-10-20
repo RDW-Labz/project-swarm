@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.149.0
+
+The hand-build guard stops accidents, and integrate records content hashes.
+- **Guard:** an orchestrator session needs the owner for hand edits to source, tests, docs and config, any commit or push on main, force pushes, merge, deploy and branch -D (computer channel only, never phone, board or remote control); routing files (manifests, HANDOFF, TASK, build-plan, the usage ledger) and commit or push of swarm-produced files on non-main branches are free; git, gh and vercel commands are free only in a short exact list of forms; dynamic commands (variables in the command position, eval, pipes into a shell, decoded text) and anything the analyzer cannot read need an approval. The hand-built counter ignores routing files, the scratchpad and memory notes. Quote-aware parsing: backticks, dollar variables and greater-than signs inside quoted arguments are not writes.
+- **Content hashes:** swarm integrate stores a sha256 per integrated file in the run state (integratedHashes) and the guard treats a file as swarm-produced only when its content matches; the run records under the swarm runs folder are protected from text-level writes.
+- **Git hooks:** swarm handbuild install also installs pre-commit and pre-push hooks that, inside an agent session, refuse commits and pushes on main and check staged files against the hash records, with the owner terminal unaffected.
+- **Chat merge approval:** the owner typing a single line merge and a PR number records a one-hour approval for that PR, checked against the session transcript.
+- **Limits are documented in docs/handbuild-guard.md (honest but fallible orchestrator, not a sandbox).**
+- **Tests:** tests/handbuild-allowlist.test.mjs, tests/handbuild-hardening.test.mjs, tests/handbuild-hardening2.test.mjs, tests/handbuild-accidents.test.mjs, tests/handbuild-channel.test.mjs, tests/shell-writes-quotes.test.mjs, tests/shell-writes-hardening.test.mjs, tests/shell-writes-accidents.test.mjs, tests/self-approval-hardening.test.mjs, tests/git-hooks.test.mjs, tests/integrate-hashes.test.mjs, tests/swarm-produced-hash.test.mjs, tests/routing-paths.test.mjs.
+
 ## 1.148.0
 
 Base checks skip integrate-only placeholders; flat-rate lanes no longer reserve against caps.

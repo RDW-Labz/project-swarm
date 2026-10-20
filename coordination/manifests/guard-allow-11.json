@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "scrub-all-spawns",
+      "agent": "auto",
+      "prompt": "tests/git-hooks.test.mjs still fails when the parent process has CLAUDECODE set (for example when the tests run inside a Claude Code session), and passes when it is unset. Cause: some child process in the test (the fixture setup that pushes main to the bare remote, git init, fetch, checkout helpers, any spawnSync or execFileSync call without an explicit env) inherits the parent's environment, so the pre-push hook sees an agent session and refuses the fixture's own setup push; then origin main never exists and the later feature push fails with an unknown revision error. Fix the test only: every child process the file starts must get an environment built from process.env with CLAUDECODE, CLAUDE_CODE_ENTRYPOINT and SWARM_AGENT_SESSION removed, unless the call is one of the deliberate agent-session calls, which set CLAUDECODE to 1 explicitly. Route all spawns through one helper that applies this. Apply the same to the other test files that start git or node children and depend on the variable being absent (tests/handbuild-hook-hardening.test.mjs, tests/handbuild-channels-hardening.test.mjs, tests/handbuild-channel.test.mjs, tests/self-approval-hardening.test.mjs) if they have the same leak. The proof: the whole test file passes both with CLAUDECODE unset and with CLAUDECODE=1 in the parent environment. Do not change any tools file. Write only test files.",
+      "context": [
+        "tests/git-hooks.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-channel.test.mjs",
+        "tests/self-approval-hardening.test.mjs"
+      ],
+      "outputs": [
+        "tests/git-hooks.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-channel.test.mjs",
+        "tests/self-approval-hardening.test.mjs"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}

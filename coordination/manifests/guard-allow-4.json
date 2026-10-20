@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "jobs": [
+    {
+      "id": "harden-policy",
+      "agent": "auto",
+      "prompt": "SHARED CONTRACT between the three hardening jobs (other jobs implement the other halves in parallel, so follow it exactly): every entry of analyzeShell(...).ops now also has: args (array of every non-option word after the subcommand, quotes removed), globalOpts (true when any option word appeared BEFORE the subcommand, for example git -c x=y, git -C dir, gh -R o/r, vercel --token T), hasConfig (true when the command carries -c, --config, --output, --exec, -x, --exec-path, --upload-pack, --receive-pack or --ext-diff anywhere), and for tool vercel and swarm one ops entry for EVERY command with sub = first non-option word (vercel bare or with only options is sub 'deploy'; vercel --prod anywhere is sub 'deploy'). The policy side (handbuild.mjs) treats an op as free only if it matches its exact allow-list form AND globalOpts is false AND hasConfig is false; everything else is not free and needs an approval naming the op (or is blocked). JOB: harden tools/handbuild.mjs (and tools/swarm-produced.mjs, tools/routing-paths.mjs) against a security review. Fix each: (1) movesToScratchpad must not return allow for the whole command: only the mv itself is free, every other write or git op in the same command line is still checked; and mv from a tracked project file that is not a routing path or swarm-produced into the scratchpad needs an approval (a file removed from the project is a delete); untracked sources are free. (2) swarm-produced files are free only for git add and git commit; a shell write (sed -i, redirect, tee, cp, mv, rm) or an Edit/Write tool call to such a file still needs an approval. (3) git push is free only in this exact form: git push [-u|--set-upstream] [REMOTE] [BRANCH] where REMOTE and BRANCH match ^[A-Za-z0-9._/-]+$, contain no colon and no leading plus, BRANCH (or the current branch when omitted) is not main, master or HEAD, no --all, --mirror, --delete, any force option, -f or other option, globalOpts and hasConfig false; every other push form needs an approval, and any force or delete push whose target is main or master (also refs/heads/main, a colon refspec with dst main, a plus refspec) is blocked and never approvable. (4) git commit: carried files are the staged files plus every positional pathspec word after commit (also with -o, --only, -i, --include, -a, --all); if the command has any positional word after commit that is not an option value (the values of -m, -F, -C, -c, --author, --date, --message) it counts as a pathspec and each such file is checked; the check is routing path or swarm-produced, else approval. (5) git push on a non-main branch also checks what it carries: the files of git diff --name-only origin/main...HEAD (3 s timeout, cwd root) must all be routing or swarm-produced, else approval; if the diff cannot be read, approval. (6) Branch ops are judged one by one: free only branch -d or --delete with plain names; branch -D, -f, -m, -M, -c, --force, --move, --copy and anything else need an approval naming branch-D (or are blocked); one safe op never clears the others in the same command. (7) git rebase is free only as git rebase REF with a single plain ref argument (origin/main, main) while the current branch is not protected, no -x, --exec, -i, --onto, --autosquash, no globalOpts or hasConfig; else approval. (8) gh: free only exactly pr create, pr view, pr list, pr checks, pr diff, run list, run watch, run view, with globalOpts false (no -R) ; anything else (gh api, gh workflow, gh release, gh repo, gh pr merge, gh pr edit ...) needs an approval (gh pr merge and gh api with any write need an approval naming merge); vercel: only vercel ls, inspect, logs, whoami, --version are free, every other vercel command needs an approval naming deploy; swarm: only swarm merge N is elevated (merge), other swarm commands as today. (9) the outside-delete allowance: only paths whose realpath is under the session scratchpad directory (a directory named scratchpad that is under the system temp directory in a folder whose name starts with claude-, or under the user's ~/.project-swarm-scratch) are free; resolve symlinks (fs.realpathSync of the longest existing parent) before judging; a lexical folder named scratchpad elsewhere is not free. (10) routing paths: before isRoutingPath(rel) frees a Write, Edit or MultiEdit target, resolve the real path (realpath of the longest existing part) and require it to stay inside the project and itself to be a routing path; a symlink that points to a non-routing file is not free. (11) git read-only commands (fetch, status, log, diff, show) are free only when hasConfig and globalOpts are false and the command has no --output option. (12) elevated approvals: approving or using an elevated op needs the explicit channel string computer; a missing channel is refused, never allowed (check the code paths that skip the check when channel is undefined) (the inbox side is another job; fix any such skip in handbuild.mjs itself). (13) chat merge token: consume it only after the WHOLE command line is decided allowed (not before other parts are checked) and require that the command has no -R/--repo/--repository option and exactly one merge op whose target equals the token PR. Update tests/handbuild-allowlist.test.mjs and tests/handbuild-guard.test.mjs and tests/handbuild-channel.test.mjs where behavior changed, and add a new file tests/handbuild-hardening.test.mjs with one test per item (1) to (13), each using the exact attack forms: printf x > src/core.mjs; mv /tmp/a scratchpad ; mv src/core.mjs scratchpad ; sed -i on a swarm-integrated file ; git push origin feature:main ; git push origin HEAD:refs/heads/main ; git push origin :main ; git push origin +HEAD:main ; git push --all ; git add coordination/HANDOFF.md && git commit -m x tools/handbuild.mjs ; gh api repos/o/r/merges -f base=main -f head=f ; gh api user then gh api -X PUT repos/o/r/pulls/5/merge ; gh workflow run deploy.yml ; vercel --prod ; vercel promote ; git branch -d tmp && git branch -f main HEAD ; git branch -m main x ; git rebase -x with a shell command ; git rebase feat main ; rm -rf ~/otherproject/scratchpad ; a symlink coordination/manifests/a.json pointing to package.json ; git -c core.pager=x log ; git diff --output=src/x. Tests build temp projects and inject branchOf and swarm-produced state like the existing tests. Write only tools/handbuild.mjs, tools/swarm-produced.mjs, tools/routing-paths.mjs, tests/handbuild-allowlist.test.mjs, tests/handbuild-guard.test.mjs, tests/handbuild-channel.test.mjs and tests/handbuild-hardening.test.mjs.",
+      "context": [
+        "tools/handbuild.mjs",
+        "tools/swarm-produced.mjs",
+        "tools/routing-paths.mjs",
+        "tools/shell-writes.mjs",
+        "tools/orchestrator-events.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-channel.test.mjs"
+      ],
+      "outputs": [
+        "tools/handbuild.mjs",
+        "tools/swarm-produced.mjs",
+        "tools/routing-paths.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-hardening.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/routing-paths.test.mjs"
+      ]
+    },
+    {
+      "id": "harden-parser",
+      "agent": "auto",
+      "prompt": "SHARED CONTRACT between the three hardening jobs (other jobs implement the other halves in parallel, so follow it exactly): every entry of analyzeShell(...).ops now also has: args (array of every non-option word after the subcommand, quotes removed), globalOpts (true when any option word appeared BEFORE the subcommand, for example git -c x=y, git -C dir, gh -R o/r, vercel --token T), hasConfig (true when the command carries -c, --config, --output, --exec, -x, --exec-path, --upload-pack, --receive-pack or --ext-diff anywhere), and for tool vercel and swarm one ops entry for EVERY command with sub = first non-option word (vercel bare or with only options is sub 'deploy'; vercel --prod anywhere is sub 'deploy'). The policy side (handbuild.mjs) treats an op as free only if it matches its exact allow-list form AND globalOpts is false AND hasConfig is false; everything else is not free and needs an approval naming the op (or is blocked). JOB: harden tools/shell-writes.mjs and the hand-built counter tools/orchestrator-events.mjs against a security review. Implement the ops contract above (args, globalOpts, hasConfig, every vercel and swarm command listed). Fix: (1) rm, unlink and rmdir targets that contain a glob (* ? [ {) are unknown unless they are inside a free folder, exactly as before the quoting change (rm -rf of a star pattern, a question-mark pattern or a brace pattern inside the .swarm folder must be unknown or protected), and rm -rf of a star pattern inside the .claude folder in the home directory is protected-outside. (2) dd of=, curl -o and --output, wget -O, tee and find -delete targets that contain a dollar variable or backtick in an unquoted or double-quoted word are unknown (a literal project file named $HOME/... is not what the shell does). (3) find -delete or -exec rm with no explicit folder is unknown (it deletes under the current folder). (4) a cd to a directory that does not exist (absolute or relative) makes the rest unknown, not trusted. (5) git push force detection: --force, -f, combined short flags containing f (for example -uf), --force-with-lease and --force-with-lease with a value, --force-if-includes, and any refspec beginning with a plus all set force true; refspec branch normalization strips refs/heads/ so HEAD:refs/heads/main gives branch main; git push origin :main and git push --delete origin main set delete 'remote'. (6) gh and vercel global options that take a value (gh -R OWNER/REPO, --repo VALUE, vercel --token T, --scope S, -t) are skipped when finding the subcommand and make globalOpts true. (7) counter: a write whose path contains a space or quote is still a real project path (only an empty path, or one containing a newline, is implausible); a folder named scratchpad inside the project (for example a file under a project folder named scratchpad) is NOT exempt: only a path outside the project root is exempt, plus paths under the session scratchpad directory (system temp folder, inside a folder whose name starts with claude-, named scratchpad) and the memory folder of any project under the home .claude folder; (8) the analyzer returns paths relative to the project root: make sure buildEvent and isHandBuilt treat them as root-relative (resolve against root before insideProject) so a hook running from another directory does not misjudge them. Add tests in a new file tests/shell-writes-hardening.test.mjs, one per item with the exact commands from the review, and keep every existing test passing (update tests/shell-writes-quotes.test.mjs and tests/routing-paths.test.mjs only where the new contract changes the ops shape). Write only tools/shell-writes.mjs, tools/orchestrator-events.mjs, tests/shell-writes-hardening.test.mjs, tests/shell-writes-quotes.test.mjs and tests/routing-paths.test.mjs.",
+      "context": [
+        "tools/shell-writes.mjs",
+        "tools/orchestrator-events.mjs",
+        "tools/routing-paths.mjs",
+        "tests/shell-writes-quotes.test.mjs",
+        "tests/routing-paths.test.mjs",
+        "tests/handbuild-guard.test.mjs"
+      ],
+      "outputs": [
+        "tools/shell-writes.mjs",
+        "tools/orchestrator-events.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/shell-writes-quotes.test.mjs",
+        "tests/routing-paths.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/orchestrator-lane.test.mjs"
+      ]
+    },
+    {
+      "id": "harden-channels",
+      "agent": "auto",
+      "prompt": "SHARED CONTRACT between the three hardening jobs (other jobs implement the other halves in parallel, so follow it exactly): every entry of analyzeShell(...).ops now also has: args (array of every non-option word after the subcommand, quotes removed), globalOpts (true when any option word appeared BEFORE the subcommand, for example git -c x=y, git -C dir, gh -R o/r, vercel --token T), hasConfig (true when the command carries -c, --config, --output, --exec, -x, --exec-path, --upload-pack, --receive-pack or --ext-diff anywhere), and for tool vercel and swarm one ops entry for EVERY command with sub = first non-option word (vercel bare or with only options is sub 'deploy'; vercel --prod anywhere is sub 'deploy'). The policy side (handbuild.mjs) treats an op as free only if it matches its exact allow-list form AND globalOpts is false AND hasConfig is false; everything else is not free and needs an approval naming the op (or is blocked). JOB: harden the chat merge hook and the channel checks in tools/orchestrator-hook.mjs, tools/inbox.mjs, tools/inbox-commands.mjs, tools/phone.mjs and tools/phone-commands.mjs. (1) Chat merge parsing: the hook records a merge approval only when the hook input's hook_event_name is UserPromptSubmit and the WHOLE trimmed prompt is exactly one line matching /^merge\\s+#?(\\d{1,6})$/i (also accept 'merge pr #N' and 'merge pull request #N'); a prompt with several lines, fences, quotes, pasted content, other words, or more than one number records nothing. (2) Forgery: an orchestrator session must not be able to record a chat approval or approve an elevated request itself. In tools/shell-writes.mjs the existing selfApproval detection (another job edits that file for other things, so do NOT edit it): instead expose in tools/handbuild.mjs? NO, that is another job too. So put the detection in a NEW module tools/self-approval.mjs exporting isSelfApprovalCommand(commandText) that returns true when the text (after quote-aware tokenizing is not needed: a conservative substring and regex check on the raw text, also inside bash -c, eval, here-documents, printf pipes and variables) mentions running tools/orchestrator-hook.mjs or orchestrator-hook, recordChatMerge, swarm decide with a handbuild- reference and approve, node ... swarm.mjs decide ... approve, swarm handbuild approve, inbox-commands, or writing to .swarm/handbuild; and add tests; another job wires it into guardDecision, so also export SELF_APPROVAL_REASON text. (3) The computer channel: tools/inbox-commands.mjs passes channel computer only when process.stdin.isTTY and process.stdout.isTTY are both true and the environment variable CLAUDECODE is not set and CLAUDE_CODE_ENTRYPOINT is not set (a swarm decide run from inside a Claude Code session is therefore not the computer); otherwise it passes channel agent, which cannot approve elevated requests. (4) tools/phone.mjs: remove the runSwarm fallback for decide (it ran as computer), normalise the choice (trim, lower case) before the allow-list check, and keep refusing elevated requests server-side. (5) tools/phone-commands.mjs and any other caller pass their real channel (phone, board or remote-control). Tests in a new file tests/handbuild-channels-hardening.test.mjs: each rule above with the exact forgery forms (echo prompt json piped to the hook; a fenced merge line; 'Please do NOT' newline 'merge 42' newline 'until CI is green'; a pasted list item; two merge lines; uppercase Approve and padded choice through the phone path; swarm decide from a non-TTY or CLAUDECODE session is channel agent and refuses an elevated approve; isSelfApprovalCommand true for the forms listed and false for ordinary commands like git status or swarm go). Write only tools/orchestrator-hook.mjs, tools/inbox.mjs, tools/inbox-commands.mjs, tools/phone.mjs, tools/phone-commands.mjs, tools/self-approval.mjs and tests/handbuild-channels-hardening.test.mjs (and update tests/handbuild-channel.test.mjs only if a changed behavior breaks an existing expectation; that file is also edited by another job, so instead do not touch it and say in your final message which expectations changed).",
+      "context": [
+        "tools/orchestrator-hook.mjs",
+        "tools/inbox.mjs",
+        "tools/inbox-commands.mjs",
+        "tools/phone.mjs",
+        "tools/phone-commands.mjs",
+        "tools/handbuild.mjs",
+        "tests/handbuild-channel.test.mjs"
+      ],
+      "outputs": [
+        "tools/orchestrator-hook.mjs",
+        "tools/inbox.mjs",
+        "tools/inbox-commands.mjs",
+        "tools/phone.mjs",
+        "tools/phone-commands.mjs",
+        "tools/self-approval.mjs",
+        "tests/handbuild-channels-hardening.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/inbox.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/model-watch.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10b-init.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/phone.test.mjs"
+      ]
+    }
+  ]
+}

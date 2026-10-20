@@ -5,6 +5,7 @@ import path from 'node:path';
 import { appendEvent, sanitizeText } from './journal.mjs';
 import { createRequest, decideRequest, listRequests, activeApprovals, REASON_KINDS, KIND_LIST, MAX_MINUTES, DEFAULT_MINUTES, LOG_FILE, OFF_FILE } from './handbuild.mjs';
 import { ensureHandbuildGuard, removeHandbuildGuard, stableInstallDir } from './install.mjs';
+import { installGitHooks, removeGitHooks } from './git-hooks.mjs';
 
 export const HANDBUILD_USAGE = [
   'Usage: swarm handbuild request --kind swarm-cannot|emergency|secret|tiny --reason "why the swarm cannot do it" --files "src/a.ts,src/b.ts" [--minutes 30] [--git commit,push]',
@@ -55,9 +56,16 @@ export async function runHandbuildCommand(root, args, { installRoot, now = Date.
     }
     if (sub === 'install') {
       const r = await ensureHandbuildGuard(root, installRoot);
-      return out(r.status === 'skipped' ? `not installed: ${r.reason}` : `hand-build guard ${r.status} in ${root}/.claude/settings.local.json (it applies to new Claude Code sessions in this project)`, r.status === 'skipped' ? 1 : 0);
+      if (r.status === 'skipped') return out(`not installed: ${r.reason}`, 1);
+      const install = stableInstallDir(installRoot);
+      installGitHooks(root, { checkScript: path.join(install, 'tools', 'githook-check.mjs') });
+      return out(`hand-build guard ${r.status} in ${root}/.claude/settings.local.json (it applies to new Claude Code sessions in this project)\ngit hooks installed`);
     }
-    if (sub === 'uninstall') { const r = await removeHandbuildGuard(root); return out(`hand-build guard ${r.status}`); }
+    if (sub === 'uninstall') {
+      const r = await removeHandbuildGuard(root);
+      removeGitHooks(root);
+      return out(`hand-build guard ${r.status}\ngit hooks removed`);
+    }
     if (sub === 'off' || sub === 'on') {
       const file = path.join(root, OFF_FILE);
       if (sub === 'off') { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, ''); } else fs.rmSync(file, { force: true });

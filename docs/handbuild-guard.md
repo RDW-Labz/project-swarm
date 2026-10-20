@@ -1,59 +1,100 @@
 # The hand-build guard
 
-An orchestrator session (Claude Code driving a project) may not build by hand. All build work goes through the swarm: write a ticket. The guard blocks, in the project checkout, every edit and every shell write that would build by hand, unless the owner approved that exact hand-build.
+An orchestrator session (Claude Code driving a project) may not build by hand. Build work goes through the swarm (write a ticket). The guard runs in the project checkout before edit tools and shell commands, and blocks changes that would hand-build unless the owner approved them—or they fall on the free list below.
 
-## What is blocked, and what is not
+## Threat model
 
-Blocked in the checkout, without an approval:
-- the edit tools: `Edit`, `Write`, `MultiEdit`, `NotebookEdit`;
-- shell writes: `>` and `>>`, `tee`, `sed -i`, `perl -i`, `mv` or `cp` into the project, `rm`, `touch`, `mkdir`, `truncate`, `dd of=`, and inline scripts that write files (`node -e`, `python -c` with a write);
-- `git commit`, `git push`, `git apply`, `git reset`, `git checkout -- FILE` and the other git commands that change the tree or history;
-- a write whose target is a variable or a substitution (the guard cannot tell what it writes, so it asks).
+The orchestrator is **honest but fallible**, not an adversary. The guard stops **accidents**: a stray commit to `main`, a hand edit of application source, an unreviewed push, approving its own hand-build, or writing guard state. It is **not a sandbox** and cannot stop a determined party who can run arbitrary code on the machine, bypass hooks, or act outside git.
 
-Allowed without approval: reading anything; running tests, type checks, lint and builds; writing under `.swarm/` and `docs/plans/` (tickets and plans are the orchestrator's job); build output (`node_modules/`, `.next/`, `dist/`, `build/`, `coverage/`); anything outside the checkout; a swarm worker's workspace (`.swarm/workspaces/...`: that is the swarm building); `swarm ...` commands (they do their own writing, by their own rules).
+## What is free
 
-Never approvable, whatever a request names (a request that names them is refused): the approval state (`.swarm/handbuild/`, and `.swarm` itself), the hooks' own settings (`.claude/`), `.git/`, the swarm install (`~/.project-swarm/`, where the guard's own scripts live) and the user's own Claude settings (`~/.claude/settings*.json`). A session also cannot run `swarm handbuild approve|deny|off|on|uninstall` or `swarm decide handbuild-...`: approving is the owner's alone.
+**Routing files** (swarm coordination, not hand-built product code):
 
-## Asking for a hand-build
+- `coordination/manifests/*.json`
+- `HANDOFF.md`, `TASK.md`, `build-plan.md` at the repo root or under `coordination/` (plus `coordination/handoff.previous.md` and `handoff.previous-2.md`)
+- `docs/state/usage-ledger.md`, `docs/state/eval-scores.ndjson`
+- `coordination/swarm-lessons.jsonl`
+
+Symlinks are resolved; the path must still match after resolution.
+
+**Orchestrator and swarm lanes (no approval):** reading anything; running tests, typecheck, lint, and builds; writing under `.swarm/` and `docs/plans/` (tickets and plans); build output (`node_modules/`, `.next/`, `dist/`, `build/`, `coverage/`); anything outside the checkout; a worker workspace (`.swarm/workspaces/...`); `swarm ...` commands (they write under their own rules); moving untracked sources into the session scratchpad.
+
+**Git and deploy reads (short allowlist, no global `-C` / config tricks):**
+
+- `git fetch`, `status`, `log`, `diff`, `show`
+- `gh pr create`, `pr view`, `pr list`, `pr checks`, `pr diff`, `run list`, `run watch`, `run view`
+- `vercel ls`, `inspect`, `logs`, `whoami`, `--version`
+
+**Swarm-produced commits and pushes (off `main` / `master`):** on a feature branch, `git commit` is allowed when every staged file is routing, orchestrator-owned (`.swarm/`, `docs/plans/`, build dirs), or its **working-tree or index bytes** match a SHA-256 recorded in an integrated run under `.swarm/runs/`. A plain `git push` (no force, no refspecs, no delete) to a non-protected branch is allowed when commits ahead of `origin/main` only carry paths that pass the same content check at `HEAD`. Adding paths that fail the check still needs approval.
+
+## What needs the owner
+
+**Hand edits and shell writes** to tracked project source, tests, **docs** (except routing paths above), config, and any other path not on the free list—including `Edit` / `Write` / `MultiEdit` / `NotebookEdit` and shell writers (`>`, `tee`, `sed -i`, `mv`/`cp` into the tree, `rm`, and similar).
+
+**Git history on protected branches:** any `git commit` or `git push` while on `main`, `master`, or detached `HEAD` treated as protected.
+
+**Never approvable** (even if a request names them): force-push or remote **delete** of `main` or `master`; writing approval state (`.swarm/handbuild/`, `.swarm/runs/`), hook settings (`.claude/`), `.git/`, the swarm install (`~/.project-swarm/`), or the user's Claude settings (`~/.claude/settings*.json`). An orchestrator session cannot run `swarm handbuild approve|deny|off|on|uninstall`, `swarm decide handbuild-...`, or other commands that approve guard state (including nested `bash -c`, `eval`, or `base64 | sh` patterns that try the same).
+
+**Elevated git and deploy** (approval only with the owner **at the computer**—see below): `git merge`, `git push --force` (or `+ref`), `git branch -D` / forced branch delete, `vercel` deploy (including `--prod`), `gh api` with a write HTTP method, and other `gh` / `swarm` commands not on the read-only lists.
+
+**Dynamic commands** the guard cannot pin down: a variable or substitution as a write target; `eval`; a command in the command position that is not a plain literal; pipes into a shell or interpreter that may execute decoded text; inline `node -e` / `python -c` that writes; `find -exec` / `xargs` writers; opaque expanded words. These are refused unless a hand-build approval names the files (and git ops) explicitly.
+
+Edits to paths listed in integrate records but **not** matching a recorded hash still need approval (the path alone is not enough).
+
+## Approvals
+
+**Channels**
+
+- **Computer:** `swarm handbuild approve ID` or `swarm decide handbuild-ID approve` for normal hand-builds. **Required** for requests whose `--git` includes `merge`, `deploy`, `force-push`, or `branch-D`—not from the phone, board, or remote control.
+- **Phone / board:** `approve` / `deny` on a pending hand-build decision in **Needs you** (deny is default), for non-elevated requests only.
+- **Chat (one-time):** when orchestrator hooks are installed, a single-line owner prompt `merge #N` / `merge pr #N` records a one-time allowance (about 60 minutes) for exactly one `gh pr merge N` or `swarm merge N` with no `-R` / `--repo` override. Consumed on use.
+
+**Hand-build request**
 
 ```
 swarm handbuild request --kind swarm-cannot|emergency|secret|tiny \
   --reason "why the swarm cannot do it" --files "src/a.ts,supabase/migrations/" \
-  --minutes 30 [--git commit,push]
+  --minutes 30 [--git commit,push,merge,deploy,force-push,branch-D]
 ```
 
-The request shows in **Needs you** (the board and the phone inbox) as a decision with `approve` and `deny` (deny is the default) and a one-line recommendation. The owner answers with any of:
-
-```
-swarm handbuild approve ID       swarm decide handbuild-ID approve       (or the phone's one-time word)
-swarm handbuild deny ID
-```
-
-An approval covers **only the files named** (a file, a folder at least two levels deep ending in `/`, or a `*.ext` pattern inside a folder), only the git operations named, for at most 120 minutes (default 30), then it expires. `**`, a whole top-level folder and a pattern in the first path segment are refused as a request. A `git commit` carries only the approved files: the staged files (all tracked changes for `-a`) are checked against the approval. A request nobody answers expires after 24 hours.
-
-### Valid reasons
-
-Only these four. Anything else: **write a ticket instead** (the request is refused with that message).
+Shows in **Needs you** with a one-line recommendation. An approval covers **only named files** (file, folder at least two levels deep ending in `/`, or `*.ext` inside a folder—no `**`, no whole top-level folder), only named git operations, for at most 120 minutes (default 30). `git commit` is checked against staged files (or all tracked changes with `-a`); `git add -A` or pattern adds cannot be checked and are blocked. Unanswered requests expire after 24 hours.
 
 | `--kind` | When it applies |
 |---|---|
-| `swarm-cannot` | the swarm cannot run it: no lane can do the work, or the swarm itself is what is broken |
-| `emergency` | an emergency fix to something live, where waiting for a ticket costs more than the hand-build |
-| `secret` | it handles a secret or credential, which no worker may see |
-| `tiny` | a change of under 5 lines that the swarm is blocked from making |
+| `swarm-cannot` | No lane can do the work, or the swarm itself is broken |
+| `emergency` | Live emergency where a ticket costs more than waiting |
+| `secret` | Secret or credential no worker may see |
+| `tiny` | Under 5 lines and the swarm is blocked from making it |
+
+Anything else: **write a ticket instead** (the request is refused).
 
 ## The record
 
-Every request, approval, denial, use of an approval and **every blocked attempt** is one line in the project journal (`.swarm/project/journal.ndjson`, an `action` event named `handbuild-request`, `-approve`, `-deny`, `-allowed`, `-blocked`) and in `.swarm/handbuild/log.ndjson` (`swarm handbuild log`). Blocked attempts and the files written by hand also feed the Orchestrator lane: the board shows `swarm-built 83%, hand-built 17% (12 files, 3 blocked)` per project, counting shell writes as well as edits.
+Every request, approval, denial, allowed use, and **blocked attempt** is one line in `.swarm/project/journal.ndjson` (`handbuild-*` actions) and in `.swarm/handbuild/log.ndjson` (`swarm handbuild log`). Blocked attempts and hand-written files feed orchestrator metrics on the board.
 
 ## Installing it
 
-- `swarm init` installs it for a project linked for the first time (re-running init in an existing project does not). `swarm update` only refreshes it where it is already installed (a project the owner has not chosen is never changed).
-- For an existing project: run `swarm handbuild install` in it (it applies to **new** Claude Code sessions there). `swarm handbuild uninstall` removes it; `swarm handbuild off` / `on` switch it without touching the settings (an orchestrator session cannot run those two).
-- `swarm handbuild uninstall` leaves a marker: a later `swarm init` does not bring the guard back (`swarm handbuild install` does).
-- The project is the one Claude Code names (`CLAUDE_PROJECT_DIR`), so a session that has moved to another folder, or into a swarm workspace, is still guarded for its project; a write inside a workspace is the swarm's, a write into the checkout from inside it is not. A tool call too large for the guard to read is refused.
-- It lives in the personal, git-ignored `.claude/settings.local.json` as one PreToolUse hook (`tools/handbuild-guard.mjs`). The command is wrapped so a missing script (before the update that brings it) does nothing.
+- `swarm init` installs the guard the first time a project is linked; `swarm update` refreshes it where already installed.
+- In an existing project: `swarm handbuild install` (new Claude Code sessions). `uninstall` removes it; `off` / `on` toggle without removing settings (orchestrator cannot run those).
+- `swarm handbuild uninstall` leaves a marker so a later `swarm init` does not reinstall; `swarm handbuild install` does.
+- Project root is `CLAUDE_PROJECT_DIR`; writes inside a worker workspace are the swarm's; writes from a workspace into the checkout are not.
+- PreToolUse hook: `tools/handbuild-guard.mjs` in `.claude/settings.local.json`. A missing script is a no-op until installed.
 
-## What it is, and is not
+## Real enforcement
 
-It is a guard for an orchestrator that follows the rules, built on the text of the command: it reads redirects, `sed -i`, `tee`, `mv`, `cp`, `rm`, downloads and extraction, git commands, what is inside `bash -c "..."`, `eval`, `$(...)`, backticks, subshells and `cd DIR && ...` (here-document text is data), and wrappers such as `sudo -u x`, `timeout 5`, `nice -n 10`. It fails closed on what it cannot read: a pattern or variable as a write target, `find -exec` or `xargs` of a writer, `awk` that writes, inline code (`node -e`, `python -c`) that is not plainly read-only, an interpreter run on a script it could have written (inside `.swarm/` or `docs/plans/`) or on a file outside the checkout, a program read from standard input, and git commands other than a short read-only list (plus adding, switching branches and creating a branch). It is not a sandbox, and three rounds of review found it keeps having gaps to close: a text reader of shell commands cannot be complete. A determined session can find a way the analyzer does not read (a script file it wrote earlier and then runs, for example; writing that script is itself blocked inside the checkout). Claude Code's own permission rules cannot say "deny edits except under `.swarm/`", so the hook is the enforcement. If the guard itself breaks, it lets the call through rather than lock the owner out.
+1. **Hook (session):** the hand-build guard reads tool input and command text before edits or shell run; it fails closed on unreadable or dynamic patterns.
+2. **Git hooks (repo):** `swarm handbuild install` also installs **pre-commit** and **pre-push** hooks that check what git actually commits and pushes in an agent session, complementing the text analyzer.
+3. **Server:** GitHub branch protection on `main` (and usually `master`) is the backstop for pushes the session might still attempt.
+
+If the guard script errors, the hook is designed not to lock the owner out (the call may proceed—treat that as an outage, not policy).
+
+## Known limits
+
+- **Obfuscation:** commands that pipe decoded text into a shell are treated as dynamic and refused, but a determined agent can still harm the machine or data outside git.
+- **Hash trust:** swarm-produced allowance trusts integrate records in `.swarm/runs/`; those paths are not writable via hand-build approvals, but a compromised integrate pipeline would poison the allowlist.
+- **Chat merge:** trusts the owner's prompt event, orchestrator hook installation, and that the merge command matches the recorded PR number once.
+- **Incomplete parsing:** the guard is a text reader of shell and git commands (wrappers, subshells, `cd &&`, here-doc bodies as data). Gaps remain; unknown writers or git ops default to needing approval or blocking.
+
+## What the hook analyzes (summary)
+
+It inspects redirects, `tee`, `sed -i`, `mv`, `cp`, `rm`, downloads, git and `gh` / `vercel` / `swarm` subcommands, `bash -c`, `eval`, `$(...)`, backticks, and common wrappers (`sudo`, `timeout`, `nice`, …). Read-only git is the short list above plus add, checkout, switch, and branch create when not destructive. Claude Code permissions cannot express "deny edits except under `.swarm/`"; the hook is the enforcement layer.

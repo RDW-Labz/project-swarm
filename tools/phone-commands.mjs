@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { setupPhone, syncPhone, phoneStatus, phoneOff, phoneItems, phoneDir, PHONE_ACTIONS, NEVER_FROM_PHONE } from './phone.mjs';
 import { listProjects } from './projects.mjs';
-import { collectInbox } from './inbox.mjs';
+import { collectInbox, decide } from './inbox.mjs';
 import { inboxDeps } from './inbox-commands.mjs';
 import { readLedger } from './tickets.mjs';
 
@@ -45,6 +45,14 @@ export function realDeps() {
       return items;
     },
     now: Date.now,
+    decideInbox: async (root, id, choice) => {
+      try {
+        await decide(root, id, choice, { ...inboxDeps(), channel: 'phone' });
+        return { ok: true, text: `decided ${id}: ${choice}` };
+      } catch (error) {
+        return { ok: false, text: String(error.message ?? error) };
+      }
+    },
   };
 }
 

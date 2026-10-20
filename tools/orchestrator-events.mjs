@@ -4,7 +4,9 @@
 // never prompt text, never tool output. This module is the pure part: building an event, masking, classifying hand-built edits, and turning the log into session states.
 // It imports nothing heavy: the hook runs on every tool call.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 
 export const EVENT_KINDS = Object.freeze(['pre', 'post', 'stop', 'prompt', 'blocked']);
 export const WRITE_TOOLS = Object.freeze(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -54,10 +56,56 @@ export function insideProject(root, file) {
   return !rel.startsWith('../') && rel !== '..' && !path.isAbsolute(rel) ? rel : null;
 }
 
-/** True when an edit lands in the project outside .swarm/ and docs/plans/: the orchestrator built it by hand. */
-export function isHandBuilt(tool, relPath) {
+/** True when an edit lands in the project outside .swarm/, docs/plans/, and routing paths: the orchestrator built it by hand. */
+export function isHandBuilt(tool, relPath, root = null) {
   if (!WRITE_TOOLS.includes(tool) || typeof relPath !== 'string') return false;
+  if (root && isRoutingPathResolved(root, relPath)) return false;
+  else if (!root && isRoutingPath(relPath)) return false;
   return !ORCHESTRATOR_OWN.some(prefix => relPath === prefix.slice(0, -1) || relPath.startsWith(prefix));
+}
+
+const isPlausibleWriteTarget = w => {
+  const s = String(w ?? '');
+  return s.length > 0 && !/[\n\r]/.test(s);
+};
+const realAbs = abs => {
+  try { return fs.realpathSync.native(abs); } catch { return path.resolve(abs); }
+};
+
+const isSessionScratchpadPath = (file, home = os.homedir()) => {
+  if (typeof file !== 'string' || !file) return false;
+  const expanded = file.startsWith('~/') ? path.join(home, file.slice(2)) : file;
+  const abs = path.isAbsolute(expanded) ? realAbs(path.resolve(expanded)) : null;
+  if (!abs) return false;
+  const tmp = os.tmpdir();
+  const n = norm(abs);
+  const tmpNorm = norm(tmp);
+  if (!(n === tmpNorm || n.startsWith(`${tmpNorm}/`))) return false;
+  const parts = n.split('/');
+  for (let i = 0; i < parts.length; i += 1) {
+    if (parts[i].startsWith('claude-') && parts[i + 1] === 'scratchpad') return true;
+  }
+  return false;
+};
+const isClaudeMemoryPath = (file, home = os.homedir()) => {
+  if (typeof file !== 'string' || !file) return false;
+  const expanded = file.startsWith('~/') ? path.join(home, file.slice(2)) : file;
+  const abs = path.isAbsolute(expanded) ? realAbs(path.resolve(expanded)) : null;
+  if (!abs) return false;
+  const under = norm(path.relative(path.join(home, '.claude', 'projects'), abs));
+  if (under.startsWith('../') || path.isAbsolute(under)) return false;
+  const parts = under.split('/');
+  return parts.length >= 2 && parts[1] === 'memory';
+};
+/** Whether a shell-analyzer write path counts toward hand-built (bf may still list every write). */
+function bashWriteCountsAsHandBuilt(root, write, home = os.homedir()) {
+  if (!isPlausibleWriteTarget(write)) return false;
+  if (isSessionScratchpadPath(write, home)) return false;
+  if (isClaudeMemoryPath(write, home)) return false;
+  const abs = path.isAbsolute(write) ? path.resolve(write) : path.resolve(root, write);
+  const rel = insideProject(root, abs);
+  if (rel === null) return false;
+  return isHandBuilt('Write', rel, root);
 }
 
 // A session that runs inside a swarm worker workspace is a worker, not an orchestrator.
@@ -97,12 +145,12 @@ export function buildEvent(kind, input, { root, now = Date.now, analyze } = {}) 
         if (a.git.length) event.bg = a.git.map(g => String(g).replace(/[^a-z-]/g, '').slice(0, 20)).slice(0, 6);
         if (a.inline || a.unknown) event.bu = 1;
         // only a write with named files is a hand-built edit; a command the guard could not read is noted (bu), not counted
-        if (a.writes.length) event.hb = 1;
+        if (a.writes.some(w => bashWriteCountsAsHandBuilt(root, w))) event.hb = 1;
       }
     }
     else {
       const rel = insideProject(root, ti.file_path ?? ti.notebook_path ?? ti.path);
-      if (rel) { event.f = rel.slice(0, 200); if (isHandBuilt(tool, rel)) event.hb = 1; }
+      if (rel) { event.f = rel.slice(0, 200); if (isHandBuilt(tool, rel, root)) event.hb = 1; }
       else if (typeof (ti.file_path ?? ti.notebook_path ?? ti.path) === 'string') event.out = 1;   // a path outside the project: noted, never stored
     }
     if (kind === 'post' && input.tool_response && typeof input.tool_response === 'object' && (input.tool_response.is_error === true || input.tool_response.success === false)) event.err = 1;

@@ -131,6 +131,18 @@ const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/;
 const CHECK_NAME = /^[A-Za-z0-9 ._-]{1,60}$/;
 const CHECK_TAIL = 2000;
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+async function recordIntegratedHashes(root, state, paths) {
+  const merged = { ...(state.integratedHashes && typeof state.integratedHashes === 'object' && !Array.isArray(state.integratedHashes) ? state.integratedHashes : {}) };
+  for (const rel of paths) {
+    if (typeof rel !== 'string' || !rel) continue;
+    try {
+      const bytes = await bytesAt(root, rel);
+      if (bytes === null) continue;
+      merged[rel.replace(/\\/g, '/')] = digest(bytes);
+    } catch { /* hashing must never fail integration */ }
+  }
+  state.integratedHashes = merged;
+}
 const fail = (message, code) => { throw Object.assign(new Error(message), code ? { code } : {}); };
 // Field lesson #344: a contract worker's hand-written `editOutputs` surfaced a bare
 // "Unknown job field" with no pointer to the real field; suggest a close known name.
@@ -4811,6 +4823,7 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, ad
       else if (!noChecks && (manifest.checks ?? []).length) affectedSinceFull = false;
       state.integratedFiles.push(...changes.map(change => change.file));
       state.integratedNewFiles.push(...changes.filter(change => change.previous === null).map(change => change.file));
+      await recordIntegratedHashes(root, state, changes.map(change => change.file));
     }
     if (!failed) await journal.finish();
     if (!failed && (ciConfig?.smoke || ciConfig?.preview)) { try { await runCiHooks(batch, changes); } catch (error) { warnings.push(`ci-hooks-error: ${String(error.message).slice(0, 120)}`); } }
@@ -5354,6 +5367,7 @@ async function integrateRunLocked(root, id, options = {}) {
         });
       }
       state.integratedAt = new Date().toISOString(); state.integratedFiles = writes.map(change => change.file); state.integratedNewFiles = newFiles;
+      await recordIntegratedHashes(root, state, writes.map(change => change.file));
       // Field lesson 120: persisted immediately, so a later failure (preChecks/checks/mutants)
       // leaves a durable `partial` marker instead of files silently written while the run either
       // still refuses "already integrated" or a retry treats its own files as a conflict.
@@ -5450,7 +5464,7 @@ async function integrateRunLocked(root, id, options = {}) {
           else await write(root, change.file, change.previous, false, change.mode);
         } catch (error) { notRestored.push(`${change.file}: ${String(error.message).slice(0, 100)}`); }
       }
-      for (const key of ['integratedAt', 'integratedFiles', 'integratedNewFiles', 'integrationStatus', ...Object.keys(checksResult)]) delete state[key];
+      for (const key of ['integratedAt', 'integratedFiles', 'integratedNewFiles', 'integratedHashes', 'integrationStatus', ...Object.keys(checksResult)]) delete state[key];
       state.lastIntegrationAttempt = { at: new Date().toISOString(), checksPassed: false, failed: failedNames, rolledBack: notRestored.length === 0 };
       await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
       return { id, status: 'checks-failed', ...checksResult, ...mutantsResult, checksPassed: false, rolledBack: notRestored.length === 0, filesRestored: writes.length - notRestored.length, ...(notRestored.length ? { notRestored } : {}), portBase, warnings: [...warnings, `check(s) failed: ${failedNames.join(', ') || 'unknown'}`, notRestored.length ? `${notRestored.length} file(s) could not be put back: ${notRestored.join('; ')}` : 'nothing was kept: the integrated files were put back and the run is not integrated; fix the failures and integrate again, or pass --accept-failed-checks to integrate anyway'] };
