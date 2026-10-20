@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "budget": {
+    "maxUsd": 6.0
+  },
+  "jobs": [
+    {
+      "id": "review3-p1",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner-requested security review of the guard code, third round, split small",
+      "type": "review",
+      "prompt": "Review coordination/review/p1.diff: the command analyzer in shell-writes.mjs, first third of the diff. Promises: quoted text used only as an argument is not a write; real redirects and write commands are still reported; targets built from variables or substitutions are unknown; rm and delete patterns inside the guard state folders are caught; ops list every git, gh, vercel and swarm command with args, globalOpts and hasConfig. Question: can any real write or delete be reported as no write, or any git, gh, vercel or swarm command be missing from ops, because of how words are split, quoted or unwrapped? Report only concrete, reproducible findings with file and line and a short input, most severe first, or say none found. Do not report style. ",
+      "context": [
+        "coordination/review/p1.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "review3-p2",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner-requested security review of the guard code, third round, split small",
+      "type": "review",
+      "prompt": "Review coordination/review/p2.diff: the command analyzer in shell-writes.mjs, middle third of the diff. Same promises as the rest of this file. Question: can any real write, delete, push, force or branch operation be misread (flags given in clustered or valued forms, refspec forms, wrappers before the command, changes of directory to places that do not exist, find with delete or exec, dd, curl and wget output options)? Report only concrete, reproducible findings with file and line and a short input, most severe first, or say none found. Do not report style. ",
+      "context": [
+        "coordination/review/p2.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "review3-p3",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner-requested security review of the guard code, third round, split small",
+      "type": "review",
+      "prompt": "Review coordination/review/p3.diff: the command analyzer in shell-writes.mjs, last third of the diff. Same promises as the rest of this file. Question: can any real write or git operation be reported wrongly (missed, or the wrong target) in the code that handles inline scripts, here-documents, eval and shell -c nesting, git global options, and the final result object? Also check the result fields keep the old shape for existing callers. Report only concrete, reproducible findings with file and line and a short input, most severe first, or say none found. Do not report style. ",
+      "context": [
+        "coordination/review/p3.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "review3-p4",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner-requested security review of the guard code, third round, split small",
+      "type": "review",
+      "prompt": "Review coordination/review/p4.diff: the hand-built counter and the routing path rules (orchestrator-events.mjs, routing-paths.mjs). Promises: routing files (manifests, handoff and task files, the usage ledger) are never counted as hand-built; every other in-project write is counted, including file names with spaces; only paths outside the project, the session scratchpad and the memory folders are exempt; the paths from the analyzer are read relative to the project root. Question: can a real source, test, docs or config edit be dropped as routing, scratchpad or memory, or a routing path rule match too much (path traversal, symlinks, case, trailing dots)? Report only concrete, reproducible findings with file and line and a short input, most severe first, or say none found. Do not report style. ",
+      "context": [
+        "coordination/review/p4.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "review3-h1",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner-requested security review of the guard code, third round, split small",
+      "type": "review",
+      "prompt": "Review coordination/review/h1.diff: the hand-build guard policy, first half of handbuild.mjs. Promises: hand edits to source, tests, docs and config need an owner approval that names the file; routing files are free; commit and push on non-main branches are free only for routing paths or files whose content hash matches a swarm integrate record; any commit or push on main or master needs an approval; force pushes and deletes of main or master are blocked and never approvable; merge, deploy, branch -D and force-push need an approval naming the op, only for the computer channel; git, gh and vercel commands are free only in a short exact list of forms. Question: find a command form that does the blocked thing but is classified as free, or an approval that is consumed, reused or matched wrongly. Report only concrete, reproducible findings with file and line and a short input, most severe first, or say none found. Do not report style. ",
+      "context": [
+        "coordination/review/h1.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "review3-h2",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner-requested security review of the guard code, third round, split small",
+      "type": "review",
+      "prompt": "Review coordination/review/h2.diff: the hand-build guard policy, second half of handbuild.mjs. Same promises. Question: find a bypass in the commit, push, branch, rebase, gh, vercel, scratchpad move and outside-delete handling, the chat merge entry (use once, exact PR number, no repository option), the protected .swarm run records, and the content-hash check for what a commit or push carries (staged bytes versus working tree bytes versus pushed commit). Report only concrete, reproducible findings with file and line and a short input, most severe first, or say none found. Do not report style. ",
+      "context": [
+        "coordination/review/h2.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "review3-h3",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner-requested security review of the guard code, third round, split small",
+      "type": "review",
+      "prompt": "Review coordination/review/h3.diff: swarm-produced.mjs and self-approval.mjs. Promises: a file counts as swarm-produced only when its content hash equals a hash recorded by a real integrate in a regular run folder; an orchestrator session cannot run the approval, hook or decide commands, including through wrappers, quotes, base64, tmux, script or a headless claude. Question: forged or stale records, symlinks, hash comparison mistakes, and any way to run those commands that the detector misses. Report only concrete, reproducible findings with file and line and a short input, most severe first, or say none found. Do not report style. ",
+      "context": [
+        "coordination/review/h3.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "review3-c1",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner-requested security review of the guard code, third round, split small",
+      "type": "review",
+      "prompt": "Review coordination/review/c1.diff: the channel and hook code (inbox, phone, hook files). Promises: elevated requests are approvable only from the computer channel, never from phone, board or remote control, and a missing request or channel fails closed; the chat merge hook records an approval only for one exact merge line from a real owner prompt event. Question: ways around these checks, including missing fields, case and whitespace, caller-supplied channel values, worker or headless sessions, and the stored entry being writable. Report only concrete, reproducible findings with file and line and a short input, most severe first, or say none found. Do not report style. ",
+      "context": [
+        "coordination/review/c1.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}
