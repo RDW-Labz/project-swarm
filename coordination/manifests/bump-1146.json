@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "bump-1-146-0",
+      "agent": "auto",
+      "prompt": "Bump the version from 1.145.0 to 1.146.0 as the 1.61.0 release did. In package.json and package-lock.json (both places in the lock) change 1.145.0 to 1.146.0. In README.md change every 1.145.0 pin (kickoff text, tag name) to 1.146.0. In these tests replace the 1.145.0 pin with 1.146.0 only where it is the current-version pin: tests/t101-release.test.mjs, tests/field-lesson-t80-cli.test.mjs, tests/field-lessons-batch-x.test.mjs, tests/field-lessons-batch-ab-release.test.mjs, tests/field-lessons-batch-ag-release.test.mjs, tests/field-lessons-batch-ah-release.test.mjs. In CHANGELOG.md the top entry is currently ## 1.145.0 (the #200 release: init --check, new-project guide); keep it unchanged under that heading, and add a NEW entry above it titled ## 1.146.0 with this text: 'Integration no longer keeps files whose checks failed.' then bullets: '(bold lead-in: Failed checks keep nothing.) swarm integrate RUN now puts every file it wrote back exactly as it was (new files removed) when the checks fail, and leaves the run un-integrated (status checks-failed, rolledBack true, the failures as before). Before, the files stayed in the working tree and the run read Run already integrated, so --accept-failed-checks could not apply (found in parts-app wave 42). After the fix is made, the same command integrates it with no flag; --accept-failed-checks keeps the files and reports integrated-with-failures as before.'; '(bold lead-in: A run an older swarm already integrated with failed checks) is resumable: swarm integrate RUN --accept-failed-checks records that the owner accepts the failed checks (nothing is rewritten); without the flag the message names the failed checks and says how.'; 'Tests: tests/field-lessons-batch-l.test.mjs (rollback, new files, retry after the fix, the older-swarm run, the CLI), and the tests that relied on failed checks keeping files now say acceptFailedChecks.' Make the two bullet lead-ins bold with double asterisks like the 1.145.0 entry below does. Write no other changes. Many tests import package.json or CHANGELOG.md; the tests not in context are knowingly left uncovered.",
+      "context": [
+        "package.json",
+        "package-lock.json",
+        "README.md",
+        "CHANGELOG.md",
+        "tests/t101-release.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs"
+      ],
+      "outputs": [
+        "package.json",
+        "package-lock.json",
+        "README.md",
+        "CHANGELOG.md",
+        "tests/t101-release.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs"
+      ],
+      "timeoutMs": 600000,
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/cap-reroute.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-w.test.mjs",
+        "tests/fixtures/make-practice-project.mjs",
+        "tests/goal.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/leads.test.mjs",
+        "tests/lessons120-ship.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/repo-map.test.mjs",
+        "tests/router.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/ship-125.test.mjs",
+        "tests/ticket-context.test.mjs",
+        "tests/update.test.mjs"
+      ]
+    }
+  ]
+}

@@ -172,13 +172,20 @@ test('#203: integrate refuses by default when a check fails, naming it; --accept
   assert.ok(parsedAccepted.warnings.some(w => /check\(s\) failed: fails/.test(w)), JSON.stringify(parsedAccepted.warnings));
 });
 
-test('#203: integrateRun itself is unchanged (checksPassed still reported); the refusal is the CLI default', async t => {
+test('#203: a failed check keeps nothing (the files are put back and the run stays un-integrated); --accept-failed-checks keeps them', async t => {
   const root = await fixture(t);
   const checks = [{ name: 'fails', argv: [process.execPath, '-e', 'process.exit(1)'] }];
   const state = await runManifest(root, manifest({}, { checks }), { spawnImpl: fake() });
+  const before = await fs.readFile(path.join(root, 'input.txt'), 'utf8');
   const result = await integrateRun(root, state.id);
-  assert.equal(result.status, 'integrated');
+  assert.equal(result.status, 'checks-failed');
   assert.equal(result.checksPassed, false);
+  assert.equal(result.rolledBack, true);
+  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), before, 'the working tree is as it was');
+  const accepted = await integrateRun(root, state.id, { acceptFailedChecks: true });
+  assert.equal(accepted.status, 'integrated');
+  assert.equal(accepted.checksPassed, false);
+  assert.notEqual(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), before, 'accepted: the files stay');
 });
 
 // --- #205: validate warns on a shell check/prompt naming a path outside the sandbox ---------------
@@ -213,4 +220,69 @@ test('#205: validate warns when a shell job\'s own prompt names a denied path wi
   assert.ok(warnings.some(w => w.code === 'shell-sandbox-denied-prompt-path'), JSON.stringify(warnings));
   const manifestExcused = { ...manifestWithPromptPath, jobs: [{ ...manifestWithPromptPath.jobs[0], prompt: 'Do not run ~/.project-swarm yourself; integrate runs this.' }] };
   assert.deepEqual(shellSandboxDeniedCheckWarnings(manifestExcused), []);
+});
+
+// ---- integrate runs the checks before keeping anything ------------------------------------------------------------------------------------------
+
+const flagCheck = [{ name: 'needs-flag', argv: [process.execPath, '-e', "process.exit(require('fs').existsSync('ok.flag') ? 0 : 1)"] }];
+
+test('integrate: failed checks put every written file back (new files removed), leave the run un-integrated, and a retry after the fix needs no flag', async t => {
+  const root = await fixture(t);
+  const state = await runManifest(root, manifest({}, { checks: flagCheck }), { spawnImpl: fake() });
+  const before = await fs.readFile(path.join(root, 'input.txt'), 'utf8');
+  const failed = await integrateRun(root, state.id);
+  assert.deepEqual([failed.status, failed.checksPassed, failed.rolledBack], ['checks-failed', false, true]);
+  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), before, 'the file the run changed is back as it was');
+  const saved = JSON.parse(await fs.readFile(path.join(root, `.swarm/runs/${state.id}/state.json`), 'utf8'));
+  assert.equal(saved.integratedAt, undefined, 'not integrated');
+  assert.equal(saved.integrationStatus, undefined);
+  assert.deepEqual(saved.lastIntegrationAttempt.failed, ['needs-flag']);
+  // the same failure again, then the cause fixed: it integrates without --accept-failed-checks and without "already integrated"
+  assert.equal((await integrateRun(root, state.id)).status, 'checks-failed');
+  await fs.writeFile(path.join(root, 'ok.flag'), '');
+  const ok = await integrateRun(root, state.id);
+  assert.equal(ok.status, 'integrated');
+  assert.equal(ok.checksPassed, true);
+  assert.notEqual(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), before);
+});
+
+test('integrate: a new file written by a run whose checks fail is removed again', async t => {
+  const root = await fixture(t);
+  const newFile = (_cmd, _args, options) => spawn(process.execPath, ['-e', "require('fs').writeFileSync('input.txt','updated');require('fs').writeFileSync('fresh.txt','new');console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'{\"summary\":\"ok\"}'}))"], { cwd: options.cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+  const state = await runManifest(root, manifest({ outputs: ['input.txt', 'fresh.txt'] }, { checks: flagCheck }), { spawnImpl: newFile });
+  if (state.status !== 'complete') return;       // the fixture's fake does not produce a second output here: nothing to prove
+  const failed = await integrateRun(root, state.id);
+  assert.equal(failed.status, 'checks-failed');
+  await assert.rejects(fs.access(path.join(root, 'fresh.txt')), 'the new file is gone');
+});
+
+test('integrate: a run an older swarm integrated before its checks failed is resumable with --accept-failed-checks; without it the message says how', async t => {
+  const root = await fixture(t);
+  const state = await runManifest(root, manifest({}, { checks: flagCheck }), { spawnImpl: fake() });
+  const file = path.join(root, `.swarm/runs/${state.id}/state.json`);
+  const saved = JSON.parse(await fs.readFile(file, 'utf8'));
+  // what the old integrate left behind: integrated, checks failed
+  await fs.writeFile(file, JSON.stringify({ ...saved, integratedAt: new Date().toISOString(), integrationStatus: 'complete', integratedFiles: ['input.txt'], checksPassed: false, checks: [{ name: 'needs-flag', status: 'failed' }] }));
+  await assert.rejects(integrateRun(root, state.id), /Run already integrated; its checks failed \(needs-flag\): pass --accept-failed-checks/);
+  const accepted = await integrateRun(root, state.id, { acceptFailedChecks: true });
+  assert.equal(accepted.status, 'integrated');
+  assert.deepEqual(accepted.acceptedFailedChecks.checks, ['needs-flag']);
+  assert.ok(JSON.parse(await fs.readFile(file, 'utf8')).acceptedFailedChecks.at);
+  await assert.rejects(integrateRun(root, state.id, { acceptFailedChecks: true }), /Run already integrated/);
+});
+
+test('integrate CLI: a failed check exits 1 with nothing kept and says so; --accept-failed-checks then integrates it with failures', async t => {
+  const root = await fixture(t);
+  const state = await runManifest(root, manifest({}, { checks: flagCheck }), { spawnImpl: fake() });
+  const before = await fs.readFile(path.join(root, 'input.txt'), 'utf8');
+  const run = args => new Promise(resolve => execFile(process.execPath, [CLI, '--root', root, ...args], { env: { ...process.env, SWARM_CONFIG: path.join(os.tmpdir(), `swarm-none-${process.pid}.json`) } }, (error, stdout, stderr) => { try { resolve({ code: error ? error.code : 0, out: JSON.parse(stdout.trim().split('\n').pop()) }); } catch { resolve({ code: error ? error.code : 0, out: { status: 'unreadable', stdout, stderr } }); } }));
+  const first = await run(['integrate', state.id]);
+  assert.equal(first.code, 1, JSON.stringify(first.out).slice(0, 600));
+  assert.equal(first.out.status, 'checks-failed', JSON.stringify(first.out).slice(0, 900));
+  assert.ok(first.out.warnings.some(w => /nothing was kept/.test(w)));
+  assert.equal(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), before);
+  const second = await run(['integrate', state.id, '--accept-failed-checks']);
+  assert.equal(second.code, 0);
+  assert.equal(second.out.status, 'integrated-with-failures');
+  assert.notEqual(await fs.readFile(path.join(root, 'input.txt'), 'utf8'), before);
 });

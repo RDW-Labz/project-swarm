@@ -277,7 +277,8 @@ test('a shell job runs the whole claude process under sandbox-exec in a worktree
   const walk = async dir => (await Promise.all((await fs.readdir(dir, { withFileTypes: true })).map(entry => entry.isDirectory() ? walk(path.join(dir, entry.name)) : [path.join(dir, entry.name)]))).flat();
   for (const file of await walk(path.join(root, '.swarm'))) assert.equal((await fs.readFile(file)).includes(FAKE_KEY), false, file);
   assert.equal(JSON.stringify(inspected).includes(FAKE_KEY), false);
-  const integrated = await integrateRun(root, state.id, { env: runEnv, keyExec: noKeychain });
+  // (the fixture's own checks are not what this test is about: accept them so the files are kept)
+  const integrated = await integrateRun(root, state.id, { env: runEnv, keyExec: noKeychain, acceptFailedChecks: true });
   assert.deepEqual(integrated.files, ['output.txt']);
 });
 

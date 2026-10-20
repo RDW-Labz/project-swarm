@@ -4999,7 +4999,7 @@ export async function integrateRun(root, id, options = {}) {
 }
 
 async function integrateRunLocked(root, id, options = {}) {
-  const { releaseIntegrationLock, securityGate = {}, noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, salvage = false, acceptDeviation = false, acceptResultShape = false, acceptDropped = false, salvageDropped = false, jobs = undefined, privateNamesFile = undefined, queue = false, batchSize = 10, adaptive = false } = options;
+  const { releaseIntegrationLock, securityGate = {}, noChecks = false, spawnImpl = spawn, mutants = false, noFlakeCheck = false, mutantsFile, mutantCheck, env, keyExec, acceptBlocked = false, acceptFailedChecks = false, salvage = false, acceptDeviation = false, acceptResultShape = false, acceptDropped = false, salvageDropped = false, jobs = undefined, privateNamesFile = undefined, queue = false, batchSize = 10, adaptive = false } = options;
   if (queue) validateQueueOptions({ batchSize, jobs, salvage, mutants: mutants || mutantsFile !== undefined || mutantCheck !== undefined });
   root = await fs.realpath(root);
   // Field lesson #202: a job's own timed-out worker declares nothing missing — it simply never got
@@ -5030,7 +5030,15 @@ async function integrateRunLocked(root, id, options = {}) {
   // after its files were already written (preChecks/checks/mutants) may be retried; only a fully
   // completed integration refuses outright. Checked before the completeness gate below so a run
   // already integrated (blocked or otherwise) always reports that, not a generic status mismatch.
-  if (state.integratedAt && state.integrationStatus !== 'partial' && !(queue && state.mergeQueue?.state === 'running')) fail('Run already integrated');
+  if (state.integratedAt && state.integrationStatus !== 'partial' && !(queue && state.mergeQueue?.state === 'running')) {
+    // A run integrated by an older swarm, whose checks failed after its files were written: --accept-failed-checks records that the owner accepts them (nothing is rewritten).
+    if (acceptFailedChecks && !queue && state.checksPassed === false && !state.acceptedFailedChecks) {
+      state.acceptedFailedChecks = { at: new Date().toISOString(), checks: (state.checks ?? []).filter(check => !['passed', 'skipped'].includes(check.status)).map(check => check.name) };
+      await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
+      return { id, status: 'integrated', checksPassed: false, checks: state.checks, integrationStatus: state.integrationStatus, files: state.integratedFiles, filesChanged: state.integratedFiles, acceptedFailedChecks: state.acceptedFailedChecks, warnings: ['the failed checks of this already integrated run were accepted by the owner (--accept-failed-checks); the files were written earlier'] };
+    }
+    fail(state.checksPassed === false && !state.acceptedFailedChecks ? `Run already integrated; its checks failed (${(state.checks ?? []).filter(check => !['passed', 'skipped'].includes(check.status)).map(check => check.name).join(', ') || 'unknown'}): pass --accept-failed-checks to accept them, or fix the failures with a new ticket` : 'Run already integrated');
+  }
   // Lesson 298: --jobs flag to integrate only named jobs
   if (jobs) {
     for (const jobId of jobs) {
@@ -5411,6 +5419,22 @@ async function integrateRunLocked(root, id, options = {}) {
       Object.assign(state, mutantsResult);
     }
     const warnings = [...designWarnings, ...swarmCheckWarnings(checksResult.checks), ...portWarnings, ...preChecksResult.warnings, ...(mutantsResult.mutantsSkippedRedBase ? ['mutants skipped: red base (checks failed)'] : []), ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`), ...mutantMissingWarnings];
+    // Failed checks keep nothing: the files this integration wrote are put back exactly as they were and the run stays un-integrated, so it can be fixed and integrated again, or
+    // integrated anyway with --accept-failed-checks (which keeps the files). A formatter's own rewrite of these files is covered by the same restore.
+    if (!noChecks && !acceptFailedChecks && (checksResult.checksPassed === false || checksResult.checksErrored)) {
+      const failedNames = (checksResult.checks ?? []).filter(check => !['passed', 'skipped'].includes(check.status)).map(check => check.name);
+      const notRestored = [];
+      for (const change of [...writes].reverse()) {
+        try {
+          if (change.previous === null || change.previous === undefined) await fs.unlink(await safePath(root, change.file)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+          else await write(root, change.file, change.previous, false, change.mode);
+        } catch (error) { notRestored.push(`${change.file}: ${String(error.message).slice(0, 100)}`); }
+      }
+      for (const key of ['integratedAt', 'integratedFiles', 'integratedNewFiles', 'integrationStatus', ...Object.keys(checksResult)]) delete state[key];
+      state.lastIntegrationAttempt = { at: new Date().toISOString(), checksPassed: false, failed: failedNames, rolledBack: notRestored.length === 0 };
+      await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
+      return { id, status: 'checks-failed', ...checksResult, ...mutantsResult, checksPassed: false, rolledBack: notRestored.length === 0, filesRestored: writes.length - notRestored.length, ...(notRestored.length ? { notRestored } : {}), portBase, warnings: [...warnings, `check(s) failed: ${failedNames.join(', ') || 'unknown'}`, notRestored.length ? `${notRestored.length} file(s) could not be put back: ${notRestored.join('; ')}` : 'nothing was kept: the integrated files were put back and the run is not integrated; fix the failures and integrate again, or pass --accept-failed-checks to integrate anyway'] };
+    }
     if (resultShapeWarnings.length) state.resultShapeWarnings = resultShapeWarnings;
     // Field lesson 328: unwritten blocked outputs were skipped; retain the distinct integration status;
     // the run is tagged distinctly so a later `inspect`/`ship` never mistakes it for a clean pass,
@@ -9047,7 +9071,7 @@ async function mainInner() {
       approvedGate={approveManifests:entries};
       for(const entry of entries)await appendEvent(root,{kind:'decision',id:`approve-manifest-${argument}-${entry.file}-${entry.sha256.slice(0,12)}`,text:entry.sha256==='deleted'?`owner reviewed the deletion of ${entry.file} by hand and approved it past the security gate for run ${argument}`:`owner reviewed ${entry.file} (sha256 ${entry.sha256.slice(0,12)}) by hand and approved exactly that content past the security gate for run ${argument}`,confirm:true,confirmed:true,by:'owner'});
     }
-    result=await (queue?integrateQueue:integrateRun)(root,argument,{...(approvedGate?{securityGate:approvedGate}:{}),batchSize,adaptive,maxRequeues,noChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
+    result=await (queue?integrateQueue:integrateRun)(root,argument,{...(approvedGate?{securityGate:approvedGate}:{}),batchSize,adaptive,maxRequeues,noChecks,acceptFailedChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
   }
   // Field lesson #203: a failed check at integrate used to be a quiet field (`status: "integrated"`,
   // exit 0) unless the coordinator remembered --require-checks; refusing (or, with the escape
@@ -9058,7 +9082,7 @@ async function mainInner() {
     const note=`check(s) failed: ${failedChecks.join(', ')}`;
     result=acceptFailedChecks
       ?{...result,status:'integrated-with-failures',warnings:[...(result.warnings??[]),note]}
-      :{...result,warnings:[...(result.warnings??[]),`${note} (refusing; pass --accept-failed-checks to integrate anyway)`]};
+      :{...result,warnings:[...(result.warnings??[]),...(result.rolledBack?[]:[`${note} (refusing; pass --accept-failed-checks to integrate anyway)`])]};
   }
   // Field lesson #210: integrate is a hand step too; say up front when no job is actually running.
   if(command==='integrate'){
