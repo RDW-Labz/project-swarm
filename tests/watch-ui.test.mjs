@@ -75,6 +75,10 @@ test('laneUsage: today per lane against its daily cap, the cap\'s reset at UTC m
   assert.equal(by.claude.todayUsd, 1.25);
   assert.equal(by.openrouter.todayUsd, 0, 'a lane with a cap is listed even with no spend');
   assert.equal(await fs.readFile(path.join(dir, 'spend/daily.json'), 'utf8'), before);
+  // every configured lane is listed, and a lane that ran jobs today is listed even when it reported no cost
+  const all = Object.fromEntries((await laneUsage({ laneToday: {}, jobsToday: { codex: 11, cursor: 3 }, configured: ['codex', 'cursor', 'claude', 'anthropic'], spendDirectory: path.join(dir, 'none'), lanesDirectory: path.join(dir, 'none'), now: NOW })).map(r => [r.lane, r]));
+  assert.deepEqual(Object.keys(all).sort(), ['anthropic', 'claude', 'codex', 'cursor']);
+  assert.deepEqual([all.codex.jobsToday, all.codex.todayUsd, all.codex.kind, all.cursor.jobsToday, all.claude.jobsToday], [11, 0, 'flat-rate', 3, 0]);
   assert.deepEqual(await laneUsage({ spendDirectory: path.join(dir, 'none'), lanesDirectory: path.join(dir, 'none'), now: NOW }), [], 'no files, nothing to show');
 });
 
@@ -383,4 +387,99 @@ test('the per-run page uses the board design system: shared tokens first, no nav
   // The wrapper keeps the phone's safe-area padding (a `.wrap` class would override it).
   assert.match(html, /<div class="app run">/);
   assert.doesNotMatch(html, /class="app wrap"/);
+});
+
+test('costOf counts the jobs a lane finished today even when the job reported no cost', () => {
+  const finishedAt = iso(NOW - 1000);
+  const job = (id, agent, status, extra = {}) => ({ id, agent, model: 'm', status, finishedAt, ...extra });
+  const out = costOf([{ state: { id: 'r', startedAt: iso(NOW - 5000), jobs: [job('a', 'codex', 'complete'), job('b', 'codex', 'failed'), job('c', 'cursor', 'complete'), job('d', 'anthropic', 'complete', { costUsd: 0.01 }), job('e', 'codex', 'running')] } }], NOW);
+  assert.deepEqual(out.laneJobsToday, { codex: 2, cursor: 1, anthropic: 1 });
+});
+
+test('Overview and Agents read one count; worker slots held without a running job are said, not hidden', async () => {
+  const L = await lib();
+  const m = { agents: { total: 0 }, workers: { total: 4, max: 4 } };
+  assert.deepEqual({ ...L.agentCounts(m) }, { live: 0, held: 4, unshown: 4 });
+  assert.match(L.slotsText(m), /4 worker slots are held \(4 held, 0 agents running\)/);
+  assert.equal(L.slotsText({ agents: { total: 4 }, workers: { total: 4 } }), '');
+  const board = await read('board.js');
+  assert.match(board, /L\.slotsText\(data\.machine\)/);
+  assert.match(board, /L\.agentCounts\(m\)\.held \+ ' worker slots held'/);
+});
+
+import { underfilledWaves, enrichRunEvents } from '../tools/board-data.mjs';
+test('many 1-job runs in a row warn that the waves are under-filled', () => {
+  assert.match(underfilledWaves([12, 1, 1, 1], 12), /waves under-filled: 1 job of 12 slots/);
+  assert.equal(underfilledWaves([1, 1], 12), null, 'two is not a pattern');
+  assert.equal(underfilledWaves([1, 1, 1, 8], 12), null, 'the last run was full');
+  assert.equal(underfilledWaves([1, 1, 1], 2), null, 'a small machine has no spare slots');
+});
+
+test('Events: a run row names its tickets, lane and model, pass or fail, with the reason and retries of a failure', async t => {
+  const root = await tmp(t);
+  await fs.mkdir(path.join(root, '.swarm/runs/run-9'), { recursive: true });
+  await fs.writeFile(path.join(root, '.swarm/runs/run-9/state.json'), JSON.stringify({ id: 'run-9', status: 'failed', jobs: [
+    { id: 'T-0277', agent: 'codex', model: 'gpt-6.1-sol', status: 'complete', attempts: [{ status: 'complete' }] },
+    { id: 'T-0286', agent: 'anthropic', model: 'claude-haiku-5-5', status: 'failed', error: 'tests failed: a.test.ts', attempts: [{ status: 'failed' }, { status: 'failed' }] }] }));
+  const { createLedger, writeLedger } = await import('../tools/tickets.mjs');
+  await writeLedger(root, createLedger({ scope: { name: 'S', version: 1, hash: 'a'.repeat(64) }, tickets: [{ id: 'T-0277', title: 'Staff list page', type: 'build', status: 'done', files: ['src/a.ts'], acceptance: ['x'], scopeRefs: ['R-001'], dependsOn: [], size: 'S', risk: 'low' }] }));
+  const rows = await enrichRunEvents([{ kind: 'run', run: 'run-9', projectId: 'p1', title: 'Run run-9' }, { kind: 'pr', title: 'x' }], [{ id: 'p1', root }]);
+  assert.deepEqual(rows[0].jobs.map(j => [j.id, j.title, j.lane, j.model, j.outcome, j.retries, j.reason]), [
+    ['T-0277', 'Staff list page', 'Codex', 'gpt-6.1-sol', 'pass', 0, null],
+    ['T-0286', null, 'Haiku', 'claude-haiku-5-5', 'fail', 1, 'tests failed: a.test.ts']]);
+  assert.equal(rows[1].jobs, undefined);
+  assert.equal((await enrichRunEvents([{ kind: 'run', run: '../x', projectId: 'p1', title: 't' }], [{ id: 'p1', root }]))[0].jobs, undefined, 'a bad run id is never read');
+});
+
+// The "Watch" link of every live run on the board, exactly as board.js builds it, must open a page (200): on the local board through /open/run, on the remote board (which never starts
+// a run's own page on the computer) through the run inspector.
+test('every Watch link on the board resolves, locally and on the remote board; a board older than the install says so', async t => {
+  const home = await tmp(t);
+  const { project } = await runFixture(t);
+  const env = { ...process.env, SWARM_PROJECTS_FILE: path.join(home, 'p.json'), SWARM_HISTORY_FILE: path.join(home, 'h.ndjson'), SWARM_LANES_DIR: path.join(home, 'l'), SWARM_SPEND_DIR: path.join(home, 's'), SWARM_PHONE_DIR: path.join(home, 'ph') };
+  await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({ version: 1, projects: [{ ...project, addedAt: iso(NOW), lastSeen: iso(NOW) }] }));
+  const liveRoot = await fs.realpath(project.root);
+  const live = async () => [{ runId: 'run-1', root: liveRoot, pid: process.pid, startedAt: iso(NOW - 1000) }];
+  const boardSource = await read('board.js');
+  const hrefs = (data) => {   // board.js's own link builders, run against the data the server sent
+    const box = { state: { data }, T: 'TOKEN', encodeURIComponent };
+    vm.runInNewContext(boardSource.slice(boardSource.indexOf('function runHref'), boardSource.indexOf('function link(')), box);
+    return data.projects.flatMap(p => p.live.map(r => box.watchHref(p.id, r.runId)));
+  };
+  for (const remote of [undefined, { port: 0, token: 'x', hosts: ['me.ts.net'], login: 'me@x.com' }]) {
+    const api = createBoardApi({ env, now: () => NOW, live, cacheMs: 0 });
+    const server = createWatchServer({ root: home, getRunSnapshot: async () => null, getPlanSnapshot: async () => ({ present: false }), getGallery: async () => ({ schema: 1, screens: [] }), getBoard: async () => ({ runs: [] }), board: api, indexName: 'board.html', assetDir: assets, deltaFile, commandList: [], contextCommands: () => [], ...(remote ? { remote } : {}) });
+    const { url } = await server.listen();
+    t.after(() => server.close());
+    api.setBoardUrl?.(url);
+    t.after(() => api.close());
+    const token = new URL(url).searchParams.get('t');
+    const headers = remote ? { 'tailscale-user-login': 'me@x.com' } : {};
+    const fetchPath = (p, base = url) => new Promise((resolve, reject) => http.get(new URL(p, base), { headers }, res => { let b = ''; res.on('data', d => { b += d; }); res.on('end', () => resolve({ status: res.statusCode, location: res.headers.location, body: b })); }).on('error', reject));
+    const board = JSON.parse((await fetchPath(`/api/board?scratch=1&t=${token}`)).body);
+    assert.equal(board.openRun, !remote);
+    assert.equal(typeof board.server.version, 'string');
+    assert.equal(board.server.stale, false, 'a development checkout has no install to be older than');
+    const links = hrefs(board).map(h => h.replace('TOKEN', token));
+    assert.ok(links.length > 0, 'the fixture has a live run with a Watch link');
+    for (const link of links) {
+      let res = await fetchPath(link);
+      if (res.status === 302) res = await fetchPath(res.location);   // the run's own page, on its own server (and token)
+      assert.equal(res.status, 200, `${remote ? 'remote' : 'local'} Watch link ${link} -> ${res.status}`);
+    }
+  }
+});
+
+import { versionInfo } from '../tools/server-version.mjs';
+test('a server started from an older install snapshot reports itself stale', async t => {
+  const install = await tmp(t);
+  for (const [dir, v] of [['versions/1.135.0-aaaa', '1.135.0'], ['versions/1.140.0-bbbb', '1.140.0']]) { await fs.mkdir(path.join(install, dir), { recursive: true }); await fs.writeFile(path.join(install, dir, 'package.json'), JSON.stringify({ version: v })); }
+  await fs.symlink(path.join(install, 'versions/1.140.0-bbbb'), path.join(install, 'current'));
+  const old = await versionInfo({ ownRoot: path.join(install, 'versions/1.135.0-aaaa') });
+  assert.deepEqual(old, { version: '1.135.0', installedVersion: '1.140.0', stale: true });
+  assert.equal((await versionInfo({ ownRoot: path.join(install, 'versions/1.140.0-bbbb') })).stale, false);
+  assert.equal((await versionInfo({ ownRoot: install })).installedVersion, null);
+  const board = await read('board.js');
+  assert.match(board, /data\.server && data\.server\.stale/);
+  assert.match(await read('board.html'), /id="staleBanner"/);
 });

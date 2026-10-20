@@ -51,6 +51,7 @@ export const SCOPE_USAGE = [
   '       swarm scope acceptance-review RUN   (records the per-line verdicts of an acceptance review run)',
   '       swarm scope contracts OPENAPI.json',
   '       swarm tickets ID --approve [--yes]     (a ticket made from a gallery comment is proposed: you read it, name its files, approve it; no worker runs it before)',
+  '       swarm tickets ID --clear-note | --retry-note TEXT | --reopen --reason "why"   (drop or replace the note a failed attempt left; put a done ticket back to ready, logged)',
   '       swarm tickets ID --lane auto|claude|codex|cursor|anthropic[:MODEL] | --risk low|medium|high [--yes]   (logged; an approved ledger is sealed again)',
   '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high (filter; with an ID use the --risk line above)] [--set STATUS] [--note TEXT] [--json]',
   '       swarm tickets ID --files a,b [--take-from TICKET] [--deletes x,y] [--dependencies pkg,pkg@^1] [--context c,d] [--tests t] [--acceptance "one || two"] [--add-acceptance TEXT] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
@@ -67,7 +68,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers']);
+const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const out = (text, exitCode = 0) => ({ stdout: text.endsWith('\n') ? text : `${text}\n`, exitCode });
@@ -1661,10 +1662,63 @@ async function releaseTickets(root, ids, flags) {
   } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
 }
 
+// swarm tickets T-xxxx --clear-note | --retry-note TEXT: the note a failed attempt left (it is quoted into the next attempt's prompt) can be dropped or replaced by the owner.
+async function retryNoteCommand(root, rest, flags) {
+  if (rest.length !== 1) return bad('tickets --clear-note and --retry-note need one ticket id');
+  try {
+    return await withLock(root, async () => {
+      const ledger = await readLedger(root);
+      const t = ledger.tickets.find(x => x.id === rest[0]);
+      if (!t) return out(`no ticket ${rest[0]}`, 1);
+      if (t.status === 'running') return out(`${t.id} is running: wait for the run to end first`, 1);
+      const before = t.retryNote ?? null;
+      if (flags['clear-note'] === true) delete t.retryNote;
+      else {
+        const text = String(flags['retry-note'] ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/[<>]/g, '').trim().slice(0, 600);
+        if (!text) return out('--retry-note needs the new text (use --clear-note to remove it)', 1);
+        t.retryNote = text;
+      }
+      ledger.updatedAt = new Date().toISOString();
+      await writeLedger(root, ledger);
+      await appendLog(root, { event: 'retry-note', by: 'owner', id: t.id, action: flags['clear-note'] === true ? 'cleared' : 'replaced', before: before ? String(before).slice(0, 200) : null });
+      return out(flags['clear-note'] === true ? (before ? `${t.id}: retry note cleared` : `${t.id} had no retry note`) : `${t.id}: retry note replaced`);
+    });
+  } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
+}
+
+// swarm tickets T-xxxx --reopen --reason "why": a done ticket goes back to ready (blocked if something it waits for is not done), with the reason on record. No change order needed: the
+// ticket's files and acceptance are not changed. Tickets that already built on it are not touched.
+async function reopenTicket(root, rest, flags) {
+  if (rest.length !== 1) return bad('tickets --reopen needs one ticket id');
+  const reason = typeof flags.reason === 'string' ? flags.reason.replace(/\s+/g, ' ').trim() : '';
+  if (reason.length < 10) return out('--reopen needs --reason "why" (at least 10 characters): it is written to the journal', 1);
+  try {
+    return await withLock(root, async () => {
+      const ledger = await readLedger(root);
+      const t = ledger.tickets.find(x => x.id === rest[0]);
+      if (!t) return out(`no ticket ${rest[0]}`, 1);
+      if (t.status !== 'done') return out(`${t.id} is ${t.status}, not done: only a done ticket is reopened`, 1);
+      if (t.type === 'human') return out(`${t.id} is a human ticket: it cannot be reopened by swarm`, 1);
+      const waiting = (t.dependsOn ?? []).filter(d => ledger.tickets.find(x => x.id === d)?.status !== 'done');
+      t.status = waiting.length ? 'blocked' : 'ready';
+      if (waiting.length) t.blockReason = 'dependency'; else delete t.blockReason;
+      for (const key of ['attempts', 'escalation', 'retryNote', 'retryHistory', 'runId', 'infraRetries']) delete t[key];
+      ledger.updatedAt = new Date().toISOString();
+      await writeLedger(root, ledger);
+      await appendLog(root, { event: 'reopen', by: 'owner', id: t.id, from: 'done', to: t.status, reason: reason.slice(0, 300) });
+      await refreshPlan(root);
+      const builtOn = ledger.tickets.filter(x => (x.dependsOn ?? []).includes(t.id) && x.status === 'done').map(x => x.id);
+      return out([`${t.id} reopened: now ${t.status}${waiting.length ? ` (waits on ${waiting.join(', ')})` : ''}`, ...(builtOn.length ? [`note: ${builtOn.join(', ')} are done and built on it; they were not changed`] : [])].join('\n'));
+    });
+  } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
+}
+
 export async function runTicketsCommand(root, args) {
   const { flags, rest } = parseArgs(args);
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
+  if (flags['clear-note'] === true || flags['retry-note'] !== undefined) return retryNoteCommand(root, rest, flags);
+  if (flags.reopen === true) return reopenTicket(root, rest, flags);
   if (flags['mark-deps']) return markDepsCommand(root, ledger, rest, flags);
   if (flags.release === true) return releaseTickets(root, rest, flags);
   if (flags.approve === true) return approveProposed(root, rest, flags);

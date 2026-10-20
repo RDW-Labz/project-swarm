@@ -4,6 +4,7 @@
 import fs from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import os from 'node:os';
+import nodeCrypto from 'node:crypto';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -230,6 +231,30 @@ async function ensureLocalSettingsIgnored(root){
  await fs.writeFile(destination,before+(before&&!before.endsWith('\n')?'\n':'')+'.claude/settings.local.json\n');
 }
 
+// The pointer file `.project-swarm.json` also holds the project's own profile (budget, UI, verify, migrations rule): it is never rewritten from scratch. The old file is copied to
+// `.project-swarm.json.bak-<time>` first, only `install` and `version` change, the new file is written beside it and renamed over it, and a file that is not a JSON object is refused
+// (nothing is written) instead of being replaced by a bare pointer.
+export async function writePointer(root,{install,version}){
+ const destination=await safeTarget(root,'.project-swarm.json');
+ let before=null,existing={};
+ try{before=await fs.readFile(destination,'utf8');}catch(error){if(error.code!=='ENOENT')throw error;}
+ if(before!==null){
+  try{existing=JSON.parse(before);}catch{throw Error(`.project-swarm.json in ${root} is not valid JSON; fix it by hand (a backup was not needed, nothing was changed)`);}
+  if(!existing||typeof existing!=='object'||Array.isArray(existing))throw Error(`.project-swarm.json in ${root} is not a JSON object; fix it by hand (nothing was changed)`);
+  if(existing.install===install&&existing.version===version)return {changed:false,backup:null};
+  const backup=`${destination}.bak-${Date.now()}-${nodeCrypto.randomBytes(3).toString('hex')}`;
+  await fs.writeFile(backup,before,{flag:'wx',mode:0o600});
+  const temp=`${destination}.tmp-${process.pid}-${Date.now()}`;
+  await fs.writeFile(temp,`${JSON.stringify({...existing,install,version},null,2)}\n`);
+  await fs.rename(temp,destination);
+  return {changed:true,backup};
+ }
+ const temp=`${destination}.tmp-${process.pid}-${Date.now()}`;
+ await fs.writeFile(temp,`${JSON.stringify({install,version},null,2)}\n`);
+ await fs.rename(temp,destination);
+ return {changed:true,backup:null};
+}
+
 // Links one project to a shared install instead of copying the runner into it. The project
 // gets a small pointer file; the install root keeps a deduped registry of linked projects.
 export async function installProject(targetDirectory,{source=packageRoot,agentFiles=true}={}){
@@ -237,9 +262,7 @@ export async function installProject(targetDirectory,{source=packageRoot,agentFi
  if(!(await fs.stat(root)).isDirectory())throw Error('Target must be an existing project directory');
  const installRoot=await fs.realpath(source);
  const pkg=JSON.parse(await fs.readFile(path.join(installRoot,'package.json'),'utf8'));
- const pointer={install:installRoot,version:pkg.version};
- const pointerDestination=await safeTarget(root,'.project-swarm.json');
- await fs.writeFile(pointerDestination,`${JSON.stringify(pointer,null,2)}\n`);
+ await writePointer(root,{install:installRoot,version:pkg.version});
  const registryPath=path.join(installRoot,'.swarm-projects.json');
  let registry=[];
  try{registry=JSON.parse(await fs.readFile(registryPath,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}

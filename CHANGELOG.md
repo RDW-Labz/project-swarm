@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.142.0
+
+Board fixes from the S13 run, safe project pointers, and database context for migration tickets.
+- **The Watch link works on the remote board.** `swarm remote` never starts a run's own page on the computer, so the board's `/open/run` link answered 404 there; the board now tells its page (`openRun`) and the link goes to the run inspector instead. A test opens every Watch link on the local and the remote board and checks each answers 200.
+- **A board older than the install says so.** `/api/board` reports the version the server runs, the installed one and `stale`; the board shows a banner (a board or `swarm remote` started before `swarm update` keeps the old code), and `swarm update` says to restart them.
+- **Cost tab lists every lane.** Every configured lane is listed, with the jobs it ran today and its list value (flat-rate lanes that report no cost show "not reported"); Codex and Cursor were missing.
+- **Agents and Overview agree.** One reading (`agentCounts`) feeds both, and worker slots held without a running job are named on both pages.
+- **Events rows name the work.** A run row lists its tickets (id and title), lane and model, pass or fail, and for a failure the short reason and retry count.
+- **Under-filled waves.** Three or more runs in a row with one job each, on a machine with room for four or more, show "waves under-filled: 1 job of N slots" on the project.
+- **Project pointers are safe and kept current.** Linking or updating a project rewrites `.project-swarm.json` as a whole object with only `install` and `version` changed, after copying the old file beside it and through a temp file renamed into place; a file that is not a JSON object is refused and left alone (the old relink could wipe the profile). `swarm update` now moves the version of every linked project whose pointer is behind.
+- **Database context for migration, RLS and pgTAP tickets.** They see the existing migrations (newest first, the ones named by the ticket first), `seed.sql`, `config.toml`, policy, grant and function files, and an existing pgTAP test.
+- **A retry note is not a path.** The `prompt-path-not-in-workspace` check no longer reads text quoted in the prompt as untrusted prose (a retry note, reviewer evidence, an owner comment: everything between `<<<` and `>>>`); "pr-part-*" in a sentence no longer fails a wave at planning. Only declared context and output paths are checked.
+- **`swarm tickets ID --clear-note`** drops a ticket's retry note, `--retry-note TEXT` replaces it, and **`--reopen --reason "why"`** puts a done ticket back to ready (blocked while a dependency is open) with the reason in the journal, no change order needed.
+- Backup file names of a rewritten pointer carry a random suffix (two writes in one millisecond collided).
+- Tests: `tests/pointer-safety.test.mjs`, `tests/watch-ui.test.mjs`, `tests/s13-live-bugs.test.mjs`.
+
 ## 1.141.0
 
 Two scope-quality fixes from S13.

@@ -152,6 +152,25 @@ export function buildTicketContext({
     if (examples.length) add('context', examples[0]);
   }
 
+  // A migration, RLS or pgTAP ticket sees the database as it is: the existing migrations (newest first), the functions, policies and grants they define, seed.sql, and an existing pgTAP test
+  // as an example. Without them the worker invents function signatures and policy names (found by S13: submit_request, the grants and the policies).
+  const dbTest = (Array.isArray(ticket.files) ? ticket.files : []).some((f) => /(^|\/)supabase\/tests\//.test(f)) || (ticket.type === 'test' && (Array.isArray(ticket.acceptance) ? ticket.acceptance : []).some((a) => /\b(pgtap|supabase test db)\b/i.test(String(a))));
+  if (kind === 'db' || dbTest) {
+    const sqlFiles = typeof listFiles === 'function' ? (listFiles('supabase') || []).map(norm) : [];
+    const migrations = sqlFiles.filter((f) => /^supabase\/migrations\/[^/]+\.sql$/.test(f)).sort().reverse();
+    const own = new Set([...(Array.isArray(ticket.files) ? ticket.files : []), ...(Array.isArray(ticket.tests) ? ticket.tests : [])].map(norm));
+    // Files whose name carries a word the ticket names (a function such as submit_request, a table, a policy) come first.
+    const words = new Set(`${ticket.title ?? ''} ${ticket.requirements ?? ''} ${(Array.isArray(ticket.acceptance) ? ticket.acceptance : []).join(' ')}`.toLowerCase().match(/[a-z][a-z0-9_]{5,}/g) || []);
+    const named = sqlFiles.filter((f) => /\.sql$/.test(f) && !own.has(f) && [...words].some((w) => f.toLowerCase().includes(w)));
+    for (const f of named) add('context', f);
+    for (const f of migrations.filter((m) => !own.has(m)).slice(0, limits.maxMigrations ?? 10)) add('context', f);
+    add('context', 'supabase/seed.sql');
+    add('context', 'supabase/config.toml');
+    for (const f of sqlFiles.filter((x) => /(^|\/)(policies|grants|functions)\//.test(x) && /\.sql$/.test(x) && !own.has(x)).sort()) add('context', f);
+    const pg = sqlFiles.filter((x) => /^supabase\/tests\/.+\.sql$/.test(x) && !own.has(x)).sort();
+    if (pg.length) add('context', pg[0]);
+  }
+
   // Paths named in backticks in the requirements text.
   const req = String(ticket.requirements ?? '');
   for (const m of req.matchAll(/`([^`\s]+)`/g)) {

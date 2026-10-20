@@ -140,3 +140,65 @@ test('scope check flags a ticket that gates many others, naming its shared files
   const small = checkTicketTree({ scope: { requirements: [] }, tickets: [root, ...behind.slice(0, 3)] });
   assert.ok(!small.warnings.some(x => x.code === 'gating-ticket'));
 });
+
+test('a migration, RLS or pgTAP ticket sees the existing migrations, named functions, seed.sql and an example pgTAP test', () => {
+  const files = ['supabase/migrations/0001_init.sql', 'supabase/migrations/0002_requests.sql', 'supabase/migrations/0003_submit_request.sql', 'supabase/migrations/0004_policies.sql', 'supabase/seed.sql', 'supabase/tests/old.test.sql', 'supabase/tests/mine.test.sql', 'supabase/config.toml'];
+  const have = new Set(files);
+  const base = { exists: p => have.has(p), listFiles: d => (d === 'supabase' ? files : []), sizes: {} };
+  const mig = buildTicketContext({ ticket: t('T-0030', { type: 'migration', files: ['supabase/migrations/0005_grants.sql'], title: 'Grant execute on submit_request' }), ...base });
+  assert.equal(mig.kind, 'db');
+  for (const p of ['supabase/migrations/0003_submit_request.sql', 'supabase/migrations/0004_policies.sql', 'supabase/migrations/0001_init.sql', 'supabase/seed.sql', 'supabase/config.toml']) assert.ok(mig.context.includes(p), p);
+  assert.ok(mig.context.some(p => p.startsWith('supabase/tests/')), 'an existing pgTAP test as an example');
+  assert.equal(mig.context[0] === 'supabase/migrations/0003_submit_request.sql' || mig.context.slice(0, 3).includes('supabase/migrations/0003_submit_request.sql'), true, 'the file named by the ticket comes first');
+  const pgtap = buildTicketContext({ ticket: t('T-0031', { type: 'test', files: ['supabase/tests/mine.test.sql'], acceptance: ['pgTAP: anon cannot read requests'] }), ...base });
+  for (const p of ['supabase/migrations/0004_policies.sql', 'supabase/tests/old.test.sql', 'supabase/seed.sql']) assert.ok(pgtap.context.includes(p), `pgTAP: ${p}`);
+  assert.ok(!pgtap.context.includes('supabase/tests/mine.test.sql'), 'its own test is an output, not context');
+});
+
+import { promptPathsNotInWorkspaceWarnings, validateProject } from '../tools/swarm.mjs';
+import { execFileSync } from 'node:child_process';
+import { runTicketsCommand } from '../tools/scope-commands.mjs';
+import { createLedger, writeLedger, readLedger } from '../tools/tickets.mjs';
+
+async function gitRoot(t2) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-note-'));
+  t2.after(() => fs.rm(root, { recursive: true, force: true }));
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  await fs.mkdir(path.join(root, 'pr-part-1'), { recursive: true });
+  await fs.writeFile(path.join(root, 'pr-part-1/a.txt'), 'x');
+  await fs.mkdir(path.join(root, 'src'));
+  execFileSync('git', ['add', '-A'], { cwd: root });
+  execFileSync('git', ['-c', 'user.email=a@b', '-c', 'user.name=a', 'commit', '-q', '-m', 'x'], { cwd: root });
+  return root;
+}
+
+test('a retry note or reviewer text with globs in it is never read as paths; declared paths still are', async t2 => {
+  const root = await gitRoot(t2);
+  const note = 'failed checks: tests; the old output pr-part-* and src/pr-part-*/x.ts were all removed, see tests/old/*.ts';
+  const tk = t('T-0323', { retryNote: note, status: 'ready' });
+  const manifest = ticketsToManifest([tk], { ledger: { tickets: [tk] }, contextEnv: { ...contextEnv, exists: () => false } }).manifest;
+  manifest.lanes = { cursor: { model: 'composer-2.5' }, codex: { model: 'gpt-6.1-sol' }, anthropic: { model: 'claude-haiku-5-5' } };
+  assert.match(manifest.jobs[0].prompt, /pr-part-\*/, 'the note is in the prompt, as quoted untrusted text');
+  await validateProject(root, manifest, { env: { HOME: os.tmpdir(), PATH: process.env.PATH } });
+  const job = { id: 'x', prompt: 'Look at pr-part-* now.' };
+  assert.equal((await promptPathsNotInWorkspaceWarnings(root, job, [])).length, 1, 'the same words outside a quoted note still warn');
+  assert.deepEqual(await promptPathsNotInWorkspaceWarnings(root, { id: 'x', prompt: 'Look at <<<pr-part-*>>> now.' }, []), []);
+});
+
+test('swarm tickets --clear-note / --retry-note / --reopen', async t2 => {
+  const root = await gitRoot(t2);
+  const tickets = [t('T-0001', { status: 'done', scopeRefs: ['R-001'], risk: 'low' }), t('T-0002', { status: 'blocked', retryNote: 'old failure pr-part-*', scopeRefs: ['R-001'], risk: 'low', dependsOn: ['T-0001'], blockReason: 'failure' }), t('T-0003', { status: 'running', retryNote: 'x', scopeRefs: ['R-001'], risk: 'low' })];
+  await writeLedger(root, createLedger({ scope: { name: 'S', version: 1, hash: 'a'.repeat(64) }, tickets }));
+  assert.match((await runTicketsCommand(root, ['T-0002', '--clear-note'])).stdout, /retry note cleared/);
+  assert.equal((await readLedger(root)).tickets[1].retryNote, undefined);
+  assert.match((await runTicketsCommand(root, ['T-0002', '--retry-note', 'use <b>src/a.ts</b> now'])).stdout, /replaced/);
+  assert.doesNotMatch((await readLedger(root)).tickets[1].retryNote, /[<>]/);
+  assert.match((await runTicketsCommand(root, ['T-0003', '--clear-note'])).stdout, /is running/);
+  // reopen: needs a reason, only a done ticket, goes to ready (or blocked while a dependency is open), logged
+  assert.match((await runTicketsCommand(root, ['T-0001', '--reopen'])).stdout, /needs --reason/);
+  assert.match((await runTicketsCommand(root, ['T-0002', '--reopen', '--reason', 'because the build failed once'])).stdout, /is blocked, not done/);
+  const r = await runTicketsCommand(root, ['T-0001', '--reopen', '--reason', 'the review found a wrong import path']);
+  assert.match(r.stdout, /T-0001 reopened: now ready/);
+  const after = (await readLedger(root)).tickets;
+  assert.equal(after[0].status, 'ready');
+});

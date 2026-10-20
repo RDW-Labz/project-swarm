@@ -66,6 +66,7 @@ const stageNumber = stage => { const m = /^S(\d+)$/.exec(String(stage ?? '')); r
 export function costOf(runs, now = Date.now()) {
   const startOfDay = new Date(now); startOfDay.setUTCHours(0, 0, 0, 0);
   const out = { allUsd: 0, todayUsd: 0, weekUsd: 0, paidUsd: 0, paidEstimatedUsd: 0, flatRateListUsd: 0, flatRateJobs: 0 };
+  const laneJobs = dict();    // by agent lane: how many jobs finished today, whatever they cost (a flat-rate lane may report no cost at all)
   const laneToday = dict();   // by agent lane: what jobs that finished today cost (billed lanes) or are worth at list price (flat-rate lanes)
   for (const { state } of runs) {
     out.allUsd += runTotals(state).usd;
@@ -77,6 +78,10 @@ export function costOf(runs, now = Date.now()) {
     for (const job of state.jobs ?? []) {
       if (!job || typeof job !== 'object') continue;
       const usd = num(jobSpend(job).usd);
+      if (job.agent && ['complete', 'failed', 'timeout'].includes(job.status)) {
+        const doneAt = Date.parse(job.finishedAt ?? '') || runDay;
+        if (Number.isFinite(doneAt) && doneAt >= startOfDay.getTime()) laneJobs[job.agent] = (laneJobs[job.agent] ?? 0) + 1;
+      }
       if (!usd) { if (FLAT_RATE.has(job.agent) && job.status === 'complete') out.flatRateJobs += 1; continue; }
       const at = Date.parse(job.finishedAt ?? '') || runDay;
       if (Number.isFinite(at) && at >= startOfDay.getTime() && job.agent) laneToday[job.agent] = (laneToday[job.agent] ?? 0) + usd;
@@ -86,6 +91,7 @@ export function costOf(runs, now = Date.now()) {
   }
   for (const key of Object.keys(out)) if (key.endsWith('Usd')) out[key] = Math.round(out[key] * 1e6) / 1e6;
   out.laneToday = Object.fromEntries(Object.entries(laneToday).map(([k, v]) => [k, Math.round(v * 1e6) / 1e6]));
+  out.laneJobsToday = Object.fromEntries(Object.entries(laneJobs));
   return out;
 }
 
@@ -152,10 +158,20 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     live: liveRuns.map(r => { const hit = runs.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
     agents, cost,
     spend: { usd: cost.allUsd, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached) },
+    recentJobCounts: runs.slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0)),
     lastRunAt: lastRun?.startedAt ?? null,
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
     idle: liveRuns.length === 0,
   };
+}
+
+// Many 1-job runs in a row leave the machine's slots empty (a run per ticket instead of a wave): the last three or more runs each held at most one job while the machine has room for
+// several. Returns the warning text, or null.
+export function underfilledWaves(counts, slots) {
+  if (!Array.isArray(counts) || !Number.isInteger(slots) || slots < 4) return null;
+  let streak = 0;
+  for (let i = counts.length - 1; i >= 0 && counts[i] <= 1; i -= 1) streak += 1;
+  return streak >= 3 ? `waves under-filled: 1 job of ${slots} slots (the last ${streak} runs each had 1 job); run the ready tickets as one wave` : null;
 }
 
 // The whole board: machine totals (sums of the project numbers) and one overview per registered project.
@@ -167,6 +183,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
     const mine = live.filter(r => r.root === project.root);
     overviews.push(await projectOverview(project, mine, { now, summary }));
   }
+  for (const o of overviews) { const warn = underfilledWaves(o.recentJobCounts, workers?.max); o.warnings = warn ? [{ code: 'waves-underfilled', text: warn }] : []; }
   const machine = { agents: { total: 0, byLane: dict(), byProject: dict(), list: [] }, cost: { todayUsd: 0, weekUsd: 0, allUsd: 0, paidUsd: 0, paidEstimatedUsd: 0, flatRateListUsd: 0, byProject: {} }, liveRuns: 0 };
   for (const o of overviews) {
     machine.agents.total += o.agents.total;
@@ -175,6 +192,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
     for (const [lane, n] of Object.entries(o.agents.byLane)) machine.agents.byLane[lane] = (machine.agents.byLane[lane] ?? 0) + n;
     for (const key of ['todayUsd', 'weekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] += o.cost[key];
     for (const [agent, usd] of Object.entries(o.cost.laneToday ?? {})) (machine.cost.laneToday ??= dict())[agent] = (machine.cost.laneToday[agent] ?? 0) + usd;
+    for (const [agent, n] of Object.entries(o.cost.laneJobsToday ?? {})) (machine.cost.laneJobsToday ??= dict())[agent] = (machine.cost.laneJobsToday[agent] ?? 0) + n;
     machine.cost.byProject[o.id] = { name: o.name, ...o.cost };
     machine.liveRuns += o.live.length;
   }
@@ -182,8 +200,9 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   machine.agents.byLane = plain(machine.agents.byLane);
   machine.agents.byProject = plain(machine.agents.byProject);
   if (machine.cost.laneToday) machine.cost.laneToday = plain(machine.cost.laneToday);
+  if (machine.cost.laneJobsToday) machine.cost.laneJobsToday = plain(machine.cost.laneJobsToday);
   machine.workers = workers;
-  machine.lanes = lanes ? await lanes(machine.cost.laneToday ?? {}) : [];
+  machine.lanes = lanes ? await lanes(machine.cost.laneToday ?? {}, machine.cost.laneJobsToday ?? {}) : [];
   return { at: new Date(now).toISOString(), machine, projects: overviews };
 }
 
@@ -262,9 +281,10 @@ export async function workersHeld({ dir, max = null, invalid = false, isAlive: p
 }
 
 // Per lane today: what it cost (billed lanes) or is worth at list price (flat-rate lanes), its daily cap and when the cap resets (UTC midnight, the day the
-// spend store counts by), and a rate-limit or quota pause with the time it ends. Only lanes with something to say are listed. Read-only.
+// spend store counts by), and a rate-limit or quota pause with the time it ends. Every configured lane is listed, and every lane that ran a job today, even when it reported no
+// cost (a flat-rate lane that cost nothing still ran). Read-only.
 const PAID = new Set(['openrouter', 'openai', 'gemini', 'lambda', 'anthropic', 'rented']);
-export async function laneUsage({ laneToday = {}, spendDirectory, lanesDirectory, caps = {}, now = Date.now() } = {}) {
+export async function laneUsage({ laneToday = {}, jobsToday = {}, configured = [], spendDirectory, lanesDirectory, caps = {}, now = Date.now() } = {}) {
   const day = new Date(now).toISOString().slice(0, 10);
   const midnight = Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)) + 1);
   let store = null;
@@ -272,7 +292,7 @@ export async function laneUsage({ laneToday = {}, spendDirectory, lanesDirectory
   const spent = store && typeof store.entries === 'object' && store.entries ? laneDayTotals(store, { day }) : {};
   let lanes = null;
   try { lanes = JSON.parse(await fs.readFile(path.join(lanesDirectory, 'lanes.json'), 'utf8')); } catch { /* no lane has been used */ }
-  const names = new Set([...Object.keys(laneToday), ...Object.keys(spent), ...Object.keys(caps), ...Object.keys(lanes?.pauses ?? {})]);
+  const names = new Set([...Object.keys(laneToday), ...Object.keys(jobsToday), ...configured, ...Object.keys(spent), ...Object.keys(caps), ...Object.entries(lanes?.pauses ?? {}).filter(([, v]) => Number.isFinite(v?.until) && v.until > now).map(([k]) => k)]);
   const rows = [];
   for (const agent of [...names].sort()) {
     const paid = PAID.has(agent);
@@ -280,8 +300,40 @@ export async function laneUsage({ laneToday = {}, spendDirectory, lanesDirectory
     const cap = typeof caps[agent] === 'number' && caps[agent] > 0 ? caps[agent] : null;
     const pause = lanes?.pauses?.[agent];
     const limited = pause && Number.isFinite(pause.until) && pause.until > now ? { state: txt(pause.state, 20), until: new Date(pause.until).toISOString() } : null;
-    if (!todayUsd && !cap && !limited) continue;
-    rows.push({ lane: txt(agent, 30), label: agent === 'anthropic' ? 'Anthropic API' : laneLabel(agent, null), kind: paid ? 'billed' : 'flat-rate', todayUsd, dailyCapUsd: cap, capResetsAt: cap ? new Date(midnight).toISOString() : null, limited });
+    const jobs = Number.isInteger(jobsToday[agent]) ? jobsToday[agent] : 0;
+    rows.push({ lane: txt(agent, 30), jobsToday: jobs, label: agent === 'anthropic' ? 'Anthropic API' : laneLabel(agent, null), kind: paid ? 'billed' : 'flat-rate', todayUsd, dailyCapUsd: cap, capResetsAt: cap ? new Date(midnight).toISOString() : null, limited });
   }
   return rows;
+}
+
+// Events tab: a run row names its tickets (id and title), the lane and model that built each, and whether it passed; a failed one carries its short reason and retry count. Read from the run's own
+// state file and the project's ledger at display time (the log keeps only the one-line title), never written back.
+export async function enrichRunEvents(events, projects) {
+  const byId = new Map((projects ?? []).map(p => [p.id, p]));
+  const titles = new Map();
+  const titlesOf = async project => {
+    if (!titles.has(project.id)) {
+      const ledger = await readLedger(project.root).catch(() => null);
+      titles.set(project.id, new Map((ledger?.tickets ?? []).filter(t => t && typeof t.id === 'string').map(t => [t.id, t.title])));
+    }
+    return titles.get(project.id);
+  };
+  const out = [];
+  for (const e of events) {
+    const project = byId.get(e.projectId);
+    if (e.kind !== 'run' || !e.run || !RUN_ID.test(e.run) || !project) { out.push(e); continue; }
+    try {
+      const file = path.join(project.root, '.swarm', 'runs', e.run, 'state.json');
+      if ((await fs.lstat(path.dirname(file))).isSymbolicLink()) { out.push(e); continue; }
+      const state = JSON.parse(await fs.readFile(file, 'utf8'));
+      const names = await titlesOf(project);
+      const jobs = (Array.isArray(state.jobs) ? state.jobs : []).filter(j => j && typeof j === 'object').slice(0, 8).map(j => {
+        const outcome = j.status === 'complete' ? 'pass' : ['failed', 'timeout', 'cancelled'].includes(j.status) ? 'fail' : txt(j.status, 20);
+        const attempts = Array.isArray(j.attempts) ? j.attempts.length : 1;
+        return { id: txt(j.id, 60), title: names.get(j.id) ? txt(names.get(j.id), 100) : null, lane: laneLabel(j.agent, j.model), model: txt(j.model, 60), outcome, retries: Math.max(0, attempts - 1), reason: outcome === 'fail' && j.error ? txt(j.error, 120) : null };
+      });
+      out.push({ ...e, jobs, jobCount: Array.isArray(state.jobs) ? state.jobs.length : jobs.length });
+    } catch { out.push(e); }
+  }
+  return out;
 }

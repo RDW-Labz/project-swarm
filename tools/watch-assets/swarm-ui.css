@@ -226,3 +226,5 @@ body.paused-motion *, body.paused-motion *::before, body.paused-motion *::after 
 
 .agent .run-s { color: var(--faint); font-size: 9px; }
 @media (max-width: 960px) { #pane-live .layout > aside { order: 0; } }
+
+.runjobs { display: flex; flex-direction: column; gap: 3px; flex: 1 1 100%; min-width: 0; } .runjob { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; }
