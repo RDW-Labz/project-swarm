@@ -250,7 +250,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
 }
 
 // One project's page: its tickets by status, its run history, its spend by lane and its lessons. Reads only under project.root.
-export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), historyFile = undefined } = {}) {
+export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), summary = projectSummary, historyFile = undefined } = {}) {
   const runs = await readRunStates(project.root, { limit: 200 });
   const ledger = await readLedger(project.root).catch(() => null);
   const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 1000).map(t => ({ id: txt(t.id, 20), title: txt(t.title, 140), status: txt(t.status, 20), stage: txt(t.stage, 10), risk: txt(t.risk, 10) }));
@@ -258,8 +258,9 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   for (const { state } of runs) for (const job of state.jobs ?? []) { if (!job || typeof job !== 'object') continue; const usd = num(jobSpend(job).usd); if (!usd) continue; const label = laneLabel(job.agent, job.model); byLane[label] = Math.round(((byLane[label] ?? 0) + usd) * 1e6) / 1e6; }
   const lessons = await listLessons(project.root).then(r => r.lessons.slice(0, 200).map(l => ({ id: txt(l.id, 40), what: txt(l.what ?? l.title ?? l.rule, 200), stage: txt(l.stage, 20), status: txt(l.guard?.status ?? l.status, 20) })), () => []);
   const detailCost = costOf(runs, now);
-  const detailSpend = { usd: detailCost.allUsd, capUsd: null, reached: false, why: null };
-  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend }).then(progressSummary, () => null);
+  const spend = (await summary(project.root).catch(() => ({}))) ?? {};
+  const detailSpend = { usd: spend.spendUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null };
+  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend }).catch(() => null);
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
     tickets, ticketCounts: ticketsOf(ledger),
