@@ -1801,19 +1801,40 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
     const profile = await readProfile(root);
     const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: false, maxJobs, lessons, verify: profile?.verify, quality: await qualityFor(root, profile), packageManager: packageManagerOf(profile), contextEnv: contextEnvFor(root, profile), laneModels: (() => { try { return loadLocalConfig().lanes; } catch { return undefined; } })() });
     manifest.jobs = manifest.jobs.filter(j => j.type !== 'human');
-    const ids = manifest.jobs.map(j => j.id);
+    let ids = manifest.jobs.map(j => j.id);
     if (!ids.length) throw fail('scope-nothing', humans ? `only ${humans} human ticket(s) are ready; finish them with swarm tickets ID --set done` : 'no ready tickets');
+    // A ticket no lane can take (for example tier expensive with no claude model) is left out and blocked with the reason; it must not abort the whole wave.
+    const unroutable = [];
     // A manifest the runner would refuse must not leave tickets stuck in running: it is validated before any ticket moves.
     if (typeof validate === 'function') {
       // Existing project tests that mention a ticket's files go into that job's context (so the worker sees what they assert); then it is validated again.
       for (let pass = 0; ; pass += 1) {
         try { await validate(manifest); break; } catch (error) {
+          if (error?.code === 'route-exhausted') {
+            const jobId = /for job (\S+?)(?:[;)]| \(|$)/.exec(String(error.message))?.[1];
+            if (jobId && manifest.jobs.some(j => j.id === jobId)) {
+              manifest.jobs = manifest.jobs.filter(j => j.id !== jobId);
+              // anything that waits for the dropped job cannot run in this wave either
+              for (let grew = true; grew;) { grew = false; for (const j of [...manifest.jobs]) if ((j.after ?? []).some(a => unroutable.some(u => u.id === a) || a === jobId)) { manifest.jobs = manifest.jobs.filter(x => x.id !== j.id); unroutable.push({ id: j.id, reason: `waits for ${jobId}, which no lane can take` }); grew = true; } }
+              unroutable.push({ id: jobId, reason: String(error.message) });
+              pass -= 1;
+              if (!manifest.jobs.length) throw fail('scope-nothing', `no ticket of this wave can be routed: ${unroutable.map(u => `${u.id}: ${u.reason}`).join('; ')}`);
+              continue;
+            }
+          }
           const suggested = error?.details?.suggestedIgnoreTests;
           if (!suggested || pass >= 2) throw error;
           for (const job of manifest.jobs) for (const test of (suggested[job.id] ?? []).slice(0, 6)) if (!job.context.includes(test) && !job.outputs.includes(test)) job.context.push(test);
         }
       }
     }
+    ids = manifest.jobs.map(j => j.id);
+    for (const u of unroutable) {
+      const ticket = ledger.tickets.find(x => x.id === u.id);
+      if (ticket && ['ready', 'todo'].includes(ticket.status)) { ticket.status = 'blocked'; ticket.blockReason = `unroutable: ${u.reason.slice(0, 300)}`; }
+      warnings.push(`${u.id}: left out of this wave and blocked: ${u.reason}`);
+    }
+    if (unroutable.length) await appendLog(root, { event: 'unroutable', by: 'go', tickets: unroutable.map(u => ({ id: u.id, reason: u.reason.slice(0, 300) })) });
     const before = new Map(ids.map(id => [id, ledger.tickets.find(t => t.id === id).status]));
     const waveAt = new Date(now()).toISOString();
     for (const id of ids) { const started = ledger.tickets.find(t => t.id === id); started.status = 'running'; started.waveAt = waveAt; }

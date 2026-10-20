@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.140.0
+
+Unblocks the S13 run: escalated tickets and pinned lanes plan on real wave manifests, a ticket no lane can take no longer aborts the wave, and test tickets see what they test.
+- **Escalated tickets route.** `tier expensive` (level 3) routes to `claude:opus` (the lane's `expensiveModel`), level 2 (`hard`) to Codex, level 1 to Cursor; the output limit and prompt caching are API-only and are dropped for every CLI lane, so no escalated ticket ends "no lane left (tier expensive)" and no pin fails "maxOutputTokens is API-only". Tests plan real escalated and pinned wave manifests for every level and every lane.
+- **An unroutable ticket is skipped, not fatal.** The wave builder leaves out a ticket (and anything that waits for it) that no lane can take, blocks it with the reason (`unroutable: ...`, logged) and runs the rest; `unroutableJobs` reports them.
+- **Test tickets get their context.** A ticket of type test sees the files under test (from the tickets it depends on, the tickets that list its tests, or matched by the test's name), the test runner config, `tsconfig.json` (the `@/` aliases) and one existing test as a convention example.
+- Tests: `tests/escalation-routing.test.mjs`, `tests/dogfood-fixes.test.mjs`, `tests/s13-live-bugs.test.mjs`.
+
 ## 1.139.0
 
 Six bugs from the live parts-app S13 run, and `swarm update` that waits for an idle machine.

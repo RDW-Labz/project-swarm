@@ -69,6 +69,7 @@ export function buildTicketContext({
   profileContext = {},
   limits = {},
   listFiles,
+  allTickets = [],
 } = {}) {
   const kind = classifyTicket(ticket);
   const maxFiles = limits.maxFiles ?? DEFAULT_MAX_FILES;
@@ -126,6 +127,29 @@ export function buildTicketContext({
   } else if (kind === 'api' || kind === 'test') {
     for (const p of scopeFor(kind)) add('context', p);
     for (const p of profFor(kind)) add('context', p);
+  }
+
+  // A test ticket sees what it tests: without the implementation files a small model guesses import paths. The files under test, the test runner's config (and the tsconfig with the
+  // `@/` aliases) and one existing test as a convention example.
+  if (kind === 'test') {
+    const testFiles = [...(Array.isArray(ticket.files) ? ticket.files : []), ...(Array.isArray(ticket.tests) ? ticket.tests : [])].filter((f) => typeof f === 'string' && isTestPath(f));
+    const own = new Set(testFiles.map(norm));
+    const under = new Set();
+    for (const o of Array.isArray(allTickets) ? allTickets : []) {
+      if (!o || o.id === ticket.id || o.status === 'cancelled') continue;
+      const related = (Array.isArray(ticket.dependsOn) && ticket.dependsOn.includes(o.id)) || (Array.isArray(o.tests) && o.tests.some((f) => own.has(norm(f))));
+      if (related) for (const f of Array.isArray(o.files) ? o.files : []) if (typeof f === 'string' && !f.endsWith('/') && !isTestPath(f)) under.add(norm(f));
+    }
+    const listed = typeof listFiles === 'function' ? ['src', 'app', 'lib', 'components', 'tests', 'test', '__tests__'].flatMap((d) => listFiles(d) || []).map(norm) : [];
+    for (const tf of testFiles) {
+      const stem = norm(tf).split('/').pop().replace(/\.(test|spec)\.[^.]+$/, '').replace(/\.[^.]+$/, '');
+      for (const f of listed) if (!isTestPath(f) && f.split('/').pop().replace(/\.[^.]+$/, '') === stem) under.add(f);
+    }
+    for (const f of [...under].sort()) add('context', f);
+    for (const c of ['vitest.config.ts', 'vitest.config.mts', 'vitest.config.js', 'vitest.config.mjs', 'vite.config.ts', 'vite.config.js', 'jest.config.ts', 'jest.config.js', 'tsconfig.json']) add('context', c);
+    const dirOf = (f) => f.split('/').slice(0, -1).join('/');
+    const examples = listed.filter((f) => isTestPath(f) && !own.has(f) && (/\.(test|spec)\./.test(f)) && !(sizes[f] > MAX_BYTES)).sort((a, b) => (dirOf(b) === dirOf(norm(testFiles[0] ?? '')) ? 1 : 0) - (dirOf(a) === dirOf(norm(testFiles[0] ?? '')) ? 1 : 0) || (a < b ? -1 : 1));
+    if (examples.length) add('context', examples[0]);
   }
 
   // Paths named in backticks in the requirements text.

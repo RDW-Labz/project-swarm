@@ -392,3 +392,38 @@ test('existing project tests that mention a ticket file go into its job context 
   const manifest = JSON.parse(await fs.readFile(path.join(root, wave.file), 'utf8'));
   assert.ok(manifest.jobs[0].context.includes('tests/theme.test.ts'));
 });
+
+test('a ticket no lane can take is left out of the wave and blocked with the reason; the other tickets still run', async t => {
+  const root = await project(t);
+  await approvedWith(root, { tickets: [ticket({ id: 'T-0001', files: ['src/a.ts'] }), ticket({ id: 'T-0002', files: ['src/b.ts'] })] });
+  const scopeHash = (await import('../tools/scope.mjs')).scopeHash;
+  const ledger = await readLedger(root);
+  ledger.scope.hash = scopeHash(SCOPE);
+  ledger.scope.file = 'docs/scope/scope.md';
+  ledger.approved = (await import('../tools/tickets.mjs')).approveLedger(ledger).approved;
+  await writeLedger(root, ledger);
+  await fs.mkdir(path.join(root, '.swarm/project'), { recursive: true });
+  await fs.writeFile(path.join(root, '.swarm/project/scope.snapshot.md'), SCOPE);
+  const validate = async manifest => {
+    const bad = manifest.jobs.find(j => j.id === 'T-0002');
+    if (bad) throw Object.assign(new Error('route-exhausted: no lane left for job T-0002 (tier expensive)'), { code: 'route-exhausted' });
+  };
+  const wave = await prepareScopeRun(root, { validate });
+  assert.deepEqual(wave.ids, ['T-0001']);
+  assert.ok(wave.warnings.some(w => /T-0002: left out of this wave and blocked/.test(w)));
+  const after = (await readLedger(root)).tickets;
+  assert.equal(after.find(x => x.id === 'T-0001').status, 'running');
+  const blocked = after.find(x => x.id === 'T-0002');
+  assert.equal(blocked.status, 'blocked');
+  assert.match(blocked.blockReason, /^unroutable: route-exhausted/);
+  // a wave where nothing can be routed says so instead of starting nothing silently
+  const root2 = await project(t);
+  await approvedWith(root2, { tickets: [ticket({ id: 'T-0002', files: ['src/b.ts'] })] });
+  const l2 = await readLedger(root2);
+  l2.scope.hash = scopeHash(SCOPE); l2.scope.file = 'docs/scope/scope.md';
+  l2.approved = (await import('../tools/tickets.mjs')).approveLedger(l2).approved;
+  await writeLedger(root2, l2);
+  await fs.mkdir(path.join(root2, '.swarm/project'), { recursive: true });
+  await fs.writeFile(path.join(root2, '.swarm/project/scope.snapshot.md'), SCOPE);
+  await assert.rejects(prepareScopeRun(root2, { validate }), /no ticket of this wave can be routed/);
+});

@@ -121,7 +121,7 @@ export function ticketsToManifest(tickets,opts={}){
     let autoShared=[],kind=null,mockupAdded=false;
     if(contextEnv){
       const reqText=(t.scopeRefs||[]).map(id=>reqs.get(id)).filter(Boolean).flatMap(r=>[r.text,...(r.acceptance||[])]).join('\n');
-      const built=buildTicketContext({ticket:{...t,context:expandTicketRefs(t.context||[],[...byId.values()]),requirements:reqText},scope,exists:contextEnv.exists,sizes:contextEnv.sizes,profileContext:contextEnv.profileContext,listFiles:contextEnv.listFiles,limits:contextEnv.limits});
+      const built=buildTicketContext({allTickets:[...byId.values()],ticket:{...t,context:expandTicketRefs(t.context||[],[...byId.values()]),requirements:reqText},scope,exists:contextEnv.exists,sizes:contextEnv.sizes,profileContext:contextEnv.profileContext,listFiles:contextEnv.listFiles,limits:contextEnv.limits});
       warnings.push(...built.warnings.map(w=>t.id+': '+w));
       kind=built.kind;autoShared=built.cacheContext;
       // Only the filtered paths reach the job (the ticket's own context, contracts and tests went through the same filter); the manifest contract only if it passes it.
