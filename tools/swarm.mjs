@@ -24,6 +24,7 @@ import { resolveLanes, LaneScheduler, classifyProviderOutcome, lanesDir, machine
 import { projectId } from './projects.mjs';
 import { resolveHosts, enabledHosts, createHostPool, defaultHostTransport, remoteEnv, checkPulled, isSecretPath } from './executors.mjs';
 import { initProject, checkProject, refreshRepoMap } from './init.mjs';
+import { writeRuleFiles } from './lanes-rule.mjs';
 import { summarizeMap, mapIsFresh, readRepoMap } from './repo-map.mjs';
 import { selectAffectedTests, expandAffectedArgv } from './affected.mjs';
 import { createBatchController } from './adaptive-batch.mjs';
@@ -6881,6 +6882,12 @@ const OLD_COPY_ENTRIES=['tools/swarm.mjs','tools/preflight.mjs','tools/monitor-v
 // Finds old per-project copies (a full runner+skill checkout, not this install root) and
 // stale pointers, replacing each with a pointer only once the caller passes --yes. Old files
 // are moved aside, never deleted, and coordination/ and .swarm/ are never touched.
+async function attachRuleFiles(report,projectRoot,yes){
+  if(!yes||report.action==='missing'||report.action==='would replace with pointer')return;
+  try{report.ruleFiles=await writeRuleFiles(projectRoot);}
+  catch(error){report.ruleFilesError=String(error.message);}
+}
+
 export async function updateProjects(root,{projects,yes=false}={}){
   root=await fs.realpath(root);
   const version=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8')).version;
@@ -6898,7 +6905,12 @@ export async function updateProjects(root,{projects,yes=false}={}){
     let pointerVersion=null;
     try{pointerVersion=JSON.parse(await fs.readFile(path.join(project,'.project-swarm.json'),'utf8')).version;}catch{pointerVersion=null;}
     if(pointerVersion&&pointerVersion!==version)found.push('stale-pointer');
-    if(!found.length){reports.push({project,found,action:'up-to-date'});continue;}
+    if(!found.length){
+      const report={project,found,action:'up-to-date'};
+      await attachRuleFiles(report,project,yes);
+      reports.push(report);
+      continue;
+    }
     if(!yes){reports.push({project,found,action:'would replace with pointer'});continue;}
     let backup=null;
     if(isOldCopy){
@@ -6914,7 +6926,9 @@ export async function updateProjects(root,{projects,yes=false}={}){
     }
     const {writePointer}=await import('./install.mjs');
     const written=await writePointer(project,{install:root,version});
-    reports.push({project,found,action:'replaced',backup,pointerBackup:written.backup});
+    const report={project,found,action:'replaced',backup,pointerBackup:written.backup};
+    await attachRuleFiles(report,project,yes);
+    reports.push(report);
   }
   return {projects:reports};
 }
