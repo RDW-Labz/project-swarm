@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "test-isolation-guard",
+      "agent": "auto",
+      "prompt": "Item M: tests must never touch the machine's real lane claims, spend store or config. tests/_isolate-config.mjs already isolates the config when the suite is run through npm test (node --import ./tests/_isolate-config.mjs --test), but a test file run directly with node --test skips that import and then reads and writes the real machine state (a direct run waited for 40 minutes on a lane claim held by another live run). Add a runtime guard. Create tools/test-isolation.mjs (SPDX header, ES module) exporting assertTestIsolation(what, env = process.env) which throws an Error whose message starts with test-not-isolated and says which resource was about to use a real machine path and that tests must run through npm test or with node --import ./tests/_isolate-config.mjs --test, but only when env.NODE_TEST_CONTEXT is set (node sets it inside test child processes) and env.SWARM_TEST_ISOLATED is not set; outside of node --test it never throws. Make tests/_isolate-config.mjs set process.env.SWARM_TEST_ISOLATED to 1 (so child processes inherit it). Call assertTestIsolation at the point where each of these resolves a REAL machine path because no override is present: the machine config path in tools/local-config.mjs (when SWARM_CONFIG is not set), the spend directory in tools/spend.mjs spendDir (when SWARM_SPEND_DIR is not set), the shared lane claims or machine state directory in tools/lanes.mjs (find where the cross-process claims directory is chosen and add the call when no override env var is set), and the live-run directory in tools/board.mjs liveDir (when its override env var is not set). Do not change behavior outside node --test. Add tests/isolation-check.test.mjs (node:test, strict assert) that: spawns a child node --test run of a tiny temporary test file that calls assertTestIsolation without the flag and expects the failure text; spawns the same child with SWARM_TEST_ISOLATED set and expects success; asserts package.json scripts.test contains --import ./tests/_isolate-config.mjs; asserts the CI workflow file .github/workflows/ci.yml runs npm test; and asserts assertTestIsolation never throws when NODE_TEST_CONTEXT is unset. Write only tools/test-isolation.mjs, tools/local-config.mjs, tools/spend.mjs, tools/lanes.mjs, tools/board.mjs, tests/_isolate-config.mjs and tests/isolation-check.test.mjs.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/local-config.mjs",
+        "tools/spend.mjs",
+        "tools/lanes.mjs",
+        "tools/board.mjs",
+        "package.json",
+        ".github/workflows/ci.yml"
+      ],
+      "outputs": [
+        "tools/test-isolation.mjs",
+        "tools/local-config.mjs",
+        "tools/spend.mjs",
+        "tools/lanes.mjs",
+        "tools/board.mjs",
+        "tests/_isolate-config.mjs",
+        "tests/isolation-check.test.mjs"
+      ],
+      "timeoutMs": 1500000,
+      "ignoreTests": [
+        "tests/api-short-report.test.mjs",
+        "tests/batch-run.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/config-private-names.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-m2.test.mjs",
+        "tests/field-lessons-batch-m3.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/field-lessons-batch-w.test.mjs",
+        "tests/flat-rate-reserve.test.mjs",
+        "tests/gpu.test.mjs",
+        "tests/hard-cap.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/lanes.test.mjs",
+        "tests/leads-run.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/phase12-cli.test.mjs",
+        "tests/phase14.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/rented-run.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/sandbox-tmp.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tests/spend.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/verify-orb.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}
