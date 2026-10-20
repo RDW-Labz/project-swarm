@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Paths the swarm uses for routing and coordination: never hand-built edits and never blocked by the guard.
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 export const ROUTING_RULE = 'Routing files (manifests, handoffs, plans, and swarm state under coordination/ and docs/state/) are updated by the swarm, not by hand.';
 
 const norm = p => String(p).replace(/\\/g, '/');
@@ -23,4 +26,34 @@ export function isRoutingPath(rel) {
   if (lower === 'docs/state/eval-scores.ndjson') return true;
   if (lower === 'coordination/swarm-lessons.jsonl') return true;
   return false;
+}
+
+const realOf = p => {
+  let cur = p;
+  const tail = [];
+  for (let i = 0; i < 64; i += 1) {
+    try { return path.join(fs.realpathSync.native(cur), ...tail.reverse()); } catch {
+      const up = path.dirname(cur);
+      if (up === cur) return p;
+      tail.push(path.basename(cur));
+      cur = up;
+    }
+  }
+  return p;
+};
+
+const insideProject = (root, file) => {
+  if (typeof file !== 'string' || !file) return null;
+  const abs = path.isAbsolute(file) ? path.resolve(file) : path.resolve(root, file);
+  const rel = norm(path.relative(realOf(root), realOf(abs)));
+  return !rel.startsWith('../') && rel !== '..' && !path.isAbsolute(rel) ? rel : null;
+};
+
+/** After resolving symlinks, `rel` must stay in the project and still match a routing path. */
+export function isRoutingPathResolved(root, rel) {
+  if (!isRoutingPath(rel)) return false;
+  const abs = path.isAbsolute(rel) ? path.resolve(rel) : path.join(root, rel);
+  const resolved = realOf(abs);
+  const inner = insideProject(root, resolved);
+  return inner !== null && isRoutingPath(inner);
 }

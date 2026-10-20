@@ -32,19 +32,22 @@ test('tokenizer records per-word expansion inside double quotes', () => {
   assert.equal(w2.expands[w2.indexOf('literal $HOME')], false);
 });
 
+const op = (extra, base) => ({ args: [], globalOpts: false, hasConfig: false, ...base, ...extra });
+
 test('ops describe git, gh, vercel, and swarm commands', () => {
-  assert.deepEqual(a('git push --force origin x').ops[0], { tool: 'git', sub: 'push', flags: ['--force'], branch: 'x', force: true, delete: null });
-  assert.deepEqual(a('git push origin main').ops[0], { tool: 'git', sub: 'push', flags: [], branch: 'main', force: false, delete: null });
-  assert.deepEqual(a('git push origin HEAD:refs/heads/feat').ops[0], { tool: 'git', sub: 'push', flags: [], branch: 'refs/heads/feat', force: false, delete: null });
-  assert.deepEqual(a('git branch -d a').ops[0], { tool: 'git', sub: 'branch', flags: ['-d'], branch: 'a', force: false, delete: 'safe' });
-  assert.deepEqual(a('git branch -D a').ops[0], { tool: 'git', sub: 'branch', flags: ['-D'], branch: 'a', force: false, delete: 'force' });
-  assert.deepEqual(a('git commit -m x').ops[0], { tool: 'git', sub: 'commit', flags: ['-m'], branch: null, force: false, delete: null });
-  assert.deepEqual(a('git fetch').ops[0], { tool: 'git', sub: 'fetch', flags: [], branch: null, force: false, delete: null });
-  assert.deepEqual(a('git rebase origin/main').ops[0], { tool: 'git', sub: 'rebase', flags: [], branch: 'origin/main', force: false, delete: null });
-  assert.deepEqual(a('gh pr create --title t').ops[0], { tool: 'gh', sub: 'pr create', flags: ['--title'], branch: null, force: false, delete: null, target: null });
-  assert.deepEqual(a('gh pr merge 5').ops[0], { tool: 'gh', sub: 'pr merge', flags: [], branch: null, force: false, delete: null, target: '5' });
-  assert.deepEqual(a('gh pr checks 5').ops[0], { tool: 'gh', sub: 'pr checks', flags: [], branch: null, force: false, delete: null, target: null });
-  assert.deepEqual(a('gh run watch 1').ops[0], { tool: 'gh', sub: 'run watch', flags: [], branch: null, force: false, delete: null, target: null });
-  assert.deepEqual(a('vercel --prod').ops[0], { tool: 'vercel', sub: 'deploy', flags: ['--prod'], branch: null, force: false, delete: null });
-  assert.deepEqual(a('swarm merge 5').ops[0], { tool: 'swarm', sub: 'merge', flags: [], branch: null, force: false, delete: null, target: '5' });
+  assert.deepEqual(a('git push --force origin x').ops[0], op({ args: ['origin', 'x'] }, { tool: 'git', sub: 'push', flags: ['--force'], branch: 'x', force: true, delete: null }));
+  assert.deepEqual(a('git push origin main').ops[0], op({ args: ['origin', 'main'] }, { tool: 'git', sub: 'push', flags: [], branch: 'main', force: false, delete: null }));
+  assert.deepEqual(a('git push origin HEAD:refs/heads/feat').ops[0], op({ args: ['origin', 'HEAD:refs/heads/feat'] }, { tool: 'git', sub: 'push', flags: [], branch: 'feat', force: false, delete: null }));
+  assert.deepEqual(a('git branch -d a').ops[0], op({ args: [] }, { tool: 'git', sub: 'branch', flags: ['-d'], branch: 'a', force: false, delete: 'safe' }));
+  assert.deepEqual(a('git branch -D a').ops[0], op({ args: [] }, { tool: 'git', sub: 'branch', flags: ['-D'], branch: 'a', force: false, delete: 'force' }));
+  assert.deepEqual(a('git commit -m x').ops[0], op({ args: ['x'] }, { tool: 'git', sub: 'commit', flags: ['-m'], branch: null, force: false, delete: null }));
+  assert.deepEqual(a('git fetch').ops[0], op({}, { tool: 'git', sub: 'fetch', flags: [], branch: null, force: false, delete: null }));
+  assert.deepEqual(a('git rebase origin/main').ops[0], op({ args: ['origin/main'] }, { tool: 'git', sub: 'rebase', flags: [], branch: 'origin/main', force: false, delete: null }));
+  assert.deepEqual(a('gh pr create --title t').ops[0], op({ args: ['t'] }, { tool: 'gh', sub: 'pr create', flags: ['--title'], branch: null, force: false, delete: null, target: null }));
+  assert.deepEqual(a('gh pr merge 5').ops[0], op({ args: [] }, { tool: 'gh', sub: 'pr merge', flags: [], branch: null, force: false, delete: null, target: '5' }));
+  assert.deepEqual(a('gh pr checks 5').ops[0], op({ args: ['5'] }, { tool: 'gh', sub: 'pr checks', flags: [], branch: null, force: false, delete: null, target: null }));
+  assert.deepEqual(a('gh run watch 1').ops[0], op({ args: ['1'] }, { tool: 'gh', sub: 'run watch', flags: [], branch: null, force: false, delete: null, target: null }));
+  assert.deepEqual(a('vercel --prod').ops[0], op({ args: [], globalOpts: true }, { tool: 'vercel', sub: 'deploy', flags: ['--prod'], branch: null, force: false, delete: null }));
+  assert.deepEqual(a('swarm merge 5').ops[0], op({ args: [] }, { tool: 'swarm', sub: 'merge', flags: [], branch: null, force: false, delete: null, target: '5' }));
+  assert.equal(a('swarm tickets T-1 --set done').ops[0].sub, 'tickets');
 });

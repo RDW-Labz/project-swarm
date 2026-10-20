@@ -65,9 +65,23 @@ export function isHandBuilt(tool, relPath) {
 
 const isPlausibleWriteTarget = w => {
   const s = String(w ?? '');
-  return s.length > 0 && !/[\s"'$`]/.test(s);
+  return s.length > 0 && !/[\n\r]/.test(s);
 };
-const isScratchpadPath = rel => norm(rel).toLowerCase().split('/').includes('scratchpad');
+const isSessionScratchpadPath = (file, home = os.homedir()) => {
+  if (typeof file !== 'string' || !file) return false;
+  const expanded = file.startsWith('~/') ? path.join(home, file.slice(2)) : file;
+  const abs = path.isAbsolute(expanded) ? path.resolve(expanded) : null;
+  if (!abs) return false;
+  const tmp = os.tmpdir();
+  const n = norm(abs);
+  const tmpNorm = norm(tmp);
+  if (!(n === tmpNorm || n.startsWith(`${tmpNorm}/`))) return false;
+  const parts = n.split('/');
+  for (let i = 0; i < parts.length; i += 1) {
+    if (parts[i].startsWith('claude-') && parts[i + 1] === 'scratchpad') return true;
+  }
+  return false;
+};
 const isClaudeMemoryPath = (file, home = os.homedir()) => {
   if (typeof file !== 'string' || !file) return false;
   const expanded = file.startsWith('~/') ? path.join(home, file.slice(2)) : file;
@@ -81,10 +95,11 @@ const isClaudeMemoryPath = (file, home = os.homedir()) => {
 /** Whether a shell-analyzer write path counts toward hand-built (bf may still list every write). */
 function bashWriteCountsAsHandBuilt(root, write, home = os.homedir()) {
   if (!isPlausibleWriteTarget(write)) return false;
+  if (isSessionScratchpadPath(write, home)) return false;
   if (isClaudeMemoryPath(write, home)) return false;
-  const rel = insideProject(root, write);
+  const abs = path.isAbsolute(write) ? path.resolve(write) : path.resolve(root, write);
+  const rel = insideProject(root, abs);
   if (rel === null) return false;
-  if (isScratchpadPath(rel)) return false;
   return isHandBuilt('Write', rel);
 }
 

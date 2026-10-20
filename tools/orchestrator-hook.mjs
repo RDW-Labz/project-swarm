@@ -17,14 +17,20 @@ process.stdin.on('end', () => {
     if (root) {
       const event = buildEvent(kind, input, { root, analyze: analyzeShell });
       if (event) appendEvent(root, event);
-      if (kind === 'prompt') {
+      if (kind === 'prompt' && input.hook_event_name === 'UserPromptSubmit') {
         try {
           const prompt = typeof input.prompt === 'string' ? input.prompt : (typeof input.user_prompt === 'string' ? input.user_prompt : '');
-          let recorded = 0;
-          for (const line of prompt.split('\n')) {
-            if (recorded >= 5) break;
-            const m = line.match(/^\s*(?:(?:\d+\.|[-*])\s+)?merge\s+#?(\d+)\s*$/i);
-            if (m) { recordChatMerge(root, m[1], { now: Date.now }); recorded += 1; }
+          const trimmed = prompt.trim();
+          if (!trimmed.includes('\n') && !trimmed.includes('\r')) {
+            const patterns = [
+              /^merge\s+#?(\d{1,6})$/i,
+              /^merge\s+pr\s+#?(\d{1,6})$/i,
+              /^merge\s+pull\s+request\s+#?(\d{1,6})$/i,
+            ];
+            for (const re of patterns) {
+              const m = trimmed.match(re);
+              if (m) { recordChatMerge(root, m[1], { now: Date.now }); break; }
+            }
           }
         } catch { /* never throw from the hook */ }
       }

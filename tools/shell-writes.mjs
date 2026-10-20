@@ -98,21 +98,46 @@ export function tokenize(command) {
   return commands;
 }
 
-const gitPushOp = rest => {
-  const flags = rest.filter(a => a.startsWith('-'));
-  const pos = rest.filter(a => a !== '' && !a.startsWith('-'));
-  let force = flags.some(a => a === '--force' || a === '-f' || a === '--force-with-lease' || a === '--force-if-includes')
-    || pos.some(a => a.startsWith('+'));
-  let branch = null;
-  for (const a of pos) {
-    if (a.startsWith('+')) { const spec = a.slice(1); branch = spec.includes(':') ? spec.split(':').pop() : spec; }
-    else if (a.includes(':')) branch = a.split(':').pop();
-    else if (a !== 'origin' && a !== 'HEAD') branch = a;
-  }
-  return { tool: 'git', sub: 'push', flags, branch, force, delete: null };
+const normBranch = b => {
+  if (b == null) return null;
+  const s = String(b);
+  return s.startsWith('refs/heads/') ? s.slice('refs/heads/'.length) : s;
 };
 
-const gitBranchOp = rest => {
+const CONFIG_ANYWHERE = new Set(['-c', '--config', '--output', '--exec', '-x', '--exec-path', '--upload-pack', '--receive-pack', '--ext-diff']);
+const hasConfigInArgs = args => args.some(a => CONFIG_ANYWHERE.has(a) || a.startsWith('--config=') || a.startsWith('--output='));
+
+const opFields = (op, { args: opArgs, globalOpts, allArgs }) => ({
+  ...op,
+  args: opArgs,
+  globalOpts: !!globalOpts,
+  hasConfig: hasConfigInArgs(allArgs ?? []),
+});
+
+const shortFlagHas = (flag, ch) => flag.startsWith('-') && !flag.startsWith('--') && flag.slice(1).includes(ch);
+
+const gitPushOp = (rest, meta = {}) => {
+  const flags = rest.filter(a => a.startsWith('-'));
+  const pos = rest.filter(a => a !== '' && !a.startsWith('-'));
+  let force = flags.some(a => a === '--force' || a === '-f' || a === '--force-with-lease' || a === '--force-if-includes' || a.startsWith('--force-with-lease=') || shortFlagHas(a, 'f'))
+    || pos.some(a => a.startsWith('+'));
+  let deleteMode = null;
+  if (rest.some(a => a === '--delete' || a === '-d')) deleteMode = 'remote';
+  let branch = null;
+  for (const a of pos) {
+    if (a.startsWith('+')) { const spec = a.slice(1); branch = normBranch(spec.includes(':') ? spec.split(':').pop() : spec); }
+    else if (a.startsWith(':') && a.length > 1) { deleteMode = 'remote'; branch = normBranch(a.slice(1)); }
+    else if (a.includes(':')) {
+      const rhs = a.split(':').pop();
+      if (rhs === '') deleteMode = 'remote';
+      else branch = normBranch(rhs);
+    }
+    else if (a !== 'origin' && a !== 'HEAD') branch = normBranch(a);
+  }
+  return opFields({ tool: 'git', sub: 'push', flags, branch, force, delete: deleteMode }, { ...meta, args: pos });
+};
+
+const gitBranchOp = (rest, meta = {}) => {
   const flags = rest.filter(a => a.startsWith('-'));
   const pos = rest.filter(a => a !== '' && !a.startsWith('-'));
   let deleteMode = null;
@@ -121,35 +146,80 @@ const gitBranchOp = rest => {
   else if (rest.some(a => a === '-d' && (rest.includes('-f') || rest.includes('--force')))) deleteMode = 'force';
   else if (rest.some(a => a === '-d' || a === '--delete')) deleteMode = 'safe';
   const branch = pos[0] ?? null;
-  return { tool: 'git', sub: 'branch', flags, branch, force: false, delete: deleteMode };
+  return opFields({ tool: 'git', sub: 'branch', flags, branch, force: false, delete: deleteMode }, { ...meta, args: pos.slice(1) });
 };
 
 const gitOpFromArgs = args => {
   let sub = null, at = -1;
   const preFlags = [];
+  let globalOpts = false;
   for (let j = 0; j < args.length; j += 1) {
-    if (args[j] === '-C') { j += 1; continue; }
-    if (args[j] === '-c' || args[j] === '--config-env') { j += 1; continue; }
-    if (['--git-dir', '--work-tree', '--namespace'].includes(args[j])) { j += 1; continue; }
+    if (args[j] === '-C') { globalOpts = true; j += 1; continue; }
+    if (args[j] === '-c' || args[j] === '--config-env') { globalOpts = true; j += 1; continue; }
+    if (['--git-dir', '--work-tree', '--namespace'].includes(args[j])) { globalOpts = true; j += 1; continue; }
     if (!args[j].startsWith('-')) { sub = args[j]; at = j; break; }
     preFlags.push(args[j]);
+    if (preFlags.length) globalOpts = true;
   }
   const rest = at === -1 ? [] : args.slice(at + 1);
   const flags = [...preFlags, ...rest.filter(a => a.startsWith('-'))];
-  if (sub === 'push') return gitPushOp(rest);
-  if (sub === 'branch') return gitBranchOp(rest);
+  const meta = { args: rest.filter(a => a !== '' && !a.startsWith('-')), globalOpts, allArgs: args };
+  if (sub === 'push') return gitPushOp(rest, meta);
+  if (sub === 'branch') return gitBranchOp(rest, meta);
   const pos = rest.filter(a => a !== '' && !a.startsWith('-'));
   let branch = null;
   if (sub === 'rebase' && pos[0]) branch = pos[0];
-  return { tool: 'git', sub, flags, branch, force: false, delete: null };
+  return opFields({ tool: 'git', sub, flags, branch, force: false, delete: null }, { ...meta, args: pos });
+};
+
+const ghSkipGlobal = args => {
+  let globalOpts = false;
+  let i = 0;
+  for (; i < args.length; i += 1) {
+    const a = args[i];
+    if (!a.startsWith('-')) break;
+    globalOpts = true;
+    if (a === '-R' || a === '--repo') { i += 1; continue; }
+  }
+  return { globalOpts, rest: args.slice(i) };
 };
 
 const ghOpFromArgs = args => {
+  const { globalOpts, rest } = ghSkipGlobal(args);
   const flags = args.filter(a => a.startsWith('-'));
-  const pos = args.filter(a => a !== '' && !a.startsWith('-'));
+  const pos = rest.filter(a => a !== '' && !a.startsWith('-'));
   const sub = pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null;
   const target = sub === 'pr merge' && pos[2] !== undefined ? String(pos[2]) : null;
-  return { tool: 'gh', sub, flags, branch: null, force: false, delete: null, target };
+  const opArgs = sub === 'pr merge' ? pos.slice(3) : pos.length >= 2 ? pos.slice(2) : pos.slice(1);
+  return opFields({ tool: 'gh', sub, flags, branch: null, force: false, delete: null, target }, { args: opArgs, globalOpts, allArgs: args });
+};
+
+const vercelOpFromArgs = args => {
+  let globalOpts = false;
+  let i = 0;
+  for (; i < args.length; i += 1) {
+    const a = args[i];
+    if (!a.startsWith('-')) break;
+    globalOpts = true;
+    if (a === '--token' || a === '--scope') { i += 1; continue; }
+    if (a === '-t' && args[i + 1] !== undefined && !args[i + 1].startsWith('-')) { i += 1; continue; }
+  }
+  const rest = args.slice(i);
+  const pos = rest.filter(a => a !== '' && !a.startsWith('-'));
+  let sub = pos[0] ?? 'deploy';
+  if (args.length === 0 || args.every(a => a.startsWith('-')) || args.some(a => a === '--prod')) sub = 'deploy';
+  const opArgs = sub === pos[0] ? pos.slice(1) : pos;
+  const flags = args.filter(a => a.startsWith('-'));
+  return opFields({ tool: 'vercel', sub, flags, branch: null, force: false, delete: null }, { args: opArgs, globalOpts, allArgs: args });
+};
+
+const swarmOpFromArgs = args => {
+  const pos = args.filter(a => a !== '' && !a.startsWith('-'));
+  const sub = pos[0] ?? null;
+  const flags = args.filter(a => a.startsWith('-'));
+  const target = sub === 'merge' && pos[1] !== undefined ? String(pos[1]) : null;
+  const opArgs = sub === 'merge' ? pos.slice(2) : pos.slice(1);
+  return opFields({ tool: 'swarm', sub, flags, branch: null, force: false, delete: null, target }, { args: opArgs, globalOpts: false, allArgs: args });
 };
 
 /** The text inside $(...) and `...` (one level, not inside single quotes), so a command run by substitution is read too. */
@@ -193,7 +263,7 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
   const writes = new Set(), git = new Set(), protectedOutside = new Set(), outsideDeletes = new Set(), ops = [];
   let inline = false, unknown = false, selfApproval = false;
   let here = cwd;           // the directory relative paths mean: `cd DIR` moves it, an unreadable cd makes it unknown
-  const heres = [cwd];      // every place a relative path may mean (a cd may not happen: the old ones stay)
+  const heres = [...new Set([cwd, root].map(d => path.resolve(d)))];      // relative paths may mean cwd or the project root
   let hereKnown = true;
   const merge = r => { r.writes.forEach(w => writes.add(w)); r.git.forEach(g => git.add(g)); r.protectedOutside.forEach(p => protectedOutside.add(p)); (r.outsideDeletes ?? []).forEach(p => outsideDeletes.add(p)); (r.ops ?? []).forEach(o => ops.push(o)); inline ||= r.inline; unknown ||= r.unknown; selfApproval ||= r.selfApproval; };
   // The orchestrator's own folders and build output are free to write, except the guard's own state, and never the folders that contain it (.swarm itself).
@@ -225,7 +295,16 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
     // the protected path, what lies under it, and the folders that contain it (removing or moving them removes it)
     return a === pre || a.startsWith(`${pre}/`) || (pre.startsWith(`${a}/`) && a !== '/');
   }));
+  const globPatternUnknown = (raw, expands = false) => {
+    if (!/[*?\[{]/.test(String(raw))) return false;
+    const fixed = String(raw).replace(/[*?\[{].*$/, '');
+    const rs = resolveAll(fixed || '.', expands);
+    const free = rs.every(r => r.skip || (r.rel !== undefined && r.rel !== '' && allowedRel(r.rel) && !String(raw).split('/').includes('..') && !lowerRel(r.rel).startsWith('.swarm/handbuild') && lowerRel(r.rel) !== '.swarm')) && /\/$/.test(fixed);
+    if (!free) { unknown = true; return true; }
+    return false;
+  };
   const target = (raw, expands = false) => {
+    if (expands) { unknown = true; return; }
     // a pattern as a write target can reach files the guard cannot name: only a pattern inside a free folder (build output, .swarm/ minus the guard's state) is allowed
     if (/[*?\[{]/.test(String(raw))) {
       const fixed = String(raw).replace(/[*?\[{].*$/, '');
@@ -309,6 +388,7 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
       if (r.unknown || r.skip) hereKnown = false;
       else {
         const dir = r.outside ? r.abs : path.resolve(root, r.rel);
+        if (!fsExists(dir)) hereKnown = false;
         // `cd DIR && ...` with DIR present: the next commands really run there; any other cd may not happen, so the old place stays a candidate
         const cdSure = fsExists(dir) || (words.sepAfter === '&&' && r.outside && path.isAbsolute(dir));
         if (words.sepAfter === '&&' && cdSure) { here = dir; heres.length = 0; heres.push(dir); }
@@ -322,12 +402,26 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
     }
     if (cmd === 'eval') { recurse(args.join(' ')); continue; }
     if (cmd === 'find' && args.some(a => ['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprintf', '-fls'].includes(a))) {
+      const searchPaths = [];
+      for (let fj = 0; fj < args.length; fj += 1) {
+        const fa = args[fj];
+        if (fa.startsWith('-')) break;
+        if (fa !== '') searchPaths.push({ p: fa, exp: argExp[fj] ?? false });
+      }
+      const execRm = () => {
+        const at = args.findIndex(a => a === '-exec' || a === '-execdir' || a === '-ok' || a === '-okdir');
+        if (at === -1) return false;
+        const inner = args.slice(at + 1).filter(a => a !== ';' && a !== '+' && a !== '\\;');
+        return inner.some(a => path.basename(a) === 'rm' || WRITERS.has(path.basename(a)));
+      };
+      if ((args.includes('-delete') || execRm()) && searchPaths.length === 0) unknown = true;
       const at = args.findIndex(a => a === '-exec' || a === '-execdir' || a === '-ok' || a === '-okdir');
       if (at !== -1) { const inner = args.slice(at + 1).filter(a => a !== ';' && a !== '+' && a !== '\\;'); recurse(inner.join(' ')); if (inner.some(a => WRITERS.has(path.basename(a)) || isInterpreter(path.basename(a)))) unknown = true; }
       else if (args.includes('-delete')) {
-        const pos = args.filter(a => a !== '' && !a.startsWith('-'));
-        for (const p of pos) {
-          for (const r of resolveAll(p, false)) {
+        for (const { p, exp } of searchPaths) {
+          if (exp) { unknown = true; continue; }
+          if (globPatternUnknown(p, exp)) continue;
+          for (const r of resolveAll(p, exp)) {
             if (r.unknown) { unknown = true; continue; }
             if (r.outside) { outsideDeletes.add(r.abs); if (isProtectedAbs(r)) protectedOutside.add(r.abs); }
             else if (r.rel !== undefined && !allowedRel(r.rel)) writes.add(r.rel === '' ? '.' : r.rel);
@@ -369,6 +463,14 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
       if (cmd === 'ln' && operands.length >= 2) target(operands[0], operandExp[0]);
     } else if (['rm', 'rmdir', 'unlink'].includes(cmd)) {
       operands.forEach((o, oi) => {
+        if (operandExp[oi]) { unknown = true; return; }
+        if (globPatternUnknown(o, operandExp[oi])) {
+          const fixed = String(o).replace(/[*?\[{].*$/, '');
+          for (const r of resolveAll(fixed || '.', operandExp[oi])) {
+            if (r.outside && isProtectedAbs(r)) protectedOutside.add(r.abs);
+          }
+          return;
+        }
         for (const r of resolveAll(o, operandExp[oi])) {
           if (r.unknown) { unknown = true; continue; }
           if (r.outside) { outsideDeletes.add(r.abs); if (isProtectedAbs(r)) protectedOutside.add(r.abs); continue; }
@@ -377,7 +479,12 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
       });
     } else if (['touch', 'mkdir', 'truncate', 'chmod', 'chown', 'ed', 'ex'].includes(cmd)) operands.forEach((o, oi) => target(o, operandExp[oi]));
     else if (cmd === 'patch') { const explicit = operands.length >= 1; if (!explicit) unknown = true; else operands.forEach((o, oi) => target(o, operandExp[oi])); }
-    else if (cmd === 'dd') args.filter(a => a.startsWith('of=')).forEach(a => target(a.slice(3)));
+    else if (cmd === 'dd') {
+      for (let dj = 0; dj < args.length; dj += 1) {
+        const a = args[dj];
+        if (a.startsWith('of=')) target(a.slice(3), argExp[dj] ?? false);
+      }
+    }
     else if (cmd === 'curl' || cmd === 'wget') {
       let named = false;
       for (let j = 0; j < args.length; j += 1) {
@@ -424,10 +531,10 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
       else git.add(sub);
     } else if (cmd === 'gh') {
       ops.push(ghOpFromArgs(args));
-    } else if (cmd === 'vercel' && (args.length === 0 || args.some(a => a === 'deploy' || a === '--prod') || args.every(a => a.startsWith('-')))) {
-      ops.push({ tool: 'vercel', sub: 'deploy', flags: args.filter(a => a.startsWith('-')), branch: null, force: false, delete: null });
-    } else if (cmd === 'swarm' && operands[0] === 'merge') {
-      ops.push({ tool: 'swarm', sub: 'merge', flags: args.filter(a => a.startsWith('-')), branch: null, force: false, delete: null, target: operands[1] !== undefined ? String(operands[1]) : null });
+    } else if (cmd === 'vercel') {
+      ops.push(vercelOpFromArgs(args));
+    } else if (cmd === 'swarm') {
+      ops.push(swarmOpFromArgs(args));
     } else if (isInterpreter(cmd)) {
       const isCode = codeFlagFor(cmd);
       const at = args.findIndex(isCode);

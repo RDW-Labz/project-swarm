@@ -58,7 +58,8 @@ test('isHandBuilt and buildEvent respect routing and shell write filters', async
   assert.equal(ev(['coordination/manifests/a.json']).hb, undefined);
   assert.deepEqual(ev(['coordination/manifests/a.json']).bf, ['coordination/manifests/a.json']);
   assert.equal(ev(['tools/a.mjs']).hb, 1);
-  assert.equal(ev(['a b', 'x$y']).hb, undefined);
+  assert.equal(ev(['a b']).hb, 1);
+  assert.equal(ev(['']).hb, undefined);
   const outside = path.join(os.tmpdir(), 'outside-swarm', 'nope.txt');
   assert.equal(ev([outside]).hb, undefined);
   assert.equal(ev([path.join(memDir, 'n.md')]).hb, undefined);

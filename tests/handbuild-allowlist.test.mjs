@@ -36,9 +36,13 @@ async function project(t, { branch = 'feature/x', produced = [] } = {}) {
   }
   git('add', '-A');
   git('commit', '-q', '-m', 'base');
+  const baseRef = git('rev-parse', 'HEAD').stdout.trim();
+  git('branch', '-q', 'main', baseRef);
+  git('remote', 'add', 'origin', root);
   if (branch !== 'main') {
     git('checkout', '-q', '-b', branch);
   }
+  git('update-ref', 'refs/remotes/origin/main', baseRef);
   const branchOfFn = () => branch;
   const decide = (tool, toolInput, extra = {}) => guardDecision({ tool, toolInput, root, cwd: root, now: () => T0, branchOf: branchOfFn, ...extra });
   const bash = (command, extra = {}) => decide('Bash', { command }, extra);
@@ -82,11 +86,13 @@ test('ALLOWED git and gh read commands without approval', async t => {
   ]) assert.equal(bash(cmd).allow, true, cmd);
 });
 
-test('ALLOWED shell writes to routing paths and mv into scratchpad', async t => {
+test('ALLOWED shell writes to routing paths and mv untracked file into scratchpad', async t => {
   const { bash, root } = await project(t);
   assert.equal(bash('echo x > coordination/manifests/x.json').allow, true);
   await fs.mkdir(path.join(root, 'scratchpad'), { recursive: true });
-  assert.equal(bash('mv src/hand.ts scratchpad/hand.ts').allow, true);
+  await fs.writeFile(path.join(root, 'scratchpad', 'tmp.txt'), 't\n');
+  await fs.writeFile(path.join(root, 'src', 'untracked.txt'), 'u\n');
+  assert.equal(bash('mv src/untracked.txt scratchpad/untracked.txt').allow, true);
 });
 
 test('ALLOWED commit and push on feature branch for swarm-produced files only', async t => {
@@ -142,17 +148,17 @@ test('BLOCKED merge, deploy, branch -D, and gh api write without approval', asyn
 test('approval naming merge allows gh pr merge', async t => {
   const { bash, root } = await project(t);
   const r = createRequest(root, { kind: 'tiny', reason: 'the swarm cannot merge from here', files: 'src/hand.ts', git: 'merge', minutes: 30 }, { now: () => T0 });
-  decideRequest(root, r.id, 'approve', { now: () => T0 });
+  decideRequest(root, r.id, 'approve', { now: () => T0, channel: 'computer' });
   assert.equal(bash('gh pr merge 5', { now: () => T0 + 1000 }).allow, true);
 });
 
-test('outside deletes: scratchpad dir allowed, home path blocked', async t => {
+test('outside deletes: session scratchpad dir allowed, home path blocked', async t => {
   const { bash, root } = await project(t);
-  const scratch = path.join(os.tmpdir(), `scratchpad-${process.pid}`);
+  const scratch = path.join(os.tmpdir(), `claude-hb-${process.pid}`, 'scratchpad');
   await fs.mkdir(scratch, { recursive: true });
   const victim = path.join(scratch, 'x.txt');
   await fs.writeFile(victim, 'x');
-  t.after(() => fs.rm(scratch, { recursive: true, force: true }));
+  t.after(() => fs.rm(path.dirname(scratch), { recursive: true, force: true }));
   assert.equal(bash(`rm ${JSON.stringify(victim)}`).allow, true);
   const outside = `/var/tmp/swarm-hb-victim-${process.pid}`;
   const blocked = bash(`rm ${JSON.stringify(outside)}`);

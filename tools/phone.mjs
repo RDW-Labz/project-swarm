@@ -39,7 +39,8 @@ const SECOND_STEP = /\b(pay\w*|billing|bill|charge|price|prices|auth\w*|log-?in|
 const HANDBUILD_COMPUTER_ONLY = 'handbuild-computer-only: merge, deploy, force-push and branch -D need the owner at the computer (swarm decide), not from the phone or board';
 
 async function refuseElevatedHandbuildChoose(root, itemId, choice) {
-  if (!String(itemId ?? '').startsWith('handbuild-') || String(choice ?? '') !== 'approve') return;
+  const picked = String(choice ?? '').trim().toLowerCase();
+  if (!String(itemId ?? '').startsWith('handbuild-') || picked !== 'approve') return;
   const { readState, ELEVATED_GIT_OPS } = await import('./handbuild.mjs');
   const req = readState(root).requests[String(itemId).slice('handbuild-'.length)];
   if (req && (req.git ?? []).some(g => ELEVATED_GIT_OPS.includes(g))) throw new Error(HANDBUILD_COMPUTER_ONLY);
@@ -257,9 +258,11 @@ async function syncUnlocked({ dir, deps, dryRun }) {
     try {
       if (!PHONE_ACTIONS.includes(action.type)) throw new Error('not an allowed phone action');
       if (action.type === 'choose') {
-        await refuseElevatedHandbuildChoose(rec.root, rec.itemId, action.choice);
-        if (typeof deps.decideInbox === 'function') result = await deps.decideInbox(rec.root, rec.itemId, action.choice);
-        else result = await deps.runSwarm(rec.root, ['decide', rec.itemId, action.choice]);
+        let choice = String(action.choice ?? '').trim();
+        if (String(rec.itemId ?? '').startsWith('handbuild-')) choice = choice.toLowerCase();
+        await refuseElevatedHandbuildChoose(rec.root, rec.itemId, choice);
+        if (typeof deps.decideInbox !== 'function') throw new Error('phone decide requires decideInbox');
+        result = await deps.decideInbox(rec.root, rec.itemId, choice);
       }
       else if (action.type === 'approve-ticket') result = await deps.runSwarm(rec.root, ['tickets', rec.itemId, '--approve', '--yes']);
       else result = await deps.runSwarm(null, ['stop', '--all']);

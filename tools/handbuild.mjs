@@ -10,15 +10,20 @@ import path from 'node:path';
 import { insideProject, ORCHESTRATOR_OWN, WRITE_TOOLS } from './orchestrator-events.mjs';
 import { execFileSync } from 'node:child_process';
 import { analyzeShell, writesAnything, TOOL_DIRS, tokenize } from './shell-writes.mjs';
-import { isRoutingPath } from './routing-paths.mjs';
+import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 import { swarmProducedFiles } from './swarm-produced.mjs';
 
 export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D']);
 export const ELEVATED_GIT_OPS = Object.freeze(['merge', 'deploy', 'force-push', 'branch-D']);
 const CHAT_MERGE_MS = 60 * 60000;
 const ALLOWED_GH = new Set(['pr create', 'pr view', 'pr list', 'pr checks', 'pr diff', 'run list', 'run watch', 'run view']);
+const ALLOWED_VERCEL = new Set(['ls', 'inspect', 'logs', 'whoami', '--version']);
 const READ_GIT_SUBS = new Set(['fetch', 'status', 'log', 'diff', 'show']);
 const WRITE_HTTP = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const CONFIG_FLAGS = new Set(['-c', '--config', '--output', '--exec', '-x', '--exec-path', '--upload-pack', '--receive-pack', '--ext-diff']);
+const PLAIN_REF = /^[A-Za-z0-9._/-]+$/;
+const COMMIT_MSG_OPTS = new Set(['-m', '-F', '-C', '-c', '--author', '--date', '--message']);
+const GH_REPO_OPTS = new Set(['-R', '--repo', '--repository']);
 
 /** Current branch name; detached HEAD returns `HEAD`. */
 export function branchOf(root) {
@@ -29,14 +34,311 @@ export function branchOf(root) {
 export const isProtectedBranch = b => b === 'main' || b === 'master' || b === 'HEAD';
 
 const normBranch = b => String(b ?? '').replace(/^refs\/heads\//, '');
-const isUnderScratchpad = abs => abs.split(path.sep).includes('scratchpad');
+const hasConfigInWords = words => words.some(w => CONFIG_FLAGS.has(w) || w.startsWith('--config=') || w.startsWith('--output=') || /^--exec=/.test(w));
+
+const realOfAbs = abs => {
+  let cur = abs;
+  const tail = [];
+  for (let i = 0; i < 64; i += 1) {
+    try { return path.join(fs.realpathSync.native(cur), ...tail.reverse()); } catch {
+      const up = path.dirname(cur);
+      if (up === cur) return path.resolve(abs);
+      tail.push(path.basename(cur));
+      cur = up;
+    }
+  }
+  return path.resolve(abs);
+};
+
+const isSessionScratchpadRoot = (dir, home) => {
+  const n = realOfAbs(dir);
+  const base = path.basename(n);
+  if (base !== 'scratchpad') return false;
+  const parent = path.dirname(n);
+  const pBase = path.basename(parent);
+  if (pBase.startsWith('claude-') && realOfAbs(parent).startsWith(`${realOfAbs(os.tmpdir())}${path.sep}`)) return true;
+  const swarmScratch = path.join(home, '.project-swarm-scratch');
+  const rs = realOfAbs(swarmScratch);
+  return n === rs || n.startsWith(`${rs}${path.sep}`);
+};
+
 const allowedOutsideDelete = (abs, home) => {
-  const n = path.resolve(abs);
-  const scratch = path.join(home, '.project-swarm-scratch');
-  const tmp = os.tmpdir();
-  if (n === scratch || n.startsWith(`${scratch}${path.sep}`)) return true;
-  if (n === tmp || n.startsWith(`${tmp}${path.sep}`)) return true;
-  return isUnderScratchpad(n);
+  const n = realOfAbs(path.resolve(abs));
+  let cur = n;
+  for (let i = 0; i < 64; i += 1) {
+    if (isSessionScratchpadRoot(cur, home)) return true;
+    const up = path.dirname(cur);
+    if (up === cur) break;
+    cur = up;
+  }
+  return false;
+};
+
+const isTracked = (root, rel) => {
+  try {
+    execFileSync('git', ['ls-files', '--error-unmatch', rel], { cwd: root, encoding: 'utf8', timeout: 3000, stdio: 'pipe' });
+    return true;
+  } catch { return false; }
+};
+
+const expandPath = (raw, { root, cwd, home }) => {
+  if (!raw) return null;
+  let p = raw;
+  if (p === '~' || p.startsWith('~/')) p = path.join(home, p.slice(2));
+  if (!path.isAbsolute(p)) p = path.resolve(cwd || root, p);
+  return p;
+};
+
+/** Destinations of mv into a session scratchpad (project-relative paths that are free writes). */
+const mvScratchpadDests = (command, { root, cwd, home }) => {
+  const free = new Set();
+  for (const words of tokenize(command)) {
+    const mi = words.findIndex(w => w === 'mv');
+    if (mi === -1) continue;
+    const dest = words.slice(mi + 1).filter(w => w && !w.startsWith('-')).pop();
+    if (!dest) continue;
+    const abs = expandPath(dest, { root, cwd, home });
+    if (!abs) continue;
+    const realDest = realOfAbs(abs);
+    if (!isSessionScratchpadRoot(realDest, home) && !isSessionScratchpadRoot(path.dirname(realDest), home)) {
+      const rel = insideProject(root, abs);
+      if (rel === null || (!rel.startsWith('scratchpad/') && rel !== 'scratchpad')) continue;
+    }
+    const rel = insideProject(root, abs);
+    if (rel !== null) free.add(rel === '' ? '.' : rel);
+    else if (isSessionScratchpadRoot(path.dirname(realDest), home) || isSessionScratchpadRoot(realDest, home)) {
+      const parent = path.dirname(realDest);
+      const base = path.basename(realDest);
+      const relIn = insideProject(root, path.join(parent, base));
+      if (relIn) free.add(relIn);
+    }
+  }
+  return free;
+};
+
+/** Untracked project sources moved into scratchpad (free removals). */
+const mvUntrackedSourcesToScratchpad = (command, { root, cwd, home }) => {
+  const free = new Set();
+  for (const words of tokenize(command)) {
+    const mi = words.findIndex(w => w === 'mv');
+    if (mi === -1) continue;
+    const operands = words.slice(mi + 1).filter(w => w && !w.startsWith('-'));
+    if (operands.length < 2) continue;
+    const dest = operands[operands.length - 1];
+    const absDest = expandPath(dest, { root, cwd, home });
+    if (!absDest) continue;
+    const realDest = realOfAbs(absDest);
+    const toScratch = isSessionScratchpadRoot(realDest, home) || isSessionScratchpadRoot(path.dirname(realDest), home)
+      || (() => { const r = insideProject(root, absDest); return r !== null && (r === 'scratchpad' || r.startsWith('scratchpad/')); })();
+    if (!toScratch) continue;
+    for (const src of operands.slice(0, -1)) {
+      const absSrc = expandPath(src, { root, cwd, home });
+      if (!absSrc) continue;
+      const rel = insideProject(root, absSrc);
+      if (rel === null || isTracked(root, rel)) continue;
+      free.add(rel);
+    }
+  }
+  return free;
+};
+
+/** Tracked project sources moved into scratchpad that are not routing or swarm-produced. */
+const mvTrackedSourcesNeedingApproval = (command, { root, cwd, home }, produced) => {
+  const need = [];
+  for (const words of tokenize(command)) {
+    const mi = words.findIndex(w => w === 'mv');
+    if (mi === -1) continue;
+    const operands = words.slice(mi + 1).filter(w => w && !w.startsWith('-'));
+    if (operands.length < 2) continue;
+    const dest = operands[operands.length - 1];
+    const absDest = expandPath(dest, { root, cwd, home });
+    if (!absDest) continue;
+    const realDest = realOfAbs(absDest);
+    const toScratch = isSessionScratchpadRoot(realDest, home) || isSessionScratchpadRoot(path.dirname(realDest), home)
+      || (() => { const r = insideProject(root, absDest); return r !== null && (r === 'scratchpad' || r.startsWith('scratchpad/')); })();
+    if (!toScratch) continue;
+    for (const src of operands.slice(0, -1)) {
+      const absSrc = expandPath(src, { root, cwd, home });
+      if (!absSrc) continue;
+      const rel = insideProject(root, absSrc);
+      if (rel === null || !isTracked(root, rel)) continue;
+      const rlow = rel.toLowerCase();
+      const allow = ORCHESTRATOR_OWN.some(prefix => rlow === prefix.slice(0, -1) || rlow.startsWith(prefix)) || TOOL_DIRS.some(prefix => rlow === prefix.slice(0, -1) || rlow.startsWith(prefix));
+      if (isRoutingPathResolved(root, rel) || produced.has(rel) || allow) continue;
+      need.push(rel);
+    }
+  }
+  return need;
+};
+
+const plainWords = words => {
+  const plain = [];
+  for (let i = 0; i < words.length; i += 1) {
+    if (['>', '>>', '>|', '>&', '&>', '<', '<<<'].includes(words[i])) { i += 1; continue; }
+    if (words[i] === '<<') continue;
+    if (/^\d+$/.test(words[i]) && ['>', '>>', '>&'].includes(words[i + 1])) continue;
+    plain.push(words[i]);
+  }
+  return plain;
+};
+
+const commandHasGhRepoFlag = command => {
+  for (const words of tokenize(command)) {
+    const plain = plainWords(words);
+    const gi = plain.findIndex(w => path.basename(w) === 'gh');
+    if (gi === -1) continue;
+    if (plain.slice(gi + 1).some(w => GH_REPO_OPTS.has(w) || w.startsWith('--repo=') || w.startsWith('--repository='))) return true;
+  }
+  return false;
+};
+
+/** Policy ops with args, globalOpts, and hasConfig (shared contract with shell-writes). */
+const buildPolicyOps = command => {
+  const ops = [];
+  for (const words of tokenize(command)) {
+    const plain = plainWords(words);
+    let k = 0;
+    while (k < plain.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) k += 1;
+    if (k >= plain.length) continue;
+    const cmd = path.basename(plain[k]);
+    const args = plain.slice(k + 1);
+    const hasConfig = hasConfigInWords(plain.slice(k));
+    if (cmd === 'git') {
+      let globalOpts = false;
+      let i = 0;
+      while (i < args.length && args[i].startsWith('-')) {
+        globalOpts = true;
+        if (args[i] === '-C' || args[i] === '-c' || args[i] === '--config-env' || ['--git-dir', '--work-tree', '--namespace'].includes(args[i])) i += 2;
+        else i += 1;
+      }
+      const sub = i < args.length && !args[i].startsWith('-') ? args[i] : null;
+      const rest = sub ? args.slice(i + 1) : [];
+      const pos = rest.filter(a => a && !a.startsWith('-'));
+      const opArgs = pos;
+      let branch = null, force = false, deleteMode = null, target = null;
+      if (sub === 'push') {
+        const flags = rest.filter(a => a.startsWith('-'));
+        force = flags.some(a => a === '--force' || a === '-f' || a === '--force-with-lease') || pos.some(a => a.startsWith('+'));
+        for (const a of pos) {
+          if (a.startsWith('+')) { const spec = a.slice(1); branch = spec.includes(':') ? normBranch(spec.split(':').pop()) : normBranch(spec); }
+          else if (a.includes(':')) branch = normBranch(a.split(':').pop() || a.split(':')[0]);
+          else if (a !== 'origin' && a !== 'HEAD') branch = normBranch(a);
+        }
+      } else if (sub === 'branch') {
+        if (rest.some(a => a === '-D')) deleteMode = 'force';
+        else if (rest.some(a => a === '-d' || a === '--delete')) deleteMode = 'safe';
+        else if (rest.some(a => ['-f', '-m', '-M', '-c', '-C', '--force', '--move', '--copy'].includes(a))) deleteMode = 'force';
+        branch = pos[0] ?? null;
+      } else if (sub === 'rebase' && pos[0]) branch = pos[0];
+      else if (sub === 'merge') branch = pos[0] ?? null;
+      ops.push({ tool: 'git', sub, args: opArgs, globalOpts, hasConfig, flags: rest.filter(a => a.startsWith('-')), branch, force, delete: deleteMode, target });
+    } else if (cmd === 'gh') {
+      let globalOpts = false;
+      let i = 0;
+      while (i < args.length && args[i].startsWith('-')) {
+        globalOpts = true;
+        if (GH_REPO_OPTS.has(args[i]) || args[i].startsWith('--repo=') || args[i].startsWith('--repository=')) i += 1;
+        else if (args[i] === '-R') i += 2;
+        else i += 1;
+      }
+      const pos = args.slice(i).filter(a => !a.startsWith('-'));
+      const sub = pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null;
+      const ghTarget = sub === 'pr merge' && pos[2] !== undefined ? String(pos[2]) : null;
+      ops.push({ tool: 'gh', sub, args: pos.slice(2), globalOpts, hasConfig, flags: args.filter(a => a.startsWith('-')), branch: null, force: false, delete: null, target: ghTarget });
+    } else if (cmd === 'vercel') {
+      const globalOpts = args.some(a => a.startsWith('-'));
+      const prod = args.includes('--prod');
+      const pos = args.filter(a => !a.startsWith('-'));
+      const onlyVersion = args.includes('--version') && pos.length === 0;
+      const sub = onlyVersion ? '--version' : (prod || pos.length === 0 || args.every(a => a.startsWith('-')) ? 'deploy' : pos[0]);
+      ops.push({ tool: 'vercel', sub, args: sub === 'deploy' ? pos : pos.slice(1), globalOpts, hasConfig, flags: args.filter(a => a.startsWith('-')), branch: null, force: false, delete: null, target: null });
+    } else if (cmd === 'swarm') {
+      const pos = args.filter(a => !a.startsWith('-'));
+      const sub = pos[0] ?? null;
+      const swarmTarget = sub === 'merge' && pos[1] !== undefined ? String(pos[1]) : null;
+      ops.push({ tool: 'swarm', sub, args: pos.slice(1), globalOpts: args.some(a => a.startsWith('-')), hasConfig, flags: args.filter(a => a.startsWith('-')), branch: null, force: false, delete: null, target: swarmTarget });
+    }
+  }
+  return ops;
+};
+
+const pushBlockedOnProtected = (pos, force) => {
+  for (const a of pos) {
+    const spec = a.startsWith('+') ? a.slice(1) : a;
+    if (spec.includes(':')) {
+      const dst = normBranch(spec.split(':').pop());
+      const src = spec.split(':')[0];
+      if (dst === 'main' || dst === 'master' || dst === 'refs/heads/main' || dst === 'refs/heads/master') return true;
+      if ((src === '' || src === ':') && (dst === 'main' || dst === 'master')) return true;
+    } else if (force && (normBranch(spec) === 'main' || normBranch(spec) === 'master')) return true;
+    if (a === ':main' || a === ':master' || a.endsWith(':main') || a.endsWith(':master')) return true;
+  }
+  return false;
+};
+
+const isFreeGitPush = (op, current) => {
+  if (op.globalOpts || op.hasConfig) return false;
+  const flags = op.flags ?? [];
+  if (flags.some(f => !['-u', '--set-upstream'].includes(f))) return false;
+  if (flags.some(f => ['--all', '--mirror', '--delete', '-f', '--force'].includes(f))) return false;
+  const pos = op.args ?? [];
+  if (pos.some(a => a.startsWith('+') || a.includes(':'))) return false;
+  if (pushBlockedOnProtected(pos, false)) return false;
+  let remote = null; let branch = current;
+  if (pos.length === 1) {
+    if (!PLAIN_REF.test(pos[0])) return false;
+    branch = normBranch(pos[0]);
+  } else if (pos.length >= 2) {
+    if (!PLAIN_REF.test(pos[0]) || !PLAIN_REF.test(pos[1])) return false;
+    remote = pos[0];
+    branch = normBranch(pos[1]);
+  }
+  if (isProtectedBranch(branch)) return false;
+  return true;
+};
+
+const isFreeGitRebase = (op, protBranch) => {
+  if (protBranch || op.globalOpts || op.hasConfig) return false;
+  const flags = op.flags ?? [];
+  if (flags.some(f => ['-x', '--exec', '-i', '--interactive', '--onto', '--autosquash'].includes(f))) return false;
+  const pos = op.args ?? [];
+  if (pos.length !== 1 || !PLAIN_REF.test(pos[0])) return false;
+  return true;
+};
+
+const isFreeReadGit = op => !op.globalOpts && !op.hasConfig && !(op.flags ?? []).some(f => f === '--output' || f.startsWith('--output='));
+
+const commitCarriedPaths = (command, root, cwd) => {
+  const paths = [];
+  for (const words of tokenize(command)) {
+    const plain = plainWords(words);
+    const gi = plain.findIndex(w => path.basename(w) === 'git');
+    if (gi === -1) continue;
+    const rest = plain.slice(gi + 1);
+    const ci = rest.indexOf('commit');
+    if (ci === -1) continue;
+    const after = rest.slice(ci + 1);
+    let skipNext = false;
+    for (let i = 0; i < after.length; i += 1) {
+      const w = after[i];
+      if (skipNext) { skipNext = false; continue; }
+      if (w.startsWith('-') && !COMMIT_MSG_OPTS.has(w) && !['-o', '--only', '-i', '--include', '-a', '--all'].includes(w)) {
+        if (['-m', '-F', '-C', '-c', '--author', '--date', '--message'].includes(w) || w.includes('=')) skipNext = !w.includes('=');
+        continue;
+      }
+      if (COMMIT_MSG_OPTS.has(w)) { skipNext = true; continue; }
+      if (w.startsWith('-')) continue;
+      const rel = insideProject(root, path.isAbsolute(w) ? w : path.resolve(cwd || root, w));
+      if (rel) paths.push(rel);
+    }
+  }
+  return paths;
+};
+
+const pushDiffFiles = root => {
+  try {
+    return execFileSync('git', ['diff', '--name-only', 'origin/main...HEAD'], { cwd: root, encoding: 'utf8', timeout: 3000 }).split('\n').filter(Boolean);
+  } catch { return null; }
 };
 
 const ghApiWrite = (command, ops) => {
@@ -58,21 +360,6 @@ const ghApiWrite = (command, ops) => {
       }
     }
     return false;
-  }
-  return false;
-};
-
-const movesToScratchpad = (command, { root, cwd }) => {
-  for (const words of tokenize(command)) {
-    const mi = words.findIndex(w => w === 'mv');
-    if (mi === -1) continue;
-    const dest = words.slice(mi + 1).filter(w => w && !w.startsWith('-')).pop();
-    if (!dest) continue;
-    const raw = dest === '~' || dest.startsWith('~/') ? path.join(os.homedir(), dest.slice(2)) : path.isAbsolute(dest) ? dest : path.resolve(cwd || root, dest);
-    const base = path.basename(raw.replace(/\/$/, ''));
-    if (base === 'scratchpad') return true;
-    const rel = insideProject(root, raw);
-    if (rel !== null && (rel === 'scratchpad' || rel.startsWith('scratchpad/') || rel.split('/').includes('scratchpad'))) return true;
   }
   return false;
 };
@@ -125,6 +412,15 @@ export function recordChatMerge(root, pr, { now = Date.now } = {}) {
     state.merges[String(n)] = now() + CHAT_MERGE_MS;
     writeState(root, state);
   });
+}
+
+function peekChatMerge(root, pr, now) {
+  const key = String(pr ?? '').replace(/^#/, '');
+  if (!/^\d+$/.test(key)) return false;
+  const state = readState(root);
+  pruneMerges(state, now);
+  const exp = state.merges?.[key];
+  return Number.isFinite(exp) && exp > now;
 }
 
 function tryConsumeChatMerge(root, pr, now) {
@@ -243,7 +539,7 @@ export function decideRequest(root, id, choice, { now = Date.now, by = 'owner', 
   if (r.status !== 'pending') throw Error(`handbuild-not-pending: ${id} is already ${r.status}`);
   if (now() - Date.parse(r.requestedAt) > PENDING_MS) { r.status = 'expired'; writeState(root, state); throw Error(`handbuild-expired: ${id} waited more than 24 hours and expired; ask again if it is still needed`); }
   if (!['approve', 'deny'].includes(choice)) throw Error('handbuild-choice: approve or deny');
-  if (choice === 'approve' && requestElevated(r) && channel !== undefined && channel !== 'computer') {
+  if (choice === 'approve' && requestElevated(r) && channel !== 'computer') {
     throw Error('handbuild-computer-only: merge, deploy, force-push and branch -D need the owner at the computer (swarm decide), not from the phone or board');
   }
   r.status = choice === 'approve' ? 'approved' : 'denied';
@@ -278,7 +574,8 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
   const h = home ?? os.homedir();
   const approvals = activeApprovals(root, now());
   const produced = swarmProducedFiles(root);
-  const swarmOk = rel => isRoutingPath(rel) || produced.has(rel);
+  const gitCarryOk = rel => isRoutingPathResolved(root, rel) || produced.has(rel) || AllowRel(rel);
+  const writeFree = rel => AllowRel(rel) || isRoutingPathResolved(root, rel);
   const covers = (rels, gitOps = []) => {
     // every file and every git operation must be covered by one live approval
     for (const rel of rels) if (!approvals.some(a => matchesFile(a.files, rel))) return { ok: false, missing: rel };
@@ -295,7 +592,11 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (rel === null && typeof raw === 'string' && raw && underAbs(path.resolve(path.isAbsolute(raw) ? raw : path.join(cwd || root, raw)), protectedAbsolute(home))) return { allow: false, files: [], reason: `Hand-build guard: ${raw} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
     if (rel !== null && isProtected(rel)) return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
     if (rel === null || AllowRel(rel)) return { allow: true };
-    if (rel !== null && isRoutingPath(rel)) return { allow: true, files: [rel] };
+    if (rel !== null && isRoutingPathResolved(root, rel)) return { allow: true, files: [rel] };
+    if (rel !== null && produced.has(rel)) {
+      const c = covers([rel]);
+      return c.ok ? { allow: true, files: [rel], approval: c.approval } : { allow: false, files: [rel], reason: `${DENY_ADVICE} (blocked: ${tool} ${rel})` };
+    }
     const c = covers([rel]);
     return c.ok ? { allow: true, files: [rel], approval: c.approval } : { allow: false, files: [rel], reason: `${DENY_ADVICE} (blocked: ${tool} ${rel})` };
   }
@@ -309,27 +610,39 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (a.outsideDeletes?.length && !a.outsideDeletes.every(p => allowedOutsideDelete(p, h))) {
       return { allow: false, files: [], reason: 'Hand-build guard: deletes outside the scratchpad are the owner\'s.' };
     }
+    const policyOps = buildPolicyOps(ti.command);
     const policyGitOps = [];
     let commitStagedCheck = null;
-    for (const op of a.ops) {
+    let pushNeedsCarryCheck = false;
+    const chatMergeCandidates = [];
+    for (const op of policyOps) {
       if (op.tool === 'git') {
-        if (READ_GIT_SUBS.has(op.sub)) continue;
+        if (READ_GIT_SUBS.has(op.sub)) {
+          if (!isFreeReadGit(op)) policyGitOps.push(op.sub === 'diff' && (op.flags ?? []).some(f => f.startsWith('--output')) ? 'output' : 'config');
+          continue;
+        }
         if (op.sub === 'branch') {
           if (op.delete === 'safe') continue;
-          if (op.delete === 'force') { policyGitOps.push('branch-D'); continue; }
+          policyGitOps.push('branch-D');
+          continue;
         }
         if (op.sub === 'rebase') {
-          if (protBranch) policyGitOps.push('commit');
+          if (!isFreeGitRebase(op, protBranch)) policyGitOps.push('commit');
           continue;
         }
         if (op.sub === 'merge') { policyGitOps.push('merge'); continue; }
         if (op.sub === 'push') {
-          const target = normBranch(op.branch ?? current);
-          if (op.force && isProtectedBranch(target)) {
+          const pos = op.args ?? [];
+          const deletePush = pos.some(a => a.includes(':') && (a.startsWith(':') || a.split(':')[0] === ''));
+          if (pushBlockedOnProtected(pos, op.force || deletePush)) {
             return { allow: false, files: [], reason: 'Hand-build guard: force push to a protected branch (main or master) is never approvable, even with a hand-build approval that names force-push.' };
           }
           if (op.force) { policyGitOps.push('force-push'); continue; }
-          if (protBranch || isProtectedBranch(target)) policyGitOps.push('push');
+          if (isFreeGitPush(op, current)) {
+            pushNeedsCarryCheck = true;
+            continue;
+          }
+          policyGitOps.push('push');
           continue;
         }
         if (op.sub === 'commit') {
@@ -337,32 +650,50 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
           else commitStagedCheck = 'allowlist';
           continue;
         }
+        if (op.sub) policyGitOps.push(op.sub);
       } else if (op.tool === 'gh') {
+        if (op.globalOpts) { policyGitOps.push('merge'); continue; }
         if (ALLOWED_GH.has(op.sub)) continue;
         if (op.sub === 'pr merge') {
-          if (op.target && tryConsumeChatMerge(root, op.target, now())) continue;
+          chatMergeCandidates.push(op.target);
           policyGitOps.push('merge');
           continue;
         }
-      } else if (op.tool === 'vercel' && op.sub === 'deploy') {
+        if (String(op.sub ?? '').startsWith('api')) policyGitOps.push('gh-api-write');
+        else policyGitOps.push('merge');
+      } else if (op.tool === 'vercel') {
+        if (op.globalOpts && op.sub !== '--version') { policyGitOps.push('deploy'); continue; }
+        if (ALLOWED_VERCEL.has(op.sub)) continue;
         policyGitOps.push('deploy');
-      } else if (op.tool === 'swarm' && op.sub === 'merge') {
-        if (op.target && tryConsumeChatMerge(root, op.target, now())) continue;
-        policyGitOps.push('merge');
+      } else if (op.tool === 'swarm') {
+        if (op.sub === 'merge') {
+          chatMergeCandidates.push(op.target);
+          policyGitOps.push('merge');
+        }
       }
     }
-    if (ghApiWrite(ti.command, a.ops)) policyGitOps.push('gh-api-write');
+    if (ghApiWrite(ti.command, policyOps)) policyGitOps.push('gh-api-write');
+    const mergeOps = policyOps.filter(o => (o.tool === 'gh' && o.sub === 'pr merge') || (o.tool === 'swarm' && o.sub === 'merge'));
+    const chatMergeOk = !commandHasGhRepoFlag(ti.command) && mergeOps.length === 1 && mergeOps[0].target && peekChatMerge(root, mergeOps[0].target, now());
+    if (chatMergeOk) {
+      for (let i = policyGitOps.length - 1; i >= 0; i -= 1) if (policyGitOps[i] === 'merge') policyGitOps.splice(i, 1);
+    }
     if (policyGitOps.length && !covers([], policyGitOps).ok) {
       const label = policyGitOps[0] === 'gh-api-write' ? 'gh api write' : `git ${policyGitOps[0]}`;
       return { allow: false, files: [], reason: `${DENY_ADVICE} (blocked: ${label})` };
     }
-    if (!writesAnything(a)) return { allow: true };
+    const finishAllow = result => {
+      if (chatMergeOk && mergeOps[0]?.target) tryConsumeChatMerge(root, mergeOps[0].target, now());
+      return result;
+    };
+    if (!writesAnything(a)) return finishAllow({ allow: true });
     if (a.inline || a.unknown) {
       const need = [a.inline ? 'an inline script that writes files' : null, a.unknown ? 'a write whose target is a variable or substitution' : null].filter(Boolean).join(' and ');
       return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${need}; the guard cannot tell what it writes, so it needs an approval that names the files, or a ticket)` };
     }
     let staged = [];
-    const hasCommit = a.ops.some(o => o.tool === 'git' && o.sub === 'commit') || a.git.includes('commit');
+    const commitPathspecs = commitCarriedPaths(ti.command, root, cwd);
+    const hasCommit = policyOps.some(o => o.tool === 'git' && o.sub === 'commit') || a.git.includes('commit');
     if (hasCommit) {
       const added = [];
       let everything = false;
@@ -383,33 +714,40 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       const all = /\bcommit\b[^;&|]*\s-[A-Za-z]*a|--all\b/.test(String(ti.command ?? ''));
       try { staged = [...staged, ...execFileSync('git', ['diff', all ? '--name-only' : '--cached', ...(all ? ['HEAD'] : ['--name-only'])], { cwd: root, encoding: 'utf8', timeout: 3000 }).split('\n').filter(Boolean)]; }
       catch { return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: git commit, and the guard could not read which files it would carry)` }; }
-      if (commitStagedCheck === 'allowlist' && staged.length && staged.every(swarmOk)) {
-        if (!policyGitOps.length) return { allow: true, files: staged };
+      staged.push(...commitPathspecs);
+      if (commitStagedCheck === 'allowlist' && staged.length && staged.every(gitCarryOk)) {
+        if (!policyGitOps.length) return finishAllow({ allow: true, files: staged });
       }
-      if (commitStagedCheck === 'allowlist' && staged.some(f => !swarmOk(f) && !AllowRel(f))) {
+      if (commitStagedCheck === 'allowlist' && staged.some(f => !gitCarryOk(f))) {
         policyGitOps.push('commit');
       }
     }
-    const needsFileApproval = a.writes.filter(w => !swarmOk(w) && !AllowRel(w));
-    const fileRels = [...new Set([...needsFileApproval, ...staged.filter(f => !swarmOk(f) && !AllowRel(f))])];
+    if (pushNeedsCarryCheck && !protBranch) {
+      const carried = pushDiffFiles(root);
+      if (carried === null || carried.some(f => !gitCarryOk(f))) policyGitOps.push('push');
+    }
+    const scratchDests = mvScratchpadDests(ti.command, { root, cwd, home: h });
+    const mvUntrackedFree = mvUntrackedSourcesToScratchpad(ti.command, { root, cwd, home: h });
+    const mvApprovals = mvTrackedSourcesNeedingApproval(ti.command, { root, cwd, home: h }, produced);
+    const needsFileApproval = a.writes.filter(w => !writeFree(w) && !scratchDests.has(w) && !mvUntrackedFree.has(w));
+    const fileRels = [...new Set([...needsFileApproval, ...mvApprovals, ...staged.filter(f => !gitCarryOk(f))])];
     if (policyGitOps.length) {
       const c = covers(fileRels, policyGitOps);
-      if (c.ok) return { allow: true, files: [...a.writes, ...staged], approval: c.approval };
+      if (c.ok) return finishAllow({ allow: true, files: [...a.writes, ...staged], approval: c.approval });
       const label = policyGitOps[0] === 'gh-api-write' ? 'gh api write' : `git ${policyGitOps[0]}`;
       return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${label})` };
     }
     const residualGit = a.git.filter(g => {
-      if (g === 'rebase' && !protBranch) return false;
-      if (g === 'push') return false;
-      if (g === 'branch' && a.ops.some(o => o.tool === 'git' && o.sub === 'branch' && o.delete === 'safe')) return false;
-      if (g === 'commit' && commitStagedCheck === 'allowlist' && staged.length && staged.every(swarmOk)) return false;
+      if (g === 'rebase' && policyOps.some(o => o.tool === 'git' && o.sub === 'rebase' && isFreeGitRebase(o, protBranch))) return false;
+      if (g === 'push' && policyOps.some(o => o.tool === 'git' && o.sub === 'push' && isFreeGitPush(o, current))) return false;
+      if (g === 'branch' && policyOps.some(o => o.tool === 'git' && o.sub === 'branch' && o.delete === 'safe')) return false;
+      if (g === 'commit' && commitStagedCheck === 'allowlist' && staged.length && staged.every(gitCarryOk)) return false;
       return true;
     });
-    if (movesToScratchpad(ti.command, { root, cwd })) return { allow: true, files: a.writes };
-    if (!fileRels.length && !residualGit.length) return { allow: true, files: [...a.writes, ...staged] };
-    if (a.writes.length && a.writes.every(w => swarmOk(w) || AllowRel(w)) && !residualGit.length) return { allow: true, files: a.writes };
+    if (!fileRels.length && !residualGit.length) return finishAllow({ allow: true, files: [...a.writes, ...staged] });
+    if (a.writes.length && a.writes.every(w => writeFree(w) || scratchDests.has(w) || mvUntrackedFree.has(w)) && !mvApprovals.length && !residualGit.length) return finishAllow({ allow: true, files: a.writes });
     const c = covers(fileRels, residualGit);
-    if (c.ok) return { allow: true, files: [...a.writes, ...staged], approval: c.approval };
+    if (c.ok) return finishAllow({ allow: true, files: [...a.writes, ...staged], approval: c.approval });
     return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${[...fileRels.map(w => `writes ${w}`), ...residualGit.map(g => `git ${g}`)].join(', ')})` };
   }
   return { allow: true };

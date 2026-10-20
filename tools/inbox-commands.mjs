@@ -17,6 +17,13 @@ const USAGE = {
 };
 const bad = command => ({ stdout: USAGE[command], exitCode: 1 });
 
+/** Owner at the computer: interactive TTY and not inside a Claude Code agent session. */
+export function decideChannelFromEnvironment(env = process.env) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return 'agent';
+  if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT) return 'agent';
+  return 'computer';
+}
+
 // The inbox library reads and writes human items through these functions; here they are backed by
 // .swarm/project/human-jobs.json and the project journal.
 export function inboxDeps({ now = Date.now, onNote, channel } = {}) {
@@ -80,7 +87,7 @@ export async function runInboxCommand(root, command, args, { installRoot, now = 
     }
     if (command === 'decide') {
       if (args.length !== 2) return bad(command);
-      const out = await decide(root, args[0], args[1], inboxDeps({ now, channel: 'computer' }));
+      const out = await decide(root, args[0], args[1], inboxDeps({ now, channel: decideChannelFromEnvironment() }));
       return { stdout: out.changed ? `decided ${out.id}: ${out.choice}; added to backlog: ${out.goal}\n` : `decided ${out.id}: ${out.choice}\n`, exitCode: 0 };
     }
     if (command === 'resolve') {
