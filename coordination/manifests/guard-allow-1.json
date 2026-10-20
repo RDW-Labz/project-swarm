@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "routing-paths-and-counter",
+      "agent": "auto",
+      "prompt": "Owner rule: routing files are never a hand-built edit and never blocked. Create tools/routing-paths.mjs (SPDX header, ES module) exporting isRoutingPath(rel), where rel is a project-relative path with forward slashes, compared case-insensitively. It is true for: any .json file under coordination/manifests/; HANDOFF.md, TASK.md and build-plan.md at the project root or directly under coordination/ (also HANDOFF.previous.md and HANDOFF.previous-2.md under coordination/); docs/state/usage-ledger.md and docs/state/eval-scores.ndjson; coordination/swarm-lessons.jsonl. It is false for everything else, including source, tests, docs, config, and any path with .. segments. Also export ROUTING_RULE, a one-sentence string for messages. Then in tools/orchestrator-events.mjs make the hand-built counter use it: isHandBuilt(tool, relPath) is false for a routing path, and in buildEvent the Bash branch counts a shell command as hand-built (event.hb = 1) only when at least one of a.writes is NOT a routing path (the event.bf list may still show all written files). Next, fix the false positive where text inside a quoted string or a here-document is read as a redirect: this is handled in tools/shell-writes.mjs by another job, so do not touch that file; instead in buildEvent ignore any a.writes entry that is not a plausible project-relative path (it contains whitespace, quotes, $, backtick, or is empty). Finally scratchpad and memory-note writes are not hand-built edits: in buildEvent, a.writes entries that resolve outside the project root, or that are under a directory named scratchpad, or under ~/.claude/projects/*/memory/, are dropped from the hand-built decision (insideProject already returns null for outside paths; keep that). Write tests in a new file tests/routing-paths.test.mjs (node:test, strict assert): every path rule above true and false cases (a manifest json, HANDOFF.md, coordination/HANDOFF.md, usage-ledger.md true; tools/swarm.mjs, tests/x.test.mjs, docs/new-project.md, package.json, coordination/manifests/../../tools/a.mjs false); isHandBuilt false for a Write to a manifest and true for a Write to tools/swarm.mjs; buildEvent with an injected analyze returning writes [coordination/manifests/a.json] has no hb, writes [tools/a.mjs] has hb 1, writes ['a b', 'x$y'] has no hb, an absolute path outside the project and one under ~/.claude/projects/x/memory/n.md have no hb. Write only tools/routing-paths.mjs, tools/orchestrator-events.mjs and tests/routing-paths.test.mjs.",
+      "context": [
+        "tools/orchestrator-events.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tools/handbuild.mjs",
+        "tests/handbuild-guard.test.mjs"
+      ],
+      "outputs": [
+        "tools/routing-paths.mjs",
+        "tools/orchestrator-events.mjs",
+        "tests/routing-paths.test.mjs"
+      ],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "shell-parser-and-git-ops",
+      "agent": "auto",
+      "prompt": "Two changes to tools/shell-writes.mjs, with tests in a new file tests/shell-writes-quotes.test.mjs (node:test, strict assert; import analyzeShell and tokenize). (1) Quoting: a backtick, a $VAR or $(...), or a > inside a QUOTED string is not a write and not unknown when that word is only an ARGUMENT (for example git commit -m \"fix `x` for $HOME > y\", echo 'a > b', gh pr create --body \"uses `foo` and $BAR\", a printf argument). Inside single quotes everything is literal. Inside double quotes a $ or backtick is an expansion, but it only makes the command unknown when it appears in a word that is a WRITE TARGET (a redirect target, tee/cp/mv/rm/touch/sed -i target and so on); as an ordinary argument it is ignored. A real unquoted > redirect, and a quoted redirect target such as echo hi > \"$X\", must still be reported (the target is a variable so unknown). Today the check is on the word text after quotes were removed (the /[$`]/ tests near lines 152 and 227), which loses quoting: make the tokenizer record, per word, whether it contained an unquoted or double-quoted expansion (for example a parallel array words.expands) and use that instead of testing the stripped text. (2) Git and gh classification: add to the result a field ops, an array of objects describing every git and gh command found (same places the git field is filled), each {tool: 'git'|'gh', sub, flags, branch, force, delete} : for git, sub is the subcommand (commit, push, merge, rebase, branch, fetch, status, log, diff, ...); push has force true for --force, -f, --force-with-lease, --force-if-includes or a refspec starting with +; branch has delete 'safe' for -d or --delete, 'force' for -D or --delete --force or -d -f; push records branch as the refspec or branch named on the command line (null when none given, meaning the current branch), and a refspec SRC:DST records DST. For gh: sub is the first two words joined, for example 'pr create', 'pr merge', 'pr view', 'run watch', 'api', and the word 'deploy' style commands are plain tool 'other' entries: also record {tool: 'vercel', sub: 'deploy'} when a vercel command has deploy or --prod or is bare vercel, and {tool: 'swarm', sub: 'merge'} for swarm merge. Keep the existing writes, git, inline, unknown, protectedOutside and selfApproval fields exactly as they are. Tests: every quoting case above (no write, not unknown), the real redirect cases still reported, ops for git push --force origin x, git push origin main, git push origin HEAD:refs/heads/feat, git branch -d a, git branch -D a, git commit -m x, git fetch, git rebase origin/main, gh pr create --title t, gh pr merge 5, gh pr checks 5, gh run watch 1, vercel --prod, swarm merge 5. Write only tools/shell-writes.mjs and tests/shell-writes-quotes.test.mjs.",
+      "context": [
+        "tools/shell-writes.mjs",
+        "tests/handbuild-guard.test.mjs"
+      ],
+      "outputs": [
+        "tools/shell-writes.mjs",
+        "tests/shell-writes-quotes.test.mjs"
+      ],
+      "timeoutMs": 900000
+    }
+  ]
+}
