@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.148.0
+
+Base checks skip integrate-only placeholders; flat-rate lanes no longer reserve against caps.
+- **Base checks:** swarm run no longer spawns a base check whose argv names an integrate-only placeholder (whole argv item {integrated}, {integrated:.ext}, {new} or {new:.ext}) with the literal text, which turned every base red (parts-app, 1.144.0). Such a check, or one with base set to false, is recorded as skipped with its reason; {root} is expanded at base the way integrate does; the cached base verdict carries a checksKey so a record from different checks or an older runner is recomputed.
+- **Flat-rate reserve:** codex, cursor, hermes and qwen reserve 0 dollars against spend caps while a job is in flight (atlas-seafloor: a scope split was refused at 0.00 of a 10 dollar cap while one Codex run was running). Metered lanes and the claude lane reserve exactly as before. In-flight flat-rate work no longer counts toward the cap until it finishes.
+- **Tests:** tests/base-checks-placeholders.test.mjs, tests/flat-rate-reserve.test.mjs, tests/hard-cap.test.mjs.
+
 ## 1.147.0
 
 swarm update waits for busy swarm commands.
