@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "board-worktrees",
+      "agent": "auto",
+      "prompt": "Fix the board listing scratch worktrees and git worktrees as separate projects with no cap. Read tools/board-data.mjs, tools/board.mjs, tools/project-spend.mjs and tools/watch-assets/board.js first. Create tools/worktree-group.mjs (SPDX header, ES module) exporting async parentRootOf(root, {git}) which returns the main repository root when root is a linked git worktree (git rev-parse --git-dir differs from --git-common-dir; the parent root is the parent folder of the common dir; the git runner is injected so tests use fakes) and otherwise returns root unchanged, never throws (returns root on any error), and isScratchRoot(root, {home}) true for any path under the user's .project-swarm-scratch folder or the system temp folder or a folder named .swarm-tmp. Then change the project listing in tools/board-data.mjs so that: a root that is a linked worktree of a known project is not listed as its own project; it is grouped under the parent project (a worktrees array on the parent entry with root, branch if known, and its live runs) and its live runs are counted in the parent's busy and idle state; it inherits the parent's cap (the project cap shown and checked for the worktree is the parent's, so no NO CAP label appears); a scratch root that is not a worktree of any known project is hidden from the default list and shown only when the existing show test/temp option is on (find the existing test/temp handling and reuse it; if there is none, add a showTemp flag to the data function that defaults to false). Change tools/watch-assets/board.js so the parent's card shows a small collapsed 'worktrees (N)' row listing them, and the NO CAP label is never drawn for a grouped worktree. In tools/project-spend.mjs make the project cap lookup for a root that is a linked worktree resolve to the parent repo's cap (use parentRootOf). Tests in a new file tests/board-worktrees.test.mjs (node:test, strict assert, fakes for git and a fixture project registry as existing board data tests do): a worktree root groups under its parent and is not listed alone; its live run makes the parent busy; the cap lookup returns the parent's cap; a scratch root with no parent is hidden by default and shown with showTemp; a normal project is unchanged; parentRootOf returns the root on a git error. Write only tools/worktree-group.mjs, tools/board-data.mjs, tools/board.mjs (only if needed), tools/project-spend.mjs, tools/watch-assets/board.js and tests/board-worktrees.test.mjs.",
+      "context": [
+        "tools/board-data.mjs",
+        "tools/board.mjs",
+        "tools/project-spend.mjs",
+        "tools/watch-assets/board.js"
+      ],
+      "outputs": [
+        "tools/worktree-group.mjs",
+        "tools/board-data.mjs",
+        "tools/board.mjs",
+        "tools/project-spend.mjs",
+        "tools/watch-assets/board.js",
+        "tests/board-worktrees.test.mjs"
+      ],
+      "timeoutMs": 1500000,
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}
