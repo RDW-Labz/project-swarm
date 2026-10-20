@@ -4,7 +4,7 @@
 // Fresh, project-local workers. No daemon or terminal attachment; a worker shell exists only inside a sandbox (codex, claude shell jobs).
 import { isBuildArtifact, withoutIgnored } from './ignored-artifacts.mjs';
 import fs from 'node:fs/promises';
-import { createReadStream, realpathSync, existsSync } from 'node:fs';
+import { createReadStream, realpathSync, existsSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -85,6 +85,7 @@ import { prepareWorkspaceEnvironment, prepareViteCaches, isDesignOnlyCodexJob, c
 import { readCursorKey, CURSOR_MODEL, CURSOR_BLIP_RE, requireCursorPlatform, requireCursorApiKey, resolveCursorBinary, cursorConfig, cursorProfile, cursorLaunchArgs, cursorMessage, cursorEnvironment, resolveCursorEnvelope, parseCursorOutput, redactCursorKey, cursorDoctor } from './cursor-adapter.mjs';
 import { classifyCheckEnvironment, swarmCheckWarnings } from './ship.mjs';
 import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary, listLiveRuns, repoKey, repoPaths } from './board.mjs';
+import { BUSY_MARKER_VERBS, writeBusyMarker, liveBusyMarkers, busyDir } from './busy-marker.mjs';
 import { acquireIntegrationLock } from './integration-lock.mjs';
 export { acquireIntegrationLock } from './integration-lock.mjs';
 import { writeSessionMetric } from './session-metrics.mjs';
@@ -7413,6 +7414,15 @@ async function warnProjectVersionMismatch(root){
   if(pointer.version!==installedVersion)process.stderr.write(`Warning: this project is linked to project-swarm ${pointer.version}, but the running install is ${installedVersion}; run \`swarm update\` in the install root to realign.\n`);
 }
 
+function verbFromArgv(argv) {
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === '--root') { i += 1; continue; }
+    if (argv[i].startsWith('-')) continue;
+    return argv[i];
+  }
+  return null;
+}
+
 // Journals every command (name, sanitized arguments, outcome) and what it produced, then refreshes
 // coordination/HANDOFF.md. A journal problem never fails a command.
 async function main() {
@@ -7422,9 +7432,23 @@ async function main() {
   const write = process.stdout.write.bind(process.stdout);
   process.stdout.write = (chunk, ...rest) => { if (printed.length < 1_000_000) printed += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'); return write(chunk, ...rest); };
   let status = 'ok';
+  let removeBusyMarker = null;
+  let busyMarkerPath = null;
+  const verb = verbFromArgv(argv);
+  if (verb && BUSY_MARKER_VERBS.has(verb)) {
+    try {
+      const at = argv.indexOf('--root');
+      const base = at !== -1 && argv[at + 1] ? path.resolve(argv[at + 1]) : resolveDefaultRoot(ownRoot, process.cwd());
+      const command = argv.join(' ').slice(0, 160);
+      removeBusyMarker = await writeBusyMarker({ command, root: base });
+      busyMarkerPath = path.join(busyDir(), `${process.pid}.json`);
+      process.on('exit', () => { if (busyMarkerPath) try { unlinkSync(busyMarkerPath); } catch { /* best effort */ } });
+    } catch { /* marker writing must never fail the command */ }
+  }
   try { await mainInner(); }
   catch (error) { status = 'error'; throw error; }
   finally {
+    if (removeBusyMarker) try { await removeBusyMarker(); } catch { /* best effort */ }
     process.stdout.write = write;
     if (process.exitCode) status = 'error';
     try {
@@ -8281,6 +8305,8 @@ async function mainInner() {
       for(const d of [launcher?.installRoot,path.join(os.homedir(),'.project-swarm')].filter(Boolean)){dirs.push(d);try{dirs.push(await fs.realpath(d));}catch{/* not there */}}
       const busy=runningSwarmCommands({installDirs:[...new Set(dirs)]});
       if(busy.length)fail(`update-refused: swarm will not update while work is running:\n${busy.map(b=>`  process ${b.pid}  ${b.command}`).join('\n')}\nWait for them to finish (a go --scope loop has no run between waves), or run swarm update --force yourself.`,'update-refused');
+      const markers=(await liveBusyMarkers()).filter(marker=>marker.pid!==process.pid);
+      if(markers.length)fail(`update-refused: swarm will not update while work is running:\n${markers.map(marker=>`  process ${marker.pid}  ${marker.command}  (${marker.root})`).join('\n')}\nWait for them to finish (a go --scope loop has no run between waves), or run swarm update --force yourself.`,'update-refused');
     }
     let target=root,note;
     {
