@@ -234,6 +234,17 @@ function laneDots(p) {
   if (!d.childNodes.length) { d.appendChild(el('span', 'sub', '-')); }
   return d;
 }
+function progressLine(p) {
+  var progress = p.progress;
+  if (!progress) { return null; }
+  var value = typeof progress.overall === 'number' ? progress.overall : 0;
+  var label = progress.finished ? 'Finished' : (progress.overall === null || progress.overall === undefined ? 'Unknown' : String(progress.overall) + '%');
+  var eta = progress.eta === null || progress.eta === undefined ? '' : ' · ETA ' + progress.eta + 'd';
+  var line = el('div', 'sub progress-line');
+  line.appendChild(meter(value));
+  line.appendChild(el('span', '', label + ' · ' + (progress.current || 'Unknown') + eta));
+  return line;
+}
 function renderProjects(projects) {
   var psig = L.signature(projects, Math.floor(Date.now() / 60000));
   if (psig === state.projSig) { return; }
@@ -256,6 +267,7 @@ function renderProjects(projects) {
     var p = entry.project, isWorktree = entry.worktree;
     var tr = el('tr'); if (isWorktree) { tr.className = 'wt'; }
     var name = el('div'); name.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', (isWorktree ? '↳ ' : '') + p.name)])); name.appendChild(document.createTextNode(' ')); name.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage')));
+    var tableProgress = progressLine(p); if (tableProgress) { name.appendChild(tableProgress); }
     (p.warnings || []).forEach(function (w) { name.appendChild(el('div', 'sub', '')); name.lastChild.appendChild(pill(w.text, 'warn')); });
     var mixText = buildMixText(p.orchestrator); if (mixText) { name.appendChild(el('div', 'sub', '')); name.lastChild.appendChild(pill(mixText, p.orchestrator.handPct > 0 ? 'warn' : 'good')); }
     tr.appendChild(td(name)); tr.appendChild(td(liveCell(p), 'wrap'));
@@ -265,6 +277,7 @@ function renderProjects(projects) {
     body.appendChild(tr);
     var c = el('div', 'pcard');
     var head = el('div', 'row'); head.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', (isWorktree ? '↳ ' : '') + p.name)])); head.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); c.appendChild(head);
+    var cardProgress = progressLine(p); if (cardProgress) { c.appendChild(cardProgress); }
     (p.warnings || []).forEach(function (w) { var wl = el('div', 'sub'); wl.appendChild(pill(w.text, 'warn')); c.appendChild(wl); });
     var mixCard = buildMixText(p.orchestrator); if (mixCard) { var ml = el('div', 'sub'); ml.appendChild(pill(mixCard, p.orchestrator.handPct > 0 ? 'warn' : 'good')); c.appendChild(ml); }
     if (p.idleWithReady) { var idleReady = el('div', 'sub'); idleReady.appendChild(pill('Idle with ' + p.readyTickets + ' ready tickets', 'bad')); c.appendChild(idleReady); }

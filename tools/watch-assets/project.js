@@ -7,11 +7,64 @@
   var T = encodeURIComponent(TOKEN);
   var $ = function (id) { return document.getElementById(id); };
   function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined) { n.textContent = text; } return n; }
+  function meter(pct) { var m = el('div', 'meter'); var i = el('i'); i.style.width = Math.max(0, Math.min(100, typeof pct === 'number' ? pct : 0)) + '%'; m.appendChild(i); m.setAttribute('role', 'img'); m.setAttribute('aria-label', (typeof pct === 'number' ? Math.round(pct) : 0) + ' percent'); return m; }
   function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
   function when(iso) { return iso ? String(iso).slice(0, 16).replace('T', ' ') : '-'; }
   $('back').href = '/?t=' + T;
   $('crumbBack').href = '/?t=' + T;
   $('crumbAll').href = '/?t=' + T;
+
+  function progressList(title, items) {
+    var box = el('div', 'progress-list');
+    box.appendChild(el('div', 'label', title));
+    var list = el('ul', 'board-list');
+    if (!items.length) { list.appendChild(el('li', 'board-entry sub', 'none')); }
+    items.forEach(function (item) { list.appendChild(el('li', 'board-entry', item)); });
+    box.appendChild(list);
+    return box;
+  }
+
+  function renderProgress(progress) {
+    var host = $('progressBody'); host.textContent = '';
+    if (!progress) { host.appendChild(el('div', 'board-empty', 'Build progress unavailable.')); return; }
+    var overall = progress.percent && progress.percent.overall;
+    var tickets = progress.percent && progress.percent.tickets || { done: 0, total: 0 };
+    var requirements = progress.percent && progress.percent.requirements;
+    var headline = el('div', 'livebar'); headline.appendChild(meter(overall));
+    headline.appendChild(el('strong', 'big num', overall === null || overall === undefined ? 'Unknown' : String(overall) + '%'));
+    headline.appendChild(el('span', 'sub', 'tickets ' + tickets.done + '/' + tickets.total + ', requirements ' + (requirements ? requirements.covered + '/' + requirements.total : '—')));
+    host.appendChild(headline);
+
+    var milestones = el('ol', 'milestones');
+    (progress.milestones || []).forEach(function (item) {
+      var li = el('li', item.state, item.label); if (item.state === 'current') { li.setAttribute('aria-current', 'step'); } milestones.appendChild(li);
+    });
+    host.appendChild(milestones);
+
+    var stages = el('div', 'board-list');
+    (progress.stages || []).forEach(function (stage) {
+      var row = el('div', 'board-entry'); row.appendChild(el('span', 'name', stage.title || stage.id)); row.appendChild(meter(stage.pct)); row.appendChild(el('span', 'mono sub', stage.done + ' done/' + stage.open + ' open/' + stage.blocked + ' blocked')); stages.appendChild(row);
+    });
+    if (!stages.childNodes.length) { stages.appendChild(el('div', 'board-empty', 'No stages recorded.')); }
+    host.appendChild(stages);
+
+    var left = progress.left || { openByType: {}, human: [], blockers: [], approvals: [] };
+    var types = Object.keys(left.openByType || {}).sort().map(function (type) { return type + ': ' + left.openByType[type]; });
+    var humans = (left.human || []).map(function (item) { return item.id + ' · ' + item.title + (item.stage ? ' · ' + item.stage : ''); });
+    var blockers = (left.blockers || []).map(function (item) { return item.id + ' · ' + item.title + ' — ' + item.reason; });
+    var approvals = (left.approvals || []).map(function (item) { return item.kind + ': ' + item.id + ' · ' + item.title; });
+    host.appendChild(el('div', 'label', 'What is left'));
+    host.appendChild(progressList('Open by type', types));
+    host.appendChild(progressList('Human tickets', humans));
+    host.appendChild(progressList('Blockers', blockers));
+    host.appendChild(progressList('Approvals', approvals));
+
+    host.appendChild(el('div', 'board-note', progress.eta ? 'ETA ~' + progress.eta.days + ' days (' + progress.eta.basis + ')' : 'ETA: not enough history'));
+    if (progress.spend) {
+      host.appendChild(el('div', 'board-note', usd(progress.spend.usd) + ' of ' + (progress.spend.capUsd === null ? 'no cap' : usd(progress.spend.capUsd))));
+      if (progress.spend.why) { host.appendChild(el('div', 'board-note', progress.spend.why)); }
+    }
+  }
 
   function render(p) {
     $('title').textContent = p.name;
@@ -23,6 +76,8 @@
     });
     var lanes = Object.keys(p.spend.byLane).sort();
     var byLane = el('div', 'tile'); byLane.appendChild(el('div', 'label', 'By lane')); byLane.appendChild(el('div', 'sub', lanes.length ? lanes.map(function (k) { return k + ' ' + usd(p.spend.byLane[k]); }).join(', ') : 'none')); s.appendChild(byLane);
+
+    renderProgress(p.progress);
 
     var t = $('tickets'); t.textContent = '';
     var counts = p.ticketCounts.byStatus; 
