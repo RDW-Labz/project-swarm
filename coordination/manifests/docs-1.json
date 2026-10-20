@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "docs-test-isolation",
+      "agent": "auto",
+      "prompt": "Write docs/test-isolation.md (new file, nothing else) for developers: why tests must run through npm test or node --import ./tests/_isolate-config.mjs --test, what goes wrong without it (a test used the machine's real lane claims and waited 40 minutes), what the runtime guard assertTestIsolation does and which paths it protects (machine config, spend directory, lane claims, live-run directory), the error text test-not-isolated, how to run a single test file correctly, and why CLAUDECODE must be scrubbed in tests that start git or node children. Read tools/test-isolation.mjs, tests/_isolate-config.mjs and tests/isolation-check.test.mjs for the facts. Plain, short sentences, under 70 lines.",
+      "context": [
+        "tools/test-isolation.mjs",
+        "tests/_isolate-config.mjs",
+        "tests/isolation-check.test.mjs"
+      ],
+      "outputs": [
+        "docs/test-isolation.md"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}
