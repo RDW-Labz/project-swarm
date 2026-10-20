@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.146.0
+
+Integration no longer keeps files whose checks failed.
+- **Failed checks keep nothing.** `swarm integrate RUN` now puts every file it wrote back exactly as it was (new files removed) when the checks fail, and leaves the run un-integrated (status `checks-failed`, `rolledBack` true, the failures as before). Before, the files stayed in the working tree and the run read Run already integrated, so `--accept-failed-checks` could not apply (found in parts-app wave 42). After the fix is made, the same command integrates it with no flag; `--accept-failed-checks` keeps the files and reports `integrated-with-failures` as before.
+- **A run an older swarm already integrated with failed checks** is resumable: `swarm integrate RUN --accept-failed-checks` records that the owner accepts the failed checks (nothing is rewritten); without the flag the message names the failed checks and says how.
+- Tests: `tests/field-lessons-batch-l.test.mjs` (rollback, new files, retry after the fix, the older-swarm run, the CLI), and the tests that relied on failed checks keeping files now say `acceptFailedChecks`.
+
 ## 1.145.0
 
 `swarm init --check` fails on an empty checks file, the guard follows first-time links only, and the docs match what the swarm does today.
