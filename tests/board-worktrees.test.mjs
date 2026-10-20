@@ -9,7 +9,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { projectId } from '../tools/projects.mjs';
 import { boardSnapshot } from '../tools/board-data.mjs';
-import { mainWorktreeRoot, projectSummary } from '../tools/project-spend.mjs';
+import { checkProjectCap, mainWorktreeRoot, projectSpend, projectSummary } from '../tools/project-spend.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -54,49 +54,80 @@ test('mainWorktreeRoot identifies linked worktrees and rejects the main checkout
   assert.equal(await mainWorktreeRoot(worktree), root);
 });
 
-test('worktree spend inherits the main profile cap, but an own pointer wins and its own runs reach the inherited cap', async t => {
+test('one project cap covers the main checkout and every linked worktree', async t => {
   const root = await tempDir(t);
   await initRepo(root);
-  const inherited = await addWorktree(t, root, 'inherited');
-  const own = await addWorktree(t, root, 'own');
-  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ profile: { budget: { projectMaxUsd: 5 } } }));
+  const worktree = await addWorktree(t, root, 'inherited');
+  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ profile: { budget: { projectMaxUsd: 4 } } }));
   const config = path.join(path.dirname(root), 'config.json');
   await fs.writeFile(config, JSON.stringify({}));
   const env = { ...process.env, SWARM_CONFIG: config };
 
-  const under = await projectSummary(inherited, { env, ttlMs: 0 });
-  assert.equal(under.capUsd, 5);
+  await writeRun(root, 'main-run', 3);
+  await writeRun(worktree, 'worktree-run', 2);
+  const mainSpent = await projectSpend(root);
+  const worktreeSpent = await projectSpend(worktree);
+  assert.equal(mainSpent.usd, 5);
+  assert.equal(worktreeSpent.usd, 5);
+  assert.deepEqual(mainSpent.trees.map(tree => tree.root), [root, worktree]);
+  assert.deepEqual(worktreeSpent.trees.map(tree => tree.root), [root, worktree]);
+
+  const mainDecision = await checkProjectCap(root, { env });
+  const worktreeDecision = await checkProjectCap(worktree, { env });
+  for (const decision of [mainDecision, worktreeDecision]) {
+    assert.equal(decision.reason, 'project-cap');
+    assert.match(decision.message, /and its 1 worktrees/);
+    assert.match(decision.message, /\$5\.00/);
+  }
+  const reached = await projectSummary(worktree, { env, ttlMs: 0 });
+  assert.equal(reached.spendUsd, 5);
+  assert.equal(reached.treeUsd, 2);
+  assert.equal(reached.sharedTrees, 2);
+  assert.equal(reached.reached, true);
+
+  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ profile: { budget: { projectMaxUsd: 10 } } }));
+  assert.equal(await checkProjectCap(root, { env }), null);
+  assert.equal(await checkProjectCap(worktree, { env }), null);
+  const under = await projectSummary(worktree, { env, ttlMs: 0 });
+  assert.equal(under.capUsd, 10);
   assert.equal(under.capInherited, true);
   assert.equal(under.inheritedFrom, root);
   assert.match(under.capSource, /inherited from .*$/);
   assert.equal(under.why, null);
 
+  const second = await addWorktree(t, root, 'second');
+  await writeRun(second, 'second-run', 1);
+  assert.equal((await projectSpend(root)).usd, 6);
+  assert.equal((await projectSpend(worktree)).usd, 6);
+});
+
+test('a worktree pointer wins over the main profile pointer', async t => {
+  const root = await tempDir(t);
+  await initRepo(root);
+  const own = await addWorktree(t, root, 'own');
+  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ profile: { budget: { projectMaxUsd: 5 } } }));
+  const config = path.join(path.dirname(root), 'config.json');
+  await fs.writeFile(config, JSON.stringify({}));
+  const env = { ...process.env, SWARM_CONFIG: config };
   await fs.writeFile(path.join(own, '.project-swarm.json'), JSON.stringify({ profile: { budget: { projectMaxUsd: 7 } } }));
   const ownSummary = await projectSummary(own, { env, ttlMs: 0 });
   assert.equal(ownSummary.capUsd, 7);
   assert.equal(ownSummary.capInherited, false);
   assert.equal(ownSummary.inheritedFrom, null);
   assert.equal(ownSummary.capSource, 'profile budget.projectMaxUsd');
-
-  await writeRun(inherited, 'run-a', 3);
-  await writeRun(inherited, 'run-b', 2);
-  const reached = await projectSummary(inherited, { env, ttlMs: 0 });
-  assert.equal(reached.capUsd, 5);
-  assert.match(reached.why, /^project-cap:/);
 });
 
 test('boardSnapshot groups registered worktrees while keeping the flat projects and machine totals', async t => {
   const root = await tempDir(t);
   await initRepo(root);
   const worktree = await addWorktree(t, root, 'feature');
-  await writeRun(root, 'main-run', 1.25);
-  await writeRun(worktree, 'worktree-run', 2.5);
+  await writeRun(root, 'main-run', 3);
+  await writeRun(worktree, 'worktree-run', 2);
   const main = { id: projectId(root), root, name: 'main' };
   const child = { id: projectId(worktree), root: worktree, name: 'feature' };
   const snapshot = await boardSnapshot({
     projects: [main, child],
     liveRuns: [],
-    summary: async () => ({ capUsd: null, capSource: null, capInherited: false, inheritedFrom: null, why: null }),
   });
   const mainOverview = snapshot.projects.find(project => project.id === main.id);
   const childOverview = snapshot.projects.find(project => project.id === child.id);
@@ -104,7 +135,34 @@ test('boardSnapshot groups registered worktrees while keeping the flat projects 
   assert.equal(childOverview.worktree, true);
   assert.deepEqual(mainOverview.worktreeIds, [child.id]);
   assert.deepEqual(snapshot.projects.map(project => project.id), [main.id, child.id]);
+  assert.equal(mainOverview.spend.familyUsd, 5);
+  assert.equal(childOverview.spend.familyUsd, 5);
+  assert.equal(mainOverview.spend.sharedTrees, 2);
+  assert.equal(childOverview.spend.sharedTrees, 2);
   for (const key of ['todayUsd', 'weekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) {
     assert.equal(snapshot.machine.cost[key], snapshot.projects.reduce((sum, project) => sum + project.cost[key], 0), key);
   }
+});
+
+test('a plain repository keeps the old spend totals and has one tree', async t => {
+  const root = await tempDir(t);
+  await initRepo(root);
+  await writeRun(root, 'plain-run', 1.25);
+  const spent = await projectSpend(root);
+  assert.equal(spent.usd, 1.25);
+  assert.equal(spent.runs, 1);
+  assert.equal(spent.trees.length, 1);
+  assert.equal(spent.trees[0].root, root);
+});
+
+test('worktree metadata under .swarm is ignored so a swarm job worktree is not counted twice', async t => {
+  const root = await tempDir(t);
+  await initRepo(root);
+  const swarmWorktree = path.join(root, '.swarm', 'job-worktree');
+  await fs.mkdir(path.dirname(swarmWorktree), { recursive: true });
+  await git(root, ['worktree', 'add', '-q', '-b', 'swarm-job', swarmWorktree]);
+  await writeRun(root, 'main-run', 3);
+  const spent = await projectSpend(root);
+  assert.equal(spent.usd, 3);
+  assert.deepEqual(spent.trees.map(tree => tree.root), [root]);
 });

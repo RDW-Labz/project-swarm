@@ -199,8 +199,10 @@ function renderBays(m) {
 function capCell(p) {
   var s = p.spend, box = el('div');
   if (s.capUsd) {
-    box.appendChild(meter(100 * s.usd / s.capUsd, s.usd / s.capUsd > 0.75));
-    box.appendChild(el('span', 'mono sub', usd(s.usd) + ' of ' + usd(s.capUsd)));
+    var used = s.sharedTrees > 1 && typeof s.familyUsd === 'number' ? s.familyUsd : s.usd;
+    box.appendChild(meter(100 * used / s.capUsd, used / s.capUsd > 0.75));
+    box.appendChild(el('span', 'mono sub', usd(used) + ' of ' + usd(s.capUsd)));
+    if (s.sharedTrees > 1) { box.appendChild(el('div', 'sub', 'shared by ' + s.sharedTrees + ' trees (this one ' + usd(s.usd) + ')')); }
     if (s.capInherited) { box.appendChild(el('div', 'sub', 'cap inherited from ' + String(s.inheritedFrom || '').split(/[\\/]/).pop())); }
   } else {
     var r = el('div', 'livebar'); r.appendChild(pill(s.capInvalid ? 'CAP INVALID' : 'NO CAP', s.capInvalid ? 'bad' : 'warn')); r.appendChild(el('span', 'mono sub', usd(s.usd))); box.appendChild(r);

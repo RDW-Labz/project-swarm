@@ -10,9 +10,9 @@ const finite = value => typeof value === 'number' && Number.isFinite(value) && v
 
 const cache = new Map(); // state.json path -> { mtimeMs, size, run }: a rescan re-reads only runs that changed
 
-// Total of every run in the project. A run state that cannot be read, or has the wrong shape, is listed in `unreadable`; never silently skipped.
+// Total of every run in one checkout. A run state that cannot be read, or has the wrong shape, is listed in `unreadable`; never silently skipped.
 // `exposureUsd` is what runs that are still running may yet spend under their own --max-usd (counted so runs started together cannot all slip under the cap).
-export async function projectSpend(root) {
+export async function treeSpend(root) {
   const dir = path.join(root, '.swarm', 'runs');
   const total = { usd: 0, tokens: 0, runs: 0, unreadable: [], unknownUsd: 0, exposureUsd: 0 };
   let ids = [];
@@ -66,6 +66,62 @@ export async function mainWorktreeRoot(root) {
   }
 }
 
+const realOrResolved = async root => await fs.realpath(root).catch(() => path.resolve(root));
+const hasSwarmSegment = root => path.resolve(root).split(path.sep).includes('.swarm');
+
+// The cap is shared by the main checkout and every linked worktree recorded by git. This reads
+// only the worktree metadata; it deliberately does not invoke git, and malformed entries are
+// ignored so a missing or half-written entry cannot make cap inspection throw.
+export async function worktreeFamily(root) {
+  const requested = await realOrResolved(root);
+  const mainCandidate = (await mainWorktreeRoot(root)) ?? root;
+  const main = await realOrResolved(mainCandidate);
+  let gitStat;
+  try { gitStat = await fs.stat(path.join(main, '.git')); } catch { return [requested]; }
+  if (!gitStat.isDirectory()) return [requested];
+
+  const discovered = new Set();
+  const worktreesDir = path.join(main, '.git', 'worktrees');
+  let entries = [];
+  try { entries = await fs.readdir(worktreesDir); } catch (error) { if (error.code !== 'ENOENT') entries = []; }
+  for (const entry of entries) {
+    const gitdirFile = path.join(worktreesDir, entry, 'gitdir');
+    let pointer;
+    try { pointer = (await fs.readFile(gitdirFile, 'utf8')).trim(); } catch { continue; }
+    if (!pointer) continue;
+    const gitdir = path.isAbsolute(pointer) ? pointer : path.resolve(path.dirname(gitdirFile), pointer);
+    let member;
+    try { member = await fs.realpath(path.dirname(gitdir)); } catch { continue; }
+    if (hasSwarmSegment(member)) continue;
+    if (member !== main) discovered.add(member);
+  }
+  return [main, ...[...new Set([...discovered, requested])].filter(member => member !== main).sort()];
+}
+
+export async function projectSpend(root) {
+  const family = await worktreeFamily(root);
+  const requested = await realOrResolved(root);
+  const results = await Promise.all(family.map(async member => ({ root: member, spent: await treeSpend(member) })));
+  const total = { usd: 0, tokens: 0, runs: 0, unreadable: [], unknownUsd: 0, exposureUsd: 0, trees: results.map(({ root: member, spent }) => ({ root: member, usd: spent.usd, runs: spent.runs })) };
+  const own = results.find(({ root: member }) => member === requested);
+  for (const { spent } of results) {
+    total.usd += spent.usd;
+    total.tokens += spent.tokens;
+    total.runs += spent.runs;
+    total.unknownUsd += spent.unknownUsd;
+    total.exposureUsd += spent.exposureUsd;
+  }
+  const unreadable = [];
+  if (own) unreadable.push(...own.spent.unreadable);
+  for (const { root: member, spent } of results) {
+    if (member === requested) continue;
+    const prefix = path.basename(member);
+    unreadable.push(...spent.unreadable.map(id => `${prefix}:${id}`));
+  }
+  total.unreadable = unreadable;
+  return total;
+}
+
 // The lower of the profile cap and the local-config cap, with where it came from; null when neither is set. null or a bad value is an error, never "no cap".
 export function projectCapInfo({ profile, config, inheritedFrom = null } = {}) {
   let best = null;
@@ -110,7 +166,8 @@ export function projectCapDecision({ spent, cap, source = 'profile budget.projec
   if (spent.unreadable?.length) return { reason: 'project-cap-unreadable', spent: spent.usd, cap, message: `project-cap: ${spent.unreadable.length} run state${spent.unreadable.length === 1 ? '' : 's'} could not be read (${spent.unreadable.slice(0, 3).join(', ')}), so the project total is unknown and no new run starts; fix or move them` };
   const exposure = spent.exposureUsd ?? 0;
   if (spent.usd + exposure < cap) return null;
-  return { reason: 'project-cap', spent: spent.usd, cap, message: `project-cap: this project has spent $${spent.usd.toFixed(2)} across ${spent.runs} runs${exposure > 0 ? ` and runs still going may spend $${exposure.toFixed(2)} more` : ''} >= the project cap $${cap.toFixed(2)}; no new run starts. Raising it needs the owner (${source})` };
+  const subject = spent.trees?.length > 1 ? `this project and its ${spent.trees.length - 1} worktrees have spent` : 'this project has spent';
+  return { reason: 'project-cap', spent: spent.usd, cap, message: `project-cap: ${subject} $${spent.usd.toFixed(2)} across ${spent.runs} runs${exposure > 0 ? ` and runs still going may spend $${exposure.toFixed(2)} more` : ''} >= the project cap $${cap.toFixed(2)}; no new run starts. Raising it needs the owner (${source})` };
 }
 
 export async function checkProjectCap(root, { env = process.env } = {}) {
@@ -130,8 +187,10 @@ export async function projectSummary(root, { env = process.env, now = Date.now, 
     let info = null, capError = null;
     try { info = await readProjectCap(root, { env }); } catch (error) { capError = error.message; }
     const decision = info ? projectCapDecision({ spent, cap: info.cap, source: info.source }) : null;
-    value = { spendUsd: Math.round(spent.usd * 100) / 100, runs: spent.runs, capUsd: info?.cap ?? null, noCap: !info && !capError, reached: Boolean(decision), unknownUsd: spent.unknownUsd, unreadable: spent.unreadable.length, capSource: info?.source ?? null, capInherited: Boolean(info?.inheritedFrom), inheritedFrom: info?.inheritedFrom ?? null, why: capError ? `cap invalid: ${capError}` : decision?.message ?? null, ...(capError ? { capError } : {}) };
-  } catch (error) { const capError = String(error.message).slice(0, 200); value = { spendUsd: null, runs: 0, capUsd: null, reached: false, unknownUsd: 0, unreadable: 0, capSource: null, capInherited: false, inheritedFrom: null, why: `cap invalid: ${capError}`, capError }; }
+    const ownRoot = await realOrResolved(root);
+    const own = spent.trees?.find(tree => tree.root === ownRoot);
+    value = { spendUsd: Math.round(spent.usd * 100) / 100, treeUsd: Math.round((own?.usd ?? 0) * 100) / 100, sharedTrees: spent.trees?.length ?? 1, runs: spent.runs, capUsd: info?.cap ?? null, noCap: !info && !capError, reached: Boolean(decision), unknownUsd: spent.unknownUsd, unreadable: spent.unreadable.length, capSource: info?.source ?? null, capInherited: Boolean(info?.inheritedFrom), inheritedFrom: info?.inheritedFrom ?? null, why: capError ? `cap invalid: ${capError}` : decision?.message ?? null, ...(capError ? { capError } : {}) };
+  } catch (error) { const capError = String(error.message).slice(0, 200); value = { spendUsd: null, treeUsd: null, sharedTrees: 1, runs: 0, capUsd: null, reached: false, unknownUsd: 0, unreadable: 0, capSource: null, capInherited: false, inheritedFrom: null, why: `cap invalid: ${capError}`, capError }; }
   summaryCache.set(root, { at: now(), value });
   return value;
 }
