@@ -3,7 +3,7 @@
 `swarm init` links a project to the shared install and records what the swarm needs to know about it.
 
 ```
-swarm init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]...
+swarm init [--check [--json]] [--kit NAME --kit-source PATH_OR_GIT_URL] [--sensitive | --not-sensitive] [--protect PATH]...
            [--max-usd N] [--max-tokens N] [--no-base-check] [--no-map]
 swarm map [--json]
 ```
@@ -28,4 +28,8 @@ For every tracked file: language, exports, imports resolved to project files, ex
 
 ## `swarm init --check`
 
-A read-only health check: the pointer file, its version against the installed one, the profile, the checks file, the base check (and whether it was taken at another commit), the map, whether `.swarm/` is git-ignored, and whether `AGENTS.md` and `CLAUDE.md` tell agents to run `swarm brief`. One line per item (`ok`, `warn`, `FAIL`); it exits 1 only when something failed, and writes nothing, not even a journal line.
+A read-only health check (exit 1 when anything FAILs). A missing, empty or runnable-check-less `coordination/checks.json` is a **FAIL**: nothing would verify the work. the pointer file, its version against the installed one, the profile, the checks file, the base check (and whether it was taken at another commit), the map, whether `.swarm/` is git-ignored, and whether `AGENTS.md` and `CLAUDE.md` tell agents to run `swarm brief`. One line per item (`ok`, `warn`, `FAIL`); it exits 1 only when something failed, and writes nothing, not even a journal line.
+
+## After init
+
+A new project's whole setup, in order, is in [new-project.md](new-project.md). `swarm init` also installs the Orchestrator-lane hooks (and, for a project linked for the first time, the hand-build guard) in `.claude/settings.local.json` (see [the Orchestrator lane](orchestrator-lane.md) and [the guard](handbuild-guard.md)); `.swarm/orchestrator/off` and `swarm handbuild uninstall` opt out.

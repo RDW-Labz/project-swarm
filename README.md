@@ -40,10 +40,10 @@ or another agent with file and command access. The worker adapter does not
 need to match the orchestrator. Paste this into your agent at project start:
 
 ```text
-Use Project Swarm 1.144.0 for this project. Read docs/kickoff.md in the toolkit
+Use Project Swarm 1.145.0 for this project. Read docs/kickoff.md in the toolkit
 and perform its kickoff workflow. Ask me up front which model providers may
 receive project code and what spend ceiling applies; wait before model calls.
-Install from tag v1.144.0 in ~/.project-swarm, run tools/install.mjs --user,
+Install from tag v1.145.0 in ~/.project-swarm, run tools/install.mjs --user,
 link this project, run doctor, validate and run the read-only and writing smoke
 jobs, inspect and integrate the reviewed writing output. Read the installed
 SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
@@ -103,10 +103,26 @@ for one directory cover only some of its filename prefixes. See
 
 Release 1.19.0 adds claude shell jobs (`shell: true`, or model `sonnet-shell`/`opus-shell`): the whole `claude -p` process runs under a generated macOS seatbelt profile with a sandboxed Bash, writes only in its worktree, network only to the model API, so the worker can run the checks itself; see [shell jobs](docs/manifest-reference.md#shell-jobs) and [lesson 40](docs/lessons.md).
 
+## Setting up a new project
+
+Step by step, with what to check first: **[docs/new-project.md](docs/new-project.md)** (init, checks, caps, lanes, hooks, the hand-build guard, the board, the first scope run).
+
+## How the swarm works today
+
+- **Lanes and routing.** Code work goes to the cheapest healthy lane first: Cursor, then Codex (flat-rate subscriptions), then paid Haiku; the Claude subscription only after two failures or for the expensive tier (Opus). Every lane needs a model string in `~/.config/project-swarm/config.json`; the `claude` lane also takes `midModel` and `expensiveModel`. See [lanes](docs/lanes.md).
+- **Escalation.** A ticket that fails goes up one level each time: a bigger output, then Codex first (hard), then the expensive tier on `claude:opus`. A ticket no lane can take is left out of its wave and blocked with the reason instead of aborting the wave. API-only fields (output limit, prompt caching) are never sent to Cursor, Codex or Claude. See [scope](docs/scope.md).
+- **Caps are hard.** A job is refused if what is spent, plus what is reserved for jobs in flight, plus its own worst case would pass a cap (per run, per project, per lane per day). See [spend](docs/spend.md).
+- **Checks decide.** Tests run in the merge queue, not in a worker's sandbox. Integration runs the checks first and keeps nothing when they fail (`--accept-failed-checks` is the owner's override). See [verification](docs/verification.md).
+- **Swarm Watch.** `swarm watch --all` is the board (lanes, cost per lane with list value for flat-rate lanes, agents, events, Needs you, and the **Orchestrator** lane: the Claude Code sessions driving each project, their tokens at list value, and the swarm-built against hand-built share). `swarm remote on` puts it on your phone over Tailscale, tailnet only. See [watch](docs/watch.md), [remote](docs/remote.md), [the Orchestrator lane](docs/orchestrator-lane.md).
+- **The hand-build guard.** An orchestrator session cannot edit or shell-write the checkout outside `.swarm/` and `docs/plans/` without your approval for named files and a short time. See [the guard](docs/handbuild-guard.md).
+- **Updates.** `swarm update` moves the installed swarm and the version of every linked project's pointer (the profile in `.project-swarm.json` is never rewritten), and refuses while a run or a swarm command is running from the install; `--force` is the owner's. A board or `swarm remote` started before an update must be restarted. See [setup](docs/setup.md).
+- **The plan for managers** (budget, lane health, version, ticket manager, unblocker, merge queue, lessons, visual QA) is [docs/plans/phase19-swarm-managers.md](docs/plans/phase19-swarm-managers.md); nothing in it is built yet.
+
 ## Shared install
 
 ```sh
-git clone --branch v1.37.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git ~/.project-swarm
+git clone https://github.com/RDW-Labz/project-swarm.git ~/.project-swarm
+git -C ~/.project-swarm checkout "$(git -C ~/.project-swarm describe --tags --abbrev=0)"     # the newest release tag
 node ~/.project-swarm/tools/install.mjs --user
 node ~/.project-swarm/tools/install.mjs /absolute/path/to/project
 node ~/.project-swarm/current/tools/swarm.mjs --root /absolute/path/to/project doctor all
@@ -125,8 +141,9 @@ You need **Node.js 20.3+**, macOS/Linux/WSL, and one configured provider. For Cl
 Clone the public repository. No GitHub account or access invitation is required:
 
 ```sh
-git clone --branch v1.37.0 --depth 1 https://github.com/RDW-Labz/project-swarm.git
+git clone https://github.com/RDW-Labz/project-swarm.git
 cd project-swarm
+git checkout "$(git describe --tags --abbrev=0)"     # the newest release tag
 npm test
 npm run check
 node tools/swarm.mjs doctor all

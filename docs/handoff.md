@@ -47,3 +47,7 @@ The workers write from the **approved scope** (your own words: overview, the req
 ## What it never does
 
 It sends nothing anywhere and spends nothing without your `y` or `--yes`. It does not put model-written text in the runbook, and a failing check never changes a guide: it only files a proposal.
+
+## Where this fits
+
+Handoff is the last step of a stage. The first steps of a project (init, checks, caps, hooks, guard, the first scope run) are in [new-project.md](new-project.md).

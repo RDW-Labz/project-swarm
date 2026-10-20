@@ -431,3 +431,26 @@ test('third review: requests name specific files; a commit with a same-line add 
   assert.equal(bash(root, 'git add -A && git commit -m x', T0 + 1000).allow, false, 'add -A cannot be checked');
   assert.equal(bash(root, 'git add . ; git commit -m x', T0 + 1000).allow, false);
 });
+
+import { installProject } from '../tools/install.mjs';
+test('init links a new project with the guard; re-running it in an existing project never turns the guard on', async t => {
+  const packageRoot = fileURLToPath(new URL('..', import.meta.url));
+  const settings = async root => JSON.parse(await fs.readFile(path.join(root, '.claude/settings.local.json'), 'utf8'));
+  const hasGuard = s => JSON.stringify(s).includes('handbuild-guard.mjs');
+  const fresh = await project(t);
+  const first = await installProject(fresh, { source: packageRoot });
+  assert.ok(['created', 'updated'].includes(first.handbuildGuard.status));
+  assert.equal(hasGuard(await settings(fresh)), true);
+  // an existing project (already linked, no guard): init again changes the pointer, not the guard
+  const existing = await project(t);
+  await fs.writeFile(path.join(existing, '.project-swarm.json'), JSON.stringify({ install: packageRoot, version: '1.0.0' }));
+  const again = await installProject(existing, { source: packageRoot });
+  assert.equal(again.handbuildGuard, null);
+  const s = await settings(existing);
+  assert.equal(hasGuard(s), false, 'no guard');
+  assert.equal(JSON.stringify(s).includes('orchestrator-hook.mjs'), true, 'the observer hooks are there');
+  // a project that removed the guard keeps it removed across init
+  await removeHandbuildGuard(fresh);
+  await fs.rm(path.join(fresh, '.project-swarm.json'));     // as if linked again for the first time
+  assert.equal((await installProject(fresh, { source: packageRoot })).handbuildGuard.status, 'removed-by-owner');
+});
