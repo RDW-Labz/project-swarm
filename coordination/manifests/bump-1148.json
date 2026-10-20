@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "bump-1-148-0",
+      "agent": "auto",
+      "prompt": "Bump the version from 1.147.0 to 1.148.0 as the 1.61.0 release did. In package.json and package-lock.json (both places in the lock) change 1.147.0 to 1.148.0. In README.md change every 1.147.0 pin (kickoff text, tag name) to 1.148.0. In these tests replace the 1.147.0 pin with 1.148.0 where it is the current-version pin (assertions, test titles, the pin map in the AH release test): tests/t101-release.test.mjs, tests/field-lesson-t80-cli.test.mjs, tests/field-lessons-batch-x.test.mjs, tests/field-lessons-batch-ab-release.test.mjs, tests/field-lessons-batch-ag-release.test.mjs, tests/field-lessons-batch-ah-release.test.mjs. In CHANGELOG.md the top entry is currently the 1.147.0 entry: keep it unchanged and add a NEW entry above it titled ## 1.148.0 with this text: 'Base checks skip integrate-only placeholders; flat-rate lanes no longer reserve against caps.' then bullets (make the lead-in of each bullet bold with double asterisks like the entries below): 'Base checks: swarm run no longer spawns a base check whose argv names an integrate-only placeholder (whole argv item {integrated}, {integrated:.ext}, {new} or {new:.ext}) with the literal text, which turned every base red (parts-app, 1.144.0). Such a check, or one with base set to false, is recorded as skipped with its reason; {root} is expanded at base the way integrate does; the cached base verdict carries a checksKey so a record from different checks or an older runner is recomputed.'; 'Flat-rate reserve: codex, cursor, hermes and qwen reserve 0 dollars against spend caps while a job is in flight (atlas-seafloor: a scope split was refused at 0.00 of a 10 dollar cap while one Codex run was running). Metered lanes and the claude lane reserve exactly as before. In-flight flat-rate work no longer counts toward the cap until it finishes.'; 'Tests: tests/base-checks-placeholders.test.mjs, tests/flat-rate-reserve.test.mjs, tests/hard-cap.test.mjs.' Write no other changes. Many tests import package.json or CHANGELOG.md; the tests not in context are knowingly left uncovered.",
+      "context": [
+        "package.json",
+        "package-lock.json",
+        "README.md",
+        "CHANGELOG.md",
+        "tests/t101-release.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs"
+      ],
+      "outputs": [
+        "package.json",
+        "package-lock.json",
+        "README.md",
+        "CHANGELOG.md",
+        "tests/t101-release.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs"
+      ],
+      "timeoutMs": 600000,
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/cap-reroute.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-w.test.mjs",
+        "tests/fixtures/make-practice-project.mjs",
+        "tests/goal.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/leads.test.mjs",
+        "tests/lessons120-ship.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/repo-map.test.mjs",
+        "tests/router.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/ship-125.test.mjs",
+        "tests/ticket-context.test.mjs",
+        "tests/update.test.mjs"
+      ]
+    }
+  ]
+}
