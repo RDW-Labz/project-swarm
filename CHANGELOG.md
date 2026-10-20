@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.150.0
+
+Keep the lanes busy: the swarm starts ready tickets itself.
+- **Autopilot start-ready:** swarm autopilot has a new action that starts go --scope when the project has ready tickets, no run or busy marker is live for it, and the project cap has room. It makes no model calls and never approves, merges, deploys, raises a cap or overrides. A pending approval holds back only the tickets whose files it names; every other ready ticket still starts.
+- **The rule in every project:** swarm init and swarm update --projects --yes write a short keep-the-lanes-busy section into CLAUDE.md and AGENTS.md between markers (re-runs replace only the marked block).
+- **Board:** a project that is idle with ready tickets shows a red Idle with N ready tickets flag.
+- **Docs:** docs/new-project.md has a Keep the lanes busy section.
+- **Tests:** tests/lanes-rule.test.mjs, tests/autopilot-start-ready.test.mjs, tests/autopilot-ready-deps.test.mjs, tests/board-idle-ready.test.mjs, tests/rule-wiring.test.mjs.
+
 ## 1.149.0
 
 The hand-build guard stops accidents, and integrate records content hashes.
