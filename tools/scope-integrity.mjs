@@ -72,6 +72,9 @@ function findConflicts(active, waves) {
   return out;
 }
 
+const GATE_MIN = 8;
+const SHARED_FILE = /(^|\/)(shared|common|globals?|layout|theme|tokens?|i18n|locales?|messages|types)\b|\.css$|(^|\/)(index|utils?|helpers?)\.[a-z]+$/i;
+
 export function checkTicketTree({ scope, tickets = [], sizeBudget } = {}) {
   const reqs = Array.isArray(scope?.requirements) ? scope.requirements : [];
   const reqIds = new Set(reqs.map((r) => r.id));
@@ -117,6 +120,19 @@ export function checkTicketTree({ scope, tickets = [], sizeBudget } = {}) {
     }
   }
   if (later.length) warnings.push({ code: 'test-owned-by-later', message: `${later.length} ticket(s) list a test file that a later ticket owns (it is written after them, so they do not wait for it): ${later.slice(0, 5).map(x => `${x.ticket} lists ${x.file} owned by ${x.owner}`).join('; ')}${later.length > 5 ? `; and ${later.length - 5} more` : ''}. Remove the file from the earlier ticket's tests, or make its owner a dependency of it.`, items: later });
+
+  // One ticket that gates many others (when it is blocked, a whole stage waits): flagged before the run, with the shared files that usually cause it, so the work is split early.
+  const gates = [];
+  for (const t of active) {
+    const down = new Set(dependentsOf.get(t.id) ?? []);
+    for (const id of down) for (const d of dependentsOf.get(id) ?? []) down.add(d);
+    const sameStage = active.filter((x) => x.stage === t.stage).length || active.length;
+    if (down.size >= Math.max(GATE_MIN, Math.ceil(sameStage * 0.25))) gates.push({ ticket: t.id, gates: down.size, shared: (Array.isArray(t.files) ? t.files : []).filter((f) => SHARED_FILE.test(f)) });
+  }
+  if (gates.length) {
+    const top = gates.sort((a, b) => b.gates - a.gates);
+    warnings.push({ code: 'gating-ticket', message: `${top.length} ticket(s) gate many others: ${top.slice(0, 5).map((g) => `${g.ticket} gates ${g.gates} tickets${g.shared.length ? ` (shared files: ${g.shared.slice(0, 3).join(', ')})` : ''}`).join('; ')}. If one of them gets blocked, all of those wait. Split the shared work (one ticket per component or file group) or make the ones behind it depend on less.`, items: top });
+  }
 
   const uncovered = reqs.map((r) => r.id).filter((id) => !covered.has(id));
   const coveragePct = reqs.length ? Math.round((covered.size * 100) / reqs.length) : 0;
