@@ -482,8 +482,14 @@ function tailDetailLines(tail) {
     .map(line => (line.length > 160 ? line.slice(0, 160) : line));
 }
 
+function failingCheckWarrantsDetails(check) {
+  if (Number.isInteger(check?.exitCode)) return true;
+  if (check?.exitCode === null) return true;
+  return tailDetailLines(check?.tail).length > 0;
+}
+
 export function formatFailingBaseCheckDetails(failingChecks) {
-  const failing = Array.isArray(failingChecks) ? failingChecks : [];
+  const failing = (Array.isArray(failingChecks) ? failingChecks : []).filter(failingCheckWarrantsDetails);
   if (!failing.length) return '';
   const maxShow = 5;
   const lines = [];

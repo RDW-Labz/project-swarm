@@ -66,6 +66,25 @@ test('more than five failing checks prints and N more', () => {
   assert.match(details, /and 2 more/);
 });
 
+test('red base with failing checks that have no exitCode and no tail stays one line', () => {
+  const baseCheck = {
+    status: 'red',
+    ranAt: ISO,
+    checks: [
+      { name: 'test', ok: false },
+      { name: 'lint', ok: false },
+      { name: 'build', ok: true },
+    ],
+  };
+  assert.equal(
+    formatBaseCheck(baseCheck),
+    'Base checks: RED, already failing before any change: test, lint',
+  );
+  const warning = formatBaseRedWarningMessage(baseCheck);
+  assert.equal(warning, 'base-red: checks already fail before any change: test, lint');
+  assert.equal(warning.split('\n').length, 1);
+});
+
 test('green, none, and skipped stay one line', () => {
   const green = formatBaseCheck({ status: 'green', ranAt: ISO, checks: [{ ok: true }, { ok: true }] });
   assert.match(green, /^Base checks: green \(2 checks, 2026-10-15T/);
