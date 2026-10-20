@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "guard-tests-follow",
+      "agent": "auto",
+      "prompt": "Wave 4 changed behavior on purpose and six older tests now fail. Update them to the new behavior WITHOUT weakening what they protect. (a) tests/handbuild-channel.test.mjs, the test named 'orchestrator prompt hook records merge lines only at line start': the hook now records a merge approval only for a prompt that is exactly one line of the form merge, optional hash, a PR number (also merge pr N and merge pull request N) and only when hook_event_name is UserPromptSubmit; rewrite the test to assert exactly that (accepted: merge #203, Merge 7, merge pr #5 with the right event name; nothing recorded: a list item, a line inside a longer prompt, a fenced line, two lines, the wrong event name). (b) tests/phone.test.mjs, five failing tests (the phone owner-answer runs once, the borderline second step, the same-owner logins, the confirmation word for non-default choices, and the source-reading test named 'the phone code cannot reach merge, deploy, spend caps or overrides'): tools/phone.mjs no longer falls back to runSwarm for decide; a choose action calls deps.decideInbox(root, itemId, choice) (and refuses when it is missing, and normalises the choice by trimming and lower-casing before the allow-list check). Change the test deps to supply a decideInbox fake that records its calls and returns what the old runSwarm decide fake returned, and make each assertion that looked at the swarm decide invocation look at the decideInbox call instead (same arguments: root, item id, choice). The source-reading test must keep asserting that tools/phone.mjs can only ever run decide through decideInbox, tickets --approve and stop --all and has no path to merge, deploy, spend caps or overrides; update its pattern to the new code, do not delete the assertion. Do not change any tools file. Write only tests/handbuild-channel.test.mjs and tests/phone.test.mjs.",
+      "context": ["tests/handbuild-channel.test.mjs", "tests/phone.test.mjs", "tools/phone.mjs", "tools/phone-commands.mjs", "tools/orchestrator-hook.mjs"],
+      "outputs": ["tests/handbuild-channel.test.mjs", "tests/phone.test.mjs"],
+      "timeoutMs": 900000
+    }
+  ]
+}

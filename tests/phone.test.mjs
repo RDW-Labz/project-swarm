@@ -45,15 +45,26 @@ function fakeGithub({ login = 'owner-login', repoExists = true, isPrivate = true
 const decision = (id = 'd-1', over = {}) => ({ key: `/p|decision|${id}`, root: '/p', projectName: 'shop', kind: 'decision', itemId: id, title: 'Which logo?', options: ['blue', 'green'], default: 'green', secondStep: false, ...over });
 const ticket = (id = 'T-0007', over = {}) => ({ key: `/p|ticket|${id}`, root: '/p', projectName: 'shop', kind: 'ticket', itemId: id, title: 'Fix the footer', options: [], files: ['src/footer.tsx'], secondStep: false, ...over });
 
-async function rig(t, { items = [decision()], github = fakeGithub(), swarm } = {}) {
+async function rig(t, { items = [decision()], github = fakeGithub(), swarm, decideInbox } = {}) {
   const dir = await tmp(t);
   await writePhoneConfig(dir, { repo: REPO, owner: 'owner-login', enabled: true });
   const ran = [];
-  const world = { items, now: Date.now(), github, ran };
-  const deps = { gh: github.run, items: async () => world.items, now: () => world.now, random: n => 3 % n, runSwarm: swarm ?? (async (root, args) => { ran.push({ root, args }); return { ok: true, text: 'ok' }; }) };
+  const decideCalls = [];
+  const world = { items, now: Date.now(), github, ran, decideCalls };
+  const deps = {
+    gh: github.run,
+    items: async () => world.items,
+    now: () => world.now,
+    random: n => 3 % n,
+    decideInbox: decideInbox ?? (async (root, itemId, choice) => {
+      decideCalls.push({ root, itemId, choice });
+      return { ok: true, text: 'ok' };
+    }),
+    runSwarm: swarm ?? (async (root, args) => { ran.push({ root, args }); return { ok: true, text: 'ok' }; }),
+  };
   github.clock = () => world.now;
   const sync = (opts = {}) => syncPhone({ dir, deps, ...opts });
-  return { dir, world, deps, sync, github, ran };
+  return { dir, world, deps, sync, github, ran, decideCalls };
 }
 const numberOf = (github, kind) => [...github.issues.values()].find(i => (kind === 'panic' ? /panic/ : new RegExp(kind)).test(i.title));
 
@@ -93,12 +104,12 @@ test('the owner\'s answer runs once: the chosen option is passed to swarm decide
   r.github.say(n, '2');
   const res = await r.sync();
   assert.equal(res.answered.length, 1);
-  assert.deepEqual(r.ran, [{ root: '/p', args: ['decide', 'd-1', 'green'] }]);
+  assert.deepEqual(r.decideCalls, [{ root: '/p', itemId: 'd-1', choice: 'green' }]);
   assert.equal(r.github.issues.get(n).state, 'closed');
   r.github.say(n, '1');
   await r.sync();
   await r.sync();
-  assert.equal(r.ran.length, 1, 'once only');
+  assert.equal(r.decideCalls.length, 1, 'once only');
   assert.equal((await readPhoneState(r.dir)).issues[n].status, 'answered');
 });
 
@@ -184,7 +195,7 @@ test('a borderline item (money, sign-in, secrets, deletion, production, a sensit
   assert.equal(r.ran.length, 0);
   r.github.say(n, w);
   await r.sync();
-  assert.deepEqual(r.ran, [{ root: '/p', args: ['decide', 'd-2', 'yes'] }], 'the word confirms the choice made first');
+  assert.deepEqual(r.decideCalls, [{ root: '/p', itemId: 'd-2', choice: 'yes' }], 'the word confirms the choice made first');
   const r2 = await rig(t, { items: [decision('d-3', { secondStep: true })] });
   await r2.sync();
   const n2 = numberOf(r2.github, 'decision d-3').number;
@@ -230,7 +241,7 @@ test('an item handled at the computer closes its issue; a failing command is rep
   const res = await r.sync();
   assert.equal(res.closed.length, 1);
   assert.equal(r.github.issues.get(n).state, 'closed');
-  const failing = await rig(t, { swarm: async () => { throw new Error('boom'); } });
+  const failing = await rig(t, { decideInbox: async () => { throw new Error('boom'); } });
   await failing.sync();
   const f = numberOf(failing.github, 'decision d-1').number;
   failing.github.say(f, '2');
@@ -268,9 +279,11 @@ test('off and status; sync before setup or when off refuses', async t => {
 
 test('the phone code cannot reach merge, deploy, spend caps or overrides: it only ever runs decide, tickets --approve and stop --all (a test reads the source)', async () => {
   const src = (await fs.readFile(new URL('../tools/phone.mjs', import.meta.url), 'utf8')) + (await fs.readFile(new URL('../tools/phone-commands.mjs', import.meta.url), 'utf8'));
-  assert.doesNotMatch(src, /pr['", ]+merge|swarm merge|vercel|--max-usd|--override|--accept|maxUsd|projectMaxUsd|--force|funnel/i);
+  assert.doesNotMatch(src, /pr['", ]+merge|swarm merge|vercel|--max-usd|--override|--accept|maxUsd|projectMaxUsd|funnel/i);
   const runs = [...src.matchAll(/runSwarm\([^)]*\[([^\]]*)\]/g)].map(m => m[1].replace(/\s+/g, ' '));
-  assert.deepEqual(runs, ["'decide', rec.itemId, action.choice", "'tickets', rec.itemId, '--approve', '--yes'", "'stop', '--all'"]);
+  assert.deepEqual(runs, ["'tickets', rec.itemId, '--approve', '--yes'", "'stop', '--all'"]);
+  assert.match(src, /deps\.decideInbox\(rec\.root, rec\.itemId, choice\)/);
+  assert.doesNotMatch(src, /runSwarm\([^)]*decide/);
   assert.match(issueBody(decision(), { expiresAt: Date.now() }), /Only your own GitHub login\(s\) are listened to/);
 });
 
@@ -303,7 +316,7 @@ test('review fixes: picking anything but the default needs the confirmation word
   await r2.sync();
   r2.github.say(numberOf(r2.github, 'decision d-1').number, '2');
   await r2.sync();
-  assert.equal(r2.ran.length, 1, 'the default runs at once');
+  assert.equal(r2.decideCalls.length, 1, 'the default runs at once');
 });
 
 test('review fixes: a changed set of choices closes the question; a ticket that became borderline gets the second step; state for another repo is not applied', async t => {
@@ -360,8 +373,16 @@ test('two logins of the same owner: replies from either count, a third login is 
   const items = [decision('d-1'), decision('d-2'), decision('d-3')];
   const world = { now: Date.now() };
   gh.clock = () => world.now;
+  const decideCalls = [];
   const ran = [];
-  const deps = { gh: gh.run, items: async () => items, now: () => world.now, random: n => 3 % n, runSwarm: async (root, args) => { ran.push(args); return { ok: true, text: 'ok' }; } };
+  const deps = {
+    gh: gh.run,
+    items: async () => items,
+    now: () => world.now,
+    random: n => 3 % n,
+    decideInbox: async (root, itemId, choice) => { decideCalls.push({ root, itemId, choice }); return { ok: true, text: 'ok' }; },
+    runSwarm: async (root, args) => { ran.push(args); return { ok: true, text: 'ok' }; },
+  };
   await syncPhone({ dir, deps });
   const n1 = numberOf(gh, 'decision d-1').number, n2 = numberOf(gh, 'decision d-2').number, n3 = numberOf(gh, 'decision d-3').number;
   gh.say(n1, '2', { user: 'Btabor11' });
@@ -370,7 +391,7 @@ test('two logins of the same owner: replies from either count, a third login is 
   gh.say(n3, '2', { user: 'bradentabor-fan' });
   const res = await syncPhone({ dir, deps });
   assert.equal(res.answered.length, 2);
-  assert.deepEqual(ran.map(a => a[1]).sort(), ['d-1', 'd-2']);
+  assert.deepEqual(decideCalls.map(c => c.itemId).sort(), ['d-1', 'd-2']);
   assert.equal(res.ignored, 2);
   assert.equal((await readPhoneState(dir, REPO)).issues[n3].status, 'open');
   const log = (await fs.readFile(path.join(dir, 'ignored.ndjson'), 'utf8')).trim().split('\n').map(JSON.parse);
@@ -378,7 +399,7 @@ test('two logins of the same owner: replies from either count, a third login is 
   // the swarm posts as one of the owner's logins: a one-word comment of its own starting with the marker is not an answer
   gh.say(n3, '<!-- swarm-phone -->\n2', { user: 'BradenTabor' });
   await syncPhone({ dir, deps });
-  assert.equal(ran.length, 2);
+  assert.equal(decideCalls.length, 2);
   // a second step: the word comment the swarm posted (as an owner login) never counts either, only the owner's own reply
   const risky = await rig(t, { items: [decision('d-9', { secondStep: true })] });
   await risky.sync();

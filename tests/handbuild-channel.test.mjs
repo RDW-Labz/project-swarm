@@ -95,16 +95,27 @@ test('chat merge: record, consume once, wrong PR and expiry', async t => {
 
 test('orchestrator prompt hook records merge lines only at line start', async t => {
   const { root } = await project(t);
-  const runHook = prompt => spawnSync(process.execPath, [HOOK, 'prompt'], {
-    input: JSON.stringify({ session_id: 's', cwd: root, prompt }),
+  const runHook = (prompt, hookEventName = 'UserPromptSubmit') => spawnSync(process.execPath, [HOOK, 'prompt'], {
+    input: JSON.stringify({ session_id: 's', cwd: root, prompt, hook_event_name: hookEventName }),
     encoding: 'utf8',
   });
-  const out = runHook('1. merge #203\nplease merge #5 soon\nmerge 7');
-  assert.equal(out.status, 0);
+  for (const prompt of ['merge #203', 'Merge 7', 'merge pr #5']) {
+    assert.equal(runHook(prompt).status, 0);
+  }
+  for (const [prompt, event] of [
+    ['1. merge #99', 'UserPromptSubmit'],
+    ['please merge #98 soon', 'UserPromptSubmit'],
+    ['```merge #97```', 'UserPromptSubmit'],
+    ['merge #96\nsecond line', 'UserPromptSubmit'],
+    ['merge #95', 'SessionStart'],
+  ]) {
+    assert.equal(runHook(prompt, event).status, 0);
+  }
   const state = readState(root);
   assert.ok(state.merges['203'] > T0);
-  assert.equal(state.merges['5'], undefined);
   assert.ok(state.merges['7'] > T0);
+  assert.ok(state.merges['5'] > T0);
+  for (const pr of ['99', '98', '97', '96', '95']) assert.equal(state.merges[pr], undefined);
 });
 
 test('phone refuses elevated hand-build approve before decide runs', async t => {
