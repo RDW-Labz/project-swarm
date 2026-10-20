@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { assertTestIsolation } from './test-isolation.mjs';
 
 // Field lesson 112: the old default, `<home>/.project-swarm/config.json`, sits inside the shared
 // install clone itself (the same directory `git pull`/`swarm update` operate on) — a machine-local
@@ -41,12 +42,14 @@ function gitWorkTreeTop(dir) {
 // the parse). A caller that only needs to name the path in a message — never a second, drifting
 // copy of the same `env.SWARM_CONFIG || defaultConfigPath(...)` logic — uses this instead.
 export function resolveConfigPath({ env = process.env, home = env.HOME || os.homedir() } = {}) {
+  if (!env.SWARM_CONFIG) assertTestIsolation('config', env);
   return env.SWARM_CONFIG || defaultConfigPath({ env, home });
 }
 
 export function loadLocalConfig({ env = process.env, home = env.HOME || os.homedir() } = {}) {
   let file = env.SWARM_CONFIG;
   if (!file) {
+    assertTestIsolation('config', env);
     const oldPath = oldInstallConfigPath(home);
     if (fs.existsSync(oldPath)) {
       throw Error(`config-inside-install: ${oldPath} sits in the install checkout; move it to ${defaultConfigPath({ home, env })}`);

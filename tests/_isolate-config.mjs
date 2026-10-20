@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Setup file imported before any test runs: isolate the test suite from the developer's real
 // local config, preventing accidental dependencies on development machine state.
+process.env.SWARM_TEST_ISOLATED = '1';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';

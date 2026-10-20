@@ -8,6 +8,7 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LANE_AGENTS } from './lanes.mjs';
 import { validateRentedConfig } from './rented.mjs';
+import { assertTestIsolation } from './test-isolation.mjs';
 
 export const LANE_DAILY_DEFAULTS = Object.freeze({ openrouter: Object.freeze({ dailyUsd: 5 }), anthropic: Object.freeze({ dailyUsd: 20 }) });
 export const PAID_LANES = Object.freeze(['openrouter', 'openai', 'gemini', 'lambda', 'anthropic', 'rented']);
@@ -83,6 +84,7 @@ export function validateRates(rates) {
 }
 
 export function spendDir(env = process.env, home = os.homedir()) {
+  if (!env.SWARM_SPEND_DIR) assertTestIsolation('spend store', env);
   return env.SWARM_SPEND_DIR || path.join(home, '.project-swarm', 'spend');
 }
 function pidAlive(pid) {
