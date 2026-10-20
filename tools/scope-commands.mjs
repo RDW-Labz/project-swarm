@@ -228,19 +228,30 @@ const mentionsFiles = (ticket, text) => (ticket.files ?? []).some(f => String(te
 
 // The job's proposed outputs are byte for byte what the tree already has (an earlier run or a hand edit put them there): there was nothing to write,
 // so the integration has no batch for it. That is not a failure and not a reason to leave the ticket in review.
-async function outputsMatchTree(root, state, id) {
+async function outputsMatchTree(root, state, id, ticket) {
   const job = (Array.isArray(state.jobs) ? state.jobs : []).find(j => j.id === id);
   const outputs = Array.isArray(job?.outputs) ? job.outputs : [];
-  if (!outputs.length || typeof job.workspace !== 'string' || !job.workspace) return false;
+  const deletes = new Set((ticket?.deletes ?? []).filter(f => typeof f === 'string' && f));
+  const paths = [...new Set([...outputs, ...deletes])];
+  if (!paths.length || typeof job.workspace !== 'string' || !job.workspace) return false;
   const base = path.resolve(root);
   const workspace = path.resolve(base, job.workspace);
   const workspaces = path.join(base, '.swarm', 'workspaces') + path.sep;
   // The workspace must be a run workspace (never the project itself), and both files plain regular files inside their own roots.
   if (!workspace.startsWith(workspaces) || workspace === base) return false;
-  for (const file of outputs) {
+  for (const file of paths) {
     if (typeof file !== 'string' || !file || path.isAbsolute(file) || file.split('/').includes('..')) return false;
     const mine = path.join(workspace, file), theirs = path.join(base, file);
     if (!mine.startsWith(workspace + path.sep) || !theirs.startsWith(base + path.sep) || mine === theirs) return false;
+    if (deletes.has(file)) {
+      try {
+        await fs.lstat(theirs);
+        return false;
+      } catch (error) {
+        if (error?.code === 'ENOENT') continue;
+        return false;
+      }
+    }
     try {
       const a = await fs.lstat(mine), b = await fs.lstat(theirs);
       if (!a.isFile() || !b.isFile() || a.isSymbolicLink() || b.isSymbolicLink()) return false;
@@ -1265,7 +1276,7 @@ async function cmdSync(root, { rest, flags }) {
           (result === 'blocked' ? blocked : retried).push(t.id);
           continue;
         }
-        if (!evidence.ok && !(/not in the integrated files|no merge batch|job not found/.test(String(evidence.reason)) && await outputsMatchTree(root, state, t.id) && inTree.add(t.id))) { unverified.push(`${t.id} (${evidence.reason})`); continue; }
+        if (!evidence.ok && !(/not in the integrated files|no merge batch|job not found/.test(String(evidence.reason)) && await outputsMatchTree(root, state, t.id, t) && inTree.add(t.id))) { unverified.push(`${t.id} (${evidence.reason})`); continue; }
         if (evidence.ok === true && !acceptedFailure) testsSeen.add(t.id);
       }
       // A build ticket is done only when the project's typecheck and lint (and build, when the profile asks) passed on the batch that integrated it.
@@ -1282,7 +1293,7 @@ async function cmdSync(root, { rest, flags }) {
           (result === 'blocked' ? blocked : retried).push(t.id);
           continue;
         }
-        if (!quality.ok && !(/not in the integrated files|no merge batch/.test(String(quality.reason)) && await outputsMatchTree(root, state, t.id) && inTree.add(t.id))) { unverified.push(`${t.id} (${quality.reason})`); continue; }
+        if (!quality.ok && !(/not in the integrated files|no merge batch/.test(String(quality.reason)) && await outputsMatchTree(root, state, t.id, t) && inTree.add(t.id))) { unverified.push(`${t.id} (${quality.reason})`); continue; }
       }
       // Any check that failed on the batch or the run keeps every ticket in it out of done, whatever the check is called and whether or not the ticket has tests.
       const runFailed = failedRunChecks(state, t.id, { accepted: [...accepted] });
