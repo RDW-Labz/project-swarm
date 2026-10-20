@@ -27,7 +27,7 @@ function ownerTerminalEnv(extra = {}) {
 
 async function project(t) {
   const root = await tmp(t);
-  const git = (...args) => spawnSync('git', ['-c', 'user.email=a@b', '-c', 'user.name=a', ...args], { cwd: root, encoding: 'utf8' });
+  const git = (...args) => spawnSync('git', ['-c', 'user.email=a@b', '-c', 'user.name=a', ...args], { cwd: root, encoding: 'utf8', env: ownerTerminalEnv() });
   git('init', '-q');
   await fs.mkdir(path.join(root, 'src'), { recursive: true });
   await fs.writeFile(path.join(root, 'src', 'a.ts'), 'a\n');

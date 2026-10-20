@@ -22,7 +22,12 @@ const tmp = async t => {
   return d;
 };
 
-const git = (root, ...args) => spawnSync('git', ['-c', 'user.email=a@b.c', '-c', 'user.name=ab', ...args], { cwd: root, encoding: 'utf8' });
+function spawnScrubbed(command, args, options = {}) {
+  const { env: extraEnv, ...rest } = options;
+  return spawnSync(command, args, { ...rest, env: gitEnv(extraEnv ?? {}) });
+}
+
+const git = (root, ...args) => spawnScrubbed('git', ['-c', 'user.email=a@b.c', '-c', 'user.name=ab', ...args], { cwd: root, encoding: 'utf8' });
 
 async function repo(t) {
   const root = await tmp(t);
@@ -51,11 +56,11 @@ function scrubAgentSessionEnv(env) {
 const gitEnv = extra => ({ ...scrubAgentSessionEnv(process.env), ...extra });
 
 function commit(root, env = {}) {
-  return spawnSync('git', ['-c', 'user.email=a@b.c', '-c', 'user.name=ab', 'commit', '-m', 'm'], { cwd: root, encoding: 'utf8', env: gitEnv(env) });
+  return spawnScrubbed('git', ['-c', 'user.email=a@b.c', '-c', 'user.name=ab', 'commit', '-m', 'm'], { cwd: root, encoding: 'utf8', env });
 }
 
 function push(root, remote, branch, env = {}) {
-  return spawnSync('git', ['push', remote, branch], { cwd: root, encoding: 'utf8', env: gitEnv(env) });
+  return spawnScrubbed('git', ['push', remote, branch], { cwd: root, encoding: 'utf8', env });
 }
 
 async function integratedRun(root, rel, content) {
