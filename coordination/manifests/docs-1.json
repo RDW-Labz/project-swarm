@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "docs-verify-local",
+      "agent": "auto",
+      "prompt": "Write docs/verify-local.md (new file, nothing else) describing the local verify mode for a project owner: verify.agent local with a command, how it runs the ticket's test command itself in a scratch worktree with no model and no tokens, pass, fail and error results, secret masking of the output tail, why it lets Cursor and Hermes build tested tickets, and what is not wired yet. Read tools/verify-config.mjs, tools/verify-local.mjs and tests/verify-local.test.mjs for the facts; do not invent behavior; mark unbuilt parts as planned. Plain, short sentences, under 100 lines.",
+      "context": [
+        "tools/verify-config.mjs",
+        "tools/verify-local.mjs",
+        "tests/verify-local.test.mjs"
+      ],
+      "outputs": [
+        "docs/verify-local.md"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}
