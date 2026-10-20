@@ -70,3 +70,14 @@ test('a guard marker from before the last boot is stale even if its pid is alive
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).machineConcurrency, 4);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+import { applyJobType } from '../tools/job-types.mjs';
+import { routeJob } from '../tools/router.mjs';
+test('every job type that any lane can do routes cheapest first: Cursor, then Codex, then Anthropic', () => {
+  const lanes = { cursor: { model: 'u' }, codex: { model: 'c' }, anthropic: { model: 'h' }, claude: { model: 'sonnet' } };
+  for (const type of ['build', 'fix', 'test', 'docs']) {
+    const { job } = applyJobType({ id: 'j', agent: 'auto', type, prompt: 'p', sensitive: false, outputs: type === 'docs' ? ['docs/a.md'] : ['src/a.test.ts'] });
+    assert.equal(routeJob(job, { lanes }).agent, 'cursor', type);
+    assert.equal(routeJob(job, { lanes, health: a => ({ state: a === 'cursor' ? 'paused' : 'ok' }) }).agent, 'codex', `${type}: paused cursor hands on`);
+  }
+});

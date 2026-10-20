@@ -101,6 +101,23 @@ export function checkTicketTree({ scope, tickets = [], sizeBudget } = {}) {
     if (!['S', 'M'].includes(t.size)) oversize.push(t.id);
   }
 
+  // A ticket that lists a test file which a LATER ticket (one that depends on it) owns: the file does not exist when this ticket runs, and it is the later ticket's to write.
+  // Not an error (sync and the job builder leave such a file to its owner), but the owner should know: move it out of this ticket's `tests`, or make the owner come first.
+  const dependentsOf = new Map();
+  for (const o of active) for (const d of Array.isArray(o.dependsOn) ? o.dependsOn : []) { if (!dependentsOf.has(d)) dependentsOf.set(d, new Set()); dependentsOf.get(d).add(o.id); }
+  const later = [];
+  for (const t of active) {
+    const after = new Set(dependentsOf.get(t.id) ?? []);
+    for (const id of after) for (const d of dependentsOf.get(id) ?? []) after.add(d);
+    if (!after.size) continue;
+    for (const f of Array.isArray(t.tests) ? t.tests : []) {
+      if (typeof f !== 'string' || (Array.isArray(t.files) && t.files.includes(f))) continue;
+      const owner = active.find(o => after.has(o.id) && ((Array.isArray(o.files) && o.files.includes(f)) || (o.type === 'test' && Array.isArray(o.tests) && o.tests.includes(f))));
+      if (owner) later.push({ ticket: t.id, file: f, owner: owner.id });
+    }
+  }
+  if (later.length) warnings.push({ code: 'test-owned-by-later', message: `${later.length} ticket(s) list a test file that a later ticket owns (it is written after them, so they do not wait for it): ${later.slice(0, 5).map(x => `${x.ticket} lists ${x.file} owned by ${x.owner}`).join('; ')}${later.length > 5 ? `; and ${later.length - 5} more` : ''}. Remove the file from the earlier ticket's tests, or make its owner a dependency of it.`, items: later });
+
   const uncovered = reqs.map((r) => r.id).filter((id) => !covered.has(id));
   const coveragePct = reqs.length ? Math.round((covered.size * 100) / reqs.length) : 0;
 
