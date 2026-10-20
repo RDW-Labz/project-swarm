@@ -48,31 +48,47 @@ test('githubRepo returns null for no origin, non-GitHub and invalid owner remote
 test('fetchDeployStatus reads the newest deployment statuses without forwarding tokens or using a shell', async () => {
   const calls = [];
   const deployments = [
-    { id: 3, sha: 'sha-new', created_at: '2026-10-20T12:00:00Z' },
-    { id: 2, sha: 'sha-old', created_at: '2026-10-19T12:00:00Z' },
-    { id: 1, sha: 'sha-older', created_at: '2026-10-18T12:00:00Z' },
+    { id: 3, sha: 'sha-preview', environment: 'Preview', created_at: '2026-10-20T12:00:00Z' },
+    { id: 2, sha: 'sha-production-failure', environment: 'production', created_at: '2026-10-19T12:00:00Z' },
+    { id: 1, sha: 'sha-production-success', environment: 'Production', created_at: '2026-10-18T12:00:00Z' },
   ];
   const statuses = {
-    3: [{ state: 'failure', environment: 'preview', created_at: '2026-10-20T12:01:00Z', target_url: 'http://insecure.example' }],
-    2: [{ state: 'success', environment: 'production', created_at: '2026-10-19T12:01:00Z', environment_url: 'https://deploy.example/production' }],
-    1: [{ state: 'success', environment: 'old', created_at: '2026-10-18T12:01:00Z', target_url: 'https://deploy.example/old' }],
+    2: [{ state: 'failure', environment: 'production', created_at: '2026-10-19T12:01:00Z', target_url: 'https://deploy.example/failed' }],
+    1: [{ state: 'success', environment: 'production', created_at: '2026-10-18T12:01:00Z', environment_url: 'https://deploy.example/production' }],
   };
   const run = async (cmd, args, opts) => {
     calls.push({ cmd, args, opts });
     const id = args[1]?.match(/deployments\/(\d+)\/statuses/)?.[1];
     return { code: 0, stdout: JSON.stringify(id ? statuses[id] : deployments), stderr: '' };
   };
-  const result = await fetchDeployStatus({ repo: 'acme/web', ref: 'feature branch', run, env: { GITHUB_TOKEN: 'secret', GH_TOKEN: 'secret2', PATH: '/bin' } });
+  const result = await fetchDeployStatus({ repo: 'acme/web', run, env: { GITHUB_TOKEN: 'secret', GH_TOKEN: 'secret2', PATH: '/bin' } });
+  assert.equal(result.environment, 'Production');
   assert.equal(result.latest.state, 'failure');
-  assert.equal(result.latest.id, 3);
-  assert.equal(result.latest.url, null);
+  assert.equal(result.latest.id, 2);
+  assert.equal(result.latest.url, 'https://deploy.example/failed');
   assert.equal(result.lastSuccess.environment, 'production');
-  assert.equal(result.lastSuccess.sha, 'sha-old');
+  assert.equal(result.lastSuccess.id, 1);
+  assert.equal(result.lastSuccess.sha, 'sha-production-success');
   assert.equal(result.lastSuccess.url, 'https://deploy.example/production');
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 3);
   assert.ok(calls.every(call => call.cmd === 'gh' && Array.isArray(call.args) && call.opts.shell === false));
   assert.ok(calls.every(call => !('GITHUB_TOKEN' in call.opts.env) && !('GH_TOKEN' in call.opts.env) && call.opts.env.GH_PROMPT_DISABLED === '1'));
-  assert.match(calls[0].args[3], /ref=feature%20branch&per_page=10$/);
+  assert.match(calls[0].args[3], /deployments\?environment=Production&per_page=10$/);
+  assert.doesNotMatch(calls[0].args[3], /ref=/);
+});
+
+test('fetchDeployStatus URL-encodes a custom environment', async () => {
+  const calls = [];
+  const result = await fetchDeployStatus({
+    repo: 'acme/web',
+    environment: 'production-eu',
+    run: async (cmd, args, opts) => {
+      calls.push({ cmd, args, opts });
+      return { code: 0, stdout: '[]', stderr: '' };
+    },
+  });
+  assert.equal(result.environment, 'production-eu');
+  assert.equal(calls[0].args[3], 'repos/acme/web/deployments?environment=production-eu&per_page=10');
 });
 
 test('fetchDeployStatus returns a short error on gh failure or bad JSON', async () => {
@@ -95,7 +111,7 @@ test('createDeployTracker returns cached values, coalesces refreshes, and honors
     repoOf: async () => 'acme/web',
     run: async (cmd, args) => {
       calls += 1;
-      return { code: 0, stdout: JSON.stringify(args[1]?.includes('deployments/') ? [{ state: 'success', environment: 'production', created_at: new Date(now).toISOString() }] : [{ id: calls, sha: 'sha', created_at: new Date(now).toISOString() }]), stderr: '' };
+      return { code: 0, stdout: JSON.stringify(args[1]?.includes('deployments/') ? [{ state: 'success', environment: 'production', created_at: new Date(now).toISOString() }] : [{ id: calls, sha: 'sha', environment: 'production', created_at: new Date(now).toISOString() }]), stderr: '' };
     },
   });
   assert.equal(tracker.get(root), null);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// Read-only GitHub deployment status for the Swarm Watch build-progress board.
+// Read-only GitHub production deployment status for the Swarm Watch build-progress board.
+// Vercel posts these for the production branch.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -64,8 +65,8 @@ async function defaultRun(cmd, args, opts) {
   }
 }
 
-function resultBase(repo, ref, at) {
-  return { checkedAt: at, repo, ref, latest: null, lastSuccess: null, error: null };
+function resultBase(repo, environment, at) {
+  return { checkedAt: at, repo, environment, latest: null, lastSuccess: null, error: null };
 }
 
 function newest(items, key) {
@@ -91,9 +92,10 @@ function deploymentStatus(deployment, status) {
   };
 }
 
-export async function fetchDeployStatus({ repo, ref = 'main', run = defaultRun, env = process.env, timeoutMs = 15000 } = {}) {
+export async function fetchDeployStatus({ repo, environment = 'Production', run = defaultRun, env = process.env, timeoutMs = 15000 } = {}) {
   const at = new Date().toISOString();
-  const output = resultBase(clean(repo), clean(ref) ?? '', at);
+  const requestedEnvironment = clean(environment) ?? '';
+  const output = resultBase(clean(repo), requestedEnvironment, at);
   const childEnv = { ...(env ?? process.env) };
   delete childEnv.GITHUB_TOKEN;
   delete childEnv.GH_TOKEN;
@@ -107,7 +109,7 @@ export async function fetchDeployStatus({ repo, ref = 'main', run = defaultRun, 
     output.error = 'invalid GitHub repo';
     return output;
   }
-  const deploymentsResult = await call(['api', '-H', 'Accept: application/vnd.github+json', `repos/${repo}/deployments?ref=${encodeURIComponent(String(ref))}&per_page=10`]);
+  const deploymentsResult = await call(['api', '-H', 'Accept: application/vnd.github+json', `repos/${repo}/deployments?environment=${encodeURIComponent(requestedEnvironment)}&per_page=10`]);
   const fail = message => { output.latest = null; output.lastSuccess = null; output.error = message; return output; };
   if (!deploymentsResult || deploymentsResult.code !== 0) return fail('gh deployments request failed');
   let deployments;
@@ -116,7 +118,7 @@ export async function fetchDeployStatus({ repo, ref = 'main', run = defaultRun, 
     if (!Array.isArray(deployments)) throw new Error('not an array');
   } catch { return fail('gh deployments returned bad JSON'); }
 
-  const candidates = newest(deployments.slice(0, 10), 'created_at').slice(0, 5);
+  const candidates = newest(deployments.slice(0, 10).filter(deployment => clean(deployment?.environment)?.toLowerCase() === requestedEnvironment.toLowerCase()), 'created_at').slice(0, 5);
   for (let index = 0; index < candidates.length; index += 1) {
     const deployment = candidates[index];
     const id = deployment?.id;
