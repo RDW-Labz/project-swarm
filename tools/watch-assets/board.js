@@ -254,6 +254,7 @@ function renderProjects(projects) {
     var head = el('div', 'row'); head.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)])); head.appendChild(el('span', 'stage', p.stage ? 'stage ' + p.stage : 'no stage')); c.appendChild(head);
     (p.warnings || []).forEach(function (w) { var wl = el('div', 'sub'); wl.appendChild(pill(w.text, 'warn')); c.appendChild(wl); });
     var mixCard = buildMixText(p.orchestrator); if (mixCard) { var ml = el('div', 'sub'); ml.appendChild(pill(mixCard, p.orchestrator.handPct > 0 ? 'warn' : 'good')); c.appendChild(ml); }
+    if (p.idleWithReady) { var idleReady = el('div', 'sub'); idleReady.appendChild(pill('Idle with ' + p.readyTickets + ' ready tickets', 'bad')); c.appendChild(idleReady); }
     c.appendChild(liveCell(p));
     var meta = el('div', 'row'); meta.appendChild(el('span', 'mono', p.tickets.open + ' open' + (p.tickets.blocked ? ', ' + p.tickets.blocked + ' blocked' : ''))); meta.appendChild(el('span', 'mono', ago(p.lastActivityAt))); c.appendChild(meta);
     c.appendChild(capCell(p));

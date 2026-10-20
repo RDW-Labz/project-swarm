@@ -154,9 +154,11 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const lastRun = runs.length ? runs[runs.length - 1].state : null;
   const lastActivityMs = Math.max(0, ...runs.map(r => r.mtimeMs), Date.parse(ledger?.updatedAt ?? '') || 0);
   const tickets = ticketsOf(ledger);
+  const readyTickets = tickets.byStatus.ready ?? 0;
+  const idle = liveRuns.length === 0;
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
-    stage: tickets.stage, tickets,
+    stage: tickets.stage, tickets, readyTickets, idleWithReady: idle && readyTickets > 0,
     live: liveRuns.map(r => { const hit = runs.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
     agents, cost,
     orchestrator: (() => { try { return projectOrchestrator(project, { runs, now }); } catch { return { sessions: [], handBuilt: { files: 0, edits: 0, list: [] }, swarmBuilt: { files: 0 }, swarmPct: null, handPct: null, cost: { todayListUsd: 0, allListUsd: 0, todayTokens: 0, allTokens: 0 } }; } })(),
@@ -164,7 +166,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     recentJobCounts: runs.slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0)),
     lastRunAt: lastRun?.startedAt ?? null,
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
-    idle: liveRuns.length === 0,
+    idle,
   };
 }
 

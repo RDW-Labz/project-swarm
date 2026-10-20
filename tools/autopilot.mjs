@@ -1,6 +1,47 @@
 // SPDX-License-Identifier: Apache-2.0
 import { stopGuard } from './stop-all.mjs';
-export const ACTIONS = ['integrate', 'resume', 'retry-failed', 'start-wave', 'start-deferred', 'start-backlog', 'unlock-tickets'];
+import { matchesFile } from './handbuild.mjs';
+export const ACTIONS = ['integrate', 'resume', 'retry-failed', 'start-wave', 'start-deferred', 'start-backlog', 'unlock-tickets', 'start-ready'];
+
+function ticketFiles(ticket) {
+  if (!ticket || typeof ticket !== 'object') return [];
+  if (Array.isArray(ticket.files)) return ticket.files.map(String);
+  if (typeof ticket.file === 'string' && ticket.file) return [ticket.file];
+  return [];
+}
+
+function isReadyForStart(ticket, tickets) {
+  if (!ticket || typeof ticket.id !== 'string') return false;
+  if (ticket.status === 'ready') return true;
+  if (ticket.status !== 'todo' || ticket.type === 'human') return false;
+  const done = new Set(tickets.filter(t => t && t.status === 'done').map(t => t.id));
+  const deps = Array.isArray(ticket.dependsOn) ? ticket.dependsOn : [];
+  return deps.every(d => done.has(d));
+}
+
+function pendingApproval(approval) {
+  return approval && typeof approval === 'object' && approval.status === 'pending';
+}
+
+function heldByApproval(ticket, approval) {
+  const patterns = Array.isArray(approval.files) ? approval.files : [];
+  if (!patterns.length) return false;
+  return ticketFiles(ticket).some(rel => matchesFile(patterns, rel));
+}
+
+/** Ready tickets split by pending hand-build / ticket approvals that name overlapping files. */
+export function pickReadyTickets({ tickets, approvals }) {
+  const list = Array.isArray(tickets) ? tickets : [];
+  const pending = (Array.isArray(approvals) ? approvals : []).filter(pendingApproval);
+  const ready = list.filter(t => isReadyForStart(t, list));
+  const startable = [];
+  const held = [];
+  for (const ticket of ready) {
+    if (pending.some(a => heldByApproval(ticket, a))) held.push(ticket);
+    else startable.push(ticket);
+  }
+  return { startable, held };
+}
 
 const MINUTE = 60_000;
 const MAX_ACTIONS_PER_RUN = 3;
@@ -332,6 +373,40 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
         await write({ kind: 'action', action: 'start-backlog', reason: `backlog goal ${item.id}`, result });
         actions.push({ action: 'start-backlog', backlog: item.id, ok, result });
         if (!ok) await write({ kind: 'blocker', id: `backlog-${item.id}`, text: `Backlog goal ${item.id} could not start: ${result}` });
+      }
+    }
+  }
+
+  if (!journalBroken && typeof deps.readyTickets === 'function') {
+    const ticketList = await safe(() => deps.readyTickets(root), []);
+    const approvalList = typeof deps.pendingApprovals === 'function'
+      ? await safe(() => deps.pendingApprovals(root), [])
+      : [];
+    const { startable } = pickReadyTickets({ tickets: ticketList, approvals: approvalList });
+    if (startable.length) {
+      const live = typeof deps.liveRuns === 'function' ? await safe(() => deps.liveRuns(root), []) : [];
+      const busy = typeof deps.busyMarkers === 'function' ? await safe(() => deps.busyMarkers(), []) : [];
+      const capRoom = typeof deps.capRoom === 'function' ? await safe(() => deps.capRoom(root), true) : true;
+      const hasLiveRun = (Array.isArray(live) && live.length > 0) || runs.some(r => r.status === 'running');
+      const hasBusy = Array.isArray(busy) && busy.some(m => m != null && m !== false);
+      const key = 'start-ready';
+      if (!memory.has(key) && !hasLiveRun && !hasBusy && capRoom !== false && typeof deps.startScope === 'function') {
+        memory.add(key);
+        const ids = startable.map(t => t.id).slice(0, 8);
+        const reason = `${startable.length} startable ticket(s)${ids.length ? `: ${ids.join(', ')}` : ''}`;
+        let ok = true;
+        let result = 'ok';
+        try {
+          const out = await deps.startScope({ root });
+          ok = out?.ok !== false;
+          if (ok) result = out?.result ?? 'ok';
+          else result = String(out?.result ?? 'failed').slice(0, RESULT_LIMIT);
+        } catch (error) {
+          ok = false;
+          result = String(error?.message ?? error).slice(0, RESULT_LIMIT);
+        }
+        await write({ kind: 'action', action: 'start-ready', reason, result });
+        actions.push({ action: 'start-ready', ok, result, reason });
       }
     }
   }
