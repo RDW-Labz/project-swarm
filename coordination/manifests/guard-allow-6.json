@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "harden2-policy",
+      "agent": "auto",
+      "prompt": "Second hardening round for tools/handbuild.mjs, tools/self-approval.mjs and the tests, after a second security review. Fix: (1) force detection in buildPolicyOps: a push is force when any option word is --force, -f, a short-option cluster that contains the letter f (for example -fu, -uf, -vf), --force-with-lease, --force-with-lease with a value, --force-if-includes, or any positional refspec starts with a plus; a push is a delete when --delete or -d is present or a refspec starts with a colon; force or delete pushes whose target is main or master (including the target given as the plain positional word after the remote, and refs/heads/main) are blocked and never approvable. (2) git branch: -d or --delete together with -f, --force or -D anywhere in the same command is the force kind (needs an approval naming branch-D); only a lone -d or --delete with plain names is safe. (3) git commit must also be gated on globalOpts and hasConfig exactly like push, rebase and the read-only commands: git -c core.hooksPath=X commit is not free. (4) command wrappers: before classifying a command as git, gh, vercel or swarm, strip these leading wrappers and their own options: env (with NAME=value words and -i, -u NAME), command, exec, nice (and -n N), nohup, time, timeout (with its duration), stdbuf, sudo, xargs, builtin, and also look through sh -c, bash -c and zsh -c strings and eval strings by recursively classifying the inner text; if a wrapper word is followed by something the code cannot read, treat the command as not free (needs an approval). (5) wire the self-approval detector into guardDecision for Bash commands: tools/self-approval.mjs isSelfApprovalCommand(text) true means the call is blocked with SELF_APPROVAL_REASON and no approval can cover it. Extend isSelfApprovalCommand so it also returns true for: claude -p or claude --print or claude with a prompt argument run from the shell (a headless session fires the owner hooks), tmux send-keys and tmux new-session or split-window running swarm or node commands, the script command, osascript, expect, and any command that mentions swarm decide, swarm handbuild approve or deny or on or off, handbuild approve, recordChatMerge or orchestrator-hook, wherever they appear (also inside quotes, bash -c strings, here-documents, base64 -d pipes to sh or node, and variable assignments). (6) protect the swarm run records from the orchestrator session: a text-level write (Edit, Write, MultiEdit tool or a shell write, redirect, tee, cp, mv, rm, sed -i) to a path inside the .swarm/runs folder or .swarm/handbuild is blocked with no approval able to cover it, because those records are written only by swarm commands themselves (a swarm command that writes them is not a text-level write by the orchestrator and stays allowed); keep every other .swarm path free as today. (7) when swarm-produced.mjs reads state files, only accept a state.json that is a regular file (not a symlink) inside a run folder that is also a regular directory, whose id equals its folder name. Update the existing tests that these changes alter, and add tests in a new file tests/handbuild-hardening2.test.mjs with one test per numbered item using these exact forms: git push -fu origin main ; git push -uf origin main ; git push --force-with-lease=origin/main origin main ; git push origin --delete main ; git branch --delete --force unmerged ; git branch -d -f x ; git -c core.hooksPath=/tmp/e commit -m x ; command git push -f origin main ; env FOO=1 git push origin feature:main ; nice git push --all ; bash -c followed by a quoted git push -f origin main ; swarm decide handbuild-abc approve ; claude -p with the text merge 12 ; tmux send-keys with swarm decide ; script -q /dev/null swarm decide handbuild-abc approve ; echo with base64 piped to sh ; a Write to .swarm/runs/x/state.json ; sed -i on that file ; a forged state.json that is a symlink. Write only tools/handbuild.mjs, tools/self-approval.mjs, tests/handbuild-hardening.test.mjs, tests/handbuild-channels-hardening.test.mjs, tests/handbuild-allowlist.test.mjs, tests/handbuild-guard.test.mjs and tests/handbuild-hardening2.test.mjs (and tools/swarm-produced.mjs for item 7).",
+      "context": [
+        "tools/handbuild.mjs",
+        "tools/self-approval.mjs",
+        "tools/swarm-produced.mjs",
+        "tools/shell-writes.mjs",
+        "tests/handbuild-hardening.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-guard.test.mjs"
+      ],
+      "outputs": [
+        "tools/handbuild.mjs",
+        "tools/self-approval.mjs",
+        "tools/swarm-produced.mjs",
+        "tests/handbuild-hardening.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-hardening2.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/handbuild-channel.test.mjs"
+      ]
+    },
+    {
+      "id": "harden2-hook",
+      "agent": "auto",
+      "prompt": "Second hardening round for the chat merge hook and the approval paths, after a second security review. Fix: (1) tools/orchestrator-hook.mjs: ignore the prompt entirely (record nothing) when the hook input shows a worker or headless session: the cwd is a swarm worker workspace (use isWorkerCwd from tools/orchestrator-events.mjs), or the input has no transcript_path or session_id string, or the project root found from cwd is not the root the hook was installed for; a task text of exactly merge 7 inside a worker must record nothing. Also pass now as a number to recordChatMerge (the review saw a function being passed where a number is expected: check tools/handbuild.mjs recordChatMerge and use the right type). (2) fail closed when the request cannot be found: in tools/inbox.mjs and tools/phone.mjs, if the request to approve is missing from the guard state or has no git field, the elevated-op check must refuse the approval (throw handbuild-request-unknown), never skip the check. (3) tools/inbox-commands.mjs: the computer channel additionally requires that the process was started with a controlling terminal whose name is readable (process.stdin.isTTY and a successful tty name through the tty command is not required, keep the current checks) AND that the environment variable SWARM_AGENT_SESSION is not set; document in a comment that the real protection is the guard blocking the command text inside agent sessions (another module), and that the owner's own terminal is outside the guard. Tests in a new file tests/handbuild-hook-hardening.test.mjs: the hook with a worker cwd records nothing, with no transcript_path records nothing, with a valid owner prompt records the approval with a numeric expiry about 60 minutes ahead; an approve of an unknown request id and of a request with no git field is refused from every channel; the channel is agent when SWARM_AGENT_SESSION is set. Write only tools/orchestrator-hook.mjs, tools/inbox.mjs, tools/phone.mjs, tools/inbox-commands.mjs and tests/handbuild-hook-hardening.test.mjs (if an existing test breaks because of these changes, do not edit it and say which one in your final message).",
+      "context": [
+        "tools/orchestrator-hook.mjs",
+        "tools/inbox.mjs",
+        "tools/phone.mjs",
+        "tools/inbox-commands.mjs",
+        "tools/handbuild.mjs",
+        "tools/orchestrator-events.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-channel.test.mjs"
+      ],
+      "outputs": [
+        "tools/orchestrator-hook.mjs",
+        "tools/inbox.mjs",
+        "tools/phone.mjs",
+        "tools/inbox-commands.mjs",
+        "tests/handbuild-hook-hardening.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/inbox.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/model-watch.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10b-init.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/phone.test.mjs"
+      ]
+    }
+  ]
+}
