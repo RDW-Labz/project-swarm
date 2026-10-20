@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import crypto from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import { validateRentedConfig, effectiveRentedRaw } from './rented.mjs';
@@ -140,15 +141,38 @@ function validStore(store) {
 
 // Callers in this process go through one queue per store, so a thousand workers starting or stopping at once do not all poll the lock file: one of them holds the file lock at a time and
 // the rest wait their turn here (found by the 1,000-worker practice run: cancelling 1,000 workers made them time out on lanes.lock). The file lock still keeps other processes out.
+// A caller waits only while the queue is moving: if no turn has started or finished for `timeoutMs`, the waiter gives up with lanes-store-locked (a hung holder can no longer block every
+// worker forever), and its own turn is skipped when it comes. A call made from inside a turn of the same store would wait for itself, so it fails at once.
 const storeQueues = new Map();
+const inTurn = new AsyncLocalStorage();
 export function withLaneStore(fn, options = {}) {
   const dir = options.dir ?? lanesDir();
-  const previous = storeQueues.get(dir) ?? Promise.resolve();
-  const turn = previous.then(() => withLaneStoreFile(fn, { ...options, dir }));
+  if (inTurn.getStore()?.has(dir)) return Promise.reject(storeError('lanes-store-reentrant', 'withLaneStore was called from inside a lane store turn on the same store; that would wait for itself'));
+  const timeoutMs = options.timeoutMs ?? 10000;
+  let queue = storeQueues.get(dir);
+  if (!queue) { queue = { tail: Promise.resolve(), progress: Date.now(), pending: 0 }; storeQueues.set(dir, queue); }
+  if (queue.pending === 0) queue.progress = Date.now();
+  queue.pending += 1;
+  let abandoned = false, running = false;
+  const turn = queue.tail.then(async () => {
+    if (abandoned) return undefined;
+    running = true;
+    queue.progress = Date.now();
+    try { return await inTurn.run(new Set([...(inTurn.getStore() ?? []), dir]), () => withLaneStoreFile(fn, { ...options, dir })); }
+    finally { queue.progress = Date.now(); }
+  });
   const tail = turn.catch(() => {});
-  storeQueues.set(dir, tail);
-  tail.then(() => { if (storeQueues.get(dir) === tail) storeQueues.delete(dir); });
-  return turn;
+  queue.tail = tail;
+  tail.then(() => { queue.pending -= 1; if (queue.pending === 0 && storeQueues.get(dir) === queue) storeQueues.delete(dir); });
+  return new Promise((resolve, reject) => {
+    const timer = setInterval(() => {
+      // Only a caller still waiting for its turn gives up; one that is running is bounded by its own work.
+      if (running || Date.now() - queue.progress <= timeoutMs) return;
+      abandoned = true; clearInterval(timer);
+      reject(storeError('lanes-store-locked', `timed out waiting in the lane store queue (no turn finished for ${timeoutMs} ms)`));
+    }, Math.max(5, Math.min(250, Math.floor(timeoutMs / 4))));
+    turn.then(value => { clearInterval(timer); resolve(value); }, error => { clearInterval(timer); reject(error); });
+  });
 }
 
 async function withLaneStoreFile(fn, { dir = lanesDir(), now = Date.now, isAlive = pidAlive, timeoutMs = 10000 } = {}) {
