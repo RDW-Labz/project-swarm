@@ -24,12 +24,12 @@ test('untyped jobs remain unchanged and are copied', () => {
 
 test('presets are frozen and match the contract defaults', () => {
   const expected = {
-    build: ['any', ['anthropic', 'cursor', 'codex'], 1800000, null],
-    fix: ['any', ['anthropic', 'cursor', 'codex'], 1800000, 'diagnosing-bugs'],
-    test: ['tests', ['codex', 'anthropic', 'hermes', 'cursor'], 1200000, 'tdd'],
+    build: ['any', ['cursor', 'codex', 'anthropic'], 1800000, null],
+    fix: ['any', ['cursor', 'codex', 'anthropic'], 1800000, 'diagnosing-bugs'],
+    test: ['tests', ['cursor', 'codex', 'anthropic', 'hermes'], 1200000, 'tdd'],
     review: ['none', ['codex'], 900000, 'code-review'],
     research: ['none', ['hermes'], 900000, null],
-    docs: ['docs', ['anthropic', 'hermes', 'cursor', 'codex'], 900000, null],
+    docs: ['docs', ['cursor', 'codex', 'anthropic', 'hermes'], 900000, null],
     merge: ['any', ['codex'], 1800000, 'resolving-merge-conflicts'],
     lead: ['manifest', ['codex'], 900000, null],
   };
@@ -104,7 +104,7 @@ test('unknown types and forged internal routes refuse', () => {
       assert.throws(() => check(input), { code: 'job-type-invalid', message: 'Job typed: unknown type ' + type });
     }
   }
-  validateManifest(manifest(job({ type: 'build', typeRoute: ['anthropic', 'cursor', 'codex'] })));
+  validateManifest(manifest(job({ type: 'build', typeRoute: ['cursor', 'codex', 'anthropic'] })));
   for (const input of [job({ typeRoute: ['codex'] }), job({ type: 'build', typeRoute: ['cursor', 'codex'] }), job({ type: 'build', typeRoute: [] })]) {
     assert.throws(() => validateManifest(manifest(input)), { code: 'job-type-invalid' });
   }

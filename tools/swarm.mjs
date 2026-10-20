@@ -2596,10 +2596,11 @@ async function runManifestMain(root, manifest, options = {}) {
   manifest = appliedTypes.manifest;
   manifest = selectRunManifest(manifest, jobs);
   const runLanes = resolveLanes({ config: loadLocalConfig({ env }), manifest, env });
+  const oversize = await editInPlaceOnlyJobs(root, manifest, { env });
   const dispatchJobs = manifest.jobs.map(job => {
     if (job.agent !== 'auto') return job;
-    const route = pickJobRoute(job, runLanes, { contract: manifest.contract, ready: readyAutoJobs(manifest) });
-    return { ...job, agent: route.agent, model: route.model };
+    const route = pickJobRoute(job, runLanes, { contract: manifest.contract, ready: readyAutoJobs(manifest), editInPlaceOnly: oversize.has(job.id) });
+    return withoutApiOnlyFields({ ...job, agent: route.agent, model: route.model });
   });
   const scopeWarnings = manifest.jobs.map(narrowOutputScopeWarning).filter(Boolean);
   // An unborn HEAD (no commits yet) breaks `git rev-parse HEAD`, which runBaseChecks below (and
@@ -2724,6 +2725,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
     validateRunIdle(state.idle);
   }
   const lanes = resolveLanes({ config: worktreeConfig, manifest, env });
+  const oversize = await editInPlaceOnlyJobs(root, manifest, { env });
   const laneDirectory = lanesDir(env);
   // The machine-wide worker limit (config machineConcurrency), shared fairly between projects: this run is one project's share of it.
   const machineMax = machineConcurrency(worktreeConfig);
@@ -3047,8 +3049,8 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
       const failures = record.routeFailures ??= {};
       try {
         if (original.agent === 'auto') {
-          record.route = pickJobRoute(original, lanes, { health: routeHealth(await today(), original.id), failures, contract: manifest.contract, ready: readyAutoJobs(manifest) });
-          job = { ...job, agent: record.route.agent, model: record.route.model };
+          record.route = pickJobRoute(original, lanes, { health: routeHealth(await today(), original.id), failures, contract: manifest.contract, ready: readyAutoJobs(manifest), editInPlaceOnly: oversize.has(original.id) });
+          job = withoutApiOnlyFields({ ...job, agent: record.route.agent, model: record.route.model });
           if (record.capFallbacks?.length) record.capFallbacks[record.capFallbacks.length - 1].to = record.route.agent;
           // The API lanes carry the short report inside their envelope (`result`); the "finish with one JSON line" instruction is for CLI lanes and makes small models drop the files.
           if (API_AGENTS.includes(job.agent) && job.report === 'short' && job.prompt.endsWith(`\n\n${REPORT_PROMPT_LINE}`)) job = { ...job, prompt: job.prompt.slice(0, -REPORT_PROMPT_LINE.length - 2) };
@@ -5734,10 +5736,41 @@ export function modelRouteChangeNoSmokeTestWarning(manifest, job) {
 // How many non-sensitive auto-routed jobs this run has ready now (no unmet `after`): the rented GPU lane is only for a big queue (see tools/router.mjs RENTED_MIN_READY).
 const readyAutoJobs = manifest => (manifest?.jobs ?? []).filter(job => job.agent === 'auto' && job.sensitive === false && !(Array.isArray(job.after) && job.after.length)).length;
 
+// Fields only the API lanes understand (the output limit and prompt caching): a job routed to a CLI lane (Cursor, Codex, Claude) does not carry them, so an escalated
+// ticket (bigger output limit) is not refused by the lane that would edit it in place.
+const API_ONLY_JOB_FIELDS = ['maxOutputTokens', 'cacheContext'];
+export function withoutApiOnlyFields(job) {
+  if (API_AGENTS.includes(job?.agent) || job?.agent === 'auto') return job;
+  const copy = { ...job };
+  for (const field of API_ONLY_JOB_FIELDS) delete copy[field];
+  return copy;
+}
+
+// Automatic jobs whose existing output files are too big for a single-request API worker (the output cap): they are routed to a lane that edits in place (Cursor, Codex, Claude)
+// instead of failing at planning with output-cap-exceeded.
+export async function editInPlaceOnlyJobs(root, manifest, { env = process.env, home = os.homedir() } = {}) {
+  const ids = new Set();
+  const config = loadLocalConfig({ env, home });
+  const configured = config.outputCap === undefined ? OUTPUT_CAP_BYTES : validateOutputCap(config.outputCap, 'outputCap');
+  for (const job of manifest.jobs ?? []) {
+    if (job.agent !== 'auto' || job.shell === true || !Array.isArray(job.outputs)) continue;
+    const cap = job.outputCapBytes ?? configured;
+    const sizes = [];
+    for (const file of job.outputs) {
+      try { const info = await fs.stat(await safePath(root, file)); if (info.isFile()) sizes.push(info.size); } catch { /* a file that does not exist yet has no size */ }
+    }
+    const total = sizes.reduce((sum, bytes) => sum + bytes, 0);
+    if (sizes.some(bytes => bytes > cap.perFile || (total > cap.total && bytes > 0))) ids.add(job.id);
+  }
+  return ids;
+}
+
 function pickJobRoute(job, lanes, options = {}) {
-  return routeJob(job, { lanes, ...options, accepts: candidate => {
+  const { editInPlaceOnly = false, ...routeOptions } = options;
+  return routeJob(job, { lanes, ...routeOptions, accepts: candidate => {
+    if (editInPlaceOnly && API_AGENTS.includes(candidate.agent)) return false;
     if (candidate.after && isWorktreeWriter(candidate)) return false;
-    try { validateManifest({ version: 1, jobs: [{ ...candidate, after: undefined }] }); return true; }
+    try { validateManifest({ version: 1, jobs: [withoutApiOnlyFields({ ...candidate, after: undefined })] }); return true; }
     catch { return false; }
   } });
 }
@@ -5759,10 +5792,11 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   // and child manifests of leads come through here too. A profile that cannot be read fails closed.
   await enforceProtectedPaths(root, manifest.jobs, { resources: manifest.resources ?? [] });
   const resolvedLanes = resolveLanes({ config: loadLocalConfig({ env, home }), manifest, env });
-  const routes = manifest.jobs.filter(job => job.agent === 'auto').map(job => ({ jobId: job.id, ...pickJobRoute(job, resolvedLanes, { contract: manifest.contract, ready: readyAutoJobs(manifest) }) }));
+  const oversize = await editInPlaceOnlyJobs(root, manifest, { env, home });
+  const routes = manifest.jobs.filter(job => job.agent === 'auto').map(job => ({ jobId: job.id, ...pickJobRoute(job, resolvedLanes, { contract: manifest.contract, ready: readyAutoJobs(manifest), editInPlaceOnly: oversize.has(job.id) }) }));
   if (routes.length) {
     const byId = new Map(routes.map(route => [route.jobId, route]));
-    manifest = { ...manifest, jobs: manifest.jobs.map(job => byId.has(job.id) ? { ...job, agent: byId.get(job.id).agent, model: byId.get(job.id).model } : job) };
+    manifest = { ...manifest, jobs: manifest.jobs.map(job => byId.has(job.id) ? withoutApiOnlyFields({ ...job, agent: byId.get(job.id).agent, model: byId.get(job.id).model }) : job) };
     validateManifest(manifest);
   }
   scopeWarnings ??= manifest.jobs.map(narrowOutputScopeWarning).filter(Boolean);
@@ -7581,9 +7615,15 @@ async function mainInner() {
   if(['--version','-v','-V'].includes(args[0]))args[0]='version';
   // A guarded machineConcurrency whose owner is gone (a crash, a kill, a power cut) is put back before anything else runs.
   try{const {restoreIfStale}=await import('./concurrency-guard.mjs');const {resolveConfigPath}=await import('./local-config.mjs');restoreIfStale(resolveConfigPath({env:process.env}));}catch{/* a bad config is reported by the command that needs it */}
-  if(args[0]==='with-concurrency'){
+  // swarm with-concurrency N -- COMMAND, with `--root PROJECT` before the word, or between the word and `--`: the root goes to the wrapped command.
+  const wcAt=args[0]==='with-concurrency'?0:(args[0]==='--root'&&args[2]==='with-concurrency'?2:-1);
+  if(wcAt!==-1){
     const {runWithConcurrency}=await import('./concurrency-guard.mjs');
-    const res=await runWithConcurrency(args.slice(1));
+    const lead=args.slice(0,wcAt);const body=args.slice(wcAt+1);
+    const cut=body.indexOf('--');const head=cut===-1?body:body.slice(0,cut);const tail=cut===-1?[]:body.slice(cut);
+    const rootArgs=[...lead];const kept=[];
+    for(let i=0;i<head.length;i++){if(head[i]==='--root'&&i+1<head.length){rootArgs.push('--root',head[i+1]);i++;}else kept.push(head[i]);}
+    const res=await runWithConcurrency([...kept,...tail],{rootArgs});
     process.stdout.write(res.stdout);
     if(res.exitCode)process.exitCode=res.exitCode;
     return;
@@ -8082,7 +8122,7 @@ async function mainInner() {
   // `swarm "goal sentence"` is shorthand for `swarm go "goal sentence"`. Only one argument with
   // whitespace counts, so a mistyped one-word command never starts a paid run.
   if(!args[0].startsWith('-')&&/\s/.test(args[0])&&isGoalArgument(args[0]))args.unshift('go');
-  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] [--kit NAME --kit-source PATH_OR_GIT_URL [--name NAME] [--no-protect-kit]] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] [--skip-skeleton] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | tickets --mark-deps [ID...] [--yes] | change "REASON" [FILE] [--yes] | merge PR [--repo OWNER/NAME] | stop --all|--status|--clear | backup [list|verify ID] [--reason TEXT] | restore ID [--yes] | migrations [check [--yes]|approve FILE [--note TEXT]] | projects [list|add PATH|remove ID] | history [--project P] [--kind K] [--q TEXT] [--from D] [--to D] [--csv] [--backfill] | budgets check [--url URL] [--screens a,b] | budgets status | errors pull [--dry-run] | errors ingest [FILE|-] | errors list|show|ignore|resolve|digest | report --client [--since DAYS] [--preview URL] [--approve [DIR]] [--status] | time log HOURS [NOTE] | time list | quote SCOPE.md | quote record|list|config | resolve BLOCKER_ID | remote on|off|status|show|rotate | with-concurrency N -- COMMAND... | phone setup --repo OWNER/NAME | phone sync [--dry-run] | phone status | phone off | models watch [--force] [--json] | models list | models compare CURRENT CANDIDATE | ui check [SCREEN_ID...] [--base-url URL] [--json] | ui list | watch [RUN] [--all] [--tui] [--open] [--json] | gallery list|approve ID...|comment ID "text" | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | handoff generate --stage S3 [--max-usd N] [--yes] [--dry-run] | handoff check --url URL [--propose] | handoff status | handoff final | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] [--kit NAME --kit-source PATH_OR_GIT_URL [--name NAME] [--no-protect-kit]] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] [--skip-skeleton] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | tickets --mark-deps [ID...] [--yes] | change "REASON" [FILE] [--yes] | merge PR [--repo OWNER/NAME] | stop --all|--status|--clear | backup [list|verify ID] [--reason TEXT] | restore ID [--yes] | migrations [check [--yes]|approve FILE [--note TEXT]] | projects [list|add PATH|remove ID] | history [--project P] [--kind K] [--q TEXT] [--from D] [--to D] [--csv] [--backfill] | budgets check [--url URL] [--screens a,b] | budgets status | errors pull [--dry-run] | errors ingest [FILE|-] | errors list|show|ignore|resolve|digest | report --client [--since DAYS] [--preview URL] [--approve [DIR]] [--status] | time log HOURS [NOTE] | time list | quote SCOPE.md | quote record|list|config | resolve BLOCKER_ID | remote on|off|status|show|rotate | with-concurrency N -- COMMAND... | phone setup --repo OWNER/NAME | phone sync [--dry-run] | phone status | phone off | models watch [--force] [--json] | models list | models compare CURRENT CANDIDATE | ui check [SCREEN_ID...] [--base-url URL] [--json] | ui list | watch [RUN] [--all] [--tui] [--open] [--json] | gallery list|approve ID...|comment ID "text" | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] [--force] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | handoff generate --stage S3 [--max-usd N] [--yes] [--dry-run] | handoff check --url URL [--propose] | handoff status | handoff final | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
@@ -8127,12 +8167,18 @@ async function mainInner() {
   }
   if(args[0]==='update'){
     const flags=args.slice(1);
-    let yes=false,useProjects=false;const dirs=[];
+    let yes=false,useProjects=false,force=false;const dirs=[];
     for(let index=0;index<flags.length;index++){
       const flag=flags[index];
       if(flag==='--yes'){yes=true;continue;}
-      if(flag==='--projects'){useProjects=true;while(flags[index+1]&&flags[index+1]!=='--yes'){dirs.push(flags[++index]);}continue;}
+      if(flag==='--force'){force=true;continue;}
+      if(flag==='--projects'){useProjects=true;while(flags[index+1]&&!['--yes','--force'].includes(flags[index+1])){dirs.push(flags[++index]);}continue;}
       fail('Invalid arguments; use --help');
+    }
+    // A running run keeps the code it started with, but a new version changes what its later steps and the next commands do: update only when the machine is idle, unless the owner forces it.
+    if(!force){
+      const {runs:liveNow}=await boardSummary();
+      if(liveNow.length)fail(`update-refused: ${liveNow.length} run(s) are live, so swarm will not update now:\n${liveNow.map(r=>`  ${r.runId}  ${r.jobs.filter(j=>j.status==='complete').length}/${r.jobs.length} jobs  ${r.root}`).join('\n')}\nWait for them to finish (swarm watch --all), or run swarm update --force yourself.`,'update-refused');
     }
     root=await fs.realpath(root);
     // `swarm update` moves the INSTALLED swarm (the one the swarm command on this machine runs). Run from a development checkout it must not touch that checkout

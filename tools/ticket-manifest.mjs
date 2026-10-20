@@ -156,16 +156,22 @@ export function ticketsToManifest(tickets,opts={}){
     if(deps.length)job.after=deps;
     if(t.risk==='high')job.hard=true;
     // A ticket that failed before is routed up: a bigger output, then Codex (edits in place), then Claude.
-    if(!vfields&&!deletes.length)Object.assign(job,routingFor(t.escalation||0,{maxOutputTokens:job.maxOutputTokens}));
+    if(!(vfields&&(deps.length||vfields.setup||vfields.testEnv))&&!deletes.length)Object.assign(job,routingFor(t.escalation||0,{maxOutputTokens:job.maxOutputTokens}));
     // A worker that can run the ticket's tests (a shell-capable lane) with the project's setup commands and test environment.
     if(vfields){
-      job.agent=vfields.agent;job.model=vfields.model;
-      if(vfields.shell)job.shell=true;
-      if(vfields.setup)job.setup=vfields.setup;
-      if(vfields.testEnv)job.testEnv=vfields.testEnv;
-      job.timeoutMs=vfields.timeoutMs;
-      delete job.cacheContext;delete job.acceptance;
-      if(vfields.agent==='codex')delete job.after;
+      // The verify block says who runs the tests, not who builds: the ticket is routed like any other (cheapest healthy lane first) and the merge queue runs the managed test check on
+      // every batch. Only a ticket that cannot be routed keeps the verify worker: one that waits for others (`after`: Cursor and Codex cannot take it, the API lanes cannot run tests) and
+      // one whose tests need the project's setup commands or test environment (a database), which only the shell worker provides.
+      if(deps.length||vfields.setup||vfields.testEnv){
+        job.agent=vfields.agent;job.model=vfields.model;
+        if(vfields.shell)job.shell=true;
+        if(vfields.setup)job.setup=vfields.setup;
+        if(vfields.testEnv)job.testEnv=vfields.testEnv;
+        if(vfields.agent==='codex')delete job.after;
+      }
+      job.timeoutMs=Math.max(job.timeoutMs||0,vfields.timeoutMs);
+      delete job.acceptance;
+      if(deps.length||vfields.setup||vfields.testEnv)delete job.cacheContext;
     }else if(deletes.length){
       // Only a worker that edits in place can delete: a shell Claude job, like the test-running lane.
       Object.assign(job,{agent:'claude',model:'sonnet',shell:true});delete job.cacheContext;
@@ -181,6 +187,8 @@ export function ticketsToManifest(tickets,opts={}){
         job.agent=lane.agent;
         // Prompt caching belongs to the Anthropic lane: a ticket pinned anywhere else carries its shared files as plain context.
         if(lane.agent!=='anthropic')delete job.cacheContext;
+        // The output limit is an API field: a ticket pinned to Cursor, Codex or Claude (even one that was escalated) carries none.
+        if(editsInPlace)delete job.maxOutputTokens;
         // A pin without a model takes the lane's configured one (a job with a named agent and no model is refused); the claude lane's tiers follow the ticket's risk.
         if(lane.model)job.model=lane.model;else if(lane.agent!==prev||!job.model){delete job.model;const cfg=laneModels?.[lane.agent];const m=lane.agent==='claude'&&t.risk==='high'&&cfg?.expensiveModel?cfg.expensiveModel:cfg?.model;if(typeof m==='string'&&m)job.model=m;else warnings.push(t.id+': lane '+t.lane+' has no model in the machine config; set lanes.'+lane.agent+'.model');}
         if(vfields){if(lane.agent==='codex')delete job.after;else if(deps.length)job.after=deps;}

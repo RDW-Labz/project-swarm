@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.139.0
+
+Six bugs from the live parts-app S13 run, and `swarm update` that waits for an idle machine.
+- **Job-type presets are cheapest-first.** build, fix, test and docs jobs now try Cursor, then Codex, then paid Haiku (then the local Hermes lane); they used to put Anthropic first and override the router's order.
+- **The verify block no longer picks the builder.** A ticket with tests is routed like any other ticket; the profile's `verify` agent is used only for a ticket that waits for others (`after`, which Cursor and Codex cannot take) or whose tests need the project's setup commands or test environment (a database). The merge queue still runs the tests.
+- **No API-only fields on CLI lanes.** A ticket pinned to (or routed to) Cursor, Codex or Claude carries no `maxOutputTokens` or `cacheContext`; an escalated ticket pinned to Codex no longer fails with "maxOutputTokens is API-only".
+- **Test files owned by later tickets.** The acceptance review manifest leaves out files that do not exist yet, and `swarm scope check` warns (`test-owned-by-later`) about a ticket that lists a test file a later ticket owns, naming both.
+- **Output cap.** An automatic ticket whose existing output files are over the single-request cap (two CSS files over 15 KB) is routed to a lane that edits in place (Cursor, Codex, Claude) instead of failing at planning with `output-cap-exceeded`.
+- **`with-concurrency` takes `--root` in any place:** before the word, after it, or before the `--`.
+- **`swarm update` refuses while a run is live** (it names each one) unless you pass `--force` yourself.
+- Tests: `tests/s13-live-bugs.test.mjs`, `tests/job-types.test.mjs`, `tests/s13-blockers.test.mjs`.
+
 ## 1.138.0
 
 The three review findings left open in 1.137.0.

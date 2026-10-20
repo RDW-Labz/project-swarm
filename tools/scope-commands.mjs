@@ -1374,7 +1374,7 @@ async function cmdSync(root, { rest, flags }) {
     let accLine = null;
     if (accNeed.length) {
       if (`acc-review-${rest[0]}`.length > 60) return out(`run id ${rest[0]} is too long for an acceptance review job id (at most ${60 - 'acc-review-'.length} characters)`, 1);
-      const manifest = acceptanceManifest(rest[0], accNeed.map(x => ({ ticket: x.ticket, uncovered: x.lines })), { model: profile?.acceptance?.model ?? 'sonnet', tickets: ledger.tickets });
+      const manifest = acceptanceManifest(rest[0], accNeed.map(x => ({ ticket: x.ticket, uncovered: x.lines })), { model: profile?.acceptance?.model ?? 'sonnet', tickets: ledger.tickets, exists: p => existsSync(path.join(root, p)) });
       // A fresh token goes into the review prompt and the hashes file: a review run counts only for the sync that wrote this exact manifest.
       const nonce = randomBytes(12).toString('hex');
       for (const job of manifest.jobs) job.prompt = `${job.prompt}\n\nReview token (copy nothing, it only identifies this request): ${nonce}`;

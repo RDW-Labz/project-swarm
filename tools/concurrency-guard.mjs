@@ -140,12 +140,12 @@ export async function runGuarded({ value, args, env = process.env, configFile = 
   return { code, applied };
 }
 
-export async function runWithConcurrency(argv, { env = process.env } = {}) {
+export async function runWithConcurrency(argv, { env = process.env, rootArgs = [] } = {}) {
   const cut = argv.indexOf('--');
   const value = Number(argv[0]);
   if (cut !== 1 || cut === argv.length - 1 || !/^\d+$/.test(argv[0] ?? '') || value < MIN || value > MAX) return { stdout: `${GUARD_USAGE}\n`, exitCode: 2 };
-  const rest = argv.slice(cut + 1);
-  if (rest[0] === 'with-concurrency') return { stdout: 'with-concurrency cannot wrap itself\n', exitCode: 2 };
+  const rest = [...rootArgs, ...argv.slice(cut + 1)];
+  if (rest.includes('with-concurrency') && rest.indexOf('with-concurrency') === rootArgs.length) return { stdout: 'with-concurrency cannot wrap itself\n', exitCode: 2 };
   try {
     const { code, applied } = await runGuarded({ value, args: rest, env });
     process.stderr.write(`machineConcurrency was ${applied.previous ?? 'unset'}, set to ${applied.set} for this command, and is back to ${applied.previous ?? 'unset'}.\n`);

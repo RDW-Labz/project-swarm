@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 import { isTestFile } from './context-check.mjs';
 
+// The cheapest lanes first for every kind of job that any lane can do: the flat-rate subscriptions (Cursor, then Codex), then paid Haiku, then the free local lane. The router
+// still skips a lane that is paused or cannot take the job, and never routes sensitive jobs where they must not go.
+const CHEAPEST_FIRST = ['cursor', 'codex', 'anthropic', 'hermes'];
 const preset = (writes, route, timeoutMs, skill, promptLine) => Object.freeze({
   writes, route: Object.freeze(route), timeoutMs, skill, promptLine,
 });
 
 export const JOB_TYPES = Object.freeze({
-  build: preset('any', ['anthropic', 'cursor', 'codex'], 1800000, null, 'Implement the change and its tests inside your declared outputs.'),
-  fix: preset('any', ['anthropic', 'cursor', 'codex'], 1800000, 'diagnosing-bugs', 'Reproduce the failure first, fix the cause, and keep or add a regression test inside your outputs.'),
-  test: preset('tests', ['codex', 'anthropic', 'hermes', 'cursor'], 1200000, 'tdd', 'Write or update tests only; do not change non-test files.'),
+  build: preset('any', ['cursor', 'codex', 'anthropic'], 1800000, null, 'Implement the change and its tests inside your declared outputs.'),
+  fix: preset('any', ['cursor', 'codex', 'anthropic'], 1800000, 'diagnosing-bugs', 'Reproduce the failure first, fix the cause, and keep or add a regression test inside your outputs.'),
+  test: preset('tests', CHEAPEST_FIRST, 1200000, 'tdd', 'Write or update tests only; do not change non-test files.'),
   review: preset('none', ['codex'], 900000, 'code-review', 'Do not edit files. Finish with one JSON line: {"status":"complete","summary":"...","findings":[{"file":"...","line":0,"severity":"high|medium|low","issue":"...","fix":"..."}]}.'),
   research: preset('none', ['hermes'], 900000, null, 'Do not edit files. Finish with one JSON line: {"status":"complete","summary":"...","sources":["..."],"findings":["..."]}. For GitHub prior art, the coordinator uses swarm scout or sweep instead.'),
-  docs: preset('docs', ['anthropic', 'hermes', 'cursor', 'codex'], 900000, null, 'Edit documentation only. Plain, short sentences.'),
+  docs: preset('docs', CHEAPEST_FIRST, 900000, null, 'Edit documentation only. Plain, short sentences.'),
   merge: preset('any', ['codex'], 1800000, 'resolving-merge-conflicts', "Resolve the conflict so both sides' intent survives; never drop a side silently. Keep tests passing."),
   lead: preset('manifest', ['codex'], 900000, null, 'Write exactly one child manifest JSON file as your only output. Do not edit any other file. Child jobs must stay inside your assigned area.'),
 });

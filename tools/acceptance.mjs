@@ -214,14 +214,14 @@ export function evaluate({ ticket, cov, record, filesHash, testsPassed, accepted
   return { state, lines, missing, failing };
 }
 
-export function reviewManifest(runId, items, { model = 'sonnet', agent = 'claude', tickets = [] } = {}) {
+export function reviewManifest(runId, items, { model = 'sonnet', agent = 'claude', tickets = [], exists = null } = {}) {
   const list = arr(items);
   const context = [];
   for (const item of list) {
     const ticket = item.ticket ?? {};
     const paths = expandTicketRefs([...arr(ticket.files), ...arr(ticket.tests), ...arr(ticket.context)], tickets);
     for (const p of paths) {
-      if (typeof p === 'string' && !/(^|\/)\.env(\.|$)/.test(p) && !/(^|\/)\.project-swarm\.json$/.test(p) && !p.includes('..') && !context.includes(p)) {
+      if (typeof p === 'string' && !/(^|\/)\.env(\.|$)/.test(p) && !/(^|\/)\.project-swarm\.json$/.test(p) && !p.includes('..') && !context.includes(p) && (typeof exists !== 'function' || exists(p))) {
         context.push(p);
       }
     }
