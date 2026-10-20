@@ -387,4 +387,19 @@ test('integration refuses an import.meta.vitest block in a production file under
   const okId = await savedRun(ok, [{ id: 'writer', outputs: { 'src/a.test.ts': 'if (import.meta.vitest) {}', 'tests/b.test.ts': 'import.meta.vitest', 'docs/notes.md': 'import.meta.vitest is not used here', 'src/binary.dat': Buffer.from('\0import.meta.vitest') } }]);
   assert.equal((await swarm.integrateRun(ok, okId, { noChecks: true })).status, 'integrated');
   assert.deepEqual(swarm.inSourceTestHits([{ file: 'src/x.ts', bytes: Buffer.from('a\nimport.meta.vitest') }, { file: 'src/x.test.ts', bytes: Buffer.from('import.meta.vitest') }, { file: 'lib/y.ts', bytes: Buffer.from('import.meta.vitest') }, { file: 'src/gone.ts', bytes: null }]).map(h => [h.file, h.line]), [['src/x.ts', 2]]);
+  // Only a block the change ADDS counts: a file that already had one (from an earlier wave) can be edited again; a second block is refused.
+  const old = Buffer.from('export const a = 1;\nif (import.meta.vitest) { /* old */ }\n');
+  assert.deepEqual(swarm.inSourceTestHits([{ file: 'src/old.ts', previous: old, bytes: Buffer.from('export const a = 2;\nif (import.meta.vitest) { /* old */ }\n') }]), [], 'edited, block not added');
+  assert.deepEqual(swarm.inSourceTestHits([{ file: 'src/old.ts', previous: old, bytes: Buffer.from('export const a = 1;\n') }]), [], 'a block removed');
+  const more = swarm.inSourceTestHits([{ file: 'src/old.ts', previous: old, bytes: Buffer.from('export const a = 1;\nif (import.meta.vitest) { /* old */ }\nif (import.meta.vitest) { /* new */ }\n') }]);
+  assert.deepEqual(more.map(h => [h.file, h.line]), [['src/old.ts', 3]], 'a new block in a file that had one');
+  // end to end: a run that edits a file with 13 old blocks and adds none is integrated; one that adds one is refused
+  const root2 = await fixture(t);
+  await put(root2, 'src/legacy.ts', old.toString());
+  const keep = await savedRun(root2, [{ id: 'writer', outputs: { 'src/legacy.ts': 'export const a = 2;\nif (import.meta.vitest) { /* old */ }\n' } }]);
+  assert.equal((await swarm.integrateRun(root2, keep, { noChecks: true })).status, 'integrated');
+  const root3 = await fixture(t);
+  await put(root3, 'src/legacy.ts', old.toString());
+  const add = await savedRun(root3, [{ id: 'writer', outputs: { 'src/legacy.ts': `${old.toString()}if (import.meta.vitest) { /* new */ }\n` } }]);
+  await assert.rejects(swarm.integrateRun(root3, add, { noChecks: true }), { code: 'in-source-test' });
 });

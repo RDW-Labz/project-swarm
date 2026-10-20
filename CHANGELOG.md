@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.144.0
+
+The hand-build guard (see `docs/handbuild-guard.md`) and a stricter update guard.
+- **An orchestrator session may not build by hand.** A PreToolUse hook blocks, in the project checkout, `Edit`, `Write`, `MultiEdit`, `NotebookEdit` and shell writes (`>`, `tee`, `sed -i`, `mv`/`cp` into the project, `rm`, `touch`, `mkdir`, inline scripts that write, `git commit`/`push`...) unless the owner approved that exact hand-build. Allowed without approval: reading, tests and builds, writing under `.swarm/` and `docs/plans/`, build output, anything outside the checkout, swarm worker workspaces, and `swarm` commands.
+- **The request flow.** `swarm handbuild request --kind swarm-cannot|emergency|secret|tiny --reason ... --files ... --minutes 30` shows in Needs you (board and phone) as an approve/deny decision (deny is the default, with a recommendation); the owner answers with `swarm handbuild approve ID`, `swarm decide handbuild-ID approve` or the phone. An approval covers only the files (and git operations) named and expires. Any other reason: "write a ticket instead". An orchestrator session cannot approve its own request, edit the approval state or the hook settings, or switch the guard off.
+- **Every request, approval, denial and blocked attempt is on the journal** and in `.swarm/handbuild/log.ndjson`.
+- **The hand-built share is complete.** The Orchestrator lane now reads shell writes too (the files a command wrote) and counts blocked attempts: `swarm-built 83%, hand-built 17% (12 files, 3 blocked)`.
+- **Hooks are safe before the update that brings them:** their commands are wrapped (`test -f SCRIPT && node SCRIPT || true`). `swarm handbuild install | uninstall | off | on`; `swarm init` installs the guard for a new project, `swarm update` only refreshes where it is installed.
+- **`swarm update` also refuses while a swarm command is running from the install** (found in the process list: a `go --scope` loop between two waves has no run registered), naming the process; `--force` stays the owner's.
+- **In-source tests.** The `in-source-test` check at integration looks only at files a job changed and only at a block the change adds (a file with blocks from earlier waves can be edited again); the security and acceptance reviewers are told that an `import.meta.vitest` block in a production file under `src/` is a defect.
+- **Opus review of the guard (three rounds, $3.10 in all): the analyzer and the decision module were hardened.** It now reads `bash -c`, `eval`, substitutions, subshells, `cd`, `xargs`, `find -exec`, `awk`, wrappers with options, downloads and extraction, interpreters on writable or outside scripts, and fails closed on inline code that is not plainly read-only; git commands are an allowlist of reads; `.git/`, `.swarm` itself, `.claude/`, the install and the user's Claude settings are protected (case-insensitively); requests may not be broad or protected, expire after 24 hours, and are written under a lock; a commit carries only the approved files (a `git add` on the same line is counted; adding everything is refused); bundled shell flags (`-lc`), shell keywords, variable command words, scripts run by path or sourced, `git -c`, sed `w`/`e`, `curl -o`/`tar -x` variants, and a `cd` that may not happen are read; the project comes from `CLAUDE_PROJECT_DIR`; too-large input is refused; shell writes count as hand-built only when files are named.
+- Tests: `tests/handbuild-guard.test.mjs`, `tests/s13-live-bugs.test.mjs`.
+
 ## 1.143.0
 
 The Orchestrator lane in Swarm Watch (see `docs/orchestrator-lane.md`).

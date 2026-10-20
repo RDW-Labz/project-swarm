@@ -45,7 +45,7 @@ test('init installs the checkpoint hook once, keeps other settings and hooks, an
   assert.equal((await installProject(other, { source: packageRoot })).claudeHook.status, 'updated');
   const merged = await settingsOf(other);
   assert.equal(merged.model, 'x');
-  assert.deepEqual(merged.hooks.PreToolUse.flatMap(entry => entry.hooks.map(hook => hook.command)).filter(c => !c.includes('orchestrator-hook.mjs')), [], 'the empty list only gained the Orchestrator lane hook');
+  assert.deepEqual(merged.hooks.PreToolUse.flatMap(entry => entry.hooks.map(hook => hook.command)).filter(c => !c.includes('orchestrator-hook.mjs') && !c.includes('handbuild-guard.mjs')), [], 'the empty list only gained the Orchestrator lane and guard hooks');
   assert.deepEqual(merged.hooks.Stop.flatMap(entry => entry.hooks.map(hook => hook.command)).filter(c => !c.includes('orchestrator-hook.mjs')), ['echo mine', CHECKPOINT_HOOK]);
 
   const broken = await temp(t);
