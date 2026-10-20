@@ -10,9 +10,16 @@ export function swarmProducedFiles(root) {
   const runsDir = path.join(root, '.swarm', 'runs');
   try {
     for (const name of fs.readdirSync(runsDir)) {
-      const file = path.join(runsDir, name, 'state.json');
+      const runDir = path.join(runsDir, name);
+      let dirSt;
+      try { dirSt = fs.lstatSync(runDir); } catch { continue; }
+      if (dirSt.isSymbolicLink() || !dirSt.isDirectory()) continue;
+      const file = path.join(runDir, 'state.json');
       try {
+        const fileSt = fs.lstatSync(file);
+        if (fileSt.isSymbolicLink() || !fileSt.isFile()) continue;
         const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (String(state?.id ?? '') !== name) continue;
         if (!state?.integratedAt) continue;
         for (const list of [state.integratedFiles, state.integratedNewFiles]) {
           if (!Array.isArray(list)) continue;

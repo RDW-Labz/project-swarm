@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "budget": {
+    "maxUsd": 3.0
+  },
+  "jobs": [
+    {
+      "id": "review2-g1",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner-requested security review of the guard policy code",
+      "type": "review",
+      "prompt": "SECOND REVIEW after fixes for a first review that found many bypasses. Review coordination/review/g1.diff: the hand-build guard policy (handbuild.mjs guardDecision, swarm-produced.mjs, routing-paths.mjs). Promises: an orchestrator session needs the owner's approval for any hand edit to source, tests, docs or config; routing files (manifests, HANDOFF, TASK, build-plan, usage ledger) are free; commit and push on a non-main branch are free only when every carried file is a routing path or a file recorded as integrated by a swarm run; any commit or push on main or master needs an approval; git push with force is blocked, and a force push to a protected branch is never approvable even with an approval naming force-push; merge, deploy, branch -D and force-push need an approval that names the op; git fetch, status, log, diff, rebase on a non-main branch, branch -d, gh pr create/view/list/checks/diff and gh run list/watch/view are free; deletes outside the scratchpad are blocked. Look for ways to bypass: a command form that does the blocked thing but is classified as free (aliases, env prefixes, git -c, git -C, flags before the subcommand, refspec forms such as +src:dst or HEAD:refs/heads/main or a remote default branch, push with no branch while the current branch is main, a detached HEAD, symlinks, case differences, path traversal into a routing name such as coordination/manifests/../../tools/x.mjs), a routing path rule that matches too much, swarm-produced reading a forged or stale state file, the branch lookup failing open, and any approval being consumed or reused wrongly. Report only concrete, reproducible findings with file and line and a short failing command or input, most severe first, or say none found. Do not report style.  Also check that the earlier problem classes are really closed: a command form that does the blocked thing but is classified as free, git push refspec forms, commit pathspecs, gh api writes, vercel deploys, scratchpad moves and deletes, symlinked routing paths, wildcard and variable targets, forged chat approvals and the computer channel being claimable. The policy now fails closed: git, gh and vercel commands are free only in a short exact list of forms. Try to find a form on that list that still does harm, and any command that is not on the list but is treated as free.",
+      "context": [
+        "coordination/review/g1.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "review2-g2",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner-requested security review of the guard policy code",
+      "type": "review",
+      "prompt": "SECOND REVIEW after fixes for a first review that found many bypasses. Review coordination/review/g2.diff: the shell command analyzer (shell-writes.mjs) and the hand-built counter (orchestrator-events.mjs). Promises: a backtick, a dollar variable or a greater-than sign inside a quoted string used only as an argument is not a write and not unknown; the same characters in a write target are still caught; every real write (redirects, tee, sed -i, mv, cp, rm, touch, mkdir, curl -o, tar -x, python or node inline writes, git operations) is still reported; ops lists every git, gh, vercel and swarm command; outside deletes are reported. Look for quoting or expansion forms that now hide a real write or git/gh op from the analyzer (single versus double quotes, escaped quotes, ANSI-C quoting, here-documents, command substitution in a target, process substitution, braces, line continuation, eval and bash -c nesting, env and command wrappers), and for the counter dropping a real source edit as routing, scratchpad or memory. Report only concrete, reproducible findings with file and line and a short failing command or input, most severe first, or say none found. Do not report style.  Also check that the earlier problem classes are really closed: a command form that does the blocked thing but is classified as free, git push refspec forms, commit pathspecs, gh api writes, vercel deploys, scratchpad moves and deletes, symlinked routing paths, wildcard and variable targets, forged chat approvals and the computer channel being claimable. The policy now fails closed: git, gh and vercel commands are free only in a short exact list of forms. Try to find a form on that list that still does harm, and any command that is not on the list but is treated as free.",
+      "context": [
+        "coordination/review/g2.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "review2-g3",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner-requested security review of the guard policy code",
+      "type": "review",
+      "prompt": "SECOND REVIEW after fixes for a first review that found many bypasses. Review coordination/review/g3.diff: the request channel limits and chat merge approval. Promises: a hand-build request naming merge, deploy, force-push or branch-D can be approved only when the decision channel is the computer (swarm decide); a missing or unknown channel counts as not the computer; the phone, board and remote control paths refuse it server-side before doing anything; denying is allowed from any channel; the owner's chat line starting with merge and a PR number, seen by the prompt hook, records a 60 minute approval for exactly that PR number, consumed on use. Look for ways around it: a channel value that can be forged by a caller or by request fields, a decide path that skips the check (other callers, the handbuild- prefix handling, case or whitespace in the choice), the phone allow-list being bypassable, the chat parser matching text that is not the owner's own instruction (pasted content, quoted lines, code fences, multi-line prompts, a line such as merge 5 inside a longer sentence), the stored merge entry being writable by the orchestrator session, expiry and pruning errors. Report only concrete, reproducible findings with file and line and a short failing command or input, most severe first, or say none found. Do not report style.  Also check that the earlier problem classes are really closed: a command form that does the blocked thing but is classified as free, git push refspec forms, commit pathspecs, gh api writes, vercel deploys, scratchpad moves and deletes, symlinked routing paths, wildcard and variable targets, forged chat approvals and the computer channel being claimable. The policy now fails closed: git, gh and vercel commands are free only in a short exact list of forms. Try to find a form on that list that still does harm, and any command that is not on the list but is treated as free.",
+      "context": [
+        "coordination/review/g3.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

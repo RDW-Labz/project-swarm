@@ -17,10 +17,12 @@ const USAGE = {
 };
 const bad = command => ({ stdout: USAGE[command], exitCode: 1 });
 
-/** Owner at the computer: interactive TTY and not inside a Claude Code agent session. */
+// Owner at the computer: interactive TTY and not inside a Claude Code or swarm agent session.
+// The guard (another module) blocks `swarm decide` / hand-build approval command text inside agent sessions; the owner's own terminal is outside that guard.
 export function decideChannelFromEnvironment(env = process.env) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return 'agent';
   if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT) return 'agent';
+  if (env.SWARM_AGENT_SESSION) return 'agent';
   return 'computer';
 }
 

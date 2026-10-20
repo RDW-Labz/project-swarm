@@ -24,6 +24,7 @@ async function project(t, { branch = 'feature/x', produced = [] } = {}) {
   if (produced.length) {
     await fs.mkdir(path.join(root, '.swarm', 'runs', 'RUN'), { recursive: true });
     await fs.writeFile(path.join(root, '.swarm', 'runs', 'RUN', 'state.json'), JSON.stringify({
+      id: 'RUN',
       integratedAt: '2026-01-01T00:00:00.000Z',
       integratedFiles: produced,
       integratedNewFiles: [],

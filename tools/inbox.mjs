@@ -240,8 +240,11 @@ async function decideHandbuild(root, ref, picked, deps) {
   const { decideRequest, readState, ELEVATED_GIT_OPS } = await import('./handbuild.mjs');
   const hbId = ref.slice('handbuild-'.length);
   const req = readState(root).requests[hbId];
-  if (picked === 'approve' && req && (req.git ?? []).some(g => ELEVATED_GIT_OPS.includes(g)) && channel !== 'computer') {
-    throw new Error('handbuild-computer-only: merge, deploy, force-push and branch -D need the owner at the computer (swarm decide), not from the phone or board');
+  if (picked === 'approve') {
+    if (!req || req.git === undefined) throw new Error('handbuild-request-unknown');
+    if (req.git.some(g => ELEVATED_GIT_OPS.includes(g)) && channel !== 'computer') {
+      throw new Error('handbuild-computer-only: merge, deploy, force-push and branch -D need the owner at the computer (swarm decide), not from the phone or board');
+    }
   }
   decideRequest(root, hbId, picked, { now, by: 'owner', channel });
   await appendEvent(root, { kind: 'decision', id: ref, confirmed: true, choice: picked, text: sanitizeText(item.text ?? '') }, { now });

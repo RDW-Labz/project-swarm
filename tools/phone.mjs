@@ -43,7 +43,8 @@ async function refuseElevatedHandbuildChoose(root, itemId, choice) {
   if (!String(itemId ?? '').startsWith('handbuild-') || picked !== 'approve') return;
   const { readState, ELEVATED_GIT_OPS } = await import('./handbuild.mjs');
   const req = readState(root).requests[String(itemId).slice('handbuild-'.length)];
-  if (req && (req.git ?? []).some(g => ELEVATED_GIT_OPS.includes(g))) throw new Error(HANDBUILD_COMPUTER_ONLY);
+  if (!req || req.git === undefined) throw new Error('handbuild-request-unknown');
+  if (req.git.some(g => ELEVATED_GIT_OPS.includes(g))) throw new Error(HANDBUILD_COMPUTER_ONLY);
 }
 const clean = (text, n = 120) => sanitizeText(String(text ?? '')).replace(/[`<>\[\]|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
 

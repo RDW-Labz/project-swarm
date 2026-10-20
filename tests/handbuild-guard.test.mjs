@@ -279,6 +279,7 @@ test('the guard is installed on request (and removed), keeps other hooks, update
 test('review findings: the shell analyzer reads bash -c, substitutions, subshells, cd, xargs, find, interpreters on writable scripts, downloads and extraction; here-document text is data', async t => {
   const root = await project(t);
   const home = '/Users/someone';
+  const outsideCd = `cd ${os.tmpdir()} && echo x > y.txt`;
   const a = c => analyzeShell(c, { root, cwd: root, home, protectedAbs: [path.join(home, '.project-swarm')] });
   const blocks = c => { const r = a(c); return r.writes.length > 0 || r.git.length > 0 || r.inline || r.unknown || r.selfApproval || r.protectedOutside.length > 0; };
   for (const c of [
@@ -291,7 +292,7 @@ test('review findings: the shell analyzer reads bash -c, substitutions, subshell
   ]) assert.equal(blocks(c), true, `should be blocked: ${c}`);
   for (const c of [
     'npm test', 'npx vitest run', 'node --test tests/a.test.mjs', 'python3 -m pytest', 'cat <<EOF\nrm src/a.ts\n> src/b.ts\nEOF', 'cat > /tmp/note.txt <<\'EOF\'\nsed -i s/a/b/ src/a.ts\nEOF', 'echo "rm src/a.ts is how you delete it"',
-    'cd src && ls && grep -rn foo .', 'cd /tmp && echo x > y.txt', 'bash -c "npm test"', 'echo $(date)', 'find src -name "*.ts" | head', 'ls src | xargs wc -l', 'curl https://x.test/a | head', 'git log --oneline | head',
+    'cd src && ls && grep -rn foo .', outsideCd, 'bash -c "npm test"', 'echo $(date)', 'find src -name "*.ts" | head', 'ls src | xargs wc -l', 'curl https://x.test/a | head', 'git log --oneline | head',
     'swarm tickets T-0001 --set done', 'swarm handbuild request --kind tiny --reason "four lines blocked" --files src/a.ts', 'swarm handbuild status', 'node tools/swarm.mjs run manifest.json', 'node docs/plans/../../tests/x.mjs'.replace('docs/plans/../../', ''),
     'echo hi > .swarm/notes.txt', 'echo hi >> docs/plans/p.md', 'python3 -c "print(1)"',
   ]) assert.equal(blocks(c), false, `should be allowed: ${c} -> ${JSON.stringify(a(c))}`);
@@ -394,6 +395,7 @@ test('third review: bundled flags, shell keywords, variable command words, scrip
   const root = await project(t);
   await fs.mkdir(path.join(root, 'scripts'));
   await fs.writeFile(path.join(root, 'scripts/ok.sh'), 'echo ok');
+  const outsideCd = `cd ${os.tmpdir()} && echo x > y.txt`;
   const a = c => analyzeShell(c, { root, cwd: root, home: '/Users/someone', protectedAbs: [path.join('/Users/someone', '.project-swarm'), path.join('/Users/someone', '.claude', 'settings.json')] });
   const blocks = c => { const r = a(c); return r.writes.length > 0 || r.git.length > 0 || r.inline || r.unknown || r.selfApproval || r.protectedOutside.length > 0; };
   for (const c of [
@@ -405,7 +407,7 @@ test('third review: bundled flags, shell keywords, variable command words, scrip
     'ln -s src/a.ts .swarm/link', 'rm -rf ~/.claude', 'rm -rf /Users/someone/.project-swarm', 'echo x > .swarm/*',
   ]) assert.equal(blocks(c), true, `should be blocked: ${c} -> ${JSON.stringify(a(c))}`);
   for (const c of [
-    'node --test', 'node -v', 'command -v python3', 'python3 --version', './scripts/ok.sh', 'bash scripts/ok.sh', 'cd src && ls && echo x > /tmp/y', 'cd /tmp && echo x > y.txt', 'if true; then npm test; fi', 'for f in a b; do echo $f; done',
+    'node --test', 'node -v', 'command -v python3', 'python3 --version', './scripts/ok.sh', 'bash scripts/ok.sh', 'cd src && ls && echo x > /tmp/y', outsideCd, 'if true; then npm test; fi', 'for f in a b; do echo $f; done',
     'rm -rf dist/*', 'rm -rf build/cache/* node_modules/.cache/x', 'git -C /tmp/other-repo commit -m x', 'git diff --stat', 'git log -p -3', 'git remote -v', 'git tag -l', 'git checkout main', 'git switch main',
     'curl -s https://x.test | head', 'tar tf a.tar', 'tar -czf /tmp/o.tgz src', 'sed -n 1,5p f', 'sed "s/a/b/" f', 'echo "it\'s fine $(date)" > /tmp/q',
     'python3 -c "print(sum(range(10)))"', 'node -e "console.log(2 ** 8)"', 'echo \'$(rm src/a.ts) is data\'',

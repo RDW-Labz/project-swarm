@@ -12,6 +12,7 @@ import { execFileSync } from 'node:child_process';
 import { analyzeShell, writesAnything, TOOL_DIRS, tokenize } from './shell-writes.mjs';
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 import { swarmProducedFiles } from './swarm-produced.mjs';
+import { isSelfApprovalCommand, SELF_APPROVAL_REASON } from './self-approval.mjs';
 
 export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D']);
 export const ELEVATED_GIT_OPS = Object.freeze(['merge', 'deploy', 'force-push', 'branch-D']);
@@ -192,47 +193,117 @@ const commandHasGhRepoFlag = command => {
   return false;
 };
 
-/** Policy ops with args, globalOpts, and hasConfig (shared contract with shell-writes). */
-const buildPolicyOps = command => {
-  const ops = [];
-  for (const words of tokenize(command)) {
-    const plain = plainWords(words);
-    let k = 0;
-    while (k < plain.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) k += 1;
-    if (k >= plain.length) continue;
-    const cmd = path.basename(plain[k]);
-    const args = plain.slice(k + 1);
-    const hasConfig = hasConfigInWords(plain.slice(k));
-    if (cmd === 'git') {
-      let globalOpts = false;
-      let i = 0;
-      while (i < args.length && args[i].startsWith('-')) {
-        globalOpts = true;
-        if (args[i] === '-C' || args[i] === '-c' || args[i] === '--config-env' || ['--git-dir', '--work-tree', '--namespace'].includes(args[i])) i += 2;
-        else i += 1;
-      }
-      const sub = i < args.length && !args[i].startsWith('-') ? args[i] : null;
-      const rest = sub ? args.slice(i + 1) : [];
+const WRAPPERS = new Set(['sudo', 'command', 'time', 'nohup', 'exec', 'env', 'nice', 'builtin', 'xargs', 'stdbuf', 'timeout']);
+const WRAPPER_VALUE_OPTS = { sudo: ['-u', '-g', '-C', '-h', '-p', '-r', '-t', '-U'], env: ['-u', '-C'], nice: ['-n'], stdbuf: ['-i', '-o', '-e'], timeout: ['-s', '-k', '--signal', '--kill-after'], xargs: ['-n', '-I', '-L', '-P', '-s', '-d', '-E'] };
+const POLICY_SHELL_KEYWORDS = new Set(['if', 'then', 'do', 'else', 'elif', 'while', 'until', '!', 'fi', 'done', 'case', 'esac', 'for', 'in', 'select', 'function', 'coproc']);
+const POLICY_SHELLS = new Set(['bash', 'sh', 'zsh']);
+const shortFlagHas = (flag, ch) => flag.startsWith('-') && !flag.startsWith('--') && flag.slice(1).includes(ch);
+const shellCodeFlag = a => /^-[A-Za-z]*c$/.test(a) || a === '--command';
+
+const policySubstitutions = text => {
+  const out = [];
+  const s = String(text ?? '');
+  let single = false, double = false;
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s[i];
+    if (c === '\\' && !single) { i += 1; continue; }
+    if (c === "'" && !double) { single = !single; continue; }
+    if (c === '"' && !single) { double = !double; continue; }
+    if (single) continue;
+    if (c === '$' && s[i + 1] === '(') {
+      let depth = 1, j = i + 2;
+      for (; j < s.length && depth > 0; j += 1) { if (s[j] === '(') depth += 1; else if (s[j] === ')') depth -= 1; }
+      out.push(s.slice(i + 2, j - 1));
+      i = j - 1;
+    } else if (c === '`') {
+      const j = s.indexOf('`', i + 1);
+      if (j === -1) break;
+      out.push(s.slice(i + 1, j));
+      i = j;
+    }
+  }
+  return out;
+};
+
+const gitPushPolicy = (rest, meta) => {
+  const flags = rest.filter(a => a.startsWith('-'));
+  const pos = rest.filter(a => a !== '' && !a.startsWith('-'));
+  const force = flags.some(a => a === '--force' || a === '-f' || a === '--force-with-lease' || a === '--force-if-includes' || a.startsWith('--force-with-lease=') || shortFlagHas(a, 'f'))
+    || pos.some(a => a.startsWith('+'));
+  let deleteMode = null;
+  if (rest.some(a => a === '--delete' || a === '-d')) deleteMode = 'remote';
+  let branch = null;
+  for (const a of pos) {
+    if (a.startsWith('+')) { const spec = a.slice(1); branch = normBranch(spec.includes(':') ? spec.split(':').pop() : spec); }
+    else if (a.startsWith(':') && a.length > 1) { deleteMode = 'remote'; branch = normBranch(a.slice(1)); }
+    else if (a.includes(':')) {
+      const rhs = a.split(':').pop();
+      if (rhs === '') deleteMode = 'remote';
+      else branch = normBranch(rhs);
+    } else if (a !== 'origin' && a !== 'HEAD') branch = normBranch(a);
+  }
+  return { tool: 'git', sub: 'push', args: pos, flags, branch, force, delete: deleteMode, ...meta };
+};
+
+const gitBranchPolicy = (rest, meta) => {
+  const pos = rest.filter(a => a !== '' && !a.startsWith('-'));
+  const hasDelete = rest.some(a => a === '-d' || a === '--delete');
+  const hasForce = rest.some(a => a === '-D' || a === '-f' || a === '--force');
+  let deleteMode = null;
+  if (rest.some(a => a === '-D') || (hasDelete && hasForce)) deleteMode = 'force';
+  else if (hasDelete) deleteMode = 'safe';
+  else if (rest.some(a => ['-f', '-m', '-M', '-c', '-C', '--force', '--move', '--copy'].includes(a))) deleteMode = 'force';
+  return { tool: 'git', sub: 'branch', args: pos.slice(1), flags: rest.filter(a => a.startsWith('-')), branch: pos[0] ?? null, force: false, delete: deleteMode, ...meta };
+};
+
+const policyOpsFromPlain = (plain, plainExp, ops) => {
+  let k = 0, wrapperName = null;
+  for (;;) {
+    if (k >= plain.length) return;
+    if (POLICY_SHELL_KEYWORDS.has(plain[k])) { k += 1; continue; }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) { k += 1; continue; }
+    if (wrapperName === 'env' && /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) { k += 1; continue; }
+    if (WRAPPERS.has(plain[k])) { wrapperName = plain[k]; k += 1; continue; }
+    if (wrapperName === 'env' && (plain[k] === '-S' || plain[k] === '--split-string') && plain[k + 1] !== undefined) {
+      buildPolicyOps(plain[k + 1]).forEach(o => ops.push(o));
+      return;
+    }
+    if (wrapperName && plain[k]?.startsWith('-')) { const takes = (WRAPPER_VALUE_OPTS[wrapperName] ?? []).includes(plain[k]); k += takes ? 2 : 1; continue; }
+    if (wrapperName === 'timeout' && /^\d+(?:\.\d+)?[smhd]?$/.test(plain[k])) { k += 1; wrapperName = null; continue; }
+    break;
+  }
+  if (k >= plain.length) return;
+  if (plainExp[k]) { ops.push({ tool: '_opaque', sub: null, opaque: true }); return; }
+  const cmd = path.basename(plain[k]);
+  const args = plain.slice(k + 1);
+  const hasConfig = hasConfigInWords(plain.slice(k));
+  if (POLICY_SHELLS.has(cmd)) {
+    const at = args.findIndex(shellCodeFlag);
+    if (at !== -1 && args[at + 1] !== undefined) buildPolicyOps(args[at + 1]).forEach(o => ops.push(o));
+    return;
+  }
+  if (cmd === 'eval') { buildPolicyOps(args.join(' ')).forEach(o => ops.push(o)); return; }
+  if (cmd === 'git') {
+    let globalOpts = false;
+    let i = 0;
+    while (i < args.length && args[i].startsWith('-')) {
+      globalOpts = true;
+      if (args[i] === '-C' || args[i] === '-c' || args[i] === '--config-env' || ['--git-dir', '--work-tree', '--namespace'].includes(args[i])) i += 2;
+      else i += 1;
+    }
+    const sub = i < args.length && !args[i].startsWith('-') ? args[i] : null;
+    const rest = sub ? args.slice(i + 1) : [];
+    const meta = { globalOpts, hasConfig, target: null };
+    if (sub === 'push') ops.push(gitPushPolicy(rest, meta));
+    else if (sub === 'branch') ops.push(gitBranchPolicy(rest, meta));
+    else {
       const pos = rest.filter(a => a && !a.startsWith('-'));
-      const opArgs = pos;
-      let branch = null, force = false, deleteMode = null, target = null;
-      if (sub === 'push') {
-        const flags = rest.filter(a => a.startsWith('-'));
-        force = flags.some(a => a === '--force' || a === '-f' || a === '--force-with-lease') || pos.some(a => a.startsWith('+'));
-        for (const a of pos) {
-          if (a.startsWith('+')) { const spec = a.slice(1); branch = spec.includes(':') ? normBranch(spec.split(':').pop()) : normBranch(spec); }
-          else if (a.includes(':')) branch = normBranch(a.split(':').pop() || a.split(':')[0]);
-          else if (a !== 'origin' && a !== 'HEAD') branch = normBranch(a);
-        }
-      } else if (sub === 'branch') {
-        if (rest.some(a => a === '-D')) deleteMode = 'force';
-        else if (rest.some(a => a === '-d' || a === '--delete')) deleteMode = 'safe';
-        else if (rest.some(a => ['-f', '-m', '-M', '-c', '-C', '--force', '--move', '--copy'].includes(a))) deleteMode = 'force';
-        branch = pos[0] ?? null;
-      } else if (sub === 'rebase' && pos[0]) branch = pos[0];
+      let branch = null;
+      if (sub === 'rebase' && pos[0]) branch = pos[0];
       else if (sub === 'merge') branch = pos[0] ?? null;
-      ops.push({ tool: 'git', sub, args: opArgs, globalOpts, hasConfig, flags: rest.filter(a => a.startsWith('-')), branch, force, delete: deleteMode, target });
-    } else if (cmd === 'gh') {
+      ops.push({ tool: 'git', sub, args: pos, globalOpts, hasConfig, flags: rest.filter(a => a.startsWith('-')), branch, force: false, delete: null, target: null });
+    }
+  } else if (cmd === 'gh') {
       let globalOpts = false;
       let i = 0;
       while (i < args.length && args[i].startsWith('-')) {
@@ -258,19 +329,42 @@ const buildPolicyOps = command => {
       const swarmTarget = sub === 'merge' && pos[1] !== undefined ? String(pos[1]) : null;
       ops.push({ tool: 'swarm', sub, args: pos.slice(1), globalOpts: args.some(a => a.startsWith('-')), hasConfig, flags: args.filter(a => a.startsWith('-')), branch: null, force: false, delete: null, target: swarmTarget });
     }
+};
+
+/** Policy ops with args, globalOpts, and hasConfig (shared contract with shell-writes). */
+const buildPolicyOps = command => {
+  const ops = [];
+  for (const sub of policySubstitutions(command)) buildPolicyOps(sub).forEach(o => ops.push(o));
+  for (const words of tokenize(command)) {
+    const wordExp = words.expands ?? [];
+    const plain = [];
+    const plainExp = [];
+    for (let i = 0; i < words.length; i += 1) {
+      if (['>', '>>', '>|', '>&', '&>', '<', '<<<'].includes(words[i])) { i += 1; continue; }
+      if (words[i] === '<<') continue;
+      if (/^\d+$/.test(words[i]) && ['>', '>>', '>&'].includes(words[i + 1])) continue;
+      plain.push(words[i]);
+      plainExp.push(wordExp[i] ?? false);
+    }
+    policyOpsFromPlain(plain, plainExp, ops);
   }
   return ops;
 };
 
-const pushBlockedOnProtected = (pos, force) => {
+const protectedBranchName = b => {
+  const n = normBranch(b);
+  return n === 'main' || n === 'master' || n === 'refs/heads/main' || n === 'refs/heads/master';
+};
+
+const pushBlockedOnProtected = (pos, forceOrDelete) => {
   for (const a of pos) {
     const spec = a.startsWith('+') ? a.slice(1) : a;
     if (spec.includes(':')) {
       const dst = normBranch(spec.split(':').pop());
       const src = spec.split(':')[0];
-      if (dst === 'main' || dst === 'master' || dst === 'refs/heads/main' || dst === 'refs/heads/master') return true;
-      if ((src === '' || src === ':') && (dst === 'main' || dst === 'master')) return true;
-    } else if (force && (normBranch(spec) === 'main' || normBranch(spec) === 'master')) return true;
+      if (protectedBranchName(dst)) return true;
+      if ((src === '' || src === ':') && protectedBranchName(dst)) return true;
+    } else if (forceOrDelete && protectedBranchName(spec)) return true;
     if (a === ':main' || a === ':master' || a.endsWith(':main') || a.endsWith(':master')) return true;
   }
   return false;
@@ -278,9 +372,10 @@ const pushBlockedOnProtected = (pos, force) => {
 
 const isFreeGitPush = (op, current) => {
   if (op.globalOpts || op.hasConfig) return false;
+  if (op.delete === 'remote' || op.force) return false;
   const flags = op.flags ?? [];
   if (flags.some(f => !['-u', '--set-upstream'].includes(f))) return false;
-  if (flags.some(f => ['--all', '--mirror', '--delete', '-f', '--force'].includes(f))) return false;
+  if (flags.some(f => ['--all', '--mirror', '--delete', '-d', '-f', '--force'].includes(f) || shortFlagHas(f, 'f'))) return false;
   const pos = op.args ?? [];
   if (pos.some(a => a.startsWith('+') || a.includes(':'))) return false;
   if (pushBlockedOnProtected(pos, false)) return false;
@@ -562,7 +657,45 @@ export function activeApprovals(root, now = Date.now()) { return listRequests(ro
 // The approval state is the owner's: no approval covers a write to it, to the guard's log, or to the hooks' own settings, and an orchestrator session cannot run the approval commands.
 export const PROTECTED = Object.freeze(['.swarm/handbuild', '.claude/settings.local.json', '.claude/settings.json', '.git/']);
 // Compared in lower case (the usual macOS volume is case-insensitive), and the folders that contain the guard's state are protected too, not only the files in them.
-const isProtected = rel => { const r = rel.toLowerCase(); return r === '.swarm' || r === '.claude' || PROTECTED.some(p => r === p || r.startsWith(p.endsWith('/') ? p : `${p}/`)); };
+const isSwarmRunRecord = rel => { const r = rel.toLowerCase(); return r === '.swarm/runs' || r.startsWith('.swarm/runs/'); };
+const resolveCmdPath = (raw, root, cwd) => {
+  if (!raw || raw.startsWith('-')) return null;
+  const p = path.isAbsolute(raw) ? raw : path.resolve(cwd || root, raw);
+  return insideProject(root, p);
+};
+const orchestratorSwarmRunWrites = (command, root, cwd) => {
+  const out = new Set();
+  for (const words of tokenize(command)) {
+    for (let i = 0; i < words.length; i += 1) {
+      if (['>', '>>', '>|', '>&', '&>'].includes(words[i]) && words[i + 1] !== undefined && !/^&?\d+$/.test(words[i + 1])) {
+        const rel = resolveCmdPath(words[i + 1], root, cwd);
+        if (rel) out.add(rel);
+      }
+    }
+    const plain = plainWords(words);
+    const cmd = plain.find(w => ['sed', 'tee', 'cp', 'mv', 'rm', 'touch', 'truncate', 'chmod', 'chown', 'install', 'ln'].includes(w));
+    if (!cmd) continue;
+    const ci = plain.indexOf(cmd);
+    const args = plain.slice(ci + 1);
+    if (cmd === 'sed') {
+      const inPlace = args.some(a => /^-[A-Za-z]*i/.test(a) || a === '--in-place' || a.startsWith('--in-place='));
+      if (!inPlace) continue;
+      for (const w of args) {
+        if (w && !w.startsWith('-')) { const rel = resolveCmdPath(w, root, cwd); if (rel) out.add(rel); }
+      }
+    } else if (cmd === 'tee') {
+      for (const w of args.filter(a => a && !a.startsWith('-'))) { const rel = resolveCmdPath(w, root, cwd); if (rel) out.add(rel); }
+    } else if (['cp', 'mv', 'install', 'ln'].includes(cmd)) {
+      const ops = args.filter(a => a && !a.startsWith('-'));
+      if (ops.length) { const rel = resolveCmdPath(ops[ops.length - 1], root, cwd); if (rel) out.add(rel); }
+    } else {
+      for (const w of args.filter(a => a && !a.startsWith('-'))) { const rel = resolveCmdPath(w, root, cwd); if (rel) out.add(rel); }
+    }
+  }
+  return [...out].filter(isSwarmRunRecord);
+};
+const isProtected = rel => { const r = rel.toLowerCase(); return r === '.swarm' || r === '.claude' || isSwarmRunRecord(r) || PROTECTED.some(p => r === p || r.startsWith(p.endsWith('/') ? p : `${p}/`)); };
+const swarmRecordReason = rel => `Hand-build guard: ${rel} is swarm run state (only swarm commands may write it); no approval covers it.`;
 // Outside the checkout too: the install (the guard's own scripts) and the user's own Claude settings could switch the hooks off.
 export const protectedAbsolute = (home = os.homedir()) => [path.join(home, '.project-swarm'), path.join(home, '.claude', 'settings.json'), path.join(home, '.claude', 'settings.local.json'), ...(process.env.SWARM_INSTALL_DIR ? [process.env.SWARM_INSTALL_DIR] : [])];
 const underAbs = (abs, list) => list.some(prefix => abs === prefix || abs.startsWith(`${prefix}/`));
@@ -590,6 +723,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     const raw = typeof raw0 === 'string' && raw0 && !path.isAbsolute(raw0) ? path.resolve(cwd || root, raw0) : raw0;
     const rel = insideProject(root, raw);
     if (rel === null && typeof raw === 'string' && raw && underAbs(path.resolve(path.isAbsolute(raw) ? raw : path.join(cwd || root, raw)), protectedAbsolute(home))) return { allow: false, files: [], reason: `Hand-build guard: ${raw} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
+    if (rel !== null && isSwarmRunRecord(rel)) return { allow: false, files: [rel], reason: swarmRecordReason(rel) };
     if (rel !== null && isProtected(rel)) return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
     if (rel === null || AllowRel(rel)) return { allow: true };
     if (rel !== null && isRoutingPathResolved(root, rel)) return { allow: true, files: [rel] };
@@ -604,8 +738,10 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
     const current = branchOfFn(root);
     const protBranch = isProtectedBranch(current);
-    if (a.selfApproval) return { allow: false, files: [], reason: 'Hand-build guard: approving or denying a hand-build, or switching the guard off, is the owner\'s alone (swarm handbuild approve, or the phone). An orchestrator session cannot approve its own request.' };
+    if (a.selfApproval || isSelfApprovalCommand(ti.command)) return { allow: false, files: [], reason: SELF_APPROVAL_REASON };
     if (a.protectedOutside.length) return { allow: false, files: [], reason: `Hand-build guard: ${a.protectedOutside.join(', ')} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
+    const swarmRunWrites = [...new Set([...a.writes.filter(isSwarmRunRecord), ...orchestratorSwarmRunWrites(ti.command, root, cwd)])];
+    if (swarmRunWrites.length) return { allow: false, files: [...a.writes, ...swarmRunWrites], reason: swarmRecordReason(swarmRunWrites[0]) };
     if (a.writes.some(isProtected)) return { allow: false, files: a.writes, reason: `Hand-build guard: ${a.writes.filter(isProtected).join(', ')} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
     if (a.outsideDeletes?.length && !a.outsideDeletes.every(p => allowedOutsideDelete(p, h))) {
       return { allow: false, files: [], reason: 'Hand-build guard: deletes outside the scratchpad are the owner\'s.' };
@@ -616,6 +752,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     let pushNeedsCarryCheck = false;
     const chatMergeCandidates = [];
     for (const op of policyOps) {
+      if (op.opaque) { policyGitOps.push('commit'); continue; }
       if (op.tool === 'git') {
         if (READ_GIT_SUBS.has(op.sub)) {
           if (!isFreeReadGit(op)) policyGitOps.push(op.sub === 'diff' && (op.flags ?? []).some(f => f.startsWith('--output')) ? 'output' : 'config');
@@ -633,7 +770,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
         if (op.sub === 'merge') { policyGitOps.push('merge'); continue; }
         if (op.sub === 'push') {
           const pos = op.args ?? [];
-          const deletePush = pos.some(a => a.includes(':') && (a.startsWith(':') || a.split(':')[0] === ''));
+          const deletePush = op.delete === 'remote' || pos.some(a => a.includes(':') && (a.startsWith(':') || a.split(':')[0] === ''));
           if (pushBlockedOnProtected(pos, op.force || deletePush)) {
             return { allow: false, files: [], reason: 'Hand-build guard: force push to a protected branch (main or master) is never approvable, even with a hand-build approval that names force-push.' };
           }
@@ -646,7 +783,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
           continue;
         }
         if (op.sub === 'commit') {
-          if (protBranch) policyGitOps.push('commit');
+          if (protBranch || op.globalOpts || op.hasConfig) policyGitOps.push('commit');
           else commitStagedCheck = 'allowlist';
           continue;
         }
