@@ -8,7 +8,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { capDecision, estimateReservation, flatRateReserve, runTotals, FLAT_RATE_RESERVE_DEFAULTS } from '../tools/spend.mjs';
+import { capDecision, estimateReservation, flatRateReserve, runTotals } from '../tools/spend.mjs';
 import { runManifest } from '../tools/swarm.mjs';
 
 const budget = (maxUsd, lanes = {}) => ({ maxUsd, maxTokens: null, lanes });
@@ -29,8 +29,8 @@ test('subscription lanes reserve an estimate while a job runs: the most a finish
   assert.equal(flatRateReserve({ lane: 'claude', model: 'opus' }), 1.0);
   assert.equal(flatRateReserve({ lane: 'claude', model: 'claude-sonnet-5-5' }), 0.5);
   assert.equal(flatRateReserve({ lane: 'claude', model: 'haiku' }), 0.2);
-  assert.equal(flatRateReserve({ lane: 'codex' }), FLAT_RATE_RESERVE_DEFAULTS.codex);
-  assert.equal(flatRateReserve({ lane: 'cursor' }), 0.4);
+  assert.equal(flatRateReserve({ lane: 'codex' }), 0);
+  assert.equal(flatRateReserve({ lane: 'cursor' }), 0);
   assert.equal(flatRateReserve({ lane: 'hermes' }), 0, 'a free local lane reserves nothing');
   assert.equal(flatRateReserve({ lane: 'unknown-lane' }), 0);
   assert.equal(flatRateReserve({ lane: 'claude', model: 'opus', history: [0.1, 0.1, 0.1, 0.1] }), 1.0, 'fewer than five samples: the default');
