@@ -47,3 +47,26 @@ test('the claude lane takes tier models; other lanes refuse them; a bad name is 
   assert.throws(() => resolveLanes({ config: { lanes: { codex: { expensiveModel: 'x' } } } }), /is unknown/);
   assert.throws(() => resolveLanes({ config: { lanes: { claude: { expensiveModel: 'bad name!' } } } }), /valid model name/);
 });
+
+test('a ticket reference never hands on secret files, the project profile or globs', () => {
+  const tickets = [t('T-0193', { files: ['.env.local', 'app/.env', '.project-swarm.json', 'src/*.ts', '.env.example', 'src/ok.ts'] })];
+  assert.deepEqual(expandTicketRefs(['T-0193'], tickets), ['.env.example', 'src/ok.ts']);
+});
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { apply, markerPath, restoreIfStale } from '../tools/concurrency-guard.mjs';
+test('a guard marker from before the last boot is stale even if its pid is alive, and a second apply is refused', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-'));
+  const file = path.join(dir, 'config.json');
+  fs.writeFileSync(file, JSON.stringify({ machineConcurrency: 4 }));
+  apply(file, 16);
+  assert.throws(() => apply(file, 8), /another guarded run/);
+  // Same pid (alive) but written a year before: a reboot's pid reuse
+  const marker = JSON.parse(fs.readFileSync(markerPath(file), 'utf8'));
+  fs.writeFileSync(markerPath(file), JSON.stringify({ ...marker, at: new Date(Date.now() - 365 * 864e5).toISOString() }));
+  assert.equal(restoreIfStale(file).restored, true);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).machineConcurrency, 4);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

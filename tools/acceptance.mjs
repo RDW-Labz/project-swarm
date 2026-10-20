@@ -181,7 +181,8 @@ export function evaluate({ ticket, cov, record, filesHash, testsPassed, accepted
       }
       // A line a test covers but that test has not been seen passing (no verify block, or it did not run): a recorded review pass for the same code stands in for it,
       // otherwise the ticket could never be done and the review the sync asks for would count for nothing (found by the first live go --scope run).
-      const reviewed = recorded.find((e) => e && e.n === item.n);
+      // (a failed test never gets here: sync sends that ticket back first; the record is tied to the files by validRecord, and must name the same line text)
+      const reviewed = recorded.find((e) => e && e.n === item.n && (e.line === undefined || e.line === item.line));
       if (reviewed && reviewed.verdict === 'pass') {
         return { n: item.n, line: item.line, by: 'review', verdict: 'pass', evidence: typeof reviewed.evidence === 'string' ? reviewed.evidence : '' };
       }
@@ -220,7 +221,7 @@ export function reviewManifest(runId, items, { model = 'sonnet', agent = 'claude
     const ticket = item.ticket ?? {};
     const paths = expandTicketRefs([...arr(ticket.files), ...arr(ticket.tests), ...arr(ticket.context)], tickets);
     for (const p of paths) {
-      if (typeof p === 'string' && !p.startsWith('.env') && !p.includes('..') && !context.includes(p)) {
+      if (typeof p === 'string' && !/(^|\/)\.env(\.|$)/.test(p) && !/(^|\/)\.project-swarm\.json$/.test(p) && !p.includes('..') && !context.includes(p)) {
         context.push(p);
       }
     }

@@ -11,6 +11,7 @@ Fixes for the parts app S13 run, plus the practice-run tooling.
 - **`go --scope` ending.** The final line no longer fails with "say is not defined"; an acceptance review pass satisfies a covered line whose test was not seen passing.
 - **`swarm with-concurrency N -- COMMAND`** sets `machineConcurrency` for one command and puts the old value back on exit, error, Ctrl-C, kill, a crash of the wrapper, or the next command after a power cut. A new run's cap is clamped to what is left of the project's cap.
 - **`swarm scale --full`** runs a stub run plus a live second run, measured by the Watch API, with a panic stop and a backup check; the lane store queues its callers in process.
+- Opus review fixes: a ticket reference never hands on `.env` files, the project profile or globs (and at most 60 files); the guard marker is created exclusively, only its owner restores it on exit, and a marker from before the last boot is stale even if its pid was reused; `scope sync` skips a test file only when every other owner comes after the ticket; an acceptance review pass must name the same line text.
 - Tests: `tests/s13-blockers.test.mjs`, `tests/concurrency-guard.test.mjs`, `tests/practice-tooling.test.mjs`, router and lesson-40 additions.
 
 ## 1.136.0

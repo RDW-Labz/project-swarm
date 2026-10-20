@@ -6,6 +6,7 @@
 // meantime is never overwritten.
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolveConfigPath } from './local-config.mjs';
@@ -41,12 +42,16 @@ export function restore(configFile) {
   return result;
 }
 
+// A marker written before the machine last started belongs to a process that no longer exists, whatever process now holds its pid.
+const bootedAt = () => Date.now() - os.uptime() * 1000;
+const fromBeforeBoot = marker => { const at = Date.parse(marker?.at); return Number.isFinite(at) && at < bootedAt() - 5000; };
+
 /** Called at the start of every swarm command: a marker whose owner is gone is restored. */
 export function restoreIfStale(configFile) {
   try {
     const marker = readJson(markerPath(configFile));
     if (!marker) return null;
-    if (alive(marker.pid)) return null;
+    if (alive(marker.pid) && !fromBeforeBoot(marker)) return null;
     return restore(configFile);
   } catch { return null; }
 }
@@ -55,13 +60,16 @@ export function apply(configFile, value, { pid = process.pid, now = Date.now } =
   if (!Number.isInteger(value) || value < MIN || value > MAX) throw Object.assign(new Error(`${GUARD_USAGE}`), { code: 'guard-usage' });
   const stale = restoreIfStale(configFile);
   const existing = readJson(markerPath(configFile));
-  if (existing && alive(existing.pid)) throw Object.assign(new Error(`another guarded run (process ${existing.pid}) has machineConcurrency set to ${existing.set}; wait for it or stop it`), { code: 'guard-busy' });
+  if (existing && alive(existing.pid) && !fromBeforeBoot(existing)) throw Object.assign(new Error(`another guarded run (process ${existing.pid}) has machineConcurrency set to ${existing.set}; wait for it or stop it`), { code: 'guard-busy' });
   const config = readJson(configFile);
   if (config === null) throw Object.assign(new Error(`${configFile} is missing or is not valid JSON: not changed`), { code: 'guard-config' });
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw Object.assign(new Error(`${configFile} is not a JSON object: not changed`), { code: 'guard-config' });
   const previous = Object.hasOwn(config, 'machineConcurrency') ? config.machineConcurrency : null;
   // The marker first: if anything fails after this, the next command restores it.
-  writeJsonAtomic(markerPath(configFile), { previous, set: value, pid, at: new Date(now()).toISOString() });
+  // Created exclusively: two guards starting at once cannot both believe they own the value.
+  fs.mkdirSync(path.dirname(configFile), { recursive: true });
+  try { fs.writeFileSync(markerPath(configFile), `${JSON.stringify({ previous, set: value, pid, at: new Date(now()).toISOString() }, null, 2)}\n`, { flag: 'wx', mode: 0o600 }); }
+  catch (error) { if (error.code === 'EEXIST') throw Object.assign(new Error('another guarded run is starting; try again'), { code: 'guard-busy' }); throw error; }
   writeJsonAtomic(configFile, { ...config, machineConcurrency: value }, 0o600);
   return { previous, set: value, staleRestored: stale?.restored ?? false };
 }
@@ -82,7 +90,7 @@ export async function runGuarded({ value, args, env = process.env, configFile = 
   let watcher = null;
   if (startWatcher) { watcher = spawn(process.execPath, [SELF, '--watch', String(process.pid), configFile], { detached: true, stdio: 'ignore', env }); watcher.unref(); }
   let done = false;
-  const finish = () => { if (done) return; done = true; try { restore(configFile); } catch { /* the next command restores it */ } };
+  const finish = () => { if (done) return; done = true; try { if (readJson(markerPath(configFile))?.pid === process.pid) restore(configFile); } catch { /* the next command restores it */ } };
   const onExit = () => finish();
   process.on('exit', onExit);
   const child = spawnImpl(process.execPath, [SWARM, ...args], { stdio, env });
