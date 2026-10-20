@@ -1114,10 +1114,23 @@ export function dirtyBlockers(porcelainLines) {
   return [...blockers].sort();
 }
 
-function commitFirstRefusal(stdout) {
+export const COMMIT_FIRST_REASON = 'commit first';
+const COMMIT_FIRST_BLOCKER_CAP = 20;
+
+export function formatCommitFirstRefusal(blockers) {
+  const listed = (blockers ?? []).slice(0, COMMIT_FIRST_BLOCKER_CAP);
+  if (!listed.length) return COMMIT_FIRST_REASON;
+  return `${COMMIT_FIRST_REASON}: ${listed.join(', ')}`;
+}
+
+export function shipRefusalMessage(result) {
+  if (result?.reason === COMMIT_FIRST_REASON && result?.blockers?.length) return formatCommitFirstRefusal(result.blockers);
+  return result?.reason ?? '';
+}
+
+function commitFirstBlockers(stdout) {
   const blockers = dirtyBlockers(String(stdout ?? '').split('\n'));
-  if (!blockers.length) return null;
-  return `commit first: ${blockers.join(', ')}`;
+  return blockers.length ? blockers.slice(0, COMMIT_FIRST_BLOCKER_CAP) : null;
 }
 
 async function cleanHeadAt(exec, root, expectedSha) {
@@ -1719,8 +1732,11 @@ export async function ship(options) {
   }
   const statusRes = await exec('git', ['status', '--porcelain'], { cwd: root });
   if (statusRes.code !== 0) return { ...base, status: 'refused', reason: 'git status failed' };
-  const commitFirst = commitFirstRefusal(statusRes.stdout);
-  if (commitFirst) return { ...base, status: 'refused', reason: commitFirst };
+  const blockers = commitFirstBlockers(statusRes.stdout);
+  if (blockers) {
+    process.stderr.write(`${formatCommitFirstRefusal(blockers)}\n`);
+    return { ...base, status: 'refused', reason: COMMIT_FIRST_REASON, blockers };
+  }
   const shaRes = await exec('git', ['rev-parse', 'HEAD'], { cwd: root });
   if (shaRes.code !== 0 || shaRes.stdout.trim() === '') return { ...base, status: 'refused', reason: stepFailed('rev-parse', shaRes) };
   const sha = shaRes.stdout.trim();

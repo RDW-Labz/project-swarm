@@ -5,7 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { test } from 'node:test';
-import { dirtyBlockers } from '../tools/ship.mjs';
+import {
+  COMMIT_FIRST_REASON,
+  dirtyBlockers,
+  formatCommitFirstRefusal,
+  ship,
+} from '../tools/ship.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -111,10 +116,32 @@ test('git repo: unrelated dirty file is reported from porcelain', async t => {
   assert.deepEqual(dirtyBlockers(await porcelain(root)), ['src.mjs']);
 });
 
-test('dirtyBlockers: refusal message lists only blocking paths', () => {
-  const blockers = dirtyBlockers([' M dirty.txt\n']);
-  assert.deepEqual(blockers, ['dirty.txt']);
-  assert.equal(`commit first: ${blockers.join(', ')}`, 'commit first: dirty.txt');
+test('ship: dirty tree refuses with commit first reason and blockers field', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ship-clean-tree-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const payloadPath = path.join(root, 'pr.json');
+  await writeFile(payloadPath, JSON.stringify({ title: 'Add feature', head: 'feature-branch', base: 'main', body: 'body' }));
+  const exec = async (file, args) => {
+    if (file === 'git' && args[0] === 'remote') return { code: 0, stdout: 'https://github.com/acme/widgets.git', stderr: '' };
+    if (file === 'git' && args[0] === 'merge-base') return { code: 1, stdout: '', stderr: 'no package' };
+    if (file === 'git' && args[0] === 'status' && args[1] === '--porcelain') {
+      return { code: 0, stdout: ' M dirty.txt\n M coordination/HANDOFF.md\n', stderr: '' };
+    }
+    throw new Error(`unexpected exec ${file} ${args.join(' ')}`);
+  };
+  const result = await ship({
+    root,
+    repo: 'acme/widgets',
+    payloadPath,
+    runChecks: async () => [],
+    sleep: async () => {},
+    now: () => 0,
+    exec,
+  });
+  assert.equal(result.status, 'refused');
+  assert.equal(result.reason, COMMIT_FIRST_REASON);
+  assert.deepEqual(result.blockers, ['dirty.txt']);
+  assert.equal(formatCommitFirstRefusal(result.blockers), 'commit first: dirty.txt');
 });
 
 test('dirtyBlockers: generated-only porcelain has no blockers', () => {
