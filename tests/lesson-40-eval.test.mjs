@@ -276,3 +276,12 @@ test('eval 40.10: review follow-ups: ci-local never runs deploy jobs, secrets or
   await put(dep, 'package.json', JSON.stringify({ name: 'app', workspaces: ['a'] }));
   await assert.rejects(dependencyWrites({ root: dep, specs: ['zod'], exec: sneaky }), /workspaces/);
 });
+
+test('a build ticket whose test file belongs to a LATER ticket (one that depends on it) does not wait for it', async t => {
+  const ledgerRoot = await withLedger(t, [tk('T-0001', { type: 'test', files: ['tests/a.test.ts'], dependsOn: ['T-0002'], status: 'todo' }), tk('T-0002', { tests: ['tests/a.test.ts'], runId: 'r9', status: 'review' })]);
+  await runState(ledgerRoot, doneState(['T-0002']));
+  const result = await runScopeCommand(ledgerRoot, 'scope', ['sync', 'r9', '--integrated']);
+  assert.doesNotMatch(result.stdout, /waiting for T-0001/);
+  const t2 = (await readLedger(ledgerRoot)).tickets[1];
+  assert.notEqual(t2.attempts?.length ?? 0, 1, 'no retry was started for a file that is the later ticket\'s to write');
+});

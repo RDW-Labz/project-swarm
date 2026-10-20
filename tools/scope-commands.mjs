@@ -26,6 +26,7 @@ import { validateProfile, protectedPathHit, isSecretPath, isExampleFile } from '
 import { ensureGitignore } from './gitignore-defaults.mjs';
 import { workTreeFingerprint } from './work-tree.mjs';
 import { otherManagerLockfile } from './ticket-manifest.mjs';
+import { loadLocalConfig } from './local-config.mjs';
 import { doneEvidence, ticketTests, failedRunChecks } from './verify-config.mjs';
 import { deriveQualityChecks, qualityEvidence } from './quality-checks.mjs';
 import { nextStep, sizeTicket } from './escalation.mjs';
@@ -1231,9 +1232,12 @@ async function cmdSync(root, { rest, flags }) {
       if (integrated && !integrated.has(t.id)) { notIntegrated.push(t.id); continue; }
       // The test files a ticket names must exist in the tree: a ticket whose tests were never written is not done, whatever the suite says.
       const namedTests = ['build', 'test', 'migration'].includes(t.type) ? [...new Set([...(t.tests ?? []), ...ticketTests(t)])].filter(f => looksLikeTestFile(f) && !/[*?]|\/$/.test(f) && !(t.deletes ?? []).includes(f)) : [];
-      const missingAll = namedTests.filter(f => !existsSync(path.join(root, f)));
-      // A test file another ticket owns is that ticket's to write: while it is not done, this ticket waits (no retry, no attempt).
+      // A ticket that comes after this one (it depends on it, directly or through others) can never be waited for: its files are written later, so they are not this ticket's to find.
+      const laterIds = new Set();
+      for (let grew = true; grew;) { grew = false; for (const o of ledger.tickets) if (!laterIds.has(o.id) && o.id !== t.id && (o.dependsOn ?? []).some(d => d === t.id || laterIds.has(d))) { laterIds.add(o.id); grew = true; } }
       const ownerOf = f => ledger.tickets.find(o => o.id !== t.id && o.status !== 'cancelled' && ((o.files ?? []).includes(f) || (o.type === 'test' && (o.tests ?? []).includes(f))));
+      const missingAll = namedTests.filter(f => !existsSync(path.join(root, f)) && !laterIds.has(ownerOf(f)?.id));
+      // A test file another ticket owns is that ticket's to write: while it is not done, this ticket waits (no retry, no attempt).
       const waiting = missingAll.filter(f => { const o = ownerOf(f); return o && o.status !== 'done'; });
       if (waiting.length) { unverified.push(`${t.id} (waiting for ${[...new Set(waiting.map(f => ownerOf(f).id))].join(', ')} to write ${waiting.join(', ')}; not retried)`); continue; }
       const missingTests = missingAll;
@@ -1365,7 +1369,7 @@ async function cmdSync(root, { rest, flags }) {
     let accLine = null;
     if (accNeed.length) {
       if (`acc-review-${rest[0]}`.length > 60) return out(`run id ${rest[0]} is too long for an acceptance review job id (at most ${60 - 'acc-review-'.length} characters)`, 1);
-      const manifest = acceptanceManifest(rest[0], accNeed.map(x => ({ ticket: x.ticket, uncovered: x.lines })), { model: profile?.acceptance?.model ?? 'sonnet' });
+      const manifest = acceptanceManifest(rest[0], accNeed.map(x => ({ ticket: x.ticket, uncovered: x.lines })), { model: profile?.acceptance?.model ?? 'sonnet', tickets: ledger.tickets });
       // A fresh token goes into the review prompt and the hashes file: a review run counts only for the sync that wrote this exact manifest.
       const nonce = randomBytes(12).toString('hex');
       for (const job of manifest.jobs) job.prompt = `${job.prompt}\n\nReview token (copy nothing, it only identifies this request): ${nonce}`;
@@ -1382,7 +1386,7 @@ async function cmdSync(root, { rest, flags }) {
     const notUnmet = [...unmetOk].filter(id => !unmetNow.includes(id));
     let reviewLine = null;
     if (needReview.length) {
-      const manifest = await securityReviewManifest(root, rest[0], needReview);
+      const manifest = await securityReviewManifest(root, rest[0], needReview, ledger.tickets);
       const file = `.swarm/security-reviews/${rest[0]}.json`;
       await fs.mkdir(path.join(root, '.swarm', 'security-reviews'), { recursive: true });
       await fs.writeFile(path.join(root, file), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -1790,7 +1794,7 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
     }
     const humans = ready.filter(t => t.type === 'human').length;
     const profile = await readProfile(root);
-    const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: false, maxJobs, lessons, verify: profile?.verify, quality: await qualityFor(root, profile), packageManager: packageManagerOf(profile), contextEnv: contextEnvFor(root, profile) });
+    const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: false, maxJobs, lessons, verify: profile?.verify, quality: await qualityFor(root, profile), packageManager: packageManagerOf(profile), contextEnv: contextEnvFor(root, profile), laneModels: (() => { try { return loadLocalConfig().lanes; } catch { return undefined; } })() });
     manifest.jobs = manifest.jobs.filter(j => j.type !== 'human');
     const ids = manifest.jobs.map(j => j.id);
     if (!ids.length) throw fail('scope-nothing', humans ? `only ${humans} human ticket(s) are ready; finish them with swarm tickets ID --set done` : 'no ready tickets');

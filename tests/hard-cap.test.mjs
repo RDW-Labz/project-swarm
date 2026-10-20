@@ -126,3 +126,18 @@ test('a subscription lane\'s daily dollar cap is enforced with reservations too'
 test('a job and the cap with a float edge: $0.10 spent, $0.20 reserved, $0.30 cap is allowed', () => {
   assert.equal(capDecision({ budget: budget(0.3), run: { usd: 0.1, tokens: 0 }, laneToday: {}, agent: 'claude', add: { usd: 0.2 } }), null);
 });
+
+test('the project cap is hard for a new run: its own cap is never more than what the project has left', async t => {
+  const root = await fixture(t);
+  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ profile: { sensitive: false, protectedPaths: [], budget: { maxUsd: 5, maxTokens: 1000000, projectMaxUsd: 1 }, baseCheck: { status: 'none' } } }));
+  const env = spendEnv(root);
+  // Spend 0.8 of the $1.00 project cap in a first run.
+  const first = await runManifest(root, { version: 1, concurrency: 1, jobs: [named('a')] }, { spawnImpl: claudeFake(0.8, 30), env });
+  assert.equal(runTotals(first).usd, 0.8);
+  // The second run asks for $5.00 and gets what is left: about $0.20.
+  const second = await runManifest(root, { version: 1, concurrency: 1, jobs: [named('b')] }, { spawnImpl: claudeFake(0.1, 30), env, maxUsd: 5 });
+  assert.ok(Math.abs(second.budget.maxUsd - 0.2) < 1e-6, `run cap ${second.budget.maxUsd}`);
+  // A manifest cap that is already lower stays as it is.
+  const third = await runManifest(root, { version: 1, concurrency: 1, budget: { maxUsd: 0.05 }, jobs: [named('c')] }, { spawnImpl: claudeFake(0.01, 30), env });
+  assert.equal(third.budget.maxUsd, 0.05);
+});

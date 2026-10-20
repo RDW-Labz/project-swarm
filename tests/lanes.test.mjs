@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { LANE_AGENTS, LANE_DEFAULTS, resolveLanes, classifyProviderOutcome, LaneScheduler } from '../tools/lanes.mjs';
+import { LANE_AGENTS, LANE_DEFAULTS, resolveLanes, classifyProviderOutcome, LaneScheduler, withLaneStore } from '../tools/lanes.mjs';
 
 function fixture(overrides = {}, globalConcurrency = 4, random = () => 1) {
   let time = 1700000000000;
@@ -477,4 +477,27 @@ test('an adaptive lane in the shared lane file holds to its current limit across
     assert.equal(s.health('openai').limit, 3);
     await s.close?.();
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('1,500 callers in one process take their turn at the lanes store: none times out on the lock, and each sees the one before (found by the 1,000-worker practice run)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lanes-queue-'));
+  try {
+    let inside = 0, overlaps = 0, order = [];
+    const one = n => withLaneStore(async store => {
+      inside += 1; if (inside > 1) overlaps += 1;
+      store.slots.claude = store.slots.claude ?? [];
+      store.slots.claude.push({ id: `s${n}`, pid: process.pid, host: os.hostname(), runId: 'r', at: Date.now() });
+      order.push(n);
+      await new Promise(r => setImmediate(r));
+      inside -= 1;
+      return store.slots.claude.length;
+    }, { dir, timeoutMs: 2000 });
+    const results = await Promise.all(Array.from({ length: 1500 }, (_, n) => one(n)));
+    assert.equal(overlaps, 0, 'never two inside at once');
+    assert.equal(Math.max(...results), 1500);
+    assert.deepEqual(order, Array.from({ length: 1500 }, (_, n) => n), 'in the order they asked');
+    // A failing caller does not stop the ones behind it.
+    await assert.rejects(withLaneStore(async () => { throw new Error('boom'); }, { dir }), /boom/);
+    assert.equal(await withLaneStore(async store => store.slots.claude.length, { dir }), 1500);
+  } finally { await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { parseLane, laneOkForSensitive, PROPOSAL_ORIGINS } from './tickets.mjs';
 import { looksLikeTestFile } from './wiring.mjs';
+import { expandTicketRefs } from './ticket-refs.mjs';
 import * as scopeModule from './scope.mjs';
 import { queryFromTicket, selectNotes, renderNotes } from './lesson-notes.mjs';
 import { buildTicketContext } from './ticket-context.mjs';
@@ -86,7 +87,7 @@ function promptFor(t,reqs,lessons,extra={}){
 }
 
 export function ticketsToManifest(tickets,opts={}){
-  const {ledger,scope,ready=true,contract,maxJobs,lessons,verify,packageManager,contextEnv,quality}=opts;
+  const {ledger,scope,ready=true,contract,maxJobs,lessons,verify,packageManager,contextEnv,quality,laneModels}=opts;
   if(maxJobs!==undefined&&!(Number.isSafeInteger(maxJobs)&&maxJobs>0)){
     const e=new Error('maxJobs must be a positive safe integer');
     e.code='ticket-max-jobs';
@@ -114,13 +115,13 @@ export function ticketsToManifest(tickets,opts={}){
       if(f.endsWith('/'))warnings.push(t.id+': folder output '+f+' skipped');
       else outputs.push(f);
     }
-    let context=[...new Set([...(t.context||[]),...(t.contracts||[])])];
+    let context=expandTicketRefs([...(t.context||[]),...(t.contracts||[])],[...byId.values()]);
     if(contract&&!context.includes(contract))context.push(contract);
     // Automatic context: shared project files first (cached), then the files this kind of ticket needs.
     let autoShared=[],kind=null,mockupAdded=false;
     if(contextEnv){
       const reqText=(t.scopeRefs||[]).map(id=>reqs.get(id)).filter(Boolean).flatMap(r=>[r.text,...(r.acceptance||[])]).join('\n');
-      const built=buildTicketContext({ticket:{...t,requirements:reqText},scope,exists:contextEnv.exists,sizes:contextEnv.sizes,profileContext:contextEnv.profileContext,listFiles:contextEnv.listFiles,limits:contextEnv.limits});
+      const built=buildTicketContext({ticket:{...t,context:expandTicketRefs(t.context||[],[...byId.values()]),requirements:reqText},scope,exists:contextEnv.exists,sizes:contextEnv.sizes,profileContext:contextEnv.profileContext,listFiles:contextEnv.listFiles,limits:contextEnv.limits});
       warnings.push(...built.warnings.map(w=>t.id+': '+w));
       kind=built.kind;autoShared=built.cacheContext;
       // Only the filtered paths reach the job (the ticket's own context, contracts and tests went through the same filter); the manifest contract only if it passes it.
@@ -178,7 +179,10 @@ export function ticketsToManifest(tickets,opts={}){
       else if(!editsInPlace&&(vfields||deletes.length||job.shell))warnings.push(t.id+': lane '+t.lane+' ignored: this ticket needs a worker that runs commands or deletes files');
       else{
         job.agent=lane.agent;
-        if(lane.model)job.model=lane.model;else if(lane.agent!==prev)delete job.model;
+        // Prompt caching belongs to the Anthropic lane: a ticket pinned anywhere else carries its shared files as plain context.
+        if(lane.agent!=='anthropic')delete job.cacheContext;
+        // A pin without a model takes the lane's configured one (a job with a named agent and no model is refused); the claude lane's tiers follow the ticket's risk.
+        if(lane.model)job.model=lane.model;else if(lane.agent!==prev||!job.model){delete job.model;const cfg=laneModels?.[lane.agent];const m=lane.agent==='claude'&&t.risk==='high'&&cfg?.expensiveModel?cfg.expensiveModel:cfg?.model;if(typeof m==='string'&&m)job.model=m;else warnings.push(t.id+': lane '+t.lane+' has no model in the machine config; set lanes.'+lane.agent+'.model');}
         if(vfields){if(lane.agent==='codex')delete job.after;else if(deps.length)job.after=deps;}
       }
     }
