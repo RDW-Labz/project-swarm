@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "spend-labels",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "TASK (owner item X): on Swarm Watch every money figure must say clearly whether it is BILLED (real money: paid API lanes and rented GPUs) or LIST VALUE (flat-rate subscription lanes codex, cursor, claude, hermes, qwen: what the work would cost at list price, not billed). Today some figures mix the two without saying so. Labels only: do NOT change any cap or enforcement math (tools/project-spend.mjs, tools/spend.mjs stay untouched; the MacBook seat will switch caps to billed-only later). Do NOT touch tools/swarm.mjs, package.json, CHANGELOG.md or README.md.\n\nFacts (verified): in tools/board-data.mjs costOf(), allUsd = sum of runTotals(state).usd and INCLUDES flat-rate list value; todayUsd and weekUsd are billed only; paidUsd = billed all time (paid lanes + rentals); paidEstimatedUsd = estimated part of billed; flatRateListUsd = list value all time; laneToday mixes per lane. FLAT_RATE set is in board-data.mjs. The project cap today compares against runTotals (billed + list value) via projectSummary.spendUsd.\n\n1) tools/board-data.mjs costOf: add `flatRateTodayUsd` and `flatRateWeekUsd` (list value of flat-rate jobs finished today / in the last 7 days, same day boundaries as todayUsd/weekUsd). Machine totals sum them like the other keys. projectOverview.spend gains `billedUsd: cost.paidUsd`, `listUsd: cost.flatRateListUsd`, and `capBasis`: the summary's `capBasis` when present (a future field from the MacBook), else 'billed+list'. projectDetail.spend gains the same three. Keep every existing field and value.\n2) tools/watch-assets/board.js:\n - renderKpis: tile 'Spend today' becomes 'Billed today' with sub 'last 7 days billed ' + week; add a tile 'List value today' = flatRateTodayUsd with sub 'flat-rate lanes, not billed; 7 days ' + flatRateWeekUsd. Keep 'Billed, all time'; its sub becomes 'of which estimated X'. (List value all time moves to its own tile 'List value, all time' with sub 'not billed').\n - capCell: under the cap meter text add a sub line 'billed ' + usd(billedUsd) + ' \u00b7 list value ' + usd(listUsd) + ' (not billed)'; and a sub line 'cap counts: ' + (capBasis === 'billed' ? 'billed only' : 'billed + list value'). With no cap, the existing NO CAP row shows billed and list value the same way instead of the single mixed number.\n - renderCost per-project spend table: the 'All time' column header becomes 'Billed, all time' showing bp.paidUsd, and add a 'List value, all time' column showing bp.flatRateListUsd. Cost tab tiles: 'Today' -> 'Billed today', 'Last 7 days' -> 'Billed, 7 days'; keep the others.\n - The lanes table header 'List value / cost today' stays but each cell gets a suffix ' billed' or ' list value' by the row's kind ('billed' vs 'flat-rate').\n3) tools/watch-assets/project.js spend tiles: ['Billed today', todayUsd], ['Billed, 7 days', weekUsd], ['Billed, all time', billedUsd ?? paidUsd], ['List value, all time (not billed)', listUsd ?? flatRateListUsd]; drop the mixed 'All time'. The By lane tile label becomes 'By lane (billed + list value)'. The Build progress spend line says '... of cap (cap counts: billed + list value | billed only)'.\n4) tools/watch-assets/run-kpis.js: wherever the run page shows the project forecast against the cap, append ' (cap counts billed + list value)' or ' (billed only)' by pj.capBasis when present, default billed + list value. Only label text.\nAll text via textContent. Tests: extend tests/board-page.test.mjs (or a new tests/spend-labels.test.mjs) for costOf flatRateTodayUsd/flatRateWeekUsd math with one billed and one flat-rate job today and one flat-rate job 3 days ago, machine sums, projectOverview.spend billedUsd/listUsd/capBasis default 'billed+list' and passthrough of an injected summary capBasis 'billed'. Keep existing assertions (allUsd unchanged). Run `node --import ./tests/_isolate-config.mjs --test tests/board-page.test.mjs tests/spend-labels.test.mjs tests/watch-ui.test.mjs tests/board.test.mjs tests/board-worktrees.test.mjs tests/build-progress.test.mjs tests/estimates.test.mjs tests/quotes.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests use these modules for unrelated behavior; the coordinator runs the full suite after integration.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/spend.mjs",
+        "tools/project-spend.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/board.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/build-progress.test.mjs"
+      ],
+      "outputs": [
+        "tools/board-data.mjs",
+        "tools/watch-assets/board.js",
+        "tools/watch-assets/project.js",
+        "tools/watch-assets/run-kpis.js",
+        "tests/board-page.test.mjs",
+        "tests/spend-labels.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/autopilot-lock.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/completion.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10b-cli.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs"
+      ]
+    }
+  ]
+}
