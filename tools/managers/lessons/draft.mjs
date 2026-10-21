@@ -18,6 +18,7 @@ export const LESSON_DRAFT_OUT_DIR = 'coordination/lesson-drafts';
 const LINE_MAX = 400;
 const MAX_BYTES = 64 * 1024;
 const TEST_GUARD_KINDS = new Set(['contract-test', 'test-template']);
+const CLOSED_GUARD_STATUSES = new Set(['built', 'shipped', 'dropped']);
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
@@ -84,6 +85,26 @@ export function lessonDraftArtifact(kind) {
 }
 
 /**
+ * @param {ReturnType<typeof proposeLessonDraft>} proposal
+ * @returns {string}
+ */
+export function lessonDraftFileName(proposal) {
+  const ext = proposal.artifact === 'test' ? 'test-draft.mjs' : 'rule-draft.md';
+  return `${proposal.slug}.${ext}`;
+}
+
+/**
+ * @param {object} lesson
+ * @param {boolean} includeGuarded
+ * @returns {boolean}
+ */
+export function lessonOpenForKeeper(lesson, includeGuarded) {
+  if (includeGuarded) return true;
+  const status = lesson.guard?.status ?? 'proposed';
+  return !CLOSED_GUARD_STATUSES.has(status);
+}
+
+/**
  * @param {object} lesson
  * @returns {object}
  */
@@ -96,6 +117,8 @@ export function proposeLessonDraft(lesson) {
     ...base,
     lessonId: lesson.id,
     project: lesson.project,
+    what: String(lesson.what ?? ''),
+    kind,
     artifact,
     why,
     slug: draftSlug(lesson),
@@ -139,6 +162,104 @@ export function renderLessonDraft(proposal, { date } = {}) {
     `Proposed by lessons-keeper write-lesson-draft on ${day}. Not merged automatically.`,
   );
   return lines.map(fit).join('\n') + '\n';
+}
+
+/**
+ * Render the keeper artifact body (a test module or a rule draft), not the coordination readme.
+ *
+ * @param {ReturnType<typeof proposeLessonDraft>} proposal
+ * @param {{ date?: string }} [options]
+ * @returns {string}
+ */
+export function renderLessonArtifact(proposal, { date } = {}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const day = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : today;
+  const ruleText = clip(proposal.lessons?.[0]?.rule ?? proposal.text, 500);
+  const whatText = clip(proposal.what ?? '', 500);
+
+  if (proposal.artifact === 'test') {
+    const lines = [
+      '// SPDX-License-Identifier: Apache-2.0',
+      `// Lesson ${proposal.lessonId} test draft (${proposal.kind}) — ${day}`,
+      `// Ship target: ${proposal.target}`,
+      `// ${clip(proposal.text, 360)}`,
+      '',
+      "import { describe, it } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      '',
+      `describe(${JSON.stringify(`lesson ${proposal.lessonId}`)}, () => {`,
+      `  it(${JSON.stringify(clip(ruleText, 120))}, () => {`,
+      `    const rule = ${JSON.stringify(ruleText)};`,
+      whatText ? `    const symptom = ${JSON.stringify(whatText)};` : '',
+      '    assert.fail(`lesson guard not implemented: ${rule}`);',
+      '  });',
+      '});',
+      '',
+    ].filter((line) => line !== '');
+    return lines.join('\n') + '\n';
+  }
+
+  const lines = [
+    `# Lesson ${proposal.lessonId}: rule draft`,
+    '',
+    `Guard kind: ${proposal.kind}`,
+    `Why: ${proposal.why}`,
+    '',
+    '## Rule',
+    ruleText,
+    '',
+    whatText ? `## Symptom\n${whatText}\n` : '',
+    '## Enforcement',
+    proposal.text,
+    '',
+    `Ship target: ${proposal.target}`,
+    '',
+    `Drafted by lessons-keeper write-lesson-draft on ${day}. Not merged automatically.`,
+    '',
+  ].filter((line) => line !== '');
+  return lines.map(fit).join('\n') + '\n';
+}
+
+/**
+ * @param {string} root
+ * @param {string} outDir
+ * @param {string} fileName
+ * @param {string} body
+ * @returns {Promise<string>} relative path written
+ */
+async function writeExclusiveDraftFile(root, outDir, fileName, body) {
+  const parts = checkOutDir(outDir);
+  const folder = await safeWritableDir(root, parts);
+  const base = path.basename(fileName);
+  if (base !== fileName || base.includes('/') || base.includes('\\')) {
+    throw fail('lesson-draft-name', 'draft file name must be a single path segment');
+  }
+  const rel = path.posix.join(...parts, base);
+  const file = path.join(folder, base);
+  await assertRegularOrMissing(file);
+
+  const tmp = path.join(folder, `.${base}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
+  const handle = await fs.open(
+    tmp,
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    await handle.writeFile(body);
+  } finally {
+    await handle.close();
+  }
+
+  try {
+    await fs.link(tmp, file);
+    return rel;
+  } catch (error) {
+    await fs.rm(tmp, { force: true });
+    if (error.code === 'EEXIST') throw Object.assign(new Error('draft-exists'), { code: 'EEXIST' });
+    throw error;
+  } finally {
+    await fs.rm(tmp, { force: true });
+  }
 }
 
 async function readCappedLessonFile(full) {
@@ -217,7 +338,7 @@ async function closeLessonAfterDraft(root, lesson, draftRel, proposal) {
 }
 
 /**
- * Turn one logged lesson into a test or rule draft; optionally write the markdown and close the lesson.
+ * Turn one logged lesson into a test or rule draft, write it under outDir, and close the lesson.
  *
  * @param {string} root
  * @param {string|object} lessonOrRel
@@ -246,11 +367,11 @@ export async function draftLoggedLesson(root, lessonOrRel, options = {}) {
   const check = validateLesson(lesson);
   if (!check.ok) throw fail('lesson-invalid', check.errors[0]);
 
-  if (!includeGuarded && lesson.guard?.status !== 'proposed') {
+  if (!lessonOpenForKeeper(lesson, includeGuarded)) {
     return {
       lessonId: lesson.id,
       skipped: true,
-      reason: 'guard-not-proposed',
+      reason: 'guard-closed',
       proposal: null,
       written: null,
       closed: false,
@@ -258,7 +379,8 @@ export async function draftLoggedLesson(root, lessonOrRel, options = {}) {
   }
 
   const proposal = proposeLessonDraft(lesson);
-  const rel = path.posix.join(...checkOutDir(outDir), `${proposal.slug}.md`);
+  const fileName = lessonDraftFileName(proposal);
+  const artifactBody = renderLessonArtifact(proposal, { date });
 
   if (!write) {
     return {
@@ -267,28 +389,16 @@ export async function draftLoggedLesson(root, lessonOrRel, options = {}) {
       proposal,
       written: null,
       closed: false,
-      markdown: renderLessonDraft(proposal, { date }),
+      artifact: artifactBody,
+      readme: renderLessonDraft(proposal, { date }),
     };
   }
 
-  const parts = checkOutDir(outDir);
-  const folder = await safeWritableDir(root, parts);
-  const file = path.join(folder, `${proposal.slug}.md`);
-  await assertRegularOrMissing(file);
-
-  const tmp = path.join(folder, `.${proposal.slug}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
-  const handle = await fs.open(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+  let written;
   try {
-    await handle.writeFile(renderLessonDraft(proposal, { date }));
-  } finally {
-    await handle.close();
-  }
-
-  try {
-    await fs.link(tmp, file);
+    written = await writeExclusiveDraftFile(root, outDir, fileName, artifactBody);
   } catch (error) {
-    await fs.rm(tmp, { force: true });
-    if (error.code === 'EEXIST') {
+    if (error?.code === 'EEXIST') {
       return {
         lessonId: lesson.id,
         skipped: true,
@@ -299,13 +409,11 @@ export async function draftLoggedLesson(root, lessonOrRel, options = {}) {
       };
     }
     throw error;
-  } finally {
-    await fs.rm(tmp, { force: true });
   }
 
   let closed = false;
   if (close) {
-    await closeLessonAfterDraft(root, lesson, rel, proposal);
+    await closeLessonAfterDraft(root, lesson, written, proposal);
     closed = true;
   }
 
@@ -313,7 +421,7 @@ export async function draftLoggedLesson(root, lessonOrRel, options = {}) {
     lessonId: lesson.id,
     skipped: false,
     proposal,
-    written: rel,
+    written,
     closed,
   };
 }
