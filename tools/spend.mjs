@@ -252,12 +252,20 @@ export function jobSpend(record) {
   return { usd: spendNumber(record?.costUsd), tokens: spendNumber(record?.usage?.total_tokens) };
 }
 export function runTotals(state) {
-  const totals = { usd: Number.isFinite(state.rental?.usd) ? state.rental.usd : 0, tokens: 0, unknownUsd: [] };
+  const rentalUsd = Number.isFinite(state.rental?.usd) ? state.rental.usd : 0;
+  const totals = { usd: rentalUsd, tokens: 0, unknownUsd: [], billedUsd: rentalUsd, billedUnknown: 0, hasPaidLaneJob: rentalUsd > 0 };
   for (const record of state.jobs ?? []) {
+    const lane = record.agent;
+    const paid = lane && PAID_LANES.includes(lane);
     const { usd, tokens } = jobSpend(record);
     totals.usd += usd ?? 0;
     totals.tokens += tokens ?? 0;
     if (tokens !== null && usd === null) totals.unknownUsd.push(record.id);
+    if (paid) {
+      totals.hasPaidLaneJob = true;
+      if (usd !== null) totals.billedUsd += usd;
+      else totals.billedUnknown += 1;
+    }
   }
   return totals;
 }

@@ -4,7 +4,9 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { runTotals } from './spend.mjs';
+import { PAID_LANES, runTotals } from './spend.mjs';
+
+const meteredLaneList = () => PAID_LANES.join(', ');
 import { loadLocalConfig } from './local-config.mjs';
 import { scratchRootDir } from './claude-shell.mjs';
 
@@ -16,7 +18,7 @@ const cache = new Map(); // state.json path -> { mtimeMs, size, run }: a rescan 
 // `exposureUsd` is what runs that are still running may yet spend under their own --max-usd (counted so runs started together cannot all slip under the cap).
 export async function treeSpend(root) {
   const dir = path.join(root, '.swarm', 'runs');
-  const total = { usd: 0, tokens: 0, runs: 0, unreadable: [], unknownUsd: 0, exposureUsd: 0 };
+  const total = { usd: 0, listUsd: 0, billedUsd: 0, tokens: 0, runs: 0, unreadable: [], unknownUsd: 0, billedUnknown: 0, exposureUsd: 0 };
   let ids = [];
   try { ids = await fs.readdir(dir); } catch (error) { if (error.code !== 'ENOENT') total.unreadable.push('.swarm/runs'); }
   for (const id of ids) {
@@ -30,11 +32,12 @@ export async function treeSpend(root) {
         if (state === null || typeof state !== 'object' || Array.isArray(state) || (state.jobs !== undefined && !Array.isArray(state.jobs))) throw new Error('state has the wrong shape');
         const run = runTotals(state);
         const cap = state.budget?.maxUsd;
-        entry = { mtimeMs: stat.mtimeMs, size: stat.size, run: { usd: run.usd, tokens: run.tokens, unknown: run.unknownUsd.length, exposure: state.status === 'running' && finite(cap) ? Math.max(0, cap - run.usd) : 0 } };
+        const exposure = state.status === 'running' && run.hasPaidLaneJob && finite(cap) ? Math.max(0, cap - run.billedUsd) : 0;
+        entry = { mtimeMs: stat.mtimeMs, size: stat.size, run: { usd: run.usd, billedUsd: run.billedUsd, tokens: run.tokens, unknown: run.unknownUsd.length, billedUnknown: run.billedUnknown, exposure } };
         cache.set(file, entry);
       } catch { total.unreadable.push(id); continue; }
     }
-    total.usd += entry.run.usd; total.tokens += entry.run.tokens; total.runs++; total.unknownUsd += entry.run.unknown; total.exposureUsd += entry.run.exposure;
+    total.usd += entry.run.usd; total.listUsd += entry.run.usd; total.billedUsd += entry.run.billedUsd; total.tokens += entry.run.tokens; total.runs++; total.unknownUsd += entry.run.unknown; total.billedUnknown += entry.run.billedUnknown; total.exposureUsd += entry.run.exposure;
   }
   return total;
 }
@@ -107,13 +110,16 @@ export async function projectSpend(root) {
   const family = await worktreeFamily(root);
   const requested = await realOrResolved(root);
   const results = await Promise.all(family.map(async member => ({ root: member, spent: await treeSpend(member) })));
-  const total = { usd: 0, tokens: 0, runs: 0, unreadable: [], unknownUsd: 0, exposureUsd: 0, trees: results.map(({ root: member, spent }) => ({ root: member, usd: spent.usd, runs: spent.runs })) };
+  const total = { usd: 0, listUsd: 0, billedUsd: 0, tokens: 0, runs: 0, unreadable: [], unknownUsd: 0, billedUnknown: 0, exposureUsd: 0, trees: results.map(({ root: member, spent }) => ({ root: member, usd: spent.usd, runs: spent.runs })) };
   const own = results.find(({ root: member }) => member === requested);
   for (const { spent } of results) {
     total.usd += spent.usd;
+    total.listUsd += spent.listUsd;
+    total.billedUsd += spent.billedUsd;
     total.tokens += spent.tokens;
     total.runs += spent.runs;
     total.unknownUsd += spent.unknownUsd;
+    total.billedUnknown += spent.billedUnknown;
     total.exposureUsd += spent.exposureUsd;
   }
   const unreadable = [];
@@ -168,11 +174,13 @@ export async function readProjectCap(root, { env = process.env } = {}) {
 
 export function projectCapDecision({ spent, cap, source = 'profile budget.projectMaxUsd' }) {
   if (cap === null || cap === undefined) return null;
-  if (spent.unreadable?.length) return { reason: 'project-cap-unreadable', spent: spent.usd, cap, message: `project-cap: ${spent.unreadable.length} run state${spent.unreadable.length === 1 ? '' : 's'} could not be read (${spent.unreadable.slice(0, 3).join(', ')}), so the project total is unknown and no new run starts; fix or move them` };
+  if (spent.unreadable?.length) return { reason: 'project-cap-unreadable', spent: spent.billedUsd ?? 0, cap, message: `project-cap: ${spent.unreadable.length} run state${spent.unreadable.length === 1 ? '' : 's'} could not be read (${spent.unreadable.slice(0, 3).join(', ')}), so the project total is unknown and no new run starts; fix or move them` };
+  const billed = spent.billedUsd ?? 0;
+  const list = spent.listUsd ?? spent.usd ?? 0;
   const exposure = spent.exposureUsd ?? 0;
-  if (spent.usd + exposure < cap) return null;
-  const subject = spent.trees?.length > 1 ? `this project and its ${spent.trees.length - 1} worktrees have spent` : 'this project has spent';
-  return { reason: 'project-cap', spent: spent.usd, cap, message: `project-cap: ${subject} $${spent.usd.toFixed(2)} across ${spent.runs} runs${exposure > 0 ? ` and runs still going may spend $${exposure.toFixed(2)} more` : ''} >= the project cap $${cap.toFixed(2)}; no new run starts. Raising it needs the owner (${source})` };
+  if (billed + exposure < cap) return null;
+  const lanes = meteredLaneList();
+  return { reason: 'project-cap', spent: billed, cap, message: `project-cap: this project has been billed $${billed.toFixed(2)} (list value $${list.toFixed(2)} across ${spent.runs} runs)${exposure > 0 ? ` and runs still going may spend $${exposure.toFixed(2)} more` : ''}; only metered lanes (${lanes}) count toward the cap >= the project cap $${cap.toFixed(2)}; no new run starts. Raising it needs the owner (${source})` };
 }
 
 export async function checkProjectCap(root, { env = process.env } = {}) {
@@ -194,8 +202,8 @@ export async function projectSummary(root, { env = process.env, now = Date.now, 
     const decision = info ? projectCapDecision({ spent, cap: info.cap, source: info.source }) : null;
     const ownRoot = await realOrResolved(root);
     const own = spent.trees?.find(tree => tree.root === ownRoot);
-    value = { spendUsd: Math.round(spent.usd * 100) / 100, treeUsd: Math.round((own?.usd ?? 0) * 100) / 100, sharedTrees: spent.trees?.length ?? 1, runs: spent.runs, capUsd: info?.cap ?? null, noCap: !info && !capError, reached: Boolean(decision), unknownUsd: spent.unknownUsd, unreadable: spent.unreadable.length, capSource: info?.source ?? null, capInherited: Boolean(info?.inheritedFrom), inheritedFrom: info?.inheritedFrom ?? null, why: capError ? `cap invalid: ${capError}` : decision?.message ?? null, ...(capError ? { capError } : {}) };
-  } catch (error) { const capError = String(error.message).slice(0, 200); value = { spendUsd: null, treeUsd: null, sharedTrees: 1, runs: 0, capUsd: null, reached: false, unknownUsd: 0, unreadable: 0, capSource: null, capInherited: false, inheritedFrom: null, why: `cap invalid: ${capError}`, capError }; }
+    value = { spendUsd: Math.round(spent.usd * 100) / 100, listUsd: Math.round(spent.listUsd * 100) / 100, billedUsd: Math.round(spent.billedUsd * 100) / 100, treeUsd: Math.round((own?.usd ?? 0) * 100) / 100, sharedTrees: spent.trees?.length ?? 1, runs: spent.runs, capUsd: info?.cap ?? null, noCap: !info && !capError, reached: Boolean(decision), unknownUsd: spent.unknownUsd, billedUnknown: spent.billedUnknown, unreadable: spent.unreadable.length, capSource: info?.source ?? null, capInherited: Boolean(info?.inheritedFrom), inheritedFrom: info?.inheritedFrom ?? null, why: capError ? `cap invalid: ${capError}` : decision?.message ?? null, ...(capError ? { capError } : {}) };
+  } catch (error) { const capError = String(error.message).slice(0, 200); value = { spendUsd: null, listUsd: null, billedUsd: null, treeUsd: null, sharedTrees: 1, runs: 0, capUsd: null, reached: false, unknownUsd: 0, billedUnknown: 0, unreadable: 0, capSource: null, capInherited: false, inheritedFrom: null, why: `cap invalid: ${capError}`, capError }; }
   summaryCache.set(root, { at: now(), value });
   return value;
 }
