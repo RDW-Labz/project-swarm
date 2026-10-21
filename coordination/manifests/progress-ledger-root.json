@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "progress-ledger-root",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "OWNER BUG REPORT (Build progress on Swarm Watch): (1) the project-swarm card reads a one-time COPY of the roadmap ledger: the real, approved ledger is updated in another git worktree / build root of the same repo, but the card reads <card root>/.swarm/project/tickets.json. A project card must follow the NEWEST APPROVED ledger among its linked worktrees/build roots. (2) On the roadmap the card shows ETA null and 'requirements covered 0/39' (the current roadmap docs/scope/roadmap.md has 51 requirements in S1..S8, so the card read an old scope and old ledger). Fix both and add tests that use the roadmap as a fixture. Do NOT touch tools/swarm.mjs, package.json, CHANGELOG.md or README.md.\n\n1) tools/project-spend.mjs worktreeFamily(root, opts): add option `all = false`; when true, do NOT skip members under the scratch root or with a '.swarm' path segment (build roots and swarm job worktrees are valid ledger locations). Default behavior unchanged (spend keeps excluding them).\n2) tools/build-progress.mjs: export `async ledgerRoot(root, { family = worktreeFamily })`: candidates = await family(root, { all: true }) (always including root). For each candidate with a readable .swarm/project/tickets.json (use readLedger), score = Date.parse(ledger.approved?.at) when approved (prefer approved ledgers over unapproved), tie-break Date.parse(ledger.updatedAt); pick the best; return { root: chosen, ledger, candidates: [{ root, approvedAt, updatedAt }], differs: chosen !== realpath(root) }. buildProgress uses ledgerRoot(root) and reads the ledger, tickets.log done times (doneTimes(chosenRoot)), the scope file (ledger.scope.file relative to the chosen root, else docs/scope/roadmap.md if it exists there, else docs/scope/scope.md), and the journal from the CHOSEN root. Add `source: { root, approvedAt, updatedAt, differs, candidates: count }` to the result and push a note 'ledger read from <basename(root)> (newest approved of N checkouts)' when differs.\n   Also: per roadmap R-015, tickets with type 'human' do not count toward build progress: exclude them from percent.tickets, from requirement coverage (a requirement is covered when all its non-human, non-cancelled, non-proposed tickets are done and it has at least one), from stages counts and from eta.remaining; keep listing them in left.human.\n   ETA: keep the 14-day window; when fewer than 2 done times fall in it, widen to 30 days, then to all done times recorded; basis says which ('N done in the last 30 days' / 'N done since <date>'). eta stays null only when fewer than 2 done times exist at all, and then add the note 'no completion times recorded in tickets.log'.\n3) tools/board-data.mjs: projectOverview and projectDetail must use the same chosen ledger root for the card's ticket counts / stage (ticketsOf) and the tickets list, not readLedger(project.root): call ledgerRoot(project.root) once and reuse its ledger (fall back to project.root on error).\n4) Tests: new tests/build-progress-roadmap.test.mjs (node:test, assert/strict, temp dirs, real `git worktree add` like tests/board-worktrees.test.mjs). Build the fixture from the REAL repo file docs/scope/roadmap.md (read it via the repo root path, parse with parseScope from tools/scope.mjs): create a main checkout with an OLD copy (scope trimmed to the first 39 requirements, ledger approved 3 days ago, all tickets todo, no tickets.log) and a linked worktree with the full roadmap scope file and a NEWER approved ledger (one build ticket per requirement with scopeRefs [R-xxx] and stage from the scope, plus 2 human tickets; 12 tickets done with tickets.log transitions spread over the last 10 days, approved.at today; approve with the real approve/hash helpers from tools/tickets.mjs if available, else set approved so isApproved is true for the fixture). Assert: buildProgress(main root) reads the worktree ledger (source.differs true), requirements.total === 51 and requirements.covered === 12, tickets total excludes the 2 human tickets, eta is not null with basis mentioning 14 days and remaining === open non-human tickets, left.human has the 2 tickets; the overview card (projectOverview) shows the same ticket counts; with the worktree ledger unapproved and the main ledger approved, the main one wins; ETA widening (only 2 done 20 days ago -> basis 30 days; only 2 done 60 days ago -> 'since'); fewer than 2 -> null with the note. Keep tests/build-progress.test.mjs green (adjust only expectations that the human-ticket rule changes). Run `node --import ./tests/_isolate-config.mjs --test tests/build-progress-roadmap.test.mjs tests/build-progress.test.mjs tests/board-worktrees.test.mjs tests/project-spend.test.mjs tests/board-page.test.mjs` and `node tools/check-package.mjs`. ignoreTests use board-data for unrelated behavior; the coordinator runs the full suite.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "docs/scope/roadmap.md",
+        "tools/tickets.mjs",
+        "tools/scope.mjs",
+        "tools/client-report.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/board-page.test.mjs"
+      ],
+      "outputs": [
+        "tools/project-spend.mjs",
+        "tools/build-progress.mjs",
+        "tools/board-data.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/board-idle-ready.test.mjs",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.160.0
+
+Board batch 2: split quality and benchmark panels, both Macs on one board, progress from the newest approved ledger, billed-only cap on the board.
+- **Panels:** Split quality panel (R-027) and Benchmark scorecard panel on Swarm Watch.
+- **One board:** both Macs on one board (R-028), a Handled for you list, Open chat (R-029) and capacity pool cards.
+- **Build progress:** a project card follows the newest approved ledger among its linked worktrees, ticket percent comes from the main ledger, per-scope milestones, ETA and requirements covered fixes.
+- **Billed caps on the board:** the cap bar, its label and the forecast follow the billed-only project cap.
+
 ## 1.159.0
 
 T: the autonomy policy engine and the daily spend limit, wired and off by default for policy.
