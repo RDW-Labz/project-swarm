@@ -5,7 +5,7 @@
     {
       "id": "scratch-inbox",
       "agent": "auto",
-      "prompt": "Test and scratch projects must never post to the owner inbox, the Needs you list, the phone or swarm-inbox. Today a scratch worktree (/Users/bean/.project-swarm-scratch/guard-fix, a registered project) filed three real hand-build requests with swarm handbuild request while an orchestrator was probing the guard, and they sat in the owner's real Needs you list for 2 hours. There are 48 scratch worktrees registered as projects on the machine. Define a scratch project in one place (a new module tools/scratch-roots.mjs exporting isScratchRoot(root, { env, home, tmp }) and scratchRootList()): a root is scratch when its real path is inside the scratch base (the folder named .project-swarm-scratch in the home folder, plus its worktrees subfolder), inside the OS temp folders (os.tmpdir(), /tmp, /private/tmp, /var/folders and /private/var/folders), inside a folder named .tmp-test-* under any project, or when its pointer .project-swarm.json has scratch: true or the folder contains a file named .swarm-scratch; the scratch base may be overridden with the environment variable SWARM_SCRATCH_BASE for tests, and a root outside every rule is never scratch (a real project under a temp folder is not expected). Paths are compared by realpath and the comparison never throws. Rules: (1) the machine-wide projects registry reader used by the board, the inbox, the phone and swarm-inbox publishing (look for readProjectsRegistry and the collect step that builds the owner inbox: tools/inbox.mjs collectInbox callers in the board server and in the phone and inbox commands) skips scratch roots when it builds the list for the owner (they stay visible under the board toggle show test and temp projects if that toggle exists, with a scratch badge, but never contribute Needs you items, notifications, phone items or swarm-inbox posts); direct calls that pass explicit roots (collectInbox with an explicit list used by tests) keep working unchanged. (2) swarm handbuild request (and any other command that files an owner request: decisions, policy requests, change orders) run in a scratch root create the request already denied with the reason scratch project (auto-deny), print one line saying it was auto-denied because the project is scratch, and never write an inbox item or publish. (3) Cleanup: requests and approvals belonging to a scratch root are removed when the root is removed; add swarm orphans (or the existing orphans command) a note listing registry entries whose scratch root no longer exists, and make the registry reader drop entries whose folder is gone. (4) Test harness: tests that create hand-build requests or inbox items in a temp project must not leak them: add to tests/_isolate-config.mjs a registered afterEach-style cleanup hook that is exported as cleanupTestProject(root) and used by the new test; no existing test changes behavior. Tests in tests/scratch-inbox.test.mjs (hermetic: temp base, SWARM_SCRATCH_BASE, no real home, no ambient environment): isScratchRoot truth table (scratch base, worktrees under it, os temp, .tmp-test folder, pointer scratch true, marker file, a normal project outside all rules, a symlink into the scratch base, a missing folder); a scratch project with a filed hand-build request is auto-denied and absent from the registry-built owner inbox, the phone items and the swarm-inbox publish list while a normal project with the same request is present; the request in the scratch root has status denied with the reason; the registry reader drops entries whose folder is gone; cleanup removes the request state; explicit-roots collectInbox calls still list items for a temp root (existing behavior). Keep every existing test passing. Do not edit tools/swarm.mjs unless the registry reader lives there (if it does, edit only that function). No token-shaped literals. ignoreTests reason: tests that reference these modules in passing are covered by the full suite run before merge.",
+      "prompt": "Test and scratch projects must never post to the owner inbox, the Needs you list, the phone or swarm-inbox. Today a scratch worktree (/Users/bean/.project-swarm-scratch/guard-fix, a registered project) filed three real hand-build requests with swarm handbuild request while an orchestrator was probing the guard, and they sat in the owner's real Needs you list for 2 hours. There are 48 scratch worktrees registered as projects on the machine. Define a scratch project in one place (a new module tools/scratch-roots.mjs exporting isScratchRoot(root, { env, home, tmp }) and scratchRootList()): a root is scratch when its real path is inside the scratch base (the folder named .project-swarm-scratch in the home folder, plus its worktrees subfolder), inside the OS temp folders (os.tmpdir(), /tmp, /private/tmp, /var/folders and /private/var/folders), inside a folder whose name starts with .tmp-test under any project, or when its pointer .project-swarm.json has scratch: true or the folder contains a file named .swarm-scratch; the scratch base may be overridden with the environment variable SWARM_SCRATCH_BASE for tests, and a root outside every rule is never scratch (a real project under a temp folder is not expected). Paths are compared by realpath and the comparison never throws. Rules: (1) the machine-wide projects registry reader used by the board, the inbox, the phone and swarm-inbox publishing (look for readProjectsRegistry and the collect step that builds the owner inbox: tools/inbox.mjs collectInbox callers in the board server and in the phone and inbox commands) skips scratch roots when it builds the list for the owner (they stay visible under the board toggle show test and temp projects if that toggle exists, with a scratch badge, but never contribute Needs you items, notifications, phone items or swarm-inbox posts); direct calls that pass explicit roots (collectInbox with an explicit list used by tests) keep working unchanged. (2) swarm handbuild request (and any other command that files an owner request: decisions, policy requests, change orders) run in a scratch root create the request already denied with the reason scratch project (auto-deny), print one line saying it was auto-denied because the project is scratch, and never write an inbox item or publish. (3) Cleanup: requests and approvals belonging to a scratch root are removed when the root is removed; add swarm orphans (or the existing orphans command) a note listing registry entries whose scratch root no longer exists, and make the registry reader drop entries whose folder is gone. (4) Test harness: tests that create hand-build requests or inbox items in a temp project must not leak them: add to tests/_isolate-config.mjs a registered afterEach-style cleanup hook that is exported as cleanupTestProject(root) and used by the new test; no existing test changes behavior. Tests in tests/scratch-inbox.test.mjs (hermetic: temp base, SWARM_SCRATCH_BASE, no real home, no ambient environment): isScratchRoot truth table (scratch base, worktrees under it, os temp, tmp-test folder, pointer scratch true, marker file, a normal project outside all rules, a symlink into the scratch base, a missing folder); a scratch project with a filed hand-build request is auto-denied and absent from the registry-built owner inbox, the phone items and the swarm-inbox publish list while a normal project with the same request is present; the request in the scratch root has status denied with the reason; the registry reader drops entries whose folder is gone; cleanup removes the request state; explicit-roots collectInbox calls still list items for a temp root (existing behavior). Keep every existing test passing. Do not edit tools/swarm.mjs unless the registry reader lives there (if it does, edit only that function). No token-shaped literals. ignoreTests reason: tests that reference these modules in passing are covered by the full suite run before merge.",
       "context": [
         "tools/inbox.mjs",
         "tools/inbox-commands.mjs",
@@ -27,7 +27,44 @@
         "tests/_isolate-config.mjs",
         "tests/scratch-inbox.test.mjs"
       ],
-      "timeoutMs": 3600000
+      "timeoutMs": 3600000,
+      "ignoreTests": [
+        "tests/guard-word-false-positive.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/handbuild-switch.test.mjs",
+        "tests/swarm-produced-hash.test.mjs",
+        "tests/self-approval-hardening.test.mjs",
+        "tests/bare-status.test.mjs",
+        "tests/goal-guard.test.mjs",
+        "tests/handbuild-accidents.test.mjs",
+        "tests/handbuild-hardening2.test.mjs",
+        "tests/policy-wiring-phase2.test.mjs",
+        "tests/git-hooks.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-hardening.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/handbuild-vercel-merge.test.mjs",
+        "tests/inbox.test.mjs",
+        "tests/guard-readonly-forms.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/model-watch.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/quotes.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/handbuild-guard.test.mjs"
+      ]
     }
   ]
 }
