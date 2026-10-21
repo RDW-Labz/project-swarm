@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { insideProject, ORCHESTRATOR_OWN, WRITE_TOOLS } from './orchestrator-events.mjs';
 import { execFileSync } from 'node:child_process';
-import { analyzeShell, writesAnything, TOOL_DIRS, tokenize } from './shell-writes.mjs';
+import { analyzeShell, writesAnything, TOOL_DIRS, tokenize, isReadOnlyGitSub } from './shell-writes.mjs';
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 import { swarmProducedFiles, isSwarmProducedContent } from './swarm-produced.mjs';
 import { isSelfApprovalCommand, SELF_APPROVAL_REASON } from './self-approval.mjs';
@@ -17,7 +17,16 @@ import { isSelfApprovalCommand, SELF_APPROVAL_REASON } from './self-approval.mjs
 export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D', 'gh']);
 export const ELEVATED_GIT_OPS = Object.freeze(['merge', 'deploy', 'force-push', 'branch-D']);
 const CHAT_MERGE_MS = 60 * 60000;
-const ALLOWED_GH = new Set(['pr create', 'pr view', 'pr list', 'pr checks', 'pr diff', 'run list', 'run watch', 'run view']);
+const ALLOWED_GH = new Set([
+  'pr create', 'pr view', 'pr list', 'pr checks', 'pr diff', 'pr status',
+  'issue view', 'issue list', 'issue status',
+  'run list', 'run watch', 'run view', 'run status',
+  'release list', 'release view',
+  'workflow list', 'workflow view',
+  'repo view',
+  'search', 'auth status',
+]);
+const GH_BLOCKED_READ_MODIFIERS = /(?:^|\s)--web(?:\s|$)/;
 const VERCEL_TOP_FREE = new Set(['ls', 'list', 'inspect', 'logs', 'whoami', '--version', 'help']);
 const VERCEL_LIST_PARENTS = new Set(['env', 'domains', 'projects', 'project', 'teams', 'team', 'dns', 'certs', 'certificates', 'alias', 'secrets', 'integration', 'redirects', 'rolling-release']);
 const VERCEL_INFO_FLAGS = new Set(['--help', '-h', '--version', '-v']);
@@ -398,12 +407,21 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
   if (cmd === 'eval') { buildPolicyOps(args.join(' ')).forEach(o => ops.push(o)); return; }
   if (cmd === 'git') {
     let globalOpts = false;
+    let benignGlobalOnly = true;
     let i = 0;
     const globalWords = [];
     while (i < args.length && args[i].startsWith('-') && args[i] !== '--') {
+      const g = args[i];
+      if (g === '--no-pager') { globalOpts = true; i += 1; continue; }
       globalOpts = true;
-      globalWords.push(args[i]);
-      if (args[i] === '-C' || args[i] === '-c' || args[i] === '--config-env' || ['--git-dir', '--work-tree', '--namespace'].includes(args[i])) {
+      globalWords.push(g);
+      if (g === '-C' || ['--git-dir', '--work-tree', '--namespace'].includes(g) || g.startsWith('--work-tree=') || g.startsWith('--git-dir=')) {
+        if (g === '-C' && args[i + 1] !== undefined) globalWords.push(args[i + 1]);
+        i += g.includes('=') ? 1 : 2;
+        continue;
+      }
+      if (g === '-c' || g === '--config-env' || g.startsWith('--config=')) benignGlobalOnly = false;
+      if (g === '-c' || g === '--config-env' || ['--git-dir', '--work-tree', '--namespace'].includes(g)) {
         if (args[i + 1] !== undefined) globalWords.push(args[i + 1]);
         i += 2;
       } else i += 1;
@@ -415,16 +433,16 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
     const gitHasConfig = (sub === 'switch' || sub === 'checkout')
       ? gitHasConfigGlobal
       : hasConfigInWords([...globalWords, ...rest]);
-    const meta = { globalOpts, hasConfig: gitHasConfig, gitEnv, target: null };
-    if (sub === 'push') ops.push(gitPushPolicy(rest, meta));
-    else if (sub === 'fetch') ops.push(gitFetchPolicy(rest, meta));
-    else if (sub === 'branch') ops.push(gitBranchPolicy(rest, meta));
+    const meta = { globalOpts, benignGlobalOnly: globalOpts && benignGlobalOnly, hasConfig: gitHasConfig, gitEnv, target: null };
+    if (sub === 'push') ops.push({ ...gitPushPolicy(rest, meta), rest });
+    else if (sub === 'fetch') ops.push({ ...gitFetchPolicy(rest, meta), rest });
+    else if (sub === 'branch') ops.push({ ...gitBranchPolicy(rest, meta), rest });
     else {
       const pos = rest.filter(a => a && !a.startsWith('-'));
       let branch = null;
       if (sub === 'rebase' && pos[0]) branch = pos[0];
       else if (sub === 'merge') branch = pos[0] ?? null;
-      ops.push({ tool: 'git', sub, args: pos, rest, globalOpts, hasConfig: gitHasConfig, flags: rest.filter(a => a.startsWith('-')), branch, force: false, delete: null, target: null });
+      ops.push({ tool: 'git', sub, args: pos, rest, globalOpts, benignGlobalOnly: meta.benignGlobalOnly, hasConfig: gitHasConfig, flags: rest.filter(a => a.startsWith('-')), branch, force: false, delete: null, target: null });
     }
   } else if (cmd === 'gh') {
       let globalOpts = false;
@@ -435,7 +453,7 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
       }
       const pos = args.slice(i).filter(a => !a.startsWith('-'));
       const prMerge = ghArgsImplyPrMerge(args);
-      const sub = prMerge ? 'pr merge' : (pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null);
+      const sub = prMerge ? 'pr merge' : (pos[0] === 'api' ? 'api' : (pos[0] === 'search' ? 'search' : (pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null)));
       let ghTarget = null;
       if (prMerge) {
         const pi = args.findIndex((a, idx) => a === 'pr' && args[idx + 1] === 'merge');
@@ -560,7 +578,8 @@ const isFreeGitRebase = (op, protBranch) => {
   return true;
 };
 
-const isFreeReadGit = op => !op.globalOpts && !op.hasConfig && !op.gitEnv && !(op.flags ?? []).some(f => f === '--output' || f.startsWith('--output='));
+const isFreeReadGit = op => !op.hasConfig && !op.gitEnv && !(op.flags ?? []).some(f => f === '--output' || f.startsWith('--output='))
+  && (!op.globalOpts || op.benignGlobalOnly === true);
 
 const vercelFlagIsInfoOnly = f => VERCEL_INFO_FLAGS.has(f);
 
@@ -578,20 +597,88 @@ const skipGhGlobalOpt = (args, i) => {
   return i + 1;
 };
 
+const vercelFlagsBlockRead = flags => flags.some(f => f === '--token' || f.startsWith('--token=') || (f === '-t' && flags.includes('--token')));
+
 const isFreeVercel = op => {
   if (op.hasConfig) return false;
   const flags = op.flags ?? [];
   const args = op.args ?? [];
   const sub = op.sub;
+  if (vercelFlagsBlockRead(flags)) return false;
   if (flags.includes('--prod')) return false;
+  if (sub === 'git') {
+    if (args[0] === 'ls') return true;
+    if (['connect', 'disconnect'].includes(args[0])) return false;
+    return false;
+  }
   if (sub === 'deploy') {
     if (args.length > 0) return false;
     if (flags.length === 0) return false;
     return flags.every(vercelFlagIsInfoOnly);
   }
   if (VERCEL_TOP_FREE.has(sub)) return true;
+  if (sub === 'inspect') return true;
   if (VERCEL_LIST_PARENTS.has(sub) && args.length >= 1 && ['ls', 'list', 'inspect'].includes(args[0])) return true;
   return false;
+};
+
+const ghApiEndpointReadOnly = endpoint => {
+  const e = String(endpoint ?? '').replace(/^['"]|['"]$/g, '').replace(/^\/+/, '');
+  if (!e || /^graphql/i.test(e)) return false;
+  if (e === 'user' || e.startsWith('user/')) return false;
+  return /^repos\//.test(e) || /^orgs\//.test(e) || e === 'rate_limit';
+};
+
+const GH_API_VALUE_FLAGS = new Set(['-H', '--header', '-q', '--jq', '--template', '-t', '--paginate', '--slurp', '-i', '--include', '--silent', '--hostname', '--cache']);
+
+const ghApiArgsReadOnly = rest => {
+  let endpoint = null;
+  let i = 0;
+  while (i < rest.length) {
+    const w = rest[i];
+    if (w === '-X' || w === '--method') {
+      const m = String(rest[i + 1] ?? 'GET').toUpperCase();
+      if (m !== 'GET') return false;
+      i += 2;
+      continue;
+    }
+    if (w.startsWith('--method=')) {
+      if (w.slice(9).toUpperCase() !== 'GET') return false;
+      i += 1;
+      continue;
+    }
+    if (['-f', '-F', '--field', '--raw-field', '--input'].includes(w)) return false;
+    if (w === 'graphql' || /\/graphql\b/i.test(w)) return false;
+    if (GH_API_VALUE_FLAGS.has(w) || (w.startsWith('--') && ['--jq=', '--template=', '--header='].some(p => w.startsWith(p)))) {
+      i += w.includes('=') ? 1 : 2;
+      continue;
+    }
+    if (!w.startsWith('-') && endpoint === null) endpoint = w;
+    i += 1;
+  }
+  return ghApiEndpointReadOnly(endpoint);
+};
+
+const isGhApiReadOnlyCommand = command => {
+  for (const words of tokenize(command)) {
+    const plain = plainWords(words);
+    const gi = plain.findIndex(w => path.basename(w) === 'gh');
+    if (gi === -1) continue;
+    const rest = plain.slice(gi + 1);
+    if (rest[0] !== 'api') continue;
+    return ghApiArgsReadOnly(rest.slice(1));
+  }
+  return false;
+};
+
+const isFreeReadOnlyGh = (op, command) => {
+  const flags = op.flags ?? [];
+  if ((flags.includes('--version') || flags.includes('-v')) && !op.sub) return true;
+  if (op.sub === '--version') return true;
+  if (op.sub === 'run download') return false;
+  if (op.sub === 'pr view' && GH_BLOCKED_READ_MODIFIERS.test(String(command ?? ''))) return false;
+  if (op.sub === 'api') return isGhApiReadOnlyCommand(command);
+  return ALLOWED_GH.has(op.sub);
 };
 
 const swarmConfigDir = home => (process.env.SWARM_CONFIG ? path.dirname(process.env.SWARM_CONFIG) : path.join(home, '.config', 'project-swarm'));
@@ -1164,6 +1251,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
           if (!isFreeReadGit(op)) policyGitOps.push(op.sub === 'diff' && (op.flags ?? []).some(f => f.startsWith('--output')) ? 'output' : 'config');
           continue;
         }
+        if (isReadOnlyGitSub(op.sub, op.rest ?? [])) continue;
         if (op.sub === 'branch') {
           if (op.delete === 'safe') continue;
           policyGitOps.push('branch-D');
@@ -1213,7 +1301,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
           policyGitOps.push('gh-pr-merge');
           continue;
         }
-        if (ALLOWED_GH.has(op.sub)) continue;
+        if (isFreeReadOnlyGh(op, ti.command)) continue;
         policyGitOps.push('gh');
       } else if (op.tool === 'vercel') {
         if (isFreeVercel(op)) continue;
@@ -1308,9 +1396,10 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${label})` };
     }
     const residualGit = a.git.filter(g => {
+      if (policyOps.some(o => o.tool === 'git' && o.sub === g && isReadOnlyGitSub(o.sub, o.rest ?? []))) return false;
       if (g === 'rebase' && policyOps.some(o => o.tool === 'git' && o.sub === 'rebase' && isFreeGitRebase(o, protBranch))) return false;
       if (g === 'push' && policyOps.some(o => o.tool === 'git' && o.sub === 'push' && isFreeGitPush(o, current, root))) return false;
-      if (g === 'branch' && policyOps.some(o => o.tool === 'git' && o.sub === 'branch' && o.delete === 'safe')) return false;
+      if (g === 'branch' && policyOps.some(o => o.tool === 'git' && o.sub === 'branch' && (o.delete === 'safe' || isReadOnlyGitSub('branch', o.rest ?? [])))) return false;
       if (g === 'commit' && commitStagedCheck === 'allowlist' && staged.length && staged.every(stagedCarryOk)) return false;
       if (['switch', 'checkout', 'restore'].includes(g) && policyOps.some(o => o.tool === 'git' && (isFreeGitSwitchCheckout(o, root, revParseCommitFn) || isFreeGitRestorePaths(o, root)))) return false;
       return true;
