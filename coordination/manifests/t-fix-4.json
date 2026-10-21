@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "t-fix4-policy",
+      "agent": "auto",
+      "prompt": "Second Opus review of the policy engine FAILED. Fix in tools/policy.mjs, tools/policy-run.mjs, tools/policy-commands.mjs (owner-approved standing rules stay: cap raises up to 5 USD per project per day, swarm update when idle, ticket routine, path-fix and split change orders, accept-failed-checks when only new test files fail, workflow edits after an Opus review). HIGH: (1) persistAutoDecisionBefore apply must return false on any error and then apply is NOT called and the item is left for the owner; (2) resolvePastDailyAutoLimit with a missing limits key or a non-boolean result must mean owner needed (fail closed), and runPolicyPass computes pastDailyAutoLimit for EVERY kind that has the fact, not only cap-raise; (3) merge-live-site (and every conditional rule) requires irreversible, pastDailyAutoLimit, destructive, force to be exactly false and the positive facts exactly true: undefined never passes; (4) workflow-change requires isNewWorkflow strictly false; undefined means owner. MEDIUM: (5) when apply throws after the pre-log, write an apply-failed record, keep the item in left for the owner, and do not count it toward caps; log the outcome once (pre-log has the decision, post-log only the outcome, no duplicate event); (6) readHandled missing or throwing means fail closed (items left), never () => [] so daily caps cannot reset each pass; (7) cap-raise requires a non-empty normalized project string and sums raises per project and per Central day (trim, lower case, realpath-normalized); (8) protectedBranch treats HEAD, upstream/main, refs/remotes/<any>/main, refs/heads/main, origin/main and any remote prefix of main, master or release branches as protected; (9) journal-restore auto only for the exact generated routing files (coordination/HANDOFF.md, docs/state/usage-ledger.md, coordination/TASK.md, docs/scope/build-plan.md); anything under .swarm/ or any other path needs the owner; (10) policy init never rewrites an existing policy or when the marker exists (wx flag, and refuse with a clear message); LOW: projects: [] means no project (not all), a marker access error other than ENOENT fails closed, policy show lists the effective enabled state and says when the policy is failing closed. Add a test for each numbered point in tests/policy-hardening-round3.test.mjs. Keep every existing test passing (update a test only where the finding changes intended behavior and say why in a comment). Do not edit tools/swarm.mjs. No token-shaped literals. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/policy.mjs",
+        "tools/policy-run.mjs",
+        "tools/policy-commands.mjs",
+        "docs/policy.md",
+        "tests/policy.test.mjs",
+        "tests/policy-hardening-round2.test.mjs",
+        "tests/policy-run.test.mjs",
+        "tests/policy-defaults-v2.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/policy.mjs",
+        "tools/policy-run.mjs",
+        "tools/policy-commands.mjs",
+        "tests/policy-hardening-round3.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/autopilot-policy-pass.test.mjs",
+        "tests/policy-cli-wiring.test.mjs",
+        "tests/policy-wiring-phase2.test.mjs",
+        "tests/policy-defaults.test.mjs",
+        "tests/handbuild-vercel-merge.test.mjs"
+      ]
+    },
+    {
+      "id": "t-fix4-limit",
+      "agent": "auto",
+      "prompt": "Second Opus review of the daily limit FAILED. Fix in tools/spend.mjs, tools/daily-limit.mjs, tools/daily-limit-notify.mjs, tools/budget-set-commands.mjs. HIGH: (1) budget set compares EACH field separately: a lowered field never excuses a raised one (--daily 4 --ceiling 500 and --daily 4 --mode notify need approval inside an agent session); (2) the 5 USD allowance is per project (and per machine for --machine) per Central day, cumulative across invocations, recorded in the change log; beyond it an approval is needed; the approval record is single-use and bound to the exact requested values (not reusable for any size for 15 minutes); (3) accrueSpend (rented lane): the rental's own current entry is not counted twice in billed-today (compare the incremental hours cost, not the cumulative usd plus the entry), and on a refusal it still updates the recorded spend so billed-today keeps growing while the server bills; (4) delivery of notices: reserveSpend and accrueSpend return the pending notices and the spend path itself calls notifyDailyLimit (default deps) after the store update, marking a level notified only after delivery succeeds, failures logged and retried next call, the ceiling level builds and sends its notice and a human-visible item. MEDIUM: (5) a paid-lane reserveSpend without a root applies the machine-level settings against machine-wide billed-today instead of skipping the check; (6) raising usd without an explicit ceiling raises the implied 3x ceiling: compare the effective ceiling before and after; (7) write the change log and journal entry BEFORE writing the settings, and log refusals and machine changes in a machine-wide log; (8) compare roots with fs.realpath on both sides (symlink and /tmp vs /private/tmp); (9) raisedTodayUsd uses the Central day like the limit; (10) owner detection: any of CLAUDECODE, CODEX or CURSOR agent environment markers or a non-TTY stdin without an owner approval counts as an agent session (list the env names you check in a comment). LOW: a machine ceiling below a project limit is reported, not silently 3x; notifier state read-modify-write takes a lock file and a corrupt state file is replaced, never thrown to the caller. Add a test for each numbered point in tests/daily-limit-hardening-round3.test.mjs. Keep every existing test passing (update a test only where the finding changes intended behavior and say why in a comment). Do not edit tools/swarm.mjs. No token-shaped literals. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/spend.mjs",
+        "tools/daily-limit.mjs",
+        "tools/daily-limit-notify.mjs",
+        "tools/budget-set-commands.mjs",
+        "tools/project-spend.mjs",
+        "tests/daily-limit-hardening.test.mjs",
+        "tests/daily-limit.test.mjs",
+        "tests/daily-limit-admission.test.mjs",
+        "tests/daily-limit-notify.test.mjs",
+        "tests/budget-set.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/spend.mjs",
+        "tools/daily-limit.mjs",
+        "tools/daily-limit-notify.mjs",
+        "tools/budget-set-commands.mjs",
+        "tests/daily-limit-hardening-round3.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/api-short-report.test.mjs",
+        "tests/crash-guards.test.mjs",
+        "tests/flat-rate-reserve.test.mjs",
+        "tests/policy-cli-wiring.test.mjs",
+        "tests/policy-wiring-phase2.test.mjs",
+        "tests/phase14.test.mjs",
+        "tests/dead-run.test.mjs",
+        "tests/hard-cap.test.mjs",
+        "tests/project-cap-billed.test.mjs",
+        "tests/rented-run.test.mjs",
+        "tests/batch-run.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/phase12-cli.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tests/spend.test.mjs"
+      ]
+    }
+  ]
+}

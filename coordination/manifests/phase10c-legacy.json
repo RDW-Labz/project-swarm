@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "phase10c-legacy",
+      "agent": "auto",
+      "prompt": "Three tests in tests/phase10c.test.mjs now fail since autopilot starts only ledger tickets by default: (2) a run finishes everything that does not depend on a human job; the inbox lists it; done + autopilot start the rest, (6) autopilot waits on a human-paused run and starts one backlog goal while everything is waiting, (8) review fixes: deferred starts are gated and blocked on failure; double validation; ids; claims (error: Cannot read properties of undefined reading ok). Read tools/autopilot.mjs for the legacyPlan option and make these tests opt in to the old manifest-start behavior (pass legacyPlan: true where they call the autopilot tick or runAutopilot) without weakening any assertion. Write only tests/phase10c.test.mjs. ignoreTests reason: only this file is edited.",
+      "context": [
+        "tests/phase10c.test.mjs",
+        "tools/autopilot.mjs",
+        "tests/autopilot-ledger-only.test.mjs"
+      ],
+      "outputs": [
+        "tests/phase10c.test.mjs"
+      ]
+    }
+  ]
+}

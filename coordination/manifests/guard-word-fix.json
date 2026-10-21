@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "guard-word-fix",
+      "agent": "auto",
+      "prompt": "Hand-build guard false positive (parts-app): a command is blocked when its text contains the word guard, even safeguard, inside prompt text (for example a swarm ask or manifest prompt, a quoted string, a heredoc, a commit message). First find which rule matches the bare word (search tools/handbuild.mjs, tools/handbuild-guard.mjs, tools/self-approval.mjs and the policy and allow-list code for guard). Replace it with matching of real risky patterns only: commands that actually switch the guard off or change its state (swarm handbuild approve|deny|on|off|install|uninstall as a real command word, writing to the guard policy or settings.local.json hook entries, editing tools/handbuild*.mjs by hand). The words guard, guards, safeguard, guarded, guardrail in quoted strings, heredocs, prompts, commit or PR text, file names and comments must never block. Keep every existing block test passing; add tests/guard-word-false-positive.test.mjs with both sides: ten harmless commands containing those words are allowed, and the real risky forms are still blocked or need approval. Runner code: a version bump follows in a separate job, do not bump. ignoreTests reason: only guard files are edited.",
+      "context": [
+        "tools/handbuild.mjs",
+        "tools/handbuild-guard.mjs",
+        "tools/self-approval.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/self-approval-hardening.test.mjs",
+        "tests/git-hooks.test.mjs"
+      ],
+      "outputs": [
+        "tools/handbuild.mjs",
+        "tools/handbuild-guard.mjs",
+        "tools/self-approval.mjs",
+        "tests/guard-word-false-positive.test.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/handbuild-accidents.test.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-hardening.test.mjs",
+        "tests/handbuild-hardening2.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/handbuild-switch.test.mjs",
+        "tests/handbuild-vercel-merge.test.mjs",
+        "tests/phase10b-init.test.mjs",
+        "tests/self-approval-claude-word.test.mjs",
+        "tests/swarm-produced-hash.test.mjs"
+      ]
+    }
+  ]
+}

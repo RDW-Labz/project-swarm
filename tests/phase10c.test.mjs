@@ -73,7 +73,7 @@ test('a run finishes everything that does not depend on a human job; the inbox l
     startDeferred: async (r, group) => { started.push(group.id); return { run: 'run-h2', status: 'complete' }; },
   };
   // the human job is not done yet: nothing starts
-  await autopilotStep(root, deps, { now: () => Date.now(), memory: new Set() });
+  await autopilotStep(root, deps, { now: () => Date.now(), memory: new Set(), legacyPlan: true });
   assert.deepEqual(started, []);
 
   assert.equal((await runInboxCommand(root, 'done', ['run-h1:nope'])).exitCode, 1);
@@ -85,14 +85,14 @@ test('a run finishes everything that does not depend on a human job; the inbox l
   // done, but integration of the run that held it fails: nothing starts
   const realIntegrate = deps.integrate;
   deps.integrate = async () => { throw new Error('conflict'); };
-  await autopilotStep(root, deps, { now: () => Date.now(), memory: new Set() });
+  await autopilotStep(root, deps, { now: () => Date.now(), memory: new Set(), legacyPlan: true });
   assert.deepEqual(started, []);
   deps.integrate = realIntegrate;
   const memory = new Set();
-  const step = await autopilotStep(root, deps, { now: () => Date.now(), memory });
+  const step = await autopilotStep(root, deps, { now: () => Date.now(), memory, legacyPlan: true });
   assert.deepEqual(started, ['run-h1']);
   assert.ok(step.actions.some(a => a.action === 'start-deferred' && a.ok));
-  await autopilotStep(root, deps, { now: () => Date.now(), memory });
+  await autopilotStep(root, deps, { now: () => Date.now(), memory, legacyPlan: true });
   assert.deepEqual(started, ['run-h1'], 'never started twice');
 });
 
@@ -143,17 +143,17 @@ test('autopilot waits on a human-paused run and starts one backlog goal while ev
   const calls = [];
   const deps = stepDeps({ nextBacklog: async () => ({ id: 'g1', goal: 'next' }), startBacklog: async (r, item) => { calls.push(item.id); return { run: 'r9', status: 'running' }; }, notify: async () => { calls.push('notify'); } });
   const memory = new Set();
-  const step = await autopilotStep('/x', deps, { now: () => 1, memory });
+  const step = await autopilotStep('/x', deps, { now: () => 1, memory, legacyPlan: true });
   assert.deepEqual(step.actions.map(a => a.action), ['start-backlog']);
   assert.deepEqual(calls, ['g1', 'notify']);
-  await autopilotStep('/x', deps, { now: () => 1, memory });
+  await autopilotStep('/x', deps, { now: () => 1, memory, legacyPlan: true });
   assert.deepEqual(calls.filter(c => c === 'g1'), ['g1'], 'once');
   // a running run, or an unsafe checkout, means no backlog start
   for (const extra of [{ loadRuns: async () => [{ id: 'r1', status: 'paused', pause: { reasons: ['human'] } }, { id: 'r2', status: 'running' }] }, { checkout: async () => ({ branch: 'main', dirty: false }) }]) {
-    const quiet = await autopilotStep('/x', stepDeps({ nextBacklog: async () => ({ id: 'g2' }), startBacklog: async () => assert.fail('must not start'), ...extra }), { now: () => 1, memory: new Set() });
+    const quiet = await autopilotStep('/x', stepDeps({ nextBacklog: async () => ({ id: 'g2' }), startBacklog: async () => assert.fail('must not start'), ...extra }), { now: () => 1, memory: new Set(), legacyPlan: true });
     assert.deepEqual(quiet.actions, []);
   }
-  const failing = await autopilotStep('/x', stepDeps({ nextBacklog: async () => ({ id: 'g3', goal: 'x' }), startBacklog: async () => { throw new Error('boom'); } }), { now: () => 1, memory: new Set() });
+  const failing = await autopilotStep('/x', stepDeps({ nextBacklog: async () => ({ id: 'g3', goal: 'x' }), startBacklog: async () => { throw new Error('boom'); } }), { now: () => 1, memory: new Set(), legacyPlan: true });
   assert.equal(failing.actions[0].ok, false);
 });
 
@@ -172,7 +172,7 @@ test('review fixes: deferred starts are gated and blocked on failure; double val
   const base = { loadRuns: async () => [], readJournal: async () => [], appendEvent: async () => {}, readPlan: async () => null, integrate: async () => ({}), resume: async () => {}, retryFailed: async () => ({}), startWave: async () => ({}), humanGroups: async () => [group] };
   const blockedOn = [];
   const writes = [];
-  const run = extra => autopilotStep('/x', { ...base, appendEvent: async (_r, e) => { writes.push(e); }, ...extra }, { now: () => 1, memory: new Set() });
+  const run = extra => autopilotStep('/x', { ...base, appendEvent: async (_r, e) => { writes.push(e); }, ...extra }, { now: () => 1, memory: new Set(), legacyPlan: true });
   // dirty tree or main: nothing starts
   for (const checkout of [{ branch: 'main', dirty: false }, { branch: 'swarm/x', dirty: true }]) {
     const step = await run({ checkout: async () => checkout, startDeferred: async () => assert.fail('must not start') });
@@ -186,10 +186,10 @@ test('review fixes: deferred starts are gated and blocked on failure; double val
   assert.ok(writes.some(e => e.kind === 'blocker' && e.id === 'deferred-g1'), blockedOn.join());
 
   // a run paused on a spend cap is not idle time for the backlog
-  const capped = await autopilotStep('/x', stepDeps({ loadRuns: async () => [{ id: 'r1', status: 'paused', pause: { reasons: ['run-cap'] } }], nextBacklog: async () => ({ id: 'g' }), startBacklog: async () => assert.fail('must not start') }), { now: () => 1, memory: new Set() });
+  const capped = await autopilotStep('/x', stepDeps({ loadRuns: async () => [{ id: 'r1', status: 'paused', pause: { reasons: ['run-cap'] } }], nextBacklog: async () => ({ id: 'g' }), startBacklog: async () => assert.fail('must not start') }), { now: () => 1, memory: new Set(), legacyPlan: true });
   assert.deepEqual(capped.actions, []);
   // an open human task counts as waiting even when no run is paused
-  const open = await autopilotStep('/x', stepDeps({ loadRuns: async () => [], humanGroups: async () => [{ id: 'h', humans: [{ done: false }], started: false }], nextBacklog: async () => ({ id: 'g4', goal: 'x' }), startBacklog: async () => ({ run: 'r5' }) }), { now: () => 1, memory: new Set() });
+  const open = await autopilotStep('/x', stepDeps({ loadRuns: async () => [], humanGroups: async () => [{ id: 'h', humans: [{ done: false }], started: false }], nextBacklog: async () => ({ id: 'g4', goal: 'x' }), startBacklog: async () => ({ run: 'r5' }) }), { now: () => 1, memory: new Set(), legacyPlan: true });
   assert.deepEqual(open.actions.map(a => a.action), ['start-backlog']);
 });
 

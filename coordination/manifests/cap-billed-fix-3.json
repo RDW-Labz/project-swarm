@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "cap-billed-fix-3",
+      "agent": "auto",
+      "prompt": "Second round of review fixes on the billed-only project cap (tools/spend.mjs runTotals area and tools/project-spend.mjs). (1) HIGH: a rented job with no costUsd and no valid rental.usd must never count as free: after the loop, if any rented job has an unknown cost and the rented billed total is still 0, add a nonzero reserve (the configured rented daily or hourly figure if one exists in the lane defaults, otherwise 0.5) and keep the job in billedUnknown; make this independent of job order. (2) MEDIUM: replace every `lane in LANE_RESERVE_DEFAULTS` style lookup with Object.hasOwn(LANE_RESERVE_DEFAULTS, lane) and coerce the reserve with a finite-number check (non-finite or negative becomes the 0.5 fallback), so lanes named constructor, toString or __proto__ cannot produce a non-numeric reserve. (3) LOW: an invalid (non-finite or negative) rental.usd is treated as unknown cost (counted at the reserve), not silently as 0, and the cap message names the rented lane correctly when it is the source. (4) LOW: add ctimeMs and ino to the project-spend cache key next to mtimeMs and size. Add tests to tests/project-cap-billed.test.mjs: rented job without cost reserves a nonzero amount regardless of order; agent named constructor and toString counted as metered unknown with a numeric reserve; invalid rental.usd counted at the reserve; cache entry invalidated when ino or ctime changes (use the existing test seam, or skip with a stated reason if none exists). Keep all existing tests passing. Do not edit tools/swarm.mjs. ignoreTests reason: only project-spend files change.",
+      "context": [
+        "tools/project-spend.mjs",
+        "tools/spend.mjs",
+        "tests/project-cap-billed.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/project-spend.mjs",
+        "tools/spend.mjs",
+        "tests/project-cap-billed.test.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/api-short-report.test.mjs",
+        "tests/crash-guards.test.mjs",
+        "tests/flat-rate-reserve.test.mjs",
+        "tests/phase14.test.mjs",
+        "tests/dead-run.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/hard-cap.test.mjs",
+        "tests/rented-run.test.mjs",
+        "tests/batch-run.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/phase12-cli.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tests/spend.test.mjs",
+        "tests/board-page.test.mjs"
+      ]
+    }
+  ]
+}

@@ -60,12 +60,23 @@ test('spend totals count incomplete records and preserve unknown cost ids', () =
   assert.deepEqual(jobSpend({}), { usd: null, tokens: null });
   assert.deepEqual(jobSpend({ costUsd: 0, usage: { total_tokens: 0 } }), { usd: 0, tokens: 0 });
   assert.deepEqual(jobSpend({ costUsd: Infinity, usage: { total_tokens: '3' } }), { usd: null, tokens: null });
+  // Jobs without agent are metered; c has tokens but no costUsd (unknownUsd + billed unknown);
+  // d has neither (billed unknown). Missing lane uses anthropic reserve default 0.5 each → billedUnknownUsd 1.
   assert.deepEqual(runTotals({ jobs: [
     { id: 'a', status: 'complete', costUsd: 1, usage: { total_tokens: 200 } },
     { id: 'b', status: 'failed', costUsd: 2 },
     { id: 'c', status: 'running', usage: { total_tokens: 20 } },
     { id: 'd' },
-  ] }), { usd: 3, tokens: 220, unknownUsd: ['c'] });
+  ] }), {
+    usd: 3,
+    tokens: 220,
+    unknownUsd: ['c'],
+    billedUsd: 3,
+    billedUnknown: 2,
+    billedUnknownUsd: 1,
+    billedUnknownRented: 0,
+    hasPaidLaneJob: true,
+  });
 });
 
 test('daily totals use UTC midnight inclusively and exclude the requested run', () => {
@@ -225,7 +236,9 @@ test('store clears stale locks, times out on live/foreign locks and refuses malf
 test('reservation admission, settlement and release preserve original UTC day', async () => {
   const dir = await tempSpend(), budget = resolveBudget({ cli: { maxTokens: 10 } });
   const input = { dir, key: '0123456789ab/r/j#1', lane: 'openrouter', runId: 'r', root: '/fixture', jobId: 'j', usd: 0.5, tokens: 10, budget, runTotals: { usd: 0, tokens: 0 }, now: fixedNow };
-  assert.deepEqual(await reserveSpend(input), { decision: null });
+  const admitted = await reserveSpend(input);
+  assert.equal(admitted.decision, null);
+  assert.ok(admitted.dailyLimit?.evaluation?.allow);
   assert.equal((await reserveSpend({ ...input, key: 'blocked', runTotals: { tokens: 10 } })).decision.reason, 'run-cap');
   await settleSpend({ dir, key: input.key, usd: 0.6, tokens: 20, kind: 'estimated', flagged: true, now: () => fixedNow() + 86400000 });
   await withSpendStore(store => {

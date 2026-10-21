@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "docs-autotune",
+      "agent": "auto",
+      "prompt": "Write docs/autotune.md (new file, nothing else) describing machine worker-limit auto-scaling for a project owner: the auto setting for machineConcurrency, the hardware default, how the tuner raises and backs off (CPU, free RAM, rate-limited lanes), learned per-lane caps, where the state file lives, what the board will show, and what is not wired yet. Read tools/autotune.mjs and tests/autotune.test.mjs for the facts; do not invent behavior; mark unbuilt parts as planned. Plain, short sentences, under 100 lines.",
+      "context": [
+        "tools/autotune.mjs",
+        "tests/autotune.test.mjs"
+      ],
+      "outputs": [
+        "docs/autotune.md"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}

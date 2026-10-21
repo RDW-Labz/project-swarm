@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "panels-wiring",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "TASK: wire two finished read-only modules into Swarm Watch. tools/split-quality.mjs exports splitQuality({ root, now, slots, windowDays }) -> { metrics: [{key,label,value,display,unit,grade,basis,note}], grade, at } (roadmap R-027: 'A Split quality panel per project shows overhead ratio, first-try pass rate, critical path, wave fill, collisions, review $ per ticket and ticket sizes, each green, amber or red'). tools/benchmark-scorecard.mjs exports readBenchmarks(root) and scorecard(files, { now, weeks }) -> { metrics: [{key,label,unit,better,baseline,latest,change,changePct,verdict,weekly:[{week,value}]}], weeks, skipped, files } (contract: docs/benchmarks-format.md). Do NOT change those two modules' behavior, and do NOT touch tools/swarm.mjs, package.json, CHANGELOG.md or README.md. Note: split-quality.mjs imports readRunStates from board-data.mjs; importing split-quality.mjs from board-data.mjs is a safe ESM cycle (only used at call time) \u2014 keep it that way or pass runs in, your choice, without changing splitQuality's output.\n\n1) tools/board-data.mjs:\n - projectDetail gains `splitQuality` (await splitQuality({ root: project.root, now, slots }), null on error) and `benchmarks` (scorecard(await readBenchmarks(project.root), { now }), null on error; when files === 0 keep the object so the page can say 'no baseline yet'). Add an injectable `slots = null` option to projectDetail.\n - projectOverview gains `split: { grade, reds: number of red metrics, worst: label of the first red (else first amber) metric or null }` from splitQuality({ root, now, slots }) (null on error). boardSnapshot passes `slots: workers?.max ?? null` through to projectOverview. Keep every existing field.\n2) tools/watch-cli.mjs: pass `slots` (the machine worker limit `max` already computed in the snapshot path; compute it the same way in the project path) into projectDetail. Nothing else.\n3) tools/watch-assets/project.html: in the Overview pane add, right after the Build progress card, `<section class=\"card\" id=\"split\" aria-label=\"Split quality\"><h2 class=\"board-h\">Split quality</h2><div id=\"splitBody\" class=\"board-list\"></div></section>` and `<section class=\"card\" id=\"bench\" aria-label=\"Benchmark scorecard\"><h2 class=\"board-h\">Benchmark scorecard</h2><div id=\"benchBody\" class=\"board-list\"></div></section>`.\n4) tools/watch-assets/project.js (textContent/setAttribute only, never innerHTML):\n - renderSplit(p.splitQuality): a header line with the overall grade pill; then one row per metric: a colored dot by grade (class 'grade-green|grade-amber|grade-red|grade-unknown'), the label, the display value, and a sub line with the basis (or the note when grade is unknown); the row's title attribute = note. null -> 'Split quality unavailable.'\n - renderBench(p.benchmarks): files === 0 -> 'No baseline yet. The MacBook writes docs/state/benchmarks/<date>-<label>.json (see docs/benchmarks-format.md).'; else one row per metric: label (or key), 'baseline X \u2192 latest Y unit', change and changePct with sign, a verdict pill (better=good, worse=bad, flat/unknown=quiet), and an inline SVG sparkline of weekly values (width 120, height 24, a polyline built with document.createElementNS and setAttribute; no innerHTML), plus a sub line listing skipped files count when > 0.\n5) tools/watch-assets/board.js renderProjects: when p.split and p.split.grade !== 'unknown', add one sub line in both the table name cell and the card: 'Split ' + grade + (reds ? ' \u00b7 ' + reds + ' red' : '') + (worst ? ' \u00b7 ' + worst : '') with class 'sub split-' + grade.\n6) CSS at the end of tools/watch-assets/swarm-ui.css: .grade-green/.grade-amber/.grade-red/.grade-unknown dot colors using existing tokens (--good or similar, --warn, --bad, --muted), .split-red { color: var(--bad) } .split-amber { color: var(--warn) }, a small .spark style.\nTests: extend tests/board-page.test.mjs minimally: projectDetail returns splitQuality with 7 metrics and benchmarks with files 0 for a fixture project, and with one valid docs/state/benchmarks/2026-10-20-baseline.json plus one 2026-10-27-after.json returns a metric with verdict set; projectOverview returns split with a grade field. Run `node --import ./tests/_isolate-config.mjs --test tests/board-page.test.mjs tests/split-quality.test.mjs tests/benchmark-scorecard.test.mjs tests/board.test.mjs tests/watch-ui.test.mjs tests/build-progress.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests use these files for unrelated behavior; the coordinator runs the full suite after integration.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/split-quality.mjs",
+        "tools/benchmark-scorecard.mjs",
+        "docs/benchmarks-format.md",
+        "tests/board.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/build-progress.test.mjs"
+      ],
+      "outputs": [
+        "tools/board-data.mjs",
+        "tools/watch-cli.mjs",
+        "tools/watch-assets/project.html",
+        "tools/watch-assets/project.js",
+        "tools/watch-assets/board.js",
+        "tools/watch-assets/swarm-ui.css",
+        "tests/board-page.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/autopilot-lock.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/completion.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10b-cli.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "busy-start-time-2",
+      "agent": "auto",
+      "prompt": "The files on main changed since this was first written (another PR touched tests/busy-marker.test.mjs): read the current files in context and apply the change on top of them, keeping every existing test. Item A2: busy marker pid reuse. tools/busy-marker.mjs liveBusyMarkers treats a marker as alive when its pid is alive, so a reused pid keeps blocking swarm update. Store the process start time in the marker and treat a pid as alive only if the start time still matches. In writeBusyMarker add a field procStart read for the marker's pid through an injectable procStart(pid) function (default: run ps with arguments -o lstart= -p PID through execFileSync with a 2 second timeout, trimmed and whitespace collapsed; returns null when ps fails or prints nothing), stored in the record. In liveBusyMarkers: a marker whose pid is alive and whose stored procStart is null or missing (older markers, or ps unavailable) is alive as before (fail safe: never delete a marker just because the start time could not be read); a marker whose pid is alive and whose stored procStart is a string that differs from the current procStart(pid) (when the current one can be read) is dead: delete its file and do not return it; a marker whose start time matches is alive. Keep every other behavior and the existing exports and signatures (add procStart as an optional injected dependency to both functions). The swarm update refusal in tools/swarm.mjs is not touched (it already uses liveBusyMarkers). Update tests/busy-marker.test.mjs and add cases there: matching start is alive; same pid with a different start is dead and its file is deleted; a marker without procStart is alive; an unreadable current start (procStart returns null) keeps it alive; writeBusyMarker stores the injected start. Also add one case to tests/update-busy-marker.test.mjs only if it needs the new field to keep passing. Write only tools/busy-marker.mjs, tests/busy-marker.test.mjs and tests/update-busy-marker.test.mjs.",
+      "context": [
+        "tools/busy-marker.mjs",
+        "tests/busy-marker.test.mjs",
+        "tests/update-busy-marker.test.mjs"
+      ],
+      "outputs": [
+        "tools/busy-marker.mjs",
+        "tests/busy-marker.test.mjs",
+        "tests/update-busy-marker.test.mjs"
+      ],
+      "timeoutMs": 900000
+    }
+  ]
+}

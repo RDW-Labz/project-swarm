@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "pools-stub-fix",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "Fix stubPools in tools/pools-board.mjs, seen on the live board: it emits one 'lane' pool for EVERY lane row, including lanes with no daily cap and no pause (limit null, never capped), giving 13 noisy rows, and three rows all named 'GPU' (rented/ollama/lambda share the display label). Change: emit a lane pool only when the row has dailyCapUsd > 0 OR an active pause (limited with until in the future). Pool id = 'lane:' + row.lane (the agent name, unique); name = row.label, but when two emitted lane pools share a label append ' (' + row.lane + ')' to each of them. Machine pool: when max is null and not invalid, keep it with limit null and why null (the panel shows 'no machine limit'). Change nothing else. Update tests/pools-board.test.mjs: a lane without cap or pause is not emitted; capped and paused lanes are; two GPU-labelled lanes get distinct names; ids are unique. Edit only tools/pools-board.mjs and tests/pools-board.test.mjs. Do NOT touch tools/swarm.mjs. Run `node --import ./tests/_isolate-config.mjs --test tests/pools-board.test.mjs tests/board-page.test.mjs` and `node tools/check-package.mjs`.",
+      "context": ["tests/_isolate-config.mjs", "tests/board-page.test.mjs"],
+      "outputs": ["tools/pools-board.mjs", "tests/pools-board.test.mjs"],
+      "timeoutMs": 1200000
+    }
+  ]
+}

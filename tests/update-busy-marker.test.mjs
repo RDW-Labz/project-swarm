@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { writeBusyMarker } from '../tools/busy-marker.mjs';
+import { runningSwarmCommands } from '../tools/live-processes.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const swarmPath = path.join(packageRoot, 'tools/swarm.mjs');
@@ -195,6 +196,30 @@ test('with-concurrency writes a busy marker for the swarm pid while the wrapped 
   child.stdin.end();
   await closed;
   await assert.rejects(fs.access(path.join(f.busyDir, `${child.pid}.json`)));
+});
+
+test('a swarm autopilot process line is not reported by runningSwarmCommands', () => {
+  const ps = () => '  201 node /h/.project-swarm/current/tools/swarm.mjs autopilot --interval 600 --root /p';
+  assert.deepEqual(runningSwarmCommands({ ps, selfPid: 1 }), []);
+});
+
+test('update refuses while an autopilot step busy marker is present and allows update after it is removed', async t => {
+  const busyDir = await tempDir(t);
+  const home = await tempDir(t);
+  const root = await tempDir(t);
+  const remove = await writeBusyMarker({ command: 'swarm autopilot', root, dir: busyDir });
+  await assert.rejects(runUpdate(busyDir, home), error => {
+    assert.match(error.stderr, /update-refused/);
+    assert.match(error.stderr, /swarm autopilot/);
+    return true;
+  });
+  await remove();
+  try {
+    const { stderr } = await runUpdate(busyDir, home);
+    assert.doesNotMatch(stderr, /update-refused/);
+  } catch (error) {
+    assert.doesNotMatch(error.stderr ?? '', /update-refused/);
+  }
 });
 
 test('run that fails immediately does not leave a busy marker behind', async t => {

@@ -473,7 +473,8 @@ export class LaneScheduler {
         lane.queue.splice(index, 1);
         signal.removeEventListener('abort', waiter.abort);
         reject(abortError());
-        this.pump();
+        if (this.shared) this.scheduleShared();
+        else this.pump();
       };
       lane.queue.push(waiter);
       signal?.addEventListener('abort', waiter.abort, { once: true });
@@ -501,6 +502,18 @@ export class LaneScheduler {
       this.refillTimer = null;
       this.enqueuePump();
     }, 0);
+  }
+
+  scheduleWake(callback, delay) {
+    if (this.timer !== null) {
+      this.clearTimer(this.timer);
+      this.timer = null;
+    }
+    if (this.closed) return;
+    this.timer = this.setTimer(() => {
+      this.timer = null;
+      callback();
+    }, delay);
   }
 
   async flushReleases() {
@@ -631,7 +644,7 @@ export class LaneScheduler {
         wakeAt = Math.min(wakeAt, lane.acquisitions[0] + 60000);
       }
     }
-    if (Number.isFinite(wakeAt) && !this.closed) this.timer = this.setTimer(() => { this.timer = null; this.scheduleShared(); }, Math.max(0, wakeAt - this.now()));
+    if (Number.isFinite(wakeAt)) this.scheduleWake(() => this.scheduleShared(), Math.max(0, wakeAt - this.now()));
   }
 
   pump() {
@@ -681,7 +694,7 @@ export class LaneScheduler {
         wakeAt = Math.min(wakeAt, lane.acquisitions[0] + 60000);
       }
     }
-    if (Number.isFinite(wakeAt)) this.timer = this.setTimer(() => { this.timer = null; this.pump(); }, Math.max(0, wakeAt - time));
+    if (Number.isFinite(wakeAt)) this.scheduleWake(() => this.pump(), Math.max(0, wakeAt - time));
   }
 
   report(agent, outcome) {

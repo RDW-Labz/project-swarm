@@ -71,6 +71,72 @@ test('the hook process appends the event, prints nothing and always exits 0', as
   assert.equal(projectRootOf(path.join(root, 'src/deep/er')), root);
 });
 
+test('ended sessions: end events, proc pid, revival, and process liveness', () => {
+  const root = '/proj';
+  const end = buildEvent('end', { session_id: 's1', cwd: root, reason: '  logout  ' }, { root, now: at(0) });
+  assert.equal(end.e, 'end');
+  assert.equal(end.why, 'logout');
+  assert.equal(buildEvent('end', { session_id: 's1', cwd: root, reason: 'x'.repeat(50) }, { root, now: at(0) }).why.length, 40);
+  const proc = { pid: 4242, host: 'h1' };
+  const tp = '/h/.claude/projects/p/s.jsonl';
+  for (const kind of ['prompt', 'stop', 'end']) {
+    const input = { session_id: 's1', cwd: root, ...(kind === 'end' ? { reason: 'done' } : { transcript_path: tp }) };
+    const e = buildEvent(kind, input, { root, now: at(0), proc });
+    assert.deepEqual([e.pid, e.h], [4242, 'h1'], kind);
+  }
+  for (const kind of ['pre', 'post']) {
+    const input = kind === 'pre'
+      ? { session_id: 's1', cwd: root, tool_name: 'Read', tool_input: { file_path: path.join(root, 'a.ts') } }
+      : { session_id: 's1', tool_name: 'Read', tool_input: {} };
+    const e = buildEvent(kind, input, { root, now: at(0), proc });
+    assert.equal(e.pid, undefined);
+    assert.equal(e.h, undefined);
+  }
+  assert.equal(buildEvent('prompt', { session_id: 's1', cwd: root, transcript_path: tp }, { root, proc: { pid: 0, host: 'h1' } }).pid, undefined);
+  assert.equal(buildEvent('prompt', { session_id: 's1', cwd: root, transcript_path: tp }, { root, proc: { pid: 1.5, host: 'h1' } }).pid, undefined);
+
+  const ev = (sec, e, extra = {}) => ({ at: new Date(T0 + sec * 1000).toISOString(), s: 'E', e, ...extra });
+  const endMs = T0 + 100 * 1000;
+  const endedOnly = [ev(0, 'prompt'), ev(100, 'end', { why: 'logout' })];
+  const ended = sessionsOf(endedOnly, endMs)[0];
+  assert.equal(ended.state, 'ended');
+  assert.equal(ended.endedAt, new Date(endMs).toISOString());
+  assert.equal(sessionsOf(endedOnly, endMs + 4 * 60 * 1000)[0].shown, true);
+  assert.equal(sessionsOf(endedOnly, endMs + 6 * 60 * 1000)[0].shown, false);
+  const revived = [...endedOnly, ev(200, 'prompt')];
+  const live = sessionsOf(revived, T0 + 250 * 1000)[0];
+  assert.notEqual(live.state, 'ended');
+  assert.equal(live.endedAt, null);
+
+  const pidEvents = [ev(0, 'prompt', { pid: 99, h: 'myhost' }), ev(10, 'stop')];
+  const lastIso = new Date(T0 + 10 * 1000).toISOString();
+  const dead = sessionsOf(pidEvents, T0 + 11 * 1000, { isAlive: () => false, host: 'myhost' })[0];
+  assert.equal(dead.state, 'ended');
+  assert.equal(dead.endedAt, lastIso);
+  assert.equal(sessionsOf(pidEvents, T0 + 10 * 1000, { isAlive: () => false, host: 'myhost' })[0].shown, true);
+  assert.equal(sessionsOf(pidEvents, T0 + 10 * 1000 + 6 * 60 * 1000, { isAlive: () => false, host: 'myhost' })[0].shown, false);
+  let isAliveCalls = 0;
+  const otherHost = sessionsOf(pidEvents, T0 + 11 * 1000, { isAlive: () => { isAliveCalls += 1; return false; }, host: 'other-host' })[0];
+  assert.equal(isAliveCalls, 0);
+  assert.equal(otherHost.state, 'waiting');
+  assert.equal(otherHost.endedAt, null);
+  const withoutAlive = sessionsOf(pidEvents, T0 + 11 * 1000)[0];
+  assert.notEqual(withoutAlive.state, 'ended');
+  assert.equal(withoutAlive.endedAt, null);
+});
+
+test('projectOrchestrator ends a session when the hook pid is not alive on this host', async t => {
+  const now = Date.now();
+  const iso = sec => new Date(now - sec * 1000).toISOString();
+  const host = os.hostname();
+  const events = [{ at: iso(30), s: 'dead-session', e: 'prompt', pid: 424242, h: host, tp: 'lane.jsonl' }];
+  const { project } = await projectWith(t, { events });
+  const o = projectOrchestrator(project, { runs: [], now, isAlive: () => false });
+  assert.equal(o.sessions.length, 1);
+  assert.equal(o.sessions[0].state, 'ended');
+  assert.equal(o.sessions[0].endedAt, iso(30));
+});
+
 test('session states from recorded events: working, thinking, waiting on you, idle, with what it is doing and since when', () => {
   const ev = (s, sec, e, extra = {}) => ({ at: new Date(T0 + sec * 1000).toISOString(), s, e, ...extra });
   const events = [
@@ -164,7 +230,7 @@ test('the board carries the orchestrator in the project overview and the machine
   assert.equal(snap.machine.orchestrator.swarmPct, 0);
 });
 
-test('the hooks are installed in the personal settings file: four events, idempotent, replaced on update, other hooks and settings kept, a broken file left alone', async t => {
+test('the hooks are installed in the personal settings file: five events, idempotent, replaced on update, other hooks and settings kept, a broken file left alone', async t => {
   const root = await tmp(t);
   const install = await tmp(t);
   const versioned = path.join(install, 'versions', '1.145.0-abc');
@@ -178,7 +244,7 @@ test('the hooks are installed in the personal settings file: four events, idempo
   const read = async () => JSON.parse(await fs.readFile(file, 'utf8'));
   let s = await read();
   assert.deepEqual(s.permissions, { allow: ['Bash(npm test)'] });
-  for (const [name, kind] of [['PreToolUse', 'pre'], ['PostToolUse', 'post'], ['Stop', 'stop'], ['UserPromptSubmit', 'prompt']]) {
+  for (const [name, kind] of [['PreToolUse', 'pre'], ['PostToolUse', 'post'], ['Stop', 'stop'], ['UserPromptSubmit', 'prompt'], ['SessionEnd', 'end']]) {
     const cmds = s.hooks[name].flatMap(e => e.hooks.map(h => h.command));
     const script = JSON.stringify(path.join(install, 'current/tools/orchestrator-hook.mjs'));
     assert.ok(cmds.includes(`test -f ${script} && node ${script} ${kind} || true`), `${name}: ${cmds}`);

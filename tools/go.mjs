@@ -37,6 +37,21 @@ export function goExitCode(status) {
   return status === 'failed' ? 1 : 0;
 }
 
+export function firstJobOrError(state) {
+  const jobs = state?.jobs;
+  if (Array.isArray(jobs) && jobs.length > 0 && jobs[0] != null) return { record: jobs[0] };
+  if (state?.error != null && state.error !== '') return { error: String(state.error) };
+  const status = state?.status;
+  if (status != null && status !== '') return { error: `run ${status}` };
+  return { error: 'run produced no job results' };
+}
+
+export function waitResultCost(waited) {
+  const { record } = firstJobOrError(waited ?? {});
+  if (record && typeof record.costUsd === 'number') return record.costUsd;
+  return waited?.costUsd ?? null;
+}
+
 // Stage functions (run/wait/integrate/commit/ship) are always supplied by the caller: swarm.mjs
 // wires the real ones for `swarm go`, tests inject fakes so none of this touches a real agent CLI
 // or GitHub. `flags` carries commitMessage, repo, payloadPath, requireSections, mutants,
@@ -55,8 +70,11 @@ export async function go(root, target, flags, deps) {
     } catch (error) {
       return { status: 'failed', stage: 'run', ...base, reason: error.message, ...(error.code ? { code: error.code } : {}) };
     }
-    base.runId = started.id; base.cost = waited.costUsd ?? null; base.warnings = waited.warnings ?? [];
-    if (waited.status !== 'complete') return { status: 'failed', stage: 'run', ...base, reason: `run ${waited.status}` };
+    base.runId = started.id; base.cost = waitResultCost(waited); base.warnings = waited?.warnings ?? [];
+    if (waited?.status !== 'complete') {
+      const { error } = firstJobOrError(waited ?? {});
+      return { status: 'failed', stage: 'run', ...base, reason: error ?? `run ${waited?.status ?? 'unknown'}` };
+    }
   } else {
     base.runId = runId;
   }

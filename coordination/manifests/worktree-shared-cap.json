@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "worktree-shared-cap",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "OWNER RULE (fix for PR #207): a project and all of its git worktrees share ONE budget. Spend from the main checkout plus every linked worktree counts together against the one project cap; a worktree must never get its own fresh copy of the cap. Do NOT touch tools/swarm.mjs, package.json, CHANGELOG.md or README.md. tools/swarm.mjs calls checkProjectCap(root) and, for a run's remaining budget, readProjectCap(root) and projectSpend(root) (it computes info.cap - sp.usd - sp.exposureUsd); so the family total must come out of projectSpend(root) itself.\n\nIn tools/project-spend.mjs:\n- Rename the current per-folder total function to `treeSpend(root)` (same behavior, same cache) and export it.\n- Export `async worktreeFamily(root)` (never throws, fs only, no child processes): main = (await mainWorktreeRoot(root)) ?? root. Members = [main] plus, for each entry E in `<main>/.git/worktrees/` (readdir; missing dir = none), the dirname of the trimmed path in `<main>/.git/worktrees/E/gitdir` (resolved relative to that gitdir file's folder if not absolute) when it exists (fs.realpath succeeds). Skip any member whose real path has a '.swarm' path segment (swarm's own job worktrees, scratch). Always include realpath(root) itself. Deduplicate by real path, main first, others sorted. If <main>/.git is not a directory, the family is just [realpath(root)].\n- `projectSpend(root)` now returns the sum of treeSpend over worktreeFamily(root): usd, tokens, runs, unknownUsd, exposureUsd summed; unreadable = own tree's ids as today plus other trees' ids prefixed `<basename(tree)>:`; plus a new field `trees: [{ root, usd, runs }]` (main first). For a folder that is not a worktree family (no linked worktrees) the numbers are identical to before.\n- projectCapDecision message: when spent.trees has more than one entry, say `this project and its N worktrees have spent $X across R runs` instead of `this project has spent $X across R runs` (N = trees.length - 1); keep the rest of the message.\n- projectSummary: spendUsd is the family total (rounded as today); add `treeUsd` (this folder's own total, rounded to cents) and `sharedTrees` (trees.length). Keep capSource/capInherited/inheritedFrom/why.\n- Cap source rules from #207 stay: a worktree with no own .project-swarm.json reads the main checkout's profile cap; its own pointer wins when present. Either way the spend compared is the family total.\n\nIn tools/board-data.mjs projectOverview: add to overview.spend `familyUsd: spend.spendUsd ?? null` and `sharedTrees: spend.sharedTrees ?? 1` (null-safe). Keep `usd` (this folder's own runs) unchanged so machine totals never double count.\nIn tools/watch-assets/board.js capCell: when s.capUsd and s.sharedTrees > 1, draw the meter and the 'X of Y' text from s.familyUsd instead of s.usd and add a sub line 'shared by ' + s.sharedTrees + ' trees (this one ' + usd(s.usd) + ')'. Keep the inherited and why lines. textContent only.\n\nTests: in tests/board-worktrees.test.mjs replace the per-tree expectation: with the main checkout spending $3 and a worktree spending $2 under a main-profile cap of $4, checkProjectCap(main) AND checkProjectCap(worktree) both refuse with reason 'project-cap' and a message containing 'and its 1 worktrees' (or the exact wording you implement) and '$5.00'; projectSpend(worktree).usd === 5 and projectSpend(main).usd === 5 with trees listing both roots; projectSummary(worktree, {ttlMs:0}) has spendUsd 5, treeUsd 2, sharedTrees 2, reached true; under a cap of 10 neither refuses; a second worktree's spend adds in too; a run state under main/.swarm (simulate a swarm job worktree path containing '.swarm' registered in main/.git/worktrees) is NOT counted twice; a plain repo with no worktrees gives exactly the old numbers (trees length 1); boardSnapshot keeps machine cost totals equal to the sum of each overview's own cost (no double count) while overview.spend.familyUsd is 5 for both. Use real `git worktree add` like the existing tests. Keep the rest of the file's tests passing (update the ones that pinned per-tree enforcement). Keep tests/project-spend.test.mjs and tests/board-page.test.mjs green; change them only if a pinned message or shape must change. Run `node --import ./tests/_isolate-config.mjs --test tests/board-worktrees.test.mjs tests/project-spend.test.mjs tests/board-page.test.mjs tests/board.test.mjs tests/hard-cap.test.mjs tests/spend-run.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests reference board.js/board-data only for unrelated UI behavior; the coordinator runs the full suite after integration.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/board.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/hard-cap.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tools/local-config.mjs",
+        "tools/spend.mjs"
+      ],
+      "outputs": [
+        "tools/project-spend.mjs",
+        "tools/board-data.mjs",
+        "tools/watch-assets/board.js",
+        "tests/board-worktrees.test.mjs",
+        "tests/project-spend.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}

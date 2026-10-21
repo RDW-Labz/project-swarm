@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: Apache-2.0
-// Claude Code hook for the Orchestrator lane: `node orchestrator-hook.mjs pre|post|stop|prompt`, the hook input as JSON on stdin. Writes one small event to the project's
+// Claude Code hook for the Orchestrator lane: `node orchestrator-hook.mjs pre|post|stop|prompt|end`, the hook input as JSON on stdin. Writes one small event to the project's
 // .swarm/orchestrator/events.ndjson and prints nothing. It never blocks or changes anything: whatever goes wrong, it exits 0 so a tool call is never held up by it.
+import * as child_process from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -115,6 +116,23 @@ function shouldRecordChatMerge(input, projectRoot) {
 }
 
 const kind = process.argv[2];
+function claudeProcess() {
+  try {
+    const p = process.ppid;
+    if (!Number.isInteger(p) || p <= 0) return null;
+    const result = child_process.spawnSync('ps', ['-o', 'ppid=,comm=', '-p', String(p)], { encoding: 'utf8', timeout: 1000 });
+    if (result.error || result.status !== 0 || typeof result.stdout !== 'string') return null;
+    const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(result.stdout);
+    if (!match) return null;
+    const parent = Number(match[1]);
+    if (!Number.isInteger(parent) || parent <= 0) return null;
+    const command = match[2].split(/\s+/).at(-1) ?? '';
+    const basename = command.split(/[\\/]/).at(-1)?.toLowerCase();
+    const pid = ['sh', 'bash', 'zsh', 'dash'].includes(basename) ? parent : p;
+    return Number.isInteger(pid) && pid > 0 ? { pid, host: os.hostname() } : null;
+  } catch { return null; }
+}
+
 let raw = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => { if (raw.length < 2000000) raw += chunk; });
@@ -123,7 +141,8 @@ process.stdin.on('end', () => {
     const input = JSON.parse(raw);
     const root = projectRootOf(input.cwd);
     if (root) {
-      const event = buildEvent(kind, input, { root, analyze: analyzeShell });
+      const proc = ['prompt', 'stop', 'end'].includes(kind) ? claudeProcess() : undefined;
+      const event = buildEvent(kind, input, { root, analyze: analyzeShell, proc });
       if (event) appendEvent(root, event);
       if (kind === 'prompt' && input.hook_event_name === 'UserPromptSubmit' && shouldRecordChatMerge(input, root)) {
         try {

@@ -3,8 +3,9 @@
 // list says "idle" while the machine is not: `swarm update` also looks here before it moves the install.
 import { execFileSync } from 'node:child_process';
 
-// The long-running commands: a loop, a run, an integration, a scale test, a guarded command, autopilot, a ship, a ticket pipeline, a sweep.
-const BUSY_VERBS = new Set(['go', 'run', 'integrate', 'autopilot', 'ship', 'scale', 'with-concurrency', 'ticket', 'sweep']);
+// The long-running commands: a loop, a run, an integration, a scale test, a guarded command, a ship, a ticket pipeline, a sweep.
+// Autopilot is omitted: a sleeping loop is idle; it is busy only during a step (busy marker from runAutopilot, not the process line).
+const BUSY_VERBS = new Set(['go', 'run', 'integrate', 'ship', 'scale', 'with-concurrency', 'ticket', 'sweep']);
 // The verb is the first word after swarm.mjs (or `swarm`) that is not an option or the value of --root.
 function verbOf(command) {
   const words = command.trim().split(/\s+/);

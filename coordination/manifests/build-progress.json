@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "build-progress",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "TASK: a per-project \"Build progress\" view on the Swarm Watch board (owner item V). Read existing on-disk data only; write nothing to the project; no network; no child processes. Do NOT touch tools/swarm.mjs, package.json, CHANGELOG.md or README.md (no version bump).\n\n\"Finished\" = every scope requirement done, checks green, PR merged.\n\n1) New module tools/build-progress.mjs (ESM, SPDX header, short header comment in the repo style). Export `async buildProgress({ root, projectId, now = Date.now(), historyFile, spend = null })` that never throws (any read problem leaves that part null/unknown and adds a string to `notes`). Sources: the ticket ledger via readLedger(root) and helpers in tools/tickets.mjs (isApproved, ledgerStats if useful); done times via doneTimes(root) in tools/client-report.mjs (tickets.log transitions to done); the scope via parseScope from tools/scope.mjs reading `ledger.scope.file` when set else docs/scope/scope.md (missing scope -> requirements null); open decisions via openDecisions in tools/inbox.mjs over the journal (tools/journal.mjs reader, .swarm/project/journal.ndjson); PR events via readHistory in tools/history.mjs filtered to this projectId and kinds 'pr' and 'merge' (pass `file: historyFile` when given). Return exactly:\n{ percent: { tickets: {done,total,pct}, requirements: {covered,total,pct} | null, overall: pct|null },\n  stages: [{ id, title, total, done, open, blocked, pct }],\n  left: { openByType: {build,test,docs,...only types with >0}, human: [{id,title,stage}], blockers: [{id,title,reason}], approvals: [{kind:'scope'|'proposal'|'decision', id, title}] },\n  milestones: [{ key, label, state: 'done'|'current'|'todo'|'unknown', at: ISO|null, evidence: string|null }],\n  eta: { remaining, perDay, days, basis } | null,\n  spend: { usd, capUsd, reached, why } | null,\n  finished: boolean, notes: [string] }\nRules: tickets total excludes cancelled and proposed; done = status done; open = todo|ready|running|review|blocked; pct is an integer 0..100 rounded down (null when total is 0). A requirement R is covered when at least one non-cancelled, non-proposed ticket lists R in scopeRefs and all such tickets are done. overall = requirements pct when requirements exist, else tickets pct. stages: from scope stages (id S1..Sn, title) unioned with ticket stages, sorted by stage number, counting non-cancelled non-proposed tickets. left.human = open tickets with type 'human'; blockers = tickets with status blocked (reason = blockReason) plus tickets with acceptanceBlocked (reason = acceptanceBlocked.reason); approvals = one 'scope' item when the ledger exists and isApproved(ledger) is false, one 'proposal' item per ticket with status proposed, one 'decision' item per open decision (id, title from its text/question field). Milestones in order with keys/labels: scope 'Scope approved' (done when isApproved; at = ledger.approved.at), building 'Building' (done when any ticket is done or running/review), e2e 'E2E green' (done when tickets total > 0, every counted ticket is done, and no ticket has acceptanceBlocked or an acceptanceResults entry whose verdict is not 'pass'/'passed'/'met'), pr 'PR open' (done when a history 'pr' event exists for the project; at/evidence = newest event time and ref), merged 'Merged' (done when a history 'merge' event exists newer than or equal to the newest 'pr' event), deployed 'Deployed' (always state 'unknown', evidence 'not tracked yet'). The first milestone that is not done (ignoring 'unknown') gets state 'current'; later not-done ones 'todo'. eta: done times within the last 14 days before now; null when fewer than 2; perDay = count/14 rounded to 2 decimals; remaining = open ticket count; days = remaining === 0 ? 0 : Math.ceil(remaining/perDay); basis = 'N done in the last 14 days'. spend = the `spend` argument's usd/capUsd/reached/why when given, else null. finished = requirements covered === total (or, with no scope, tickets done === total > 0) AND e2e done AND merged done.\nAlso export `progressSummary(p)` -> { overall, ticketsPct, current: the label of the 'current' milestone or 'Finished' when finished, eta days or null, finished } for the board card.\n\n2) tools/board-data.mjs: in projectOverview add `progress: progressSummary(await buildProgress({ root: project.root, projectId: project.id, now, spend: overviewSpend }))` (null-safe: on any error `progress: null`); in projectDetail add the full `progress` object the same way (pass the project spend shape that projectDetail already has, mapping usd/capUsd/reached/why when present). Accept an injectable `historyFile` option where those functions take options, defaulting to undefined (readHistory's own default). Keep every existing field.\n\n3) tools/watch-assets/board.js: in renderProjects (both table name cell and card) add one sub line when p.progress: a small meter (reuse meter()) of p.progress.overall plus text like '42% \u00b7 Building \u00b7 ETA 6d' (omit ETA when null; 'Finished' when finished). Build only with el()/textContent; never innerHTML.\n\n4) tools/watch-assets/project.html + project.js: in the Overview pane add a card section aria-label 'Build progress' (id 'progress') above the existing tickets section. project.js renders from data.progress: headline overall % with a meter and 'tickets d/t, requirements c/t'; milestone strip as an ordered list (class 'milestones', each li class = state, the 'current' li also aria-current='step'); per-stage rows with meter + 'done/open/blocked'; 'What is left' lists (open by type, human tickets, blockers, approvals; each list shows 'none' when empty); 'ETA ~N days (basis)' or 'ETA: not enough history'; spend 'USD of cap' and the why line when present. Use the page's existing helpers and swarm-ui.css classes; add minimal CSS for .milestones (horizontal flex, wraps on phones, .current bold with an accent border, .done muted check, .unknown dashed) to tools/watch-assets/swarm-ui.css at its end, using existing color tokens. textContent only.\n\nTests: new tests/build-progress.test.mjs (node:test, assert/strict, temp dirs under os.tmpdir cleaned up, write fixture .swarm/project/tickets.json, tickets.log, journal.ndjson, docs/scope/scope.md in the formats the context modules read; temp history file via historyFile): percent and requirement coverage math incl. cancelled/proposed excluded; stages from scope plus ticket stages; left buckets (human, blocked, acceptanceBlocked, proposal, open decision, unapproved scope); milestone states and the single 'current'; merge older than newest pr does not count as merged; eta null under 2 done, correct days otherwise; finished only when all three hold; missing ledger/scope/journal/history gives nulls and notes, never throws. Extend tests/board-page.test.mjs minimally only if needed so projectDetail's new field is asserted present (do not break existing assertions). Run `node --import ./tests/_isolate-config.mjs --test tests/build-progress.test.mjs tests/board-page.test.mjs tests/board.test.mjs tests/board-worktrees.test.mjs tests/board-nav.test.mjs tests/watch-assets.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests reference these modules only for unrelated behavior (pages, css listing, inbox); the coordinator runs the full suite after integration.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/tickets.mjs",
+        "tools/scope.mjs",
+        "tools/client-report.mjs",
+        "tools/inbox.mjs",
+        "tools/journal.mjs",
+        "tools/history.mjs",
+        "tools/project-spend.mjs",
+        "tests/board.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/watch-assets.test.mjs"
+      ],
+      "outputs": [
+        "tools/build-progress.mjs",
+        "tests/build-progress.test.mjs",
+        "tools/board-data.mjs",
+        "tools/watch-assets/board.js",
+        "tools/watch-assets/project.js",
+        "tools/watch-assets/project.html",
+        "tools/watch-assets/swarm-ui.css",
+        "tests/board-page.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/autopilot-lock.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/completion.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10b-cli.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}

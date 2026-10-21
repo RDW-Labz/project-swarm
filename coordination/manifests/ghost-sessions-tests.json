@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "ghost-sessions-tests",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "Add regression tests for the ended-session feature already implemented in tools/orchestrator-events.mjs (EVENT_KINDS has 'end', ENDED_SHOWN_MS, buildEvent proc option, sessionsOf(events, now, { isAlive, host })), tools/board-orchestrator.mjs (projectOrchestrator isAlive option, defaultIsAlive) and tools/install.mjs (ORCHESTRATOR_HOOK_EVENTS has SessionEnd:'end'). Edit only tests/orchestrator-lane.test.mjs; do not change any tools/ file (if you find a real bug, describe it in your final notes instead). Do not spawn `ps` or the hook script (the sandbox blocks ps). Add tests: (1) buildEvent('end', {session_id, cwd, reason:'  logout  '}, {root}) -> e 'end', why 'logout'; a reason longer than 40 chars is trimmed to 40; (2) buildEvent with proc {pid: 4242, host:'h1'} sets pid and h for prompt, stop and end, but never for pre or post; a non-integer or 0 pid is dropped; (3) sessionsOf: a session with an 'end' event is state 'ended', endedAt = that at, shown true at end+4min and false at end+6min; (4) a later 'prompt' in the same session after 'end' makes it live again (state not 'ended', endedAt null); (5) isAlive returning false for the recorded pid with matching host -> 'ended' with endedAt = lastAt, shown only while lastAt is within 5 min; with a different host isAlive is never called (use a spy) and the state is the normal one; without isAlive the old states are unchanged; (6) projectOrchestrator with an injected isAlive (false) and a temp project whose .swarm/orchestrator/events.ndjson holds a prompt event with pid and h = os.hostname() returns that session with state 'ended' and endedAt set (use the existing test helpers in the file for temp projects and usage stubs); (7) the install test that counts orchestrator hook events now also expects SessionEnd with command arg 'end' (update the existing assertion if it pins four events). Follow the file's existing style. Run `node --import ./tests/_isolate-config.mjs --test tests/orchestrator-lane.test.mjs` and `node tools/check-package.mjs`.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/orchestrator-events.mjs",
+        "tools/board-orchestrator.mjs",
+        "tools/install.mjs"
+      ],
+      "outputs": ["tests/orchestrator-lane.test.mjs"],
+      "timeoutMs": 1500000
+    }
+  ]
+}

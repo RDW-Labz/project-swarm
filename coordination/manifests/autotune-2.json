@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "machine-limit",
+      "agent": "auto",
+      "prompt": "Item W part 2, as new modules only (do not edit tools/swarm.mjs or tools/lanes.mjs). Read tools/autotune.mjs (already written: defaultLimit, readMachine, createTuner, createLaneCaps, stateFilePath, describe) and tools/concurrency-guard.mjs and how machineConcurrency is read in tools/lanes.mjs. Create tools/machine-limit.mjs (SPDX header, ES module) and tests/machine-limit.test.mjs. Exports: resolveMachineLimit({config, state, machine, env}) returning {limit, source, reason}: when config.machineConcurrency is a number use it (source config, reason fixed), when it is the string auto (or missing and config.machineConcurrencyAuto is true) use the persisted tuner state limit if present and within bounds else defaultLimit of the machine reading (source auto-default or auto-state); an environment variable SWARM_MACHINE_CONCURRENCY with a number overrides everything (source env); validateMachineLimitConfig(config) returning plain error strings for a bad value (not a positive integer or auto, over 256); async loadTunerState(path, fs) and saveTunerState(path, state, fs) with atomic writes and a version field, tolerating a missing or corrupt file (returns null); and tickAutotune({state, machine, inUse, waiting, rateLimitedLanes, now}) that runs the tuner once and returns {state, limit, reason, capped, laneCaps} ready to persist, with the lane caps from createLaneCaps updated for any rate limited lanes. Also export boardLine(result) returning the text the board shows (limit, in use, why capped). Tests: number, auto with and without state, env override, invalid values, corrupt state file, atomic save, tick raises when idle and work waits, backs off on a rate limited lane and records a lane cap, boardLine for each reason. Write only tools/machine-limit.mjs and tests/machine-limit.test.mjs.",
+      "context": [
+        "tools/autotune.mjs",
+        "tools/concurrency-guard.mjs",
+        "tools/lanes.mjs"
+      ],
+      "outputs": [
+        "tools/machine-limit.mjs",
+        "tests/machine-limit.test.mjs"
+      ],
+      "timeoutMs": 1500000
+    }
+  ]
+}

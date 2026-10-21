@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "q2-investigate",
+      "agent": "auto",
+      "type": "review",
+      "prompt": "Read-only investigation, no edits. Problem (parts-app, 2026-10-20): a review job (security or acceptance review of a ticket) that cannot fit under the project spend cap sits queued forever. Find in tools/swarm.mjs, tools/spend.mjs, tools/lanes.mjs and tools/escalation.mjs the exact code path that decides to hold a job because its reservation does not fit under the cap (capDecision and what the caller does with a refusal: heldReason, queued state, retry), and say: which function holds it, why nothing ever releases or fails it, and where a review job's tier and model are chosen. Then propose the smallest change with exact function names and line numbers: (a) fail fast with a clear message when a job's own reservation alone is larger than the cap that remains for good (not a transient shortage), and (b) fall back to the next cheaper review tier (expensive to mid to cheap) before failing, using the existing tier fields. Report as a short numbered list. Do not write any file.",
+      "context": [
+        "tools/swarm.mjs",
+        "tools/spend.mjs",
+        "tools/lanes.mjs",
+        "tools/escalation.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "n-investigate",
+      "agent": "auto",
+      "type": "review",
+      "prompt": "Read-only investigation, no edits. tests/field-lesson-t80-cli.test.mjs runs a real in-process swarm run through runManifestMain. With isolation (node --import ./tests/_isolate-config.mjs --test) its 9 subtests finish in about 5 seconds but the test process only exits after about 49 seconds. Without isolation it never exits because of a machine-wide lane claim wait. Active timers seen after the tests finish: a setInterval of 50 ms created in runOne in tools/swarm.mjs (around line 3094, called from runManifestBody around line 3611), a LaneScheduler pumpShared setTimeout in tools/lanes.mjs (around line 634, wakeAt computed from lane.until and claim.until and acquisitions), and a heartbeat beat setTimeout of 5000 ms in tools/executors.mjs (around line 221). Find which of these is not cleared when the run finishes (or when the scheduler or executor pool is closed), why it keeps the process alive for about 44 more seconds, and who should clear it (the exact function and the condition). Report a short numbered list with the smallest fix and the test that would prove it (a test that runs a tiny manifest and asserts the process has no active ref'd timers after the run resolves, for example through process.getActiveResourcesInfo). Do not write any file.",
+      "context": [
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tools/swarm.mjs",
+        "tools/lanes.mjs",
+        "tools/executors.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

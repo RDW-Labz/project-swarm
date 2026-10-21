@@ -42,3 +42,5 @@
 .need-cmd{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .need-cmd code{padding:3px 6px;border-radius:6px;background:rgba(128,128,128,.15);overflow-wrap:anywhere}
 .chip.needs-some{background:var(--warn);color:#1a1202}
+tr.wt td:first-child{padding-left:22px}
+.why{color:var(--bad, #c0392b)}

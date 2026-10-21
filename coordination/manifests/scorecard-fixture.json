@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "scorecard-fixture",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "In tests/board-page.test.mjs, test 'project panels expose split quality and benchmark scorecards' writes a scorecard fixture where billed_usd goes from previous 10 to value 8 but labels the trend 'up'. tools/bench-scorecard.mjs metricTrend returns RAW direction, so 10 -> 8 is trend 'down', and for billed_usd (lower is better) the board verdict is 'better'. Fix the fixture only: change that trend from 'up' to 'down' so it matches metricTrend(8, 10); keep the assertion expecting 'better'. Edit only tests/board-page.test.mjs. Run `node --import ./tests/_isolate-config.mjs --test tests/board-page.test.mjs tests/benchmark-scorecard.test.mjs`.",
+      "context": ["tests/_isolate-config.mjs", "tools/bench-scorecard.mjs", "tools/benchmark-scorecard.mjs"],
+      "outputs": ["tests/board-page.test.mjs"],
+      "timeoutMs": 900000
+    }
+  ]
+}

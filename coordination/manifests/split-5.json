@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "split-fix-calls",
+      "agent": "auto",
+      "prompt": "tools/split-scan.mjs still drops uses in some call-argument positions. Reproductions where uses must contain load but today does not: function c2(){ const x = res(m, load({ env, home }), root); } and async function e(){ const base = await w(realRoot, load({ env }), { env }); return base; } (the same call as the first argument, or with a non-shorthand object, works). It looks like an identifier followed by an opening paren that appears after a comma inside another call and has an object literal as its argument is classified as an object method shorthand or a function header and its name is dropped. Find and fix the cause in the tokenizer and scope logic (check how a comma inside call arguments is distinguished from a comma inside an object literal, and make method-shorthand detection require that the innermost open bracket is a brace that is an object literal or class body AND that the closing paren is followed by an opening brace). Then add to tests/split-scan.test.mjs a DIFFERENTIAL INVARIANT test on the real tools/swarm.mjs that does not trust the scanner: for every top-level item that is not an import, build a crude over-approximation by removing comments, string literals (single, double, and the literal parts of templates but keeping the ${} expressions), regular expression literals and any identifier directly after a dot or question-dot, then collect every identifier-like token; intersect that set with the set of names declared by top-level items or imported by import statements of the file (excluding names the item declares itself at top level); the scanner uses set of the item must contain EVERY name in that intersection. Names the crude pass can report that are really locals shadowing a top-level name are allowed to be missing only if the item itself declares a local with that exact name anywhere (parameter, const, let, var, function, class, catch binding, destructuring); implement that check with a simple regex over the item text and keep a short explicit allow-list for anything that remains, printing the full list of violations in the assertion message so it is actionable. If the invariant finds more scanner gaps, fix them too until it passes with an allow-list of at most 5 names. Add fixtures for both reproductions and for: a call argument that is a method call result (res(a, obj.load({ env }), b)), a new expression as a call argument (res(new Load({ env }))), an await in an argument (res(await load({ env }))), an arrow as argument whose body calls load, and a template literal argument with a call inside the expression. All existing tests must still pass and the scan must stay under 5 seconds. Write only tools/split-scan.mjs and tests/split-scan.test.mjs. ignoreTests reason: only the scanner and its test change.",
+      "context": [
+        "tools/split-scan.mjs",
+        "tests/split-scan.test.mjs",
+        "tools/swarm.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/split-scan.mjs",
+        "tests/split-scan.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ]
+}

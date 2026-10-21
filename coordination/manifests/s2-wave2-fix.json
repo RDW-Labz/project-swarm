@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "card-headline",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "Owner board request 3 says the project CARD line must read 'build D/T \u00b7 human d/t' (percent and build counts from non-human tickets; human separate; with no human tickets just 'build D/T'), replacing today's '66% \u00b7 Building \u00b7 ETA 8d' mismatch. tools/build-progress.mjs progressSummary already computes `headline`, but it is not an enumerable own property, so it is lost when the board snapshot is JSON-serialized and the card never sees it; also tools/watch-assets/board.js progressLine still renders '<overall>% \u00b7 <current> \u00b7 ETA Nd'. Fix: (1) progressSummary returns a plain object with `headline` (and `untracked` counts: { runs, jobs }) as ordinary enumerable fields, plus the existing fields; (2) board.js progressLine renders: meter(overall) + text `headline` + ' \u00b7 ' + current milestone + (eta ? ' \u00b7 ETA ' + eta + 'd' : '') + (untracked runs ? ' \u00b7 untracked work: ' + N + ' runs' with a warn style : ''); textContent only. Tests: in tests/build-progress-atlas.test.mjs (or tests/board-page.test.mjs) assert JSON.parse(JSON.stringify(progressSummary(p))).headline === the exact atlas header, and that a no-human ledger gives 'build N/N'. Edit only tools/build-progress.mjs, tools/watch-assets/board.js and tests/build-progress-atlas.test.mjs. Do NOT touch tools/swarm.mjs. Run `node --import ./tests/_isolate-config.mjs --test tests/build-progress-atlas.test.mjs tests/build-progress.test.mjs tests/board-page.test.mjs tests/board-projects-filter.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests use these files for unrelated behavior; the coordinator runs the FULL suite.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/fixtures/ledgers/atlas.anon.json",
+        "tests/board-page.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/board-projects-filter.test.mjs"
+      ],
+      "outputs": [
+        "tools/build-progress.mjs",
+        "tools/watch-assets/board.js",
+        "tests/build-progress-atlas.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-peers.test.mjs",
+        "tests/board.test.mjs",
+        "tests/build-progress-ledgers.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/machine-share.test.mjs",
+        "tests/managers/r038-version-merge.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}

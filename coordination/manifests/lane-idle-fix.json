@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "lane-idle-fix",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "Bug in laneIdleReasons (tools/board-data.mjs), seen on the live board: with Codex and Cursor both idle and both having run jobs in the last 24h, Codex says 'no ready jobs; recent jobs named Cursor explicitly' AND Cursor says 'no ready jobs; recent jobs named Codex explicitly' \u2014 contradictory. Fix rule (h): append '; recent jobs named <other> explicitly' only when THIS label's agents finished 0 jobs in the last 24h (recent jobs === 0) AND the other label (Codex<->Cursor) finished at least 1 job with explicit >= jobs/2. Otherwise the text stays 'no ready jobs'. Change nothing else. Update tests/lane-idle.test.mjs: both lanes with recent jobs -> both plain 'no ready jobs'; Cursor 0 recent + Codex 3 explicit -> Cursor's text ends with 'recent jobs named Codex explicitly' and Codex's stays plain. Edit only tools/board-data.mjs and tests/lane-idle.test.mjs. Do NOT touch tools/swarm.mjs. Run `node --import ./tests/_isolate-config.mjs --test tests/lane-idle.test.mjs tests/board-page.test.mjs` and `node tools/check-package.mjs`. ignoreTests cover unrelated board-data behavior; the coordinator runs the full suite.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/board-page.test.mjs"
+      ],
+      "outputs": [
+        "tools/board-data.mjs",
+        "tests/lane-idle.test.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/board-worktrees.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}

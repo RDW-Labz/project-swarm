@@ -231,7 +231,10 @@ export function createWatchServer(opts) {
       if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, { ...detail, openRun: !remote }) : sendText(res, method, 404, 'not found'); }
       // `openRun`: the "Watch" links start a run's own page on this computer, which the remote board never does (it links to the run inspector instead). `server`: the version this
       // process runs, the one now installed, and whether they differ (it was started before the last swarm update).
-      if (pathname === '/api/board') return sendJson(res, method, { ...(await board.snapshot(q)), openRun: !remote, server: await versionInfo() });
+      if (pathname === '/api/board') {
+        const localOnly = q.local === '1';
+        return sendJson(res, method, { ...(await board.snapshot({ ...q, local: localOnly })), openRun: !remote, server: await versionInfo() });
+      }
       if (pathname === '/api/project') { const detail = await board.project(String(q.id ?? '')); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
       if (pathname === '/api/live') { const live = await board.live(String(q.id ?? '')); return live ? sendJson(res, method, live) : sendText(res, method, 404, 'not found'); }
       if (pathname === '/api/history') return sendJson(res, method, await board.history(q));

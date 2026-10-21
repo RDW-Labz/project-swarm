@@ -3,7 +3,7 @@ import './_isolate-config.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { wavesOf } from '../tools/tickets.mjs';
-import { ledgerSummary } from '../tools/scope-loop.mjs';
+import { ledgerSummary, waveBlockingIds, wavePlanningLedger } from '../tools/scope-loop.mjs';
 import {
   buildProgressStats,
   ledgerBuildSummary,
@@ -42,15 +42,21 @@ test('AC1: human tickets do not count toward build progress or block wave planni
   const all = ledgerSummary(ledger);
   const build = ledgerBuildSummary(ledger);
   assert.equal(all.total, 4);
+  assert.equal(all.percentDone, 50);
+  assert.equal(all.done, build.done);
   assert.equal(build.total, 2);
   assert.equal(build.done, 1);
   assert.equal(build.humans, 1);
+  assert.deepEqual(all.human, { open: 1, done: 1, total: 2 });
 
   const waitingOnHuman = [
     tk('T-1', { status: 'done' }),
     tk('T-2', { dependsOn: ['H-1'], status: 'todo' }),
     tk('H-1', { type: 'human', scopeRefs: [], acceptance: [], steps: ['Go'], status: 'todo' }),
   ];
+  assert.deepEqual(waveBlockingIds({ tickets: waitingOnHuman }), []);
+  const plannedFromLedger = wavePlanningLedger({ tickets: waitingOnHuman });
+  assert.equal(wavesOf(plannedFromLedger).length, 1);
   assert.deepEqual(waveBlockingTicketIds(waitingOnHuman), []);
   assert.equal(waveBlockingCount(waitingOnHuman), 0);
   const planned = wavePlanningTickets(waitingOnHuman);

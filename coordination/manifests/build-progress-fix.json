@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "build-progress-fix",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "cheap",
+      "prompt": "Fix three review findings in the build-progress feature. Do NOT touch tools/swarm.mjs, package.json, CHANGELOG.md or README.md.\n1) tools/board-data.mjs projectDetail: it passes buildProgress(...) through progressSummary, so the project page (tools/watch-assets/project.js renderProgress, which reads progress.percent, milestones, stages, left, eta, spend) receives only the short card summary and renders empty. projectDetail must return the FULL buildProgress object as `progress` (null on error). projectOverview keeps progressSummary.\n2) projectDetail spend for progress uses capUsd null / reached false / why null, so the page always says 'of no cap'. Give projectDetail an injectable `summary = projectSummary` option (same pattern as projectOverview) and build the progress spend from it: usd = summary.spendUsd (the shared family total) ?? costOf allUsd, capUsd, reached, why from the summary; null-safe if summary throws.\n3) tools/build-progress.mjs readHistorySafe reads the whole machine-wide history file once per project on every board poll. Add a small module-level cache keyed by history file path holding {mtimeMs, size, events} of the pr/merge events (read via readHistory with no project filter, kind filtering done in memory, limit/cap large enough to cover the file, e.g. 100000), refreshed only when stat mtimeMs or size changes; then filter by projectId (event.projectId === projectId || event.project === projectId) per call. Keep the 'history unavailable' note behavior when the file does not exist.\nTests: in tests/build-progress.test.mjs add: projectDetail (import from tools/board-data.mjs) returns progress with percent, milestones and stages arrays (full object) and progress.spend.capUsd from an injected summary stub {spendUsd: 3, capUsd: 10, reached: false, why: null}; projectOverview still returns the short summary shape {overall, ticketsPct, current, eta, finished}; two projects reading the same history file each see only their own PR events, and appending a new pr line to the file is picked up on the next call (cache invalidated by size/mtime). Keep tests/board-page.test.mjs green. Run `node --import ./tests/_isolate-config.mjs --test tests/build-progress.test.mjs tests/board-page.test.mjs tests/board.test.mjs tests/board-worktrees.test.mjs` and `node tools/check-package.mjs`. ignoreTests use board-data for unrelated behavior; the coordinator runs the full suite.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/history.mjs",
+        "tools/project-spend.mjs",
+        "tools/watch-assets/project.js",
+        "tests/board-page.test.mjs",
+        "tests/board.test.mjs",
+        "tests/board-worktrees.test.mjs"
+      ],
+      "outputs": [
+        "tools/board-data.mjs",
+        "tools/build-progress.mjs",
+        "tests/build-progress.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}

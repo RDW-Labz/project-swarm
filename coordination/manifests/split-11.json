@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "split-source-tests",
+      "agent": "auto",
+      "prompt": "After the swarm.mjs split (code moved from tools/swarm.mjs into tools/swarm/*.mjs modules, with re-exports), two tests that grep the SOURCE TEXT of tools/swarm.mjs for a code pattern fail because the code now lives in a module: tests/bare-status.test.mjs (swarm doctor on a remote lane still does the real check: expects the regular expression options.skipRemote?resolveCliHosts in the source) and tests/policy-hardening-round4.test.mjs (round4-4: cap allowance day uses US Central not UTC: expects centralDayKey(() => ms) in the source). Fix both tests to read the COMBINED source: add a small shared helper tests/helpers/swarm-source.mjs exporting readSwarmSource() that returns tools/swarm.mjs text followed by the text of every tools/swarm/*.mjs file (sorted by name, each prefixed with a comment line naming the file), works the same before and after the split, and use it in the two tests instead of reading tools/swarm.mjs directly. Then search ALL tests for any other test that reads tools/swarm.mjs as text (fs.readFile, readFileSync of a path ending in swarm.mjs, or a regex assertion against the source) and switch each to the helper; keep every assertion unchanged. Add a test of the helper itself. Write only test files. No token-shaped literals. ignoreTests reason: only test files change.",
+      "context": [
+        "tests/bare-status.test.mjs",
+        "tests/policy-hardening-round4.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/helpers/swarm-source.mjs",
+        "tests/swarm-source-helper.test.mjs",
+        "tests/bare-status.test.mjs",
+        "tests/policy-hardening-round4.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ]
+}

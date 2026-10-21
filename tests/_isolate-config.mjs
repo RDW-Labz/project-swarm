@@ -18,7 +18,37 @@ const currentConfig = process.env.SWARM_CONFIG || defaultConfigPath();
 process.env.SWARM_REAL_CONFIG = currentConfig;
 
 const isolateDir = fs.mkdtempSync(path.join(testTmpBase, 'swarm-test-isolate-'));
-process.env.SWARM_CONFIG = path.join(isolateDir, 'config.json');
+const isolatedConfigPath = path.join(isolateDir, 'config.json');
+process.env.SWARM_CONFIG = isolatedConfigPath;
+
+// Paid launches now resolve the machine daily limit from SWARM_CONFIG; keep suite jobs from
+// hitting the real default ($5 stop) unless a test sets its own limit explicitly.
+const unlimitedDailyLimit = {
+  usd: 1_000_000,
+  mode: 'notify',
+  ceilingUsd: 10_000_000,
+};
+let isolatedConfig = {};
+try {
+  if (fs.existsSync(isolatedConfigPath)) {
+    isolatedConfig = JSON.parse(fs.readFileSync(isolatedConfigPath, 'utf8'));
+  }
+} catch {
+  isolatedConfig = {};
+}
+if (typeof isolatedConfig !== 'object' || isolatedConfig === null || Array.isArray(isolatedConfig)) {
+  isolatedConfig = {};
+}
+const priorDaily = isolatedConfig.dailyLimit;
+const mergedDaily = {
+  ...(priorDaily && typeof priorDaily === 'object' && !Array.isArray(priorDaily) ? priorDaily : {}),
+  ...unlimitedDailyLimit,
+};
+fs.writeFileSync(
+  isolatedConfigPath,
+  `${JSON.stringify({ ...isolatedConfig, dailyLimit: mergedDaily }, null, 2)}\n`,
+  { mode: 0o600 },
+);
 
 // Lesson #152: a test that passes its own small `env` object (never `process.env`) to a function
 // whose fallback is `env.HOME || os.homedir()` still lands on the real machine's home once that

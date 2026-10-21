@@ -103,7 +103,7 @@ test('gallery tickets backfills old comments once; without a ledger nothing is m
   const first = await runGalleryCommand(root, ['tickets']);
   assert.match(first.stdout, /Proposed 1 ticket\(s\): T-0002 \(home\)/);
   assert.match(await runGalleryCommand(root, ['tickets']).then(r => r.stdout), /already has a ticket/);
-  assert.equal((await runScopeCommand(root, 'tickets', ['T-0002', '--set', 'cancelled'])).exitCode ?? 0, 0);
+  assert.equal((await runScopeCommand(root, 'tickets', ['T-0002', '--set', 'cancelled', '--yes'])).exitCode ?? 0, 0);
   const bare = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'gallery-noledger-')));
   t.after(() => fs.rm(bare, { recursive: true, force: true }));
   await fs.mkdir(path.join(bare, '.swarm/ui'), { recursive: true });
@@ -128,7 +128,7 @@ test('go --scope never starts a proposed ticket: the wave builder skips it', asy
 test('review fixes: cancelling a proposed ticket keeps the ledger approved; an unapproved comment ticket made todo by hand is no job; approving refuses files another open ticket writes; the reseal keeps the original approval time', async t => {
   const root = await project(t);
   await runGalleryCommand(root, ['comment', 'home', 'a']);
-  assert.equal((await runScopeCommand(root, 'tickets', ['T-0002', '--set', 'cancelled'])).exitCode ?? 0, 0);
+  assert.equal((await runScopeCommand(root, 'tickets', ['T-0002', '--set', 'cancelled', '--yes'])).exitCode ?? 0, 0);
   assert.equal(isApproved(await readLedger(root)), true, 'cancelling a proposal does not unapprove the plan');
   await runGalleryCommand(root, ['comment', 'home', 'b']);
   const handEdited = await readLedger(root);

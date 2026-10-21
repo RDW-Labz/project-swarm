@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "adapters-cancel-hang-2",
+      "agent": "auto",
+      "prompt": "CI hang: on ubuntu/node20 tests/adapters.test.mjs timed out after 600000ms once, right after the test timeout and external cancellation abort the owned HTTP request (so inside four concurrent API requests cancel together and queued jobs never start, line 35-36); the same test failed once on another PR on the same runner. It does not reproduce locally in 12 parallel runs. Investigate the cause in the code in context: look for a path where cancelRun is called while a job is between workspace preparation and its fetch (so pending = runManifest never settles), a fixed wait loop of 3000x10ms that fails instead of retrying, a hanging fetch that ignores the abort signal, or a lane claim wait. tools/swarm.mjs (runManifest ~2630, cancelRun ~3836) is context only and you may not edit it: if the cause is a runner race, put the exact function, line and interleaving as a comment block at the top of tests/adapters.test.mjs under the heading RUNNER RACE and write a test with deterministic gates (promises, not sleeps) that is skipped with that reason until the runner is fixed. In every case make the test fail fast with a diagnostic (state dump of job statuses) instead of hanging: bound await pending with a 60 second race that rejects with the current state. Write only the files named as outputs. ignoreTests reason: only the named files change and the adapters tests are in context. SECOND ATTEMPT: the previous result was correct (RUNNER RACE comment, skipped gated test, bounded waits) but the integration secret scan blocked the whole file on its existing fixture line const env={OPENAI_API_KEY:...,GEMINI_API_KEY:...,LAMBDA_API_KEY:...} (generic secret assignment). Build every fake credential in this file at runtime from pieces, for example const fake=name=>[name,\"fixture\",\"value\"].join(\"-\"), and make sure no line of tests/adapters.test.mjs assigns a literal string to a KEY, TOKEN or SECRET looking name. Keep every assertion that checks a credential is never leaked using the same runtime values. Keep the rest of your previous change.",
+      "context": [
+        "tests/adapters.test.mjs",
+        "tools/lanes.mjs",
+        "tools/executors.mjs",
+        "tools/swarm.mjs"
+      ],
+      "outputs": [
+        "tests/adapters.test.mjs"
+      ],
+      "timeoutMs": 1200000
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "wave2-regressions",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "Fix four full-suite regressions from the board changes just made (tools/board-data.mjs isTestOrTempProject / live counting / ordering, tools/watch-cli.mjs filtering, tools/build-progress.mjs progressSummary). Do NOT weaken the new owner rules; make the old tests' intent hold too. Do NOT touch tools/swarm.mjs or the tools/swarm folder.\n1) tests/board-idle-ready.test.mjs 'a live run clears idleWithReady' (line ~54): projectOverview(project, [{ runId, root, startedAt }], ...) with a running state.json must count that passed-in live run: overview.idle false, idleWithReady false. The new worktree-aware Live counting (request 6) must ADD worktree/scratch-root live runs, never drop the explicitly passed liveRuns; 'paused with live workers' applies only to runs found through the registry, not to the liveRuns the caller passes.\n2) tests/board-inbox.test.mjs 'feedback 5: test and temp projects are left out by default ...' (line ~261): with an explicit SWARM_PROJECTS_FILE, project 'real-app' at /Users/me/real-app (does not exist on disk, no ledger, no runs on disk) has a history 'run' event at NOW in SWARM_HISTORY_FILE; it must stay visible. Rule (c) 'idle' must count recent activity from the history file (kind run/pr/merge/spend within 7 days for that projectId) as a recent run, and must not mark a project idle-hidden just because its folder is missing when history shows activity. Keep snapshot.scratch = { shown, hidden, total } counting exactly as before for scratch/temp projects; projects hidden only by the new idle rule (c) are reported separately as snapshot.scratch.idleHidden (number) so the old counts do not change.\n3) tests/build-progress-roadmap.test.mjs (~line 80) and tests/build-progress.test.mjs (~line 161) pin the exact progressSummary keys/values; the new enumerable fields `headline` and `untracked` are intended (owner request 3/5): update ONLY those two assertions to include them (headline 'build 12/51 \u00b7 human 0/2' in the roadmap test as computed; untracked {runs:0,jobs:0}), nothing else in those tests.\nKeep tests/board-projects-filter.test.mjs, tests/build-progress-atlas.test.mjs, tests/board-page.test.mjs, tests/watch-ui.test.mjs green. Run `node --import ./tests/_isolate-config.mjs --test tests/board-idle-ready.test.mjs tests/board-inbox.test.mjs tests/build-progress-roadmap.test.mjs tests/build-progress.test.mjs tests/board-projects-filter.test.mjs tests/build-progress-atlas.test.mjs tests/board-page.test.mjs tests/watch-ui.test.mjs tests/board.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests use these files for unrelated behavior; the coordinator runs the FULL suite.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/build-progress-atlas.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/board.test.mjs",
+        "tools/projects.mjs",
+        "tools/history.mjs"
+      ],
+      "outputs": [
+        "tools/board-data.mjs",
+        "tools/watch-cli.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-leftovers.test.mjs"
+      ]
+    }
+  ]
+}

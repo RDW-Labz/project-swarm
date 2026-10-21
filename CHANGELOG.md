@@ -1,5 +1,62 @@
 # Changelog
 
+## 1.163.0
+
+tools/swarm.mjs is split into modules (pure move).
+- **Split:** 24 modules under tools/swarm/ (patterns, warnings, mutants, shell sandbox, checks, run state, context, integrate, workspace and 15 layered core modules) hold about 5,700 lines moved out of tools/swarm.mjs, which goes from 9,520 to 4,020 lines. Every moved name stays exported from tools/swarm.mjs by re-export, so no importer changes and behavior is identical.
+- **Tooling:** tools/split-scan.mjs (acorn AST scanner, scope-aware uses) and tools/split-module.mjs (plan, move and verify with a byte-for-byte check, unresolved-name check, smoke import and dynamic import rewrite) did the move; acorn 8.18.0 and acorn-walk 8.3.5 are dev dependencies, npm ci --ignore-scripts runs in CI.
+- **Tests:** tests/split-scan.test.mjs, tests/split-module.test.mjs and a shared helper so tests that grep the source read the combined swarm source.
+
+## 1.162.0
+
+Hotfix: guard regressions from 1.159 and version pinning.
+- **Guard:** orchestrators can file hand-build requests in every invocation form (node PATH/swarm.mjs, --root, env and cd prefixes); only approve, deny, on, off, install, uninstall and decide stay owner-only. The inline-code detector no longer fires on direct script calls.
+- **Read-only forms allowed:** git rev-parse, branch --show-current and listing, remote -v, config --get, ls-files, ls-remote, describe, for-each-ref, merge-base, cat-file, blame, tag -l, stash list, worktree list and more; gh pr, issue, run, release, workflow and repo views and lists, gh auth status, gh api in GET form; vercel git ls. Every write form stays blocked.
+- **Pinning:** a project with pinned true or pinnedVersion x.y.z in .project-swarm.json is skipped by swarm update (printed as skipped, pinned at x.y.z), its hooks and guard are not refreshed, its version is never pruned, update --projects lists pinned projects separately, swarm pin PROJECT VERSION installs the version from its git tag if needed and swarm unpin PROJECT releases it; the board card shows a pinned at x.y.z badge.
+
+## 1.159.0
+
+T: the autonomy policy engine and the daily spend limit, wired and off by default for policy.
+- **Daily limit:** new per-project daily limit on BILLED spend (default 5 USD, stop mode; notify mode warns at 1x, 2x, 3x; hard ceiling default 3x always stops), enforced in the one place every paid launch passes (reserveSpend, and accrueSpend for rentals); free lanes never count; swarm budget set and show; changes are logged, raises beyond 5 USD per project per day need the owner when an agent session asks.
+- **Policy engine:** swarm policy init, show, validate, path, check, run; standing-approval default rules that fail closed on missing or loose facts, log before they apply, and stay inert until the owner runs swarm policy init; autopilot runs a policy pass only when a policy file exists.
+- **Known limits from the Opus reviews:** the limit is counted per project root; owner detection is by terminal and environment names; a few low findings (notifier lock cleanup on crash, reservation day at midnight) are documented in the PR.
+- **Tests:** policy, daily limit, budget set, hardening rounds 2 to 4.
+
+## 1.158.0
+
+Batch 2: billed-only caps, guard word fix, scope fixes, delivered tickets, busy marker start time.
+- **Billed caps:** the project spend cap counts billed spend only (metered lanes), fails closed on unknown paid cost, missing lanes and rented jobs, and reports list value separately; known limits: an unknown cost counts at the lane reserve, not the job's own reservation, and a running run with no paid job recorded yet adds no exposure.
+- **Guard:** the word guard in prompt text no longer blocks a command; only real risky forms do.
+- **Scope fixes:** delete-only tickets finish, done tickets release their files and the splitter sees open tickets, a ticket's own specs run before review, tickets --set done keeps the review gate.
+- **Delivered:** swarm tickets ID --delivered PR records work merged outside the ledger (merged PR required, sensitive tickets still need their review).
+- **Busy marker:** records the process start time so a reused pid no longer blocks swarm update.
+
+## 1.157.0
+
+Board batch: worktrees, build progress, deploy milestone, ghost sessions, billed vs list value, idle lane reasons.
+- **Worktrees:** scratch worktrees group under their project and inherit its cap; a why-capped line shows what limits it.
+- **Build progress:** each project card shows percent done, stages, what is left, milestones and ETA.
+- **Deployed:** a Deployed milestone from GitHub Production deployments (read-only).
+- **Ghost sessions:** exited orchestrator sessions end on SessionEnd or when Claude exits and leave the board after 5 minutes.
+- **Billed vs list value:** every money figure says billed or list value and the cap line says what it counts.
+- **Idle lanes:** idle lane bays say why (rate limit, cap, not set up, not routed, queued, no ready jobs).
+
+## 1.156.0
+
+Batch 1: autopilot ledger-only start, crash fixes, init base detail, machine limit resolver, integrated snapshot module.
+- **Ledger only:** swarm autopilot starts go --scope only for tickets in the ledger and never from a stale manifest; runs without outputs no longer raise a blocker.
+- **Tests:** tests/autopilot-ledger-only.test.mjs, tests/autopilot-no-outputs.test.mjs.
+- **Crash fixes:** the lane scheduler leaves no orphaned wake timer after close (removes the roughly 44 second process tail in the CLI test); dead runs are finalized and a missing cost is treated as 0 for flat-rate lanes.
+- **Init base detail:** a red base check in swarm init says which check failed and why (name, exit code, output tail) and prints detail only when a check has info.
+- **Autotune:** new machine limit resolver (hardware default, back off on CPU and RAM, per-lane caps from rate limits); modules and tests only, not yet wired.
+- **Integrated snapshot:** new module that snapshots the integrated tree for follow-up jobs; not yet wired.
+
+## 1.155.0
+
+A sleeping autopilot no longer blocks swarm update.
+- **Busy:** swarm autopilot counts as busy only while one of its steps is executing (a busy marker is written around each pass and removed after, also when the pass throws); a loop that is waiting for its next pass writes no marker and is not found by the process check. With an autopilot per project the machine can now be idle, so swarm update runs right after a release.
+- **Tests:** tests/autopilot-busy.test.mjs, tests/busy-marker.test.mjs, tests/update-busy-marker.test.mjs.
+
 ## 1.154.0
 
 The guard allows read-only vercel commands and says to use swarm merge.

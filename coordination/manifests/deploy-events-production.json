@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "deploy-events-production",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "cheap",
+      "prompt": "Fix in tools/deploy-status.mjs, verified against a real Vercel repo: Vercel creates GitHub deployments whose `ref` is the commit SHA (never 'main'), with environment 'Production' for production deploys from main and 'Preview' for branch previews. So `deployments?ref=main` returns nothing, and previews must not count as deployed. Change fetchDeployStatus: replace the `ref` option with `environment = 'Production'`; request `repos/OWNER/NAME/deployments?environment=<URL-encoded environment>&per_page=10` (no ref filter). Also defensively keep only deployments whose `environment` equals the requested one case-insensitively (a GitHub filter quirk must not let a Preview through). The result object replaces `ref` with `environment` (the requested name); keep checkedAt, repo, latest, lastSuccess, error and every other behavior (token stripping, argv arrays, no shell, timeouts, 5 newest, https-only url, never throws). createDeployTracker passes no ref. Update the header comment to say it reads production deployments (Vercel posts these for the production branch). Update tests/deploy-status.test.mjs: assert the first gh call's path contains `deployments?environment=Production` and not `ref=`; a canned list mixing a newer Preview success and an older Production success yields lastSuccess = the Production one and latest = the newest Production one; a custom environment 'production-eu' is URL-encoded. Keep tests/build-progress.test.mjs green (adjust only fixtures that set `ref`). Do NOT touch tools/swarm.mjs, package.json, CHANGELOG.md or README.md. Run `node --import ./tests/_isolate-config.mjs --test tests/deploy-status.test.mjs tests/build-progress.test.mjs` and `node tools/check-package.mjs`.",
+      "context": ["tests/_isolate-config.mjs"],
+      "outputs": ["tools/deploy-status.mjs", "tests/deploy-status.test.mjs", "tests/build-progress.test.mjs"],
+      "timeoutMs": 1500000
+    }
+  ]
+}

@@ -12,7 +12,7 @@ const MIN = 60_000;
 const START_READY_MIN_MS = 120_000;
 const START_READY_STALE_MS = 10 * MIN;
 const iso = ms => new Date(ms).toISOString();
-const BASE_ACTIONS = ['integrate', 'resume', 'retry-failed', 'start-wave', 'start-deferred', 'start-backlog', 'unlock-tickets'];
+const BASE_ACTIONS = ['integrate', 'resume', 'retry-failed', 'unlock-tickets', 'start-ready', 'start-wave', 'start-deferred', 'start-backlog'];
 
 async function tempRoot(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'autopilot-start-ready-'));
@@ -76,8 +76,8 @@ function scopeDeps(overrides = {}) {
   return deps;
 }
 
-test('start-ready is the only new autopilot action', () => {
-  assert.deepEqual(ACTIONS, [...BASE_ACTIONS, 'start-ready']);
+test('ACTIONS lists default actions then legacy plan starts', () => {
+  assert.deepEqual(ACTIONS, BASE_ACTIONS);
 });
 
 test('pickReadyTickets treats only status ready tickets as startable', () => {
@@ -256,7 +256,7 @@ test('when start-wave and start-ready are both eligible only the wave starts', a
     tickets: [ticket('T-1', ['src/a.ts'])],
     deps: { plan, readPlan: async () => plan, startWave: async () => ({ run: 'r-wave', status: 'running' }) },
   });
-  const step = await autopilotStep(root, deps, { now: () => NOW });
+  const step = await autopilotStep(root, deps, { now: () => NOW, legacyPlan: true });
   assert.equal(callsNamed(deps, 'startScope').length, 0);
   assert.equal(step.actions.some(a => a.action === 'start-wave'), true);
   assert.equal(step.actions.some(a => a.action === 'start-ready'), false);

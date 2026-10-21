@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "split-verify-dir",
+      "agent": "auto",
+      "prompt": "tools/split-module.mjs smoke import check fails on every stage after the first when earlier stages already moved modules into tools/swarm/: it copies the new module to a temp folder (tools/.split-module-verify/mod-*.mjs) and imports it there, but the new module imports earlier-moved siblings by relative path (./patterns.mjs, resolved against tools/swarm/ where they really live), which do not exist in the temp folder: Cannot find module tools/.split-module-verify/patterns.mjs imported from tools/.split-module-verify/mod-core... Fix: run the smoke import (and any resolution check) from a temp copy placed in the SAME directory as the final target (for a target tools/swarm/core-3.mjs use tools/swarm/.split-verify-core-3.mjs with a unique name, removed in a finally block even on failure), so every relative import resolves exactly as it will after the move, and do the same for the rewritten FILE copy (place the temp copy of the rewritten tools/swarm.mjs next to the original, same directory, unique dot-prefixed name, removed in a finally). Verify that nothing is left behind after success, failure or an exception (add tests that list the folder). Add a fixture test with a two-stage move where the second module imports the first by relative path and the smoke import must pass, and a test that a failure leaves no temp files. Also keep the new module name collision rule: refuse when the target path already exists. Do not edit tools/swarm.mjs or tools/split-scan.mjs. No token-shaped literals. ignoreTests reason: only the mover and its test change.",
+      "context": [
+        "tools/split-module.mjs",
+        "tests/split-module.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/split-module.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-scan.test.mjs"
+      ]
+    }
+  ]
+}

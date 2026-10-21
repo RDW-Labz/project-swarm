@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "split-fix-arrow",
+      "agent": "auto",
+      "prompt": "tools/split-scan.mjs still misses uses inside a call argument that is an array literal containing spread. Minimal reproductions (scanModule(text).items[0].uses must contain the names X and Y, but today it does not): export const A = Object.freeze([...X, ...Y]); const D = f([...Y]); const E = Object.freeze([...Y]); (the plain assignments const B = [...X, ...Y]; and return [...X, ...Y].includes(job) work). The tokenizer apparently treats an opening paren followed by an opening bracket as the start of an arrow function parameter list with an array destructuring pattern and a rest element, so the names after the spread are recorded as declarations (parameters) instead of uses, and it never backtracks. Fix by deciding whether a parenthesized group is an arrow parameter list only after finding the matching closing paren and checking that the next significant token is an arrow (=>); otherwise it is an ordinary expression or call arguments and every identifier in it is a use. Apply the same lookahead rule everywhere the scanner classifies a pattern or parameter list (arrow functions with one parenthesized parameter group, async arrow functions, function expressions are fine because they have the function keyword, destructuring assignment such as [a, b] = x versus an array literal: decide by whether an equals sign (not ==, =>, ===) follows the closing bracket, and for-of and for-in heads, catch parameters, and object literals versus destructuring patterns in argument position). Over-approximate when unsure: report the name as used rather than declared. Add fixture tests for every reproduction above and these extras: f({ ...Y }), g([a, ...Y], [...Z]) with Y and Z as uses and a, an arrow with a real rest parameter ((...args) => args.length declares args, uses nothing), a destructuring assignment ([p, q] = pair uses pair and assigns p and q), an arrow inside call arguments ((x) => x + Y uses Y), nested calls h(i([...W])). Then add a regression test on the real tools/swarm.mjs: for the three real items that contain ...API_AGENTS (the const AGENTS item, pickJobRoute, resolveAskRoute) uses must contain API_AGENTS and for the item holding the CLI_AGENTS constant the uses must contain EXTRA_CLI_AGENTS. All existing tests must still pass and the scan must stay under 5 seconds. Write only tools/split-scan.mjs and tests/split-scan.test.mjs. ignoreTests reason: only the scanner and its test change.",
+      "context": [
+        "tools/split-scan.mjs",
+        "tests/split-scan.test.mjs",
+        "tools/swarm.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/split-scan.mjs",
+        "tests/split-scan.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ]
+}

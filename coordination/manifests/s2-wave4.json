@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "W4-ingest-sync-approve",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "Roadmap S2 wave 4 in tools/scope-commands.mjs (sole writer), modules already on main with no callers. Do NOT edit tools/swarm.mjs, the tools/swarm folder, tools/tickets.mjs, tools/ticket-sync-checks.mjs, tools/acceptance-provable.mjs, tools/sensitive-ticket.mjs or tools/manager-commands.mjs (read them; if one has a real gap, describe it in your final notes). Never write token-shaped literals. Tests: node:test, temp git repos, injected deps and fixed clock (no wall clock, env, TTY).\n(T-0044, R-009) scope split --ingest: use tools/acceptance-provable.mjs (pathsInAcceptanceText, allowedPathsForAcceptance, ownersOfPath, provabilityOfAcceptanceLine, filterProvableAcceptance) so ingest REFUSES a build ticket whose acceptance names files it does not write or own (message: '<id>: acceptance line N names <path>, owned by <owner or nobody>'), and copied requirement acceptance lines skip route-level checks until the integration ticket exists (mark them deferred rather than refusing). Test file tests/scope-ingest-acceptance.test.mjs.\n(T-0046, R-010) scope split --ingest: set ticket.sensitive with isSensitiveTicket(ticket, scope, reqLookup) from tools/sensitive-ticket.mjs instead of the scope-phrase match: a store-wrapper ticket that does not touch auth/customer data stays sensitive:false; a ticket writing a public API route (e.g. app/api/x/route.ts or src/routes/public/*) is sensitive:true. Owner overrides already on a ticket (risk/sensitive set by the owner) are kept. Test tests/scope-ingest-sensitive.test.mjs.\n(T-0055, R-014) scope sync --integrated: run syncCheckForTicket (tools/ticket-sync-checks.mjs) per ticket: a delete-only ticket is marked done when its declared deletes are absent (with a tickets.log transition note 'delete-only: files gone'); a rename ticket is refused (stays in review/blocked with the problem text) until the old path is gone and the new path exists; migration tickets keep the DDL-only rule. Tests tests/scope-sync-delete.test.mjs and (T-0062) tests/ticket-delete-rename-regression.test.mjs (delete-only passes once files are gone, fails while one remains; rename ok vs both-present vs neither; migration DDL vs DML).\n(Package E, roadmap T-0208 context) scope approve runs the ticket-manager scope gate: call runManagersScopeGate(root, { now }) from tools/manager-commands.mjs before writing the approval; if it returns a blocking result (read its return shape) refuse approval with its reason; a gate error is reported as a warning and does not block (log it). Injectable via deps for tests (tests/scope-approve-managers.test.mjs: blocking gate refuses; passing gate approves; throwing gate warns and approves).\n(Nit) scope approve byte-budget warning: a ticket with no lane is measured against the first lane auto-routing would use (CHEAP_LANE_ORDER[0], an in-place lane with no byte cap), not Hermes; keep the warning for tickets whose lane is set to a capped lane. Update tests/scope-split-lane-size.test.mjs for this.\nKeep these green: tests/scope-commands.test.mjs, tests/scope-ingest-paths.test.mjs, tests/scope-ingest-waves.test.mjs, tests/scope-sync-replan.test.mjs, tests/scope-split-lane-size.test.mjs, tests/batch-a-eval.test.mjs, tests/lesson-40-eval.test.mjs, tests/dogfood-fixes.test.mjs, tests/lesson-38-eval.test.mjs, tests/lessons-28-32-eval.test.mjs, tests/scope-delete-tickets.test.mjs, tests/lesson-39-integrate.test.mjs, tests/acceptance-provable.test.mjs, tests/sensitive-ticket.test.mjs. Run them plus the new tests with `node --import ./tests/_isolate-config.mjs --test ...` and `node tools/check-package.mjs`. Tests in ignoreTests (and ledger fixture JSON) use scope-commands for unrelated behavior; the coordinator runs the FULL suite (env -u CLAUDECODE npm test).",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/acceptance-provable.mjs",
+        "tools/sensitive-ticket.mjs",
+        "tools/ticket-sync-checks.mjs",
+        "tools/manager-commands.mjs",
+        "tools/tickets.mjs",
+        "tools/lane-size.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/scope-split-lane-size.test.mjs",
+        "tests/scope-sync-replan.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs"
+      ],
+      "outputs": [
+        "tools/scope-commands.mjs",
+        "tests/scope-ingest-acceptance.test.mjs",
+        "tests/scope-ingest-sensitive.test.mjs",
+        "tests/scope-sync-delete.test.mjs",
+        "tests/ticket-delete-rename-regression.test.mjs",
+        "tests/scope-approve-managers.test.mjs",
+        "tests/scope-split-lane-size.test.mjs"
+      ],
+      "timeoutMs": 3300000,
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-delete-tickets.test.mjs",
+        "tests/scope-ingest-paths.test.mjs",
+        "tests/scope-ingest-waves.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scope-ownership.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/scope-spec-gate.test.mjs",
+        "tests/scope-spec-no-runner.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/ticket-paths-regression.test.mjs",
+        "tests/tickets-delivered.test.mjs",
+        "tests/ui-check.test.mjs"
+      ]
+    }
+  ]
+}

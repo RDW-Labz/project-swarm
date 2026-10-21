@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "b2-inode-test",
+      "agent": "auto",
+      "prompt": "CI failure on ubuntu-latest node 22 only: the test treeSpend cache misses when inode changes but mtime and size stay the same (added with the cap review fix, in tests/project-cap-billed.test.mjs or tests/project-spend.test.mjs; find it) fails because it relies on the filesystem giving a rewritten file a different inode, and ext4 on the CI runner reuses it. Make the test deterministic without depending on inode allocation: inject the stat result through an existing seam in tools/project-spend.mjs if one exists, otherwise add a small optional parameter (a statFn defaulting to fs.stat) used only by tests, and have the test return the same mtime and size with two different ino and ctime values and assert the cache misses; also assert a call with identical ino, ctime, mtime and size hits the cache. Keep all other tests unchanged. Do not edit tools/swarm.mjs. ignoreTests reason: only project-spend files and its tests change.",
+      "context": [
+        "tools/project-spend.mjs",
+        "tests/project-cap-billed.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/project-spend.mjs",
+        "tests/project-cap-billed.test.mjs",
+        "tests/project-spend.test.mjs"
+      ],
+      "timeoutMs": 900000,
+      "ignoreTests": [
+        "tests/board-worktrees.test.mjs",
+        "tests/board-page.test.mjs"
+      ]
+    }
+  ]
+}

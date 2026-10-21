@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "cap-billed-fix-2",
+      "agent": "auto",
+      "prompt": "The cap message was reworded by the review fix to: project-cap: this project has been billed $B of the $C cap; list value $L across N runs is not counted, only metered lanes (names) count. In tests/board-worktrees.test.mjs the test one project cap covers the main checkout and every linked worktree still matches the old wording (been billed $5.00 (list value $5.00 across 2 runs)). Change only that assertion to match the new wording (billed $5.00 of the $4.00 cap; list value $5.00 across 2 runs is not counted) and keep the only metered lanes assertion. Write only tests/board-worktrees.test.mjs. ignoreTests reason: only this test file changes.",
+      "context": [
+        "tests/board-worktrees.test.mjs",
+        "tools/project-spend.mjs"
+      ],
+      "outputs": [
+        "tests/board-worktrees.test.mjs"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}

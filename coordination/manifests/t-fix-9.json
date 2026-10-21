@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t-fix9-approval-tests",
+      "agent": "auto",
+      "prompt": "Two tests still fail after the round 3 owner detection change. tests/daily-limit-hardening-round3.test.mjs round3 (2) tracks raises in the log per Central day and binds approval to the exact patch fails with ENOENT opening .swarm/project/daily-limit-raise-approval.json, and tests/daily-limit-hardening-round4.test.mjs round4 (4) refuses approval files with no request field fails (expected true). The production code in tools/budget-set-commands.mjs (read-only here) now reads and writes the owner approval record in its own location and shape (find the real path constant, the single-use binding to the exact requested values and the required request field) and accepts an injected owner-detection dependency. Update only these two tests so they create the approval record the way the production code expects (or call the exported helper that writes it, if one exists), and still assert: a raise beyond the per-project per-day allowance is refused for an agent session without an approval, accepted with a matching single-use approval, refused again on reuse and for different values, and an approval record without a request field is refused. Do not weaken assertions and do not change tools. ignoreTests reason: only two test files change.",
+      "context": [
+        "tools/budget-set-commands.mjs",
+        "tools/daily-limit.mjs",
+        "tests/daily-limit-hardening-round3.test.mjs",
+        "tests/daily-limit-hardening-round4.test.mjs",
+        "tests/budget-set.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/daily-limit-hardening-round3.test.mjs",
+        "tests/daily-limit-hardening-round4.test.mjs"
+      ],
+      "timeoutMs": 1200000
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "lane-idle",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "TASK (owner item: lane 'why idle'). Swarm Watch shows lane bays like 'Codex 1, Cursor 0' with no reason, even though Cursor is set up. Each bay with 0 running must show ONE short plain reason. Read-only; do NOT touch tools/swarm.mjs, tools/router.mjs, tools/lanes.mjs, package.json, CHANGELOG.md or README.md.\n\nBay names are display labels from laneLabel() in tools/board-data.mjs: Codex <- agent codex; Cursor <- cursor; Haiku/Sonnet/Opus <- anthropic or claude by model; GPU <- rented, ollama, lambda; any other agent shows as its own name. KNOWN_LANES in tools/watch-assets/board-lib.js = Haiku, Sonnet, Opus, Codex, Cursor, GPU.\n\n1) tools/board-data.mjs: export a pure function `laneIdleReasons({ running = {}, configured = {}, pauses = {}, demand = {}, caps = {}, todayUsd = {}, queued = {}, recent = {}, now = Date.now() })` returning `{ [label]: { reason, text, until } }` for every label in KNOWN set (Haiku, Sonnet, Opus, Codex, Cursor, GPU) plus every label present in any input, but ONLY for labels whose running count (running[label]) is 0. Inputs are keyed by AGENT name except `running` (by label): configured = { agent: model string } from local config lanes; pauses = lanes.json pauses { agent: { state, until(ms) } }; demand = { agent: count of jobs waiting for a slot } ; caps = { agent: dailyUsd }; todayUsd = { agent: usd today }; queued = { agent: count of queued jobs in live runs with that explicit agent, plus key 'auto' for queued auto jobs }; recent = { agent: { jobs, explicit } } jobs finished in the last 24h and how many named that agent explicitly. A label maps to its agents (Codex->[codex], Cursor->[cursor], Haiku/Sonnet/Opus->[anthropic, claude], GPU->[rented, ollama, lambda], other->[name]). First matching reason wins, checked over the label's agents:\n  a) a pause with until > now -> reason 'rate-limited' (state 'backoff') or 'paused' (state 'paused'), text 'rate limited, back in <countdown>' / 'quota paused, back in <countdown>', until = ISO;\n  b) a daily cap > 0 and todayUsd >= cap -> 'daily-cap', text 'daily cap reached ($X of $Y)', until = next UTC midnight ISO;\n  c) none of the label's agents configured -> 'not-set-up', text 'not set up (no model in local config)'; but for GPU say 'no GPU configured';\n  d) demand > 0 -> 'waiting-slot', text 'N job(s) waiting for a slot';\n  e) queued[agent] > 0 -> 'queued', text 'N queued, starting soon';\n  f) queued.auto > 0 and the label is Cursor or Codex -> 'routing', text 'N auto job(s) not routed yet';\n  g) Opus/Sonnet/Haiku whose only configured agent is claude -> 'not-routed', text 'only for expensive tier or after 2 failures'; an agent configured but not in ROUTE_ORDER (import ROUTE_ORDER from tools/router.mjs) and not hermes -> 'not-routed', text 'not in auto routing; only explicit jobs'; hermes -> 'not-routed', text 'research job type only';\n  h) otherwise 'no-ready-jobs', text 'no ready jobs'; when another label in the same set of {Codex, Cursor} ran jobs in the last 24h that were mostly explicit (explicit >= jobs/2), append '; recent jobs named <that label> explicitly' to explain why this one sat idle.\n  Countdown text: '45s', '12m', '3h 5m' (write a tiny helper).\n2) tools/board-data.mjs boardSnapshot: accept `laneState = null` (an async function returning { configured, pauses, demand, caps } read by the server) and compute machine.laneIdle = laneIdleReasons({ running: machine.agents.byLane, ...await laneState(), todayUsd: machine.cost.laneToday ?? {}, queued, recent, now }) where queued and recent are gathered from the projects' run states the snapshot already reads (queued: jobs with status 'queued' in live runs, by job.agent; recent: jobs finished in the last 24h by job.agent with explicit = the job's requested agent was not 'auto' (use job.requestedAgent ?? job.agent; if the state has no way to tell, treat agent !== 'auto' at queue time as explicit)). Without laneState, machine.laneIdle = laneIdleReasons with only running/queued/recent/todayUsd. Never throws: on any error laneIdle = {}.\n3) tools/watch-cli.mjs: pass laneState into boardSnapshot, reading: configured = Object.fromEntries of local config lanes with a string model (the same source already used for `configured` there), pauses and demand from the lanes file (lanes.json under lanesDir(env); read it the way workersHeld in board-data does, demand counted per agent from entries whose `at` is within 5 s, any read error -> {}), caps = the same dailyUsd caps object already computed there.\n4) tools/watch-assets/board.js renderBays (and the Agents tab bays if they use the same function): for an idle bay, show a small line under the lane name with class 'sub why-idle' and the reason text from m.laneIdle[lane].text (textContent only); set the bay's title attribute to the same text; when reason is 'rate-limited', 'paused' or 'daily-cap' add class 'warn' to that line. tools/watch-assets/project-live.js bays: leave unchanged.\nTests: new tests/lane-idle.test.mjs (node:test, assert/strict, pure inputs, fixed now): each reason a-h with its priority (a pause beats a cap beats not-set-up ...); a label with running > 0 gets no entry; GPU 'no GPU configured'; claude-only Opus 'only for expensive tier or after 2 failures'; Cursor idle with Codex recent 3 jobs all explicit -> text ends with 'recent jobs named Codex explicitly'; countdown formatting; boardSnapshot with an injected laneState returns machine.laneIdle with Cursor's reason and no entry for a running lane. Run `node --import ./tests/_isolate-config.mjs --test tests/lane-idle.test.mjs tests/board-page.test.mjs tests/watch-ui.test.mjs tests/board.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests use these modules for unrelated behavior; the coordinator runs the full suite after integration.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/router.mjs",
+        "tools/lanes.mjs",
+        "tools/watch-assets/board-lib.js",
+        "tests/board-page.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/board.test.mjs"
+      ],
+      "outputs": [
+        "tools/board-data.mjs",
+        "tools/watch-cli.mjs",
+        "tools/watch-assets/board.js",
+        "tests/lane-idle.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/gallery-tickets.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs"
+      ]
+    }
+  ]
+}

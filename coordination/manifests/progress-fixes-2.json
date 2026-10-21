@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "progress-fixes-2",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "OWNER TEST RESULTS for the Build progress view (tools/build-progress.mjs, rendered by tools/watch-assets/project.js and the card line in tools/watch-assets/board.js; data from tools/board-data.mjs). Fix all seven. Read-only toward projects; do NOT touch tools/swarm.mjs, package.json, CHANGELOG.md or README.md.\n\n1) Main % = tickets done / tickets total, where total excludes cancelled, proposed and human tickets (human tickets are the owner checklist per roadmap R-015). percent.overall becomes this ticket %; requirements % stays as a secondary field (percent.requirements) and the UI shows it second ('42% \u00b7 requirements 30%').\n2) Requirement coverage: normalize every ticket's requirement links by extracting all /R-\\d{3,}/ ids from scopeRefs entries (strings may be 'R-001', 'R-001 text', lowercase 'r-001' -> uppercase), and also from ticket.requirement / ticket.requirements if present. A requirement is covered when it has at least one non-human, non-cancelled, non-proposed ticket and all of those are done.\n3) Milestones per scope, not repo-wide: PR open / Merged count only history pr/merge events that are linked to THIS scope: (a) event.run is the id of a run whose state jobs include a job whose id or ticket field equals a ledger ticket id, or whose state.ticketIds/state.tickets list includes one; or (b) event.ref (#N) equals a ledger ticket's pr field (number or '#N' or URL ending /pull/N); and in both cases event.at >= ledger.approved.at when approved. Current step = the LATEST milestone reached (the furthest 'done' one in order) is marked state 'current' (with done styling plus emphasis in the UI); everything after it is 'todo'; when nothing is done the first is current. Deployed keeps its own rules (unknown stays unknown and never becomes current).\n4) Stage mapping bug: on project-swarm all 37 done tickets show under the last stage 'Managers, first versions'. Fix the ticket -> stage mapping: build requirementStage from the scope (requirement id -> stage id); a ticket's effective stage = its own stage when it is a scope stage id AND agrees with the stage of its requirement links; else the earliest stage among its linked requirements; else its own stage string; else 'none'. Count stage rows by effective stage. Add a test reproducing the reported symptom (tickets carrying a wrong/last stage but scopeRefs in earlier stages land in their requirements' stages).\n5) ETA null: when tickets.log has fewer than 2 done times, fall back to other completion evidence: run state jobs whose id or ticket equals a done ticket id (use job.finishedAt), then linked merge history events (rule 3) mapped to their tickets; dedupe per ticket, keep the earliest evidence; then apply the existing 14/30/all-time widening; basis says the source ('from run finish times' when the fallback was used). Also guard perDay: if it rounds to 0, compute days from the unrounded rate and never return Infinity/NaN (cap days at 3650).\n   'Stale (48 s)': the project page goes stale. In tools/watch-assets/project.js wrap each panel renderer (spend, progress, split, bench, handled, tickets, runs, lessons) in its own try/catch so one throwing panel never aborts render() (show 'This panel failed to render.' in that panel and console.error once); make sure the page's live/stale chip is updated on every successful /api/project or /api/live response even if a panel throws (find how the chip and LIVE_MS/liveness work in tools/watch-assets/board-lib.js and tools/watch-assets/project-live.js and fix the path that leaves it stale). Explain the root cause in your final notes.\n6) Stage display names, not raw ids: every place that shows a stage (progress stage rows, the card's 'stage S1' tag via ticketsOf in board-data, left.human items) shows the scope title (e.g. 'Managers, first versions'); ids not in the scope show 'Stage N' for S<N> (e.g. 'S0' -> 'Stage 0') and 'No stage' for none. Keep the raw id in a separate field (stageId) for tests.\n7) Off-ledger work: runs in the project's .swarm/runs (both the card root and the chosen ledger root) started in the last 14 days whose jobs map to no ledger ticket id are 'off-ledger work'. buildProgress returns offLedger: { runs: [{ runId, startedAt, status, jobs, done, costUsd, prs: ['#N' from history events whose run equals runId] }], count }. The project page shows an 'Off-ledger work' block (runs newest first with their PRs) and the card line adds ' \u00b7 N off-ledger runs' when N > 0.\nTests: extend tests/build-progress-roadmap.test.mjs (real docs/scope/roadmap.md as the scope fixture; the owner will add the real ledgers later) with: main % excludes cancelled/proposed/human; coverage with messy scopeRefs ('r-007 tickets sized'); a scope's PR milestone ignores a repo PR not linked to its tickets and counts a linked one only after approval; current = latest reached; the stage-mapping repro (wrong last stage -> requirement stage), display names incl. 'Stage 0'; ETA from run finish times when tickets.log is empty, and the perDay-rounds-to-0 guard; off-ledger runs listed with their PR refs. Keep tests/build-progress.test.mjs and tests/board-page.test.mjs green (update expectations only where these rules change them). Run `node --import ./tests/_isolate-config.mjs --test tests/build-progress-roadmap.test.mjs tests/build-progress.test.mjs tests/board-page.test.mjs tests/board-worktrees.test.mjs tests/board-nav.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests use these files for unrelated behavior; the coordinator runs the full suite after integration.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "docs/scope/roadmap.md",
+        "tools/tickets.mjs",
+        "tools/scope.mjs",
+        "tools/client-report.mjs",
+        "tools/history.mjs",
+        "tools/watch-assets/board-lib.js",
+        "tools/watch-assets/project-live.js",
+        "tools/watch-assets/project.html",
+        "tests/board-worktrees.test.mjs",
+        "tests/board-nav.test.mjs"
+      ],
+      "outputs": [
+        "tools/build-progress.mjs",
+        "tools/board-data.mjs",
+        "tools/watch-assets/project.js",
+        "tools/watch-assets/board.js",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/board-page.test.mjs"
+      ],
+      "timeoutMs": 3300000,
+      "ignoreTests": [
+        "tests/autopilot-lock.test.mjs",
+        "tests/bench-replay.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-peers.test.mjs",
+        "tests/board.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/completion.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10b-cli.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}

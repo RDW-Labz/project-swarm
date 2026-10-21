@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t-fix-tests",
+      "agent": "auto",
+      "prompt": "Nine tests fail in the full suite after the daily limit is enforced on every paid launch (reserveSpend now resolves the effective daily limit itself, default 5 USD billed per project, stop mode). Fix the TESTS and the command metadata, not the enforcement. (1) tests/completion.test.mjs \"command metadata covers the Usage line without duplicates\" fails with Missing policy: add the new commands (policy with verbs init, show, validate, path, check, run; budget with verbs set and show, if budget is a new top-level command in the Usage line) to the command metadata in tools/watch-command-meta.mjs and tools/completion.mjs as the existing entries are written. (2) The other eight tests (tests/lanes-run.test.mjs \"500 API jobs respect lane caps, retry 429s...\", tests/rented-run.test.mjs two tests, tests/spend-run.test.mjs three tests, tests/spend.test.mjs two tests) exercise machine-wide lane caps and spend with fixture jobs that cost more than the new default 5 USD daily limit, so the new limit stops them first. Make the test isolation give every test a machine config whose daily limit is effectively unlimited by default: in tests/_isolate-config.mjs write the isolated config file (SWARM_CONFIG) with the machine daily limit keys that tools/daily-limit.mjs resolveDailyLimit reads (dailyLimitUsd 1000000, dailyLimitMode notify, a hardCeilingUsd far above it), merged with anything already in that file. Tests that test the limit itself (tests/daily-limit*.test.mjs, tests/budget-set.test.mjs, tests/policy*.test.mjs) set their own settings explicitly and must keep passing, so make sure they override the isolated default (verify by reading how they set it). If a failing test still fails, change only that test to set its own explicit limit and say why in a comment. Do not weaken any assertion. Do not edit tools/swarm.mjs, tools/spend.mjs, tools/daily-limit.mjs. No token-shaped literals. ignoreTests reason: only the named files change and the full suite is run before merge.",
+      "context": [
+        "tools/watch-command-meta.mjs",
+        "tools/completion.mjs",
+        "tools/daily-limit.mjs",
+        "tools/spend.mjs",
+        "tests/_isolate-config.mjs",
+        "tests/completion.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/rented-run.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tests/spend.test.mjs",
+        "tests/daily-limit-hardening.test.mjs",
+        "tests/daily-limit-admission.test.mjs"
+      ],
+      "outputs": [
+        "tools/watch-command-meta.mjs",
+        "tools/completion.mjs",
+        "tests/_isolate-config.mjs",
+        "tests/completion.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/rented-run.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tests/spend.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/watch-review-fixes.test.mjs",
+        "tests/installed-swarm.test.mjs"
+      ]
+    }
+  ]
+}

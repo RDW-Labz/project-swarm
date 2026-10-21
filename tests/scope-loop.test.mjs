@@ -213,7 +213,7 @@ test('CLI: go --scope on an approved ledger with the project cap reached starts 
   await fs.mkdir(path.join(root, ws, 'docs/scope/split'), { recursive: true });
   await fs.writeFile(path.join(root, ws, 'docs/scope/split/S1.json'), JSON.stringify([item('mod'), { ...item('mount'), integration: true, files: ['src/routes/m.mjs'], tests: ['tests/m.test.mjs'], dependsOn: ['mod'] }]));
   await fs.mkdir(path.join(root, '.swarm/runs/r1'), { recursive: true });
-  await fs.writeFile(path.join(root, '.swarm/runs/r1/state.json'), JSON.stringify({ id: 'r1', status: 'complete', jobs: [{ id: 'split-S1', status: 'complete', workspace: ws, costUsd: 9 }] }));
+  await fs.writeFile(path.join(root, '.swarm/runs/r1/state.json'), JSON.stringify({ id: 'r1', status: 'complete', jobs: [{ id: 'split-S1', agent: 'anthropic', status: 'complete', workspace: ws, costUsd: 9 }] }));
   const split = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
   assert.equal(split.exitCode, 0, split.stdout);
   await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, acceptance: { enforce: false }, protectedPaths: [], budget: { maxUsd: 5, projectMaxUsd: 1 } } }));
