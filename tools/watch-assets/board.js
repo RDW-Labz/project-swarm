@@ -259,9 +259,11 @@ function progressLine(p) {
   var value = typeof progress.overall === 'number' ? progress.overall : 0;
   var label = progress.finished ? 'Finished' : (progress.overall === null || progress.overall === undefined ? 'Unknown' : String(progress.overall) + '%');
   var eta = progress.eta === null || progress.eta === undefined ? '' : ' · ETA ' + progress.eta + 'd';
+  var offLedger = typeof progress.offLedger === 'number' ? progress.offLedger : progress.offLedger && progress.offLedger.count || 0;
+  var offLedgerText = offLedger > 0 ? ' · ' + offLedger + ' off-ledger run' + (offLedger === 1 ? '' : 's') : '';
   var line = el('div', 'sub progress-line');
   line.appendChild(meter(value));
-  line.appendChild(el('span', '', label + ' · ' + (progress.current || 'Unknown') + eta));
+  line.appendChild(el('span', '', label + ' · ' + (progress.current || 'Unknown') + eta + offLedgerText));
   return line;
 }
 function splitLine(p) {

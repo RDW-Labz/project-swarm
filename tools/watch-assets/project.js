@@ -24,6 +24,13 @@
     return box;
   }
 
+  var panelErrors = Object.create(null);
+  function failedPanel(id, error) {
+    var host = $(id); host.textContent = ''; host.appendChild(el('div', 'board-empty', 'This panel failed to render.'));
+    if (!panelErrors[id]) { panelErrors[id] = true; console.error('Swarm Watch panel failed to render:', id, error); }
+  }
+  function panel(id, fn) { try { fn(); } catch (error) { failedPanel(id, error); } }
+
   function renderProgress(progress) {
     var host = $('progressBody'); host.textContent = '';
     if (!progress) { host.appendChild(el('div', 'board-empty', 'Build progress unavailable.')); return; }
@@ -32,12 +39,13 @@
     var requirements = progress.percent && progress.percent.requirements;
     var headline = el('div', 'livebar'); headline.appendChild(meter(overall));
     headline.appendChild(el('strong', 'big num', overall === null || overall === undefined ? 'Unknown' : String(overall) + '%'));
-    headline.appendChild(el('span', 'sub', 'tickets ' + tickets.done + '/' + tickets.total + ', requirements ' + (requirements ? requirements.covered + '/' + requirements.total : '—')));
+    headline.appendChild(el('span', 'sub', 'tickets ' + tickets.done + '/' + tickets.total + ' · requirements ' + (requirements && typeof requirements.pct === 'number' ? requirements.pct + '%' : '—')));
     host.appendChild(headline);
 
     var milestones = el('ol', 'milestones');
     (progress.milestones || []).forEach(function (item) {
-      var li = el('li', item.state, item.label); var title = [item.evidence, item.at].filter(Boolean).join(' · '); if (title) { li.setAttribute('title', title); } if (item.state === 'current') { li.setAttribute('aria-current', 'step'); } milestones.appendChild(li);
+      var classes = item.state + (item.state === 'current' && item.currentDone ? ' done' : '');
+      var li = el('li', classes, item.label); var title = [item.evidence, item.at].filter(Boolean).join(' · '); if (title) { li.setAttribute('title', title); } if (item.state === 'current') { li.setAttribute('aria-current', 'step'); } milestones.appendChild(li);
     });
     host.appendChild(milestones);
 
@@ -154,24 +162,18 @@
     if (benchmarks.skipped && benchmarks.skipped.length) { host.appendChild(el('div', 'board-note', benchmarks.skipped.length + ' scorecard file' + (benchmarks.skipped.length === 1 ? '' : 's') + ' skipped.')); }
   }
 
-  function render(p) {
-    $('title').textContent = p.name;
-    $('crumbProject').textContent = p.name;
-    $('root').textContent = p.root;
+  function renderSpend(p) {
     var s = $('spend'); s.textContent = '';
     [['Billed today', usd(p.spend.todayUsd)], ['Billed, 7 days', usd(p.spend.weekUsd)], ['Billed, all time', usd(p.spend.billedUsd ?? p.spend.paidUsd)], ['List value, all time (not billed)', usd(p.spend.listUsd ?? p.spend.flatRateListUsd)]].forEach(function (pair) {
       var tile = el('div', 'tile'); tile.appendChild(el('div', 'label', pair[0])); tile.appendChild(el('div', 'big num', pair[1])); s.appendChild(tile);
     });
     var lanes = Object.keys(p.spend.byLane).sort();
     var byLane = el('div', 'tile'); byLane.appendChild(el('div', 'label', 'By lane (billed + list value)')); byLane.appendChild(el('div', 'sub', lanes.length ? lanes.map(function (k) { return k + ' ' + usd(p.spend.byLane[k]); }).join(', ') : 'none')); s.appendChild(byLane);
+  }
 
-    renderProgress(p.progress);
-    renderSplit(p.splitQuality);
-    renderHandled(p.handled);
-    renderBench(p.benchmarks);
-
+  function renderTickets(p) {
     var t = $('tickets'); t.textContent = '';
-    var counts = p.ticketCounts.byStatus; 
+    var counts = p.ticketCounts.byStatus;
     t.appendChild(el('div', 'board-note', Object.keys(counts).sort().map(function (k) { return k + ' ' + counts[k]; }).join(', ') || 'No ticket ledger.'));
     ['blocked', 'running', 'review', 'ready', 'todo', 'proposed', 'done'].forEach(function (status) {
       var list = p.tickets.filter(function (x) { return x.status === status; });
@@ -182,7 +184,9 @@
       list.slice(0, 200).forEach(function (x) { body.appendChild(el('div', 'board-entry', x.id + '  ' + (x.stage || '') + '  ' + (x.risk || '') + '  ' + x.title)); });
       d.appendChild(body); t.appendChild(d);
     });
+  }
 
+  function renderRuns(p) {
     var r = $('runs'); r.textContent = '';
     if (!p.runs.length) { r.appendChild(el('div', 'board-empty', 'No runs yet.')); }
     p.runs.slice(0, 100).forEach(function (run) {
@@ -192,16 +196,66 @@
       a.appendChild(el('span', 'num mono', usd(run.costUsd))); a.appendChild(el('span', 'mono', when(run.startedAt)));
       r.appendChild(a);
     });
+    var off = p.offLedger;
+    if (off && off.count) {
+      r.appendChild(el('div', 'label', 'Off-ledger work'));
+      off.runs.forEach(function (run) {
+        var prs = run.prs && run.prs.length ? ' · ' + run.prs.join(', ') : '';
+        r.appendChild(el('div', 'board-entry', run.runId + ' · ' + run.status + ' · ' + run.done + '/' + run.jobs + ' jobs' + prs));
+      });
+    }
+  }
 
+  function renderLessons(p) {
     var l = $('lessons'); l.textContent = '';
     if (!p.lessons.length) { l.appendChild(el('div', 'board-empty', 'No lessons recorded here.')); }
     p.lessons.forEach(function (x) { l.appendChild(el('div', 'board-entry', x.id + '  ' + (x.stage || '') + '  ' + (x.what || ''))); });
   }
 
+  function markProjectResponse() {
+    window.__swarmProjectOkAt = Date.now();
+    var dot = $('liveDot'), label = $('liveText');
+    if (dot && label) { dot.className = 'dot'; label.textContent = 'Live'; }
+  }
+
+  // Both project requests share the page chip. Mark successful responses before their
+  // JSON/render continuations, so a renderer exception cannot make a good response stale.
+  if (!window.__swarmProjectFetchWrapped) {
+    var projectFetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+      var url = typeof input === 'string' ? input : input && input.url || '';
+      return projectFetch(input, init).then(function (response) {
+        if (response.ok && (url.indexOf('/api/project') >= 0 || url.indexOf('/api/live') >= 0)) markProjectResponse();
+        return response;
+      });
+    };
+    window.__swarmProjectFetchWrapped = true;
+  }
+  setInterval(function () {
+    var at = Number(window.__swarmProjectOkAt) || 0;
+    var live = window.BoardLib && window.BoardLib.liveness ? window.BoardLib.liveness(at, Date.now()) : { state: at ? 'live' : 'stale', ageS: null };
+    var dot = $('liveDot'), label = $('liveText');
+    if (dot && label) { dot.className = 'dot' + (live.state === 'live' ? '' : ' off'); label.textContent = live.state === 'live' ? 'Live' : at ? 'Stale (' + live.ageS + ' s)' : 'connecting'; }
+  }, 250);
+
+  function render(p) {
+    $('title').textContent = p.name;
+    $('crumbProject').textContent = p.name;
+    $('root').textContent = p.root;
+    panel('spend', function () { renderSpend(p); });
+    panel('progressBody', function () { renderProgress(p.progress); });
+    panel('splitBody', function () { renderSplit(p.splitQuality); });
+    panel('benchBody', function () { renderBench(p.benchmarks); });
+    panel('handledBody', function () { renderHandled(p.handled); });
+    panel('tickets', function () { renderTickets(p); });
+    panel('runs', function () { renderRuns(p); });
+    panel('lessons', function () { renderLessons(p); });
+  }
+
   function load() {
     fetch('/api/project?id=' + encodeURIComponent(ID) + '&t=' + T, { headers: { 'x-watch-token': TOKEN } })
       .then(function (res) { return res.ok ? res.json() : null; })
-      .then(function (p) { if (p) { render(p); } else { $('title').textContent = 'Unknown project'; } })
+      .then(function (p) { if (p) { markProjectResponse(); render(p); } else { $('title').textContent = 'Unknown project'; } })
       .catch(function () {});
   }
   load();
