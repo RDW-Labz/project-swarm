@@ -10,6 +10,7 @@ import {
   runBuiltinManager,
 } from './managers/registry.mjs';
 import { isBudgetLaneManagerId } from './managers/register/budget-lane.mjs';
+import { ticketUnblockBuiltinManagerIds } from './managers/register/ticket-unblock.mjs';
 import { MANAGER_REPLAY_CLI_IDS, normalizeReplayManagerId } from './managers/replay.mjs';
 import { runManagerReplayWithScorecard } from './managers/scorecard.mjs';
 
@@ -86,10 +87,30 @@ const createManagerLoaders = new Map();
 const createManagerFns = new Map();
 
 /** @type {Set<ManagerId>} */
-const budgetLaneRunRegistered = new Set();
+const cliManagerRunRegistered = new Set();
 
 /** @type {Map<ManagerId, Promise<import('./managers/registry.mjs').BuiltinManagerRun>>} */
 const runBuiltinManagerLoaders = new Map();
+
+/**
+ * @param {ManagerId} managerId
+ * @returns {boolean}
+ */
+function isCliRunnableManagerId(managerId) {
+  if (isBudgetLaneManagerId(managerId)) return true;
+  return ticketUnblockBuiltinManagerIds.includes(managerId);
+}
+
+/**
+ * Default orchestrator trigger when `swarm managers run` omits `--trigger`.
+ *
+ * @param {ManagerId} managerId
+ * @returns {import('./contracts/managers.json').components.schemas.ManagerTrigger}
+ */
+function defaultManagerRunTrigger(managerId) {
+  if (managerId === 'unblocker') return 'wave';
+  return 'scope';
+}
 
 /**
  * @param {ManagerId} managerId
@@ -127,15 +148,15 @@ export function createBuiltinManagerForReplay(options) {
 }
 
 /**
- * Wire budget and lane-health orchestrator run entry points when `swarm managers run` is used (T-0198).
+ * Wire built-in orchestrator run entry points for `swarm managers run` (T-0198, T-0208).
  *
  * @param {ManagerId} managerId
  */
-async function ensureBudgetLaneManagerRunRegistered(managerId) {
-  if (!isBudgetLaneManagerId(managerId)) {
+async function ensureCliManagerRunRegistered(managerId) {
+  if (!isCliRunnableManagerId(managerId)) {
     throw new Error(`manager-run-unsupported: ${managerId}`);
   }
-  if (budgetLaneRunRegistered.has(managerId)) return;
+  if (cliManagerRunRegistered.has(managerId)) return;
 
   let pending = runBuiltinManagerLoaders.get(managerId);
   if (!pending) {
@@ -145,12 +166,48 @@ async function ensureBudgetLaneManagerRunRegistered(managerId) {
       const runFn = mod.runBuiltinManager ?? mod.run;
       if (typeof runFn !== 'function') throw new Error(`manager-run-missing: ${managerId}`);
       registerBuiltinManagerRun(managerId, (options) => runFn(options));
-      budgetLaneRunRegistered.add(managerId);
+      cliManagerRunRegistered.add(managerId);
       return runFn;
     });
     runBuiltinManagerLoaders.set(managerId, pending);
   }
   await pending;
+}
+
+/**
+ * Scope-time hook: ticket-manager gates scope approve (R-036).
+ *
+ * @param {string} root
+ * @param {{ journal?: import('./managers/journal.mjs').ManagerJournalLine, now?: () => number }} [options]
+ */
+export async function runManagersScopeGate(root, options = {}) {
+  await ensureCliManagerRunRegistered('ticket-manager');
+  const modeSettings = createManagerActionModeSettings();
+  return runBuiltinManager('ticket-manager', {
+    root,
+    modeSettings,
+    trigger: 'scope',
+    journal: options.journal ?? appendManagerJournalLine,
+    now: options.now,
+  });
+}
+
+/**
+ * Post-wave hook: unblocker runs after each orchestrator wave (R-013 / T-0208).
+ *
+ * @param {string} root
+ * @param {{ journal?: import('./managers/journal.mjs').ManagerJournalLine, now?: () => number }} [options]
+ */
+export async function runManagersAfterWave(root, options = {}) {
+  await ensureCliManagerRunRegistered('unblocker');
+  const modeSettings = createManagerActionModeSettings();
+  return runBuiltinManager('unblocker', {
+    root,
+    modeSettings,
+    trigger: 'wave',
+    journal: options.journal ?? appendManagerJournalLine,
+    now: options.now,
+  });
 }
 
 /**
@@ -255,7 +312,7 @@ async function managersRun(root, runArgs, opts = {}) {
     return bad(String(error.message ?? error));
   }
 
-  const triggerRaw = String(opts.trigger ?? 'scope').trim();
+  const triggerRaw = String(opts.trigger ?? defaultManagerRunTrigger(managerId)).trim();
   if (!MANAGER_TRIGGERS.has(triggerRaw)) {
     return bad(`unknown trigger: ${triggerRaw}`);
   }
@@ -264,7 +321,7 @@ async function managersRun(root, runArgs, opts = {}) {
   );
 
   try {
-    await ensureBudgetLaneManagerRunRegistered(managerId);
+    await ensureCliManagerRunRegistered(managerId);
     const modeSettings = createManagerActionModeSettings();
     const { run, report } = await runBuiltinManager(managerId, {
       root,
