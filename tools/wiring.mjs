@@ -108,6 +108,7 @@ export function unwiredRequirements(tickets) {
 export function orderTestsAfterBuild(added, existing = []) {
   const all = [...existing, ...added];
   const notes = [];
+  const removedByTicket = new Map();
   const byId = id => all.find(x => x.id === id) ?? { id };
   const reaches = (from, target, seen = new Set()) => {
     if (seen.has(from.id)) return false;
@@ -121,7 +122,16 @@ export function orderTestsAfterBuild(added, existing = []) {
     const prerequisites = req => [...moduleTickets(all, req), ...all.filter(x => x.type === 'migration' && x.status !== 'cancelled' && (x.scopeRefs ?? []).includes(req))];
     const modules = [...new Set((t.scopeRefs ?? []).flatMap(prerequisites))].filter(m => m.id !== t.id && newIds.has(m.id));
     const flipped = [], waits = [];
-    for (const m of modules) if ((m.dependsOn ?? []).includes(t.id)) { m.dependsOn = m.dependsOn.filter(d => d !== t.id); flipped.push(m.id); }
+    for (const m of modules) if ((m.dependsOn ?? []).includes(t.id)) {
+      m.dependsOn = m.dependsOn.filter(d => d !== t.id);
+      flipped.push(m.id);
+      const ownedTestFiles = new Set(Array.isArray(m.tests) ? m.tests : []);
+      const testFiles = new Set([...(t.files ?? []), ...(t.tests ?? [])]);
+      if (m.type === 'build' && ownedTestFiles.size && [...ownedTestFiles].some(file => testFiles.has(file))) {
+        const prior = removedByTicket.get(m.id) ?? [];
+        removedByTicket.set(m.id, [...prior, t.id]);
+      }
+    }
     const indirect = [];
     for (const m of modules) {
       if (reaches(m, t.id)) { indirect.push(m.id); continue; }
@@ -130,5 +140,6 @@ export function orderTestsAfterBuild(added, existing = []) {
     if (indirect.length) notes.push(`${t.id}: ${indirect.join(', ')} waits for this test through other tickets, so the test could not be ordered after it; check that order`);
     if (waits.length) notes.push(`${t.id}: test ticket now waits for ${waits.join(', ')} (a test runs after the module it tests)${flipped.length ? `; ${flipped.join(', ')} no longer waits for it` : ''}`);
   }
+  for (const [ticketId, testIds] of removedByTicket) notes.push(`${ticketId}: owns its tests; no longer waits on ${testIds.join(', ')}`);
   return notes;
 }
