@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "verify-local",
+      "agent": "auto",
+      "prompt": "Add a local verify mode that needs no model. Read tools/verify-config.mjs first: today verify.agent must be codex, claude or none, so any ticket whose verify step uses an agent forces the build onto the lanes that can verify. New mode: verify.agent may also be local, meaning the swarm itself runs the ticket's test command (no agent, no tokens) after integrating the job's output in a scratch worktree, so any lane (Cursor, Hermes) can build tested tickets and the gate stays. In tools/verify-config.mjs accept agent local, require a command field for it (a non-empty argv array of strings with no shell metacharacter strings in the program name; an optional timeoutMs integer between 1000 and 1800000, default 600000), keep every existing validation, and make the error text say verify.agent must be codex, claude, local or none. Create tools/verify-local.mjs (SPDX header, ES module) exporting async runLocalVerify({worktree, command, timeoutMs, spawnImpl, now, env}) which runs the command argv with the worktree as the working directory using node:child_process spawn (injectable), kills it on timeout, and returns {status: 'pass' when exit code is 0, 'fail' when it exits non-zero, 'error' when it could not start or timed out, exitCode, durationMs, tail: the last 4000 characters of combined stdout and stderr with anything that looks like a secret masked (reuse an existing mask function from the repo if there is one, search tools for mask or redact)}, and prepareScratchVerify({root, outputs, integrateIntoScratch, runLocal}) which calls the injected integrateIntoScratch(outputs) to get a scratch worktree path (the caller supplies the integration, this module does not touch the real project), runs runLocalVerify there, always calls the returned cleanup if present, and returns the verify result shape {verify: {status, mode: 'local', exitCode, durationMs, tail}} in the same shape tools/verify-orb.mjs uses for its result so the gate can treat it the same way. No wiring into swarm.mjs yet. Tests in tests/verify-local.test.mjs (node:test, strict assert, fake spawn): config accepts local with a command and refuses local without a command, with an empty argv, with a non-array command, and refuses an unknown agent with the new message; runLocalVerify returns pass on exit 0, fail on exit 1 with the tail, error on spawn failure, error on timeout (fake timers or a fake spawn that never exits and a tiny timeout), masks a token-looking string in the tail; prepareScratchVerify cleans up on pass and on fail and returns the verify shape. Write only tools/verify-config.mjs, tools/verify-local.mjs and tests/verify-local.test.mjs. IMPORTANT: the repository security gate refuses any test file that contains a literal string that looks like a secret or a JSON Web Token. In the test that checks masking, never write a token-looking literal: build the fake secret at run time from harmless pieces (for example join an array of short strings such as ['sk', 'test', 'abc123'] with dashes, or repeat a letter), and assert on the masked output only. Check the finished test file for any long random-looking literal before you finish.",
+      "context": [
+        "tools/verify-config.mjs",
+        "tools/verify-orb.mjs",
+        "tools/security-gate.mjs"
+      ],
+      "outputs": [
+        "tools/verify-config.mjs",
+        "tools/verify-local.mjs",
+        "tests/verify-local.test.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/verify-config.test.mjs"
+      ]
+    }
+  ]
+}
