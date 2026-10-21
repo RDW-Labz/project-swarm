@@ -12,7 +12,7 @@ import { execFileSync } from 'node:child_process';
 import { analyzeShell, writesAnything, TOOL_DIRS, tokenize, isReadOnlyGitSub } from './shell-writes.mjs';
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 import { swarmProducedFiles, isSwarmProducedContent } from './swarm-produced.mjs';
-import { isSelfApprovalCommand, SELF_APPROVAL_REASON } from './self-approval.mjs';
+import { isSelfApprovalCommand, SELF_APPROVAL_REASON, handbuildShellPolicy, HANDBUILD_SELF_APPROVAL_RULE_ID } from './self-approval.mjs';
 export const SCRATCH_DENY_REASON = 'scratch project';
 
 export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D', 'gh']);
@@ -1258,7 +1258,17 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
     const current = branchOfFn(root);
     const protBranch = isProtectedBranch(current);
-    if (isSelfApprovalCommand(ti.command)) return { allow: false, files: [], reason: SELF_APPROVAL_REASON };
+    const handbuildPol = handbuildShellPolicy(ti.command);
+    if (handbuildPol.applies && !handbuildPol.allow) {
+      return { allow: false, files: [], reason: handbuildPol.reason, ruleId: handbuildPol.ruleId };
+    }
+    if (handbuildPol.applies && handbuildPol.allow
+      && !a.writes.length && !a.git.length && !a.inline && !a.protectedOutside.length && !(a.outsideDeletes?.length)) {
+      return { allow: true };
+    }
+    if (!handbuildPol.applies && isSelfApprovalCommand(ti.command)) {
+      return { allow: false, files: [], reason: SELF_APPROVAL_REASON, ruleId: HANDBUILD_SELF_APPROVAL_RULE_ID };
+    }
     const transcriptHits = bashTranscriptWrites(ti.command, h);
     if (transcriptHits.length) return { allow: false, files: [], reason: `Hand-build guard: ${transcriptHits[0]} belongs to the owner (session transcripts under .claude/projects); no approval covers it.` };
     if (a.protectedOutside.length) return { allow: false, files: [], reason: `Hand-build guard: ${a.protectedOutside.join(', ')} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };

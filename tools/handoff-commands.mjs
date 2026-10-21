@@ -40,7 +40,7 @@ export function realDeps() {
 
 async function profileOf(root) {
   let pointer = null;
-  try { pointer = JSON.parse(await fs.readFile(path.join(root, '.project-swarm.json'), 'utf8')); } catch { /* no profile */ }
+  try { const { readRunnerPointer } = await import('./runner-pointer.mjs'); pointer = await readRunnerPointer(root); } catch { /* no profile */ }
   if (pointer?.profile?.handoff === undefined) return { config: {} };
   const checked = validateHandoffConfig(pointer.profile.handoff);
   return checked.ok ? { config: checked.config } : { error: `the handoff block of the profile is invalid: ${checked.errors[0]}` };

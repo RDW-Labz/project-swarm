@@ -37,7 +37,9 @@ process.stdin.on('end', () => {
     logAction(root, { event: 'blocked', by: 'guard', tool, files: decision.files, reason: decision.reason.slice(0, 200) });
     const event = buildEvent('blocked', input, { root, analyze: analyzeShell });
     if (event) appendEvent(root, event);
-    process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: decision.reason } })}\n`);
+    const hookOut = { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: decision.reason };
+    if (decision.ruleId) hookOut.ruleId = decision.ruleId;
+    process.stdout.write(`${JSON.stringify({ hookSpecificOutput: hookOut })}\n`);
   } catch { /* fail open */ }
   process.exit(0);
 });

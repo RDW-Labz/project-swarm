@@ -203,7 +203,7 @@ async function writeAgentPointer(root,relative,template,installRoot){
  if(after!==before)await fs.writeFile(await safeTarget(root,relative),after);
 }
 
-async function ensureSwarmIgnore(root){
+export async function ensureSwarmIgnore(root){
  const destination=await safeTarget(root,'.gitignore');
  const before=await readOptional(destination);
  const lines=before.split(/\r?\n/).map(line=>line.trim());
@@ -365,25 +365,17 @@ export async function patchPointer(root,patch){
  throw Error(`no .project-swarm.json in ${root}`);
 }
 
+// Release fields (version, install path used by the runner) live in git-ignored .swarm/runner-pointer.json so `swarm update` never dirties the tracked profile file.
 export async function writePointer(root,{install,version}){
+ const {readRunnerPointer,bootstrapProjectPointer,writeReleasePointer}=await import('./runner-pointer.mjs');
  const destination=await safeTarget(root,'.project-swarm.json');
- let before=null,existing={};
+ let before=null;
  try{before=await fs.readFile(destination,'utf8');}catch(error){if(error.code!=='ENOENT')throw error;}
- if(before!==null){
-  try{existing=JSON.parse(before);}catch{throw Error(`.project-swarm.json in ${root} is not valid JSON; fix it by hand (a backup was not needed, nothing was changed)`);}
-  if(!existing||typeof existing!=='object'||Array.isArray(existing))throw Error(`.project-swarm.json in ${root} is not a JSON object; fix it by hand (nothing was changed)`);
-  if(existing.install===install&&existing.version===version)return {changed:false,backup:null};
-  const backup=`${destination}.bak-${Date.now()}-${nodeCrypto.randomBytes(3).toString('hex')}`;
-  await fs.writeFile(backup,before,{flag:'wx',mode:0o600});
-  const temp=`${destination}.tmp-${process.pid}-${Date.now()}`;
-  await fs.writeFile(temp,`${JSON.stringify({...existing,install,version},null,2)}\n`);
-  await fs.rename(temp,destination);
-  return {changed:true,backup};
- }
- const temp=`${destination}.tmp-${process.pid}-${Date.now()}`;
- await fs.writeFile(temp,`${JSON.stringify({install,version},null,2)}\n`);
- await fs.rename(temp,destination);
- return {changed:true,backup:null};
+ if(before===null)return bootstrapProjectPointer(root,{install,version});
+ try{JSON.parse(before);}catch{throw Error(`.project-swarm.json in ${root} is not valid JSON; fix it by hand (a backup was not needed, nothing was changed)`);}
+ const merged=await readRunnerPointer(root);
+ if(merged.install===install&&merged.version===version)return {changed:false,backup:null};
+ return writeReleasePointer(root,{install,version});
 }
 
 // Links one project to a shared install instead of copying the runner into it. The project

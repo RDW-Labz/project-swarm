@@ -120,7 +120,7 @@ export async function updateProjects(root,{projects,yes=false}={}){
     let project;
     try{project=await fs.realpath(projectDir);}catch{reports.push({project:projectDir,found:[],action:'missing'});continue;}
     let pointer=null;
-    try{pointer=JSON.parse(await fs.readFile(path.join(project,'.project-swarm.json'),'utf8'));}catch{pointer=null;}
+    try{const {readRunnerPointer}=await import('../runner-pointer.mjs');pointer=await readRunnerPointer(project);}catch{pointer=null;}
     if(pointer&&isPinned(pointer)){
       const at=pinOf(pointer);
       pinned.push({project,found:[],action:'pinned',pinnedAt:at});
@@ -174,7 +174,7 @@ export async function bumpPointers(root){
     try{project=await fs.realpath(projectDir);}catch{continue;}
     if(project===root)continue;
     let pointer;
-    try{pointer=JSON.parse(await fs.readFile(path.join(project,'.project-swarm.json'),'utf8'));}catch(error){if(error.code==='ENOENT')continue;failed.push({project,error:'the pointer file is not valid JSON; not changed'});continue;}
+    try{const {readRunnerPointer}=await import('../runner-pointer.mjs');pointer=await readRunnerPointer(project);}catch(error){if(error.code==='ENOENT'||String(error.message).includes('no .project-swarm.json'))continue;failed.push({project,error:'the pointer file is not valid JSON; not changed'});continue;}
     if(!pointer||typeof pointer!=='object')continue;
     if(isPinned(pointer)){skipped.push({project,pinnedAt:pinOf(pointer)});continue;}
     // The Orchestrator lane's hooks are put (back) in place for every linked project on each update, whatever the pointer says.

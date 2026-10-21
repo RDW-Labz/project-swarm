@@ -46,7 +46,8 @@ export async function readPins(source) {
     let project;
     try { project = await fs.realpath(projectDir); } catch { unreadable.push({ project: projectDir, error: 'project path missing' }); continue; }
     try {
-      const pointer = JSON.parse(await fs.readFile(path.join(project, '.project-swarm.json'), 'utf8'));
+      const { readRunnerPointer } = await import('./runner-pointer.mjs');
+      const pointer = await readRunnerPointer(project);
       if (!isPinned(pointer)) continue;
       const at = pinOf(pointer);
       if (!at) { unreadable.push({ project, error: 'pinned but no valid version' }); continue; }
