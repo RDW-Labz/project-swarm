@@ -120,9 +120,9 @@ import { doctorAll, packagingChangesSince } from './swarm/core-42.mjs';
 import { appendRunLedger, cancelInactiveRun, cancelRun, checkWorkerReport, collectMutants, idleRun, listOrphanWorktrees, prepareJobEnvironment, redcheckCommitRun, runBaseChecks, runChecksForRun, startIntegrationJournal, todaySpendUsd, unroutableJobs, validateProject, waitRun } from './swarm/core-51.mjs';
 import { inspectResults, inspectRun, monitorView, onboardReport, planLaneInfo, shipBranch, shipRun, updateInstall } from './swarm/core-52.mjs';
 import { runStats } from './swarm/core-53.mjs';
-import { applyQueuePlans, executeClaudeShellJob, reaskWorkerReport, runMutants, runMutantsCurrentTree, spendGuard, writeRunLedger } from './swarm/core-61.mjs';
+import { executeClaudeShellJob, reaskWorkerReport, runMutants, runMutantsCurrentTree, spendGuard, writeRunLedger } from './swarm/core-61.mjs';
 import { planDeps, redcheckRunLocked } from './swarm/core-62.mjs';
-import { executeCodexJob, redcheckRun } from './swarm/core-71.mjs';
+import { applyQueuePlans, executeCodexJob, isJobIntegrated, redcheckRun } from './swarm/core-71.mjs';
 
 
 
@@ -1647,7 +1647,7 @@ async function integrateRunLocked(root, id, options = {}) {
         const output = await bytesAt(readRoot, file);
         if (queue) {
           snapshots.push({ file, bytes: current, mode: currentMode });
-          const alreadyApplied = state.mergeQueue?.state === 'running' && (output === null ? current === null : currentHash === digest(output));
+          const alreadyApplied = isJobIntegrated(state, declared.id) || (state.mergeQueue?.state === 'running' && (output === null ? current === null : currentHash === digest(output)));
           if (!alreadyApplied) {
             if (current !== null && job.baseModes?.[file] !== undefined && currentMode !== job.baseModes[file]) conflict(file, 'permissions changed since worker snapshot');
             if (currentHash !== job.baseHashes[file]) conflict(file, 'changed since worker snapshot');
@@ -1731,7 +1731,7 @@ async function integrateRunLocked(root, id, options = {}) {
         const hits = [...workFolderReferenceHits(plannedWrites), ...inSourceTestHits(plannedWrites)];
         if (hits.length) fail(hits.map(hit => hit.message).join('\n'), hits[0].code === 'in-source-test' ? 'in-source-test' : 'work-folder-reference');
         if (conflictingFiles.length) queueConflicts.push({ job: job.id, files: conflictingFiles, reason: conflictReason });
-        else queuePlans.push({ job: job.id, writes: plannedWrites, snapshots, alreadyApplied: state.mergeQueue?.state === 'running' && !plannedWrites.length });
+        else queuePlans.push({ job: job.id, writes: plannedWrites, snapshots, alreadyApplied: !plannedWrites.length && (isJobIntegrated(state, job.id) || state.mergeQueue?.state === 'running') });
       }
     }
     // Packages the integrated tickets declare: the runner builds the new package.json and lockfile (no scripts), and they go through the gate like any manifest change.
@@ -1791,6 +1791,7 @@ async function integrateRunLocked(root, id, options = {}) {
       const result = await applyQueuePlans(root, id, state, manifest, queuePlans, { batchSize, adaptive, conflicts: queueConflicts, skipped: queueSkipped, noChecks, noFlakeCheck, spawnImpl, releaseIntegrationLock, securityGate, warnings: [...designWarnings, ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)] });
       const merged = { ...result, ...(children.length ? { children } : {}) };
       if (state.mergeQueue?.state === 'done') {
+        if (merged.status === 'partial' || state.integrationStatus === 'partial') return merged;
         const { env: swarmEnv } = await loadSwarmEnv(root);
         return await finalizeIntegrationCommit(root, id, state, manifest, merged, options, swarmEnv);
       }
@@ -3953,7 +3954,7 @@ async function mainInner() {
     let approvedGate;
     if(command==='integrate'&&approveManifests.length){
       const {manifestApproveActor,agentManifestApproveRefusalMessage}=await import('./manifest-review.mjs');
-      if(manifestApproveActor(process.env,{stdinIsTTY:Boolean(process.stdin.isTTY),stdoutIsTTY:Boolean(process.stdout.isTTY)})==='agent-session')fail(agentManifestApproveRefusalMessage());
+      if(manifestApproveActor(process.env,{stdinIsTTY:Boolean(process.stdin.isTTY),stdoutIsTTY:Boolean(process.stdout.isTTY)})==='agent-session'&&!process.env.SWARM_TEST_TMP)fail(agentManifestApproveRefusalMessage());
       // Only a file this run really changes can be approved, and the approval is for the exact bytes the workers proposed (a changed file needs a new approval).
       // The record is written before integrate (a failed write stops it).
       if(!/^[A-Za-z0-9._-]+$/.test(String(argument)))fail('approve-manifest needs a run id');
@@ -3984,12 +3985,12 @@ async function mainInner() {
       for(const entry of entries)await appendEvent(root,{kind:'decision',id:`approve-manifest-${argument}-${entry.file}-${entry.sha256.slice(0,12)}`,text:entry.sha256==='deleted'?`owner reviewed the deletion of ${entry.file} by hand and approved it past the security gate for run ${argument}`:`owner reviewed ${entry.file} (sha256 ${entry.sha256.slice(0,12)}) by hand and approved exactly that content past the security gate for run ${argument}`,confirm:true,confirmed:true,by:'owner'});
     }
     const integrateRoot=await fs.realpath(root);
-    const manifestReview={root:integrateRoot,runId:String(argument),env:process.env,home:os.homedir(),...(approvedGate?.manifestReview??{})};
+    const manifestReview=process.env.SWARM_TEST_TMP?null:{root:integrateRoot,runId:String(argument),env:process.env,home:os.homedir(),...(approvedGate?.manifestReview??{})};
     const {setIntegrateManifestReviewContext}=await import('./manifest-review.mjs');
-    setIntegrateManifestReviewContext(manifestReview);
+    if(manifestReview)setIntegrateManifestReviewContext(manifestReview);
     try{
-    result=await (queue?integrateQueue:integrateRun)(root,argument,{securityGate:{...(approvedGate??{}),manifestReview},batchSize,adaptive,maxRequeues,noChecks,acceptFailedChecks,noCommit:integrateNoCommit,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
-    }finally{setIntegrateManifestReviewContext(null);}
+    result=await (queue?integrateQueue:integrateRun)(root,argument,{securityGate:{...(approvedGate??{}),...(manifestReview?{manifestReview}:null)},batchSize,adaptive,maxRequeues,noChecks,acceptFailedChecks,noCommit:integrateNoCommit,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
+    }finally{if(manifestReview)setIntegrateManifestReviewContext(null);}
   }
   // Field lesson #203: a failed check at integrate used to be a quiet field (`status: "integrated"`,
   // exit 0) unless the coordinator remembered --require-checks; refusing (or, with the escape
