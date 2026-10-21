@@ -161,6 +161,8 @@ test('stage, tickets, caps and last activity per project; a project is never mix
   assert.equal(db.runs[0].jobs, 2, 'the same run id in the other project is a different run');
   assert.equal(da.tickets.length, 4);
   assert.equal(db.tickets.length, 2);
+  assert.ok('progress' in da);
+  assert.ok('progress' in db);
   assert.ok(!JSON.stringify(da).includes(B.root) && !JSON.stringify(db).includes(A.root), 'neither project\'s data names the other\'s folder');
   assert.equal(da.spend.byLane.Haiku, 2.5);
   assert.equal(db.spend.byLane.Haiku, 0.1);

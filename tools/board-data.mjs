@@ -12,6 +12,7 @@ import { sanitizeWorkerText } from './worker-text.mjs';
 import os from 'node:os';
 import { projectOrchestrator } from './board-orchestrator.mjs';
 import { combinedUsage } from './orchestrator-usage.mjs';
+import { buildProgress, progressSummary } from './build-progress.mjs';
 
 const DAY = 86400000;
 const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   // subscription lanes: not billed per use
@@ -144,11 +145,13 @@ export function ticketsOf(ledger) {
 }
 
 // One project's lane on the board. `liveRuns` are the alive runs of THIS project only.
-export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary } = {}) {
+export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined } = {}) {
   const runs = await readRunStates(project.root);
   const liveIds = new Set(liveRuns.map(r => r.runId));
   const ledger = await readLedger(project.root).catch(() => null);
   const spend = await summary(project.root).catch(error => ({ spendUsd: null, capUsd: null, capError: String(error.message).slice(0, 120) }));
+  const overviewSpend = { usd: spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null };
+  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend }).then(progressSummary, () => null);
   const cost = costOf(runs, now);
   const agents = agentsOf(runs, liveIds, now);
   const lastRun = runs.length ? runs[runs.length - 1].state : null;
@@ -163,6 +166,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     agents, cost,
     orchestrator: (() => { try { return projectOrchestrator(project, { runs, now }); } catch { return { sessions: [], handBuilt: { files: 0, edits: 0, list: [] }, swarmBuilt: { files: 0 }, swarmPct: null, handPct: null, cost: { todayListUsd: 0, allListUsd: 0, todayTokens: 0, allTokens: 0 } }; } })(),
     spend: { usd: cost.allUsd, familyUsd: spend.spendUsd ?? null, sharedTrees: spend.sharedTrees ?? 1, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached), capSource: spend.capSource ?? null, capInherited: Boolean(spend.capInherited), inheritedFrom: spend.inheritedFrom ?? null, why: spend.why ?? null },
+    progress,
     recentJobCounts: runs.slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0)),
     lastRunAt: lastRun?.startedAt ?? null,
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
@@ -180,13 +184,13 @@ export function underfilledWaves(counts, slots) {
 }
 
 // The whole board: machine totals (sums of the project numbers) and one overview per registered project.
-export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, workers = null, lanes = null, worktreeRoot = mainWorktreeRoot } = {}) {
+export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, worktreeRoot = mainWorktreeRoot } = {}) {
   const overviews = [];
   // A live run belongs to the project whose real root it ran in, however the path was spelled.
   const live = await Promise.all(liveRuns.map(async r => ({ ...r, root: await fs.realpath(r.root).catch(() => r.root) })));
   for (const project of projects) {
     const mine = live.filter(r => r.root === project.root);
-    overviews.push(await projectOverview(project, mine, { now, summary }));
+    overviews.push(await projectOverview(project, mine, { now, summary, historyFile }));
   }
   const realRoot = async root => await fs.realpath(root).catch(() => path.resolve(root));
   const registered = new Map();
@@ -246,13 +250,17 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
 }
 
 // One project's page: its tickets by status, its run history, its spend by lane and its lessons. Reads only under project.root.
-export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set() } = {}) {
+export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), summary = projectSummary, historyFile = undefined } = {}) {
   const runs = await readRunStates(project.root, { limit: 200 });
   const ledger = await readLedger(project.root).catch(() => null);
   const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 1000).map(t => ({ id: txt(t.id, 20), title: txt(t.title, 140), status: txt(t.status, 20), stage: txt(t.stage, 10), risk: txt(t.risk, 10) }));
   const byLane = dict();
   for (const { state } of runs) for (const job of state.jobs ?? []) { if (!job || typeof job !== 'object') continue; const usd = num(jobSpend(job).usd); if (!usd) continue; const label = laneLabel(job.agent, job.model); byLane[label] = Math.round(((byLane[label] ?? 0) + usd) * 1e6) / 1e6; }
   const lessons = await listLessons(project.root).then(r => r.lessons.slice(0, 200).map(l => ({ id: txt(l.id, 40), what: txt(l.what ?? l.title ?? l.rule, 200), stage: txt(l.stage, 20), status: txt(l.guard?.status ?? l.status, 20) })), () => []);
+  const detailCost = costOf(runs, now);
+  const spend = (await summary(project.root).catch(() => ({}))) ?? {};
+  const detailSpend = { usd: spend.spendUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null };
+  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend }).catch(() => null);
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
     tickets, ticketCounts: ticketsOf(ledger),
@@ -260,7 +268,8 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
       const jobs = state.jobs ?? [];
       return { runId: id, status: txt(state.status, 30), live: liveRunIds.has(id), startedAt: state.startedAt ?? null, finishedAt: state.finishedAt ?? null, jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length, failed: jobs.filter(j => ['failed', 'timeout'].includes(j.status)).length, costUsd: Math.round(runTotals(state).usd * 1e6) / 1e6 };
     }),
-    spend: { ...costOf(runs, now), byLane: plain(byLane) },
+    spend: { ...detailCost, byLane: plain(byLane) },
+    progress,
     lessons,
   };
 }
