@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "split-check-alias",
+      "agent": "auto",
+      "prompt": "tools/split-module.mjs unresolved-name check (the acorn tokenizer pass) still gives a false positive on the real tools/swarm.mjs: stage core-12 is refused with possibly unresolved import isSecretPath in new module. Cause: tools/swarm.mjs has two imports of the same exported name: import { ..., isSecretPath } from ./executors.mjs (line 26, local name isSecretPath) and import { ..., isSecretPath as isProfileSecretPath, ... } from ./profile or similar (line 35, local name isProfileSecretPath). The moved items use only the alias isProfileSecretPath, so the new module correctly gets the alias import line, but the check sees the name token isSecretPath inside that import specifier (the imported name of an alias, not a local binding or a use) and treats it as a use of the other import. Fix in the check: ignore every token inside import declarations and export-from declarations entirely when collecting uses, and in an import specifier the imported name of an alias is never a use (only the local name binds); apply the same rule to the original-file import map (map by LOCAL name, not by imported name) so aliases never collide. Also keep the rule that a declared or imported local name resolves a use. Add fixtures to tests/split-module.test.mjs: two imports of the same exported name with one aliased where only the alias is used (must pass and the move must copy only the alias import), the unaliased name used with its import dropped (must still be flagged), an export-from line inside the moved text. Add a real-file test that applies the first 12 stages of the real plan (patterns through core-12) to a temp copy of tools/swarm.mjs and requires success (reuse the plan from planSplit and the same staging rules the tests already use; if no staging helper exists in the repo, hard-code the stage item names by running the real planner in the test and moving layer groups in order for those 12 stages: keep the test under 60 seconds). Do not edit tools/split-scan.mjs or tools/swarm.mjs. No token-shaped literals. ignoreTests reason: only the mover and its test change.",
+      "context": [
+        "tools/split-module.mjs",
+        "tools/split-scan.mjs",
+        "tests/split-module.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/split-module.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-scan.test.mjs"
+      ]
+    }
+  ]
+}
