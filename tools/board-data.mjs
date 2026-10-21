@@ -16,6 +16,7 @@ import { buildProgress, progressSummary } from './build-progress.mjs';
 import { ROUTE_ORDER } from './router.mjs';
 import { splitQuality } from './split-quality.mjs';
 import { readScorecards, scorecardHistory } from './benchmark-scorecard.mjs';
+import { handledForProject } from './handled.mjs';
 
 const DAY = 86400000;
 const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   // subscription lanes: not billed per use
@@ -295,11 +296,13 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     const amber = metrics.find(metric => metric?.grade === 'amber');
     return { grade: result?.grade ?? 'unknown', reds: red.length, worst: red[0]?.label ?? amber?.label ?? null };
   }).catch(() => null);
+  const handled = await handledForProject(project.root, { now }).catch(() => null);
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
     stage: tickets.stage, tickets, readyTickets, idleWithReady: idle && readyTickets > 0,
     live: liveRuns.map(r => { const hit = runs.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
     agents, cost,
+    handled,
     orchestrator: (() => { try { return projectOrchestrator(project, { runs, now }); } catch { return { sessions: [], handBuilt: { files: 0, edits: 0, list: [] }, swarmBuilt: { files: 0 }, swarmPct: null, handPct: null, cost: { todayListUsd: 0, allListUsd: 0, todayTokens: 0, allTokens: 0 } }; } })(),
     spend: { usd: cost.allUsd, familyUsd: spend.spendUsd ?? null, sharedTrees: spend.sharedTrees ?? 1, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached), capSource: spend.capSource ?? null, capInherited: Boolean(spend.capInherited), inheritedFrom: spend.inheritedFrom ?? null, why: spend.why ?? null, billedUsd: cost.paidUsd, listUsd: cost.flatRateListUsd, capBasis: spend.capBasis ?? 'billed+list' },
     progress,
@@ -425,6 +428,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null }).catch(() => null);
   const split = await splitQuality({ root: project.root, now, slots }).catch(() => null);
   const benchmarks = await readScorecards(project.root).then(input => scorecardHistory(input)).catch(() => null);
+  const handled = await handledForProject(project.root, { now, limit: 20 }).catch(() => null);
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
     tickets, ticketCounts: ticketsOf(ledger),
@@ -436,6 +440,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
     progress,
     splitQuality: split,
     benchmarks,
+    handled,
     lessons,
   };
 }

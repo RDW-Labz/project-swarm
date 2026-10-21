@@ -26,6 +26,9 @@ import { readHistory, historyCsv, historyFile } from './history.mjs';
 import { boardInbox, inboxText } from './board-inbox.mjs';
 import { runDetail, compareRuns } from './board-run.mjs';
 import { boardSnapshot, projectDetail, workersHeld, laneUsage, enrichRunEvents } from './board-data.mjs';
+import { createPeerCache, listPeers, mergeMachines, publicPeers } from './board-peers.mjs';
+import { versionInfo } from './server-version.mjs';
+import { boardPools } from './pools-board.mjs';
 import { resolveBudget, spendDir } from './spend.mjs';
 import { lanesDir, machineConcurrency } from './lanes.mjs';
 import { loadLocalConfig } from './local-config.mjs';
@@ -272,11 +275,18 @@ export function runNav({ root, runId, env = process.env, openBoard }) {
 const MAX_WATCHERS = 6;
 const BOARD_RUN_IDLE_MS = 10 * 60 * 1000;
 
-export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000 } = {}) {
+export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000, listPeers: listPeersFn = listPeers, peerCache = null, fetchImpl = fetch, versionInfo: versionInfoFn = versionInfo, boardPools: boardPoolsFn = boardPools } = {}) {
   const watchers = new Map();                // `${projectId}/${runId}` -> { server, url, closed }
   const deployTracker = createDeployTracker({ env });
+  const peersCache = peerCache ?? createPeerCache({
+    fetchImpl: (request, init) => {
+      const url = new URL(request instanceof URL ? request : request?.url ?? request);
+      url.searchParams.set('local', '1');
+      return fetchImpl(url, init);
+    },
+  });
   let boardUrl = null;
-  const cachedBy = new Map();                // by whether test/temp projects are shown
+  const cachedBy = new Map();                // by whether test/temp projects and peers are shown
   const showsScratch = q => q?.scratch === '1' || q?.scratch === true;
   const scratchIds = async () => new Set((await listProjects({ file: projectsFile(env) })).filter(p => isScratchRoot(p.root)).map(p => p.id));
   const find = async id => (await listProjects({ file: projectsFile(env) })).find(p => p.id === id) ?? null;
@@ -284,17 +294,19 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
     // One snapshot at a time: requests that arrive while one is being built share it.
     snapshot(q = {}) {
       const scratch = showsScratch(q);
-      const cached = cachedBy.get(scratch);
+      const localOnly = q?.local === '1' || q?.local === true;
+      const cacheKey = `${scratch}|${localOnly}`;
+      const cached = cachedBy.get(cacheKey);
       if (cached && now() - cached.at < cacheMs) return cached.promise;
       const promise = (async () => {
-        let max = null, invalid = false;
-        try { max = machineConcurrency(loadLocalConfig({ env })); } catch { invalid = true; /* the runs that read it refuse to start; the board says so */ }
+        let config = {}, max = null, invalid = false;
+        try { config = loadLocalConfig({ env }) ?? {}; max = machineConcurrency(config); } catch { config = {}; invalid = true; /* the runs that read it refuse to start; the board says so */ }
         const all = await listProjects({ file: projectsFile(env) });
         // Test and temp projects are left out of everything (lanes, totals, the inbox) unless asked for, so the numbers still add up.
         const projects = scratch ? all : all.filter(p => !isScratchRoot(p.root));
-        const caps = (() => { try { const lanes = resolveBudget({ config: loadLocalConfig({ env }) }).lanes ?? {}; return Object.fromEntries(Object.entries(lanes).map(([k, v]) => [k, v?.dailyUsd])); } catch { return {}; } })();
-        const configured = (() => { try { return Object.entries(loadLocalConfig({ env }).lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k]) => k); } catch { return []; } })();
-        const configuredModels = (() => { try { return Object.fromEntries(Object.entries(loadLocalConfig({ env }).lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k, v]) => [k, v.model])); } catch { return {}; } })();
+        const caps = (() => { try { const lanes = resolveBudget({ config }).lanes ?? {}; return Object.fromEntries(Object.entries(lanes).map(([k, v]) => [k, v?.dailyUsd])); } catch { return {}; } })();
+        const configured = (() => { try { return Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k]) => k); } catch { return []; } })();
+        const configuredModels = (() => { try { return Object.fromEntries(Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k, v]) => [k, v.model])); } catch { return {}; } })();
         const laneState = async () => {
           let store;
           try { store = JSON.parse(await fs.readFile(path.join(lanesDir(env), 'lanes.json'), 'utf8')); } catch { return { configured: configuredModels, caps }; }
@@ -305,14 +317,44 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
           }
           return { configured: configuredModels, pauses: store?.pauses && typeof store.pauses === 'object' ? store.pauses : {}, demand, caps };
         };
-        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: now(), laneState, workers: await workersHeld({ dir: lanesDir(env), max, invalid }), lanes: (laneToday, jobsToday) => laneUsage({ laneToday, jobsToday, configured, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: now() }), deployStatus: root => isScratchRoot(root) ? null : deployTracker.get(root) });
+        const snapshotNow = now();
+        const workers = await workersHeld({ dir: lanesDir(env), max, invalid });
+        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: snapshotNow, laneState, workers, lanes: (laneToday, jobsToday) => laneUsage({ laneToday, jobsToday, configured, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: snapshotNow }), deployStatus: root => isScratchRoot(root) ? null : deployTracker.get(root) });
+        let peers = [];
+        let remoteResults = [];
+        if (!localOnly) {
+          try { peers = await listPeersFn(env); } catch { peers = []; }
+          try { remoteResults = await peersCache.all(peers); } catch { remoteResults = []; }
+        }
+        const filteredResults = (Array.isArray(remoteResults) ? remoteResults : []).map(remote => {
+          const machine = remote?.machine ?? remote?.name;
+          if (!remote || remote.ok !== true || !machine) return remote;
+          return {
+            ...remote,
+            projects: (Array.isArray(remote.projects) ? remote.projects : []).filter(card => !card?.machine || card.machine === machine),
+            orchestrators: (Array.isArray(remote.orchestrators) ? remote.orchestrators : []).filter(card => !card?.machine || card.machine === machine),
+          };
+        });
+        const localVersion = (await versionInfoFn()).version;
+        const merged = mergeMachines({ name: os.hostname(), version: localVersion, projects: snapshot.projects, orchestrators: snapshot.machine.orchestrator.sessions }, filteredResults);
+        snapshot.projects = merged.projects;
+        snapshot.machine.orchestrator.sessions = merged.orchestrators;
+        snapshot.machines = merged.machines;
+        snapshot.drift = merged.drift;
+        snapshot.peers = publicPeers(peers);
+        try {
+          const hosts = Array.isArray(config.hosts) ? config.hosts.filter(host => host && typeof host === 'object' && host.enabled !== false) : [];
+          snapshot.pools = await boardPoolsFn({ now: snapshotNow, stubInput: { workers: snapshot.machine.workers, laneRows: snapshot.machine.lanes, hosts } });
+        } catch {
+          snapshot.pools = { source: 'stub', pools: [], at: new Date(snapshotNow).toISOString() };
+        }
         // What waits for the owner (read-only); a failure here never hides the rest of the board.
         snapshot.inbox = await boardInbox({ projects, now: now(), env }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
         snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : all.length - projects.length, total: all.filter(p => isScratchRoot(p.root)).length };
         return snapshot;
       })();
-      cachedBy.set(scratch, { at: now(), promise });
-      promise.catch(() => { if (cachedBy.get(scratch)?.promise === promise) cachedBy.delete(scratch); });
+      cachedBy.set(cacheKey, { at: now(), promise });
+      promise.catch(() => { if (cachedBy.get(cacheKey)?.promise === promise) cachedBy.delete(cacheKey); });
       return promise;
     },
     async project(id) {

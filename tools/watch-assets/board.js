@@ -165,6 +165,7 @@ function renderKpis(m) {
     var bar = w.max && !w.invalid ? meter(100 * w.total / w.max, w.total >= w.max) : null;
     box.appendChild(tile('Workers held', limit, w.invalid ? 'fix machineConcurrency: runs will not start' : w.max ? 'machine limit ' + w.max + ', shared fairly between active projects, ' + (w.free === null ? 0 : w.free) + ' free' : 'no machine limit', bar));
   }
+  var note = $('totalsNote'); note.textContent = m && state.data && Array.isArray(state.data.machines) && state.data.machines.length > 1 ? 'Totals above are this machine only' : '';
 }
 function renderOrch(m) {
   var o = m.orchestrator || { sessions: [] };
@@ -227,6 +228,10 @@ function capCell(p) {
 }
 function liveCell(p) {
   var box = el('div');
+  if (p.remote) {
+    box.appendChild(el('span', 'sub', p.live.length ? p.live.length + ' live run' + (p.live.length === 1 ? '' : 's') + ' on ' + (p.machine || 'peer') + ' board' : 'remote project'));
+    return box;
+  }
   if (!p.live.length) { box.appendChild(el('span', 'sub', 'idle, last run ' + ago(p.lastRunAt))); return box; }
   p.live.forEach(function (r) {
     var row = el('div', 'livebar');
@@ -264,8 +269,37 @@ function splitLine(p) {
   var text = 'Split ' + p.split.grade + (p.split.reds ? ' · ' + p.split.reds + ' red' : '') + (p.split.worst ? ' · ' + p.split.worst : '');
   return el('div', 'sub split-' + p.split.grade, text);
 }
+function handledLine(p) { return p.handled && p.handled.today ? el('div', 'sub', p.handled.today + ' handled for you today') : null; }
+function peerForProject(p) {
+  if (!p || !p.remote) { return null; }
+  var peers = state.data && Array.isArray(state.data.peers) ? state.data.peers : [];
+  return peers.find(function (peer) {
+    if (!peer) { return false; }
+    if (peer.name === p.machine || peer.name === p.name) { return true; }
+    try { return new URL(peer.url).hostname === p.machine; } catch (e) { return false; }
+  }) || null;
+}
+function cleanPeerUrl(peer) {
+  if (!peer || typeof peer.url !== 'string') { return null; }
+  try { var u = new URL(peer.url); u.search = ''; u.hash = ''; return u.toString(); } catch (e) { return null; }
+}
+function projectName(p, label) {
+  var text = el('span', '', label);
+  var peer = peerForProject(p);
+  if (!p.remote) { return link(projectHref(p.id), 'name board-link', [text]); }
+  var href = cleanPeerUrl(peer);
+  if (!href) { return text; }
+  var a = link(href, 'name board-link', [text]);
+  a.target = '_blank'; a.rel = 'noopener'; a.title = 'open on ' + p.machine;
+  return a;
+}
+function machineLine(p) {
+  var line = el('div', 'sub', (p.machine || '-') + ' · v' + (p.version || '-'));
+  if (p.versionDrift) { var newest = state.data && state.data.drift ? state.data.drift.newest : null; var drift = pill('version drift', 'warn'); drift.title = 'this machine runs v' + (p.version || '-') + '; newest is v' + (newest || '-'); line.appendChild(el('span', '', ' ')); line.appendChild(drift); }
+  return line;
+}
 function renderProjects(projects) {
-  var psig = L.signature(projects, Math.floor(Date.now() / 60000));
+  var psig = L.signature({ projects: projects, machines: state.data && state.data.machines, peers: state.data && state.data.peers, drift: state.data && state.data.drift }, Math.floor(Date.now() / 60000));
   if (psig === state.projSig) { return; }
   state.projSig = psig;
   var byId = Object.create(null); projects.forEach(function (p) { byId[p.id] = p; });
@@ -281,13 +315,19 @@ function renderProjects(projects) {
   var cards = $('projCards'); cards.textContent = '';
   if (!sorted.length) { var none = 'No projects yet. Run a swarm command inside a project, or swarm projects add PATH.'; $('projTable').appendChild(el('caption', 'empty', none)); cards.appendChild(el('div', 'empty', none)); cards.classList.add('show'); }
   else { cards.classList.remove('show'); table.appendChild(th(['Project', 'Live runs', 'Jobs', 'Tickets', 'Spend and cap', 'Lanes', 'Last activity'])); }
+  var machines = state.data && Array.isArray(state.data.machines) ? state.data.machines : [];
+  var machinesNote = $('machinesNote'); machinesNote.textContent = '';
+  var machineText = machines.map(function (m) { return m.name + ' (v' + (m.version || '-') + (m.ok === false ? ', unreachable' : '') + ')'; }).join(' · ');
+  machinesNote.appendChild(el('span', '', 'Machines: ' + (machineText || 'none')));
+  if (state.data && state.data.drift && state.data.drift.drifted) { machinesNote.appendChild(el('span', '', ' ')); machinesNote.appendChild(pill('version drift: ' + state.data.drift.versions.join(', '), 'warn')); }
   var body = el('tbody');
   sorted.forEach(function (entry) {
     var p = entry.project, isWorktree = entry.worktree;
     var tr = el('tr'); if (isWorktree) { tr.className = 'wt'; }
-    var name = el('div'); name.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', (isWorktree ? '↳ ' : '') + p.name)])); name.appendChild(document.createTextNode(' ')); name.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage')));
+    var name = el('div'); name.appendChild(projectName(p, (isWorktree ? '↳ ' : '') + p.name)); name.appendChild(el('span', '', ' ')); name.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); name.appendChild(machineLine(p));
     var tableProgress = progressLine(p); if (tableProgress) { name.appendChild(tableProgress); }
     var tableSplit = splitLine(p); if (tableSplit) { name.appendChild(tableSplit); }
+    var tableHandled = handledLine(p); if (tableHandled) { name.appendChild(tableHandled); }
     (p.warnings || []).forEach(function (w) { name.appendChild(el('div', 'sub', '')); name.lastChild.appendChild(pill(w.text, 'warn')); });
     var mixText = buildMixText(p.orchestrator); if (mixText) { name.appendChild(el('div', 'sub', '')); name.lastChild.appendChild(pill(mixText, p.orchestrator.handPct > 0 ? 'warn' : 'good')); }
     tr.appendChild(td(name)); tr.appendChild(td(liveCell(p), 'wrap'));
@@ -296,9 +336,10 @@ function renderProjects(projects) {
     tr.appendChild(td(capCell(p))); tr.appendChild(td(laneDots(p))); tr.appendChild(td(ago(p.lastActivityAt), 'mono'));
     body.appendChild(tr);
     var c = el('div', 'pcard');
-    var head = el('div', 'row'); head.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', (isWorktree ? '↳ ' : '') + p.name)])); head.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); c.appendChild(head);
+    var head = el('div', 'row'); head.appendChild(projectName(p, (isWorktree ? '↳ ' : '') + p.name)); head.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); c.appendChild(head); c.appendChild(machineLine(p));
     var cardProgress = progressLine(p); if (cardProgress) { c.appendChild(cardProgress); }
     var cardSplit = splitLine(p); if (cardSplit) { c.appendChild(cardSplit); }
+    var cardHandled = handledLine(p); if (cardHandled) { c.appendChild(cardHandled); }
     (p.warnings || []).forEach(function (w) { var wl = el('div', 'sub'); wl.appendChild(pill(w.text, 'warn')); c.appendChild(wl); });
     var mixCard = buildMixText(p.orchestrator); if (mixCard) { var ml = el('div', 'sub'); ml.appendChild(pill(mixCard, p.orchestrator.handPct > 0 ? 'warn' : 'good')); c.appendChild(ml); }
     if (p.idleWithReady) { var idleReady = el('div', 'sub'); idleReady.appendChild(pill('Idle with ' + p.readyTickets + ' ready tickets', 'bad')); c.appendChild(idleReady); }
@@ -469,6 +510,32 @@ setInterval(tickCountdowns, 1000);
 
 // ---- agents --------------------------------------------------------------------------------------------------------------------------------------
 
+function renderPools(data) {
+  var table = $('poolsTable'); table.textContent = '';
+  var pools = data && Array.isArray(data.pools) ? data.pools : [];
+  if (!pools.length) { table.appendChild(el('caption', 'empty', 'No capacity pools reported.')); }
+  else {
+    table.appendChild(th(['Pool', 'Kind', 'Limit', 'In use', 'Status']));
+    var body = el('tbody');
+    pools.forEach(function (p) {
+      var tr = el('tr');
+      tr.appendChild(td(p.name || p.id || 'pool'));
+      tr.appendChild(td(p.kind || 'other'));
+      var limit = el('div');
+      if (typeof p.limit === 'number' && p.limit > 0) { limit.appendChild(meter(100 * (typeof p.inUse === 'number' ? p.inUse : 0) / p.limit, (typeof p.inUse === 'number' ? p.inUse : 0) >= p.limit)); }
+      limit.appendChild(el('span', 'mono', p.limit === null || p.limit === undefined ? '—' : String(p.limit) + ' ' + (p.unit || 'slots')));
+      tr.appendChild(td(limit));
+      tr.appendChild(td(String(typeof p.inUse === 'number' ? p.inUse : 0) + ' ' + (p.unit || 'slots'), 'mono'));
+      var status = el('div');
+      if (p.capped) { status.appendChild(pill('capped: ' + (p.why || 'limit reached'), 'warn')); }
+      else { status.appendChild(el('span', 'sub', 'ok')); }
+      tr.appendChild(td(status)); body.appendChild(tr);
+    });
+    table.appendChild(body);
+  }
+  $('poolsNote').textContent = data && data.source === 'pools.mjs' ? 'Source: pools.mjs' : 'Source: stub from lane store and config (pools.mjs not installed yet)';
+}
+
 function renderAgents(data) {
   var list = data.machine.agents.list;
   $('agentsCount').textContent = String(data.machine.agents.total);
@@ -560,7 +627,7 @@ function renderTab() {
   if (!d) { return; }
   if (state.tab === 'overview') { renderKpis(d.machine); renderBays(d.machine); renderOrch(d.machine); renderProjects(d.projects); }
   else if (state.tab === 'cost') { renderCost(d); }
-  else if (state.tab === 'agents') { renderAgents(d); }
+  else if (state.tab === 'agents') { renderAgents(d); renderPools(d.pools); }
   tickCountdowns();
 }
 function renderBoard(data) {

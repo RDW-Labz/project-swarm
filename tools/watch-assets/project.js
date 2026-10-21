@@ -84,6 +84,20 @@
     });
   }
 
+  function renderHandled(handled) {
+    var host = $('handledBody'); host.textContent = '';
+    if (!handled) { host.appendChild(el('div', 'board-empty', 'Handled-for-you data unavailable.')); return; }
+    host.appendChild(el('div', 'label', handled.today + ' today · ' + handled.week + ' this week'));
+    if (!handled.items || !handled.items.length) {
+      host.appendChild(el('div', 'board-empty', 'Nothing handled yet. The policy engine logs auto-decisions here.'));
+      return;
+    }
+    handled.items.forEach(function (item) {
+      var parts = [when(item.at), item.rule, [item.requestKind, item.requestId].filter(Boolean).join(' ') || null, item.reason].filter(Boolean);
+      host.appendChild(el('div', 'board-entry', parts.join(' · ')));
+    });
+  }
+
   function benchValue(name, value) {
     if (typeof value !== 'number' || !isFinite(value)) { return '—'; }
     if (name && name.slice(-3) === '_ms') { return (value / 3600000).toFixed(1) + 'h'; }
@@ -153,6 +167,7 @@
 
     renderProgress(p.progress);
     renderSplit(p.splitQuality);
+    renderHandled(p.handled);
     renderBench(p.benchmarks);
 
     var t = $('tickets'); t.textContent = '';
