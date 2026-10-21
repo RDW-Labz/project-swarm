@@ -113,6 +113,12 @@ export const DEFAULT_RULES = Object.freeze([
     kind: 'accept-failed-checks',
     description: 'Auto-approve accept-failed-checks when only new-test checks failed and everything else passed.',
   },
+  {
+    id: 'manifest-reviewed',
+    kind: 'manifest-approval',
+    description:
+      'Auto-approve integrate for an exact manifest or workflow file hash when autonomous manifest review passed and the pass record matches.',
+  },
 ]);
 
 const DEFAULT_IDS = new Set(DEFAULT_RULES.map(r => r.id));
@@ -653,6 +659,19 @@ function factsForKind(kind, facts = {}, ruleId = null, request = {}) {
     if (p !== reqProject) return { ok: false, reason: 'project mismatch' };
     return { ok: true };
   }
+  if (kind === 'manifest-approval') {
+    const file = facts.file;
+    const sha256 = facts.sha256;
+    if (typeof file !== 'string' || !file.trim()) return { ok: false, reason: 'file missing' };
+    if (typeof sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(sha256)) {
+      return { ok: false, reason: 'hash missing' };
+    }
+    if (!factIsTrue(facts, 'manifestReviewPassed')) return { ok: false, reason: 'review not passed' };
+    if (typeof facts.reviewerRunId !== 'string' || !facts.reviewerRunId.trim()) {
+      return { ok: false, reason: 'reviewer run missing' };
+    }
+    return { ok: true };
+  }
   return { ok: false, reason: 'no matching rule' };
 }
 
@@ -717,6 +736,11 @@ export function autoDecisionEvent(request, result, { now = Date.now, machine = '
     }
     if (Array.isArray(request.facts.files)) event.files = request.facts.files.map(String);
     if (typeof request.facts.branch === 'string') event.branch = request.facts.branch;
+  }
+  if (result?.rule === 'manifest-reviewed' && request?.facts) {
+    if (typeof request.facts.file === 'string') event.file = request.facts.file;
+    if (typeof request.facts.sha256 === 'string') event.sha256 = request.facts.sha256;
+    if (typeof request.facts.reviewerRunId === 'string') event.reviewerRunId = request.facts.reviewerRunId;
   }
   return event;
 }

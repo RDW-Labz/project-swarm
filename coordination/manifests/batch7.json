@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "partial-retry",
+      "agent": "auto",
+      "prompt": "Bug from parts-request-app: a partly blocked run (one job refused by the security gate or manifest gate, the other jobs fine) is recorded as already integrated, so the blocked job can never be retried. Fix in integrateRun and the queue path (tools/swarm.mjs integrateRunLocked around line 1472, the already-integrated check around line 1525, and the integrate queue modules under tools/swarm): a run whose integration status is partial (some jobs integrated, some refused or blocked) stays integrable for the REMAINING jobs: swarm integrate RUN --queue --approve-manifest FILE (or after the owner clears the gate) integrates only the jobs that are not yet integrated, never re-applies an integrated job, keeps integratedFiles and hashes of both passes, and records each pass; a run that is fully integrated still answers Run already integrated; a retry of a job whose files conflict with what the first pass wrote reports the conflict instead of overwriting. The state keeps per-job integration status (integrated, blocked with reason, skipped). Tests in tests/integrate-partial-retry.test.mjs: two-job run, one blocked by the manifest gate, first pass integrates job A and reports partial; second pass with the approval integrates only job B; third pass reports already integrated; job A files untouched by pass two; a conflicting retry is refused with the files named. Keep every existing test passing (change a test only where intended behavior changes, with a comment). Never import install.mjs statically from new modules. Hermetic tests (no ambient environment, no TTY, no network, injected clock and reviewer). No token-shaped literals and no URL with credentials. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/swarm.mjs",
+        "tools/swarm/core-71.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/swarm.mjs",
+        "tools/swarm/core-71.mjs",
+        "tests/integrate-partial-retry.test.mjs"
+      ],
+      "timeoutMs": 3600000
+    },
+    {
+      "id": "manifest-autonomy",
+      "agent": "auto",
+      "prompt": "Manifest approvals become autonomous under the policy engine; the owner changed the plan, so this REPLACES the owner-only idea. Today swarm integrate --approve-manifest FILE (tools/swarm.mjs around lines 3625 and 3943) lets whoever runs it approve a dependency or workflow file for the exact sha256 of the bytes the workers proposed, and an orchestrator session was able to pass it for a new workflow file itself. New rules: (1) The session that produced the file (an orchestrator or agent session; use the same agent-session detection the budget raise and handbuild approve code use) can NEVER pass --approve-manifest or otherwise approve a manifest: refuse with a message naming the safe path. (2) New command swarm manifest review RUN --file FILE (and automatic during integrate --queue when a gate blocks a manifest or workflow file and a policy file exists): runs an independent review by a DIFFERENT model than the one that wrote the file (claude opus lane; the reviewer is an injectable function so tests need no model) on the exact bytes (sha256 recorded) against the SAFE RULES list, answering strict JSON pass or fail with findings per rule. Safe rules for a workflow file: no secrets other than GITHUB_TOKEN; no deploy steps (vercel, aws, gcloud, kubectl, docker push, npm publish, gh release or any environment: production); no push to protected branches; no pull_request_target trigger; no self-hosted runners; every action pinned to an exact version or full commit sha (no tags like v4, no latest, no branches); no run steps that curl or wget into a shell; permissions not wider than contents read unless justified. Safe rules for dependency manifests: changes are patch or minor only (no major bump, no new package that was not there unless it is a dev dependency from the default registry), default registry only (no git, file, http, or tarball URLs, no registry override), no install scripts (no preinstall, install, postinstall, prepare added), no lockfile change that is not explained by the manifest change. A deterministic pre-check implements the rules that need no model (unpinned action, secret reference, deploy step, pull_request_target, self-hosted runner, major bump, install script, non-registry URL) in a new tools/manifest-review.mjs with a pure function checkManifestRules(file, text) returning findings; any finding is an automatic FAIL without asking the model; only when the pre-check is clean is the model reviewer asked, and a model FAIL or a reviewer answer that is not strict JSON is a FAIL. (3) A pass is recorded as a review record (hash, file, run id, reviewer run id, model, time) in the project state next to the other approvals; the policy engine (tools/policy.mjs, tools/policy-run.mjs) gets a conditional standing rule manifest-reviewed (id manifest-reviewed, kind manifest-approval) that auto-approves exactly that hash when a valid pass record exists for it, logs rule id, reviewer run and hash in the auto-decision log (log before apply, as the engine does) and then integrate proceeds as if --approve-manifest had been given for that hash by the owner; the approval is for that exact hash only: any change to the file after review needs a new review (the gate compares the hash at integrate time) and an old pass never covers new bytes. (4) Anything that fails the review, or any file type outside the safe list (hooks, profile, secrets files, anything the rules do not cover), goes to the owner as an inbox item with the findings. (5) With no policy file nothing is auto-approved (policy stays inert until swarm policy init). Tests in tests/manifest-review.test.mjs and tests/manifest-approval-policy.test.mjs: an unpinned action (uses actions/checkout@v4), a secret reference (secrets.NPM_TOKEN), a deploy step, pull_request_target, a self-hosted runner, a major bump, an install script and a git URL dependency are each refused by checkMANIFESTRULES-style pure checks; a clean workflow with exactly pinned actions and only GITHUB_TOKEN passes the pre-check and, with an injected passing reviewer, is approved by the policy and logged with rule id, reviewer run and hash; the same file changed by one byte after review is refused at integrate; a reviewer answer that is not strict JSON is a fail; the producing agent session cannot pass --approve-manifest (refused) but the owner terminal still can for a reviewed or unreviewed file; with no policy file nothing is auto-approved; a failed review creates an owner inbox item with the findings. Keep every existing test passing (change a test only where intended behavior changes, with a comment). Never import install.mjs statically from new modules. Hermetic tests (no ambient environment, no TTY, no network, injected clock and reviewer). No token-shaped literals and no URL with credentials. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/swarm.mjs",
+        "tools/security-gate.mjs",
+        "tools/policy.mjs",
+        "tools/policy-run.mjs",
+        "tools/self-approval.mjs",
+        "tools/budget-set-commands.mjs",
+        "tools/inbox-commands.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/swarm.mjs",
+        "tools/manifest-review.mjs",
+        "tools/policy.mjs",
+        "tools/policy-run.mjs",
+        "tools/security-gate.mjs",
+        "tools/inbox-commands.mjs",
+        "tests/manifest-review.test.mjs",
+        "tests/manifest-approval-policy.test.mjs"
+      ],
+      "timeoutMs": 3600000
+    },
+    {
+      "id": "failure-hook",
+      "agent": "auto",
+      "prompt": "Wire the run-end hook for failure regression tests (ticket T-0168): tools/failure-regression.mjs exports captureNewFailureCauses(root, runStates), which writes one regression test stub per new failure cause and never overwrites. It needs exactly one call when a run finishes: find the run-finish point (where run state gets its finishedAt and final status written, in tools/swarm.mjs runOne completion or the run completion function in the tools/swarm modules), and after the final state is written call it once per finished run in a try/catch that never fails the run, only for runs that are not nonIntegrating (the new run-kind flag) and only when the project opted in (a profile or config field failureRegression: true, default false, documented in the command help or docs/state), logging one Events line with the number of stubs written. Tests in tests/failure-regression-wiring.test.mjs: a failed run writes stubs once and a second finish of the same run writes none; a successful run writes none; an error inside the hook never fails the run; a smoke run (nonIntegrating) writes none; with the option off nothing is written. Keep every existing test passing (change a test only where intended behavior changes, with a comment). Never import install.mjs statically from new modules. Hermetic tests (no ambient environment, no TTY, no network, injected clock and reviewer). No token-shaped literals and no URL with credentials. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/failure-regression.mjs",
+        "tools/swarm.mjs",
+        "tools/run-kind.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/swarm.mjs",
+        "tools/failure-regression.mjs",
+        "tests/failure-regression-wiring.test.mjs"
+      ],
+      "timeoutMs": 3000000
+    }
+  ]
+}

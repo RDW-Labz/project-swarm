@@ -101,7 +101,7 @@ return true;
 }
 const safeParse=(fn,s,warnings)=>{try{return (typeof fn==='function'?fn(s):[])||[];}catch{warnings.push('could not parse scanner output');return [];}};
 
-export async function runSecurityGate({changes=[],policy,hookScripts=[],exec,fetchImpl,now=Date.now,cwd,fingerprintKey,sensitive=true,cache=new Map(),fileExists,readRules=()=>readFileSync(SEMGREP_RULES_PATH)}={}){
+export async function runSecurityGate({changes=[],policy,hookScripts=[],exec,fetchImpl,now=Date.now,cwd,fingerprintKey,sensitive=true,cache=new Map(),fileExists,readRules=()=>readFileSync(SEMGREP_RULES_PATH),manifestReview=null}={}){
 const pol=normalizePolicy(policy);
 if(pol.enabled===false)return{ok:true,blocks:[],tickets:[],warnings:[],skipped:['security gate disabled by policy'],checked:[]};
 const blocks=[],tickets=[],warnings=[],skipped=[],checked=[];
@@ -293,6 +293,36 @@ if(s)takeSemgrep(s);
 }
 }
 
+let reviewCtx=manifestReview;
+if(!reviewCtx&&blocks.length&&cwd){
+try{
+const {peekIntegrateManifestReviewContext}=await import('./manifest-review.mjs');
+reviewCtx=peekIntegrateManifestReviewContext();
+}catch{reviewCtx=null;}
+}
+if(reviewCtx&&blocks.length&&cwd){
+let resolved;
+try{
+const {attemptManifestReviewForGate}=await import('./manifest-review.mjs');
+resolved=await attemptManifestReviewForGate({...reviewCtx,root:reviewCtx.root??cwd,changes:live,blocks,policy:pol,now});
+}catch{resolved=null;}
+if(resolved){
+pol=resolved.policy??pol;
+blocks=resolved.blocks??blocks;
+for(const {c,eco} of unparsed){
+if(!eco)continue;
+const mine=(pol.approvedManifests||[]).filter(a=>normPath(a.file)===normPath(c.file));
+const sha=c.bytes==null?'deleted':createHash('sha256').update(c.bytes).digest('hex');
+if(mine.some(a=>a.sha256===sha))blocks=blocks.filter(b=>!(b.check==='unsupported-manifest'&&normPath(b.path??c.file)===normPath(c.file)));
+}
+for(const c of pkgChanges){
+const before=scriptsOf(c.previous),after=scriptsOf(c.bytes);
+let scriptBlocked=false;
+for(const k of LIFECYCLE){const nv=after[k];if(nv==null)continue;if(JSON.stringify(nv)!==JSON.stringify(before[k]))scriptBlocked=true;}
+if(!scriptBlocked)blocks=blocks.filter(b=>!(b.check==='install-script'&&normPath(b.path??c.file)===normPath(c.file)));
+}
+}
+}
 return{ok:blocks.length===0,blocks,tickets,warnings,skipped,checked};
 }
 
