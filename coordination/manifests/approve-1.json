@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "board-approve-core",
+      "agent": "auto",
+      "prompt": "Item G part 1: the server-side core of Approve and Deny buttons on the board, as new modules only (no board.js, no server wiring, no tools/swarm.mjs). Read tools/phone.mjs (PHONE_ACTIONS and the never-from-phone list), tools/handbuild.mjs (the elevated git operations and decideRequest channels), tools/inbox.mjs and tools/board-inbox.mjs. Create tools/board-approve.mjs (SPDX header, ES module) and tests/board-approve.test.mjs (node:test, strict assert, fake clock and fake fs or temp directories). Concept: the board lets the owner answer only what the phone may answer (hand-build requests that are not elevated, ticket decisions, retries, a listed choice), from a registered device, behind the tailnet sign-in. Exports: ALLOWED_BOARD_ACTIONS (frozen: choose, approve-ticket, decline, stop-all, same as the phone list) and ELEVATED_NEVER_FROM_BOARD (merge, deploy, publish, cap raise, force-push, branch-D, override, accept unmet acceptance); isAllowedFromBoard(item, action) false for any elevated op in the item's git list or kind, and false for any action outside the allow-list (the server must refuse, hiding the button is not the protection); createPairing({store, now, random}) returning a one-time pairing word (three short common words with dashes) valid for 10 minutes, redeemPairing({store, word, deviceName, now, random}) which registers a device and returns a device token once (only its sha256 is stored, with name, createdAt, lastSeen; a word works once; a wrong or expired word is refused and three wrong tries lock pairing for 15 minutes), deviceFromToken(store, token) (read-only mode when no device is registered or the token is unknown: return null); issueDecisionIds({store, items, deviceId, now, random}) one-time decision ids bound to item id, device and the machine id, expiring after the request window (24 hours or the item's own expiry, whichever is earlier); prepareDecision({store, decisionId, action, deviceToken, now}) returning {confirmText: 'Approve hand-build hb-xxx on PROJECT?' style text naming the action, the item and the project, csrf: a token bound to the decision id and device} and refusing replayed, expired, wrong-device, unknown or disallowed-action ids; commitDecision({store, decisionId, csrf, deviceToken, now, apply}) which checks the csrf and the device again, consumes the id (a second commit is refused as a replay), calls the injected apply({itemId, action, channel: 'board'}) and writes the audit line; appendAudit({store, entry}) writing one line per attempt (who = the tailnet login passed in, device name, at, action, item id, project, machine id, result: ok or the refusal reason) to an audit log file and listAudit({store, limit}) newest first for the Events tab. Everything carries machine id and project id for the later multi-machine board. Never store a raw device token, a raw pairing word after use, or any request free text in the audit log. Tests: pairing word works once, expires, three wrong tries lock; the device token is stored only as a hash; a decision id is one-time (replay refused), expires, is refused for another device, refused for an elevated item (merge, deploy, cap raise, force-push, branch-D) even if the id was issued, refused for an action outside the allow-list; a csrf from another decision or device is refused; no registered device means read-only (prepare refused); apply is called once with channel board; every attempt, allowed or refused, appears in the audit log without secrets. Write only tools/board-approve.mjs and tests/board-approve.test.mjs.",
+      "context": [
+        "tools/phone.mjs",
+        "tools/handbuild.mjs",
+        "tools/inbox.mjs",
+        "tools/board-inbox.mjs"
+      ],
+      "outputs": [
+        "tools/board-approve.mjs",
+        "tests/board-approve.test.mjs"
+      ],
+      "timeoutMs": 1500000
+    }
+  ]
+}
