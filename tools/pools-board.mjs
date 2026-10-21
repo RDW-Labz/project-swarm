@@ -100,24 +100,42 @@ export function stubPools({ workers = {}, laneRows = [], hosts = [], now = Date.
     }));
   }
 
+  const nowMs = typeof now === 'number' && Number.isFinite(now) ? now : Date.now();
+  const lanePools = [];
   for (const row of Array.isArray(laneRows) ? laneRows : []) {
-    const lane = text(row?.lane ?? row?.label, 'lane') || 'lane';
-    const name = text(row?.label ?? row?.lane, lane) || lane;
+    const lane = text(row?.lane, 'lane') || 'lane';
+    const label = text(row?.label ?? row?.lane, lane) || lane;
     const todayUsd = finite(row?.todayUsd) ?? 0;
     const cap = finite(row?.dailyCapUsd);
+    const hasCap = cap !== null && cap > 0;
     const reset = iso(row?.capResetsAt);
     const limited = objectOf(row?.limited);
     const limitedUntil = iso(limited.until);
-    const paused = Boolean(limitedUntil);
+    const paused = limitedUntil !== null && Date.parse(limitedUntil) > nowMs;
+    if (!hasCap && !paused) continue;
     const rateLimited = /rate|backoff/i.test(String(limited.state ?? ''));
     const capped = paused || (cap !== null && todayUsd >= cap);
     const why = paused
       ? `${rateLimited ? 'rate limited' : 'quota paused'} until ${limitedUntil}`
       : capped ? `daily cap reached, resets ${reset ?? 'next reset'}` : null;
-    pools.push(pool({
-      id: `lane:${lane}`, name, kind: 'lane', limit: cap, inUse: todayUsd,
-      unit: 'usd', capped, why, until: paused ? limitedUntil : capped ? reset : null,
-    }));
+    lanePools.push({
+      lane,
+      label,
+      pool: pool({
+        id: `lane:${lane}`, name: label, kind: 'lane', limit: hasCap ? cap : null, inUse: todayUsd,
+        unit: 'usd', capped, why, until: paused ? limitedUntil : capped ? reset : null,
+      }),
+    });
+  }
+  const labelCounts = new Map();
+  for (const entry of lanePools) {
+    labelCounts.set(entry.label, (labelCounts.get(entry.label) ?? 0) + 1);
+  }
+  for (const entry of lanePools) {
+    const name = (labelCounts.get(entry.label) ?? 0) > 1
+      ? `${entry.label} (${entry.lane})`
+      : entry.label;
+    pools.push({ ...entry.pool, name });
   }
 
   for (const host of Array.isArray(hosts) ? hosts : []) {
