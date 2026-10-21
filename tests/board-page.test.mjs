@@ -162,13 +162,18 @@ test('cost splits billed and flat-rate list value by day and cap basis is surfac
   assert.equal(overview.spend.billedUsd, 2);
   assert.equal(overview.spend.listUsd, 7);
   assert.equal(overview.spend.capBasis, 'billed+list');
-  const injected = await projectOverview(A, [], { now: NOW, summary: async () => ({ spendUsd: 9, capUsd: 10, capBasis: 'billed' }) });
+  assert.equal(overview.spend.capUsedUsd, 9);
+  const injectedSummary = async () => ({ spendUsd: 9, listUsd: 9, billedUsd: 2, capUsd: 5 });
+  const injected = await projectOverview(A, [], { now: NOW, summary: injectedSummary });
   assert.equal(injected.spend.capBasis, 'billed');
+  assert.equal(injected.spend.capUsedUsd, 2);
+  assert.equal(injected.spend.familyUsd, 9);
+  assert.equal(injected.spend.familyBilledUsd, 2);
 
-  const detail = await projectDetail(A, { now: NOW, summary: defaultSummary });
+  const detail = await projectDetail(A, { now: NOW, summary: injectedSummary });
   assert.equal(detail.spend.billedUsd, 2);
   assert.equal(detail.spend.listUsd, 7);
-  assert.equal(detail.spend.capBasis, 'billed+list');
+  assert.equal(detail.spend.capBasis, 'billed');
 
   const snap = await boardSnapshot({ projects: [A, B], liveRuns: [], now: NOW, summary: async () => ({}) });
   for (const key of ['flatRateTodayUsd', 'flatRateWeekUsd', 'paidUsd', 'flatRateListUsd']) {

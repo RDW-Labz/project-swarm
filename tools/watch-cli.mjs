@@ -94,7 +94,7 @@ export function runSnapshotLoader(root, runId) {
     if (!state) return null;
     const manifest = await readJson(path.join(dir, 'manifest.json'));
     const snapshot = buildRunSnapshot(state, { manifest, now: Date.now() });
-    snapshot.project = await projectSummary(root).catch(() => null);
+    snapshot.project = await projectSummary(root).then(summary => ({ ...summary, capBasis: summary.capBasis ?? (typeof summary.billedUsd === 'number' ? 'billed' : 'billed+list') })).catch(() => null);
     return snapshot;
   };
 }
