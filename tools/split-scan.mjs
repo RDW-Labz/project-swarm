@@ -15,6 +15,9 @@ const REGEX_PREFIX = new Set([
   '&=', '|=', '^=', '&&', '||', '??', '?.', '=>', ')', ']', '}', '++', '--',
 ]);
 
+// Slow path (large modules): scanModule called lineAt() without a line index (O(file) per item)
+// and collectUsesFast re-tokenized every top-level slice (O(file) × item count).
+
 const lineIndexCache = new Map();
 
 function buildLineIndex(text) {
@@ -561,12 +564,41 @@ function usesInTemplate(templateText) {
   return extra;
 }
 
-function collectUsesFast(text) {
-  const uses = new Set();
+function tokenBoundsForSpan(tokens, start, end) {
+  let lo = 0;
+  let hi = tokens.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (tokens[mid].end <= start) lo = mid + 1;
+    else hi = mid;
+  }
+  const i0 = lo;
+  lo = i0;
+  hi = tokens.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (tokens[mid].start < end) lo = mid + 1;
+    else hi = mid;
+  }
+  return [i0, lo];
+}
+
+function tokenizeAll(text) {
+  const tokens = [];
   const lx = createLexer(text, 0);
-  let afterDot = false;
   for (;;) {
-    const tok = lx.next();
+    const t = lx.next();
+    tokens.push(t);
+    if (t.type === 'eof') break;
+  }
+  return tokens;
+}
+
+function collectUsesFastFromTokens(tokens, i0, i1) {
+  const uses = new Set();
+  let afterDot = false;
+  for (let idx = i0; idx < i1; ) {
+    const tok = tokens[idx++];
     if (tok.type === 'eof') break;
     if (afterDot) {
       afterDot = false;
@@ -577,13 +609,19 @@ function collectUsesFast(text) {
       continue;
     }
     if (tok.type === 'identifier') {
-      const n = lx.next();
+      const n = idx < i1 ? tokens[idx] : { type: 'eof' };
       if (n.type === 'punct' && n.value === ':') continue;
       uses.add(tok.value);
-      if (n.type !== 'eof') lx.restoreState({ pos: n.start, line: lineAt(text, n.start), prevSignificant: null });
+      // idx already points at n; next iteration consumes n (matches lexer restoreState to n.start).
     }
   }
   return uses;
+}
+
+function collectUsesFast(text) {
+  const tokens = tokenizeAll(text);
+  const [i0, i1] = tokenBoundsForSpan(tokens, 0, text.length);
+  return collectUsesFastFromTokens(tokens, i0, i1);
 }
 
 function collectUses(text) {
@@ -866,25 +904,35 @@ function moduleImportsExports(items) {
 }
 
 export function scanModule(text) {
+  const lineIndex = buildLineIndex(text);
   const spans = splitTopLevel(text);
   const fastUses = text.length > 10_000;
-  const items = spans.map((span, index) => {
+  const allTokens = fastUses ? tokenizeAll(text) : null;
+  const items = [];
+  for (let index = 0; index < spans.length; index++) {
+    const span = spans[index];
     const slice = text.slice(span.start, span.end);
     const meta = parseItemMeta(slice);
-    const uses = fastUses ? collectUsesFast(slice) : collectUses(slice);
-    return {
+    let uses;
+    if (fastUses) {
+      const [i0, i1] = tokenBoundsForSpan(allTokens, span.start, span.end);
+      uses = collectUsesFastFromTokens(allTokens, i0, i1);
+    } else {
+      uses = collectUses(slice);
+    }
+    items.push({
       index,
       kind: meta.kind,
       names: meta.names,
       exported: meta.exported,
       start: span.start,
       end: span.end,
-      startLine: lineAt(text, span.start),
-      endLine: lineAt(text, span.end - 1),
+      startLine: lineAtFromIndex(lineIndex, span.start),
+      endLine: lineAtFromIndex(lineIndex, span.end - 1),
       text: slice,
       uses,
-    };
-  });
+    });
+  }
   const order = items.map((_, i) => i);
   const { imports, exports } = moduleImportsExports(items);
   return { items, imports, exports, order };
