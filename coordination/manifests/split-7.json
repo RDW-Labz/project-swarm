@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "split-check-acorn",
+      "agent": "auto",
+      "prompt": "tools/split-module.mjs has an unresolved-name check (the second method, a regex pass over the new module and the rewritten file) that now gives false positives on the real tools/swarm.mjs: it reports possibly unresolved import go in new module for the stage that moves reviewSourcePath and parseContractEventRows, because the word go appears in a line comment (a sentence: 8 of 11 reader lines go unmeasured) and inside a regular expression literal alternation (/\\.(?:...|rs|go|java|c|cc|cpp|h|swift|rb)$/i). The AST scanner (tools/split-scan.mjs, now on acorn) is right that go is not used. Replace the regex tokenizing in that check with acorn tokenizer: import { tokenizer, tokTypes } from acorn and walk acorn.tokenizer(text, { ecmaVersion: latest, sourceType: module, allowHashBang: true, allowAwaitOutsideFunction: true }) so comments, strings, template text and regular expression literals are skipped exactly; collect every name token that is not directly after a dot or question-dot token and not directly before a colon in an object-literal key position (keep it a cheap over-approximation otherwise: a name token followed by colon inside braces is not a use), then apply the same rules as today: the move FAILS only for a name that the ORIGINAL file imports (or declares at top level) and that this pass finds as a name token in the new module or in the rewritten file without being imported or declared there. Keep the smoke import check unchanged. Add tests in tests/split-module.test.mjs with fixtures: the word go in a line comment, in a block comment, in a string, in a template literal text part, in a regex alternation, and as an object key and property access, must NOT be flagged; the same word as a real call go() with the import dropped MUST be flagged; plus a real-file test that applies the first three stages from the plan (patterns, warnings, mutants) to a temp copy of tools/swarm.mjs and requires success. Do not edit tools/split-scan.mjs or tools/swarm.mjs. No token-shaped literals. ignoreTests reason: only the mover and its test change.",
+      "context": [
+        "tools/split-module.mjs",
+        "tools/split-scan.mjs",
+        "tests/split-module.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/split-module.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-scan.test.mjs"
+      ]
+    }
+  ]
+}
