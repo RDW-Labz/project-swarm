@@ -78,6 +78,9 @@ export function gatesCountForTicket(tickets, ticketId) {
  */
 export function ticketQualifiesForReplan(ticket, gatesCount = 0) {
   if (!ticket || typeof ticket.id !== 'string') return false;
+  // Human-owned work, review gates, and sensitive work needing review stay with
+  // the owner/reviewer. Automatic replanning is only for worker-owned open work.
+  if (ticket.type === 'human' || ticket.sensitive === true || ['review', 'done', 'cancelled', 'proposed', 'running', 'todo'].includes(ticket.status)) return false;
   if (isDependencyBlocked(ticket)) return false;
   const attempts = Number(ticket.attempts) || 0;
   if (attempts >= 2) return true;
@@ -203,6 +206,7 @@ export async function persistReplans(root, ledger, { now = Date.now(), by = 'syn
       id: entry.ticketId,
       action: entry.action,
       reason: entry.reason,
+      plan: { action: entry.action, reason: entry.reason },
     });
   }
   return { ledger: next, replans, changed: true };

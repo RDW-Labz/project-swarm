@@ -32,6 +32,8 @@ import { countTests, detectTestCommand } from './zero-tests.mjs';
 import { runCheckArgv } from './init.mjs';
 import { deriveQualityChecks, qualityEvidence } from './quality-checks.mjs';
 import { nextStep, sizeTicket } from './escalation.mjs';
+import { persistReplans } from './ticket-replan.mjs';
+import { CHEAP_LANE_ORDER, DEFAULT_MAX_FILES, adviseTicketLane, capBytesForLane, ticketByteTotal } from './lane-size.mjs';
 import { unlockReady, releaseReady } from './ticket-unlock.mjs';
 import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, orderTestsAfterBuild, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets } from './wiring.mjs';
 import { parseEnvNames, envNamesLine } from './env-names.mjs';
@@ -118,6 +120,19 @@ function waveSummary(sim) {
 function waveRefusal(sim, tickets) {
   const chain = longestWaveChain(tickets);
   return `${waveSummary(sim)}\nwave simulation failed; longest chain: ${chain.join(' -> ') || 'none'}; advice: re-split (merge chains / split the long chain), or rerun with --accept-waves`;
+}
+
+async function persistSyncReplans(root, deps = {}) {
+  const current = await readLedger(root);
+  if (!current) return { replans: [], lines: [] };
+  const injectedNow = typeof deps.now === 'number'
+    ? deps.now
+    : typeof deps.clock === 'function'
+      ? deps.clock()
+      : undefined;
+  const result = await persistReplans(root, current, injectedNow === undefined ? { by: 'sync' } : { now: injectedNow, by: 'sync' });
+  const lines = result.replans.map(entry => `${entry.ticketId} replanned: ${entry.reason}`);
+  return { ...result, lines };
 }
 
 // A tiny ledger cannot be made meaningfully wider by re-splitting. Keep its measured summary,
@@ -916,6 +931,21 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
   const repoFiles = await listTrackedRepoFiles(root);
   const pathRefusals = ticketPathRefusalLines(built.tickets, repoFiles, root);
   if (pathRefusals.length) return out(`split refused; ticket paths are not in the repo:\n${pathRefusals.map(line => `  ${line}`).join('\n')}`, 1);
+  const sizes = contextEnvFor(root, profile).sizes;
+  const laneNotes = [];
+  const laneRefusals = [];
+  for (const ticket of built.tickets) {
+    const advice = adviseTicketLane(ticket, { sizes, lanes: CHEAP_LANE_ORDER, maxFiles: DEFAULT_MAX_FILES });
+    if (!advice.ok) {
+      const bytes = ticketByteTotal(ticket, sizes);
+      const cap = capBytesForLane('hermes');
+      laneRefusals.push(`${ticket.id}: ${bytes} bytes exceeds the cheap-lane cap of ${cap} bytes (max ${DEFAULT_MAX_FILES} output files); split this ticket or reduce its outputs`);
+    } else if (advice.action === 'route-in-place') {
+      ticket.lane = advice.lane;
+      laneNotes.push(`${ticket.id}: ${ticketByteTotal(ticket, sizes)} bytes routed to in-place lane ${advice.lane}`);
+    }
+  }
+  if (laneRefusals.length) return out(`split refused; ticket outputs are too large for every cheap lane:\n${laneRefusals.map(line => `  ${line}`).join('\n')}`, 1);
   let tickets = built.tickets;
   if (!existing) tickets = [...tickets, ...checklistToTickets(day0Checklist(scope))];
   const base = existing ?? createLedger({ scope: { name: scope.name, version: scope.version, hash, file }, tickets: [] });
@@ -942,7 +972,7 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
     await writeLedger(root, ledger);
     wireLines = [`wiring: ${missing.length} requirement(s) have modules but no integration ticket (${missing.slice(0, 8).join(', ')}); the ledger cannot be approved until they do.`, `Next: swarm run ${SPLIT_DIR}/wire-manifest.json, then swarm scope split --ingest RUN --merge --wire`];
   }
-  return out([`ledger written: ${tickets.length} tickets added (not approved)`, ...notes.map(n => `note: ${n}`), ...[...built.notes, ...orderNotes].slice(0, 12).map(n => `note: ${n}`), ...(built.notes.length + orderNotes.length > 12 ? [`note: ...and ${built.notes.length + orderNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`] : []), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, ...wireLines, tree.ok && !wireLines.length ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
+  return out([`ledger written: ${tickets.length} tickets added (not approved)`, ...laneNotes.map(n => `lane: ${n}`), ...notes.map(n => `note: ${n}`), ...[...built.notes, ...orderNotes].slice(0, 12).map(n => `note: ${n}`), ...(built.notes.length + orderNotes.length > 12 ? [`note: ...and ${built.notes.length + orderNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`] : []), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, ...wireLines, tree.ok && !wireLines.length ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
 }
 
 async function cmdApprove(root, { rest, flags }, deps = {}) {
@@ -964,6 +994,17 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   if (unknownScreens.length) return out(`not approvable: tickets name screens that are not in the profile ui block: ${unknownScreens.slice(0, 8).join(', ')}`, 1);
   const sizes = contextEnvFor(root, uiProfile).sizes;
   const bigTickets = ledger.tickets.filter(t => t.status !== 'cancelled' && t.type !== 'human' && !sizeTicket(t, { sizes }).ok).map(t => t.id);
+  const laneWarnings = ledger.tickets
+    .filter(t => t.status !== 'cancelled' && t.type !== 'human')
+    .map(ticket => {
+      const lane = typeof ticket.lane === 'string' && ticket.lane.trim() ? ticket.lane : 'hermes';
+      const cap = capBytesForLane(lane);
+      const bytes = ticketByteTotal(ticket, sizes);
+      return cap !== null && bytes > cap
+        ? `warning: ${ticket.id} exceeds active lane ${lane} byte budget: ${bytes} bytes (cap ${cap}); split it or route it to an in-place lane`
+        : null;
+    })
+    .filter(Boolean);
   const uiNoScreens = uiProfile?.ui ? ledger.tickets.filter(t => !(t.screens ?? []).length && (t.files ?? []).some(f => /\.(?:tsx|jsx|css|html|vue|svelte)$/.test(f))).length : 0;
   const summary = formatSummary(summarizeTree({ scope, tickets: ledger.tickets }));
   const waveSimulation = simulateBeforeIngest(ledger.tickets, machineSlots(deps.machineConcurrency));
@@ -991,7 +1032,7 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   if (waveGateFails(waveSimulation)) await logAcceptedWaveSimulation(root, waveSimulation, ledger.tickets, 'scope approve');
   // A snapshot of swarm's own state at every approval (best effort; never blocks the approval).
   try { await (await import('./state-backup.mjs')).createBackup(root, { reason: 'scope approve' }); } catch { /* a failed backup must not undo an approval */ }
-  return out([waveLine, summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...await toolConfigWarnings(root, next.tickets), ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
+  return out([waveLine, summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...await toolConfigWarnings(root, next.tickets), ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), ...laneWarnings, `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
 }
 
 // A failed run or check sends the ticket back to ready one level higher (bigger output, then Codex, then Claude); only after the last level does it block. One locked ledger write.
@@ -1655,6 +1696,7 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
     if (acceptedNow.length) await appendLog(root, { event: 'accept-unreviewed', by: 'owner', run: rest[0], tickets: acceptedNow, reason: unreviewedReason, note: flags.note ?? null });
     const notAccepted = [...unreviewedOk].filter(id => !acceptedNow.includes(id));
     const notUnmet = [...unmetOk].filter(id => !unmetNow.includes(id));
+    const replanned = await persistSyncReplans(root, deps);
     let reviewLine = null;
     if (needReview.length) {
       const manifest = await securityReviewManifest(root, rest[0], needReview, ledger.tickets);
@@ -1678,6 +1720,7 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
       ...(inTree.size ? [`${[...inTree].filter(id => done.includes(id)).length} of them on output that was already in the tree (not re-verified by this run): ${[...inTree].filter(id => done.includes(id)).join(', ')}`] : []),
       ...(retried.length ? [`${retried.length} ticket(s) back to ready, one level higher, after failed checks: ${retried.join(', ')}`] : []),
       ...(blocked.length ? [`${blocked.length} ticket(s) blocked after every escalation level failed: ${blocked.join(', ')}`] : []),
+      ...replanned.lines,
       ...(unverified.length ? [`${unverified.length} ticket(s) stay in review: their tests were not seen passing: ${unverified.join('; ')}`] : []),
       ...(notIntegrated.length ? [`${notIntegrated.length} ticket(s) stay in review: not integrated by this run: ${notIntegrated.join(', ')}`] : []),
       ...(profileQuality.length ? [`warning: the profile now asks for ${profileQuality.join(', ')}, which this run's batches did not run`] : []),
@@ -1706,9 +1749,10 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
     for (const m of moves) if (m.to === 'review') { const t = fresh.tickets.find(x => x.id === m.id); t.runId = rest[0]; delete t.infraRetries; }
     await writeLedger(root, fresh);
   }
+  const replanned = await persistSyncReplans(root, deps);
   await refreshPlan(root);
   const review = moves.filter(m => m.to === 'review').length;
-  return out(`${review} ticket(s) in review${escalated.length ? `, ${escalated.length} sent back to ready one level higher (${escalated.join(', ')})` : ''}${stuck.length ? `, ${stuck.length} blocked after every level failed (${stuck.join(', ')})` : ''}${infra.length ? `, ${infra.length} back to ready at the same level (the failure was not theirs: ${infra.join(', ')})` : ''}. After swarm integrate ${rest[0]}: swarm scope sync ${rest[0]} --integrated`);
+  return out([`${review} ticket(s) in review${escalated.length ? `, ${escalated.length} sent back to ready one level higher (${escalated.join(', ')})` : ''}${stuck.length ? `, ${stuck.length} blocked after every level failed (${stuck.join(', ')})` : ''}${infra.length ? `, ${infra.length} back to ready at the same level (the failure was not theirs: ${infra.join(', ')})` : ''}. After swarm integrate ${rest[0]}: swarm scope sync ${rest[0]} --integrated`, ...replanned.lines].join('\n'));
 }
 
 // The OpenAPI file a contract ticket wrote: contracts/api.json or contracts/openapi.json, else the only .json a contract ticket names.
