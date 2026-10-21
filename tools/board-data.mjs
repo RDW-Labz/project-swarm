@@ -141,11 +141,18 @@ export function laneIdleReasons({ running = {}, configured = {}, pauses = {}, de
       let recentLabel = null;
       if (label === 'Codex' || label === 'Cursor') {
         const other = label === 'Codex' ? 'Cursor' : 'Codex';
-        for (const [agent, value] of Object.entries(valueObject(recent))) {
-          if (idleLabelForAgent(agent, configured) !== other) continue;
-          const jobs = Number(value?.jobs);
-          const explicit = Number(value?.explicit);
-          if (jobs > 0 && explicit >= jobs / 2) { recentLabel = other; break; }
+        let thisRecentJobs = 0;
+        for (const agent of agents) {
+          const value = valueObject(recent)[agent];
+          if (value) thisRecentJobs += Number(value?.jobs) || 0;
+        }
+        if (thisRecentJobs === 0) {
+          for (const [agent, value] of Object.entries(valueObject(recent))) {
+            if (idleLabelForAgent(agent, configured) !== other) continue;
+            const jobs = Number(value?.jobs);
+            const explicit = Number(value?.explicit);
+            if (jobs > 0 && explicit >= jobs / 2) { recentLabel = other; break; }
+          }
         }
       }
       answer = { reason: 'no-ready-jobs', text: recentLabel ? `no ready jobs; recent jobs named ${recentLabel} explicitly` : 'no ready jobs' };

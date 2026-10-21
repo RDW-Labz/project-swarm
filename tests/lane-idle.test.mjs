@@ -27,7 +27,20 @@ test('lane idle reasons use the requested priority and explain every branch', ()
   assert.equal(laneIdleReasons({ now: NOW, configured: { claude: 'claude-opus' } }).Opus.text, 'only for expensive tier or after 2 failures');
   assert.equal(laneIdleReasons({ now: NOW, configured: { qwen: 'qwen' } }).qwen.text, 'not in auto routing; only explicit jobs');
   assert.equal(laneIdleReasons({ now: NOW, configured: { hermes: 'research' } }).hermes.text, 'research job type only');
-  assert.equal(laneIdleReasons({ now: NOW, configured: { cursor: 'composer', codex: 'gpt' }, recent: { codex: { jobs: 3, explicit: 3 } } }).Cursor.text, 'no ready jobs; recent jobs named Codex explicitly');
+  const bothRecent = laneIdleReasons({
+    now: NOW,
+    configured: { cursor: 'composer', codex: 'gpt' },
+    recent: { codex: { jobs: 2, explicit: 2 }, cursor: { jobs: 1, explicit: 1 } },
+  });
+  assert.equal(bothRecent.Codex.text, 'no ready jobs');
+  assert.equal(bothRecent.Cursor.text, 'no ready jobs');
+  const cursorIdleCodexExplicit = laneIdleReasons({
+    now: NOW,
+    configured: { cursor: 'composer', codex: 'gpt' },
+    recent: { codex: { jobs: 3, explicit: 3 } },
+  });
+  assert.equal(cursorIdleCodexExplicit.Cursor.text, 'no ready jobs; recent jobs named Codex explicitly');
+  assert.equal(cursorIdleCodexExplicit.Codex.text, 'no ready jobs');
   assert.equal(laneIdleReasons({ now: NOW, running: { Codex: 1 } }).Codex, undefined);
   assert.equal(laneIdleReasons({ now: NOW }).GPU.text, 'no GPU configured');
 });
