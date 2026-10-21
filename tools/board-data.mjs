@@ -12,7 +12,7 @@ import { sanitizeWorkerText } from './worker-text.mjs';
 import os from 'node:os';
 import { projectOrchestrator } from './board-orchestrator.mjs';
 import { combinedUsage } from './orchestrator-usage.mjs';
-import { buildProgress, progressSummary } from './build-progress.mjs';
+import { buildProgress, ledgerRoot, progressSummary } from './build-progress.mjs';
 import { ROUTE_ORDER } from './router.mjs';
 import { splitQuality } from './split-quality.mjs';
 import { readScorecards, scorecardHistory } from './benchmark-scorecard.mjs';
@@ -266,7 +266,7 @@ export function agentsOf(runs, liveIds, now = Date.now()) {
 }
 
 export function ticketsOf(ledger) {
-  const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object');
+  const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object' && t.type !== 'human');
   const byStatus = dict();
   for (const t of tickets) byStatus[t.status] = (byStatus[t.status] ?? 0) + 1;
   const open = tickets.filter(t => ['todo', 'ready', 'running', 'review', 'blocked'].includes(t.status));
@@ -279,7 +279,8 @@ export function ticketsOf(ledger) {
 export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
   const runs = await readRunStates(project.root);
   const liveIds = new Set(liveRuns.map(r => r.runId));
-  const ledger = await readLedger(project.root).catch(() => null);
+  let ledger;
+  try { ledger = (await ledgerRoot(project.root)).ledger; } catch { ledger = await readLedger(project.root).catch(() => null); }
   const spend = await summary(project.root).catch(error => ({ spendUsd: null, capUsd: null, capError: String(error.message).slice(0, 120) }));
   const overviewSpend = { usd: spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis: spend.capBasis ?? 'billed+list' };
   const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null }).then(progressSummary, () => null);
@@ -417,7 +418,8 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
 // One project's page: its tickets by status, its run history, its spend by lane and its lessons. Reads only under project.root.
 export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
   const runs = await readRunStates(project.root, { limit: 200 });
-  const ledger = await readLedger(project.root).catch(() => null);
+  let ledger;
+  try { ledger = (await ledgerRoot(project.root)).ledger; } catch { ledger = await readLedger(project.root).catch(() => null); }
   const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 1000).map(t => ({ id: txt(t.id, 20), title: txt(t.title, 140), status: txt(t.status, 20), stage: txt(t.stage, 10), risk: txt(t.risk, 10) }));
   const byLane = dict();
   for (const { state } of runs) for (const job of state.jobs ?? []) { if (!job || typeof job !== 'object') continue; const usd = num(jobSpend(job).usd); if (!usd) continue; const label = laneLabel(job.agent, job.model); byLane[label] = Math.round(((byLane[label] ?? 0) + usd) * 1e6) / 1e6; }

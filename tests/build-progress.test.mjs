@@ -62,11 +62,11 @@ test('percent, requirements, stages and left buckets exclude cancelled and propo
     journal: [{ kind: 'decision', id: 'D-1', confirm: true, text: 'Choose a launch date' }],
   });
   const p = await buildProgress({ ...data, now: NOW });
-  assert.deepEqual(p.percent.tickets, { done: 1, total: 4, pct: 25 });
+  assert.deepEqual(p.percent.tickets, { done: 1, total: 3, pct: 33 });
   assert.deepEqual(p.percent.requirements, { covered: 0, total: 2, pct: 0 });
   assert.equal(p.percent.overall, 0);
   assert.deepEqual(p.stages.map(stage => [stage.id, stage.total, stage.done, stage.open, stage.blocked]), [
-    ['S1', 1, 1, 0, 0], ['S2', 2, 0, 2, 1], ['S3', 1, 0, 1, 0],
+    ['S1', 1, 1, 0, 0], ['S2', 1, 0, 1, 0], ['S3', 1, 0, 1, 0],
   ]);
   assert.deepEqual(p.left.openByType, { docs: 1, human: 1, test: 1 });
   assert.deepEqual(p.left.human, [{ id: 'T-0003', title: 'Ticket T-0003', stage: 'S2' }]);
