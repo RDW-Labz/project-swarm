@@ -17,6 +17,7 @@ Out of scope: building the 8 managers as separate long-running agents (S6 define
 - S6: Managers, first versions
 - S7: Swarm v2 stage 1 (internal, about one month)
 - S8: Swarm v2 later stages
+- S9: Cluster (N devices, one ledger, autonomous node-to-node work)
 
 ## S1 Unblock autonomy
 ### R-001 The policy engine auto-decides routine requests.
@@ -283,15 +284,89 @@ Acceptance:
 - If the cloud runner misses heartbeat for 120 seconds, the lease returns to the local queue and a local worker can dequeue the ticket.
 - `burst=off` remains the default; projects with burst off show zero cloud jobs in `swarm queue list` for 24 hours after a burst-enabled project runs a job.
 
-### R-050 A rented GPU worker bursts only after the benchmark gates pass.
+### R-062 A rented GPU worker bursts only after the benchmark gates pass.
 Acceptance:
 - `swarm burst gpu status` prints three gate lines with measured values and PASS or FAIL: ready tickets greater than free slots across both Macs for 3 or more consecutive days; every flat-rate lane (Cursor, Codex) rate-limited during that period; GPU model first-try pass rate of 90 percent or more on the benchmark replay (bench harness, same ticket set as the Haiku baseline; last measured: GPU 73 percent, Haiku 100 percent).
 - With any gate FAIL, `swarm burst gpu start` exits non-zero with message `gates not met` and rents nothing, and the numbers are shown to the owner before any rental.
 - Once rented, the worker starts automatically when the queue stays long, shuts down automatically when the queue is empty for 10 minutes, and its cost counts toward the daily limit (stop or notify mode, hard ceiling still stops it).
 - The GPU worker is only given tickets not marked sensitive and never production code, secrets or customer data, verified by a test that a sensitive ticket is refused with `not allowed on rented lane`.
 
-### R-051 Cloud CPU runners run tests and end-to-end checks.
+### R-063 Cloud CPU runners run tests and end-to-end checks.
 Acceptance:
 - A registered cloud CPU runner runs a ticket's own test command and the full e2e suite and writes pass or fail plus duration to the event store.
 - It is the first burst feature built, before any GPU work, because test waiting is the likely larger win: the benchmark scorecard must show ticket ready-to-merged time and idle slot percent before and after, and the runner stays off unless that scorecard improves.
 - Same defaults as R-049: burst off by default, no sensitive code, local queue takes the ticket back after 120 seconds without a heartbeat, spend counted in the daily limit.
+
+## S9 Cluster
+### R-050 Any machine joins the cluster with tailnet auth and registers capabilities.
+Acceptance:
+- `swarm join` on a new host with valid tailnet credentials exits 0 and writes a node id under `~/.project-swarm/nodes/self`.
+- Within 5 seconds, `swarm node list` on the owner MacBook shows the new node with cores, RAM, lane list, GPU flag and machine worker limit.
+- A node missing tailnet auth exits non-zero and does not appear in the registry on any peer.
+
+### R-051 One shared ledger with ticket leases replaces hand-offs.
+Acceptance:
+- With cluster ledger enabled, R-048 shared queue behavior still holds and ticket claims use a lease record with monotonic fencing token in the ledger owner store.
+- A worker heartbeat every 30 seconds extends the lease; after 90 seconds without heartbeat the lease expires and the ticket returns to ready with exit 0 on `swarm queue release --expired`.
+- Two simulated workers racing to claim the same ticket produce exactly one holder and one exit non-zero with message `claim rejected`; double-claims in a release benchmark harness are 0.
+
+### R-052 Work stealing fills free slots across nodes.
+Acceptance:
+- A node with free slots runs `swarm autopilot go` and claims a ready ticket whose target worktree, file ownership, lane and capabilities match without owner action.
+- When two projects both have ready tickets, slot share across nodes stays within 1 ticket of the fair-share target for 10 consecutive steal cycles in the harness.
+- A ticket bound to project A on node B is never started on node C when A's files are owned by B only.
+
+### R-053 Event push wakes peers over the tailnet with inbox fallback.
+Acceptance:
+- A `handoff` message delivered over the persistent tailnet connection wakes the receiving orchestrator or autopilot within 1 second in the simulated harness.
+- While the receiver is offline, the sender queues the same typed message to the GitHub swarm-inbox repo and the receiver processes it within 60 seconds of coming back online.
+- Message latency p50 is under 100 ms and p95 under 1 s on the tailnet in the benchmark harness (injected clock, fake transport).
+
+### R-054 Typed signed messages are schema-validated and replay-safe.
+Acceptance:
+- Every cluster message type validates against JSON Schema before send; oversize payloads above 64 KiB are rejected with exit non-zero.
+- Secret scan runs on send and on receive; a message containing a fake API key pattern is dropped, logged, and never applied.
+- Forged signatures and replayed sequence numbers are rejected with exit non-zero; per-sender monotonic sequence gaps inside the nonce window fail closed.
+
+### R-055 Autonomous node flows never perform owner-only actions.
+Acceptance:
+- `ticket-done`, `release-shipped`, `handoff`, `request`, `question` and `ack` messages flow Mac mini to MacBook with zero owner relays recorded in the board message log for a full harness wave.
+- Messages that imply approve, merge to live, deploy, caps, spend or keys are dropped, logged, and surfaced to the owner; no side effect occurs on any node.
+- A simulated approve-attempt message leaves ticket state unchanged and increments the owner alert counter by 1.
+
+### R-056 Cluster messaging and node commands are visible on the board.
+Acceptance:
+- `swarm msg send`, `swarm msg list` and `swarm msg tail` exit 0 and show typed messages with sender node id and sequence.
+- `swarm node list` shows every joined machine with last heartbeat age under 120 seconds when healthy.
+- Swarm Watch board message log and node view list the same message ids as `swarm msg list` within 1 message.
+
+### R-057 Release benchmarks run against a fixed baseline and are stored per version.
+Acceptance:
+- `swarm bench cluster` runs the deterministic simulated-cluster harness and writes `bench/cluster/<version>.json` with throughput (tickets done per hour per node), latency p50 and p95, utilization percent and idle node-minutes percent.
+- Re-running the harness with the same seed produces identical JSON aside from `recordedAt`.
+- An optional `swarm bench cluster --tailnet` run is documented for the owner and is not required for CI exit 0.
+
+### R-058 CI fails on benchmark regression and Swarm Watch shows the trend.
+Acceptance:
+- CI compares the new `bench/cluster/<version>.json` to the stored baseline: throughput more than 10 percent worse, latency p95 more than 25 percent worse, or utilization more than 5 points worse fails the job with exit non-zero.
+- Swarm Watch shows the last five release benchmark points for throughput and latency with regression flagged red when the gate fails.
+- A deliberate regression injection in the harness test fails CI in under 2 minutes.
+
+### R-059 Chaos tests cover node death, network loss, skew and double claim.
+Acceptance:
+- Kill-node-mid-ticket: harness kills the worker process; within 120 seconds the ticket is ready on another node with no duplicate build artifacts.
+- Network-partition: sender cannot reach peer for 60 seconds; inbox fallback delivers after heal with no duplicate applied work.
+- Clock-skew: a node clock 5 minutes ahead cannot shorten another node's lease expiry (ledger owner clock only).
+- Two-node-claim-race: 1000 races yield 0 double claims (any double claim fails the release).
+
+### R-060 MacBook and Mac mini cut over from relayed hand-offs to the ledger.
+Acceptance:
+- With both machines on cluster ledger, relayed hand-off branches and owner-forwarded messages count 0 for 24 hours in the board log.
+- Ticket ready to started time p95 is under 30 seconds when any node has a free slot (harness with ready queue).
+- Slot utilization across all nodes is above 80 percent whenever ready tickets exist in a 1-hour harness run.
+
+### R-061 A third node joins and leaves without breaking leases or the board.
+Acceptance:
+- A third simulated node joins via `swarm join`, steals work, then leaves cleanly; `swarm node list` drops it within 30 seconds and no ticket stays leased to the departed node id.
+- Idle node-minutes while ready tickets exist stay under 1 percent of total node-minutes in the three-node harness.
+- Owner relays needed remain 0 and double-claims remain 0 for the three-node scenario.
