@@ -269,3 +269,26 @@ export async function writeManagerReplayScorecardFromResult(swarmRoot, replayRes
     now: options.now,
   });
 }
+
+/**
+ * Write a replay scorecard after {@link import('./replay.mjs').runManagerReplay} finishes (AC1).
+ *
+ * @param {{
+ *   ledgerDir?: string,
+ *   skipScorecard?: boolean,
+ *   swarmRoot?: string,
+ *   timeToFix?: number|null,
+ *   now?: () => number,
+ * }} replayOptions
+ * @param {ManagerReplayResult} replayResult
+ * @returns {Promise<{ scorecard: ManagerReplayScorecard, path: string }|null>}
+ */
+export async function writeManagerReplayScorecardForRun(replayOptions, replayResult) {
+  if (replayOptions?.skipScorecard) return null;
+  const swarmRoot = path.resolve(String(replayOptions?.swarmRoot ?? swarmPackageRoot));
+  const ledgerDir = String(replayOptions?.ledgerDir ?? '');
+  return writeManagerReplayScorecardFromResult(swarmRoot, replayResult, ledgerDir, {
+    timeToFix: replayOptions?.timeToFix,
+    now: replayOptions?.now,
+  });
+}
