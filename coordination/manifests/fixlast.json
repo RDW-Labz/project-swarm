@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "fixlast",
+      "agent": "auto",
+      "prompt": "Three failing tests after round 3, fix each at the right level. (1) tests/scratch-strict-broad.test.mjs (6) SWARM_SCRATCH_BASE validation: round 3 loosened resolveScratchBase in tools/scratch-roots.mjs so a base that EQUALS a registered real project root is accepted (a custom base equal to a real project would make that whole project scratch). This is a code regression: reject (warn, use the default base) when the base equals a registered root, or lies inside a registered root, or is the home folder or an ancestor of it; a registered root that lies inside the base (scratch worktrees live there by design) stays allowed. Keep the test as is. (2) tests/scratch-strict-broad.test.mjs (11): the auto-deny message must again name the request id, the reason scratch project and how to turn it off, with the text Move the project out of the scratch base or remove the .swarm-scratch marker (restore it in tools/handbuild-commands.mjs). (3) tests/registry-review.test.mjs (8) damaged registry is not overwritten on prune: forgetProjects now throws projects-unreadable naming the damaged file (the intended, safer behavior); update the test to assert.rejects with /damaged/ and that the file bytes are unchanged. Run tests/scratch-strict-broad.test.mjs tests/registry-review.test.mjs tests/registry-round2.test.mjs tests/registry-round3.test.mjs tests/forget.test.mjs tests/scratch-inbox.test.mjs and all pass. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tests/scratch-strict-broad.test.mjs",
+        "tests/registry-review.test.mjs",
+        "tools/scratch-roots.mjs",
+        "tools/handbuild-commands.mjs",
+        "tools/projects.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/scratch-strict-broad.test.mjs",
+        "tests/registry-review.test.mjs",
+        "tools/scratch-roots.mjs",
+        "tools/handbuild-commands.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/registry-round3.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/forget.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/handbuild-guard.test.mjs"
+      ]
+    }
+  ]
+}
