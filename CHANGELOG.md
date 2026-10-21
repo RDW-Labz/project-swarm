@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.165.0
+
+Resolved blockers never return, generated files never dirty the tree, and the update restarts servers safely.
+- **Autopilot:** a resolved blocker is never raised again for the same run; smoke, lane-test and probe runs never raise complete-but-not-integrated blockers; under-filled waves are batched into one wave.
+- **Generated state files (HANDOFF, usage ledger, build plan, .swarm):** never count as a dirty tree; HANDOFF regenerates only on real change and lists pending approvals from every worktree.
+- **Integrate:** commits its own verified output on swarm branches; per-branch integration lock; policy commit windows for generated files; ignoreTestsReason job field; machine-wide budget raise request.
+- **Runner version pointer:** The runner version pointer lives in an untracked local file; hook paths always point at current; reason words never trip the hand-build guard; a pinned version reports its own version.
+- **swarm update:** restarts the board and remote servers (SIGTERM, identity-checked), swarm update --when-idle, swarm forget, scratch projects never reach the owner inbox, commit-msg guard for manifest commits.
+
 ## 1.164.0
 
 Update restarts servers, --when-idle, forget, scratch projects stay out of the owner inbox, manifest commit guard.
