@@ -65,6 +65,9 @@ export function createWatchServer(opts) {
     deltaFile,
     idleMs = 1800000,
     now = Date.now,
+    heartbeatMs = 10000,
+    setIntervalFn = setInterval,
+    clearIntervalFn = clearInterval,
     // A fixed port and token, for a board that stays up between restarts (swarm remote). Without them: a free port and a fresh token every start.
     port: wantedPort = 0,
     token: fixedToken,
@@ -80,6 +83,7 @@ export function createWatchServer(opts) {
   let port = 0;
   let url = null;
   let timer = null;
+  let heartbeatTimer = null;
   let ticking = false;
   let closed = false;
   let streamEverClosed = false;
@@ -128,6 +132,17 @@ export function createWatchServer(opts) {
     streamEverClosed = true;
   }
 
+  function writeHeartbeats() {
+    const line = ': ping\n\n' + sse('ping', {});
+    for (const s of [...streams]) {
+      try {
+        s.res.write(line);
+      } catch {
+        dropStream(s);
+      }
+    }
+  }
+
   async function openEvents(res, method) {
     if (method === 'HEAD') {
       return send(res, method, 200, { 'Content-Type': 'text/event-stream; charset=utf-8' }, '');
@@ -136,6 +151,10 @@ export function createWatchServer(opts) {
     const run = (await getRunSnapshot()) ?? null;
     if (streams.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
     res.writeHead(200, { ...SECURITY, 'Content-Type': 'text/event-stream; charset=utf-8' });
+    if (res.socket) {
+      res.socket.setTimeout(0);
+      res.socket.setKeepAlive(true);
+    }
     res.write(sse('snapshot', run));
     const stream = { res, prev: run, throttle: createThrottle(250, now), slow: 0 };
     streams.add(stream);
@@ -256,6 +275,8 @@ export function createWatchServer(opts) {
     closed = true;
     if (timer) clearInterval(timer);
     timer = null;
+    if (heartbeatTimer) clearIntervalFn(heartbeatTimer);
+    heartbeatTimer = null;
     for (const s of [...streams]) {
       try {
         s.res.end();
@@ -307,6 +328,8 @@ export function createWatchServer(opts) {
         else res.end();
       });
     });
+    server.keepAliveTimeout = 65000;
+    server.headersTimeout = 66000;
     await new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(wantedPort, '127.0.0.1', () => resolve());
@@ -321,6 +344,8 @@ export function createWatchServer(opts) {
       tick();
     }, 1000);
     if (timer && typeof timer.unref === 'function') timer.unref();
+    heartbeatTimer = setIntervalFn(writeHeartbeats, Math.max(1, heartbeatMs));
+    if (heartbeatTimer && typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
     return { url, port };
   }
 

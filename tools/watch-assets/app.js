@@ -27,6 +27,8 @@
   var importFailed = false;
   var needRunFetch = false;
   var streamSnapshotSeen = false;
+  var streamLastMessageAt = 0;
+  var STREAM_HEARTBEAT_MS = 10000;
   var pendingDeltas = [];
   var drawer = document.getElementById('drawer');
   var lastFocus = null;
@@ -115,18 +117,36 @@
       });
   }
 
-  function setConnection(ok) {
+  function setConnection(state) {
     var status = document.getElementById('status');
     if (!status) return;
+    var ok = state === true || state === 'live';
     if (ok) {
-      if (status.getAttribute('data-conn') === 'lost') {
+      if (status.getAttribute('data-conn')) {
         status.removeAttribute('data-conn');
         renderAll(true);
       }
     } else {
       status.setAttribute('data-conn', 'lost');
-      status.textContent = 'connection lost';
+      status.textContent = state === 'connecting' ? 'connecting' : 'connection lost';
     }
+  }
+
+  function streamStatus() {
+    if (window.BoardLib && window.BoardLib.streamState) {
+      return window.BoardLib.streamState({ lastMessageAt: streamLastMessageAt, now: Date.now(), heartbeatMs: STREAM_HEARTBEAT_MS });
+    }
+    if (!streamLastMessageAt || Date.now() - streamLastMessageAt > STREAM_HEARTBEAT_MS * 2) return { state: 'connecting' };
+    return { state: 'live' };
+  }
+
+  function updateStreamConnection() {
+    setConnection(streamStatus().state);
+  }
+
+  function noteStreamMessage() {
+    streamLastMessageAt = Date.now();
+    updateStreamConnection();
   }
 
   function flushDeltas() {
@@ -161,11 +181,12 @@
 
   function openStream() {
     if (!window.EventSource) {
-      setConnection(false);
+      setConnection('connecting');
       return;
     }
     var es = new EventSource(withToken('/events'));
     es.addEventListener('snapshot', function (ev) {
+      noteStreamMessage();
       var run = parseEvent(ev);
       if (run === undefined) return;
       streamSnapshotSeen = true;
@@ -173,13 +194,18 @@
       renderAll();
     });
     es.addEventListener('delta', function (ev) {
+      noteStreamMessage();
       applyDeltaEvent(parseEvent(ev));
     });
+    es.addEventListener('ping', function () {
+      noteStreamMessage();
+    });
     es.onopen = function () {
-      setConnection(true);
+      streamLastMessageAt = Date.now();
+      updateStreamConnection();
     };
     es.onerror = function () {
-      setConnection(false);
+      updateStreamConnection();
     };
   }
 
@@ -317,4 +343,5 @@
 
   openStream();
   setInterval(refreshAll, 5000);
+  setInterval(updateStreamConnection, 1000);
 })();

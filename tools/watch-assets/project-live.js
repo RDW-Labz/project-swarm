@@ -222,9 +222,6 @@ var inflight = false, lastOkAt = 0, lastSig = '', lastAnnounce = '', rendered = 
 // What changes just because time passes (elapsed time, estimates, when an agent started) does not redraw the tab: elapsed time is kept current in the page.
 var VOLATILE = { now: 1, elapsedMs: 1, etaMs: 1, since: 1 };
 function chip() {
-  var l = L.liveness(lastOkAt, Date.now());
-  $('liveText').textContent = l.state === 'live' ? 'Live' : lastOkAt ? 'Stale (' + l.ageS + ' s)' : 'connecting';
-  $('liveDot').className = 'dot ' + (l.state === 'live' ? '' : 'off');
   document.querySelectorAll('.elapsed[data-started]').forEach(function (n) { n.textContent = elapsedText(n.getAttribute('data-started')); });
 }
 function problem(text) {

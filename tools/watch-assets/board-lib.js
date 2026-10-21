@@ -33,6 +33,40 @@
     return { state: age <= LIVE_MS ? 'live' : 'stale', ageS: Math.round(age / 1000) };
   }
 
+  // The project chip belongs to the page that owns both project reads. It only says
+  // connecting before the first good answer, then allows two polling intervals before
+  // calling the page stale. An optional slack keeps callers with a request timeout from
+  // declaring a read stale while that timeout is still in flight.
+  function chipState(options) {
+    var o = options || {};
+    var nowMs = Number(o.now);
+    var lastOkMs = Number(o.lastOkAt);
+    var pollMs = Number(o.pollMs);
+    var slackMs = Number(o.slackMs);
+    if (!isFinite(nowMs)) { nowMs = Date.now(); }
+    if (!isFinite(pollMs) || pollMs < 0) { pollMs = 0; }
+    if (!isFinite(slackMs) || slackMs < 0) { slackMs = 0; }
+    if (o.everOk !== true) { return { state: 'connecting', ageS: null }; }
+    var age = Math.max(0, nowMs - (isFinite(lastOkMs) ? lastOkMs : nowMs));
+    return { state: age > (pollMs * 2 + slackMs) ? 'stale' : 'live', ageS: Math.round(age / 1000) };
+  }
+
+  // EventSource exposes named events but not SSE comment lines. Treat any message or
+  // named ping as proof of a healthy stream until two heartbeat intervals pass.
+  function streamState(options) {
+    var o = options || {};
+    var nowMs = Number(o.now);
+    var lastMessageMs = Number(o.lastMessageAt);
+    var heartbeatMs = Number(o.heartbeatMs);
+    var slackMs = Number(o.slackMs);
+    if (!isFinite(nowMs)) { nowMs = Date.now(); }
+    if (!isFinite(heartbeatMs) || heartbeatMs < 0) { heartbeatMs = 0; }
+    if (!isFinite(slackMs) || slackMs < 0) { slackMs = 0; }
+    if (!isFinite(lastMessageMs) || lastMessageMs <= 0) { return { state: 'connecting', ageMs: null, ageS: null }; }
+    var age = Math.max(0, nowMs - lastMessageMs);
+    return { state: age > (heartbeatMs * 2 + slackMs) ? 'connecting' : 'live', ageMs: age, ageS: Math.round(age / 1000) };
+  }
+
   // "in 12 min", "in 2 h 5 min", "now" (the time has passed).
   function countdown(untilIso, nowMs) {
     var t = Date.parse(untilIso);
@@ -105,5 +139,5 @@
   function agentCounts(m) { var held = m.workers && isFinite(m.workers.total) ? m.workers.total : 0; return { live: m.agents.total, held: held, unshown: Math.max(0, held - m.agents.total) }; }
   function slotsText(m) { var c = agentCounts(m); return c.unshown ? c.unshown + ' worker slot' + (c.unshown === 1 ? ' is' : 's are') + ' held (' + c.held + ' held, ' + c.live + ' agent' + (c.live === 1 ? '' : 's') + ' running): a run is between jobs or has not reported its running job yet.' : ''; }
 
-  return { agentCounts: agentCounts, slotsText: slotsText, signature: signature, laneColor: laneColor, itemKey: itemKey, unread: unread, remember: remember, liveness: liveness, countdown: countdown, duration: duration, bays: bays, parseHash: parseHash, layoutGraph: layoutGraph, replay: replay, KNOWN_LANES: KNOWN_LANES, TABS: TABS, LIVE_MS: LIVE_MS };
+  return { agentCounts: agentCounts, slotsText: slotsText, signature: signature, laneColor: laneColor, itemKey: itemKey, unread: unread, remember: remember, liveness: liveness, chipState: chipState, streamState: streamState, countdown: countdown, duration: duration, bays: bays, parseHash: parseHash, layoutGraph: layoutGraph, replay: replay, KNOWN_LANES: KNOWN_LANES, TABS: TABS, LIVE_MS: LIVE_MS };
 }));

@@ -244,10 +244,10 @@
     p.lessons.forEach(function (x) { l.appendChild(el('div', 'board-entry', x.id + '  ' + (x.stage || '') + '  ' + (x.what || ''))); });
   }
 
+  var projectEverOk = false;
   function markProjectResponse() {
     window.__swarmProjectOkAt = Date.now();
-    var dot = $('liveDot'), label = $('liveText');
-    if (dot && label) { dot.className = 'dot'; label.textContent = 'Live'; }
+    projectEverOk = true;
   }
 
   // Both project requests share the page chip. Mark successful responses before their
@@ -265,9 +265,14 @@
   }
   setInterval(function () {
     var at = Number(window.__swarmProjectOkAt) || 0;
-    var live = window.BoardLib && window.BoardLib.liveness ? window.BoardLib.liveness(at, Date.now()) : { state: at ? 'live' : 'stale', ageS: null };
+    var live = window.BoardLib && window.BoardLib.chipState
+      ? window.BoardLib.chipState({ lastOkAt: at, now: Date.now(), pollMs: 5000, everOk: projectEverOk })
+      : { state: projectEverOk ? 'live' : 'connecting', ageS: null };
     var dot = $('liveDot'), label = $('liveText');
-    if (dot && label) { dot.className = 'dot' + (live.state === 'live' ? '' : ' off'); label.textContent = live.state === 'live' ? 'Live' : at ? 'Stale (' + live.ageS + ' s)' : 'connecting'; }
+    if (dot && label) {
+      dot.className = 'dot' + (live.state === 'live' ? '' : ' off');
+      label.textContent = live.state === 'live' ? 'Live' : live.state === 'stale' ? 'Stale (' + live.ageS + ' s)' : 'connecting';
+    }
   }, 250);
 
   function render(p) {
