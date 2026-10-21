@@ -155,8 +155,10 @@ function renderKpis(m) {
   var seg = el('div', 'seg');
   Object.keys(m.agents.byLane).forEach(function (lane) { if (m.agents.byLane[lane]) { var i = el('i'); i.style.flex = String(m.agents.byLane[lane]); i.style.background = L.laneColor(lane); seg.appendChild(i); } });
   box.appendChild(tile('Live agents', String(m.agents.total), m.liveRuns + ' live run' + (m.liveRuns === 1 ? '' : 's') + (L.agentCounts(m).unshown ? ', ' + L.agentCounts(m).held + ' worker slots held' : ''), m.agents.total ? seg : null));
-  box.appendChild(tile('Spend today', usd(c.todayUsd), 'last 7 days ' + usd(c.weekUsd)));
-  box.appendChild(tile('Billed, all time', usd(c.paidUsd), 'of which estimated ' + usd(c.paidEstimatedUsd) + ' | flat-rate list value ' + usd(c.flatRateListUsd)));
+  box.appendChild(tile('Billed today', usd(c.todayUsd), 'last 7 days billed ' + usd(c.weekUsd)));
+  box.appendChild(tile('List value today', usd(c.flatRateTodayUsd), 'flat-rate lanes, not billed; 7 days ' + usd(c.flatRateWeekUsd)));
+  box.appendChild(tile('Billed, all time', usd(c.paidUsd), 'of which estimated ' + usd(c.paidEstimatedUsd)));
+  box.appendChild(tile('List value, all time', usd(c.flatRateListUsd), 'not billed'));
   var w = m.workers;
   if (w) {
     var limit = w.invalid ? 'LIMIT INVALID' : w.max ? w.total + ' / ' + w.max : String(w.total);
@@ -166,7 +168,7 @@ function renderKpis(m) {
 }
 function renderOrch(m) {
   var o = m.orchestrator || { sessions: [] };
-  $('orchCount').textContent = String(o.sessions.filter(function (x) { return x.state !== 'idle'; }).length);
+  $('orchCount').textContent = String(o.sessions.filter(function (x) { return x.state !== 'idle' && x.state !== 'ended'; }).length);
   renderOrchestrator($('orchBay'), o.sessions, { now: Date.now() });
   var mix = o.swarmPct === null || o.swarmPct === undefined ? '' : 'All projects: swarm-built ' + o.swarmPct + '%, hand-built ' + o.handPct + '% (' + o.handBuiltFiles + ' file' + (o.handBuiltFiles === 1 ? '' : 's') + ' edited by hand).';
   $('orchNote').textContent = mix;
@@ -183,11 +185,17 @@ function renderBays(m) {
     if (!hit) {
       var node = el('div', 'bay'); node.style.setProperty('--c', L.laneColor(b.lane));
       var top = el('div', 'top'); var name = el('span', 'name', b.lane); var n = el('span', 'n num', '0'); top.appendChild(name); top.appendChild(n);
-      var heads = el('div', 'heads'); node.appendChild(top); node.appendChild(heads);
-      hit = { node: node, n: n, heads: heads }; map.set(b.lane, hit); host.appendChild(node);
+      var why = el('div', 'sub why-idle'); var heads = el('div', 'heads'); node.appendChild(top); node.appendChild(why); node.appendChild(heads);
+      hit = { node: node, n: n, why: why, heads: heads }; map.set(b.lane, hit); host.appendChild(node);
     }
     hit.n.textContent = String(b.running);
     hit.node.classList.toggle('idle', b.idle);
+    var idleReason = b.idle && m.laneIdle ? m.laneIdle[b.lane] : null;
+    hit.why.hidden = !idleReason;
+    hit.why.textContent = idleReason ? idleReason.text : '';
+    hit.why.title = idleReason ? idleReason.text : '';
+    hit.why.classList.toggle('warn', Boolean(idleReason && ['rate-limited', 'paused', 'daily-cap'].indexOf(idleReason.reason) !== -1));
+    hit.node.title = idleReason ? idleReason.text : '';
     var specs = b.idle ? [{ key: 'sleep|' + b.lane, state: 'sleeping', lane: b.lane }] : b.agents.slice(0, 10).map(headSpec);
     syncHeads(hit.heads, specs, 34, false);
     var more = b.agents.length - 10;
@@ -198,13 +206,23 @@ function renderBays(m) {
 }
 function capCell(p) {
   var s = p.spend, box = el('div');
+  function breakdown() {
+    box.appendChild(el('div', 'sub', 'billed ' + usd(s.billedUsd) + ' · list value ' + usd(s.listUsd) + ' (not billed)'));
+    box.appendChild(el('div', 'sub', 'cap counts: ' + (s.capBasis === 'billed' ? 'billed only' : 'billed + list value')));
+  }
   if (s.capUsd) {
-    box.appendChild(meter(100 * s.usd / s.capUsd, s.usd / s.capUsd > 0.75));
-    box.appendChild(el('span', 'mono sub', usd(s.usd) + ' of ' + usd(s.capUsd)));
+    var used = s.sharedTrees > 1 && typeof s.familyUsd === 'number' ? s.familyUsd : s.usd;
+    box.appendChild(meter(100 * used / s.capUsd, used / s.capUsd > 0.75));
+    box.appendChild(el('span', 'mono sub', usd(used) + ' of ' + usd(s.capUsd)));
+    breakdown();
+    if (s.sharedTrees > 1) { box.appendChild(el('div', 'sub', 'shared by ' + s.sharedTrees + ' trees (this one ' + usd(s.usd) + ')')); }
+    if (s.capInherited) { box.appendChild(el('div', 'sub', 'cap inherited from ' + String(s.inheritedFrom || '').split(/[\\/]/).pop())); }
   } else {
-    var r = el('div', 'livebar'); r.appendChild(pill(s.capInvalid ? 'CAP INVALID' : 'NO CAP', s.capInvalid ? 'bad' : 'warn')); r.appendChild(el('span', 'mono sub', usd(s.usd))); box.appendChild(r);
+    var r = el('div', 'livebar'); r.appendChild(pill(s.capInvalid ? 'CAP INVALID' : 'NO CAP', s.capInvalid ? 'bad' : 'warn')); box.appendChild(r);
+    breakdown();
   }
   if (s.reached) { box.appendChild(pill('CAP REACHED', 'bad')); }
+  if (s.why) { box.appendChild(el('div', 'sub why', 'Why capped: ' + s.why)); }
   return box;
 }
 function liveCell(p) {
@@ -230,19 +248,40 @@ function laneDots(p) {
   if (!d.childNodes.length) { d.appendChild(el('span', 'sub', '-')); }
   return d;
 }
+function progressLine(p) {
+  var progress = p.progress;
+  if (!progress) { return null; }
+  var value = typeof progress.overall === 'number' ? progress.overall : 0;
+  var label = progress.finished ? 'Finished' : (progress.overall === null || progress.overall === undefined ? 'Unknown' : String(progress.overall) + '%');
+  var eta = progress.eta === null || progress.eta === undefined ? '' : ' · ETA ' + progress.eta + 'd';
+  var line = el('div', 'sub progress-line');
+  line.appendChild(meter(value));
+  line.appendChild(el('span', '', label + ' · ' + (progress.current || 'Unknown') + eta));
+  return line;
+}
 function renderProjects(projects) {
   var psig = L.signature(projects, Math.floor(Date.now() / 60000));
   if (psig === state.projSig) { return; }
   state.projSig = psig;
-  var sorted = projects.slice().sort(function (a, b) { return (b.live.length - a.live.length) || String(b.lastActivityAt).localeCompare(String(a.lastActivityAt)); });
+  var byId = Object.create(null); projects.forEach(function (p) { byId[p.id] = p; });
+  var compare = function (a, b) { return (b.live.length - a.live.length) || String(b.lastActivityAt).localeCompare(String(a.lastActivityAt)); };
+  var childCompare = function (a, b) { return String(a.name).localeCompare(String(b.name)) || compare(a, b); };
+  var top = projects.filter(function (p) { return !p.parentId || !byId[p.parentId]; }).sort(compare);
+  var sorted = [];
+  top.forEach(function (p) {
+    sorted.push({ project: p, worktree: false });
+    projects.filter(function (child) { return child.parentId === p.id; }).sort(childCompare).forEach(function (child) { sorted.push({ project: child, worktree: true }); });
+  });
   var table = $('projTable'); table.textContent = '';
   var cards = $('projCards'); cards.textContent = '';
   if (!sorted.length) { var none = 'No projects yet. Run a swarm command inside a project, or swarm projects add PATH.'; $('projTable').appendChild(el('caption', 'empty', none)); cards.appendChild(el('div', 'empty', none)); cards.classList.add('show'); }
   else { cards.classList.remove('show'); table.appendChild(th(['Project', 'Live runs', 'Jobs', 'Tickets', 'Spend and cap', 'Lanes', 'Last activity'])); }
   var body = el('tbody');
-  sorted.forEach(function (p) {
-    var tr = el('tr');
-    var name = el('div'); name.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)])); name.appendChild(document.createTextNode(' ')); name.appendChild(el('span', 'stage', p.stage ? 'stage ' + p.stage : 'no stage'));
+  sorted.forEach(function (entry) {
+    var p = entry.project, isWorktree = entry.worktree;
+    var tr = el('tr'); if (isWorktree) { tr.className = 'wt'; }
+    var name = el('div'); name.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', (isWorktree ? '↳ ' : '') + p.name)])); name.appendChild(document.createTextNode(' ')); name.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage')));
+    var tableProgress = progressLine(p); if (tableProgress) { name.appendChild(tableProgress); }
     (p.warnings || []).forEach(function (w) { name.appendChild(el('div', 'sub', '')); name.lastChild.appendChild(pill(w.text, 'warn')); });
     var mixText = buildMixText(p.orchestrator); if (mixText) { name.appendChild(el('div', 'sub', '')); name.lastChild.appendChild(pill(mixText, p.orchestrator.handPct > 0 ? 'warn' : 'good')); }
     tr.appendChild(td(name)); tr.appendChild(td(liveCell(p), 'wrap'));
@@ -251,7 +290,8 @@ function renderProjects(projects) {
     tr.appendChild(td(capCell(p))); tr.appendChild(td(laneDots(p))); tr.appendChild(td(ago(p.lastActivityAt), 'mono'));
     body.appendChild(tr);
     var c = el('div', 'pcard');
-    var head = el('div', 'row'); head.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)])); head.appendChild(el('span', 'stage', p.stage ? 'stage ' + p.stage : 'no stage')); c.appendChild(head);
+    var head = el('div', 'row'); head.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', (isWorktree ? '↳ ' : '') + p.name)])); head.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); c.appendChild(head);
+    var cardProgress = progressLine(p); if (cardProgress) { c.appendChild(cardProgress); }
     (p.warnings || []).forEach(function (w) { var wl = el('div', 'sub'); wl.appendChild(pill(w.text, 'warn')); c.appendChild(wl); });
     var mixCard = buildMixText(p.orchestrator); if (mixCard) { var ml = el('div', 'sub'); ml.appendChild(pill(mixCard, p.orchestrator.handPct > 0 ? 'warn' : 'good')); c.appendChild(ml); }
     if (p.idleWithReady) { var idleReady = el('div', 'sub'); idleReady.appendChild(pill('Idle with ' + p.readyTickets + ' ready tickets', 'bad')); c.appendChild(idleReady); }
@@ -355,8 +395,8 @@ function renderCost(data) {
   state.costSig = csig;
   var c = data.machine.cost;
   var k = $('costKpis'); k.textContent = '';
-  k.appendChild(tile('Today', usd(c.todayUsd), 'billed lanes and rented GPUs'));
-  k.appendChild(tile('Last 7 days', usd(c.weekUsd), 'billed'));
+  k.appendChild(tile('Billed today', usd(c.todayUsd), 'billed lanes and rented GPUs'));
+  k.appendChild(tile('Billed, 7 days', usd(c.weekUsd), 'billed lanes and rented GPUs'));
   k.appendChild(tile('Billed, all time', usd(c.paidUsd), 'estimated part ' + usd(c.paidEstimatedUsd)));
   k.appendChild(tile('Flat-rate list value', usd(c.flatRateListUsd), 'Codex, Cursor, Claude subscription: not billed'));
   var oc = data.machine.orchestrator || { todayListUsd: 0, allListUsd: 0 };
@@ -388,7 +428,7 @@ function renderCost(data) {
       var nameCell = el('div', 'livebar'); var sw = el('i'); sw.style.cssText = 'width:10px;height:10px;border-radius:3px;display:block;background:' + L.laneColor(l.label); nameCell.appendChild(sw); nameCell.appendChild(el('span', 'name', l.label));
       tr.appendChild(td(nameCell)); tr.appendChild(td(l.kind === 'billed' ? pill('billed', 'good') : pill('flat-rate, list value', 'info')));
       tr.appendChild(td(String(l.jobsToday || 0), 'mono'));
-      tr.appendChild(td(l.todayUsd ? usd(l.todayUsd) : (l.kind === 'flat-rate' && l.jobsToday ? 'not reported' : usd(0)), 'mono'));
+      tr.appendChild(td(l.todayUsd ? usd(l.todayUsd) + (l.kind === 'billed' ? ' billed' : ' list value') : (l.kind === 'flat-rate' && l.jobsToday ? 'not reported list value' : usd(0) + (l.kind === 'billed' ? ' billed' : ' list value')), 'mono'));
       var cap = el('div');
       if (l.dailyCapUsd) { cap.appendChild(meter(100 * l.todayUsd / l.dailyCapUsd, l.todayUsd / l.dailyCapUsd > 0.75)); cap.appendChild(el('span', 'mono sub', usd(l.todayUsd) + ' of ' + usd(l.dailyCapUsd))); } else { cap.appendChild(el('span', 'sub', 'no daily cap')); }
       tr.appendChild(td(cap));
@@ -402,12 +442,12 @@ function renderCost(data) {
   }
   $('laneNote').textContent = 'Billed lanes count what they were charged today; flat-rate lanes show what the work is worth at list price. A pause comes from a real rate-limit or quota event recorded by the lane scheduler.';
   var s = $('spendTable'); s.textContent = '';
-  s.appendChild(th(['Project', 'Today', '7 days', 'All time', 'Spend and cap']));
+  s.appendChild(th(['Project', 'Billed today', 'Billed, 7 days', 'Billed, all time', 'List value, all time', 'Spend and cap']));
   var sb = el('tbody');
   data.projects.forEach(function (p) {
     var bp = data.machine.cost.byProject[p.id] || {};
     var tr = el('tr');
-    tr.appendChild(td(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)]))); tr.appendChild(td(usd(bp.todayUsd), 'mono')); tr.appendChild(td(usd(bp.weekUsd), 'mono')); tr.appendChild(td(usd(bp.allUsd), 'mono')); tr.appendChild(td(capCell(p)));
+    tr.appendChild(td(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)]))); tr.appendChild(td(usd(bp.todayUsd), 'mono')); tr.appendChild(td(usd(bp.weekUsd), 'mono')); tr.appendChild(td(usd(bp.paidUsd), 'mono')); tr.appendChild(td(usd(bp.flatRateListUsd), 'mono')); tr.appendChild(td(capCell(p)));
     sb.appendChild(tr);
   });
   s.appendChild(sb);

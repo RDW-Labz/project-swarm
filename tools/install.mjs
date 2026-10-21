@@ -225,10 +225,10 @@ async function ensureCheckpointHook(root){
 }
 
 // Hooks installed into the personal settings file `.claude/settings.local.json` (git-ignored, like the checkpoint hook): the Orchestrator lane's observer hooks (PreToolUse, PostToolUse,
-// Stop, UserPromptSubmit: tools/orchestrator-hook.mjs appends one small event, prints nothing) and the hand-build guard (a PreToolUse hook: tools/handbuild-guard.mjs). Each command points at
+// Stop, UserPromptSubmit, SessionEnd: tools/orchestrator-hook.mjs appends one small event, prints nothing) and the hand-build guard (a PreToolUse hook: tools/handbuild-guard.mjs). Each command points at
 // the install's `current` folder, so it keeps working after `swarm update`, and is wrapped so that a missing script (before the update that brings it) is a no-op, never an error.
 // An entry from an older install is replaced, anything else in the file is kept, and an unreadable settings file is left alone.
-export const ORCHESTRATOR_HOOK_EVENTS=Object.freeze({PreToolUse:'pre',PostToolUse:'post',Stop:'stop',UserPromptSubmit:'prompt'});
+export const ORCHESTRATOR_HOOK_EVENTS=Object.freeze({PreToolUse:'pre',PostToolUse:'post',Stop:'stop',UserPromptSubmit:'prompt',SessionEnd:'end'});
 export const GUARD_MATCHER='Edit|Write|MultiEdit|NotebookEdit|Bash';
 const hookCommand=(script,arg)=>`test -f ${JSON.stringify(script)} && node ${JSON.stringify(script)}${arg?` ${arg}`:''} || true`;
 const commandOf=hook=>typeof hook?.command==='string'?hook.command:'';

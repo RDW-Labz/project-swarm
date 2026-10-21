@@ -233,5 +233,13 @@ body.paused-motion *, body.paused-motion *::before, body.paused-motion *::after 
 .orch-card { display: flex; gap: 10px; align-items: flex-start; padding: 10px; border: 1px solid var(--line-soft); border-radius: 12px; min-width: 0; }
 .orch-card[data-state="waiting"] { border-color: var(--warn, #f59e0b); }
 .orch-card[data-state="idle"] { opacity: .65; }
+.orch-card[data-state="ended"] { opacity: .45; }
 .orch-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
 .orch-name { font-weight: 600; } .orch-hand { color: var(--warn, #b45309); font-size: 12px; }
+
+.milestones { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0; padding: 0; }
+.milestones li { border: 1px solid var(--line); border-radius: var(--pill); padding: 6px 10px; color: var(--muted); font-size: 12px; }
+.milestones li.current { border-color: var(--accent); font-weight: 700; color: var(--fg); }
+.milestones li.done { color: var(--faint); }
+.milestones li.done::before { content: '✓ '; color: var(--accent); }
+.milestones li.unknown { border-style: dashed; color: var(--faint); }

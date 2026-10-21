@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.157.0
+
+Board batch: worktrees, build progress, deploy milestone, ghost sessions, billed vs list value, idle lane reasons.
+- **Worktrees:** scratch worktrees group under their project and inherit its cap; a why-capped line shows what limits it.
+- **Build progress:** each project card shows percent done, stages, what is left, milestones and ETA.
+- **Deployed:** a Deployed milestone from GitHub Production deployments (read-only).
+- **Ghost sessions:** exited orchestrator sessions end on SessionEnd or when Claude exits and leave the board after 5 minutes.
+- **Billed vs list value:** every money figure says billed or list value and the cap line says what it counts.
+- **Idle lanes:** idle lane bays say why (rate limit, cap, not set up, not routed, queued, no ready jobs).
+
 ## 1.156.0
 
 Batch 1: autopilot ledger-only start, crash fixes, init base detail, machine limit resolver, integrated snapshot module.

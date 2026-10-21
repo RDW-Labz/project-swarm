@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "ghost-sessions",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "TASK (owner item Z): ghost orchestrator cards. A Claude Code session that has exited keeps a card on Swarm Watch for up to 60 minutes (shown as 'waiting on you', then idle) because the Orchestrator lane has no end signal. Mark a session ENDED when SessionEnd fires or its Claude process is gone, and drop its card 5 minutes after it ended. Do NOT touch tools/swarm.mjs, package.json, CHANGELOG.md or README.md.\n\n1) tools/orchestrator-events.mjs: add 'end' to EVENT_KINDS (keep 'blocked'). buildEvent('end', input) returns {at, s, e:'end'} plus optional `why` = input.reason trimmed to 40 chars (SessionEnd passes reason). For 'prompt' and 'stop' (and 'end') events accept an optional process identity passed in by the hook via the options argument: `opts.proc = { pid, host }` -> store `pid` (positive integer) and `h` (host string, max 64 chars). Never add pid to pre/post events. Add `export const ENDED_SHOWN_MS = 5 * 60 * 1000`.\n   sessionsOf(events, now, { isAlive, host } = {}): track per session the last seen `pid`/`h` and an `endedAt` (the at of an 'end' event; a later prompt/pre/post event in the same session clears endedAt, i.e. a resumed session is live again). After folding: if endedAt is set -> state 'ended', since = endedAt. Else if isAlive is a function and the session has a pid recorded on this host (h === host, or h missing and host undefined) and isAlive(pid) === false -> state 'ended', endedAt = lastAt, since = lastAt. An ended session's `shown` = (now - Date.parse(endedAt)) <= ENDED_SHOWN_MS. Output gains `endedAt` (null when not ended). Every other state rule and constant stays as it is. Without isAlive (current callers/tests) behavior is unchanged except for 'end' events.\n2) tools/orchestrator-hook.mjs: for kinds prompt, stop and end, find the Claude process id once: let p = process.ppid; use child_process.spawnSync('ps', ['-o', 'ppid=,comm=', '-p', String(p)], { encoding: 'utf8', timeout: 1000 }) to read the parent's own parent and command name; if the command basename is sh, bash, zsh or dash (the hook command runs through a shell), the Claude pid is that ppid, else it is p. Any failure -> no proc. Pass { proc: { pid, host: os.hostname() } } to buildEvent. pre/post never spawn anything (the hook runs on every tool call). Keep 'exits 0 whatever happens'. Update the usage comment to include 'end'.\n3) tools/install.mjs: add SessionEnd:'end' to ORCHESTRATOR_HOOK_EVENTS (no matcher), so installs/refreshes add the SessionEnd hook. Update the comment listing the events.\n4) tools/board-orchestrator.mjs: call sessionsOf with { isAlive: defaultIsAlive, host: os.hostname() } where defaultIsAlive(pid) uses process.kill(pid, 0): true on success or EPERM, false on ESRCH, true on anything else (unknown counts as alive). Accept an injectable `isAlive` option through projectOrchestrator's options for tests. Session cards carry `endedAt`.\n5) tools/watch-assets/orchestrator-view.js: state 'ended' -> head state 'sleeping', label 'ended' plus ' ' + how long ago (use the existing time helpers in that file or board-lib if present), card data-state 'ended'. tools/watch-assets/board.js renderOrch: the count excludes 'ended' as well as 'idle'. Add `.orch-card[data-state=\"ended\"] { opacity: .45; }` to tools/watch-assets/swarm-ui.css.\n\nTests (tests/orchestrator-lane.test.mjs, update in place): the install test now expects five events including SessionEnd with command arg 'end'; sessionsOf: an 'end' event makes the session 'ended' and shown for 5 min then hidden; a later prompt in the same session makes it live again; with isAlive returning false for the recorded pid on the same host the session is 'ended' (shown only while lastAt is within 5 min), with a different host it is not checked; pre/post events never carry pid; buildEvent('end') keeps reason trimmed. Add a hook test that runs tools/orchestrator-hook.mjs for 'prompt' with a temp project (as existing hook tests do, if any) and checks the event has a positive integer pid and h, and for 'pre' has neither. Run `node --import ./tests/_isolate-config.mjs --test tests/orchestrator-lane.test.mjs tests/handbuild-guard.test.mjs tests/board-page.test.mjs tests/watch-ui.test.mjs` and `node tools/check-package.mjs`. tests/phase10b-init.test.mjs may pin the installed hook events: update it only if it breaks because of SessionEnd. Tests in ignoreTests import these modules for unrelated behavior; the coordinator runs the full suite after integration.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tools/orchestrator-usage.mjs",
+        "tools/watch-assets/board-lib.js"
+      ],
+      "outputs": [
+        "tools/orchestrator-events.mjs",
+        "tools/orchestrator-hook.mjs",
+        "tools/install.mjs",
+        "tools/board-orchestrator.mjs",
+        "tools/watch-assets/orchestrator-view.js",
+        "tools/watch-assets/board.js",
+        "tools/watch-assets/swarm-ui.css",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10b-init.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/install.test.mjs",
+        "tests/installed-swarm.test.mjs",
+        "tests/link.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/phase10-swarm-command.test.mjs",
+        "tests/pointer-safety.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/t101-vendored-skills.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/update.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}

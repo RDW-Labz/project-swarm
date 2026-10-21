@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "worktree-family-scratch",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "Small fix in tools/project-spend.mjs worktreeFamily(root): swarm's own job worktrees are registered in <main>/.git/worktrees but live under the scratch root (scratchRootDir() from tools/claude-shell.mjs, default ~/.project-swarm-scratch), not under a '.swarm' folder, so they are wrongly counted as family members (the board then says 'shared by 3 trees' while a build runs). Import scratchRootDir from './claude-shell.mjs' (check that import creates no cycle; if it would, copy the same 4-line resolution into project-spend.mjs with a comment pointing at claude-shell.mjs). Give worktreeFamily an options argument `{ env = process.env, home = os.homedir() } = {}` and skip any discovered member that is inside the realpath (or resolved path) of scratchRootDir({ env, home }) (inside = equal or starts with it + path.sep), in addition to the existing '.swarm' segment rule. The requested root itself is always kept. projectSpend(root) passes nothing new (defaults). Add one test to tests/board-worktrees.test.mjs: a real `git worktree add` into a temp folder used as SWARM_SCRATCH_ROOT (pass env {SWARM_SCRATCH_ROOT: thatDir} to worktreeFamily) is left out of the family, while the same worktree is included when the env points elsewhere. Write only tools/project-spend.mjs and tests/board-worktrees.test.mjs. Run `node --import ./tests/_isolate-config.mjs --test tests/board-worktrees.test.mjs tests/project-spend.test.mjs` and `node tools/check-package.mjs`.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/claude-shell.mjs",
+        "tests/board-page.test.mjs",
+        "tests/project-spend.test.mjs"
+      ],
+      "outputs": [
+        "tools/project-spend.mjs",
+        "tests/board-worktrees.test.mjs"
+      ],
+      "timeoutMs": 1200000
+    }
+  ]
+}

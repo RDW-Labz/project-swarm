@@ -11,7 +11,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { registerProject, listProjects, removeProject, projectId } from '../tools/projects.mjs';
 import { appendHistory, readHistory, historyCsv } from '../tools/history.mjs';
-import { laneLabel, costOf, boardSnapshot, projectDetail, projectOverview, historyEventsOf } from '../tools/board-data.mjs';
+import { laneLabel, costOf, readRunStates, boardSnapshot, projectDetail, projectOverview, historyEventsOf } from '../tools/board-data.mjs';
 import { projectSpend } from '../tools/project-spend.mjs';
 import { createBoardApi, makeRunServer } from '../tools/watch-cli.mjs';
 import { createWatchServer } from '../tools/watch-server.mjs';
@@ -128,7 +128,7 @@ test('cost: the machine totals are exactly the sums of the project totals, each 
     assert.equal(snap.machine.cost.byProject[p.id].allUsd, overview.cost.allUsd);
   }
   const sum = key => Math.round(snap.projects.reduce((s, p) => s + p.cost[key], 0) * 1e6) / 1e6;
-  for (const key of ['allUsd', 'todayUsd', 'weekUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) assert.equal(snap.machine.cost[key], sum(key), key);
+  for (const key of ['allUsd', 'todayUsd', 'weekUsd', 'flatRateTodayUsd', 'flatRateWeekUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) assert.equal(snap.machine.cost[key], sum(key), key);
   const a = snap.projects.find(p => p.id === A.id).cost;
   const r6 = x => Math.round(x * 1e6) / 1e6;
   assert.equal(a.allUsd, r6(0.5 + 1.25 + 2 + 0.6 + 3 + 0.25), 'jobs plus the rental');
@@ -136,8 +136,43 @@ test('cost: the machine totals are exactly the sums of the project totals, each 
   assert.equal(a.weekUsd, r6(0.5 + 1.25 + 0.25), 'the last seven days');
   assert.equal(a.paidEstimatedUsd, 0.5, 'an estimate from tokens is marked as one');
   assert.equal(a.flatRateListUsd, 0.6, 'a Claude subscription job is a list value, not a bill');
+  assert.equal(a.flatRateTodayUsd, 0, 'old flat-rate work is not today list value');
+  assert.equal(a.flatRateWeekUsd, 0, 'old flat-rate work is not 7-day list value');
   assert.equal(a.paidUsd, r6(0.5 + 1.25 + 2 + 3 + 0.25), 'paid = billed per use, with the rented GPU');
   assert.equal(snap.machine.cost.allUsd, r6(a.allUsd + 0.1));
+});
+
+test('cost splits billed and flat-rate list value by day and cap basis is surfaced', async t => {
+  const home = await tmp(t);
+  const A = await project(t, 'cost-split', {
+    home,
+    runs: {
+      today: { status: 'complete', finishedAt: iso(NOW - 1000), jobs: [job('billed', 'openrouter', 'x', 2, NOW - 1000), job('flat-today', 'claude', 'opus', 3, NOW - 2000)] },
+      old: { status: 'complete', finishedAt: iso(NOW - 3 * DAY), jobs: [job('flat-old', 'codex', 'gpt-5.5', 4, NOW - 3 * DAY)] },
+    },
+  });
+  const B = await project(t, 'cost-split-empty', { home });
+  const runs = await readRunStates(A.root);
+  const cost = costOf(runs, NOW);
+  assert.deepEqual([cost.todayUsd, cost.weekUsd, cost.flatRateTodayUsd, cost.flatRateWeekUsd, cost.allUsd, cost.paidUsd, cost.flatRateListUsd], [2, 2, 3, 7, 9, 2, 7]);
+
+  const defaultSummary = async () => ({ spendUsd: 9, capUsd: 10 });
+  const overview = await projectOverview(A, [], { now: NOW, summary: defaultSummary });
+  assert.equal(overview.spend.billedUsd, 2);
+  assert.equal(overview.spend.listUsd, 7);
+  assert.equal(overview.spend.capBasis, 'billed+list');
+  const injected = await projectOverview(A, [], { now: NOW, summary: async () => ({ spendUsd: 9, capUsd: 10, capBasis: 'billed' }) });
+  assert.equal(injected.spend.capBasis, 'billed');
+
+  const detail = await projectDetail(A, { now: NOW, summary: defaultSummary });
+  assert.equal(detail.spend.billedUsd, 2);
+  assert.equal(detail.spend.listUsd, 7);
+  assert.equal(detail.spend.capBasis, 'billed+list');
+
+  const snap = await boardSnapshot({ projects: [A, B], liveRuns: [], now: NOW, summary: async () => ({}) });
+  for (const key of ['flatRateTodayUsd', 'flatRateWeekUsd', 'paidUsd', 'flatRateListUsd']) {
+    assert.equal(snap.machine.cost[key], snap.projects.reduce((sum, p) => sum + p.cost[key], 0), key);
+  }
 });
 
 test('stage, tickets, caps and last activity per project; a project is never mixed with another (same run id, same ticket ids)', async t => {
@@ -161,6 +196,8 @@ test('stage, tickets, caps and last activity per project; a project is never mix
   assert.equal(db.runs[0].jobs, 2, 'the same run id in the other project is a different run');
   assert.equal(da.tickets.length, 4);
   assert.equal(db.tickets.length, 2);
+  assert.ok('progress' in da);
+  assert.ok('progress' in db);
   assert.ok(!JSON.stringify(da).includes(B.root) && !JSON.stringify(db).includes(A.root), 'neither project\'s data names the other\'s folder');
   assert.equal(da.spend.byLane.Haiku, 2.5);
   assert.equal(db.spend.byLane.Haiku, 0.1);

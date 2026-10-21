@@ -31,6 +31,7 @@ import { lanesDir, machineConcurrency } from './lanes.mjs';
 import { loadLocalConfig } from './local-config.mjs';
 import { backfillHistory } from './board-commands.mjs';
 import { projectSummary } from './project-spend.mjs';
+import { createDeployTracker } from './deploy-status.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -273,6 +274,7 @@ const BOARD_RUN_IDLE_MS = 10 * 60 * 1000;
 
 export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000 } = {}) {
   const watchers = new Map();                // `${projectId}/${runId}` -> { server, url, closed }
+  const deployTracker = createDeployTracker({ env });
   let boardUrl = null;
   const cachedBy = new Map();                // by whether test/temp projects are shown
   const showsScratch = q => q?.scratch === '1' || q?.scratch === true;
@@ -292,7 +294,18 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
         const projects = scratch ? all : all.filter(p => !isScratchRoot(p.root));
         const caps = (() => { try { const lanes = resolveBudget({ config: loadLocalConfig({ env }) }).lanes ?? {}; return Object.fromEntries(Object.entries(lanes).map(([k, v]) => [k, v?.dailyUsd])); } catch { return {}; } })();
         const configured = (() => { try { return Object.entries(loadLocalConfig({ env }).lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k]) => k); } catch { return []; } })();
-        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: now(), workers: await workersHeld({ dir: lanesDir(env), max, invalid }), lanes: (laneToday, jobsToday) => laneUsage({ laneToday, jobsToday, configured, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: now() }) });
+        const configuredModels = (() => { try { return Object.fromEntries(Object.entries(loadLocalConfig({ env }).lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k, v]) => [k, v.model])); } catch { return {}; } })();
+        const laneState = async () => {
+          let store;
+          try { store = JSON.parse(await fs.readFile(path.join(lanesDir(env), 'lanes.json'), 'utf8')); } catch { return { configured: configuredModels, caps }; }
+          const demand = {};
+          const at = now();
+          for (const [agent, entry] of Object.entries(store?.demand ?? {})) {
+            if (entry && Number.isInteger(entry.count) && entry.count > 0 && Number.isFinite(entry.at) && at - entry.at <= 5000) demand[agent] = (demand[agent] ?? 0) + entry.count;
+          }
+          return { configured: configuredModels, pauses: store?.pauses && typeof store.pauses === 'object' ? store.pauses : {}, demand, caps };
+        };
+        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: now(), laneState, workers: await workersHeld({ dir: lanesDir(env), max, invalid }), lanes: (laneToday, jobsToday) => laneUsage({ laneToday, jobsToday, configured, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: now() }), deployStatus: root => isScratchRoot(root) ? null : deployTracker.get(root) });
         // What waits for the owner (read-only); a failure here never hides the rest of the board.
         snapshot.inbox = await boardInbox({ projects, now: now(), env }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
         snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : all.length - projects.length, total: all.filter(p => isScratchRoot(p.root)).length };
@@ -306,7 +319,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       const project = await find(id);
       if (!project) return null;
       const liveRuns = (await live()).filter(r => r.root === project.root);
-      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)) });
+      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), deployStatus: root => isScratchRoot(root) ? null : deployTracker.get(root) });
     },
     // Every run alive in one project, combined (the Live tab of the project page).
     async live(id) {
