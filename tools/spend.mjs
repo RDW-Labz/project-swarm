@@ -202,9 +202,17 @@ export function estimateReservation({ job, lane, model, inputChars, rates, laneD
   let usd, source;
   if (job.maxCredits != null && rates?.creditUsd != null) { usd = job.maxCredits * rates.creditUsd; source = 'max-credits'; }
   else if (rates?.inUsdPerToken != null && rates?.outUsdPerToken != null) { usd = inputChars * rates.inUsdPerToken + maxOut * rates.outUsdPerToken; source = 'rate'; }
-  else { usd = laneDefaults[lane]?.reserveUsd ?? laneDefaults[lane] ?? LANE_RESERVE_DEFAULTS[lane]; source = 'lane-default'; }
+  else {
+    const fromLane = object(laneDefaults) && Object.hasOwn(laneDefaults, lane) ? (laneDefaults[lane]?.reserveUsd ?? laneDefaults[lane]) : undefined;
+    usd = fromLane ?? (Object.hasOwn(LANE_RESERVE_DEFAULTS, lane) ? LANE_RESERVE_DEFAULTS[lane] : RESERVE_FALLBACK);
+    source = 'lane-default';
+  }
   // Free/empty pricing cannot make an unreported paid attempt disappear.
-  if (!(usd > 0)) { usd = laneDefaults[lane]?.reserveUsd ?? laneDefaults[lane] ?? LANE_RESERVE_DEFAULTS[lane]; source = 'lane-default'; }
+  if (!(usd > 0)) {
+    const fromLane = object(laneDefaults) && Object.hasOwn(laneDefaults, lane) ? (laneDefaults[lane]?.reserveUsd ?? laneDefaults[lane]) : undefined;
+    usd = fromLane ?? (Object.hasOwn(LANE_RESERVE_DEFAULTS, lane) ? LANE_RESERVE_DEFAULTS[lane] : RESERVE_FALLBACK);
+    source = 'lane-default';
+  }
   return { usd, tokens, source };
 }
 
@@ -252,16 +260,37 @@ const UNBILLED_LANES = new Set(['claude', 'codex', 'cursor', 'hermes', 'qwen']);
 export function isMeteredLane(lane) {
   return typeof lane !== 'string' || !UNBILLED_LANES.has(lane);
 }
+const RESERVE_FALLBACK = 0.5;
+function coerceReserve(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : RESERVE_FALLBACK;
+}
 function laneReserveDefault(lane) {
-  const key = typeof lane === 'string' && lane in LANE_RESERVE_DEFAULTS ? lane : 'anthropic';
-  return LANE_RESERVE_DEFAULTS[key];
+  const key = typeof lane === 'string' && Object.hasOwn(LANE_RESERVE_DEFAULTS, lane) ? lane : 'anthropic';
+  return coerceReserve(LANE_RESERVE_DEFAULTS[key]);
+}
+function rentedUnknownReserve(state) {
+  const lane = state.budget?.lanes?.rented;
+  for (const key of ['dailyUsd', 'hourlyUsd', 'reserveUsd']) {
+    const value = lane?.[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+  }
+  const rental = state.rental;
+  for (const key of ['dailyUsd', 'hourlyUsd']) {
+    const value = rental?.[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+  }
+  return RESERVE_FALLBACK;
 }
 export function jobSpend(record) {
   return { usd: spendNumber(record?.costUsd), tokens: spendNumber(record?.usage?.total_tokens) };
 }
 export function runTotals(state) {
-  let rentalBilled = spendNumber(state.rental?.usd) ?? 0;
-  const totals = { usd: rentalBilled, tokens: 0, unknownUsd: [], billedUsd: 0, billedUnknown: 0, billedUnknownUsd: 0, hasPaidLaneJob: rentalBilled > 0 };
+  const rentalUsdRaw = state.rental?.usd;
+  const rentalUsdValid = spendNumber(rentalUsdRaw);
+  const invalidRental = rentalUsdRaw !== undefined && rentalUsdRaw !== null && rentalUsdValid === null;
+  let rentalBilled = rentalUsdValid ?? 0;
+  let rentedUnknownJobs = 0;
+  const totals = { usd: rentalBilled, tokens: 0, unknownUsd: [], billedUsd: 0, billedUnknown: 0, billedUnknownUsd: 0, billedUnknownRented: 0, hasPaidLaneJob: rentalBilled > 0 };
   for (const record of state.jobs ?? []) {
     const lane = record.agent;
     const metered = isMeteredLane(lane);
@@ -273,10 +302,7 @@ export function runTotals(state) {
       if (usd !== null) rentalBilled = Math.max(rentalBilled, usd);
       if (metered) {
         totals.hasPaidLaneJob = true;
-        if (usd === null && rentalBilled === 0) {
-          totals.billedUnknown += 1;
-          totals.billedUnknownUsd += laneReserveDefault('rented');
-        }
+        if (usd === null) rentedUnknownJobs += 1;
       }
       continue;
     }
@@ -290,6 +316,21 @@ export function runTotals(state) {
     }
   }
   totals.billedUsd += rentalBilled;
+  const rentedReserve = rentedUnknownReserve(state);
+  if (rentalBilled === 0) {
+    if (invalidRental && rentedUnknownJobs === 0) {
+      totals.billedUnknown += 1;
+      totals.billedUnknownUsd += coerceReserve(rentedReserve);
+      totals.billedUnknownRented += 1;
+      totals.hasPaidLaneJob = true;
+    }
+    if (rentedUnknownJobs > 0) {
+      totals.billedUnknown += rentedUnknownJobs;
+      totals.billedUnknownUsd += rentedUnknownJobs * coerceReserve(rentedReserve);
+      totals.billedUnknownRented += rentedUnknownJobs;
+      totals.hasPaidLaneJob = true;
+    }
+  }
   return totals;
 }
 export function laneDailyTotals(states, { now = () => new Date(), excludeRunId } = {}) {

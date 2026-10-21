@@ -8,7 +8,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { PAID_LANES, LANE_RESERVE_DEFAULTS, runTotals } from '../tools/spend.mjs';
-import { projectSpend, projectCapDecision, projectSummary } from '../tools/project-spend.mjs';
+import { projectSpend, projectCapDecision, projectSummary, treeSpend } from '../tools/project-spend.mjs';
 
 const exec = promisify(execFile);
 
@@ -142,4 +142,79 @@ test('projectCapDecision uses billedUsd not list when cap is tight on list-only 
   const spent = { usd: 100, listUsd: 100, billedUsd: 2, runs: 50, exposureUsd: 0 };
   assert.equal(projectCapDecision({ spent, cap: 5 }), null);
   assert.ok(projectCapDecision({ spent: { ...spent, billedUsd: 5 }, cap: 5 }));
+});
+
+const RENTED_RESERVE = 0.5;
+
+test('rented job without cost reserves a nonzero amount regardless of job order', () => {
+  const unknownRented = { id: 'r', agent: 'rented', usage: { total_tokens: 1 } };
+  const withCostFirst = runTotals({ jobs: [{ id: 'r2', agent: 'rented', costUsd: 4, usage: { total_tokens: 1 } }, unknownRented] });
+  assert.equal(withCostFirst.billedUsd, 4);
+  assert.equal(withCostFirst.billedUnknown, 0);
+  const onlyUnknown = runTotals({ jobs: [unknownRented] });
+  assert.equal(onlyUnknown.billedUsd, 0);
+  assert.equal(onlyUnknown.billedUnknown, 1);
+  assert.equal(onlyUnknown.billedUnknownUsd, RENTED_RESERVE);
+  const reversed = runTotals({ jobs: [unknownRented, { id: 'r3', agent: 'rented', costUsd: 0, usage: { total_tokens: 1 } }] });
+  assert.equal(reversed.billedUnknown, 1);
+  assert.equal(reversed.billedUnknownUsd, RENTED_RESERVE);
+  const twoUnknown = runTotals({ jobs: [unknownRented, { id: 'r4', agent: 'rented', usage: { total_tokens: 2 } }] });
+  assert.equal(twoUnknown.billedUnknown, 2);
+  assert.equal(twoUnknown.billedUnknownUsd, RENTED_RESERVE * 2);
+});
+
+test('agent names constructor and toString count as metered unknown with a numeric reserve', () => {
+  for (const agent of ['constructor', 'toString']) {
+    const totals = runTotals({ jobs: [{ id: agent, agent, usage: { total_tokens: 10 } }] });
+    assert.equal(totals.billedUnknown, 1);
+    assert.equal(totals.billedUnknownUsd, LANE_RESERVE_DEFAULTS.anthropic);
+    assert.ok(Number.isFinite(totals.billedUnknownUsd) && totals.billedUnknownUsd > 0);
+  }
+});
+
+test('invalid rental.usd is counted at the rented reserve, not as free', () => {
+  const totals = runTotals({
+    rental: { usd: Number.NaN },
+    jobs: [{ id: 'r', agent: 'rented', usage: { total_tokens: 1 } }],
+  });
+  assert.equal(totals.billedUsd, 0);
+  assert.equal(totals.billedUnknown, 1);
+  assert.equal(totals.billedUnknownUsd, RENTED_RESERVE);
+  const decision = projectCapDecision({
+    spent: { usd: 0, listUsd: 0, billedUsd: 0, billedUnknown: 1, billedUnknownUsd: RENTED_RESERVE, billedUnknownRented: 1, runs: 1, exposureUsd: 0 },
+    cap: RENTED_RESERVE,
+    source: 'test',
+  });
+  assert.ok(decision);
+  assert.match(decision.message, /1 rented job with unknown cost counted at the reserve/);
+  assert.match(decision.message, /rented/);
+});
+
+test('treeSpend cache misses when inode changes but mtime and size stay the same', async t => {
+  const { root } = await repo(t);
+  const id = 'cache-ino';
+  const pad = 'x'.repeat(40);
+  const stateA = { id, status: 'complete', jobs: [{ id: 'j', agent: 'anthropic', costUsd: 1, usage: { total_tokens: 1 } }], _pad: pad };
+  await writeRun(root, id, stateA);
+  const file = path.join(root, '.swarm/runs', id, 'state.json');
+  const first = await treeSpend(root);
+  assert.equal(first.billedUsd, 1);
+  const { mtimeMs, size, ino: firstIno } = await fs.stat(file);
+  const stateB = { ...stateA, jobs: [{ id: 'j', agent: 'anthropic', costUsd: 8, usage: { total_tokens: 1 } }] };
+  let payload = JSON.stringify({ id, ...stateB });
+  if (Buffer.byteLength(payload) !== size) {
+    const delta = size - Buffer.byteLength(payload);
+    stateB._pad = pad + (delta > 0 ? 'y'.repeat(delta) : pad.slice(0, pad.length + delta));
+    payload = JSON.stringify({ id, ...stateB });
+  }
+  assert.equal(Buffer.byteLength(payload), size, 'payload length must match for inode-only invalidation');
+  await fs.unlink(file);
+  await fs.writeFile(file, payload);
+  await fs.utimes(file, new Date(mtimeMs), new Date(mtimeMs));
+  const afterStat = await fs.stat(file);
+  assert.ok(Math.abs(afterStat.mtimeMs - mtimeMs) < 2, 'mtime preserved via utimes');
+  assert.equal(afterStat.size, size);
+  assert.notEqual(afterStat.ino, firstIno);
+  const second = await treeSpend(root);
+  assert.equal(second.billedUsd, 8, 'cache must re-read when ino changes');
 });
