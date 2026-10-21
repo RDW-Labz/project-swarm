@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.154.0
+
+The guard allows read-only vercel commands and says to use swarm merge.
+- **Vercel:** read-only listings are free: ls, list, inspect, logs, whoami, help and version, and the ls, list and inspect forms of env, domains, projects, teams, dns, certs, alias, secrets and similar (parts-app). Deploys, env pull and add, domains add and every other mutating form stay blocked.
+- **Merge:** gh pr merge is always blocked and the message says to use swarm merge N, which checks CI first (no CI-less merge path). swarm merge N has its own merge-specific message when blocked and is allowed when the machine policy file enables the merge-swarm-pr standing approval (one numeric PR, no force or admin flags); the decision carries the standing tag for the journal.
+- **Tests:** tests/handbuild-vercel-merge.test.mjs.
+
 ## 1.153.0
 
 The guard no longer blocks ordinary commands that contain the word claude.
