@@ -10,6 +10,7 @@
   function meter(pct) { var m = el('div', 'meter'); var i = el('i'); i.style.width = Math.max(0, Math.min(100, typeof pct === 'number' ? pct : 0)) + '%'; m.appendChild(i); m.setAttribute('role', 'img'); m.setAttribute('aria-label', (typeof pct === 'number' ? Math.round(pct) : 0) + ' percent'); return m; }
   function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
   function when(iso) { return iso ? String(iso).slice(0, 16).replace('T', ' ') : '-'; }
+  function runHref(runId) { return '/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(runId) + '&t=' + T; }
   $('back').href = '/?t=' + T;
   $('crumbBack').href = '/?t=' + T;
   $('crumbAll').href = '/?t=' + T;
@@ -92,10 +93,22 @@
 
     var untracked = progress.untracked || progress.offLedger;
     if (untracked && (untracked.count || untracked.jobs)) {
-      host.appendChild(el('div', 'label', 'Untracked work'));
+      var untrackedHead = el('div', 'label');
+      untrackedHead.appendChild(el('span', '', 'Untracked work · '));
+      var untrackedCount = el('a', '');
+      untrackedCount.setAttribute('href', untracked.countHref || ('#' + (untracked.listAnchorId || 'untracked')));
+      untrackedCount.textContent = String(untracked.count || 0) + ' run' + (untracked.count === 1 ? '' : 's');
+      untrackedHead.appendChild(untrackedCount);
+      host.appendChild(untrackedHead);
       host.appendChild(el('div', 'board-note', untracked.warning || 'untracked work: no ledger ticket'));
-      (untracked.newest || []).forEach(function (run) {
-        host.appendChild(el('div', 'board-entry', run.runId + ' · ' + run.name + ' · ' + run.status + ' · ' + when(run.startedAt)));
+      (untracked.runs || untracked.newest || []).forEach(function (run) {
+        var row = el('div', 'board-entry');
+        var runLink = el('a', 'mono', run.runId);
+        runLink.setAttribute('href', run.href || runHref(run.runId));
+        runLink.setAttribute('title', 'Open the run inspector');
+        row.appendChild(runLink);
+        row.appendChild(el('span', 'sub', ' · ' + (run.name || run.runId) + ' · ' + run.status + ' · ' + when(run.startedAt)));
+        host.appendChild(row);
       });
     }
 
@@ -228,12 +241,18 @@
       a.appendChild(el('span', 'num mono', usd(run.costUsd))); a.appendChild(el('span', 'mono', when(run.startedAt)));
       r.appendChild(a);
     });
-    var off = p.offLedger;
+    var off = p.offLedger || (p.progress && (p.progress.offLedger || p.progress.untracked));
     if (off && off.count) {
-      r.appendChild(el('div', 'label', 'Off-ledger work'));
+      var listAnchor = off.listAnchorId || 'untracked';
+      var offTitle = el('div', 'label', 'Off-ledger work'); offTitle.id = listAnchor; r.appendChild(offTitle);
       off.runs.forEach(function (run) {
-        var prs = run.prs && run.prs.length ? ' · ' + run.prs.join(', ') : '';
-        r.appendChild(el('div', 'board-entry', run.runId + ' · ' + run.status + ' · ' + run.done + '/' + run.jobs + ' jobs' + prs));
+        var row = el('div', 'board-entry');
+        var runLink = el('a', 'mono', run.runId);
+        runLink.setAttribute('href', run.href || runHref(run.runId));
+        runLink.setAttribute('title', 'Open the run inspector');
+        row.appendChild(runLink);
+        row.appendChild(el('span', 'sub', ' · ' + when(run.startedAt) + ' · ' + run.status + ' · ' + run.jobs + ' jobs'));
+        r.appendChild(row);
       });
     }
   }

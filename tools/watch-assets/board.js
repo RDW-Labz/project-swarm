@@ -266,7 +266,7 @@ function progressLine(p) {
   line.appendChild(el('span', '', headline + ' · ' + (progress.current || 'Unknown') + eta));
   if (untrackedRuns > 0) {
     line.appendChild(el('span', '', ' · '));
-    line.appendChild(el('span', 'warn', 'untracked work: ' + untrackedRuns + ' run' + (untrackedRuns === 1 ? '' : 's')));
+    line.appendChild(link(projectHref(p.id) + '#untracked', 'warn', [el('span', '', 'untracked work: ' + untrackedRuns + ' run' + (untrackedRuns === 1 ? '' : 's'))]));
   }
   return line;
 }
