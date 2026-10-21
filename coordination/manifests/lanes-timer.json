@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "lanes-timer-leak",
+      "agent": "auto",
+      "prompt": "Fix a timer leak in tools/lanes.mjs found by an investigation. In LaneScheduler (around line 476) the acquire waiter abort handler calls the synchronous pump() even for a shared scheduler. If pumpShared() is suspended awaiting flushReleases or a claim, both pump paths can schedule a wake timer and the second overwrites this.timer; close() clears only the retained handle, so the orphan timer stays referenced until its pause deadline (a 43999 ms timer was seen), keeping the process alive about 44 seconds after a run finishes. Fix: in waiter.abort use scheduleShared when this.shared is true and pump otherwise, so shared pumping is serialized; and make every place that sets this.timer first clear any timer already stored there (clearTimeout on the old handle) so no handle can be orphaned; and make close() clear the timer and mark the scheduler closed so a late pump or scheduleShared does not create a new one. Keep all behavior otherwise. Add tests/lanes-timer-leak.test.mjs (node:test, strict assert, fake clock or a short real pause deadline, no sleeps longer than needed): abort an acquisition while pumpShared is suspended (hold the flush or claim with a controllable promise), resolve it, call close(), and assert that process.getActiveResourcesInfo() contains no more Timeout entries than before the scheduler was created (compare counts, ignoring the test runner's own timers) and that no timer with a pause deadline in the future is left; a second test that two consecutive schedule calls leave exactly one live timer; a third test that after close() a late scheduleShared creates no timer. Write only tools/lanes.mjs and tests/lanes-timer-leak.test.mjs.",
+      "context": [
+        "tools/lanes.mjs",
+        "tests/lanes.test.mjs"
+      ],
+      "outputs": [
+        "tools/lanes.mjs",
+        "tests/lanes-timer-leak.test.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/gpu.test.mjs",
+        "tests/leads-run.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/rented-run.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}

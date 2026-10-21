@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "autotune-core",
+      "agent": "auto",
+      "prompt": "Build the machine worker-limit autotuner as new modules only (do not edit tools/swarm.mjs or tools/lanes.mjs yet). Create tools/autotune.mjs (SPDX header, ES module) and tests/autotune.test.mjs (node:test, strict assert). Today the config key machineConcurrency is a fixed number (see tools/concurrency-guard.mjs and how tools/lanes.mjs reads it); the owner wants it to scale with the hardware. Exports: defaultLimit({cores, freeRamGb, totalRamGb}) returning an integer: min of (cores times 2) and floor((freeRamGb minus 4) divided by 0.5), at least 4 and at most 64 (for example 10 cores and 20 GB free gives 20, and 8 cores and 6 GB free gives 4); readMachine({os, now}) returning {cores, freeRamGb, totalRamGb, cpuPercent} from node:os (cpuPercent measured from two os.cpus samples a short time apart, injectable sampler so tests do not sleep); createTuner({limit, min = 4, max = 64, stepUp = 1, backoffFactor = 0.75, now}) returning an object with tune({cpuPercent, freeRamGb, inUse, waiting, rateLimitedLanes}) that returns {limit, reason, capped}: raise by stepUp while cpuPercent is under 80 and freeRamGb is over 4 and waiting is greater than zero and the limit is not above max; multiply down by backoffFactor (rounded down, never under min) when cpuPercent is 80 or more or freeRamGb is 4 or less or any lane is in rateLimitedLanes; reason is one of cpu, ram, lane-rate-limit, no-ready-tickets, none (no-ready-tickets when waiting is zero and nothing was raised), capped names which of these is holding the limit now; the tuner never changes by more than one step per call and never goes under min. createLaneCaps({initial, min = 1, now}) with onRateLimit(lane) (cut that lane's cap by a quarter, rounded down, never under min, and hold it for 10 minutes), onClean(lane) (raise the cap by one after each 10 clean minutes, never above its initial value), cap(lane), and toJSON() and fromJSON() for a machine state file (the learned caps live in that state file, not in the config). stateFilePath(env, home) giving autotune-state.json next to the machine config (read tools/local-config.mjs for the folder logic). describe(state) returning the plain sentence the board will show, for example limit 16, in use 9, capped by CPU 82 percent. Tests (fake clock and fake readers, no sleeps): defaultLimit examples and bounds; raise when idle capacity and work waiting; no raise when nothing waits; back off on cpu, on ram, on a rate limited lane, never below min, one step per call; learned lane cap cut, held for 10 minutes, then restored one step per clean 10 minutes, never above initial; toJSON and fromJSON round trip; describe text for each reason. Write only tools/autotune.mjs and tests/autotune.test.mjs.",
+      "context": [
+        "tools/concurrency-guard.mjs",
+        "tools/local-config.mjs"
+      ],
+      "outputs": [
+        "tools/autotune.mjs",
+        "tests/autotune.test.mjs"
+      ],
+      "timeoutMs": 1200000
+    }
+  ]
+}

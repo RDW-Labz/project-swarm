@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "init-base-detail-compat",
+      "agent": "auto",
+      "prompt": "In tools/init-profile.mjs formatBaseCheck the new detail lines break the existing test named formatBaseCheck writes one short line per state in tests/init-profile.test.mjs, which passes failing checks that have only a name and ok false (no exitCode and no tail) and expects exactly one line. Fix the tool, not that test: a failing check gets detail lines only when it actually carries information, that is when its exitCode is a number or null (null meaning it did not start) or its tail has at least one non-empty line; a failing check with exitCode undefined and no tail contributes no detail lines, so that old output stays exactly one line. Apply the same rule to the base-red warning detail in tools/init.mjs. Keep the new tests in tests/init-base-detail.test.mjs passing (add one case there: a red base whose failing checks have no exitCode and no tail prints exactly the old single line). Write only tools/init-profile.mjs, tools/init.mjs and tests/init-base-detail.test.mjs.",
+      "context": [
+        "tools/init-profile.mjs",
+        "tools/init.mjs",
+        "tests/init-profile.test.mjs",
+        "tests/init-base-detail.test.mjs"
+      ],
+      "outputs": [
+        "tools/init-profile.mjs",
+        "tools/init.mjs",
+        "tests/init-base-detail.test.mjs"
+      ],
+      "timeoutMs": 900000,
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/budgets.test.mjs",
+        "tests/ci-queue.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/env-example-context.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/handoff.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/lessons-commands.test.mjs",
+        "tests/migration-down-dir.test.mjs",
+        "tests/phase12-cli.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ui-check.test.mjs"
+      ]
+    }
+  ]
+}

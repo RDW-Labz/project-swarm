@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "batch1-changelog",
+      "agent": "auto",
+      "prompt": "Release batch 1 carries four PRs under one version, 1.156.0. In CHANGELOG.md the top entry is already ## 1.156.0 (Autopilot starts only ledger tickets). Change its lead-in line to: Batch 1: autopilot ledger-only start, crash fixes, init base detail, machine limit resolver, integrated snapshot module. Keep the existing two bullets unchanged and add these bullets, lead-in of each in bold with double asterisks like the others: Crash fixes: the lane scheduler leaves no orphaned wake timer after close (removes the roughly 44 second process tail in the CLI test); dead runs are finalized and a missing cost is treated as 0 for flat-rate lanes. | Init base detail: a red base check in swarm init says which check failed and why (name, exit code, output tail) and prints detail only when a check has info. | Autotune: new machine limit resolver (hardware default, back off on CPU and RAM, per-lane caps from rate limits); modules and tests only, not yet wired. | Integrated snapshot: new module that snapshots the integrated tree for follow-up jobs; not yet wired. Write no other changes. ignoreTests reason: only CHANGELOG.md is edited and release tests read the top entry.",
+      "context": [
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "CHANGELOG.md"
+      ],
+      "ignoreTests": [
+        "tests/t101-release.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/cap-reroute.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/anthropic-lane.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/router.test.mjs",
+        "tests/update.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs"
+      ]
+    }
+  ]
+}

@@ -6,6 +6,9 @@ import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { firstJobOrError, waitResultCost } from './go.mjs';
+
+export { waitResultCost };
 
 const exec = promisify(execFile);
 const RUN_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/;
@@ -176,12 +179,15 @@ export async function goGoal(root, goal, flags = {}, deps) {
     started = await deps.run(root, manifest, { id, maxUsd, maxTokens });
     waited = await deps.wait(root, started.id);
   } catch (error) { return failed('run', base, error.message); }
-  base.cost = waited.costUsd ?? null;
-  base.warnings = waited.warnings ?? [];
-  if (waited.status === 'paused') {
+  base.cost = waitResultCost(waited);
+  base.warnings = waited?.warnings ?? [];
+  if (waited?.status === 'paused') {
     return { status: 'paused', stage: 'run', ...base, reason: waited.pause?.message ?? 'run paused on a cap', resume: resumeCommand(started.id, waited.pause) };
   }
-  if (waited.status !== 'complete') return failed('run', base, `run ${waited.status}`);
+  if (waited?.status !== 'complete') {
+    const { error } = firstJobOrError(waited ?? {});
+    return failed('run', base, error ?? `run ${waited?.status ?? 'unknown'}`);
+  }
   let integrated;
   try { integrated = await deps.integrate(root, started.id, { queue: true }); }
   catch (error) { return failed('integrate', base, error.message); }
