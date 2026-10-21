@@ -260,8 +260,9 @@ test('feedback 4: a pull request and its merge are one row (the merge); an unmer
 
 test('feedback 5: test and temp projects are left out by default (lanes, totals, inbox, history) with a switch to show them, and a count of what is hidden', async t => {
   const { isScratchRoot } = await import('../tools/projects.mjs');
+  const { isBoardTempRoot } = await import('../tools/scratch-roots.mjs');
   assert.equal(isScratchRoot('/Users/me/project-swarm/.tmp-test-x/field-lessons-x-Ng9Cw2'), true);
-  assert.equal(isScratchRoot('/private/var/folders/cy/x/T/board-abc'), true);
+  assert.equal(isBoardTempRoot('/private/var/folders/cy/x/T/board-abc'), true, 'board hide includes OS temp trees');
   assert.equal(isScratchRoot('/tmp/anything'), true);
   assert.equal(isScratchRoot('/Users/me/project-repos/parts-request-app'), false);
   assert.equal(isScratchRoot('/Users/me/project-swarm'), false);

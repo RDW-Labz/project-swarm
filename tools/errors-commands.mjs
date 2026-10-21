@@ -11,7 +11,7 @@ const out = (stdout, exitCode = 0) => ({ stdout: stdout.endsWith('\n') ? stdout 
 
 async function profileConfig(root) {
   let pointer;
-  try { pointer = JSON.parse(await fs.readFile(path.join(root, '.project-swarm.json'), 'utf8')); } catch { return { config: validateErrorsConfig({}).config }; }
+  try { const { readRunnerPointer } = await import('./runner-pointer.mjs'); pointer = await readRunnerPointer(root); } catch { return { config: validateErrorsConfig({}).config }; }
   if (pointer?.profile?.errors === undefined) return { config: validateErrorsConfig({}).config };
   const checked = validateErrorsConfig(pointer.profile.errors);
   return checked.ok ? { config: checked.config } : { error: `the errors block of the profile is invalid: ${checked.errors[0]}` };

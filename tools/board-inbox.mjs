@@ -2,12 +2,14 @@
 // The board's "Needs you" panel: what is waiting for the owner in every registered project (inbox decisions, human tasks, blockers, proposed tickets)
 // and which of those were also asked on the phone. READ-ONLY: the board never answers anything. Answers go through the commands shown here at the
 // computer, or through the private swarm-inbox issues from the phone (swarm phone sync).
+import os from 'node:os';
 import path from 'node:path';
 import { collectInbox } from './inbox.mjs';
 import { inboxDeps } from './inbox-commands.mjs';
 import { readLedger } from './tickets.mjs';
 import { readPhoneConfig, readPhoneState, phoneDir } from './phone.mjs';
 import { sanitizeText } from './journal.mjs';
+import { isScratchRoot } from './scratch-roots.mjs';
 
 // Secrets redacted, control characters (terminal escapes) removed, length bounded: everything shown here came from a file on disk.
 const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/;   // controls, C1, zero-width and text-direction characters
@@ -65,14 +67,28 @@ function nextFor(item, root) {
   return { commands, next };
 }
 
-export async function boardInbox({ projects, now = Date.now(), env = process.env, collect = collectInbox, deps = inboxDeps({ channel: 'board' }), ledgerOf = readLedger, phoneDirectory = phoneDir(env), projectMs = PROJECT_MS } = {}) {
+function filterScratchFromInbox(projects, ownerInbox, { forOwner, scratchOpts } = {}) {
+  const all = projects ?? [];
+  if (ownerInbox === false || forOwner === false) return all;
+  return all.filter(p => p?.root && !isScratchRoot(p.root, { strict: true, ...scratchOpts }));
+}
+
+function phoneRecordScratch(rec, scratchOpts) {
+  const root = rec?.root ?? String(rec?.key ?? '').split('|')[0];
+  if (!root) return false;
+  return isScratchRoot(root, { strict: true, ...scratchOpts });
+}
+
+export async function boardInbox({ projects, now = Date.now(), env = process.env, home = os.homedir(), collect = collectInbox, deps = inboxDeps({ channel: 'board' }), ledgerOf = readLedger, phoneDirectory = phoneDir(env), projectMs = PROJECT_MS, ownerInbox, forOwner } = {}) {
+  const scratchOpts = { env, home: env.HOME ?? home };
+  const ownerProjects = filterScratchFromInbox(projects, ownerInbox, { forOwner, scratchOpts });
   const config = await readPhoneConfig(phoneDirectory).catch(() => null);
   const state = config ? await readPhoneState(phoneDirectory, config.repo).catch(() => ({ issues: {} })) : { issues: {} };
   const asked = new Map();
   for (const rec of Object.values(state.issues)) if (rec && (rec.status === 'open' || rec.status === 'confirming')) asked.set(rec.key, rec);
   const problems = [];
   // Every project is read at the same time with its own time limit: one that hangs is named and does not hold up the rest.
-  const perProject = await Promise.all(projects.map(async project => {
+  const perProject = await Promise.all(ownerProjects.map(async project => {
     const read = async () => {
       const mine = [];
       for (const it of await collect([project.root], deps)) {
@@ -102,14 +118,19 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
     for (const it of mine.slice(0, MAX_PER_PROJECT)) items.push({ projectId: project.id, project: txt(project.name, 80), ...it });
   }
   items.sort((a, b) => (b.unblocks - a.unblocks) || String(a.since).localeCompare(String(b.since)) || String(a.project).localeCompare(String(b.project)));
-  const open = [...asked.values()].filter(r => r.status === 'open').length;
+  const phoneIssue = rec => {
+    if (phoneRecordScratch(rec, scratchOpts)) return false;
+    return rec.status === 'open' || rec.status === 'confirming';
+  };
+  const open = [...asked.values()].filter(r => r.status === 'open' && !phoneRecordScratch(r, scratchOpts)).length;
+  const confirming = [...asked.values()].filter(phoneIssue).length - open;
   return {
     total: items.length + hidden,
     hidden,
     items,
     fyi: fyi.sort((a, b) => String(b.since).localeCompare(String(a.since))).slice(0, 60),
     problems,
-    phone: config ? { on: config.enabled, repo: config.repo, owners: config.owners, open, confirming: asked.size - open } : null,
+    phone: config ? { on: config.enabled, repo: config.repo, owners: config.owners, open, confirming } : null,
     at: new Date(now).toISOString(),
   };
 }

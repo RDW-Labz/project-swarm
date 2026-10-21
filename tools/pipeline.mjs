@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { parsePrPayload } from './ship.mjs';
 import { isDeepStrictEqual } from 'node:util';
+import { isGeneratedStateFile } from './generated-state.mjs';
 
 export const PIPELINE_STAGES = Object.freeze(['run', 'inspect', 'integrate', 'checks', 'commit', 'ship']);
 export const TICKET_USAGE = [
@@ -101,7 +102,7 @@ async function dirtyPaths(root, exec) {
       paths.push(records[++index]);
     }
   }
-  return [...new Set(paths)].sort();
+  return [...new Set(paths)].filter(file => !isGeneratedStateFile(file)).sort();
 }
 function validateJournal(journal, identity) {
   if (!plainObject(journal) || journal.version !== 1) throw new Error('invalid pipeline schema');

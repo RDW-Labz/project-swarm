@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { packagingChangeWarnings } from './packaging-check.mjs';
 import { loadLocalConfig } from './local-config.mjs';
+import { dirtyFiles, formatDirtyListing } from './generated-state.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -1065,10 +1066,19 @@ function positiveTargetedPass(output, file, runner) {
   return false;
 }
 
+async function shipStatusStdout(exec, root) {
+  const statusRes = await exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root });
+  if (!statusRes || statusRes.code !== 0) throw new Error('git status failed');
+  return String(statusRes.stdout ?? '');
+}
+
 async function cleanHeadAt(exec, root, expectedSha) {
   try {
-    const status = await exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root });
-    if (!status || status.code !== 0 || String(status.stdout ?? '').trim() !== '') return false;
+    const dirty = await dirtyFiles(root, {
+      untracked: false,
+      runStatus: () => shipStatusStdout(exec, root),
+    });
+    if (dirty.length) return false;
     const head = await exec('git', ['rev-parse', 'HEAD'], { cwd: root });
     return Boolean(head && head.code === 0 && head.stdout.trim() === expectedSha);
   } catch {
@@ -1662,9 +1672,16 @@ export async function ship(options) {
   if (mutantsSkippedRedBase && requireSections.some(name => name.toLowerCase() === 'mutation check')) {
     return { ...base, status: 'refused', reason: 'mutants skipped: red base (checks failed); required Mutation check section cannot be satisfied' };
   }
-  const statusRes = await exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root });
-  if (statusRes.code !== 0) return { ...base, status: 'refused', reason: 'git status failed' };
-  if (statusRes.stdout.trim() !== '') return { ...base, status: 'refused', reason: 'commit first' };
+  let dirtyBeforeShip;
+  try {
+    dirtyBeforeShip = await dirtyFiles(root, {
+      untracked: false,
+      runStatus: () => shipStatusStdout(exec, root),
+    });
+  } catch {
+    return { ...base, status: 'refused', reason: 'git status failed' };
+  }
+  if (dirtyBeforeShip.length) return { ...base, status: 'refused', reason: `commit first${formatDirtyListing(dirtyBeforeShip)}` };
   const shaRes = await exec('git', ['rev-parse', 'HEAD'], { cwd: root });
   if (shaRes.code !== 0 || shaRes.stdout.trim() === '') return { ...base, status: 'refused', reason: stepFailed('rev-parse', shaRes) };
   const sha = shaRes.stdout.trim();

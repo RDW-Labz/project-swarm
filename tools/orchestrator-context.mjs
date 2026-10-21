@@ -156,6 +156,16 @@ function writeJsonAtomic(file, value, { writeFileSync = fs.writeFileSync, mkdirS
   return true;
 }
 
+/** Atomic UTF-8 write for generated project files (temp file in the same directory, then rename). */
+export function writeUtf8Atomic(file, text, { writeFile = fs.promises.writeFile, rename = fs.promises.rename, mkdir = fs.promises.mkdir } = {}) {
+  const dir = path.dirname(file);
+  return mkdir(dir, { recursive: true }).then(() => {
+    if (isLink(file)) return false;
+    const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
+    return writeFile(tmp, text, { encoding: 'utf8', mode: 0o644 }).then(() => rename(tmp, file)).then(() => true);
+  }).catch(() => false);
+}
+
 /**
  * Persist orchestrator continuity for a fresh session: project memory, Claude project memory, state file, journal.
  * @returns {{ ok: boolean, resume: object|null, error?: string }}

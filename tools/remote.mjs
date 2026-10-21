@@ -32,6 +32,7 @@ export const REMOTE_USAGE = [
 ].join('\n');
 
 export const remoteFile = (env = process.env, home = os.homedir()) => env.SWARM_REMOTE_FILE || path.join(home, '.project-swarm', 'remote.json');
+export { remoteServerFile } from './server-restart.mjs';
 const logFile = (env, home) => path.join(path.dirname(remoteFile(env, home)), 'remote.log');
 
 export async function readRemote(env = process.env) {

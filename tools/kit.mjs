@@ -20,7 +20,7 @@ const SKIP_NAMES = new Set(['.git', 'node_modules', '.next', 'coverage', 'test-r
 const RESERVED = ['.project-swarm.json', 'coordination/checks.json'];
 const LIMITS = { files: 2000, totalBytes: 20 * 1024 * 1024, fileBytes: 2 * 1024 * 1024, readOnlyPaths: 80 };
 // Existing entries that do not stop a kit from being copied in: a new repo with its git folder and swarm's own files.
-const ALLOWED_EXISTING = new Set(['.git', '.swarm', '.project-swarm.json', '.gitignore', 'README.md']);
+const ALLOWED_EXISTING = new Set(['.git', '.swarm', '.project-swarm', '.project-swarm.json', '.gitignore', 'README.md']);
 const BARE_README_BYTES = 2048;
 
 export const KIT_USAGE = 'Usage: swarm init --kit NAME --kit-source PATH_OR_GIT_URL [--name "Project name"] [--no-protect-kit]   (the folder must be new: a git repo with nothing but a README)';

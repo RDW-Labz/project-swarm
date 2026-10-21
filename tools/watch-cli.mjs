@@ -20,6 +20,7 @@ import { COMMANDS } from './completion.mjs';
 import { readLedger } from './tickets.mjs';
 import { boardSummary, listLiveRuns } from './board.mjs';
 import { listProjects, projectsFile, projectId, isScratchRoot } from './projects.mjs';
+import { isBoardTempRoot } from './scratch-roots.mjs';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { readHistory, historyCsv, historyFile } from './history.mjs';
@@ -110,10 +111,27 @@ async function projectTestFacts(project, { now, liveRuns = [], env = process.env
   };
 }
 
+function projectHiddenFromBoard(project, { scratch, env }) {
+  if (!scratch) {
+    if (project.idleHidden) return true;
+    if (project.testOrTemp) return true;
+    if (project.live) return false;
+    return isBoardTempRoot(project.root, boardProjectOpts(env));
+  }
+  if (project.idleHidden && !project.testOrTemp && !project.live
+    && !isBoardTempRoot(project.root, boardProjectOpts(env))) return true;
+  return false;
+}
+
 async function classifyProjects(projects, { now = Date.now(), liveRuns = [], env = process.env } = {}) {
   return Promise.all(projects.map(async project => {
     const facts = await projectTestFacts(project, { now, liveRuns, env });
-    return { ...project, testOrTemp: isTestOrTempProject(project, facts), idleHidden: Boolean(facts.idleHidden) };
+    return {
+      ...project,
+      testOrTemp: isTestOrTempProject(project, facts),
+      idleHidden: Boolean(facts.idleHidden),
+      live: Boolean(facts.live),
+    };
   }));
 }
 
@@ -232,10 +250,15 @@ async function safeBoard() {
   return { runs: runs.filter(run => RUN_ID_RE.test(String(run.runId)) && typeof run.root === 'string' && !/[\u0000-\u001f]/.test(run.root)) };
 }
 
+function boardProjectOpts(env = process.env) {
+  return { env, home: env.HOME ?? os.homedir() };
+}
+
 async function boardText({ env = process.env } = {}) {
   const { runs } = await safeBoard();
-  const projects = await listProjects({ file: projectsFile(env) }).catch(() => []);
-  const needs = inboxText(await boardInbox({ projects, env }).catch(() => null));
+  const opts = boardProjectOpts(env);
+  const projects = await listProjects({ file: projectsFile(env), forOwner: true, ...opts }).catch(() => []);
+  const needs = inboxText(await boardInbox({ projects, env, forOwner: true }).catch(() => null));
   if (!runs.length) return `No live runs on this machine.\n${needs}`;
   return runs.map(run => {
     const done = run.jobs.filter(job => job.status === 'complete').length;
@@ -282,6 +305,49 @@ export function makeRunServer(root, runId, extra = {}) {
 // Finding the board from anywhere. A running board writes its address (it holds the board's own token) to a file only the user can read; a run page that wants to
 // go back to it reads that file, checks the board still answers, and otherwise starts one in its own process.
 export const boardFile = (env = process.env, home = os.homedir()) => env.SWARM_BOARD_FILE || path.join(home, '.project-swarm', 'board.json');
+
+export function safeEnvSubset(env = process.env) {
+  const out = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (key === 'HOME' || key === 'PATH') out[key] = String(value);
+    else if (key.startsWith('SWARM') && typeof value === 'string') out[key] = value;
+  }
+  return out;
+}
+
+export function serverMode({ stdin = process.stdin, stdout = process.stdout, explicitBackground = false } = {}) {
+  if (stdin.isTTY && stdout.isTTY) return 'terminal';
+  if (explicitBackground && !stdin.isTTY && !stdout.isTTY) return 'background';
+  if (!explicitBackground) return stdin.isTTY && stdout.isTTY ? 'terminal' : 'background';
+  return 'terminal';
+}
+
+export function argvForRemoteServe(remote, registry = {}) {
+  if (Array.isArray(registry.argv) && registry.argv.length) return registry.argv;
+  const argv = ['remote', 'serve'];
+  if (remote?.port != null) argv.push('--port', String(remote.port));
+  if (typeof remote?.login === 'string' && remote.login) argv.push('--login', remote.login);
+  if (Array.isArray(remote?.hosts)) {
+    for (const host of remote.hosts) {
+      if (typeof host === 'string') argv.push('--host', host);
+      else if (host && typeof host.host === 'string') argv.push('--host', host.host);
+      else if (host && typeof host.name === 'string') argv.push('--host', host.name);
+    }
+  }
+  return argv;
+}
+
+export function registryModeFields(mode, { stdin = process.stdin, stdout = process.stdout, explicitBackground = false } = {}) {
+  const fromTty = !stdin.isTTY && !stdout.isTTY;
+  return {
+    mode,
+    ...(mode === 'background' && explicitBackground ? { explicitBackground: true, modeFromTty: fromTty } : {}),
+  };
+}
+
+async function readPackageVersion(root = here) {
+  try { return JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version ?? null; } catch { return null; }
+}
 // A board of ours belongs to this user: a process that exists but is not ours (EPERM) is not one.
 const pidAlive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
 
@@ -297,11 +363,17 @@ async function boardAnswers(url, fetchImpl = fetch) {
   } catch { return false; }
 }
 
-export async function writeBoardFile(url, { env = process.env } = {}) {
+export async function writeBoardFile(url, { env = process.env, registry = {} } = {}) {
   const file = boardFile(env);
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-  await fs.writeFile(tmp, `${JSON.stringify({ pid: process.pid, url, startedAt: new Date().toISOString() })}\n`, { mode: 0o600, flag: 'wx' });
+  const body = {
+    pid: process.pid,
+    url,
+    startedAt: new Date().toISOString(),
+    ...registry,
+  };
+  await fs.writeFile(tmp, `${JSON.stringify(body)}\n`, { mode: 0o600, flag: 'wx' });
   await fs.rename(tmp, file);
 }
 
@@ -362,7 +434,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
   const scratchIds = async () => {
     const all = await listProjects({ file: projectsFile(env) });
     const flagged = await classifyProjects(all, { now: now(), liveRuns: await live(), env });
-    return new Set(flagged.filter(project => project.testOrTemp).map(project => project.id));
+    return new Set(flagged.filter(project => project.testOrTemp || (isBoardTempRoot(project.root, boardProjectOpts(env)) && !project.live)).map(project => project.id));
   };
   const find = async id => (await listProjects({ file: projectsFile(env) })).find(p => p.id === id) ?? null;
   const api = {
@@ -381,7 +453,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
         const liveRuns = await live();
         const flagged = await classifyProjects(all, { now: snapshotNow, liveRuns, env });
         // Test and temp projects are left out of everything (lanes, totals, the inbox) unless asked for, so the numbers still add up.
-        const projects = flagged.filter(p => !p.idleHidden && (scratch || !p.testOrTemp));
+        const projects = flagged.filter(p => !projectHiddenFromBoard(p, { scratch, env }));
         const caps = (() => { try { const lanes = resolveBudget({ config }).lanes ?? {}; return Object.fromEntries(Object.entries(lanes).map(([k, v]) => [k, v?.dailyUsd])); } catch { return {}; } })();
         const configured = (() => { try { return Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k]) => k); } catch { return []; } })();
         const configuredModels = (() => { try { return Object.fromEntries(Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k, v]) => [k, v.model])); } catch { return {}; } })();
@@ -426,7 +498,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
           snapshot.pools = { source: 'stub', pools: [], at: new Date(snapshotNow).toISOString() };
         }
         // What waits for the owner (read-only); a failure here never hides the rest of the board.
-        snapshot.inbox = await boardInbox({ projects, now: now(), env }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
+        snapshot.inbox = await boardInbox({ projects, now: now(), env, forOwner: !scratch }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
         const scratchProjects = flagged.filter(p => p.testOrTemp && !p.idleHidden);
         snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : scratchProjects.length, total: scratchProjects.length };
         const idleHidden = flagged.filter(p => p.idleHidden).length;
@@ -443,7 +515,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       const liveRuns = (await live()).filter(r => r.root === project.root);
       let max = null;
       try { max = machineConcurrency(loadLocalConfig({ env })); } catch { /* invalid local config leaves split quality without a slot limit */ }
-      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), slots: max, deployStatus: root => isScratchRoot(root) ? null : deployTracker.get(root) });
+      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), slots: max, deployStatus: root => isBoardTempRoot(root, boardProjectOpts(env)) ? null : deployTracker.get(root) });
     },
     // Every run alive in one project, combined (the Live tab of the project page).
     async live(id) {
@@ -504,7 +576,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
 // Starts the board server in this process and records its address for run pages that want to go back to it.
 // `remote` ({ port, token, hosts, login }): the board `swarm remote` keeps up behind tailscale serve. It is not the board run pages go back to, so it records no address,
 // and it does not stop when idle.
-export async function startBoardServer({ env = process.env, root, remote }) {
+export async function startBoardServer({ env = process.env, root, remote, registry = null }) {
   const api = createBoardApi({ env });
   backfillHistory({ env }).catch(() => {});
   const server = createWatchServer({
@@ -521,9 +593,33 @@ export async function startBoardServer({ env = process.env, root, remote }) {
     deltaFile: path.join(here, 'watch-delta.mjs'),
     ...(remote ? { port: remote.port, token: remote.token, remote: { hosts: remote.hosts, login: remote.login }, idleMs: Infinity } : {}),
   });
-  const { url } = await server.listen();
+  const { url, port } = await server.listen();
   api.setBoardUrl(remote ? null : url);
-  if (!remote) await writeBoardFile(url, { env }).catch(() => {});
+  const version = await readPackageVersion();
+  const boardMode = remote ? 'background' : serverMode({ explicitBackground: registry?.explicitBackground === true });
+  const baseRegistry = {
+    version,
+    argv: remote ? argvForRemoteServe(remote, registry ?? {}) : ['watch', '--all'],
+    cwd: process.cwd(),
+    port,
+    env: safeEnvSubset(env),
+    ...registryModeFields(boardMode, { explicitBackground: remote || registry?.explicitBackground === true }),
+    ...(registry && typeof registry === 'object' ? registry : {}),
+  };
+  if (!remote) {
+    try {
+      await writeBoardFile(url, { env, registry: baseRegistry });
+    } catch (error) {
+      process.stderr.write(`board server record write failed: ${error.message}\n`);
+    }
+  } else {
+    const { writeRegistryRecord, remoteServerFile } = await import('./server-restart.mjs');
+    try {
+      await writeRegistryRecord(remoteServerFile(env), { pid: process.pid, url, startedAt: new Date().toISOString(), ...baseRegistry });
+    } catch (error) {
+      process.stderr.write(`remote server record write failed: ${error.message}\n`);
+    }
+  }
   const cleaned = server.done.then(async () => {
     try {
       // The run pages this board opened must not point back at a board that is gone, and they close with it.
@@ -533,6 +629,13 @@ export async function startBoardServer({ env = process.env, root, remote }) {
         try {
           const data = JSON.parse(await fs.readFile(boardFile(env), 'utf8'));
           if (data.pid === process.pid && data.url === url) await fs.rm(boardFile(env), { force: true });
+        } catch { /* already gone */ }
+      } else {
+        try {
+          const { remoteServerFile } = await import('./server-restart.mjs');
+          const file = remoteServerFile(env);
+          const data = JSON.parse(await fs.readFile(file, 'utf8'));
+          if (data.pid === process.pid && data.url === url) await fs.rm(file, { force: true });
         } catch { /* already gone */ }
       }
     } catch { /* cleaned must never reject */ }
@@ -547,7 +650,18 @@ export async function runWatchCommand(root, args, { write = text => process.stdo
   if (opts.all && (opts.text || opts.tui)) return { stdout: await boardText(), exitCode: 0 };
   if (opts.all) {
     // The web board: a lane per project on this machine, the machine's agents and spend on top, the history, and a click-through to any run's own page.
-    const board = await startBoardServer({ env: process.env, root });
+    const watchArgv = ['watch', '--all', ...(opts.open ? ['--open'] : []), ...(opts.tui ? ['--tui'] : []), ...(opts.text ? ['--text'] : [])];
+    const board = await startBoardServer({
+      env: process.env,
+      root,
+      registry: {
+        argv: watchArgv,
+        cwd: process.cwd(),
+        env: safeEnvSubset(process.env),
+        explicitBackground: true,
+        ...registryModeFields(serverMode({ explicitBackground: true }), { explicitBackground: true }),
+      },
+    });
     write(`Swarm Watch board (every project on this machine)\n${board.url}\nRead-only, on this machine only. Opening a run starts that run's own page. Stops after 30 minutes idle. Ctrl-C stops it now. (swarm watch --all --text prints the live runs instead.)\n`);
     if (opts.open) openUrl(board.url);
     const stop = () => { board.server.close(); board.api.close(); };

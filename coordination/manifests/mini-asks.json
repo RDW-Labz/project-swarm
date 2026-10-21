@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "ignore-tests-reason",
+      "agent": "auto",
+      "prompt": "Request from the Mac mini seat (work package G): tools/swarm/core-31.mjs validateManifest (line ~358) rejects a job whose ignoreTests list has more than 100 entries (ignoreTests must be an array of at most 100 files). A ticket whose output file is imported by about 150 tests (for example tools/ticket-manifest.mjs, ticket T-0040) can then never validate: the job can hold at most 12 relevant tests in context and must ignore the rest. Implement option (b): a new optional job field ignoreTestsReason, a string of 1 to 200 characters (trimmed, no control characters, no newlines). Rules: without ignoreTestsReason the cap stays 100 exactly as today; with a valid ignoreTestsReason the cap is 1000; an ignoreTestsReason without an ignoreTests array is rejected; an invalid reason (empty, longer than 200, not a string) is rejected with a clear message; entries are still de-duplicated and path-checked one line later exactly as today; the Uncovered test references check (the one that says add the test to context, or list it in ignoreTests with a reason in the prompt) accepts the field ignoreTestsReason as satisfying the reason requirement (the older reason-in-the-prompt form keeps working) and prints the reason in its output when it uses the field. The new field must be added everywhere job fields are allow-listed or schema-checked (the manifest job key allow-list, the saved manifest copy and its validation, swarm scaffold job, swarm validate output, resumed runs and ticket manifests: search for every place that lists ignoreTests and add ignoreTestsReason beside it). A manifest without the field behaves exactly as before. Tests in tests/ignore-tests-reason.test.mjs: 100 entries without a reason pass, 101 without a reason fail with the old message, 101 with a reason pass, 1000 with a reason pass, 1001 with a reason fail, a reason without a list fails, an empty or 201-character reason fails, a non-string reason fails, the reason satisfies the uncovered-references requirement and is printed, the older reason in the prompt still works, a job without the field is unchanged, the field survives a save and resume of the run, and swarm validate accepts a manifest with the field. Keep every existing test passing. Tests are hermetic (no ambient environment, no TTY, no network). No token-shaped literals. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/swarm/core-31.mjs",
+        "tools/ticket-manifest.mjs",
+        "tests/ticket-manifest.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/swarm/core-31.mjs",
+        "tests/ignore-tests-reason.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/helpers/swarm-source.mjs",
+        "tests/swarm-source-helper.test.mjs"
+      ]
+    },
+    {
+      "id": "budget-machine-pending",
+      "agent": "auto",
+      "prompt": "Bug report from the Mac mini seat in tools/budget-set-commands.mjs: swarm budget set --machine ... run by an agent session is refused (it needs the owner) but the refusal never writes the pending request, because the code writes it only when the change is a project change (if (!parsed.machine) writeBudgetRaisePending(...)). So swarm budget approve-raise --yes answers no pending agent raise request, and a machine-wide raise can never be approved through the agent flow; the owner had to set the 20 USD per day machine cap directly in a terminal. Fix: a refused machine-wide change writes a pending request too. Store it next to the machine config file (the same folder as the machine daily limit settings and the machine change log, file name daily-limit-raise-pending-machine.json, mode 0600, atomic) with scope machine and the exact requested values; the project pending file stays as it is. swarm budget approve-raise accepts --machine: without the flag it looks at the project pending request first and, when there is none but a machine request exists, it says a machine request is pending and to run swarm budget approve-raise --machine --yes (it never approves the machine request without the flag); with --machine it approves only the machine request. Approval is the same single-use, request-bound, 15 minute owner approval record as for projects, stored next to the machine config for the machine scope; the retried swarm budget set --machine consumes it exactly once and only for the exact values; a different value, a second use and an expired approval are refused. approve-raise still refuses to run inside an agent session. The machine pending file is cleared on approval and when the owner lowers the limit by hand. Every step is logged in the machine change log. Project behavior is unchanged. Tests in tests/budget-machine-pending.test.mjs: an agent machine raise is refused and the machine pending file exists with the requested values and mode 0600; approve-raise without --machine reports a machine request is pending and approves nothing; approve-raise --machine in an owner terminal records the approval and clears the pending file; the retried agent set --machine succeeds once for the exact values; a changed value, a second retry and an expired approval are refused; approve-raise --machine inside an agent session is refused; the project flow still works end to end; a pending machine request does not affect a project set; the logs show each step. Use the injectable owner detection and clock the existing budget tests use. Keep every existing test passing. Tests are hermetic (no ambient environment, no TTY, no network). No token-shaped literals. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/budget-set-commands.mjs",
+        "tools/daily-limit.mjs",
+        "tests/budget-set.test.mjs",
+        "tests/daily-limit-hardening-round3.test.mjs",
+        "tests/daily-limit-hardening-round4.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/budget-set-commands.mjs",
+        "tests/budget-machine-pending.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/daily-limit-hardening.test.mjs",
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ]
+}

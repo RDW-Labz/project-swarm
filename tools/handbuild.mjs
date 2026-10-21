@@ -12,7 +12,8 @@ import { execFileSync } from 'node:child_process';
 import { analyzeShell, writesAnything, TOOL_DIRS, tokenize, isReadOnlyGitSub } from './shell-writes.mjs';
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 import { swarmProducedFiles, isSwarmProducedContent } from './swarm-produced.mjs';
-import { isSelfApprovalCommand, SELF_APPROVAL_REASON } from './self-approval.mjs';
+import { isSelfApprovalCommand, SELF_APPROVAL_REASON, handbuildShellPolicy, HANDBUILD_SELF_APPROVAL_RULE_ID } from './self-approval.mjs';
+export const SCRATCH_DENY_REASON = 'scratch project';
 
 export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D', 'gh']);
 export const ELEVATED_GIT_OPS = Object.freeze(['merge', 'deploy', 'force-push', 'branch-D']);
@@ -1089,8 +1090,42 @@ export function createRequest(root, { kind, reason, files, minutes, git }, { now
   });
 }
 
+/** Owner-facing `swarm handbuild request` in a scratch project: stored denied, never queued for Needs you. */
+export function createScratchDeniedHandbuildRequest(root, fields, { now = Date.now, by = 'orchestrator' } = {}) {
+  if (!KIND_LIST.includes(fields.kind)) throw Error(`handbuild-kind: --kind must be one of ${KIND_LIST.join(', ')}.`);
+  const why = cleanText(fields.reason, 400);
+  if (why.length < 10) throw Error('handbuild-reason: --reason must say why the swarm cannot do it (at least 10 characters)');
+  const list = (Array.isArray(fields.files) ? fields.files : String(fields.files ?? '').split(',')).map(f => cleanText(f, 200)).filter(Boolean);
+  if (!list.length) throw Error('handbuild-files: --files must name the files (comma separated)');
+  const mins = fields.minutes === undefined ? DEFAULT_MINUTES : Number(fields.minutes);
+  const ops = (Array.isArray(fields.git) ? fields.git : String(fields.git ?? '').split(',')).map(g => g.trim()).filter(Boolean);
+  return withStateLock(root, () => {
+    const state = readState(root);
+    const id = newId(now());
+    const at = new Date(now()).toISOString();
+    const row = {
+      id,
+      kind: fields.kind,
+      reason: why,
+      files: list,
+      git: ops,
+      minutes: mins,
+      status: 'denied',
+      denyReason: SCRATCH_DENY_REASON,
+      requestedAt: at,
+      requestedBy: cleanText(by, 40),
+      decidedAt: at,
+      decidedBy: 'scratch',
+    };
+    state.requests[id] = row;
+    writeState(root, state);
+    logAction(root, { event: 'request', id, by, files: list, reason: `${fields.kind}: ${why}` }, { now });
+    return row;
+  });
+}
+
 /** approve | deny a pending request. An approval runs for `minutes` from now and covers only the files (and git operations) it names. */
-export function decideRequest(root, id, choice, { now = Date.now, by = 'owner', channel } = {}) {
+export function decideRequest(root, id, choice, { now = Date.now, by = 'owner', channel, policyRule, approvalMinutes } = {}) {
   return withStateLock(root, () => {
   const state = readState(root);
   const r = state.requests[id];
@@ -1104,10 +1139,32 @@ export function decideRequest(root, id, choice, { now = Date.now, by = 'owner', 
   r.status = choice === 'approve' ? 'approved' : 'denied';
   r.decidedAt = new Date(now()).toISOString();
   r.decidedBy = cleanText(by, 40);
-  if (choice === 'approve') r.expiresAt = new Date(now() + r.minutes * 60000).toISOString();
+  if (choice === 'approve') {
+    const mins = Number.isInteger(approvalMinutes) && approvalMinutes >= 1 && approvalMinutes <= MAX_MINUTES
+      ? approvalMinutes
+      : r.minutes;
+    r.expiresAt = new Date(now() + mins * 60000).toISOString();
+  }
   writeState(root, state);
-  logAction(root, { event: choice === 'approve' ? 'approve' : 'deny', id, by, files: r.files, reason: choice === 'approve' ? `until ${r.expiresAt}` : '' }, { now });
+  const ruleNote = typeof policyRule === 'string' && policyRule ? `policy ${policyRule}` : '';
+  const approveReason = choice === 'approve'
+    ? [ruleNote, `until ${r.expiresAt}`].filter(Boolean).join(' ')
+    : '';
+  logAction(root, { event: choice === 'approve' ? 'approve' : 'deny', id, by, files: r.files, reason: approveReason }, { now });
   return r;
+  });
+}
+
+/** Policy pass apply helper: same approval record as owner approve, with optional capped minutes and rule id in the log. */
+export function applyHandbuildPolicyApproval(root, item, { now = Date.now, policyRule, policyFacts, approvalMinutes } = {}) {
+  const ref = String(item?.id ?? '');
+  const hbId = ref.startsWith('handbuild-') ? ref.slice('handbuild-'.length) : ref;
+  return decideRequest(root, hbId, 'approve', {
+    now,
+    by: 'policy',
+    channel: 'policy',
+    policyRule,
+    approvalMinutes,
   });
 }
 
@@ -1218,7 +1275,17 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
     const current = branchOfFn(root);
     const protBranch = isProtectedBranch(current);
-    if (isSelfApprovalCommand(ti.command)) return { allow: false, files: [], reason: SELF_APPROVAL_REASON };
+    const handbuildPol = handbuildShellPolicy(ti.command);
+    if (handbuildPol.applies && !handbuildPol.allow) {
+      return { allow: false, files: [], reason: handbuildPol.reason, ruleId: handbuildPol.ruleId };
+    }
+    if (handbuildPol.applies && handbuildPol.allow
+      && !a.writes.length && !a.git.length && !a.inline && !a.protectedOutside.length && !(a.outsideDeletes?.length)) {
+      return { allow: true };
+    }
+    if (!handbuildPol.applies && isSelfApprovalCommand(ti.command)) {
+      return { allow: false, files: [], reason: SELF_APPROVAL_REASON, ruleId: HANDBUILD_SELF_APPROVAL_RULE_ID };
+    }
     const transcriptHits = bashTranscriptWrites(ti.command, h);
     if (transcriptHits.length) return { allow: false, files: [], reason: `Hand-build guard: ${transcriptHits[0]} belongs to the owner (session transcripts under .claude/projects); no approval covers it.` };
     if (a.protectedOutside.length) return { allow: false, files: [], reason: `Hand-build guard: ${a.protectedOutside.join(', ')} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };

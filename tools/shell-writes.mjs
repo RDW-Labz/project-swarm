@@ -322,7 +322,6 @@ function substitutions(text) {
 
 const fsExists = p => { try { return fs.existsSync(p); } catch { return false; } };
 const SHELL_KEYWORDS = new Set(['if', 'then', 'do', 'else', 'elif', 'while', 'until', '!', 'fi', 'done', 'case', 'esac', 'for', 'in', 'select', 'function', 'coproc']);
-const SELF_WORDS = new Set(['approve', 'deny', 'off', 'on', 'uninstall']);
 // Inline code is read-only only when it names nothing that can write, run a program or load a module. Everything else fails closed.
 const INLINE_CHARS = /^[A-Za-z0-9_\s.,()+\-*/%'":<>=!;\[\]{}]*$/;
 const INLINE_RISKY = /\b(?:require|import|importlib|open|file|fs|os|sys|subprocess|exec|eval|spawn|system|popen|write|unlink|remove|rename|rmdir|mkdir|process|child_process|deno|bun|globalthis|builtins|compile|__\w+__|shutil|pathlib|io|socket|net|http|fetch|chmod|chown|symlink|truncate|append|dump|save|put|copy|move|sh|bash|backtick|kernel|popen3|ruby|perl|fileutils|qx|shell_exec|passthru|file_put_contents|fopen|readfile|dir|file|io|pty|expect|osascript|lua)\b|[`|]|>>?\s*['"A-Za-z./~$]/i;
@@ -395,8 +394,122 @@ export function isReadOnlyGitSub(sub, rest = []) {
 }
 
 const READ_ONLY_PIPE_FILTERS = new Set(['jq', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'cut', 'sort', 'uniq', 'tr']);
-const SWARM_HANDBUILD_FILE_OPS = new Set(['request', 'status', 'show', 'list']);
+const SWARM_HANDBUILD_FILE_OPS = new Set(['request', 'status', 'show', 'list', 'log', 'check', 'help']);
 const SWARM_CLI_READ_VERBS = new Set(['status', 'tickets', 'run', 'go', 'scope']);
+export const HANDBUILD_OWNER_VERBS = new Set(['approve', 'deny', 'on', 'off', 'install', 'uninstall']);
+const HANDBUILD_VALUE_FLAGS = new Set([
+  '-m', '-F', '-C', '-c', '--message', '--reason', '--prompt', '--guard-text',
+  '--body', '--title', '--description', '--subject', '--file', '--kind', '--files', '--minutes', '--git',
+]);
+
+/** Words that carry data, not shell verbs (commit messages, handbuild --reason, and the like). */
+export function executablePlainWordsForHandbuild(plain) {
+  const out = [];
+  let i = 0;
+  while (i < plain.length) {
+    const w = plain[i];
+    const low = w.toLowerCase();
+    if (low === 'ask' && i > 0 && plain[i - 1].toLowerCase() === 'swarm') {
+      i += 1;
+      while (i < plain.length && plain[i].startsWith('-')) {
+        const f = plain[i].toLowerCase();
+        if (HANDBUILD_VALUE_FLAGS.has(f) || f.startsWith('--reason=') || f.startsWith('--prompt=') || f.startsWith('--guard-text=')
+          || f.startsWith('--kind=') || f.startsWith('--files=') || f.startsWith('--minutes=') || f.startsWith('--git=')) {
+          i += f.includes('=') ? 1 : 2;
+        } else i += 1;
+      }
+      if (i < plain.length) { i += 1; continue; }
+      continue;
+    }
+    if (HANDBUILD_VALUE_FLAGS.has(low)) {
+      i += low.includes('=') ? 1 : 2;
+      continue;
+    }
+    if (low.startsWith('--message=') || low.startsWith('--reason=') || low.startsWith('--guard-text=') || low.startsWith('--prompt=')
+      || low.startsWith('--kind=') || low.startsWith('--files=') || low.startsWith('--minutes=') || low.startsWith('--git=')) {
+      i += 1;
+      continue;
+    }
+    out.push(w);
+    i += 1;
+  }
+  return out;
+}
+
+const HANDBUILD_PROGRAM_WRAPPERS = new Set(['env', 'command', 'exec', 'nice', 'nohup', 'time', 'timeout', 'stdbuf', 'caffeinate', 'sudo', 'xargs', 'builtin', 'setsid', 'chrt']);
+const HANDBUILD_WRAPPER_VALUE_OPTS = { sudo: ['-u', '-g', '-C', '-h', '-p', '-r', '-t', '-U'], env: ['-u', '-C'], nice: ['-n'], stdbuf: ['-i', '-o', '-e'], timeout: ['-s', '-k', '--signal', '--kill-after'], xargs: ['-n', '-I', '-L', '-P', '-s', '-d', '-E'] };
+
+function skipToHandbuildProgram(plain) {
+  let k = 0;
+  let wrapperName = null;
+  while (k < plain.length) {
+    if (SHELL_KEYWORDS.has(plain[k])) { k += 1; continue; }
+    if (!wrapperName && /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) { k += 1; continue; }
+    if (HANDBUILD_PROGRAM_WRAPPERS.has(plain[k])) { wrapperName = plain[k]; k += 1; continue; }
+    if (wrapperName === 'env') {
+      if (plain[k] === '-S' || plain[k] === '--split-string') return { index: k + 2, envSplit: plain[k + 1] };
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) { k += 1; continue; }
+    }
+    if (wrapperName === 'nice' && /^-\d+$/.test(plain[k])) { k += 1; wrapperName = null; continue; }
+    if (wrapperName && plain[k].startsWith('-')) {
+      const takes = (HANDBUILD_WRAPPER_VALUE_OPTS[wrapperName] ?? []).includes(plain[k]);
+      k += takes ? 2 : 1;
+      continue;
+    }
+    if (wrapperName === 'timeout' && /^\d+(?:\.\d+)?[smhd]?$/.test(plain[k])) { k += 1; wrapperName = null; continue; }
+    if (wrapperName) wrapperName = null;
+    break;
+  }
+  return { index: k };
+}
+
+function handbuildVerbAfterSwarmArgs(args) {
+  const lower = args.map(w => w.toLowerCase());
+  let i = 0;
+  while (i < lower.length) {
+    const a = lower[i];
+    if (a === '--root' || a.startsWith('--root=')) {
+      if (a === '--root') i += 2;
+      else i += 1;
+      continue;
+    }
+    if (a.startsWith('-')) { i += 1; continue; }
+    break;
+  }
+  if (lower[i] === 'handbuild') return lower[i + 1] ?? '';
+  return null;
+}
+
+/** handbuild subcommand on a `swarm` or `node … swarm.mjs` invocation only, or null when not a handbuild command. */
+export function swarmHandbuildVerbFromPlain(plain) {
+  const words = executablePlainWordsForHandbuild(plain);
+  const { index, envSplit } = skipToHandbuildProgram(words);
+  if (envSplit !== undefined) return swarmHandbuildVerbFromPlain(envSplit.split(/\s+/).filter(Boolean));
+  if (index >= words.length) return null;
+  const cmd = path.basename(words[index]).toLowerCase();
+  const args = words.slice(index + 1);
+  if (cmd === 'handbuild') return handbuildVerbAfterSwarmArgs(words.slice(index).map(w => w.toLowerCase()));
+  if (cmd === 'swarm') return handbuildVerbAfterSwarmArgs(args);
+  if (cmd === 'node') {
+    const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));
+    if (scriptAt === -1) return null;
+    const base = path.basename(args[scriptAt]).toLowerCase();
+    if (base !== 'swarm.mjs' && !args[scriptAt].toLowerCase().endsWith('/swarm.mjs') && !args[scriptAt].toLowerCase().endsWith('\\swarm.mjs')) return null;
+    return handbuildVerbAfterSwarmArgs(args.slice(scriptAt + 1));
+  }
+  return null;
+}
+
+export function plainSetsHandbuildSelfApproval(plain) {
+  const verb = swarmHandbuildVerbFromPlain(plain);
+  if (verb !== null && HANDBUILD_OWNER_VERBS.has(verb)) return true;
+  const lower = executablePlainWordsForHandbuild(plain).map(w => w.toLowerCase());
+  for (let i = 0; i < lower.length; i += 1) {
+    if (lower[i] === 'decide' && lower[i + 1]?.startsWith('handbuild-') && (lower[i + 2] === 'approve' || lower[i + 2] === 'deny')) return true;
+    if (lower[i] === 'swarm' && lower[i + 1] === 'decide' && lower[i + 2]?.startsWith('handbuild-') && (lower[i + 3] === 'approve' || lower[i + 3] === 'deny')) return true;
+  }
+  return false;
+}
 
 function swarmCliArgsReadOnly(args) {
   let i = 0;
@@ -419,7 +532,24 @@ function nodeInvokesSwarmHandbuildReadOnly(args) {
   const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));
   if (scriptAt === -1) return false;
   if (path.basename(args[scriptAt]) !== 'swarm.mjs') return false;
-  return swarmCliArgsReadOnly(args.slice(scriptAt + 1));
+  const rest = args.slice(scriptAt + 1);
+  let i = 0;
+  while (i < rest.length) {
+    const a = rest[i];
+    if (a === '--root' || a.startsWith('--root=')) {
+      if (a === '--root') i += 2;
+      else i += 1;
+      continue;
+    }
+    if (a.startsWith('-')) { i += 1; continue; }
+    break;
+  }
+  if (rest[i] !== 'handbuild') return swarmCliArgsReadOnly(rest);
+  const verb = String(rest[i + 1] ?? '').toLowerCase();
+  if (!verb || verb === '--help' || verb.startsWith('-')) return true;
+  if (HANDBUILD_OWNER_VERBS.has(verb)) return false;
+  if (SWARM_HANDBUILD_FILE_OPS.has(verb)) return true;
+  return true;
 }
 
 /** { writes, git, inline, unknown, protectedOutside, selfApproval } for one command line. `protectedAbs`: absolute path prefixes (the install, the user's own Claude settings) no write may touch. */
@@ -509,11 +639,7 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
       plain.push(words[i]);
       plainExp.push(wordExp[i] ?? false);
     }
-    // approving or denying a hand-build, or switching the guard off, is the owner's alone: found in the words, whatever the quoting
-    const lower = plain.map(w => w.toLowerCase());
-    const hb = lower.indexOf('handbuild');
-    if (hb !== -1 && lower.slice(hb + 1, hb + 3).some(w => SELF_WORDS.has(w))) selfApproval = true;
-    if (lower.some(w => w.startsWith('handbuild-')) && (lower.includes('decide') || lower.includes('decision'))) selfApproval = true;
+    if (plainSetsHandbuildSelfApproval(plain)) selfApproval = true;
     // find the real command: skip shell keywords, assignments and wrappers (with the options of a wrapper that take a value)
     let k = 0, wrapperName = null;
     const wrappers = [];

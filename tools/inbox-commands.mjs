@@ -2,7 +2,7 @@
 // `swarm inbox | done | decide | decision | backlog`: the owner's side of Phase 10c. Plain commands, no model.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { appendEvent, readJournal, sanitizeText, openItems } from './journal.mjs';
+import { appendEvent, readJournal, sanitizeText, openItems, integrateBlockerKindFromId, integrateBlockerResolutionEvent, integrateBlockerRunIdFromId } from './journal.mjs';
 import { collectInbox, formatInbox, markDone, decide } from './inbox.mjs';
 import { readStore, updateGroup, groupAsState } from './human-jobs.mjs';
 import { readBacklog, addGoal, removeGoal } from './backlog.mjs';
@@ -96,7 +96,17 @@ export async function runInboxCommand(root, command, args, { installRoot, now = 
       if (args.length !== 1 || args[0].startsWith('-')) return bad(command);
       const open = openItems(await readJournal(root, { limit: Infinity })).find(event => event.kind === 'blocker' && String(event.id) === args[0]);
       if (!open) return { stdout: `no open blocker ${sanitizeText(args[0])} in this project (swarm inbox lists them)\n`, exitCode: 1 };
-      await appendEvent(root, { kind: 'blocker', id: open.id, resolved: true, text: sanitizeText(open.text ?? '') }, { now });
+      const integrateKind = integrateBlockerKindFromId(open.id);
+      const integrateRun = integrateBlockerRunIdFromId(open.id);
+      const resolution = integrateKind && integrateRun
+        ? integrateBlockerResolutionEvent(open, {
+          integrateKind,
+          integrateRun,
+          integrateCause: open.integrateCause ?? open.text,
+          resolvedBy: 'owner',
+        })
+        : { kind: 'blocker', id: open.id, resolved: true, text: sanitizeText(open.text ?? '') };
+      await appendEvent(root, resolution, { now });
       return { stdout: `resolved: ${open.id}\n`, exitCode: 0 };
     }
     if (command === 'decision') {

@@ -262,7 +262,8 @@ async function rootFilesForProject(root, { scope = null, scopeText = '', notes =
 }
 
 export async function readApprovalPolicy(root) {
-  const pointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? '{}');
+  const { readRunnerPointer } = await import('./runner-pointer.mjs');
+  const pointer = await readRunnerPointer(root, { allowMissing: true });
   const { policy, errors } = validateApprovalPolicy(pointer?.profile?.approval);
   if (errors.length) throw fail('approval-invalid', `profile.approval: ${errors[0]}`);
   return policy;
@@ -273,7 +274,8 @@ export async function readApprovalPolicy(root) {
 // The validated profile of the project (null when there is none or it is invalid).
 export async function readProfile(root) {
   try {
-    const pointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? 'null');
+    const { readRunnerPointer } = await import('./runner-pointer.mjs');
+    const pointer = await readRunnerPointer(root, { allowMissing: true });
     if (!pointer?.profile) return null;
     const { profile, errors } = validateProfile(pointer.profile);
     return errors.length ? null : { ...profile, stack: pointer.stack ?? profile.stack };
@@ -1616,7 +1618,8 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
     try { projectFiles = await projectFileList(root, execFileAsync); } catch { /* not a git repo */ }
     const runSpec = deps.runTicketSpec ?? ((r, file, ctx) => runTicketSpec(r, file, { ...ctx, pkg: ctx.pkg ?? projectPkg, files: ctx.files ?? projectFiles }));
     // A profile that names a verify block but does not validate must not turn the test gate off.
-    const rawPointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? 'null');
+    const { readRunnerPointer } = await import('./runner-pointer.mjs');
+    const rawPointer = await readRunnerPointer(root, { allowMissing: true });
     if (rawPointer?.profile?.verify !== undefined && !profile?.verify) {
       const { errors } = validateProfile(rawPointer.profile);
       return out(`the profile has a verify block but the profile is invalid, so tests cannot be checked: ${errors[0] ?? 'unknown error'}`, 1);
@@ -2304,7 +2307,8 @@ async function doneReviewRefusals(root, ledger, ticket) {
       reasons.push(`Opus security review (${reviewReason}): no passing review on the current code. Run swarm go --scope or swarm scope sync RUN --integrated to queue it, then swarm scope security-review <run id>.`);
     }
   }
-  const rawPointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? 'null');
+  const { readRunnerPointer } = await import('./runner-pointer.mjs');
+  const rawPointer = await readRunnerPointer(root, { allowMissing: true });
   const profile = await readProfile(root);
   if (rawPointer?.profile && !profile) {
     const { errors } = validateProfile(rawPointer.profile);

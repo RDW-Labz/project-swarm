@@ -325,7 +325,7 @@ test('review findings: the install and the user\'s own Claude settings hold the 
   assert.equal(decide('Bash', { command: `echo '{}' > ${home}/.claude/projects/x/notes.txt` }).allow, true);
   const quoted = decide('Bash', { command: 'swarm "handbuild" off' });
   assert.equal(quoted.allow, false);
-  assert.match(quoted.reason, /switching the guard off, is the owner/);
+  assert.match(quoted.reason, /\[handbuild-owner-verb\].*handbuild off/);
   // even an approval that names them covers nothing
   const r = createRequest(root, { kind: 'swarm-cannot', reason: 'the swarm cannot edit its own guard here', files: 'src/a.ts' }, { now: () => T0 });
   decideRequest(root, r.id, 'approve', { now: () => T0 });
