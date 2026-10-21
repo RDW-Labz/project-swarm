@@ -52,7 +52,7 @@ import { runBrainCommand, createProjectBrain, triageRun, preflightManifest, brai
 import { readBacklog, nextStartable, markStarted as markBacklogStarted } from './backlog.mjs';
 import { pendingNotifications, macNotify } from './notify.mjs';
 import { resolveDefaultRoot, INSTALL_COMMANDS, runBriefCommand, runHandoffCommand, runCheckpointCommand, journalAfterCommand } from './project-commands.mjs';
-import { runAutopilot, integrableFromJobs, manifestWorkFingerprint } from './autopilot.mjs';
+import { runAutopilot, integrableFromJobs, manifestWorkFingerprint, integrateCheckoutDirtyFromPorcelain } from './autopilot.mjs';
 import { readyAutopilotDeps } from './autopilot-ready-deps.mjs';
 import { acquireAutopilotLock } from './autopilot-lock.mjs';
 import { policyPath, loadPolicy, handledForYou } from './policy.mjs';
@@ -83,7 +83,7 @@ import { parseGoals, extractKnownRepos, gatherAreaCandidates, sweepPrompt, norma
 import { findUncoveredTests, listProjectFiles, suggestIgnoreTests, contextDirectoryWarnings, registryPinningWarnings, isTestFile } from './context-check.mjs';
 import { ship, SHIP_DEFAULTS, resolveGhAndGit, parsePrPayload, resolveToolchainBin, parseExemptFlag, toolchainCheckEnv, shipHelpRequested, SHIP_USAGE, TEST_FILE_RE, gitIgnoredFixtureWarnings, loadPrivateNames, repoVisibility, githubRepo, findPrivateNameHitsInText } from './ship.mjs';
 import { loadChecksFromCi, checkNotInCiWarnings, DEFAULT_CI_PATH } from './checks-from-ci.mjs';
-import { go, commitOutputs, goExitCode } from './go.mjs';
+import { go, commitOutputs, commitIntegratedRun, goExitCode } from './go.mjs';
 import { TICKET_USAGE, parseTicketArgs, ticketPipeline } from './pipeline.mjs';
 import { SCAFFOLD_USAGE, parseScaffoldArgs, scaffoldJob, scaffoldPr, commandHandlers, commandHandlerWarnings } from './scaffold.mjs';
 import { prepareWorkspaceEnvironment, prepareViteCaches, isDesignOnlyCodexJob, createAdapterLogSink, runCodexWithRetry } from './codex-adapter.mjs';
@@ -1455,6 +1455,26 @@ export async function integrateQueue(root, id, { batchSize = 10, maxRequeues = 2
 
 
 
+async function finalizeIntegrationCommit(root, id, state, manifest, baseResult, options, swarmEnv) {
+  const autoCommit = options.autoCommit !== false && !options.noCommit;
+  if (!autoCommit) return baseResult;
+  const { commit, humanLine } = await commitIntegratedRun(root, {
+    runId: id,
+    state,
+    manifest,
+    autoCommit: true,
+    env: swarmEnv,
+    appendEvent: event => appendEvent(root, event, { best: true }),
+  });
+  if (humanLine) process.stderr.write(`${humanLine}\n`);
+  if (commit) {
+    state.integrationCommit = commit;
+    await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
+    return { ...baseResult, commit };
+  }
+  return baseResult;
+}
+
 export async function integrateRun(root, id, options = {}) {
   if (options.queue) validateQueueOptions({ ...options, batchSize: options.batchSize ?? 10 });
   root = await fs.realpath(root);
@@ -1767,7 +1787,12 @@ async function integrateRunLocked(root, id, options = {}) {
       if (acceptedDeviations.length) state.acceptedDeviations = acceptedDeviations;
       if (resultShapeWarnings.length) state.resultShapeWarnings = resultShapeWarnings;
       const result = await applyQueuePlans(root, id, state, manifest, queuePlans, { batchSize, adaptive, conflicts: queueConflicts, skipped: queueSkipped, noChecks, noFlakeCheck, spawnImpl, releaseIntegrationLock, securityGate, warnings: [...designWarnings, ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)] });
-      return { ...result, ...(children.length ? { children } : {}) };
+      const merged = { ...result, ...(children.length ? { children } : {}) };
+      if (state.mergeQueue?.state === 'done') {
+        const { env: swarmEnv } = await loadSwarmEnv(root);
+        return await finalizeIntegrationCommit(root, id, state, manifest, merged, options, swarmEnv);
+      }
+      return merged;
     }
     // Plain integrate has no rollback, so the security gate (same policy, same checks as the queue's) runs on the planned writes BEFORE the first one:
     // there is no integration path without it.
@@ -1918,7 +1943,8 @@ async function integrateRunLocked(root, id, options = {}) {
     // state), never merely swallowed by --accept-deviation.
     if (acceptedDeviations.length) state.acceptedDeviations = acceptedDeviations;
     await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
-    return { id, status: 'integrated', ...(children.length ? { children } : {}), integrationStatus: state.integrationStatus, files: state.integratedFiles, filesChanged: state.integratedFiles, portBase, ...(preChecksResult.preChecks.length ? { preChecks: preChecksResult.preChecks } : {}), ...(warnings.length ? { warnings } : {}), ...checksResult, ...mutantsResult, ...(blockedJobs.length ? { blockedEvidence: blockedJobs.map(job => ({ name: job.id, lines: [job.error ?? 'blocked'] })) } : {}), ...(salvagedJobs.length ? { salvaged: true, salvagedJobs: salvagedJobs.map(job => job.id) } : {}), ...(acceptedDeviations.length ? { acceptedDeviations } : {}), ...(jobs ? { integratedJobs, skippedJobs } : {}) };
+    const baseReturn = { id, status: 'integrated', ...(children.length ? { children } : {}), integrationStatus: state.integrationStatus, files: state.integratedFiles, filesChanged: state.integratedFiles, portBase, ...(preChecksResult.preChecks.length ? { preChecks: preChecksResult.preChecks } : {}), ...(warnings.length ? { warnings } : {}), ...checksResult, ...mutantsResult, ...(blockedJobs.length ? { blockedEvidence: blockedJobs.map(job => ({ name: job.id, lines: [job.error ?? 'blocked'] })) } : {}), ...(salvagedJobs.length ? { salvaged: true, salvagedJobs: salvagedJobs.map(job => job.id) } : {}), ...(acceptedDeviations.length ? { acceptedDeviations } : {}), ...(jobs ? { integratedJobs, skippedJobs } : {}) };
+    return await finalizeIntegrationCommit(root, id, state, manifest, baseReturn, options, swarmEnv);
   } finally { /* The caller owns both integration locks. */ }
 }
 
@@ -2329,7 +2355,12 @@ function autopilotDeps(root) {
       const git = async args => (await execFileAsync('git', ['-C', root, ...args], { encoding: 'utf8' })).stdout.trim();
       const branch = await git(['branch', '--show-current']);
       const linkedWorktree = (await git(['rev-parse', '--git-dir'])) !== (await git(['rev-parse', '--git-common-dir']));
-      return { branch, linkedWorktree, dirty: await worktreeDirty(root) };
+      let dirty = true;
+      try {
+        const { stdout } = await execFileAsync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' });
+        dirty = integrateCheckoutDirtyFromPorcelain(stdout);
+      } catch { dirty = true; }
+      return { branch, linkedWorktree, dirty };
     },
     integrate: async (root, id) => {
       const summary = await integrateQueue(root, id);
@@ -2477,7 +2508,7 @@ async function mainInner() {
           return runManifestChecked(runRoot, manifest, undefined, { checkBase: true, id, acceptCoveredRedBase: false });
         },
         inspect: inspectRun,
-        integrate: (runRoot, id) => integrateRun(runRoot, id, { noChecks: true }),
+        integrate: (runRoot, id) => integrateRun(runRoot, id, { noChecks: true, autoCommit: false }),
         checks: (runRoot, id, additionalChecks) => runChecksForRun(runRoot, id, { additionalChecks }),
         commit: (runRoot, files, message) => commitOutputs(runRoot, files, message),
         ship: (runRoot, id, flags) => shipRun(runRoot, id, flags),
@@ -2683,7 +2714,7 @@ async function mainInner() {
     const capsFor=manifest=>autopilotCaps({maxUsd:perRun.maxUsd,maxTokens:perRun.maxTokens},manifest?.budget);
     const integrateWith=async(goRoot,id,opts)=>{
       const manifest=validateManifest(JSON.parse(await bytesAt(goRoot,`.swarm/runs/${id}/manifest.json`,true)));
-      return integrateRun(goRoot,id,{mutants:Boolean(opts.mutants)||Boolean(manifest.mutants?.length),...(loopFlags.noFlakeCheck?{noFlakeCheck:true}:{}),...(opts.jobs?{jobs:opts.jobs}:{})});
+      return integrateRun(goRoot,id,{mutants:Boolean(opts.mutants)||Boolean(manifest.mutants?.length),autoCommit:false,...(loopFlags.noFlakeCheck?{noFlakeCheck:true}:{}),...(opts.jobs?{jobs:opts.jobs}:{})});
     };
     // Commits only the wave's own files, and refuses when something else is already staged (it would ride along in the commit).
     const commitWave=async(goRoot,files,message)=>{
@@ -3002,7 +3033,7 @@ async function mainInner() {
     process.stdout.write(FORGET_USAGE);
     return;
   }
-  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] [--kit NAME --kit-source PATH_OR_GIT_URL [--name NAME] [--no-protect-kit]] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] [--skip-skeleton] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | tickets --mark-deps [ID...] [--yes] | change "REASON" [FILE] [--yes] | merge PR [--repo OWNER/NAME] | stop --all|--status|--clear | backup [list|verify ID] [--reason TEXT] | restore ID [--yes] | migrations [check [--yes]|approve FILE [--note TEXT]] | projects [list|add PATH|remove ID] | forget PATH... [--dry-run] [--missing] [--scratch] [--yes] | history [--project P] [--kind K] [--q TEXT] [--from D] [--to D] [--csv] [--backfill] | budgets check [--url URL] [--screens a,b] | budgets status | errors pull [--dry-run] | errors ingest [FILE|-] | errors list|show|ignore|resolve|digest | report --client [--since DAYS] [--preview URL] [--approve [DIR]] [--status] | time log HOURS [NOTE] | time list | quote SCOPE.md | quote record|list|config | resolve BLOCKER_ID | handbuild request|approve|deny|status|log|install|uninstall|off|on | remote on|off|status|show|rotate | with-concurrency N -- COMMAND... | phone setup --repo OWNER/NAME | phone sync [--dry-run] | phone status | phone off | models watch [--force] [--json] | models list | models compare CURRENT CANDIDATE | ui check [SCREEN_ID...] [--base-url URL] [--json] | ui list | watch [RUN] [--all] [--tui] [--open] [--json] | gallery list|approve ID...|comment ID "text" | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] [--force] [--when-idle [--timeout MINUTES]] [--no-restart] | pin [PROJECT VERSION] | unpin PROJECT | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | policy init|show|validate|path|check KIND --facts JSON|run | budget set [--daily USD] [--mode stop|notify] [--ceiling USD] [--machine] | budget show [--json] | brief [--json] | handoff --to codex|cursor|claude|gemini | handoff generate --stage S3 [--max-usd N] [--yes] [--dry-run] | handoff check --url URL [--propose] | handoff status | handoff final | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] [--legacy-plan] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nAutopilot: by default only ledger start-ready and run lifecycle actions run; --legacy-plan also allows plan waves, deferred human jobs, and backlog goals.\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--no-commit] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] [--kit NAME --kit-source PATH_OR_GIT_URL [--name NAME] [--no-protect-kit]] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] [--skip-skeleton] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | tickets --mark-deps [ID...] [--yes] | change "REASON" [FILE] [--yes] | merge PR [--repo OWNER/NAME] | stop --all|--status|--clear | backup [list|verify ID] [--reason TEXT] | restore ID [--yes] | migrations [check [--yes]|approve FILE [--note TEXT]] | projects [list|add PATH|remove ID] | forget PATH... [--dry-run] [--missing] [--scratch] [--yes] | history [--project P] [--kind K] [--q TEXT] [--from D] [--to D] [--csv] [--backfill] | budgets check [--url URL] [--screens a,b] | budgets status | errors pull [--dry-run] | errors ingest [FILE|-] | errors list|show|ignore|resolve|digest | report --client [--since DAYS] [--preview URL] [--approve [DIR]] [--status] | time log HOURS [NOTE] | time list | quote SCOPE.md | quote record|list|config | resolve BLOCKER_ID | handbuild request|approve|deny|status|log|install|uninstall|off|on | remote on|off|status|show|rotate | with-concurrency N -- COMMAND... | phone setup --repo OWNER/NAME | phone sync [--dry-run] | phone status | phone off | models watch [--force] [--json] | models list | models compare CURRENT CANDIDATE | ui check [SCREEN_ID...] [--base-url URL] [--json] | ui list | watch [RUN] [--all] [--tui] [--open] [--json] | gallery list|approve ID...|comment ID "text" | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] [--force] [--when-idle [--timeout MINUTES]] [--no-restart] | pin [PROJECT VERSION] | unpin PROJECT | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | policy init|show|validate|path|check KIND --facts JSON|run | budget set [--daily USD] [--mode stop|notify] [--ceiling USD] [--machine] | budget show [--json] | brief [--json] | handoff --to codex|cursor|claude|gemini | handoff generate --stage S3 [--max-usd N] [--yes] [--dry-run] | handoff check --url URL [--propose] | handoff status | handoff final | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] [--legacy-plan] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nAutopilot: by default only ledger start-ready and run lifecycle actions run; --legacy-plan also allows plan waves, deferred human jobs, and backlog goals.\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
   if(args[0]==='lesson'){
     try{
       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
@@ -3212,7 +3243,8 @@ async function mainInner() {
         const [{createBoardApi},{projectId},{runStopAll,readStopMarker,clearStop},{realStopDeps},{createBackup,verifyBackup},{createLedger,writeLedger}]=await Promise.all([import('./watch-cli.mjs'),import('./projects.mjs'),import('./stop-all.mjs'),import('./safety-commands.mjs'),import('./state-backup.mjs'),import('./tickets.mjs')]);
         const realDir=await fs.realpath(dir);
         const stopEnv={PATH:process.env.PATH,HOME:os.tmpdir(),SWARM_CONFIG:path.join(os.tmpdir(),'swarm-scale-missing-config.json')};
-        const result=await scaleFull(realDir,{jobs,concurrency,runManifest,integrateRun,
+        const integrateForScale=(scaleRoot,scaleId,scaleOpts)=>integrateRun(scaleRoot,scaleId,{...scaleOpts,autoCommit:false});
+        const result=await scaleFull(realDir,{jobs,concurrency,runManifest,integrateRun:integrateForScale,
           board:{createBoardApi,projectId},
           stop:{runStopAll,readMarker:readStopMarker,clear:clearStop,deps:{...realStopDeps(realDir,{env:stopEnv,reason:'scale practice'}),pollMs:50,waitMs:30000}},
           backup:{create:createBackup,verify:verifyBackup},
@@ -3226,7 +3258,8 @@ async function mainInner() {
         if(!result.ok)process.exitCode=1;
         return;
       }
-      const result=await scaleStub(dir,{jobs,concurrency,holdMs:20,runManifest,integrateRun});
+      const integrateForScale=(scaleRoot,scaleId,scaleOpts)=>integrateRun(scaleRoot,scaleId,{...scaleOpts,autoCommit:false});
+      const result=await scaleStub(dir,{jobs,concurrency,holdMs:20,runManifest,integrateRun:integrateForScale});
       process.stdout.write(`${JSON.stringify(result)}\n`);
       if(result.complete!==jobs||result.costUsd!==0)process.exitCode=1;
     }finally{await fs.rm(dir,{recursive:true,force:true});}
@@ -3547,7 +3580,7 @@ async function mainInner() {
   }
   // integrate's checks/mutants flags are read-only selection of whether/how checks run; strip
   // them here so the generic argument-count check below still fails on anything else.
-  let noChecks=false,requireChecks=false,acceptFailedChecks=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag,acceptBlocked=false,salvage=false,acceptDeviation=false,acceptResultShape=false,acceptDropped=false,salvageDropped=false,approveManifests=[],integrateJobs,queue=false,adaptive=false,batchSize=10,maxRequeues=2;
+  let noChecks=false,requireChecks=false,acceptFailedChecks=false,integrateNoCommit=false,useMutants=false,noFlakeCheck=false,mutantsFileFlag,mutantCheckFlag,acceptBlocked=false,salvage=false,acceptDeviation=false,acceptResultShape=false,acceptDropped=false,salvageDropped=false,approveManifests=[],integrateJobs,queue=false,adaptive=false,batchSize=10,maxRequeues=2;
   if(command==='integrate'){
     const flags=[...(argument === undefined ? [] : [argument]),...rest.splice(0,rest.length)];
     argument=undefined;
@@ -3568,6 +3601,7 @@ async function mainInner() {
       // gate (refuse on a failed check) is the default now; the flag still matters for mutants below.
       if(flag==='--require-checks'){requireChecks=true;continue;}
       if(flag==='--accept-failed-checks'){acceptFailedChecks=true;continue;}
+      if(flag==='--no-commit'){integrateNoCommit=true;continue;}
       if(flag==='--mutants'){useMutants=true;continue;}
       if(flag==='--mutants-file'){mutantsFileFlag=flags[++index];if(!mutantsFileFlag)fail('--mutants-file requires a value');continue;}
       if(flag==='--mutant-check'){mutantCheckFlag=flags[++index];if(mutantCheckFlag===undefined)fail('--mutant-check requires a value');continue;}
@@ -3852,7 +3886,7 @@ async function mainInner() {
       wait: async (goRoot,id)=>{const waited=await waitRun(goRoot,id);if(waited.status==='paused')waited.pause=(await readState(goRoot,id)).pause;return waited;},
       integrate: async (goRoot,id)=>{
         // A worker that also returns files it was not asked to write has those files dropped (never applied). go goes on without them and says so.
-        const summary=await integrateQueue(goRoot,id,{acceptDropped:true});
+        const summary=await integrateQueue(goRoot,id,{acceptDropped:true,autoCommit:false});
         const state=await readState(goRoot,id);
         const files=new Set(state.integratedFiles??[]);
         const dropped=[];
@@ -3888,7 +3922,7 @@ async function mainInner() {
       wait: (goRoot,id)=>waitRun(goRoot,id),
       integrate: async (goRoot,id,opts)=>{
         const manifest=validateManifest(JSON.parse(await bytesAt(goRoot,`.swarm/runs/${id}/manifest.json`,true)));
-        return integrateRun(goRoot,id,{mutants:opts.mutants||Boolean(manifest.mutants?.length)});
+        return integrateRun(goRoot,id,{mutants:opts.mutants||Boolean(manifest.mutants?.length),autoCommit:false});
       },
       commit: (goRoot,files,message)=>commitOutputs(goRoot,files,message),
       ship: (goRoot,id,goShipFlags)=>shipRun(goRoot,id,goShipFlags),
@@ -3927,7 +3961,7 @@ async function mainInner() {
       approvedGate={approveManifests:entries};
       for(const entry of entries)await appendEvent(root,{kind:'decision',id:`approve-manifest-${argument}-${entry.file}-${entry.sha256.slice(0,12)}`,text:entry.sha256==='deleted'?`owner reviewed the deletion of ${entry.file} by hand and approved it past the security gate for run ${argument}`:`owner reviewed ${entry.file} (sha256 ${entry.sha256.slice(0,12)}) by hand and approved exactly that content past the security gate for run ${argument}`,confirm:true,confirmed:true,by:'owner'});
     }
-    result=await (queue?integrateQueue:integrateRun)(root,argument,{...(approvedGate?{securityGate:approvedGate}:{}),batchSize,adaptive,maxRequeues,noChecks,acceptFailedChecks,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
+    result=await (queue?integrateQueue:integrateRun)(root,argument,{...(approvedGate?{securityGate:approvedGate}:{}),batchSize,adaptive,maxRequeues,noChecks,acceptFailedChecks,noCommit:integrateNoCommit,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
   }
   // Field lesson #203: a failed check at integrate used to be a quiet field (`status: "integrated"`,
   // exit 0) unless the coordinator remembered --require-checks; refusing (or, with the escape
