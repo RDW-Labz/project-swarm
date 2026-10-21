@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "pins-hotfix",
+      "agent": "auto",
+      "prompt": "HOTFIX: swarm update rewrote the version in every registered project's .project-swarm.json and pruned old version folders, which broke the Marketing agency project (pinned to 1.47.0 on the Mac mini). Implement version pinning. Pointer fields (in the project's .project-swarm.json, which also holds install, version, stack, profile): pinned: true (pin at the pointer's current version) or pinnedVersion: \"x.y.z\" (wins over pinned and over version). A project is pinned when either is set; its pinned version is pinnedVersion, else pointer.version. (1) tools/swarm.mjs bumpPointers (about line 6938): for a pinned project change NOTHING: no version rewrite, no refresh of the orchestrator hooks (ensureOrchestratorHooks), no hand-build guard refresh (ensureHandbuildGuard), no rule files; return it in a new skipped list as { project, pinnedAt } and make the update output print one line per pinned project: skipped (pinned at x.y.z). Unpinned projects behave exactly as today (version bumped, hooks and guard refreshed, backup file). (2) pruneVersions in tools/install.mjs gets a protect option (a set of version strings) and installUser passes the pinned versions of every registered project: never delete a version folder (names look like 1.159.0-590e61f6) whose version part is pinned by any registered project, even when it is older than the newest keep=5; the protected folders do not count against keep. Put the registry and pointer reading for this in a new module tools/pins.mjs (pinnedVersions(source) returning a Map version to [projects], pinOf(pointer), readPins) used by both install.mjs and swarm.mjs; an unreadable pointer or registry entry never fails the prune and never lets a version go: when a pointer cannot be read, protect nothing extra for it but report it. (3) swarm update --projects (the report of old project copies, around the code at line 6900 that replaces old copies with --yes) lists pinned projects in a separate section pinned (never replaced, even with --yes). New commands: swarm pin PROJECT VERSION, swarm unpin PROJECT, and swarm pin with no arguments lists the pins. PROJECT is a registered project name (folder name), id or path. pin validates x.y.z, writes pinned: true and pinnedVersion into the pointer keeping every other key (profile, stack, install) and writing a backup like writePointer does; if no installed folder for that version exists under the install root versions/ directory it installs one from the git tag v<version> of the install source repository (git archive of the tag into versions/<version>-<hash> using the same naming and manifest as snapshotVersion; never repoint current; refuse with a clear message naming the missing tag when the tag does not exist, and refuse when git is unavailable); unpin removes pinned and pinnedVersion only (the version field stays, the next update bumps it). Both print what they did. Add the commands to the help text and to the command metadata used by completions (tools/watch-command-meta.mjs and tools/completion.mjs) so tests/completion.test.mjs still passes. (4) Board: tools/board-data.mjs adds pinnedVersion (string or null) to each project overview and detail from the pointer, and tools/watch-assets/board.js (and project.js if the project page has a header chip row) renders a small badge pinned at x.y.z on the card when it is set; no badge otherwise. Keep the existing board tests passing and add a board test for the field and the badge text. Tests in tests/pins.test.mjs (temp install roots and temp projects, no real home): a pinned project (both forms) is untouched by bumpPointers (file bytes identical, no hooks or guard files written, listed as skipped with the exact line), an unpinned project is updated as before, pinnedVersion beats pointer.version, a pinned version older than the newest 5 survives pruneVersions while unpinned old versions are pruned, an unreadable pointer does not break the prune, update --projects lists pinned projects separately and --yes does not touch them, pin and unpin round trip keep the profile key, pin of a missing installed version installs it from a tag in a temp git repository without changing current, pin of a missing tag refuses, project resolution by name, id and path, completion metadata includes pin and unpin. Hermetic: no reading of the ambient environment (CLAUDECODE, TTY) and no network. Keep every existing test passing (tests/bump-pointers*.test.mjs, tests/update-*.test.mjs, tests/install*.test.mjs, tests/completion.test.mjs and others that reference swarm.mjs). No token-shaped literals. Also add docs/pinning.md (short: when to pin, the two fields, the commands, what update skips, pruning). ignoreTests reason: tests that reference swarm.mjs in passing are covered by the full suite run before merge.",
+      "context": [
+        "tools/swarm.mjs",
+        "tools/install.mjs",
+        "tools/projects.mjs",
+        "tools/board-data.mjs",
+        "tools/watch-assets/board.js",
+        "tools/watch-command-meta.mjs",
+        "tools/completion.mjs",
+        "tests/completion.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/swarm.mjs",
+        "tools/install.mjs",
+        "tools/pins.mjs",
+        "tools/board-data.mjs",
+        "tools/watch-assets/board.js",
+        "tools/watch-command-meta.mjs",
+        "tools/completion.mjs",
+        "tests/pins.test.mjs",
+        "docs/pinning.md"
+      ],
+      "timeoutMs": 3600000
+    }
+  ]
+}
