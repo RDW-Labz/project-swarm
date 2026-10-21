@@ -76,7 +76,7 @@ test('one project cap covers the main checkout and every linked worktree', async
   const worktreeDecision = await checkProjectCap(worktree, { env });
   for (const decision of [mainDecision, worktreeDecision]) {
     assert.equal(decision.reason, 'project-cap');
-    assert.match(decision.message, /been billed \$5\.00 \(list value \$5\.00 across 2 runs\)/);
+    assert.match(decision.message, /billed \$5\.00 of the \$4\.00 cap; list value \$5\.00 across 2 runs is not counted/);
     assert.match(decision.message, /only metered lanes/);
   }
   const reached = await projectSummary(worktree, { env, ttlMs: 0 });
