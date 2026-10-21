@@ -121,13 +121,24 @@ test('live owner refuses plain, queue and redcheck; dead owner clears with a war
   assert.equal(typeof held.release, 'function');
 });
 
-test('worktrees share the repository lock, and a refused root lock releases the repo lock', async t => {
+test('worktrees on different branches do not block each other, the same branch does, and a refused root lock releases the branch lock', async t => {
   const f = await fixture(t);
   const other = path.join(f.root, 'other');
   await exec('git', ['-C', f.root, 'worktree', 'add', '--detach', other, 'HEAD']);
-  const lock = await acquireIntegrationLock(f.root, { runId: 'first', liveDir: f.liveDir });
-  try { await assert.rejects(acquireIntegrationLock(other, { runId: 'second', liveDir: f.liveDir }), { code: 'integrate-locked' }); }
-  finally { await lock.release(); }
+  const [onMain, onDetached] = await Promise.all([
+    acquireIntegrationLock(f.root, { runId: 'first', liveDir: f.liveDir }),
+    acquireIntegrationLock(other, { runId: 'second', liveDir: f.liveDir }),
+  ]);
+  await onMain.release();
+  await onDetached.release();
+  const branch = 'integrate-lock-test';
+  const sameBranch = await acquireIntegrationLock(f.root, { runId: 'first', liveDir: f.liveDir, branch });
+  try {
+    await assert.rejects(
+      acquireIntegrationLock(other, { runId: 'second', liveDir: f.liveDir, branch }),
+      error => error.code === 'integrate-locked' && error.message.includes(branch),
+    );
+  } finally { await sameBranch.release(); }
   await fs.mkdir(path.join(f.root, '.swarm/integration.lock'));
   await assert.rejects(integrateRun(f.root, f.id, { liveDir: f.liveDir }), { code: 'integrate-locked' });
   assert.deepEqual(await fs.readdir(path.join(f.liveDir, 'locks')), []);
