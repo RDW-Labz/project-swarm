@@ -42,7 +42,7 @@ export const COMMANDS = [
   command('check-pins', 'Check pinned project dependencies.', 'none', '--root --json --core --app-prefix'),
   command('sweep', 'Scan a list of goals for prior art.', 'none', '--model --brief --goals --max-usd --concurrency --top --candidates --known --timeout'),
   command('version', 'Show the installed version.', 'none', '--check'),
-  command('update', 'Update the shared installation.', 'none', '--projects --yes --no-restart'),
+  command('update', 'Update the shared installation.', 'none', '--projects --yes --no-restart --when-idle --timeout --force'),
   command('pin', 'Pin a project to a swarm release version.', 'none', ''),
   command('unpin', 'Remove the version pin from a project.', 'none', ''),
   command('squash', 'Squash a branch.', 'none', '--branch --base'),

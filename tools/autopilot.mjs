@@ -653,6 +653,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
         let ok = true;
         let result = 'ok';
         try {
+          if (typeof deps.waitBeforeLaunchingWork === 'function') await deps.waitBeforeLaunchingWork(root);
           const out = await deps.startScope({ root });
           ok = out?.ok !== false;
           if (ok) {
