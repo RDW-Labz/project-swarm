@@ -1,7 +1,88 @@
 // SPDX-License-Identifier: Apache-2.0
 import crypto from 'node:crypto';
 import { stopGuard } from './stop-all.mjs';
-import { matchesFile } from './handbuild.mjs';
+import { matchesFile, ELEVATED_GIT_OPS } from './handbuild.mjs';
+import { runPolicyPass, appendAutoDecision } from './policy-run.mjs';
+import { resolveDailyLimit } from './daily-limit.mjs';
+
+const POLICY_PASS_KINDS = new Set([
+  'hand-build-request',
+  'ticket-set-status',
+  'ticket-park',
+  'ticket-retry',
+  'ticket-release',
+  'change-order-path-fix',
+  'change-order-split',
+]);
+
+function elevatedGitInItem(item) {
+  const git = item?.facts?.git ?? item?.git;
+  if (git == null || git === '') return false;
+  const entries = Array.isArray(git) ? git : [git];
+  return entries.some(g => {
+    const name = typeof g === 'string' ? g : g?.op ?? g?.name;
+    return typeof name === 'string' && ELEVATED_GIT_OPS.includes(name);
+  });
+}
+
+export function filterPolicyPassItems(items) {
+  return (Array.isArray(items) ? items : []).filter(item => {
+    if (!item || typeof item !== 'object') return false;
+    if (!POLICY_PASS_KINDS.has(item.kind)) return false;
+    if (item.kind === 'hand-build-request' && elevatedGitInItem(item)) return false;
+    return true;
+  });
+}
+
+export function policyPassFacts({ billedTodayUsd, settings, factsOf, item }) {
+  const base = typeof factsOf === 'function' ? (factsOf(item) ?? {}) : {};
+  const { dailyLimitUsd } = resolveDailyLimit(settings ?? {});
+  const billed = Number(billedTodayUsd) || 0;
+  return { ...base, pastDailyAutoLimit: billed >= dailyLimitUsd };
+}
+
+export async function executePolicyPass(root, deps, { now = Date.now } = {}) {
+  const cfg = deps?.policyPass;
+  if (!cfg || typeof cfg !== 'object') return null;
+  if (typeof cfg.loadRules !== 'function') return null;
+  const rules = await cfg.loadRules();
+  if (rules == null) return { decided: [], left: [], skipped: true };
+  const listOpen = cfg.openRequests ?? cfg.listOpenRequests;
+  const items = typeof listOpen === 'function' ? await listOpen(root) : [];
+  const filtered = filterPolicyPassItems(items);
+  if (Object.hasOwn(cfg, 'billedTodayUsd') && typeof cfg.billedTodayUsd !== 'function') {
+    return { decided: [], left: filtered, skipped: true };
+  }
+  const billedTodayUsd = typeof cfg.billedTodayUsd === 'function' ? await cfg.billedTodayUsd(root) : 0;
+  const settings = typeof cfg.dailyLimitSettings === 'function' ? await cfg.dailyLimitSettings(root) : {};
+  const factsOf = item => policyPassFacts({ billedTodayUsd, settings, factsOf: cfg.factsOf, item });
+  if (typeof cfg.apply !== 'function') return null;
+  if (Object.hasOwn(cfg, 'events') && typeof cfg.events !== 'function') {
+    return { decided: [], left: filtered, skipped: true };
+  }
+  const readHandled = typeof cfg.readHandled === 'function' ? cfg.readHandled : () => [];
+  const appendDeps = typeof cfg.appendAutoDecisionDeps === 'object' ? cfg.appendAutoDecisionDeps : {};
+  const journal = entry => appendAutoDecision({ root, entry, deps: { now, ...appendDeps } });
+  const events = typeof cfg.events === 'function' ? cfg.events : () => {};
+  const billed = Number(billedTodayUsd) || 0;
+  const { dailyLimitUsd } = resolveDailyLimit(settings ?? {});
+  const limits = cfg.limits ?? {
+    pastDailyAutoLimit: () => billed >= dailyLimitUsd,
+  };
+  return runPolicyPass({
+    root,
+    items: filtered,
+    rules,
+    factsOf,
+    apply: cfg.apply,
+    journal,
+    events,
+    now,
+    machine: cfg.machine ?? '',
+    readHandled,
+    limits,
+  });
+}
 export const DEFAULT_AUTOPILOT_ACTIONS = ['integrate', 'resume', 'retry-failed', 'unlock-tickets', 'start-ready'];
 export const LEGACY_PLAN_ACTIONS = ['start-wave', 'start-deferred', 'start-backlog'];
 export const ACTIONS = [...DEFAULT_AUTOPILOT_ACTIONS, ...LEGACY_PLAN_ACTIONS];
@@ -586,6 +667,10 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
         actions.push({ action: 'start-ready', ok, result, reason });
       }
     }
+  }
+
+  if (deps.policyPass) {
+    try { await executePolicyPass(root, deps, { now: nowMs }); } catch { /* policy pass never stops autopilot */ }
   }
 
   if (typeof deps.notify === 'function') { try { await deps.notify(root); } catch { /* a notifier never stops the loop */ } }

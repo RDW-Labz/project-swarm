@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "review-t-policy",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "autonomy policy that auto-approves actions",
+      "type": "review",
+      "prompt": "Review the autonomy policy engine in context (tools/policy.mjs, tools/policy-commands.mjs, tools/policy-run.mjs, docs/policy.md). Intent: per-machine rules auto-decide routine requests (commit and push swarm output on non-main branches, setup files, retry and park, path-fix change orders, plus conditional rules for live-site merges with CI, full e2e, review, post-deploy watch and auto-rollback, backward-compatible hosted migrations with backup, dry run and main e2e proof, branch switches and journal restores); ALWAYS owner: merge to main without the conditions, deploy outside the conditional rule, cap raises, hand edits to app code, new workflows or secrets, auth, payments, irreversible actions, new keys or accounts, spend past the daily limit. Check: (1) a missing, malformed or partial facts object can never produce an auto decision (fail closed; undefined, NaN, strings instead of booleans); (2) NEVER_AUTO kinds cannot be reached by any rule, alias, case or whitespace variant of a kind; (3) conditional rules need every fact true exactly (===true), not truthy; (4) pastDailyAutoLimit and per-day auto counters cannot be reset by a crafted record; (5) a policy file that fails to load or validate yields no auto decisions; (6) every auto decision is logged with the rule that decided it before it is applied; (7) a rule cannot be added by the orchestrator through the CLI without the owner (policy init/show/validate/path/check/run: which verbs write?). Answer with a list of findings, each with file, line, concrete scenario and severity (high, medium, low), then one line PASS or FAIL. The threat model is an honest but fallible orchestrator, not an adversary: list adversarial-only issues separately as low. Do not write files.",
+      "context": [
+        "tools/policy.mjs",
+        "tools/policy-commands.mjs",
+        "tools/policy-run.mjs",
+        "docs/policy.md",
+        "tests/policy.test.mjs",
+        "tests/policy-defaults-v2.test.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 1500000
+    },
+    {
+      "id": "review-t-limit",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "spend admission and wiring into the runner and autopilot",
+      "type": "review",
+      "prompt": "Review the daily spend limit and its wiring: tools/daily-limit.mjs, tools/budget-set-commands.mjs, tools/daily-limit-notify.mjs, and coordination/review/t-wiring-glue.diff (the changes in tools/swarm.mjs, tools/autopilot.mjs, tools/spend.mjs). Intent: dailyLimitUsd (default 5, BILLED spend only, metered lanes), mode stop (no new PAID runs until midnight Central, free lanes keep going) or notify (keep going, notify at 1x, 2x, 3x), hardCeilingUsd (default 3x limit) always stops even in notify mode; per-project setting over a machine default; free lanes (Cursor, Codex, Hermes, claude subscription) never count and never stop. Check: (1) the admission check runs on EVERY path that launches a paid job (run, go, scope waves, reviews, asks, resume, batch, autopilot) and cannot be skipped by a flag; (2) billed-today uses billed spend only and handles unknown cost fail-closed; (3) midnight Central rollover and DST edge; (4) notify mode cannot exceed the hard ceiling; a ceiling of 0, negative, NaN or missing falls back to 3x; (5) budget set can raise the limit only by the owner (the orchestrator raising caps is forbidden: how does the CLI tell?) and every change is logged; (6) notifications are once per level per day and a notification failure never blocks or bypasses the stop; (7) the autopilot policy pass cannot start paid work past the limit and does nothing when there is no policy file. Answer with a list of findings, each with file, line, concrete scenario and severity (high, medium, low), then one line PASS or FAIL. The threat model is an honest but fallible orchestrator, not an adversary: list adversarial-only issues separately as low. Do not write files.",
+      "context": [
+        "tools/daily-limit.mjs",
+        "tools/budget-set-commands.mjs",
+        "tools/daily-limit-notify.mjs",
+        "coordination/review/t-wiring-glue.diff",
+        "tools/spend.mjs",
+        "tests/daily-limit.test.mjs",
+        "tests/daily-limit-admission.test.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 1500000
+    }
+  ]
+}

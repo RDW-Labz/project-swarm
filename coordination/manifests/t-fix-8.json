@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t-fix8-budget-tests",
+      "agent": "auto",
+      "prompt": "After the round 3 change in tools/budget-set-commands.mjs (an owner terminal now needs TTY on stdin and stdout and no agent environment names; otherwise the session is an agent and raises beyond the per-project per-day 5 USD allowance or switching stop to notify need an owner approval), six tests fail because they run without a TTY, so the code treats them as an agent session. Failing: tests/budget-set.test.mjs budgetCommand (2 subtests: stop mode refuses a paid lane over the limit and lets Cursor through, and one more), tests/daily-limit-hardening-round3.test.mjs round3 (2) cumulative allowance and bound approval, tests/daily-limit-hardening-round4.test.mjs round4 (4) owner terminal detection and bound approval, tests/daily-limit-hardening.test.mjs finding 2 budget set journal, log, and agent approval, tests/policy-cli-wiring.test.mjs budget set then show round-trips project over machine default (a real CLI spawn without a TTY). Read tools/budget-set-commands.mjs: if budgetCommand already accepts an injected detection dependency (isOwnerSession, env, isTTY or similar), pass it in the tests that mean to act as the owner; if it does not, add the smallest injectable dependency to tools/budget-set-commands.mjs defaulting to the real detection, never an environment-variable override that a session could set. For the real CLI spawn test use only values an agent may set (a raise within the 5 USD allowance, stop mode) or create the owner approval record the way the production code expects. Do not weaken assertions; for tests whose purpose is the agent refusal keep them as agent sessions. Write only the named files. No token-shaped literals. ignoreTests reason: only budget set files and their tests change.",
+      "context": [
+        "tools/budget-set-commands.mjs",
+        "tools/daily-limit.mjs",
+        "tests/budget-set.test.mjs",
+        "tests/daily-limit-hardening-round3.test.mjs",
+        "tests/daily-limit-hardening-round4.test.mjs",
+        "tests/daily-limit-hardening.test.mjs",
+        "tests/policy-cli-wiring.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/budget-set-commands.mjs",
+        "tests/budget-set.test.mjs",
+        "tests/daily-limit-hardening-round3.test.mjs",
+        "tests/daily-limit-hardening-round4.test.mjs",
+        "tests/daily-limit-hardening.test.mjs",
+        "tests/policy-cli-wiring.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ]
+}

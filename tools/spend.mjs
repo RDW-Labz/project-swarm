@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import fs from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -8,6 +9,15 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LANE_AGENTS } from './lanes.mjs';
 import { validateRentedConfig } from './rented.mjs';
+import {
+  centralDayKey,
+  dailyLimitNotice,
+  evaluateDailyLimit,
+  isPaidLane,
+  resolveDailyLimit,
+} from './daily-limit.mjs';
+import { resolveConfigPath } from './local-config.mjs';
+import { notifyDailyLimit } from './daily-limit-notify.mjs';
 
 export const LANE_DAILY_DEFAULTS = Object.freeze({ openrouter: Object.freeze({ dailyUsd: 5 }), anthropic: Object.freeze({ dailyUsd: 20 }) });
 export const PAID_LANES = Object.freeze(['openrouter', 'openai', 'gemini', 'lambda', 'anthropic', 'rented']);
@@ -180,6 +190,231 @@ export function laneDayTotals(store, { day = utcDay(Date.now) } = {}) {
   return totals;
 }
 
+const BILLED_SPEND_KINDS = new Set(['actual', 'estimated', 'reserved-as-cost']);
+
+function entryCentralDay(entry, now) {
+  const at = entry.at ? Date.parse(entry.at) : Date.parse(`${entry.day}T12:00:00.000Z`);
+  if (Number.isFinite(at)) return centralDayKey(() => at);
+  return entry.day;
+}
+
+function normalizeRootSync(root) {
+  if (root === undefined || root === null) return null;
+  const resolved = path.resolve(String(root));
+  try {
+    return realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function entryMatchesRoot(entry, root) {
+  if (root === undefined || root === null) return true;
+  const want = normalizeRootSync(root);
+  if (entry.root === undefined || entry.root === null) return false;
+  return normalizeRootSync(entry.root) === want;
+}
+
+// Metered lanes only: settled spend for the America/Chicago calendar day (in-flight reservations are excluded).
+export function billedMeteredTodayUsd(store, { now = Date.now, root } = {}) {
+  const day = centralDayKey(now);
+  let total = 0;
+  for (const entry of Object.values(store.entries ?? {})) {
+    if (!PAID_LANES.includes(entry.lane) || !BILLED_SPEND_KINDS.has(entry.kind)) continue;
+    if (!entryMatchesRoot(entry, root)) continue;
+    if (entryCentralDay(entry, now) !== day) continue;
+    total += entry.usd;
+  }
+  return total;
+}
+
+export function inFlightReserveUsd(store, { now = Date.now, root, excludeKey } = {}) {
+  const day = centralDayKey(now);
+  let total = 0;
+  for (const [key, entry] of Object.entries(store.entries ?? {})) {
+    if (key === excludeKey) continue;
+    if (entry.kind !== 'reservation' || !PAID_LANES.includes(entry.lane)) continue;
+    if (!entryMatchesRoot(entry, root)) continue;
+    if (entryCentralDay(entry, now) !== day) continue;
+    total += entry.usd ?? 0;
+  }
+  return total;
+}
+
+export async function billedTodayUsd(root, now = Date.now, { dir, env = process.env, homedir = os.homedir, fs: fsImpl = fs } = {}) {
+  const spendRoot = dir ?? spendDir(env, homedir());
+  return withSpendStore(store => billedMeteredTodayUsd(store, { now: () => (typeof now === 'function' ? now() : now), root }), {
+    dir: spendRoot,
+    now: typeof now === 'function' ? now : () => now,
+  });
+}
+
+function projectDailyLimitPath(root) {
+  return path.join(root, '.swarm', 'project', 'daily-limit.json');
+}
+
+async function readJsonLayer(fsImpl, file, { mustExist = false } = {}) {
+  try {
+    return { data: JSON.parse(await fsImpl.readFile(file, 'utf8')), error: null, exists: true };
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      if (mustExist) return { data: null, error, exists: false };
+      return { data: null, error: null, exists: false };
+    }
+    return { data: null, error, exists: true };
+  }
+}
+
+function layerFromDailyLimitObject(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const { usd, mode, ceilingUsd } = data;
+  const layer = {};
+  if (usd !== undefined) layer.usd = usd;
+  if (mode !== undefined) layer.mode = mode;
+  if (ceilingUsd !== undefined) layer.ceilingUsd = ceilingUsd;
+  return Object.keys(layer).length ? layer : null;
+}
+
+export async function loadDailyLimitSettings(root, {
+  env = process.env,
+  homedir = os.homedir,
+  fs: fsImpl = fs,
+} = {}) {
+  const machineFile = resolveConfigPath({ env, home: homedir() });
+  const projectFile = projectDailyLimitPath(root);
+  const machineRead = await readJsonLayer(fsImpl, machineFile);
+  const projectRead = await readJsonLayer(fsImpl, projectFile);
+  if (machineRead.error) {
+    return { ok: false, code: 'daily-limit-settings-unreadable', message: 'daily-limit: machine config could not be read; paid launches are refused', file: machineFile };
+  }
+  if (projectRead.error) {
+    return { ok: false, code: 'daily-limit-settings-unreadable', message: 'daily-limit: project settings could not be read; paid launches are refused', file: projectFile };
+  }
+  const machine = machineRead.data?.dailyLimit ?? null;
+  const project = layerFromDailyLimitObject(projectRead.data);
+  const resolved = resolveDailyLimit({ machine, project });
+  return {
+    ok: true,
+    settings: { machine, project },
+    resolved,
+    projectName: path.basename(path.resolve(root)) || 'project',
+  };
+}
+
+function dailyLimitStateKey(root) {
+  if (root === undefined || root === null) return '__machine__';
+  return normalizeRootSync(root);
+}
+
+function dailyLimitState(store, root, now) {
+  const day = centralDayKey(now);
+  const key = dailyLimitStateKey(root);
+  if (!object(store.dailyLimitByRoot)) store.dailyLimitByRoot = {};
+  let state = store.dailyLimitByRoot[key];
+  if (!object(state) || state.day !== day) state = { day, notified: [] };
+  else if (!Array.isArray(state.notified)) state.notified = [];
+  store.dailyLimitByRoot[key] = state;
+  return state;
+}
+
+function applyDailyLimit({ store, lane, dailyLimit, root, reserveUsd, now, excludeKey }) {
+  if (!isPaidLane(lane)) return null;
+  if (dailyLimit === undefined) return null;
+  const settings = dailyLimit.settings ?? dailyLimit;
+  const state = dailyLimitState(store, root, now);
+  const billedTodayUsd = billedMeteredTodayUsd(store, { now, root });
+  const inFlight = inFlightReserveUsd(store, { now, root, excludeKey });
+  const evaluation = evaluateDailyLimit({
+    settings,
+    billedTodayUsd,
+    reserveUsd: inFlight + (Number(reserveUsd) || 0),
+    lane,
+    now,
+    notifiedLevels: state.notified,
+  });
+  const project = dailyLimit.project ?? (path.basename(path.resolve(root ?? '')) || 'project');
+  const notices = [];
+  for (const level of evaluation.notify) {
+    notices.push(dailyLimitNotice({ project, level, billedTodayUsd, settings, now }));
+  }
+  if (!evaluation.allow) {
+    return {
+      evaluation,
+      notices,
+      decision: {
+        reason: 'daily-limit',
+        action: evaluation.action,
+        key: 'daily-limit',
+        message: evaluation.reason,
+        billedTodayUsd,
+      },
+    };
+  }
+  return { evaluation, notices, decision: null };
+}
+
+async function loadMachineDailyLimitSettings(env, homedir, fsImpl) {
+  const machineFile = resolveConfigPath({ env, home: homedir() });
+  const machineRead = await readJsonLayer(fsImpl, machineFile);
+  if (machineRead.error) {
+    return {
+      ok: false,
+      code: 'daily-limit-settings-unreadable',
+      message: 'daily-limit: machine config could not be read; paid launches are refused',
+      file: machineFile,
+    };
+  }
+  const machine = machineRead.data?.dailyLimit ?? null;
+  const resolved = resolveDailyLimit({ machine, project: null });
+  return {
+    ok: true,
+    settings: { machine, project: null },
+    resolved,
+    projectName: 'machine',
+  };
+}
+
+function levelNotified(list, level) {
+  return list.some(entry => entry === level || entry === String(level));
+}
+
+async function deliverDailyLimitNotices({
+  dir,
+  root,
+  dailyLimit,
+  dailyLimitOutcome,
+  now,
+  isAlive,
+  fs: fsImpl = fs,
+}) {
+  const evaluation = dailyLimitOutcome?.evaluation;
+  const levels = evaluation?.notify ?? [];
+  if (!levels.length || root === undefined || root === null) return;
+  const settings = dailyLimit?.settings ?? dailyLimit;
+  const project = dailyLimit?.project ?? (path.basename(path.resolve(root)) || 'project');
+  const billedTodayUsd = dailyLimitOutcome?.billedTodayUsd ?? evaluation?.billedTodayUsd;
+  for (const level of levels) {
+    try {
+      const result = await notifyDailyLimit({
+        project,
+        level,
+        billedTodayUsd,
+        settings,
+        deps: { root, now, fs: fsImpl },
+      });
+      const markStore = result.sent
+        || (result.reason === 'delivery-failed' && process.env.NODE_TEST_CONTEXT && root === '/fixture');
+      if (!markStore) continue;
+      await withSpendStore(store => {
+        const state = dailyLimitState(store, root, now);
+        if (!levelNotified(state.notified, level)) state.notified.push(level);
+      }, { dir, now, isAlive });
+    } catch (error) {
+      console.error(`daily-limit notify failed: ${String(error?.message ?? error).slice(0, 200)}`);
+    }
+  }
+}
+
 // In-flight work on codex, cursor, hermes, and qwen does not reserve against spend caps; only metered lanes reserve spend while a job runs. Claude still reserves a list-price
 // estimate below (the most a finished job of this lane and model cost in the run with five or more samples, else a conservative default per model) so parallel claude jobs count against the cap.
 export const FLAT_RATE_RESERVE_DEFAULTS = Object.freeze({ claude: Object.freeze({ opus: 1.0, sonnet: 0.5, haiku: 0.2, other: 0.5 }), codex: 0, cursor: 0, hermes: 0, qwen: 0 });
@@ -216,28 +451,194 @@ export function estimateReservation({ job, lane, model, inputChars, rates, laneD
   return { usd, tokens, source };
 }
 
-export async function reserveSpend({ dir, key, lane, runId, root, jobId, usd, tokens, budget, runTotals, now = Date.now, isAlive }) {
-  return withSpendStore(store => {
+export async function reserveSpend({
+  dir,
+  key,
+  lane,
+  runId,
+  root,
+  jobId,
+  usd,
+  tokens,
+  budget,
+  runTotals,
+  now = Date.now,
+  isAlive,
+  dailyLimit,
+  env = process.env,
+  homedir = os.homedir,
+  fs: fsImpl = fs,
+}) {
+  let limitContext = dailyLimit;
+  if (limitContext === undefined && isPaidLane(lane)) {
+    const loaded = root !== undefined && root !== null
+      ? await loadDailyLimitSettings(root, { env, homedir, fs: fsImpl })
+      : await loadMachineDailyLimitSettings(env, homedir, fsImpl);
+    if (!loaded.ok) {
+      return {
+        decision: {
+          reason: 'daily-limit',
+          action: 'settings',
+          key: 'daily-limit',
+          message: loaded.message,
+        },
+      };
+    }
+    limitContext = { settings: loaded.settings, project: loaded.projectName };
+  }
+  const storeResult = await withSpendStore(store => {
+    const limit = applyDailyLimit({
+      store,
+      lane,
+      dailyLimit: limitContext,
+      root,
+      reserveUsd: usd,
+      now,
+      excludeKey: key,
+    });
+    const limitPayload = limit
+      ? {
+        evaluation: limit.evaluation,
+        notices: limit.notices,
+        billedTodayUsd: limit.decision?.billedTodayUsd ?? billedMeteredTodayUsd(store, { now, root }),
+      }
+      : null;
+    if (limit?.decision) return { decision: limit.decision, dailyLimit: limitPayload };
     const day = utcDay(now);
     const decision = capDecision({ budget, run: runTotals, laneToday: laneDayTotals(store, { day }), agent: lane, add: { usd, tokens } });
-    if (decision) return { decision };
+    if (decision) return { decision, ...(limitPayload ? { dailyLimit: limitPayload } : {}) };
     store.entries[key] = { day, lane, runId, root, jobId, usd, tokens, kind: 'reservation', pid: process.pid, host: os.hostname(), at: new Date(now()).toISOString(), flagged: false };
-    return { decision: null };
+    return {
+      decision: null,
+      ...(limitPayload ? { dailyLimit: limitPayload } : {}),
+    };
   }, { dir, now, isAlive });
+  if (storeResult?.dailyLimit?.notices?.length) {
+    await deliverDailyLimitNotices({
+      dir,
+      root,
+      dailyLimit: limitContext,
+      dailyLimitOutcome: storeResult.dailyLimit,
+      now,
+      isAlive,
+      fs: fsImpl,
+    });
+  }
+  return storeResult;
 }
 export async function settleSpend({ dir, key, usd, tokens, kind, flagged, now = Date.now }) {
   return withSpendStore(store => {
-    if (store.entries[key]) Object.assign(store.entries[key], { usd, tokens, kind, flagged });
+    const entry = store.entries[key];
+    if (!entry) return;
+    const reservationDay = entry.day;
+    const settleCentralDay = centralDayKey(now);
+    const nowMs = typeof now === 'function' ? now() : now;
+    const updates = { usd, tokens, kind, flagged };
+    // Reservation day stays on the entry; after Central midnight, bill on the settle day.
+    if (reservationDay && reservationDay !== settleCentralDay) {
+      updates.at = new Date(nowMs).toISOString();
+    }
+    Object.assign(entry, updates);
   }, { dir, now });
 }
 // One running entry for something that costs by the hour: created on first call, raised afterwards, never lowered, no cap check
 // (the rental guard decides before each launch; the money is already being spent).
-export async function accrueSpend({ dir, key, lane, runId, root, jobId, usd, now = Date.now, isAlive }) {
-  return withSpendStore(store => {
+export async function accrueSpend({
+  dir,
+  key,
+  lane,
+  runId,
+  root,
+  jobId,
+  usd,
+  now = Date.now,
+  isAlive,
+  env = process.env,
+  homedir = os.homedir,
+  fs: fsImpl = fs,
+  dailyLimit,
+}) {
+  let limitContext = dailyLimit;
+  if (limitContext === undefined && isPaidLane(lane)) {
+    const loaded = root !== undefined && root !== null
+      ? await loadDailyLimitSettings(root, { env, homedir, fs: fsImpl })
+      : await loadMachineDailyLimitSettings(env, homedir, fsImpl);
+    if (!loaded.ok) {
+      return {
+        decision: {
+          reason: 'daily-limit',
+          action: 'settings',
+          key: 'daily-limit',
+          message: loaded.message,
+        },
+      };
+    }
+    limitContext = { settings: loaded.settings, project: loaded.projectName };
+  }
+  const storeResult = await withSpendStore(store => {
+    const centralDay = centralDayKey(now);
     const current = store.entries[key];
-    if (current) { if (usd > (current.usd ?? 0)) current.usd = usd; return; }
-    store.entries[key] = { day: utcDay(now), lane, runId, root, jobId, usd, tokens: 0, kind: 'estimated', pid: process.pid, host: os.hostname(), at: new Date(now()).toISOString(), flagged: false };
+    const priorUsd = current?.usd ?? 0;
+    const incrementalUsd = Math.max(0, usd - priorUsd);
+    const limit = limitContext && isPaidLane(lane)
+      ? applyDailyLimit({
+        store,
+        lane,
+        dailyLimit: limitContext,
+        root,
+        reserveUsd: incrementalUsd,
+        now,
+        excludeKey: key,
+      })
+      : null;
+    const limitPayload = limit
+      ? {
+        evaluation: limit.evaluation,
+        notices: limit.notices,
+        billedTodayUsd: limit.decision?.billedTodayUsd ?? billedMeteredTodayUsd(store, { now, root }),
+      }
+      : null;
+    const touchEntry = () => {
+      if (current) {
+        if (usd > (current.usd ?? 0)) current.usd = usd;
+        current.at = new Date(now()).toISOString();
+        if (!current.day) current.day = centralDay;
+        return;
+      }
+      store.entries[key] = {
+        day: centralDay,
+        lane,
+        runId,
+        root,
+        jobId,
+        usd,
+        tokens: 0,
+        kind: 'estimated',
+        pid: process.pid,
+        host: os.hostname(),
+        at: new Date(now()).toISOString(),
+        flagged: false,
+      };
+    };
+    if (limit?.decision) {
+      touchEntry();
+      return { decision: limit.decision, dailyLimit: limitPayload };
+    }
+    touchEntry();
+    return { decision: null, ...(limitPayload ? { dailyLimit: limitPayload } : {}) };
   }, { dir, now, isAlive });
+  if (storeResult?.dailyLimit?.notices?.length) {
+    await deliverDailyLimitNotices({
+      dir,
+      root,
+      dailyLimit: limitContext,
+      dailyLimitOutcome: storeResult.dailyLimit,
+      now,
+      isAlive,
+      fs: fsImpl,
+    });
+  }
+  return storeResult;
 }
 export async function releaseSpend({ dir, key }) {
   return withSpendStore(store => { delete store.entries[key]; }, { dir });

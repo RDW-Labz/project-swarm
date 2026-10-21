@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "t-fix-policy",
+      "agent": "auto",
+      "prompt": "Opus review of the policy engine FAILED. Fix these findings in tools/policy.mjs, tools/policy-run.mjs and tools/policy-commands.mjs (owner-approved standing rules stay: cap raises up to +5 USD per project per day, swarm update when idle, ticket release and status routine, path-fix and split change orders, accept-failed-checks when only new test files fail, workflow edits after an Opus review). (1) HIGH fail closed on facts: every must-be-false fact (irreversible, pastDailyAutoLimit, destructive, force, addsSecrets, addsDeploy, addsPublish) must be exactly false and every must-be-true fact exactly true; a missing, string or null value means owner needed. deploysLiveSite must be exactly true or exactly false; anything else needs the owner, so a live-site merge can never fall into the weaker merge-swarm-pr rule. (2) HIGH workflow-change auto only for edits of an existing workflow with isNewWorkflow === false and no secrets, deploy or publish steps; a new workflow needs the owner. (3) HIGH in runPolicyPass write the auto-decision log (appendAutoDecision) BEFORE apply, make journal and events mandatory (a missing or failing log means the item is left for the owner and apply is not called), and record the outcome after apply. (4) MEDIUM protectedBranch: require a plain trimmed string, normalize origin/, refs/heads/, HEAD: prefixes, case; a missing branch is unprotected-unknown and needs the owner; main, master and release branches are protected. (5) MEDIUM review gate on mark-done: require requiresReview === false or reviewPassed === true and compare status after trim and lower case. (6) MEDIUM raisedTodayUsd and pastDailyAutoLimit are never trusted from the caller: runPolicyPass computes raisedTodayUsd from today's auto-decision records and takes pastDailyAutoLimit from an injected dep; a missing or negative value needs the owner. (7) MEDIUM journal-restore never auto-approves .swarm journal, ledger, auto-decision log or counter files, and rejects .. segments after normalizing. (8) MEDIUM DEFAULT_POLICY_FILE written by policy init must pass validatePolicy (accept enabled true or write only ids) and add a test that init then validate passes; init uses the wx flag. (9) MEDIUM a missing policy.json after the owner-set marker (a .policy-initialized marker written by init) fails closed; with no marker the defaults apply as today. (10) LOW only auto-decision records count as handled; each item wrapped in try/catch leaving it for the owner; match hand-build-request; change-order project must be a non-empty string equal to request.project. Add tests for each numbered finding. Keep every existing test passing (update a test only where the finding changes the intended behavior, and say why in a comment). Do not edit tools/swarm.mjs. No token-shaped literals in files. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/policy.mjs",
+        "tools/policy-run.mjs",
+        "tools/policy-commands.mjs",
+        "docs/policy.md",
+        "tests/policy.test.mjs",
+        "tests/policy-defaults.test.mjs",
+        "tests/policy-defaults-v2.test.mjs",
+        "tests/policy-run.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/policy.mjs",
+        "tools/policy-run.mjs",
+        "tools/policy-commands.mjs",
+        "tests/policy-hardening-round2.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/autopilot-policy-pass.test.mjs",
+        "tests/policy-cli-wiring.test.mjs",
+        "tests/handbuild-vercel-merge.test.mjs"
+      ]
+    },
+    {
+      "id": "t-fix-limit",
+      "agent": "auto",
+      "prompt": "Opus review of the daily limit FAILED. Fix in tools/spend.mjs, tools/daily-limit.mjs, tools/daily-limit-notify.mjs and tools/budget-set-commands.mjs. (1) HIGH enforcement: reserveSpend (every paid launch goes through it) must load the effective settings itself: resolveDailyLimit with the project settings file and the machine config for the root it is given, plus billed-today for that project, so no caller has to pass dailyLimit; if settings exist but cannot be read the paid launch is refused (fail closed); flat-rate lanes are never checked. accrueSpend for the rented lane checks the limit too and attributes hours to the day they accrue in Central time. (2) HIGH budget set: every change appends a record (who: from the environment, agent session or owner terminal; before and after values; time) to the journal and a log file; a raise of usd or ceiling by more than 5 USD over the current effective value, or switching stop to notify, is refused inside an agent session (CLAUDECODE set) unless a short-lived owner approval record exists, and the refusal says how the owner approves; lowering is always allowed. (3) MEDIUM validate every layer at resolve: usd must be a finite number above 0, mode stop or notify, ceiling finite and at least usd; anything invalid falls back to the default (5 USD, stop, 3x) and is reported, never NaN. (4) MEDIUM include in-flight reservations (running paid jobs) and the new job's own reserve in the comparison, so concurrent launches cannot overshoot the hard ceiling. (5) MEDIUM billed-today and the notified list are per project (keyed by root), not machine-wide. (6) MEDIUM build and send the ceiling notice, write the notified marker only after delivery succeeds, a delivery failure is logged and retried next call and never blocks or bypasses the stop. (7) MEDIUM budget set --machine keeps the machine config file mode (do not chmod to 644; write with the existing mode or 0600). (8) LOW notify mode sends only the 1x, 2x, 3x levels and the ceiling stop; the FYI notice is not a human item. Export a function billedTodayUsd(root, now) for the wiring job. Add tests for each numbered finding. Keep every existing test passing (update a test only where the finding changes the intended behavior, and say why in a comment). Do not edit tools/swarm.mjs. No token-shaped literals in files. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/spend.mjs",
+        "tools/daily-limit.mjs",
+        "tools/daily-limit-notify.mjs",
+        "tools/budget-set-commands.mjs",
+        "tools/project-spend.mjs",
+        "tests/daily-limit.test.mjs",
+        "tests/daily-limit-admission.test.mjs",
+        "tests/budget-set.test.mjs",
+        "tests/daily-limit-notify.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/spend.mjs",
+        "tools/daily-limit.mjs",
+        "tools/daily-limit-notify.mjs",
+        "tools/budget-set-commands.mjs",
+        "tests/daily-limit-hardening.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/api-short-report.test.mjs",
+        "tests/crash-guards.test.mjs",
+        "tests/flat-rate-reserve.test.mjs",
+        "tests/policy-cli-wiring.test.mjs",
+        "tests/phase14.test.mjs",
+        "tests/dead-run.test.mjs",
+        "tests/hard-cap.test.mjs",
+        "tests/project-cap-billed.test.mjs",
+        "tests/rented-run.test.mjs",
+        "tests/batch-run.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/phase12-cli.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tests/spend.test.mjs"
+      ]
+    }
+  ]
+}

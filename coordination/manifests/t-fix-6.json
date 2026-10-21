@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t-fix6-autopilot-test",
+      "agent": "auto",
+      "prompt": "In tests/autopilot-policy-pass.test.mjs the test provides pastDailyAutoLimit on facts so policy blocks cap-raise now fails: it expects the reason to match /past daily auto limit/ but the hardened policy answers project missing first, because the cap-raise request in the fixture has no project. Give the fixture request a non-empty project string (and any other strict fact the hardened rule needs) so the policy reaches the pastDailyAutoLimit check, keep the assertion on the reason unchanged, and add a second assertion in the same test file that a cap-raise without a project is refused with project missing. Write only tests/autopilot-policy-pass.test.mjs. ignoreTests reason: only this test file changes.",
+      "context": [
+        "tests/autopilot-policy-pass.test.mjs",
+        "tools/policy.mjs",
+        "tools/policy-run.mjs",
+        "tools/autopilot.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/autopilot-policy-pass.test.mjs"
+      ],
+      "timeoutMs": 900000
+    }
+  ]
+}

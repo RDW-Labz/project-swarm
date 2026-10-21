@@ -236,7 +236,9 @@ test('store clears stale locks, times out on live/foreign locks and refuses malf
 test('reservation admission, settlement and release preserve original UTC day', async () => {
   const dir = await tempSpend(), budget = resolveBudget({ cli: { maxTokens: 10 } });
   const input = { dir, key: '0123456789ab/r/j#1', lane: 'openrouter', runId: 'r', root: '/fixture', jobId: 'j', usd: 0.5, tokens: 10, budget, runTotals: { usd: 0, tokens: 0 }, now: fixedNow };
-  assert.deepEqual(await reserveSpend(input), { decision: null });
+  const admitted = await reserveSpend(input);
+  assert.equal(admitted.decision, null);
+  assert.ok(admitted.dailyLimit?.evaluation?.allow);
   assert.equal((await reserveSpend({ ...input, key: 'blocked', runTotals: { tokens: 10 } })).decision.reason, 'run-cap');
   await settleSpend({ dir, key: input.key, usd: 0.6, tokens: 20, kind: 'estimated', flagged: true, now: () => fixedNow() + 86400000 });
   await withSpendStore(store => {
