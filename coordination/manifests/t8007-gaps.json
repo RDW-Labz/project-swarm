@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8007-gaps",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tools/watch-assets/board-lib.js",
+        "tools/watch-assets/project.js",
+        "tools/watch-assets/app.js",
+        "tools/watch-server.mjs",
+        "tests/board-live-chip.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/board-live.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-review-fixes.test.mjs",
+        "tests/board-page.test.mjs"
+      ],
+      "prompt": "Ticket T-8007 acceptance gaps (Codex review): (1) The spec is: the chip shows 'connecting' only after 2 missed polls (or 2 missed heartbeats on the run page). Today after two missed polls the project chip renders 'Stale (N s)'. Change BoardLib.chipState and the project.js label so that: before the first good answer -> 'connecting'; good answer within two poll intervals plus slack -> 'Live'; after two missed polls -> 'connecting' (add the age as a title attribute or a small suffix 'connecting (last update N s ago)'); never flips back and forth inside the two-poll window. Do the same for the run page stream state in tools/watch-assets/app.js: 'connecting' after two missed heartbeats. Keep liveness() unchanged for other callers. (2) Add a test with a fake slow server read/write: a fake res whose write() returns false twice (back-pressure) and a slow snapshot read (a getRunSnapshot that resolves after a delay driven by fake timers): the stream stays open, heartbeats still go out, and the client state stays Live while pings arrive within two intervals. Update tests/board-live-chip.test.mjs. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test, fake timers/injected now, no real waiting. Run `node --import ./tests/_isolate-config.mjs --test tests/board-live-chip.test.mjs tests/board-live.test.mjs tests/watch-server.test.mjs tests/watch-ui.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests only use these files for unrelated behavior; the coordinator runs the FULL suite after integration.",
+      "ignoreTests": [
+        "tests/autopilot-lock.test.mjs",
+        "tests/backlog.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/bench-replay.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/build-progress-atlas.test.mjs",
+        "tests/build-progress-untracked-filter.test.mjs",
+        "tests/ci-hooks.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/completion.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/executors.test.mjs",
+        "tests/fixtures/ledgers/atlas.anon.json",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/init-profile.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/phase10b-cli.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/policy-defaults.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/repo-map.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scope-sync-delete.test.mjs",
+        "tests/scope-sync-replan.test.mjs",
+        "tests/security-scan.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/state-backup.test.mjs",
+        "tests/test-db-cleanup.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/ui-check.test.mjs",
+        "tests/verify-config.test.mjs",
+        "tests/watch-leftovers.test.mjs"
+      ]
+    }
+  ]
+}

@@ -22,7 +22,8 @@ const SECURITY = {
 
 const IDLE_FINISHED_MS = 10000;
 const MAX_STREAMS = 8;
-const MAX_SLOW_WRITES = 2;
+export const MAX_STREAM_BUFFER_BYTES = 1024 * 1024;
+const MAX_STREAM_PAUSED_MS = 60000;
 
 function safeEqual(a, b) {
   const x = Buffer.from(String(a), 'utf8');
@@ -48,6 +49,142 @@ function sse(event, data) {
   return 'event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n';
 }
 
+export function createWatchStreamManager({ getRunSnapshot, now = Date.now, onDrop = () => {}, onClose = () => {} }) {
+  const streams = new Set();
+  let latestSnapshot = null;
+
+  function dropStream(stream, end = false) {
+    if (!streams.delete(stream)) return;
+    onDrop(stream);
+    if (end) {
+      try {
+        stream.res.end();
+      } catch {
+        // already closed
+      }
+    }
+  }
+
+  function writableLength(stream) {
+    return Number.isFinite(stream.res.writableLength) ? stream.res.writableLength : 0;
+  }
+
+  function shouldDrop(stream) {
+    return writableLength(stream) > MAX_STREAM_BUFFER_BYTES
+      || (stream.paused && now() - stream.pausedAt > MAX_STREAM_PAUSED_MS);
+  }
+
+  function pause(stream) {
+    if (!stream.paused) {
+      stream.paused = true;
+      stream.pausedAt = now();
+    }
+  }
+
+  function write(stream, chunk) {
+    try {
+      const ok = stream.res.write(chunk);
+      if (!ok) pause(stream);
+      return ok;
+    } catch {
+      dropStream(stream, true);
+      return false;
+    }
+  }
+
+  function open(res, run) {
+    latestSnapshot = run;
+    const stream = {
+      res,
+      prev: run,
+      paused: false,
+      pausedAt: null,
+      throttle: createThrottle(250, now),
+    };
+    streams.add(stream);
+    res.on('close', () => {
+      dropStream(stream);
+      onClose();
+    });
+    res.on('drain', () => {
+      if (!streams.has(stream) || !stream.paused) return;
+      if (shouldDrop(stream)) {
+        dropStream(stream, true);
+        return;
+      }
+      const next = latestSnapshot;
+      const ok = write(stream, sse('snapshot', next));
+      stream.prev = next;
+      if (ok) {
+        stream.paused = false;
+        stream.pausedAt = null;
+      }
+    });
+    try {
+      write(stream, sse('snapshot', run));
+    } catch {
+      dropStream(stream, true);
+    }
+    return stream;
+  }
+
+  function writeHeartbeats() {
+    const line = ': ping\n\n' + sse('ping', {});
+    for (const stream of [...streams]) {
+      if (shouldDrop(stream)) {
+        dropStream(stream, true);
+        continue;
+      }
+      if (stream.paused && writableLength(stream) >= MAX_STREAM_BUFFER_BYTES) continue;
+      write(stream, line);
+    }
+  }
+
+  async function pushUpdates() {
+    const next = (await getRunSnapshot()) ?? null;
+    latestSnapshot = next;
+    for (const stream of [...streams]) {
+      if (stream.paused) {
+        if (shouldDrop(stream)) dropStream(stream, true);
+        continue;
+      }
+      if (shouldDrop(stream)) {
+        dropStream(stream, true);
+        continue;
+      }
+      if (JSON.stringify(stream.prev) === JSON.stringify(next)) continue;
+      if (!stream.throttle.shouldSend()) continue;
+      const line = (stream.prev === null || next === null)
+        ? sse('snapshot', next)
+        : sse('delta', diffSnapshots(stream.prev, next));
+      if (write(stream, line)) {
+        stream.prev = next;
+      }
+    }
+  }
+
+  function close() {
+    for (const stream of [...streams]) {
+      try {
+        stream.res.end();
+      } catch {
+        // already closed
+      }
+    }
+    streams.clear();
+  }
+
+  return {
+    open,
+    writeHeartbeats,
+    pushUpdates,
+    close,
+    get size() {
+      return streams.size;
+    },
+  };
+}
+
 export function createWatchServer(opts) {
   const {
     root,
@@ -65,6 +202,9 @@ export function createWatchServer(opts) {
     deltaFile,
     idleMs = 1800000,
     now = Date.now,
+    heartbeatMs = 10000,
+    setIntervalFn = setInterval,
+    clearIntervalFn = clearInterval,
     // A fixed port and token, for a board that stays up between restarts (swarm remote). Without them: a free port and a fresh token every start.
     port: wantedPort = 0,
     token: fixedToken,
@@ -75,11 +215,11 @@ export function createWatchServer(opts) {
 
   const token = fixedToken ?? randomBytes(24).toString('hex');
   const assets = new Map();
-  const streams = new Set();
   let server = null;
   let port = 0;
   let url = null;
   let timer = null;
+  let heartbeatTimer = null;
   let ticking = false;
   let closed = false;
   let streamEverClosed = false;
@@ -87,6 +227,15 @@ export function createWatchServer(opts) {
   const done = new Promise((resolve) => { resolveDone = resolve; });
   let lastActivity = now();
   let noStreamSince = now();
+  const streamManager = createWatchStreamManager({
+    getRunSnapshot,
+    now,
+    onDrop: () => { streamEverClosed = true; },
+    onClose: () => {
+      lastActivity = now();
+      if (streamManager.size === 0) noStreamSince = now();
+    },
+  });
 
   async function loadAssets() {
     assets.clear();
@@ -123,53 +272,19 @@ export function createWatchServer(opts) {
     send(res, method, 200, { 'Content-Type': 'image/png', 'Content-Length': body.length }, body);
   }
 
-  function dropStream(s) {
-    streams.delete(s);
-    streamEverClosed = true;
-  }
-
   async function openEvents(res, method) {
     if (method === 'HEAD') {
       return send(res, method, 200, { 'Content-Type': 'text/event-stream; charset=utf-8' }, '');
     }
     if (closed) return sendText(res, method, 503, 'shutting down');
     const run = (await getRunSnapshot()) ?? null;
-    if (streams.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
+    if (streamManager.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
     res.writeHead(200, { ...SECURITY, 'Content-Type': 'text/event-stream; charset=utf-8' });
-    res.write(sse('snapshot', run));
-    const stream = { res, prev: run, throttle: createThrottle(250, now), slow: 0 };
-    streams.add(stream);
-    res.on('close', () => {
-      dropStream(stream);
-      lastActivity = now();
-      if (streams.size === 0) noStreamSince = now();
-    });
-  }
-
-  async function pushUpdates() {
-    const next = (await getRunSnapshot()) ?? null;
-    for (const s of [...streams]) {
-      if (JSON.stringify(s.prev) === JSON.stringify(next)) continue;
-      if (!s.throttle.shouldSend()) continue;
-      try {
-        const line = (s.prev === null || next === null)
-          ? sse('snapshot', next)
-          : sse('delta', diffSnapshots(s.prev, next));
-        const ok = s.res.write(line);
-        s.prev = next;
-        s.slow = ok ? 0 : s.slow + 1;
-        if (s.slow >= MAX_SLOW_WRITES) {
-          dropStream(s);
-          try {
-            s.res.end();
-          } catch {
-            // already closed
-          }
-        }
-      } catch {
-        dropStream(s);
-      }
+    if (res.socket) {
+      res.socket.setTimeout(0);
+      res.socket.setKeepAlive(true);
     }
+    streamManager.open(res, run);
   }
 
   async function handle(req, res) {
@@ -254,16 +369,11 @@ export function createWatchServer(opts) {
   async function close() {
     if (closed && !server) return;
     closed = true;
-    if (timer) clearInterval(timer);
+    if (timer) clearIntervalFn(timer);
     timer = null;
-    for (const s of [...streams]) {
-      try {
-        s.res.end();
-      } catch {
-        // already closed
-      }
-    }
-    streams.clear();
+    if (heartbeatTimer) clearIntervalFn(heartbeatTimer);
+    heartbeatTimer = null;
+    streamManager.close();
     if (server && server.listening) {
       await new Promise((resolve) => {
         server.close(() => resolve());
@@ -278,8 +388,8 @@ export function createWatchServer(opts) {
     ticking = true;
     try {
       const t = now();
-      if (streams.size > 0) {
-        await pushUpdates();
+      if (streamManager.size > 0) {
+        await streamManager.pushUpdates();
       } else {
         if (t - lastActivity >= idleMs) {
           await close();
@@ -307,6 +417,8 @@ export function createWatchServer(opts) {
         else res.end();
       });
     });
+    server.keepAliveTimeout = 65000;
+    server.headersTimeout = 66000;
     await new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(wantedPort, '127.0.0.1', () => resolve());
@@ -317,10 +429,12 @@ export function createWatchServer(opts) {
     streamEverClosed = false;
     lastActivity = now();
     noStreamSince = now();
-    timer = setInterval(() => {
+    timer = setIntervalFn(() => {
       tick();
     }, 1000);
     if (timer && typeof timer.unref === 'function') timer.unref();
+    heartbeatTimer = setIntervalFn(streamManager.writeHeartbeats, Math.max(1, heartbeatMs));
+    if (heartbeatTimer && typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
     return { url, port };
   }
 

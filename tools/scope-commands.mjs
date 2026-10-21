@@ -224,6 +224,43 @@ async function loadScope(root, file) {
   return { file: target, text, scope: parseScope(text), hash: scopeHash(text) };
 }
 
+const ROOT_FILE_NAME = /^[\w.-]{1,100}$/;
+const isAllowedRootFileName = name => typeof name === 'string' && ROOT_FILE_NAME.test(name) && !/^\.env/i.test(name);
+
+function addRootFileNames(target, value, source, notes) {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    notes.push(`${source}: ignored invalid value (expected an array)`);
+    return;
+  }
+  if (value.length > 50) notes.push(`${source}: ignored entries after the maximum of 50`);
+  for (const name of value.slice(0, 50)) {
+    if (isAllowedRootFileName(name)) target.add(name);
+    else notes.push(`${source}: ignored invalid entry ${JSON.stringify(name)}`);
+  }
+}
+
+function scopeHeaderRootFiles(text) {
+  const header = String(text ?? '').split(/^##\s/m, 1)[0];
+  const line = header.match(/^Root files:\s*(.*)$/im);
+  return line ? line[1].split(',').map(name => name.trim()).filter(Boolean) : undefined;
+}
+
+async function rootFilesForProject(root, { scope = null, scopeText = '', notes = [] } = {}) {
+  const allowed = new Set();
+  let pointer = null;
+  try {
+    const text = await readText(path.join(root, '.project-swarm.json'));
+    pointer = text === null ? null : JSON.parse(text);
+  } catch {
+    pointer = null;
+  }
+  addRootFileNames(allowed, pointer?.scopeRootFiles, 'scopeRootFiles', notes);
+  addRootFileNames(allowed, pointer?.profile?.scopeRootFiles, 'profile.scopeRootFiles', notes);
+  addRootFileNames(allowed, scope?.rootFiles ?? scopeHeaderRootFiles(scopeText), 'scope rootFiles', notes);
+  return allowed;
+}
+
 export async function readApprovalPolicy(root) {
   const pointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? '{}');
   const { policy, errors } = validateApprovalPolicy(pointer?.profile?.approval);
@@ -549,7 +586,7 @@ function splitPrompt(scope, stage, only, layout = '', wire = null, existing = nu
     'Each ticket object has these fields:',
     'key (short unique name in this file), title (under 140 characters), type (build, test, docs, migration, design, contract or human),',
     'epic (a feature group name), scopeRefs (requirement ids, at least one for build, test, docs, migration), acceptance (1 to 5 observable checks; required for build, test, migration),',
-    'files (the files this ticket writes: repo-relative paths WITH their folders, for example src/app/page.tsx or supabase/migrations/0001_init.sql, never a bare file name unless the file really lives at the repo root; never a folder, never an absolute path, never a dot-env file: use env.example.txt for an env template), deletes (existing files this ticket must delete, each named exactly; omit when none), dependencies (new npm packages the ticket needs, like zod or zod@^3.23.0; the runner installs them and the change goes through the security gate; omit when none), context (files it reads), contracts (contract files it uses), tests (the test files that prove this ticket: a build ticket lists the test files owned by its test ticket and depends on that test ticket; a test ticket lists its own), screens (only on UI tickets: the ids of the design screens the ticket renders, from the profile ui screens), dependsOn (keys of other tickets in this file, or ids of existing open tickets when listed below),',
+    'files (the files this ticket writes: repo-relative paths WITH their folders, for example src/app/page.tsx or supabase/migrations/0001_init.sql, never a bare file name unless the file really lives at the repo root; the scope header may allow additional exact root names with `Root files: a.json, b.txt`; never a folder, never an absolute path, never a dot-env file: use env.example.txt for an env template), deletes (existing files this ticket must delete, each named exactly; omit when none), dependencies (new npm packages the ticket needs, like zod or zod@^3.23.0; the runner installs them and the change goes through the security gate; omit when none), context (files it reads), contracts (contract files it uses), tests (the test files that prove this ticket: a build ticket lists the test files owned by its test ticket and depends on that test ticket; a test ticket lists its own), screens (only on UI tickets: the ids of the design screens the ticket renders, from the profile ui screens), dependsOn (keys of other tickets in this file, or ids of existing open tickets when listed below),',
     'size (S or M; never larger: split instead), risk (low, medium or high), sensitive (true for payments, auth or customer data), steps (only for human tickets: 1 to 30 short imperative steps), skeleton (true only on the tickets of the thinnest vertical slice of the first stage: database, API, screen and test, the smallest path through the product; omit it elsewhere).',
     'Rules: no ticket may gate more than 8 others: shared work (shared CSS, layout, i18n keys, types) is split early into one small ticket per component or file group, so one blocked ticket cannot hold half a stage; every requirement is covered by at least one ticket; every ticket traces to a requirement; two open tickets that can run at the same time never write the same file unless one depends on the other (dependsOn);',
     'put shared types or contracts first and make the tickets that use them depend on them; add a test ticket for each requirement group.',
@@ -669,12 +706,18 @@ const strings = v => (isStrings(v) ? v : []);
 const publicRoutePath = file => /(?:^|\/)app\/api\/.+\/route\.[cm]?[jt]sx?$|(?:^|\/)src\/routes\/public(?:\/|$)/i.test(String(file ?? ''));
 const writesPublicApiRoute = ticket => (ticket?.files ?? []).some(publicRoutePath);
 
-export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManager = null, ledger = null } = {}) {
+export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManager = null, ledger = null, rootFiles = [], scopeRootFiles = [] } = {}) {
   const keyToId = new Map();
+  const keyErrors = new Map();
   const tickets = [];
   const errors = [];
   const notes = [];
+  const rejected = [];
   const copiedAcceptanceIds = new Set();
+  const allowedRootFiles = new Set();
+  addRootFileNames(allowedRootFiles, rootFiles, 'rootFiles', notes);
+  addRootFileNames(allowedRootFiles, scopeRootFiles, 'scopeRootFiles', notes);
+  addRootFileNames(allowedRootFiles, scope?.rootFiles, 'scope rootFiles', notes);
   const ledgerTickets = ledger?.tickets ?? [];
   const existingOpenIds = new Set(ledgerTickets.filter(isOpenFileOwner).map(t => t.id));
   const existingDoneIds = new Set(ledgerTickets.filter(t => t.status === 'done').map(t => t.id));
@@ -684,24 +727,37 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
   for (const { stage, items } of lists) for (const raw of items) {
     const id = `T-${String(n).padStart(4, '0')}`;
     n += 1;
-    if (typeof raw?.key !== 'string' || !raw.key) { errors.push(`${id}: key must be a non-empty string`); continue; }
+    if (typeof raw?.key !== 'string' || !raw.key) { keyErrors.set(id, 'key must be a non-empty string'); continue; }
     const key = `${stage}/${raw.key}`;
-    if (keyToId.has(key)) errors.push(`${id}: duplicate key ${raw.key} in ${stage}`);
+    if (keyToId.has(key)) keyErrors.set(id, `duplicate key ${raw.key} in ${stage}`);
     else keyToId.set(key, id);
   }
+  const candidates = [];
   n = startAt;
   for (const { stage, items } of lists) for (let raw of items) {
     const id = `T-${String(n).padStart(4, '0')}`;
     n += 1;
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { errors.push(`${stage}: ticket ${id} is not an object`); continue; }
+    const ownErrors = keyErrors.has(id) ? [keyErrors.get(id)] : [];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      const reason = 'ticket is not an object';
+      errors.push(`${stage}: ticket ${id} is not an object`);
+      rejected.push({ id, title: '', reason });
+      continue;
+    }
     const wrong = [...ARRAY_FIELDS.filter(f => raw[f] !== undefined && !isStrings(raw[f])), ...['title', 'epic'].filter(f => raw[f] !== undefined && typeof raw[f] !== 'string')];
-    if (wrong.length) { errors.push(`${id}: ${wrong.join(', ')} must be ${wrong.every(f => ARRAY_FIELDS.includes(f)) ? 'arrays of strings' : 'strings (and lists of strings)'}`); continue; }
+    if (wrong.length) {
+      const reason = `${wrong.join(', ')} must be ${wrong.every(f => ARRAY_FIELDS.includes(f)) ? 'arrays of strings' : 'strings (and lists of strings)'}`;
+      errors.push(`${id}: ${reason}`);
+      rejected.push({ id, title: String(raw.title ?? ''), reason });
+      continue;
+    }
     const deps = [];
+    const localDependencyIds = [];
     const droppedKeys = [];
     const unknownIds = [];
     for (const k of strings(raw.dependsOn)) {
       const local = keyToId.get(`${stage}/${k}`);
-      if (local) { deps.push(local); continue; }
+      if (local) { deps.push(local); localDependencyIds.push(local); continue; }
       if (/^T-[0-9]{4,}$/.test(k)) {
         if (existingOpenIds.has(k)) { deps.push(k); continue; }
         if (existingDoneIds.has(k)) { notes.push(`${id}: dependsOn ${k} is done (context only); dependency dropped`); continue; }
@@ -712,7 +768,7 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
       if (!keyToId.has(`${stage}/${k}`)) droppedKeys.push(k);
     }
     if (droppedKeys.length) notes.push(`${id}: dropped dependsOn keys that name no ticket in the file: ${droppedKeys.join(', ')}`);
-    for (const k of unknownIds) errors.push(`${id}: unknown dependsOn ticket ${k}`);
+    for (const k of unknownIds) ownErrors.push(`unknown dependsOn ticket ${k}`);
     // A worker (a small model especially) sometimes leaves a TEST ticket without acceptance lines (parts-app lesson 55): they are copied from its
     // requirements' own acceptance, which is what a test checks. A build or migration ticket is not given them (the lines of a requirement are usually route-level
     // and a module cannot meet them before it is wired): it is refused as before. With none to copy, the test ticket is refused too.
@@ -739,19 +795,44 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
     if (strings(raw.deletes).length) t.deletes = strings(raw.deletes);
     if (strings(raw.dependencies).length) t.dependencies = strings(raw.dependencies);
     const v = validateTicket(t);
-    if (!v.ok) errors.push(`${id}: ${v.errors[0]}`);
+    if (!v.ok) ownErrors.push(v.errors[0]);
     // Format rules the dogfood run needed (contract format, real paths, env template, one package manager).
-    if (t.type === 'contract' && !(t.files.length === 1 && /^contracts\/[\w.-]+\.json$/.test(t.files[0]))) errors.push(`${id}: a contract ticket must write exactly one OpenAPI JSON file under contracts/ (for example contracts/api.json); put TypeScript or SQL types in build tickets that depend on it`);
+    if (t.type === 'contract' && !(t.files.length === 1 && /^contracts\/[\w.-]+\.json$/.test(t.files[0]))) ownErrors.push('a contract ticket must write exactly one OpenAPI JSON file under contracts/ (for example contracts/api.json); put TypeScript or SQL types in build tickets that depend on it');
     for (const f of t.files) {
       const base = f.split('/').pop();
-      if (base.startsWith('.env')) errors.push(`${id}: ${f} is a reserved name; use env.example.txt for an env template`);
-      else if (!f.includes('/') && !ROOT_FILE_OK.test(f)) errors.push(`${id}: ${f} has no folder; give it its real path (for example src/... or supabase/migrations/...)`);
+      if (base.startsWith('.env')) ownErrors.push(`${f} is a reserved name; use env.example.txt for an env template`);
+      else if (!f.includes('/') && !ROOT_FILE_OK.test(f) && !allowedRootFiles.has(f)) ownErrors.push(`${f} has no folder; give it its real path (for example src/... or supabase/migrations/...)`);
     }
     const other = otherManagerLockfile(t.files, packageManager);
-    if (other) errors.push(`${id}: ${other.file} is a ${other.manager} lockfile but the project uses ${packageManager}`);
-    tickets.push(t);
+    if (other) ownErrors.push(`${other.file} is a ${other.manager} lockfile but the project uses ${packageManager}`);
+    for (const reason of ownErrors) errors.push(`${id}: ${reason}`);
+    candidates.push({ id, title: t.title, ticket: t, localDependencyIds, reasons: ownErrors });
   }
-  return { tickets, errors, notes, copiedAcceptanceIds };
+  const rejectedById = new Map(rejected.map(entry => [entry.id, entry]));
+  for (const candidate of candidates) {
+    if (candidate.reasons.length && !rejectedById.has(candidate.id)) {
+      const entry = { id: candidate.id, title: candidate.title, reason: candidate.reasons[0] };
+      rejectedById.set(candidate.id, entry);
+      rejected.push(entry);
+    }
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const candidate of candidates) {
+      if (rejectedById.has(candidate.id)) continue;
+      const dependency = candidate.localDependencyIds.find(dep => rejectedById.has(dep));
+      if (!dependency) continue;
+      const entry = { id: candidate.id, title: candidate.title, reason: `depends on rejected ${dependency}` };
+      rejectedById.set(candidate.id, entry);
+      rejected.push(entry);
+      errors.push(`${candidate.id}: ${entry.reason}`);
+      changed = true;
+    }
+  }
+  for (const candidate of candidates) if (!rejectedById.has(candidate.id)) tickets.push(candidate.ticket);
+  rejected.sort((a, b) => Number(a.id.slice(2)) - Number(b.id.slice(2)));
+  return { tickets, errors, notes, copiedAcceptanceIds, rejected };
 }
 
 async function readStageFiles(root, runId) {
@@ -932,7 +1013,7 @@ async function cmdCheck(root, { rest }) {
 }
 
 async function cmdSplit(root, { rest, flags }, deps = {}) {
-  const { file, scope, hash } = await loadScope(root, rest[0]);
+  const { file, scope, hash, text } = await loadScope(root, rest[0]);
   const checked = checkScope(scope);
   if (!checked.ok) return out(`${file} has errors; run swarm scope check ${file} first`, 1);
   if (!flags.ingest) {
@@ -960,12 +1041,19 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
   if (existing && !flags.merge) return out('a ticket ledger already exists; use --merge to add tickets, or delete .swarm/project/tickets.json first', 1);
   if (flags.merge && !existing) return out('no ticket ledger to merge into', 1);
   const { lists, errors, notes } = await readStageFiles(root, flags.ingest);
+  const rootFileNotes = [];
+  const rootFiles = await rootFilesForProject(root, { scope, scopeText: text, notes: rootFileNotes });
+  notes.push(...rootFileNotes);
   const profile = await readProfile(root);
   const startAt = existing ? Math.max(0, ...existing.tickets.filter(t => t.id < 'T-9000').map(t => Number(t.id.slice(2)))) + 1 : 1;
-  const built = ticketsFromStageLists(lists, scope, { startAt, packageManager: packageManagerOf(profile), ledger: existing });
-  const all = [...errors, ...built.errors];
+  const built = ticketsFromStageLists(lists, scope, { startAt, packageManager: packageManagerOf(profile), ledger: existing, rootFiles: [...rootFiles] });
+  const all = [...errors];
   if (startAt + built.tickets.length > 9000) all.push('too many tickets: ids T-9000 and up are reserved for day 0 tickets');
-  if (all.length) return out(`split refused; fix and rerun the failed stages:\n${all.slice(0, 15).map(e => `  ${e}`).join('\n')}`, 1);
+  if (all.length) return out(`split refused; fix and rerun the failed stages:\n${all.slice(0, 15).map(e => `  ${e}`).join('\n')}${notes.length ? `\n${notes.map(note => `  note: ${note}`).join('\n')}` : ''}`, 1);
+  const rejectedLine = built.rejected.length
+    ? `rejected ${built.rejected.length} ticket(s): ${built.rejected.map(({ id, title, reason }) => `${id} (${title || 'untitled'}): ${reason}`).join('; ')}`
+    : null;
+  if (!built.tickets.length) return out([...notes.map(note => `note: ${note}`), rejectedLine ?? 'split refused; no valid tickets remain after validation', 'split refused; every ticket was rejected'].filter(Boolean).join('\n'), 1);
   const acceptanceCheck = ingestAcceptanceChecks(root, scope, profile, existing?.tickets ?? [], built.tickets, built.copiedAcceptanceIds);
   if (acceptanceCheck.refusals.length) {
     return out(`split refused; acceptance is not provable from this ticket's outputs:\n${acceptanceCheck.refusals.slice(0, 15).map(e => `  ${e}`).join('\n')}`, 1);
@@ -1021,7 +1109,7 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
   if (waveGateFails(waveSimulation) && flags['accept-waves'] !== true) return out(waveRefusal(waveSimulation, ledger.tickets), 1);
   await writeLedger(root, ledger);
   if (waveGateFails(waveSimulation)) await logAcceptedWaveSimulation(root, waveSimulation, ledger.tickets, 'scope split --ingest');
-  await appendLog(root, { event: flags.merge ? 'split-merge' : 'split', tickets: tickets.length, run: flags.ingest, ok: tree.ok });
+  await appendLog(root, { event: flags.merge ? 'split-merge' : 'split', tickets: tickets.length, run: flags.ingest, ok: tree.ok, rejected: built.rejected });
   const gaps = tree.ok ? [] : ['Some requirements still have no tickets: run swarm scope split again (it splits only those), then --ingest RUN --merge.'];
   // Requirements the worker left without an integration ticket: the wire manifest is written now, so the next step is one run and one ingest.
   let wireLines = [];
@@ -1035,7 +1123,7 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
     await writeLedger(root, ledger);
     wireLines = [`wiring: ${missing.length} requirement(s) have modules but no integration ticket (${missing.slice(0, 8).join(', ')}); the ledger cannot be approved until they do.`, `Next: swarm run ${SPLIT_DIR}/wire-manifest.json, then swarm scope split --ingest RUN --merge --wire`];
   }
-  return out([`ledger written: ${tickets.length} tickets added (not approved)`, ...laneNotes.map(n => `lane: ${n}`), ...notes.map(n => `note: ${n}`), ...[...built.notes, ...orderNotes].slice(0, 12).map(n => `note: ${n}`), ...(built.notes.length + orderNotes.length > 12 ? [`note: ...and ${built.notes.length + orderNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`] : []), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, ...wireLines, tree.ok && !wireLines.length ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
+  return out([`ledger written: ${tickets.length} tickets added (not approved)`, rejectedLine, ...laneNotes.map(n => `lane: ${n}`), ...notes.map(n => `note: ${n}`), ...[...built.notes, ...orderNotes].slice(0, 12).map(n => `note: ${n}`), ...(built.notes.length + orderNotes.length > 12 ? [`note: ...and ${built.notes.length + orderNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`] : []), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, ...wireLines, tree.ok && !wireLines.length ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
 }
 
 function managerGateOutcome(result) {
@@ -1998,6 +2086,14 @@ async function editTicketFiles(root, ledger, rest, flags) {
       const fresh = await readLedger(root);
       const ticket = fresh.tickets.find(x => x.id === rest[0]);
       if (!ticket) return out(`no ticket ${rest[0]}`, 1);
+      const rootFileNotes = [];
+      let scope = null;
+      let scopeText = '';
+      try {
+        scopeText = await readText(resolveInside(root, fresh.scope?.file ?? DEFAULT_SCOPE_FILE)) ?? '';
+        if (scopeText) scope = parseScope(scopeText);
+      } catch { /* the ticket ledger remains editable when its scope is unavailable */ }
+      const allowedRootFiles = await rootFilesForProject(root, { scope, scopeText, notes: rootFileNotes });
       const listsEdit = Object.keys(changes).length > 0;
       // The file lists only change before the work runs; a review or done ticket may only add acceptance lines (see below).
       const allowed = listsEdit ? ['proposed', 'todo', 'ready', 'blocked'] : ['proposed', 'todo', 'ready', 'blocked', 'review', 'done'];
@@ -2027,7 +2123,7 @@ async function editTicketFiles(root, ledger, rest, flags) {
       for (const key of ['files', 'deletes']) for (const f of next[key] ?? []) {
         const base = f.split('/').pop();
         if (key === 'files' && base.startsWith('.env')) problems.push(`${f} is a reserved name; use env.example.txt for an env template`);
-        else if (key === 'files' && !f.includes('/') && !ROOT_FILE_OK.test(f)) problems.push(`${f} has no folder; give it its real path`);
+        else if (key === 'files' && !f.includes('/') && !ROOT_FILE_OK.test(f) && !allowedRootFiles.has(f)) problems.push(`${f} has no folder; give it its real path`);
         if ((ticket[key] ?? []).includes(f)) continue;
         const pathOwners = fresh.tickets.filter(x => x.id !== ticket.id && x.status !== 'cancelled' && ((x.files ?? []).includes(f) || (x.deletes ?? []).includes(f)));
         const blockingOwners = pathOwners.filter(isOpenFileOwner);
@@ -2066,7 +2162,7 @@ async function editTicketFiles(root, ledger, rest, flags) {
       await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields: touched, before: Object.fromEntries(touched.map(k => [k, ticket[k] ?? []])), after: Object.fromEntries(touched.map(k => [k, next[k] ?? []])), reapproved: wasApproved });
       if (moved.length) await appendLog(root, { event: 'file-move', by: 'owner', from: takeFromList.length === 1 ? takeFromList[0] : takeFromList, to: ticket.id, files: moved, fromStatus: sources.length === 1 ? sources[0].status : Object.fromEntries(sources.map(x => [x.id, x.status])), reapproved: wasApproved });
       await refreshPlan(root);
-      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the new lists).' : ''}`);
+      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the new lists).' : ''}${rootFileNotes.length ? `\n${rootFileNotes.map(note => `note: ${note}`).join('\n')}` : ''}`);
     });
   } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
 }
