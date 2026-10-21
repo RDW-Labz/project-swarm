@@ -12,7 +12,6 @@ import {
   pendingPath,
   readLivePending,
   registerHeldLauncher,
-  runWhenIdleUpdate,
   writePendingRecord,
 } from '../tools/update-pending.mjs';
 import {
@@ -23,6 +22,103 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HELD_LOG_BASENAME_LOCAL = '.update-pending-held.log';
+const CHILD_READY_LINE = 'update-pending-round2-ready\n';
+
+function waitForChildReadyLine(child, { timeoutMs = 10_000, readyLine = CHILD_READY_LINE } = {}) {
+  const marker = readyLine.trimEnd();
+  return new Promise((resolve, reject) => {
+    let buf = '';
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(
+        `timed out after ${timeoutMs}ms waiting for child ready line ${JSON.stringify(marker)}`,
+      ));
+    }, timeoutMs);
+    const onData = chunk => {
+      buf += chunk.toString();
+      if (buf.includes(marker)) {
+        cleanup();
+        resolve();
+      }
+    };
+    const onExit = (code, signal) => {
+      cleanup();
+      reject(new Error(`child exited before ready (code=${code}, signal=${signal})`));
+    };
+    function cleanup() {
+      clearTimeout(timer);
+      child.stdout?.off('data', onData);
+      child.off('exit', onExit);
+    }
+    child.stdout.on('data', onData);
+    child.once('exit', onExit);
+  });
+}
+
+function whenIdleSignalTestChildCode({ modulePath, installRoot, timeoutMinutes = 5 }) {
+  return `
+    import {
+      acquirePendingSlot,
+      waitForMachineIdleWhilePending,
+      removePendingRecord,
+    } from ${JSON.stringify(modulePath)};
+
+    const installRoot = ${JSON.stringify(installRoot)};
+    const timeoutMinutes = ${timeoutMinutes};
+    const startedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + timeoutMinutes * 60_000).toISOString();
+    const pendingRecord = { pid: process.pid, startedAt, expiresAt, heldPids: [] };
+
+    const acquired = await acquirePendingSlot(installRoot, pendingRecord);
+    if (!acquired.ok) process.exit(1);
+
+    let removed = false;
+    let aborted = false;
+    let abortExitCode = null;
+    const cleanup = async () => {
+      if (removed) return;
+      removed = true;
+      await removePendingRecord(installRoot).catch(() => {});
+    };
+    const detachAbortHandlers = () => {
+      process.off('SIGINT', abortHandler);
+      process.off('SIGTERM', abortHandler);
+      process.off('SIGHUP', abortHandler);
+    };
+    const abortHandler = received => {
+      aborted = true;
+      const signal = typeof received === 'string' ? received : 'SIGTERM';
+      abortExitCode = signal === 'SIGINT' ? 130 : 143;
+      void cleanup().then(() => {
+        detachAbortHandlers();
+        process.exit(abortExitCode);
+      });
+    };
+    process.on('SIGINT', abortHandler);
+    process.on('SIGTERM', abortHandler);
+    process.on('SIGHUP', abortHandler);
+    process.stdout.write(${JSON.stringify(CHILD_READY_LINE)});
+
+    const wait = await waitForMachineIdleWhilePending(installRoot, {
+      pendingRecord,
+      describeBusy: async () => ({
+        busy: true,
+        liveRuns: [],
+        processes: [],
+        markers: [{ pid: 1, command: 'busy', root: '/tmp' }],
+      }),
+      env: { SWARM_UPDATE_PENDING_POLL_MS: '20' },
+      sleep: async () => {},
+      timeoutMinutes,
+      shouldAbort: () => aborted,
+    });
+    if (wait.aborted) {
+      await cleanup();
+      detachAbortHandlers();
+      process.exit(abortExitCode ?? 130);
+    }
+  `;
+}
 
 async function tempDir(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pending-r2-'));
@@ -33,18 +129,15 @@ async function tempDir(t) {
 test('(2) SIGTERM during when-idle exits 143 after cleanup', async t => {
   const installRoot = await tempDir(t);
   const modulePath = path.join(HERE, '..', 'tools', 'update-pending.mjs');
-  const child = spawn(process.execPath, ['--input-type=module', '-e', `
-    import { runWhenIdleUpdate } from ${JSON.stringify(modulePath)};
-    await runWhenIdleUpdate({
-      installRoot: ${JSON.stringify(installRoot)},
-      timeoutMinutes: 5,
-      performUpdate: async () => ({}),
-      describeBusy: async () => ({ busy: true, liveRuns: [], processes: [], markers: [{ pid: 1, command: 'busy', root: '/tmp' }] }),
-      sleep: async () => {},
-      env: { SWARM_UPDATE_PENDING_POLL_MS: '20' },
-    });
-  `], { stdio: 'ignore' });
-  await new Promise(resolve => setTimeout(resolve, 80));
+  const child = spawn(process.execPath, [
+    '--input-type=module',
+    '-e',
+    whenIdleSignalTestChildCode({ modulePath, installRoot }),
+  ], { stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  });
+  await waitForChildReadyLine(child);
   child.kill('SIGTERM');
   const [code, signal] = await new Promise(resolve => child.once('exit', (c, s) => resolve([c, s])));
   assert.equal(code, 143);
