@@ -2,7 +2,14 @@
 // `swarm managers ...` — replay harness and scorecard (Phase 19 / T-0190). Glue over tools/managers/*.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { builtinManagerIds } from './managers/registry.mjs';
+import { createManagerActionModeSettings } from './managers/modes.mjs';
+import { appendManagerJournalLine } from './managers/journal.mjs';
+import {
+  builtinManagerIds,
+  registerBuiltinManagerRun,
+  runBuiltinManager,
+} from './managers/registry.mjs';
+import { isBudgetLaneManagerId } from './managers/register/budget-lane.mjs';
 import { MANAGER_REPLAY_CLI_IDS, normalizeReplayManagerId } from './managers/replay.mjs';
 import { runManagerReplayWithScorecard } from './managers/scorecard.mjs';
 
@@ -12,6 +19,7 @@ const toolsDir = path.dirname(fileURLToPath(import.meta.url));
 
 export const MANAGERS_USAGE = [
   'Usage: swarm managers list [--json]',
+  '       swarm managers run MANAGER [--json] [--trigger scope|wave|replay|idle]',
   '       swarm managers replay LEDGER_DIR MANAGER [--json] [--skip-scorecard]',
   '       swarm managers scorecard LEDGER_DIR MANAGER [--json] [--skip-scorecard]',
   'MANAGER is one of: budget, lane-health, version, ticket, unblocker, merge-queue, lessons, visual-qa',
@@ -19,8 +27,11 @@ export const MANAGERS_USAGE = [
   '',
 ].join('\n');
 
-const VALUE_FLAGS = new Set([]);
+const VALUE_FLAGS = new Set(['--trigger']);
 const BOOL_FLAGS = new Set(['--json', '--skip-scorecard']);
+
+/** @type {Readonly<Set<string>>} */
+const MANAGER_TRIGGERS = new Set(['scope', 'wave', 'replay', 'idle']);
 
 const out = (stdout, exitCode = 0) => ({
   stdout: stdout.endsWith('\n') ? stdout : `${stdout}\n`,
@@ -74,6 +85,12 @@ const createManagerLoaders = new Map();
 /** @type {Map<ManagerId, (opts: object) => import('./managers/base.mjs').BaseManager>} */
 const createManagerFns = new Map();
 
+/** @type {Set<ManagerId>} */
+const budgetLaneRunRegistered = new Set();
+
+/** @type {Map<ManagerId, Promise<import('./managers/registry.mjs').BuiltinManagerRun>>} */
+const runBuiltinManagerLoaders = new Map();
+
 /**
  * @param {ManagerId} managerId
  */
@@ -107,6 +124,51 @@ export function createBuiltinManagerForReplay(options) {
   const create = createManagerFns.get(options.managerId);
   if (!create) throw new Error(`manager-create-not-loaded: ${options.managerId}`);
   return create(options);
+}
+
+/**
+ * Wire budget and lane-health orchestrator run entry points when `swarm managers run` is used (T-0198).
+ *
+ * @param {ManagerId} managerId
+ */
+async function ensureBudgetLaneManagerRunRegistered(managerId) {
+  if (!isBudgetLaneManagerId(managerId)) {
+    throw new Error(`manager-run-unsupported: ${managerId}`);
+  }
+  if (budgetLaneRunRegistered.has(managerId)) return;
+
+  let pending = runBuiltinManagerLoaders.get(managerId);
+  if (!pending) {
+    const href = MANAGER_CREATE_MODULE_HREF[managerId];
+    if (!href) throw new Error(`manager-run-module-missing: ${managerId}`);
+    pending = import(href).then((mod) => {
+      const runFn = mod.runBuiltinManager ?? mod.run;
+      if (typeof runFn !== 'function') throw new Error(`manager-run-missing: ${managerId}`);
+      registerBuiltinManagerRun(managerId, (options) => runFn(options));
+      budgetLaneRunRegistered.add(managerId);
+      return runFn;
+    });
+    runBuiltinManagerLoaders.set(managerId, pending);
+  }
+  await pending;
+}
+
+/**
+ * @param {import('./contracts/managers.json').components.schemas.ManagerRun} run
+ * @param {import('./contracts/managers.json').components.schemas.JournalReport|null} report
+ */
+function formatRunSummary(run, report) {
+  const lines = [
+    `manager: ${run.managerId}`,
+    `status: ${run.status}`,
+    `findings: ${run.findingCount}`,
+    `journal lines: ${run.journalLineCount}`,
+  ];
+  if (run.error) lines.push(`error: ${run.error}`);
+  if (report?.lines?.length) {
+    lines.push(`reported journal lines: ${report.lines.length}`);
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -176,6 +238,61 @@ function formatReplaySummary(result, ledgerDir, scorecardWritten) {
  * @param {string[]} replayArgs
  * @param {{ json?: boolean, skipScorecard?: boolean, swarmRoot?: string, now?: () => number }} opts
  */
+/**
+ * @param {string} root
+ * @param {string[]} runArgs
+ * @param {{ json?: boolean, trigger?: string, now?: () => number }} opts
+ */
+async function managersRun(root, runArgs, opts = {}) {
+  const managerArg = runArgs[0];
+  if (!managerArg) return bad('run needs MANAGER');
+  if (runArgs.length > 1) return bad(`unexpected arguments: ${runArgs.slice(1).join(' ')}`);
+
+  let managerId;
+  try {
+    managerId = normalizeReplayManagerId(managerArg);
+  } catch (error) {
+    return bad(String(error.message ?? error));
+  }
+
+  const triggerRaw = String(opts.trigger ?? 'scope').trim();
+  if (!MANAGER_TRIGGERS.has(triggerRaw)) {
+    return bad(`unknown trigger: ${triggerRaw}`);
+  }
+  const trigger = /** @type {import('./contracts/managers.json').components.schemas.ManagerTrigger} */ (
+    triggerRaw
+  );
+
+  try {
+    await ensureBudgetLaneManagerRunRegistered(managerId);
+    const modeSettings = createManagerActionModeSettings();
+    const { run, report } = await runBuiltinManager(managerId, {
+      root,
+      modeSettings,
+      trigger,
+      journal: appendManagerJournalLine,
+      now: opts.now,
+    });
+
+    if (opts.json) {
+      return out(JSON.stringify({
+        managerId: run.managerId,
+        root,
+        trigger: run.trigger,
+        run,
+        journalLines: report?.lines ?? [],
+      }, null, 2));
+    }
+
+    if (run.status === 'error') {
+      return out(formatRunSummary(run, report), 1);
+    }
+    return out(formatRunSummary(run, report));
+  } catch (error) {
+    return bad(String(error.message ?? error));
+  }
+}
+
 async function managersReplay(root, replayArgs, opts = {}) {
   const ledgerArg = replayArgs[0];
   const managerArg = replayArgs[1];
@@ -241,7 +358,12 @@ export async function runManagersCommand(root, args, options = {}) {
   const [verb, ...verbArgs] = rest;
   const json = flags.json === true;
   const skipScorecard = flags['skip-scorecard'] === true;
+  const trigger = flags.trigger;
   const swarmRoot = options.swarmRoot ?? toolsDir;
+
+  if (verb === 'run') {
+    return managersRun(root, verbArgs, { json, trigger, now: options.now });
+  }
 
   if (verb === 'list') {
     if (verbArgs.length) return bad('list takes no positional arguments');
