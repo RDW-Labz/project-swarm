@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "docs-policy",
+      "agent": "auto",
+      "prompt": "Write docs/policy.md (new file, nothing else) describing the autonomy policy engine for a project owner: what swarm policy does, the per-machine rules file and where it lives, the default auto rules, the never-auto list, how an auto-decision is logged (the Events record and the collapsed Handled for you list), how to turn a default rule off or narrow it, and what is not built yet (the CLI wiring and the board list). Read tools/policy.mjs, tools/policy-commands.mjs and tests/policy.test.mjs for the facts; do not invent behavior that the code does not have; mark unbuilt parts as planned. Plain, short sentences, under 120 lines.",
+      "context": [
+        "tools/policy.mjs",
+        "tools/policy-commands.mjs",
+        "tests/policy.test.mjs"
+      ],
+      "outputs": [
+        "docs/policy.md"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}

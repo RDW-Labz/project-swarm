@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "policy-defaults",
+      "agent": "auto",
+      "prompt": "Item T phase 2a: make the autonomy policy engine's DEFAULT rules encode the owner's standing approvals EXACTLY, as modules and tests only (do not edit tools/swarm.mjs). Read tools/policy.mjs, tools/policy-commands.mjs, tests/policy.test.mjs and docs/policy.md first. Standing approvals (auto-approve, no question to the owner): (1) merge-swarm-pr: request kind merge-pr is auto-approved only when facts.repoClass is swarm (the swarm's own repository), facts.ciGreen, facts.reviewsPass, facts.fullSuiteGreen and facts.inMergeOrder are all true and facts.deploysLiveSite is false; any other case (another repository class, a merge that deploys a live site, a failing or missing condition) is needs-owner. (2) swarm-update-idle: kind swarm-update auto-approved only when facts.machineIdle is true and facts.afterReleaseMerge is true. (3) git commit or push of swarm-produced files on non-main branches (existing rule, keep). (4) setup-and-routing-hand-build: kind hand-build-request auto-approved only when every file in facts.files is a routing path (coordination/manifests json files, HANDOFF, TASK, build-plan files, the usage ledger: reuse isRoutingPath from tools/routing-paths.mjs if it exists in your context, else restate the same list) or a setup file (.gitignore, CLAUDE.md, AGENTS.md, .project-swarm.json, coordination/checks.json) and facts.git is empty or names only commit and push on a non-main branch; any source, test, docs or config file, or any elevated git op, is needs-owner. (5) ticket-routine: kinds ticket-set-status, ticket-park, ticket-retry and ticket-release auto-approved, except ticket-set-status to done when facts.requiresReview is true and facts.reviewPassed is not true (that is needs-owner: a done must never skip the review gate). (6) change-order-path-fix and change-order-split (existing, keep). (7) workflow-change: kind workflow-change auto-approved only when facts.opusReviewPassed is true and facts.addsSecrets, facts.addsDeploy and facts.addsPublish are all false. (8) cap-raise-small: kind cap-raise auto-approved only when facts.amountUsd is a positive number and facts.raisedTodayUsd plus facts.amountUsd is at most 5 for that project and day and facts.pastDailyAutoLimit is not true; otherwise needs-owner. (9) accept-failed-checks-new-tests-only (existing, keep). NEVER_AUTO (always needs-owner, no rules file can change it): merge-deploying-pr, merge-other-repo, hosted-db-migration, new-paid-service, new-key, spend-past-daily-limit, deploy, publish, hand-edit-app-code, new-secret, auth-change, payments-change, override, accept-unmet-acceptance (remove the old merge-main kind: it is replaced by the conditional merge-pr rule and merge-other-repo). Every rule has an id, a plain one-sentence description quoting the standing approval, and enabled true. Add DEFAULT_POLICY_FILE (the object that swarm policy init writes: version 1 and the rules list with their ids and enabled flags and an owner-note field) and make swarm policy init in tools/policy-commands.mjs write it to policyPath when the file does not exist (never overwrite an existing file; print the path and say so), and make swarm policy show list each rule id with its one-line description and the never-auto list. Update docs/policy.md to describe exactly these rules. Update tests/policy.test.mjs for the changed kinds and add tests/policy-defaults.test.mjs: every standing approval auto-approves with the right facts and becomes needs-owner when any one condition is removed or flipped (one test per rule with a table of cases), every NEVER_AUTO kind stays needs-owner even if a rules file lists it, the cap rule at exactly 5 dollars total passes and at 5.01 fails, a done on a sensitive ticket without a passed review is needs-owner, init writes once and never overwrites. Write only tools/policy.mjs, tools/policy-commands.mjs, tests/policy.test.mjs, tests/policy-defaults.test.mjs and docs/policy.md.",
+      "context": [
+        "tools/policy.mjs",
+        "tools/policy-commands.mjs",
+        "tests/policy.test.mjs",
+        "docs/policy.md",
+        "tools/routing-paths.mjs"
+      ],
+      "outputs": [
+        "tools/policy.mjs",
+        "tools/policy-commands.mjs",
+        "tests/policy.test.mjs",
+        "tests/policy-defaults.test.mjs",
+        "docs/policy.md"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/kickoff.test.mjs"
+      ]
+    },
+    {
+      "id": "policy-run",
+      "agent": "auto",
+      "prompt": "Item T phase 2b: the policy pass that applies and logs auto-decisions, as a new module only (do not edit tools/swarm.mjs, tools/policy.mjs or tools/policy-commands.mjs). Read tools/policy.mjs (decide, autoDecisionEvent, handledForYou, NEVER_AUTO), tools/inbox.mjs (how open requests and decisions are listed and answered, and the deps used: readJournal, appendEvent), tools/handbuild.mjs (decideRequest and the elevated ops) and tools/orchestrator-events.mjs (how Events are appended). Create tools/policy-run.mjs (SPDX header, ES module) and tests/policy-run.test.mjs (node:test, strict assert, fakes only). Export async runPolicyPass({root, items, rules, factsOf, apply, journal, events, now, machine, readHandled, limits}) where items are open requests ({id, kind, project, raw}), factsOf(item) returns the facts object for decide, apply({item, decision, channel: 'policy'}) is the injected function that really approves (the caller supplies it), journal(entry) and events(entry) are injected writers. For each item: skip any id already in the handled list (readHandled returns the ids that already have an auto-decision record, so a pass is idempotent); call decide; if the result is auto-approve call apply, then write the auto-decision record through BOTH journal and events (the record from autoDecisionEvent: rule id, request kind, request id, project, machine, time, reason, with no free text from the request); if apply throws, write a policy-error record (kind and id only) and leave the item for the owner; needs-owner items are left untouched and counted. Safety: re-check NEVER_AUTO before calling apply and refuse; fail closed with no decisions when rules could not be loaded; stop after limits.maxPerPass decisions (default 20); enforce a rule's maxPerDay using readHandled counts for the current day; never call apply for the elevated git ops merge, deploy, force-push or branch-D through a hand-build request even if a rule says auto; return {decided: [...], left: [...], errors: [...]}. Also export appendAutoDecision({root, entry, deps}) that writes one line to the project journal and one Events record using the same journal and Events functions the inbox and orchestrator code use (find them and call them through injected deps with a default that uses the real ones). Tests: an auto-approve item is applied once and logged to both journal and events; a second pass does not apply it again; a needs-owner item is left and counted; a NEVER_AUTO kind is refused even if a rule lists it; apply throwing writes a policy-error record and leaves the item; broken rules mean no decisions; maxPerPass and maxPerDay are enforced; the logged record contains no request free text (plant a canary string in item.raw and assert it never appears); elevated git ops in a hand-build request are never auto-applied. Write only tools/policy-run.mjs and tests/policy-run.test.mjs.",
+      "context": [
+        "tools/policy.mjs",
+        "tools/inbox.mjs",
+        "tools/handbuild.mjs",
+        "tools/orchestrator-events.mjs"
+      ],
+      "outputs": [
+        "tools/policy-run.mjs",
+        "tests/policy-run.test.mjs"
+      ],
+      "timeoutMs": 2400000
+    }
+  ]
+}
