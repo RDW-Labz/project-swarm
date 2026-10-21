@@ -34,15 +34,25 @@ Effort: M — move blobs to `~/.project-swarm/projects/<id>/` and keep a small c
 
 Migration: Dual-write phase: new runs write to external store and mirror into `.swarm` until the board and tools read the pointer. Flag `external_state`; `swarm migrate state` copies once. Fallback: pointer still lists legacy `.swarm` paths until cutover.
 
-## 4. Per-job isolation and enforced permissions
+## 4a. Test DB, ports, and cheap enforced permissions (stage 1)
 
-Today: Copied workspace per job with a sandbox profile; scratch worktrees for integration; Cursor and Codex lanes see committed HEAD only (integrated snapshot module on a branch). Jobs share machine ports and databases. Permissions rely on a text hand-build guard on orchestrator tool calls, git hooks, and GitHub branch protection.
+Today: Copied workspace per job with a sandbox profile; jobs share machine ports and databases. Permissions rely on a text hand-build guard, git hooks, and GitHub branch protection.
 
-Gap: Shared ports/DBs collide under parallel jobs; text guards are honest-but-fallible.
+Gap: Shared ports and DBs collide under parallel jobs; text guards are honest but fallible; broad tokens can change workflows or settings.
 
-Effort: L — container or hardened worktree profiles, dynamic port/DB allocation, and service-granted caps per job.
+Effort: M — per-job test database (own name or own file) and ports allocated by swarm (no containers; nothing shared between concurrent test or e2e jobs); branch-only fine-grained GitHub PAT (Contents and Pull requests read/write, Metadata read, Actions read; no Administration, Workflows write, Secrets, or Environments) plus branch protection on main in every active repo (PR required, no force pushes or deletions, enforced for admins, required checks as today). Owner sees exact scopes before creating the token in GitHub settings.
 
-Migration: Jobs request isolation level `legacy` vs `isolated`; isolated jobs get allocated ports/DB names from the service. Guard stays on for legacy; isolated jobs deny network/git/file outside the grant set at the service. Fallback: legacy sandbox path remains default per project until flipped.
+Migration: Allocations and branch-only token default off per project. Exit gates: e2e passes 5 times in parallel on one Mac with zero shared data; an orchestrator session with that token pushes a feature branch and opens a PR while push to main, force push, and branch delete are rejected by the server.
+
+## 4b. Container isolation and service-enforced permissions (later)
+
+Today: Scratch worktrees for integration; Cursor and Codex lanes see committed HEAD only. Isolation beyond test DB and ports is not enforced by a service.
+
+Gap: A compromised or confused agent can still reach network, git, and files outside the grant set without containers or service caps.
+
+Effort: L — container or hardened worktree profiles and service-granted caps per job.
+
+Migration: Jobs request isolation level `legacy` vs `isolated`; isolated jobs deny network, git, and file outside the grant set at the service. Fallback: legacy sandbox path remains default per project until flipped.
 
 ## 5. Multi-machine cluster (one queue, one board)
 
@@ -68,9 +78,9 @@ Migration: Projects opt in with `burst=off|on`; only tagged tickets (e.g. `lane:
 
 Today: `node tools/install.mjs --user`, `swarm update` from tags, `swarm doctor` checks lanes, `swarm init` links a project; no `swarm add`.
 
-Gap: Onboarding a second repo is manual; service + cluster assumptions are not validated in one place.
+Gap: Onboarding a second repo is manual; service and cluster assumptions are not validated in one place.
 
-Effort: S — wrap install, extend doctor checks, add `swarm add REPO` that writes pointer + scope hookup.
+Effort: S — wrap install, extend doctor checks, add `swarm add REPO` that writes pointer and scope hookup.
 
 Migration: New installs get a single curl/bash entry; existing installs keep `swarm update`. `swarm add` is additive; `swarm init` remains for backward compatibility.
 
@@ -82,18 +92,29 @@ Gap: Consistency, cross-machine sync, and progress math duplicate logic and race
 
 Effort: M — SQLite per machine (or per cluster leader) with `events` table, SQL views for board panels, and export commands for committed repo artifacts.
 
-Migration: Importers tail existing ndjson/markdown into SQLite; dual-publish new events to both until `event_store=primary`. Board switches views via flag; exports replace generated HANDOFF/usage on a schedule. Fallback: file-based readers stay until importers pass parity tests.
+Migration: Importers tail existing ndjson/markdown into SQLite; dual-publish new events to both until `event_store=primary`. Board switches views via flag; exports replace generated HANDOFF/usage on a schedule. Fallback: file-based readers stay until importers pass parity tests. The store uses built-in `node:sqlite` (Node 22.13+); on Node 20 the feature is off and its tests are skipped with a stated reason. Raising the engines floor is an owner decision.
+
+## Stage 1 (internal, about one month)
+
+Weeks 1–2: Event store (8) — events table, views, importers, dual publish. Gate: the board answers from the store with the same numbers as today's files on project-swarm.
+
+Weeks 2–3: State outside the repo (3) — pointer file, `swarm migrate state`, dual write. Gate: `git status` clean after a full wave.
+
+Weeks 2–4 (parallel): Test DB, ports, and branch-only token (4a); gates as above.
+
+Weeks 3–4: `swarm add`, stronger doctor, minimal opt-in launchd service that owns the store and machine limit (1). Gate: restart and clients reconnect within 5 seconds; `swarm add` shows a project on the board in under 60 seconds.
+
+Stage 1 does not include: chief orchestrator (2), containers and service-enforced permissions (4b), multi-machine cluster (5), or cloud burst (6). Every part stays flags-off by default until opted in.
 
 ## Suggested order
 
-1. **Event store (8)** — Single writer model unlocks service APIs, board views, and cluster queue without more file races.
-2. **State outside repo (3)** — Depends on store for pointers and exports; enables clean repos before multi-machine scale.
-3. **Per-machine service (1)** — Hosts store, grants, and queues; sessions become clients after store migration path exists.
-4. **Chief orchestrator (2)** — Sits on the service once multiple projects register.
-5. **Per-job isolation (4)** — Service allocates resources; can roll out per project after local service is stable.
-6. **Install / doctor / `swarm add` (7)** — Document and gate the new paths once service + pointer layout exist.
-7. **Multi-machine cluster (5)** — Needs shared store and queue semantics from (8) and stable external state (3).
-8. **Cloud burst (6)** — Last; reuses isolation spec (4) and cluster leases (5).
+1. **Stage 1** — Event store first, then state outside the repo, then test DB and ports plus branch-only token in parallel, then `swarm add` and doctor, then the service MVP; all flags off by default.
+2. **Chief orchestrator (2)** — After stage 1; one planner across registered projects.
+3. **Container isolation (4b)** — Service-enforced permissions; after chief orchestrator.
+4. **Multi-machine cluster (5)** — One queue and one board across machines.
+5. **Cloud burst (6)** — Overflow runners last.
+
+Node: event store needs `node:sqlite` (22.13+). On Node 20 the store is off and tests skip with a stated reason; dropping Node 20 is an owner decision.
 
 ## Risks
 
