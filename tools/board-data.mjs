@@ -13,6 +13,7 @@ import os from 'node:os';
 import { projectOrchestrator } from './board-orchestrator.mjs';
 import { combinedUsage } from './orchestrator-usage.mjs';
 import { buildProgress, progressSummary } from './build-progress.mjs';
+import { ROUTE_ORDER } from './router.mjs';
 
 const DAY = 86400000;
 const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   // subscription lanes: not billed per use
@@ -33,6 +34,132 @@ export function laneLabel(agent, model) {
   if (agent === 'cursor') return 'Cursor';
   if (['rented', 'ollama', 'lambda'].includes(agent)) return 'GPU';
   return agent ? String(agent).slice(0, 20) : 'other';
+}
+
+const KNOWN_IDLE_LANES = Object.freeze(['Haiku', 'Sonnet', 'Opus', 'Codex', 'Cursor', 'GPU']);
+const ROUTABLE_AGENTS = new Set(ROUTE_ORDER);
+const MODEL_LANES = new Set(['Haiku', 'Sonnet', 'Opus']);
+const GPU_AGENTS = new Set(['rented', 'ollama', 'lambda']);
+const valueObject = value => value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {};
+function configuredModelOf(configured, agent) { return valueObject(configured)[agent]; }
+function idleLabelForAgent(agent, configured) { return laneLabel(agent, configuredModelOf(configured, agent)); }
+function idleAgentsForLabel(label) {
+  if (label === 'Codex') return ['codex'];
+  if (label === 'Cursor') return ['cursor'];
+  if (MODEL_LANES.has(label) || label === 'Claude') return ['anthropic', 'claude'];
+  if (label === 'GPU') return [...GPU_AGENTS];
+  return [label];
+}
+function idleCountdown(until, now) {
+  const seconds = Math.max(1, Math.ceil((until - now) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `${hours}h${rest ? ` ${rest}m` : ''}`;
+}
+function idleMoney(value) {
+  if (!Number.isFinite(value)) return '0';
+  return String(Math.round(value * 1000000) / 1000000);
+}
+
+// Why an empty bay is empty. This deliberately uses only the caller's snapshots: it never
+// probes a provider or changes lane state while the read-only board is being rendered.
+export function laneIdleReasons({ running = {}, configured = {}, pauses = {}, demand = {}, caps = {}, todayUsd = {}, queued = {}, recent = {}, now = Date.now() } = {}) {
+  const inputs = [configured, pauses, demand, caps, todayUsd, queued, recent];
+  const labels = new Set(KNOWN_IDLE_LANES);
+  for (const label of Object.keys(valueObject(running))) labels.add(label);
+  for (const input of inputs) {
+    for (const agent of Object.keys(valueObject(input))) {
+      if (agent !== 'auto') labels.add(idleLabelForAgent(agent, configured));
+    }
+  }
+  const configuredEntries = Object.entries(valueObject(configured)).filter(([, model]) => typeof model === 'string' && model.length > 0);
+  const out = {};
+  for (const label of labels) {
+    if (Number(valueObject(running)[label]) > 0) continue;
+    const agents = idleAgentsForLabel(label);
+    let answer = null;
+    for (const agent of agents) {
+      const pause = valueObject(pauses)[agent];
+      if (pause && Number.isFinite(pause.until) && pause.until > now) {
+        const rate = pause.state === 'backoff';
+        answer = { reason: rate ? 'rate-limited' : 'paused', text: `${rate ? 'rate limited' : 'quota paused'}, back in ${idleCountdown(pause.until, now)}`, until: new Date(pause.until).toISOString() };
+        break;
+      }
+    }
+    if (!answer) {
+      for (const agent of agents) {
+        const cap = Number(valueObject(caps)[agent]);
+        const spent = Number(valueObject(todayUsd)[agent]);
+        if (cap > 0 && Number.isFinite(spent) && spent >= cap) {
+          const tomorrow = new Date(now);
+          tomorrow.setUTCHours(0, 0, 0, 0);
+          tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+          answer = { reason: 'daily-cap', text: `daily cap reached ($${idleMoney(spent)} of $${idleMoney(cap)})`, until: tomorrow.toISOString() };
+          break;
+        }
+      }
+    }
+    const configuredAgents = agents.filter(agent => configuredEntries.some(([name]) => name === agent));
+    if (!answer && configuredAgents.length === 0) {
+      answer = { reason: 'not-set-up', text: label === 'GPU' ? 'no GPU configured' : 'not set up (no model in local config)' };
+    }
+    if (!answer) {
+      for (const agent of agents) {
+        const count = Number(valueObject(demand)[agent]);
+        if (count > 0) { answer = { reason: 'waiting-slot', text: `${count} job${count === 1 ? '' : 's'} waiting for a slot` }; break; }
+      }
+    }
+    if (!answer) {
+      for (const agent of agents) {
+        const count = Number(valueObject(queued)[agent]);
+        if (count > 0) { answer = { reason: 'queued', text: `${count} queued, starting soon` }; break; }
+      }
+    }
+    if (!answer && (label === 'Cursor' || label === 'Codex') && Number(valueObject(queued).auto) > 0) {
+      const count = Number(valueObject(queued).auto);
+      answer = { reason: 'routing', text: `${count} auto job${count === 1 ? '' : 's'} not routed yet` };
+    }
+    if (!answer && MODEL_LANES.has(label) && configuredAgents.length === 1 && configuredAgents[0] === 'claude') {
+      answer = { reason: 'not-routed', text: 'only for expensive tier or after 2 failures' };
+    }
+    if (!answer) {
+      for (const agent of configuredAgents) {
+        if (agent !== 'hermes' && !ROUTABLE_AGENTS.has(agent)) {
+          answer = { reason: 'not-routed', text: 'not in auto routing; only explicit jobs' };
+          break;
+        }
+        if (agent === 'hermes') {
+          answer = { reason: 'not-routed', text: 'research job type only' };
+          break;
+        }
+      }
+    }
+    if (!answer) {
+      let recentLabel = null;
+      if (label === 'Codex' || label === 'Cursor') {
+        const other = label === 'Codex' ? 'Cursor' : 'Codex';
+        let thisRecentJobs = 0;
+        for (const agent of agents) {
+          const value = valueObject(recent)[agent];
+          if (value) thisRecentJobs += Number(value?.jobs) || 0;
+        }
+        if (thisRecentJobs === 0) {
+          for (const [agent, value] of Object.entries(valueObject(recent))) {
+            if (idleLabelForAgent(agent, configured) !== other) continue;
+            const jobs = Number(value?.jobs);
+            const explicit = Number(value?.explicit);
+            if (jobs > 0 && explicit >= jobs / 2) { recentLabel = other; break; }
+          }
+        }
+      }
+      answer = { reason: 'no-ready-jobs', text: recentLabel ? `no ready jobs; recent jobs named ${recentLabel} explicitly` : 'no ready jobs' };
+    }
+    out[label] = answer;
+  }
+  return out;
 }
 
 // Parsed run states are remembered by path, size and modification time: a poll costs one stat per run, and a run that finished is read once.
@@ -185,15 +312,16 @@ export function underfilledWaves(counts, slots) {
 }
 
 // The whole board: machine totals (sums of the project numbers) and one overview per registered project.
-export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, worktreeRoot = mainWorktreeRoot, deployStatus = null } = {}) {
+export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, laneState = null, worktreeRoot = mainWorktreeRoot, deployStatus = null } = {}) {
   const overviews = [];
+  const realRoot = async root => await fs.realpath(root).catch(() => path.resolve(root));
   // A live run belongs to the project whose real root it ran in, however the path was spelled.
   const live = await Promise.all(liveRuns.map(async r => ({ ...r, root: await fs.realpath(r.root).catch(() => r.root) })));
   for (const project of projects) {
-    const mine = live.filter(r => r.root === project.root);
+    const projectRoot = await realRoot(project.root);
+    const mine = live.filter(r => r.root === projectRoot);
     overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus }));
   }
-  const realRoot = async root => await fs.realpath(root).catch(() => path.resolve(root));
   const registered = new Map();
   for (const project of projects) registered.set(await realRoot(project.root), project);
   for (const overview of overviews) {
@@ -247,6 +375,30 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   if (machine.cost.laneJobsToday) machine.cost.laneJobsToday = plain(machine.cost.laneJobsToday);
   machine.workers = workers;
   machine.lanes = lanes ? await lanes(machine.cost.laneToday ?? {}, machine.cost.laneJobsToday ?? {}) : [];
+  const queued = dict();
+  const recent = dict();
+  try {
+    for (const project of projects) {
+      const states = await readRunStates(project.root);
+      const projectRoot = await realRoot(project.root);
+      const liveIds = new Set(live.filter(run => run.root === projectRoot).map(run => run.runId));
+      for (const { id, state } of states) {
+        for (const job of state.jobs ?? []) {
+          if (!job || typeof job !== 'object' || typeof job.agent !== 'string') continue;
+          if (liveIds.has(id) && job.status === 'queued') queued[job.agent] = (queued[job.agent] ?? 0) + 1;
+          const finished = Date.parse(job.finishedAt ?? '');
+          if (!Number.isFinite(finished) || finished < now - DAY || finished > now) continue;
+          const entry = recent[job.agent] ??= { jobs: 0, explicit: 0 };
+          entry.jobs += 1;
+          if ((job.requestedAgent ?? job.agent) !== 'auto') entry.explicit += 1;
+        }
+      }
+    }
+    const extra = typeof laneState === 'function' ? await laneState() : {};
+    machine.laneIdle = laneIdleReasons({ running: machine.agents.byLane, ...valueObject(extra), todayUsd: machine.cost.laneToday ?? {}, queued, recent, now });
+  } catch {
+    machine.laneIdle = {};
+  }
   return { at: new Date(now).toISOString(), machine, projects: overviews };
 }
 

@@ -185,11 +185,17 @@ function renderBays(m) {
     if (!hit) {
       var node = el('div', 'bay'); node.style.setProperty('--c', L.laneColor(b.lane));
       var top = el('div', 'top'); var name = el('span', 'name', b.lane); var n = el('span', 'n num', '0'); top.appendChild(name); top.appendChild(n);
-      var heads = el('div', 'heads'); node.appendChild(top); node.appendChild(heads);
-      hit = { node: node, n: n, heads: heads }; map.set(b.lane, hit); host.appendChild(node);
+      var why = el('div', 'sub why-idle'); var heads = el('div', 'heads'); node.appendChild(top); node.appendChild(why); node.appendChild(heads);
+      hit = { node: node, n: n, why: why, heads: heads }; map.set(b.lane, hit); host.appendChild(node);
     }
     hit.n.textContent = String(b.running);
     hit.node.classList.toggle('idle', b.idle);
+    var idleReason = b.idle && m.laneIdle ? m.laneIdle[b.lane] : null;
+    hit.why.hidden = !idleReason;
+    hit.why.textContent = idleReason ? idleReason.text : '';
+    hit.why.title = idleReason ? idleReason.text : '';
+    hit.why.classList.toggle('warn', Boolean(idleReason && ['rate-limited', 'paused', 'daily-cap'].indexOf(idleReason.reason) !== -1));
+    hit.node.title = idleReason ? idleReason.text : '';
     var specs = b.idle ? [{ key: 'sleep|' + b.lane, state: 'sleeping', lane: b.lane }] : b.agents.slice(0, 10).map(headSpec);
     syncHeads(hit.heads, specs, 34, false);
     var more = b.agents.length - 10;
