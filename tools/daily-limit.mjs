@@ -143,7 +143,12 @@ export function resolveDailyLimit({ machine = null, project = null } = {}) {
   if (p?.mode !== undefined) { dailyLimitMode = p.mode; touchProject(); }
   if (p?.ceilingUsd !== undefined) { ceilingUsd = p.ceilingUsd; touchProject(); }
 
-  if (m?.ceilingUsd !== undefined && p?.usd !== undefined && m.ceilingUsd < p.usd) {
+  const machineCeilingBelowProjectUsd =
+    m?.ceilingUsd !== undefined
+    && p?.usd !== undefined
+    && p?.ceilingUsd === undefined
+    && m.ceilingUsd < p.usd;
+  if (machineCeilingBelowProjectUsd) {
     reports.push('machine.ceilingUsd is below the project daily limit; project spend may hit the hard ceiling before the project limit');
   }
 
@@ -155,9 +160,14 @@ export function resolveDailyLimit({ machine = null, project = null } = {}) {
     reports.push('resolved mode invalid, using default stop');
     dailyLimitMode = 'stop';
   }
-  const hard = ceilingUsd ?? dailyLimitUsd * 3;
-  let hardCeilingUsd = Number.isFinite(hard) && hard >= dailyLimitUsd ? hard : dailyLimitUsd * 3;
-  if (hardCeilingUsd !== hard) reports.push('resolved ceiling invalid, using default 3×');
+  let hardCeilingUsd;
+  if (machineCeilingBelowProjectUsd) {
+    hardCeilingUsd = m.ceilingUsd;
+  } else {
+    const hard = ceilingUsd ?? dailyLimitUsd * 3;
+    hardCeilingUsd = Number.isFinite(hard) && hard >= dailyLimitUsd ? hard : dailyLimitUsd * 3;
+    if (hardCeilingUsd !== hard) reports.push('resolved ceiling invalid, using default 3×');
+  }
 
   return {
     dailyLimitUsd,

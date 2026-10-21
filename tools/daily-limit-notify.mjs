@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { dailyLimitNotice, centralDayKey } from './daily-limit.mjs';
 import { sanitizeText } from './journal.mjs';
@@ -10,6 +11,17 @@ export const NOTIFIER_LOCK_REL = '.swarm/project/daily-limit-notified.lock';
 export const BOARD_BANNER_REL = '.swarm/project/board-banner.json';
 export const SUMMARY_LINES_REL = '.swarm/project/two-hour-summary.ndjson';
 export const NOTIFY_FAIL_LOG_REL = '.swarm/project/daily-limit-notify-failures.ndjson';
+
+const NOTIFIER_LOCK_STALE_MS = 60_000;
+
+export function notifierDedupeKey(root) {
+  const resolved = path.resolve(String(root));
+  try {
+    return realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
 
 function nowMs(now) {
   return typeof now === 'function' ? now() : Number(now ?? Date.now());
@@ -63,6 +75,16 @@ async function withNotifierLock(root, fn, { fs: fsImpl = fs, timeoutMs = 10000 }
       break;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
+      try {
+        const stat = await fsImpl.stat(lockDir);
+        if (Date.now() - stat.mtimeMs > NOTIFIER_LOCK_STALE_MS) {
+          await fsImpl.rm(lockDir, { recursive: true, force: true });
+          continue;
+        }
+      } catch (statError) {
+        if (statError.code === 'ENOENT') continue;
+        throw statError;
+      }
       if (Date.now() - started >= timeoutMs) throw new Error('daily-limit-notify: timed out waiting for notifier lock');
       await new Promise(resolve => setTimeout(resolve, 25));
     }
@@ -161,24 +183,26 @@ export async function notifyDailyLimit({ project, level, billedTodayUsd, setting
   const appendSummaryLine = deps.appendSummaryLine ?? ((r, n) => defaultAppendSummaryLine(r, n, { fs: fsImpl, now }));
   const logFailure = deps.logDeliveryFailure ?? ((r, p) => logDeliveryFailure(r, p, { fs: fsImpl }));
 
+  const stateRoot = notifierDedupeKey(root);
+  const dedupeKey = stateRoot;
   try {
-    return await withNotifierLock(root, async () => {
-      const state = await readNotified(root);
-      if (notifiedHas(state, project, level)) return { sent: false, reason: 'deduped', notice };
+    return await withNotifierLock(stateRoot, async () => {
+      const state = await readNotified(stateRoot);
+      if (notifiedHas(state, dedupeKey, level)) return { sent: false, reason: 'deduped', notice };
 
       const key = levelKey(level);
       try {
-        await writeBoardBanner(root, notice);
-        await appendSummaryLine(root, notice);
+        await writeBoardBanner(stateRoot, notice);
+        await appendSummaryLine(stateRoot, notice);
         if (isCeilingLevel(level)) {
-          await appendCeilingHuman(root, notice);
+          await appendCeilingHuman(stateRoot, notice);
         } else if (typeof deps.appendPhoneInbox === 'function') {
-          await deps.appendPhoneInbox(root, notice);
+          await deps.appendPhoneInbox(stateRoot, notice);
         } else if (Number(level) >= 1 && Number(level) <= 3) {
-          await appendFyiNote(root, notice);
+          await appendFyiNote(stateRoot, notice);
         }
       } catch (error) {
-        await logFailure(root, {
+        await logFailure(stateRoot, {
           at: new Date(nowMs(now)).toISOString(),
           project,
           level: key,
@@ -188,15 +212,16 @@ export async function notifyDailyLimit({ project, level, billedTodayUsd, setting
       }
 
       const byProject = { ...state.byProject };
-      const levels = [...(Array.isArray(byProject[project]) ? byProject[project] : []), key];
-      byProject[project] = levels;
-      await writeNotified(root, { day: state.day, byProject });
+      const levels = [...(Array.isArray(byProject[dedupeKey]) ? byProject[dedupeKey] : []), key];
+      byProject[dedupeKey] = levels;
+      if (project !== dedupeKey) byProject[project] = levels;
+      await writeNotified(stateRoot, { day: state.day, byProject });
 
       return { sent: true, notice };
     }, { fs: fsImpl });
   } catch (error) {
     try {
-      await logFailure(root, {
+      await logFailure(stateRoot, {
         at: new Date(nowMs(now)).toISOString(),
         project,
         level: levelKey(level),

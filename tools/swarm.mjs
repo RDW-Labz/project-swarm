@@ -35,6 +35,7 @@ import { addCiFixTicket } from './scope-commands.mjs';
 import { protectedViolations, protectedPathHit, isExampleFile, isSecretPath as isProfileSecretPath, templateReadable, formatBaseCheck, validateProfile, hookFiles, hookScriptNames } from './init-profile.mjs';
 import { resolveCliHosts, sshInvocation, sshEnv, remoteExec, cliHostFailure } from './cli-host.mjs';
 import { isHumanJob, validateHumanJob, liftHumanJobs, addGroup, readStore as readHumanStore, humanGroupReady, updateGroup as updateHumanGroup } from './human-jobs.mjs';
+import { centralDayKey } from './daily-limit.mjs';
 import { createBatchCollector, batchEligible, BATCH_LIMITS } from './batch.mjs';
 import { runInboxCommand, inboxDeps } from './inbox-commands.mjs';
 import readline from 'node:readline';
@@ -7532,7 +7533,7 @@ function centralResetLabel(ms) {
 function policyDayKey(isoOrMs, nowMs = Date.now()) {
   const t = typeof isoOrMs === 'string' ? Date.parse(isoOrMs) : isoOrMs;
   const ms = Number.isFinite(t) ? t : nowMs;
-  return new Date(ms).toISOString().slice(0, 10);
+  return centralDayKey(() => ms);
 }
 
 function raisedTodayUsdFromAutoDecisions(records, project, nowMs = Date.now()) {

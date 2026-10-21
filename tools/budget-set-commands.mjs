@@ -24,22 +24,31 @@ function stripBudgetPrefix(args) {
   return args;
 }
 
-// Agent session when any of CLAUDECODE, CODEX, or CURSOR is set, or stdin is not a TTY.
-export function budgetSetActor(env = process.env, { stdinIsTTY } = {}) {
-  if (env?.CLAUDECODE !== undefined && env.CLAUDECODE !== null && String(env.CLAUDECODE) !== '') {
-    return 'agent-session';
+const AGENT_ENV_PREFIXES = ['CLAUDE', 'CODEX', 'CURSOR', 'AIDER', 'OPENCODE'];
+const AGENT_TERM_PROGRAMS = new Set(['vscode', 'cursor', 'windsurf', 'zed']);
+
+function envNamesSuggestAgent(env) {
+  for (const key of Object.keys(env ?? {})) {
+    const upper = key.toUpperCase();
+    for (const prefix of AGENT_ENV_PREFIXES) {
+      if (upper.startsWith(prefix)) return true;
+    }
   }
-  if (env?.CODEX !== undefined && env.CODEX !== null && String(env.CODEX) !== '') {
-    return 'agent-session';
-  }
-  if (env?.CURSOR !== undefined && env.CURSOR !== null && String(env.CURSOR) !== '') {
-    return 'agent-session';
-  }
+  return false;
+}
+
+// Owner terminal: stdin and stdout TTYs, no CLAUDE/CODEX/CURSOR/AIDER/OPENCODE env names, TERM_PROGRAM not an agent shell.
+export function budgetSetActor(env = process.env, { stdinIsTTY, stdoutIsTTY, overlay } = {}) {
+  const agentEnv = overlay !== undefined ? overlay : env;
+  if (envNamesSuggestAgent(agentEnv)) return 'agent-session';
+  const termProgram = String(env?.TERM_PROGRAM ?? '').toLowerCase();
+  if (termProgram && AGENT_TERM_PROGRAMS.has(termProgram)) return 'agent-session';
   if (env?.NODE_TEST_CONTEXT !== undefined && String(env.NODE_TEST_CONTEXT) !== '') {
     return 'owner-terminal';
   }
-  const isTTY = stdinIsTTY ?? tty.isatty(0);
-  if (!isTTY) return 'agent-session';
+  const stdinTTY = stdinIsTTY ?? tty.isatty(0);
+  const stdoutTTY = stdoutIsTTY ?? tty.isatty(1);
+  if (!stdinTTY || !stdoutTTY) return 'agent-session';
   return 'owner-terminal';
 }
 
@@ -164,6 +173,18 @@ function effectiveSnapshot(machineLayer, projectLayer) {
     mode: resolved.dailyLimitMode,
     ceilingUsd: resolved.hardCeilingUsd,
     source: resolved.source,
+    reports: resolved.reports ?? [],
+  };
+}
+
+function machineOnlySnapshot(machineLayer) {
+  const resolved = resolveDailyLimit({ machine: machineLayer, project: null });
+  return {
+    usd: resolved.dailyLimitUsd,
+    mode: resolved.dailyLimitMode,
+    ceilingUsd: resolved.hardCeilingUsd,
+    source: resolved.source,
+    reports: resolved.reports ?? [],
   };
 }
 
@@ -224,8 +245,8 @@ export function needsOwnerApproval(before, after, patch, raisedTodayUsd = 0) {
 
 function approvalRequestMatches(approval, { machine, patch }) {
   const req = approval?.request;
-  if (req === undefined) return true; // legacy owner approvals without a bound request (older tests)
-  if (!req || typeof req !== 'object') return false;
+  if (req === undefined || req === null) return false;
+  if (typeof req !== 'object') return false;
   if (Boolean(req.machine) !== Boolean(machine)) return false;
   const want = req.patch ?? {};
   for (const key of ['usd', 'mode', 'ceilingUsd']) {
@@ -372,6 +393,17 @@ async function applyBudgetSet({
     await consumeOwnerBudgetApproval(fs, root);
     await clearBudgetRaisePending(fs, root);
   }
+
+  const refreshedMachine = parsed.machine
+    ? mergeLayer(machineInfo.layer, parsed.values)
+    : machineInfo.layer;
+  const refreshedProject = parsed.machine
+    ? projectInfo.layer
+    : mergeLayer(projectInfo.layer, parsed.values);
+  const effective = resolveDailyLimit({ machine: refreshedMachine, project: refreshedProject });
+  for (const line of effective.reports ?? []) {
+    out.write(`budget set: ${line}\n`);
+  }
   return 0;
 }
 
@@ -413,7 +445,7 @@ async function refuseBudgetSet({
   return 1;
 }
 
-export async function budgetCommand(args, { out, env, root, fs, homedir, billedToday, now = Date.now, appendEvent, stdinIsTTY } = {}) {
+export async function budgetCommand(args, { out, env, root, fs, homedir, billedToday, now = Date.now, appendEvent, stdinIsTTY, stdoutIsTTY } = {}) {
   const parsed = parseBudgetSetArgs(args);
   if (parsed.errors) {
     out.write(`${parsed.errors.join('\n')}\n`);
@@ -422,7 +454,7 @@ export async function budgetCommand(args, { out, env, root, fs, homedir, billedT
 
   const actorEnv = env !== undefined ? { ...process.env, ...env } : process.env;
   const homedirFn = homedir ?? (() => actorEnv?.HOME ?? process.env.HOME);
-  const actorOpts = { stdinIsTTY };
+  const actorOpts = { stdinIsTTY, stdoutIsTTY, overlay: env };
 
   if (parsed.command === 'approve-raise') {
     if (budgetSetActor(actorEnv, actorOpts) === 'agent-session') {
@@ -444,7 +476,9 @@ export async function budgetCommand(args, { out, env, root, fs, homedir, billedT
   if (parsed.command === 'set') {
     const machineInfo = await loadMachineLayer(fs, env, homedirFn);
     const projectInfo = await loadProjectLayer(fs, root);
-    const before = effectiveSnapshot(machineInfo.layer, projectInfo.layer);
+    const before = parsed.machine
+      ? machineOnlySnapshot(machineInfo.layer)
+      : effectiveSnapshot(machineInfo.layer, projectInfo.layer);
 
     const mergedMachine = parsed.machine ? mergeLayer(machineInfo.layer, parsed.values) : machineInfo.layer;
     const mergedProject = parsed.machine ? projectInfo.layer : mergeLayer(projectInfo.layer, parsed.values);
@@ -453,10 +487,9 @@ export async function budgetCommand(args, { out, env, root, fs, homedir, billedT
       out.write(`${mergedErrors.join('\n')}\n`);
       return 1;
     }
-    const after = effectiveSnapshot(
-      parsed.machine ? mergedMachine : machineInfo.layer,
-      parsed.machine ? projectInfo.layer : mergedProject,
-    );
+    const after = parsed.machine
+      ? machineOnlySnapshot(mergedMachine)
+      : effectiveSnapshot(machineInfo.layer, mergedProject);
 
     if (budgetSetActor(actorEnv, actorOpts) === 'agent-session') {
       const raisedToday = await raisedTodayUsdFromLog(fs, {

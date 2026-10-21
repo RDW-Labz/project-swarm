@@ -67,11 +67,12 @@ export function policyCommand(args, { out, env = process.env, home = env?.HOME, 
   if (sub === 'show') {
     const file = policyPath(env, home);
     const { rules, error } = loadPolicy(file, { fs });
+    const failingClosed = Boolean(error) || rules.length === 0;
     const displayRules = rules.length ? rules : effectiveRulesFromOverrides([]);
     const lines = ['Never auto-approved:', ...NEVER_AUTO.map(k => `  - ${k}`), ''];
-    if (error) {
+    if (failingClosed) {
       lines.push('Policy is failing closed (no auto-approve rules loaded).', '');
-      lines.push(`Policy file error: ${error}`, '');
+      if (error) lines.push(`Policy file error: ${error}`, '');
     }
     lines.push('Auto-approve rules (effective):');
     for (const rule of displayRules) {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Per-machine autonomy policy: which owner requests the swarm may approve without waiting on the owner.
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { resolveConfigPath } from './local-config.mjs';
@@ -136,6 +137,23 @@ export function normalizePolicyProject(project) {
   return trimmed.toLowerCase();
 }
 
+export function normalizePolicyProjectPath(project, root) {
+  const base = normalizePolicyProject(project);
+  if (!base) return null;
+  if (!root || typeof root !== 'string' || typeof project !== 'string') return base;
+  const trimmed = project.trim();
+  if (!trimmed.includes('/') && !trimmed.includes('\\')) return base;
+  try {
+    const resolved = path.resolve(root, trimmed);
+    const real = fs.realpathSync.native?.(resolved) ?? fs.realpathSync(resolved);
+    const rel = path.relative(root, real);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return base;
+    return normalizePolicyProject(rel);
+  } catch {
+    return base;
+  }
+}
+
 export function normalizeBranchName(branch) {
   if (typeof branch !== 'string') return null;
   let b = branch.trim();
@@ -245,10 +263,19 @@ function ruleIdForKind(kind, facts = {}) {
   return def?.id ?? null;
 }
 
+function branchFactOk(branch) {
+  if (typeof branch !== 'string') return false;
+  if (!branch.trim()) return false;
+  const normalized = normalizeBranchName(branch);
+  if (normalized === null || !PLAIN_BRANCH.test(normalized) || normalized.includes(':')) return false;
+  return true;
+}
+
 function gitFactsOk(facts) {
+  if (!branchFactOk(facts.branch)) return false;
   const git = facts.git;
   if (git == null || git === '' || (Array.isArray(git) && git.length === 0)) {
-    if (facts.branch != null && branchNeedsOwner(facts.branch)) return false;
+    if (branchNeedsOwner(facts.branch)) return false;
     return true;
   }
   const entries = Array.isArray(git) ? git : [git];
@@ -259,9 +286,27 @@ function gitFactsOk(facts) {
     const branch = typeof entry === 'object' && entry != null && !Array.isArray(entry)
       ? entry.branch ?? facts.branch
       : facts.branch;
-    if (branch != null && branchNeedsOwner(branch)) return false;
+    if (!branchFactOk(branch)) return false;
+    if (branchNeedsOwner(branch)) return false;
   }
   return true;
+}
+
+const TICKET_STATUS_KEYS = ['status', 'to', 'newStatus', 'toStatus'];
+const TICKET_DONE_STATUSES = new Set(['done', 'completed', 'closed', 'shipped', 'merged']);
+
+function ticketTargetStatus(facts) {
+  for (const key of TICKET_STATUS_KEYS) {
+    const raw = facts[key];
+    if (typeof raw === 'string' && raw.trim()) return raw.trim().toLowerCase();
+  }
+  return null;
+}
+
+function ticketStatusIsDone(facts) {
+  const status = ticketTargetStatus(facts);
+  if (status === null) return true;
+  return TICKET_DONE_STATUSES.has(status);
 }
 
 export const DEFAULT_POLICY_FILE = Object.freeze({
@@ -451,6 +496,7 @@ function factsForKind(kind, facts = {}, ruleId = null, request = {}) {
     return { ok: true };
   }
   if (kind === 'commit-push-swarm-branch') {
+    if (!branchFactOk(facts.branch)) return { ok: false, reason: 'invalid branch' };
     if (branchNeedsOwner(facts.branch)) return { ok: false, reason: 'protected branch' };
     if (!factIsTrue(facts, 'allSwarmProduced')) return { ok: false, reason: 'not all swarm-produced' };
     return { ok: true };
@@ -463,9 +509,7 @@ function factsForKind(kind, facts = {}, ruleId = null, request = {}) {
     return { ok: true };
   }
   if (kind === 'ticket-set-status') {
-    const rawStatus = facts.status ?? facts.toStatus;
-    const toDone = typeof rawStatus === 'string' && rawStatus.trim().toLowerCase() === 'done';
-    if (toDone && facts.requiresReview !== false && facts.reviewPassed !== true) {
+    if (ticketStatusIsDone(facts) && facts.requiresReview !== false && facts.reviewPassed !== true) {
       return { ok: false, reason: 'review gate' };
     }
     return { ok: true };

@@ -528,7 +528,17 @@ export async function reserveSpend({
 }
 export async function settleSpend({ dir, key, usd, tokens, kind, flagged, now = Date.now }) {
   return withSpendStore(store => {
-    if (store.entries[key]) Object.assign(store.entries[key], { usd, tokens, kind, flagged });
+    const entry = store.entries[key];
+    if (!entry) return;
+    const reservationDay = entry.day;
+    const settleCentralDay = centralDayKey(now);
+    const nowMs = typeof now === 'function' ? now() : now;
+    const updates = { usd, tokens, kind, flagged };
+    // Reservation day stays on the entry; after Central midnight, bill on the settle day.
+    if (reservationDay && reservationDay !== settleCentralDay) {
+      updates.at = new Date(nowMs).toISOString();
+    }
+    Object.assign(entry, updates);
   }, { dir, now });
 }
 // One running entry for something that costs by the hour: created on first call, raised afterwards, never lowered, no cap check
@@ -549,8 +559,10 @@ export async function accrueSpend({
   dailyLimit,
 }) {
   let limitContext = dailyLimit;
-  if (limitContext === undefined && root !== undefined && root !== null && lane === 'rented') {
-    const loaded = await loadDailyLimitSettings(root, { env, homedir, fs: fsImpl });
+  if (limitContext === undefined && isPaidLane(lane)) {
+    const loaded = root !== undefined && root !== null
+      ? await loadDailyLimitSettings(root, { env, homedir, fs: fsImpl })
+      : await loadMachineDailyLimitSettings(env, homedir, fsImpl);
     if (!loaded.ok) {
       return {
         decision: {
@@ -568,7 +580,7 @@ export async function accrueSpend({
     const current = store.entries[key];
     const priorUsd = current?.usd ?? 0;
     const incrementalUsd = Math.max(0, usd - priorUsd);
-    const limit = lane === 'rented'
+    const limit = limitContext && isPaidLane(lane)
       ? applyDailyLimit({
         store,
         lane,
@@ -590,7 +602,7 @@ export async function accrueSpend({
       if (current) {
         if (usd > (current.usd ?? 0)) current.usd = usd;
         current.at = new Date(now()).toISOString();
-        current.day = centralDay;
+        if (!current.day) current.day = centralDay;
         return;
       }
       store.entries[key] = {

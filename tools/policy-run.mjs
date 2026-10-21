@@ -1,24 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-import fs from 'node:fs';
-import path from 'node:path';
-import { decide, autoDecisionEvent, NEVER_AUTO, normalizePolicyProject } from './policy.mjs';
+import { decide, autoDecisionEvent, NEVER_AUTO, normalizePolicyProjectPath } from './policy.mjs';
+import { centralDayKey } from './daily-limit.mjs';
 import { ELEVATED_GIT_OPS } from './handbuild.mjs';
-
-const CENTRAL_TZ = 'America/Chicago';
 
 function nowMs(now) {
   return typeof now === 'function' ? now() : Number(now ?? Date.now());
 }
 
-function centralDayKey(isoOrMs, now) {
+function centralDayKeyAt(isoOrMs, now) {
   const t = typeof isoOrMs === 'string' ? Date.parse(isoOrMs) : isoOrMs;
   const ms = Number.isFinite(t) ? t : nowMs(now);
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: CENTRAL_TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date(ms));
+  return centralDayKey(() => ms);
 }
 
 function normalizeHandled(raw) {
@@ -35,12 +27,12 @@ function normalizeHandled(raw) {
 }
 
 function autoTodayFromRecords(records, now) {
-  const today = centralDayKey(null, now);
+  const today = centralDayKeyAt(null, now);
   const counts = {};
   for (const entry of records) {
     if (entry.kind !== 'auto-decision') continue;
     const at = entry.at ?? entry.ts;
-    if (centralDayKey(at, now) !== today) continue;
+    if (centralDayKeyAt(at, now) !== today) continue;
     const rule = entry.rule;
     if (!rule) continue;
     counts[rule] = (counts[rule] ?? 0) + 1;
@@ -48,35 +40,18 @@ function autoTodayFromRecords(records, now) {
   return counts;
 }
 
-function normalizeProjectForCap(project, root) {
-  const base = normalizePolicyProject(project);
-  if (!base) return null;
-  if (!root || typeof root !== 'string' || typeof project !== 'string') return base;
-  const trimmed = project.trim();
-  if (!trimmed.includes('/') && !trimmed.includes('\\')) return base;
-  try {
-    const resolved = path.resolve(root, trimmed);
-    const real = fs.realpathSync.native?.(resolved) ?? fs.realpathSync(resolved);
-    const rel = path.relative(root, real);
-    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return base;
-    return normalizePolicyProject(rel);
-  } catch {
-    return base;
-  }
-}
-
 function raisedTodayUsdFromRecords(records, project, now, root) {
-  const normProject = normalizeProjectForCap(project, root);
+  const normProject = normalizePolicyProjectPath(project, root);
   if (!normProject) return 0;
-  const today = centralDayKey(null, now);
+  const today = centralDayKeyAt(null, now);
   let sum = 0;
   for (const entry of records) {
     if (entry.kind !== 'auto-decision') continue;
     if (entry.requestKind !== 'cap-raise') continue;
-    const entryProject = normalizeProjectForCap(entry.project, root);
+    const entryProject = normalizePolicyProjectPath(entry.project, root);
     if (entryProject !== normProject) continue;
     const at = entry.at ?? entry.ts;
-    if (centralDayKey(at, now) !== today) continue;
+    if (centralDayKeyAt(at, now) !== today) continue;
     const amt = entry.amountUsd;
     if (typeof amt === 'number' && Number.isFinite(amt) && amt > 0) sum += amt;
   }
@@ -174,15 +149,31 @@ function enrichPastDailyAutoLimit(facts, limits, project) {
   }
 }
 
+function resolveCapProject(item, baseFacts, root) {
+  const normItem = normalizePolicyProjectPath(item.project, root);
+  const hasFactProject = baseFacts != null && Object.hasOwn(baseFacts, 'project');
+  const normFact = hasFactProject ? normalizePolicyProjectPath(baseFacts.project, root) : null;
+  if (hasFactProject && normItem && normFact && normItem !== normFact) {
+    return { mismatch: true };
+  }
+  const project = normFact ?? normItem;
+  return { project, mismatch: false };
+}
+
 function enrichFactsForItem(item, baseFacts, { autoToday, handledRecords, now, limits, root }) {
   const facts = { ...baseFacts, autoToday };
   if (kindUsesPastDailyAutoLimit(item.kind)) {
     enrichPastDailyAutoLimit(facts, limits, item.project);
   }
   if (item.kind === 'cap-raise') {
-    facts.raisedTodayUsd = raisedTodayUsdFromRecords(handledRecords, item.project, now, root);
-    const norm = normalizeProjectForCap(item.project, root);
-    if (norm) facts.project = norm;
+    const resolved = resolveCapProject(item, baseFacts, root);
+    if (resolved.mismatch) {
+      facts.__capProjectMismatch = true;
+      return facts;
+    }
+    const project = resolved.project;
+    facts.raisedTodayUsd = raisedTodayUsdFromRecords(handledRecords, project, now, root);
+    if (project) facts.project = project;
   }
   return facts;
 }
@@ -281,10 +272,15 @@ export async function runPolicyPass({
         limits,
         root,
       });
+      if (facts.__capProjectMismatch) {
+        left.push(item);
+        continue;
+      }
+      const capProject = item.kind === 'cap-raise' ? facts.project : undefined;
       const request = {
         id: item.id,
         kind: item.kind,
-        project: item.kind === 'cap-raise' ? (facts.project ?? item.project) : item.project,
+        project: item.kind === 'cap-raise' ? capProject : item.project,
         facts,
       };
       const result = decide(request, { rules: effectiveRules, now });
