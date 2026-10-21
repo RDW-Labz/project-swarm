@@ -119,9 +119,17 @@ export function resolveScratchBase({ env = process.env, home = os.homedir(), reg
   }
   for (const reg of registeredRoots) {
     const rr = normalizedPath(reg);
-    if (!rr || !registeredProjectGitRoot(rr)) continue;
-    if (!isUnder(rr, resolved) || rr === resolved) continue;
-    if (!registeredRootAlreadyScratch(reg, { env, home, registeredRoots, customResolved: resolved })) {
+    if (!rr) continue;
+    if (rr === resolved) {
+      warnScratchBase(warn, 'SWARM_SCRATCH_BASE ignored (would treat a registered non-scratch project as scratch)');
+      return defaultBase;
+    }
+    if (isUnder(resolved, rr) && resolved !== rr) {
+      warnScratchBase(warn, 'SWARM_SCRATCH_BASE ignored (would treat a registered non-scratch project as scratch)');
+      return defaultBase;
+    }
+    if (!registeredProjectGitRoot(rr)) continue;
+    if (isUnder(rr, resolved) && rr !== resolved && !registeredRootAlreadyScratch(reg, { env, home, registeredRoots, customResolved: resolved })) {
       warnScratchBase(warn, 'SWARM_SCRATCH_BASE ignored (would treat a registered non-scratch project as scratch)');
       return defaultBase;
     }

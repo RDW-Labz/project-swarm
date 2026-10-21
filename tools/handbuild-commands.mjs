@@ -61,7 +61,10 @@ export async function runHandbuildCommand(root, args, { installRoot, env = proce
         ? createScratchDeniedHandbuildRequest(root, fields, { now })
         : createRequest(root, fields, { now });
       if (r.status === 'denied' && r.denyReason === SCRATCH_DENY_REASON) {
-        return out(`Hand-build request auto-denied: ${r.id} (${SCRATCH_DENY_REASON}).`, 1);
+        return out(
+          `Hand-build request auto-denied: ${r.id} (${SCRATCH_DENY_REASON}). Move the project out of the scratch base or remove the .swarm-scratch marker.`,
+          1,
+        );
       }
       const id = `handbuild-${r.id}`;
       // It shows up in Needs you (the board and the phone) as a decision with approve and deny.

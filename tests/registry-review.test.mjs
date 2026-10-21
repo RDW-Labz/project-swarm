@@ -43,9 +43,12 @@ test('(8) damaged registry is not overwritten on prune', async t => {
   const { file, env, home } = await mkEnv(t);
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, '{not json');
-  const res = await forgetProjects({ missing: true, yes: true, file, env, home });
-  assert.equal((await fs.readFile(file, 'utf8')).trim(), '{not json');
-  assert.match(res.stdout, /damaged/);
+  const damaged = '{not json';
+  await assert.rejects(
+    () => forgetProjects({ missing: true, yes: true, file, env, home }),
+    /damaged/,
+  );
+  assert.equal((await fs.readFile(file, 'utf8')).trim(), damaged);
 });
 
 test('(9) forget install root without installRoot arg refuses single target', async t => {
