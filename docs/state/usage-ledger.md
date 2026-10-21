@@ -165,10 +165,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | - | y2-git-hooks: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-20 | - | w8-docs: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-21 | - | s8-burst-gates: Added S8 requirements R-050 (GPU burst gates) and R-051 (cloud CPU test/e2e runners) | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-21 | - | split-fix-calls: tools/split-scan.mjs still drops uses in some call-argument positions. Reproduction | cursor | composer-2.5 | cancelled: exit 143: no stderr output; cancelled | - | subscription |
-| 2026-10-21 | - | split-acorn: Replaced the hand-written tokenizer with acorn (statement-by-statement Parser.parseStat | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-21 | - | review-ci-npm-ci: PASS. The added npm ci --ignore-scripts step adds no secrets, deploy, publish, art | claude | opus | pass | 17,949 | $0.10 |
-| 2026-10-21 | - | split-acorn: Acorn-based scanModule with scope-aware uses, skipGap spans, offsetInScannerOpaque; mod | cursor | composer-2.5 | pass | - | subscription |
 
 ## Daily summary
 
@@ -185,6 +181,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-19 | claude | 9 | 9 | 0 | 2,436,156 | $6.73 |
 | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
 | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
-| 2026-10-21 | claude | 1 | 1 | 0 | 17,949 | $0.10 |
-| 2026-10-21 | cursor | 4 | 3 | 1 | 0 | subscription |
-| **total** | all | 165 | 149 | 16 | 14,729,324 | $26.77 (incl. estimates) |
+| 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
+| **total** | all | 161 | 146 | 15 | 14,711,375 | $26.67 (incl. estimates) |
