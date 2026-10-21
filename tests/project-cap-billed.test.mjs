@@ -83,6 +83,34 @@ test('projectCapDecision counts unknown metered cost at lane reserve and names i
   assert.match(decision.message, new RegExp(`been billed \\$${(reserve * 2).toFixed(2)}`));
 });
 
+test('null and non-object job entries are skipped; __proto__ job is an ordinary metered unknown', () => {
+  const totals = runTotals({
+    jobs: [
+      null,
+      undefined,
+      [],
+      { id: '__proto__', agent: '__proto__', usage: { total_tokens: 10 } },
+      { id: 'paid', agent: 'anthropic', costUsd: 1.5, usage: { total_tokens: 1 } },
+    ],
+  });
+  assert.equal(totals.billedUsd, 1.5);
+  assert.equal(totals.billedUnknown, 1);
+  assert.equal(totals.billedUnknownUsd, LANE_RESERVE_DEFAULTS.anthropic);
+  assert.equal(totals.usd, 1.5);
+});
+
+test('projectSpend tolerates null jobs in run state', async t => {
+  const { root } = await repo(t);
+  await writeRun(root, 'dirty', {
+    status: 'complete',
+    jobs: [null, { id: '__proto__', agent: '__proto__', usage: { total_tokens: 1 } }, { id: 'a', agent: 'anthropic', costUsd: 2, usage: { total_tokens: 1 } }],
+  });
+  const spent = await projectSpend(root);
+  assert.equal(spent.unreadable.length, 0);
+  assert.ok(Math.abs(spent.billedUsd - 2) < 0.01);
+  assert.equal(spent.billedUnknown, 1);
+});
+
 test('missing or unrecognized lane is metered with reserve default', () => {
   const totals = runTotals({
     jobs: [

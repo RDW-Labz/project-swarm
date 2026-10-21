@@ -247,10 +247,8 @@ export function argvForTicketSpec(file, { profile, checks, pkg, files = [] } = {
     }
   }
   const verified = validateVerifyConfig(profile?.verify);
-  if (verified.ok && verified.value?.command) {
-    const cmd = verified.value.command;
-    if (cmd.includes(SPEC_TESTS_TOKEN)) return expandSpecArgv(cmd, [file]);
-    return [...cmd, specTestArg(file)];
+  if (verified.ok && verified.value?.command?.includes(SPEC_TESTS_TOKEN)) {
+    return expandSpecArgv(verified.value.command, [file]);
   }
   const named = list.find(c => c?.name === 'tests' || c?.name === 'test');
   if (named) {
@@ -1401,11 +1399,14 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
         (result === 'blocked' ? blocked : retried).push(t.id);
         continue;
       }
-      const specPaths = ticketSpecPaths(t, ledger, laterIds).filter(f => existsSync(path.join(root, f)));
+      const specCtx = { profile, checks: projectChecks, pkg: projectPkg, files: projectFiles };
+      const specPaths = ticketSpecPaths(t, ledger, laterIds)
+        .filter(f => existsSync(path.join(root, f)))
+        .filter(f => argvForTicketSpec(f, specCtx)?.length);
       if (specPaths.length) {
         let specStop = false;
         for (const f of specPaths) {
-          const outcome = await runSpec(root, f, { profile, checks: projectChecks, pkg: projectPkg, files: projectFiles });
+          const outcome = await runSpec(root, f, specCtx);
           if (outcome?.failed) {
             const result = await applyRetry(root, t.id, `failed checks: ticket spec ${f}${outcome.tail ? `; ${String(outcome.tail).slice(-500)}` : ''}`, rest[0]);
             (result === 'blocked' ? blocked : retried).push(t.id);

@@ -313,6 +313,7 @@ export function runTotals(state) {
   let rentedUnknownUsd = 0;
   const totals = { usd: rentalBilled, tokens: 0, unknownUsd: [], billedUsd: 0, billedUnknown: 0, billedUnknownUsd: 0, billedUnknownRented: 0, hasPaidLaneJob: rentalBilled > 0 };
   for (const record of state.jobs ?? []) {
+    if (!object(record)) continue;
     const lane = record.agent;
     const metered = isMeteredLane(lane);
     const { usd, tokens } = jobSpend(record);
