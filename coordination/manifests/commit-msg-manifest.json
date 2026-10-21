@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "commit-msg-manifest",
+      "agent": "auto",
+      "prompt": "Guard against swept-in files in manifest commits. What happened: an orchestrator ran git add on a path set that included an ignored folder, git add reported an error (the following paths are ignored by one of your .gitignore files: .swarm) but had already staged the other files, the chained git commit was skipped, and the next commit, git add coordination/manifests then git commit with the message Manifest: forget usage text, silently carried a whole feature (tools/projects.mjs, tools/swarm.mjs, tests/forget.test.mjs) under a manifest-only message. A git add error left staged files behind and the next commit swept them in. Rule: a commit whose message subject starts with Manifest (case-insensitive: Manifest: x, Manifest for the 1.162.0 bump, manifest x) may contain ONLY files under coordination/manifests/ (added, modified, deleted or renamed within that folder); if anything else is staged the commit FAILS with a clear message: manifest commit refused: these staged files are not manifests: LIST; a git add that errors can leave files staged, so run git status, unstage them with git restore --staged FILE (or git reset), commit them separately with their own message, then commit the manifest again. The check is on the staged set at commit time, so it also catches the case where git add errored earlier. Implement it as a commit-msg git hook next to the existing pre-commit and pre-push hooks: tools/git-hooks.mjs installs and removes the hook kinds (the list of kinds at lines 52 and 66 and the script template at the top: the commit-msg hook receives the message file path as its first argument and must pass it to the check; keep the existing marker and preservation logic so a user's own commit-msg hook is kept and chained exactly as pre-commit is today, and installing twice is idempotent), and tools/githook-check.mjs gets a commit-msg check that reads the message file, takes the first non-comment line as the subject, lists the staged files with git diff --cached --name-status (all statuses; for renames both names), applies the rule, and exits non-zero with the message above. It applies to every actor (no agent-only condition, no environment variable bypass, no reading of the ambient environment; git commit --no-verify remains git's own escape). Make sure every place that installs or refreshes the hooks (swarm handbuild install, the refresh done by swarm update for linked projects via ensureHandbuildGuard with refreshOnly, and swarm init) installs the commit-msg hook too, and that uninstall removes it; add a short paragraph to docs/handbuild-guard.md. Tests in tests/commit-msg-manifest.test.mjs (temp git repos, hooks installed with the real installer, git run with explicit env and config so the machine configuration is not read: set user.name, user.email, commit.gpgsign false, core.hooksPath unset): Manifest commit with only coordination/manifests files staged succeeds; Manifest commit with a tools file also staged fails, exit non-zero, the message names the offending file and says how to fix; the Manifest for the version bump subject and a lower-case manifest subject follow the same rule; a deleted manifest and a rename inside coordination/manifests are fine; a rename from a tools file into coordination/manifests is refused (the old name counts); a commit with another subject and mixed files is unaffected; the real scenario: run git add with a pathspec list that includes an ignored folder so git add errors and stages the rest, then git add coordination/manifests, then commit with a Manifest subject: refused, then git restore --staged the stray files and the commit succeeds; amend keeps the rule; installing the hooks twice leaves one commit-msg hook, a pre-existing user commit-msg hook is still run (a file marker proves it ran) and its failure still fails the commit; uninstall removes it. Keep every existing test passing (tests/git-hooks.test.mjs and the guard tests: update their expectations of the hook kind list if they assert it). No token-shaped literals. ignoreTests reason: only git hook files and their tests change.",
+      "context": [
+        "tools/git-hooks.mjs",
+        "tools/githook-check.mjs",
+        "tests/git-hooks.test.mjs",
+        "docs/handbuild-guard.md",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/git-hooks.mjs",
+        "tools/githook-check.mjs",
+        "docs/handbuild-guard.md",
+        "tests/commit-msg-manifest.test.mjs",
+        "tests/git-hooks.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/guard-word-false-positive.test.mjs",
+        "tests/phase10b-init.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/guard-readonly-forms.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/handbuild-guard.test.mjs"
+      ]
+    }
+  ]
+}
