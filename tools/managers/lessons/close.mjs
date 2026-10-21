@@ -10,6 +10,8 @@ import {
   readLoggedLessonFile,
   proposeLessonDraft,
   lessonDraftArtifact,
+  draftLoggedLesson,
+  lessonOpenForKeeper,
 } from './draft.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
@@ -31,6 +33,14 @@ const isRepoRel = (rel) => {
 
 function posixNorm(rel) {
   return path.posix.normalize(String(rel).replace(/\\/g, '/'));
+}
+
+function lessonRel(lesson) {
+  return `lessons/${lesson.project}/${lesson.id}.json`;
+}
+
+async function reloadLoggedLesson(root, lesson) {
+  return readLoggedLessonFile(root, lessonRel(lesson));
 }
 
 /**
@@ -213,7 +223,7 @@ export async function findLandedArtifact(root, lesson, proposal) {
 }
 
 /**
- * Mark a built lesson shipped once its test or rule exists in the repo.
+ * Turn a logged lesson into a test or rule when needed, then mark it shipped once that guard lands.
  *
  * @param {string} root
  * @param {string|object} lessonOrRel
@@ -232,7 +242,7 @@ export async function closeLoggedLesson(root, lessonOrRel, options = {}) {
   };
 
   try {
-    const lesson =
+    let lesson =
       typeof lessonOrRel === 'string'
         ? await readLoggedLessonFile(root, lessonOrRel)
         : normalizeLesson(lessonOrRel);
@@ -250,11 +260,57 @@ export async function closeLoggedLesson(root, lessonOrRel, options = {}) {
         landed: null,
       };
     }
+
+    let drafted = null;
+    let proposal = proposeLessonDraft(lesson);
+
     if (status !== LESSON_SHIP_CLOSE_STATUS) {
+      if (!lessonOpenForKeeper(lesson, false)) {
+        return {
+          lessonId: lesson.id,
+          skipped: true,
+          reason: 'guard-closed',
+          closed: false,
+          landed: null,
+        };
+      }
+      if (!write) {
+        const landedPreview = await findLandedArtifact(root, lesson, proposal);
+        record('preview', { lessonId: lesson.id, wouldDraft: true, landed: landedPreview });
+        return {
+          lessonId: lesson.id,
+          skipped: false,
+          proposal,
+          drafted: null,
+          wouldDraft: true,
+          landed: landedPreview,
+          closed: false,
+        };
+      }
+      drafted = await draftLoggedLesson(root, lesson, { write: true, close: true });
+      record('draft', { lessonId: lesson.id, drafted });
+      if (drafted.skipped && drafted.reason !== 'draft-exists') {
+        return {
+          lessonId: lesson.id,
+          skipped: true,
+          reason: drafted.reason ?? 'draft-skipped',
+          proposal: drafted.proposal ?? proposal,
+          drafted,
+          closed: false,
+          landed: null,
+        };
+      }
+      lesson = await reloadLoggedLesson(root, lesson);
+      proposal = proposeLessonDraft(lesson);
+    }
+
+    if ((lesson.guard?.status ?? 'proposed') !== LESSON_SHIP_CLOSE_STATUS) {
       return {
         lessonId: lesson.id,
         skipped: true,
         reason: 'guard-not-built',
+        proposal,
+        drafted,
         closed: false,
         landed: null,
       };
@@ -264,21 +320,24 @@ export async function closeLoggedLesson(root, lessonOrRel, options = {}) {
         lessonId: lesson.id,
         skipped: true,
         reason: 'missing-ref',
+        proposal,
+        drafted,
         closed: false,
         landed: null,
       };
     }
 
-    const proposal = proposeLessonDraft(lesson);
     const landed = await findLandedArtifact(root, lesson, proposal);
     record('scan', { lessonId: lesson.id, ref: lesson.guard.ref, landed });
     if (!landed) {
+      const builtClosed = Boolean(drafted?.closed);
       return {
         lessonId: lesson.id,
-        skipped: true,
-        reason: 'not-landed',
+        skipped: !builtClosed,
+        reason: builtClosed ? undefined : 'not-landed',
         proposal,
-        closed: false,
+        drafted,
+        closed: builtClosed,
         landed: null,
       };
     }
@@ -288,6 +347,7 @@ export async function closeLoggedLesson(root, lessonOrRel, options = {}) {
         lessonId: lesson.id,
         skipped: false,
         proposal,
+        drafted,
         landed,
         closed: false,
       };
@@ -307,6 +367,7 @@ export async function closeLoggedLesson(root, lessonOrRel, options = {}) {
       lessonId: lesson.id,
       skipped: false,
       proposal,
+      drafted,
       landed,
       closed: true,
     };
