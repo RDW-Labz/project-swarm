@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Automatic re-split or lane reroute for blocked or repeatedly failed tickets (R-013, T-0051).
-import { appendLog, writeLedger } from './tickets.mjs';
+import { readFile } from 'node:fs/promises';
+import { appendLog, logPath, writeLedger } from './tickets.mjs';
 
 /**
  * @typedef {object} TicketLike
@@ -9,6 +10,8 @@ import { appendLog, writeLedger } from './tickets.mjs';
  * @property {string[]} [dependsOn]
  * @property {string} [lane]
  * @property {string} [blockReason]
+ * @property {string} [blockNote]
+ * @property {string} [ownerNote]
  * @property {number} [attempts]
  * @property {string} [replanNote]
  */
@@ -23,9 +26,12 @@ import { appendLog, writeLedger } from './tickets.mjs';
 const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 /** @param {TicketLike} ticket */
-function isDependencyBlocked(ticket) {
+function isDependencyBlocked(ticket, tickets) {
   const r = ticket?.blockReason;
-  return r === 'deps' || r === 'dependency';
+  if (r === 'deps' || r === 'dependency') return true;
+  if (!Array.isArray(tickets) || !Array.isArray(ticket?.dependsOn) || !ticket.dependsOn.length) return false;
+  const byId = new Map(tickets.filter(Boolean).map((candidate) => [candidate.id, candidate]));
+  return ticket.dependsOn.some((dependency) => byId.get(dependency)?.status !== 'done');
 }
 
 /** @param {TicketLike[]} tickets */
@@ -76,12 +82,15 @@ export function gatesCountForTicket(tickets, ticketId) {
  * @param {TicketLike} ticket
  * @param {number} [gatesCount]
  */
-export function ticketQualifiesForReplan(ticket, gatesCount = 0) {
+export function ticketQualifiesForReplan(ticket, gatesCount = 0, options = {}) {
   if (!ticket || typeof ticket.id !== 'string') return false;
+  if (options.onlyIds && !options.onlyIds.has(ticket.id)) return false;
+  if (options.priorReplannedIds?.has(ticket.id)) return false;
   // Human-owned work, review gates, and sensitive work needing review stay with
   // the owner/reviewer. Automatic replanning is only for worker-owned open work.
   if (ticket.type === 'human' || ticket.sensitive === true || ['review', 'done', 'cancelled', 'proposed', 'running', 'todo'].includes(ticket.status)) return false;
-  if (isDependencyBlocked(ticket)) return false;
+  if (ticket.blockNote || ticket.ownerNote || ticket.blockReason === 'manual') return false;
+  if (isDependencyBlocked(ticket, options.tickets)) return false;
   const attempts = Number(ticket.attempts) || 0;
   if (attempts >= 2) return true;
   return ticket.status === 'blocked';
@@ -92,10 +101,17 @@ export function ticketQualifiesForReplan(ticket, gatesCount = 0) {
  * @param {number} [gatesCount]
  * @returns {{ action: 'split-ticket'|'reroute-lane', reason: string }|null}
  */
-export function replanPlanForTicket(ticket, gatesCount = 0) {
-  if (!ticketQualifiesForReplan(ticket, gatesCount)) return null;
+export function replanPlanForTicket(ticket, gatesCount = 0, options = {}) {
+  if (!ticketQualifiesForReplan(ticket, gatesCount, options)) return null;
   const attempts = Number(ticket.attempts) || 0;
   if (attempts >= 2) {
+    if (options.requireChange && (!Array.isArray(ticket.files) || ticket.files.length < 2)) {
+      if (typeof ticket.lane !== 'string' || !ticket.lane.trim()) return null;
+      return {
+        action: 'reroute-lane',
+        reason: `blocked after ${attempts} failed attempts; reroute to a different lane`,
+      };
+    }
     return {
       action: 'split-ticket',
       reason: `blocked after ${attempts} failed attempts; re-split without a new scope manifest`,
@@ -129,16 +145,30 @@ export function replanPlanForTicket(ticket, gatesCount = 0) {
  * @param {number} [gatesCount]
  * @returns {{ ticket: TicketLike, log: ReplanLogEntry }|null}
  */
-export function applyReplanToTicket(ticket, gatesCount = 0) {
-  const plan = replanPlanForTicket(ticket, gatesCount);
+export function applyReplanToTicket(ticket, gatesCount = 0, options = {}) {
+  const plan = replanPlanForTicket(ticket, gatesCount, options);
   if (!plan) return null;
   /** @type {TicketLike} */
   const next = { ...ticket };
   next.status = 'ready';
   delete next.blockReason;
   if (plan.action === 'reroute-lane') {
-    delete next.lane;
+    if (options.requireChange) {
+      const currentAgent = String(ticket.lane).split(':', 1)[0];
+      const alternate = ['claude', 'codex', 'cursor'].find((agent) => agent !== currentAgent);
+      if (!alternate) return null;
+      next.lane = alternate;
+    } else {
+      delete next.lane;
+    }
   } else {
+    if (options.requireChange) {
+      const files = Array.isArray(next.files) ? next.files : [];
+      const splitAt = Math.ceil(files.length / 2);
+      if (splitAt >= files.length) return null;
+      next.files = files.slice(0, splitAt);
+      next.replanDeferredFiles = files.slice(splitAt);
+    }
     next.replanNote = plan.reason.slice(0, 600);
   }
   return {
@@ -153,7 +183,7 @@ export function applyReplanToTicket(ticket, gatesCount = 0) {
  * @param {TicketLike[]} tickets
  * @returns {{ tickets: TicketLike[], replans: ReplanLogEntry[] }}
  */
-export function replanTickets(tickets) {
+export function replanTickets(tickets, options = {}) {
   const list = Array.isArray(tickets) ? tickets.map((t) => ({ ...t })) : [];
   const candidates = list
     .map((ticket, index) => ({
@@ -161,14 +191,14 @@ export function replanTickets(tickets) {
       ticket,
       gatesCount: gatesCountForTicket(list, ticket.id),
     }))
-    .filter(({ ticket, gatesCount }) => ticketQualifiesForReplan(ticket, gatesCount));
+    .filter(({ ticket, gatesCount }) => ticketQualifiesForReplan(ticket, gatesCount, { ...options, tickets: list }));
 
   candidates.sort((a, b) => b.gatesCount - a.gatesCount || byId(a.ticket, b.ticket));
 
   /** @type {ReplanLogEntry[]} */
   const replans = [];
   for (const { index, ticket, gatesCount } of candidates) {
-    const applied = applyReplanToTicket(ticket, gatesCount);
+    const applied = applyReplanToTicket(ticket, gatesCount, options);
     if (!applied) continue;
     list[index] = applied.ticket;
     replans.push(applied.log);
@@ -180,9 +210,9 @@ export function replanTickets(tickets) {
  * @param {object} ledger
  * @returns {{ ledger: object, replans: ReplanLogEntry[] }}
  */
-export function replanLedger(ledger) {
+export function replanLedger(ledger, options = {}) {
   const copy = structuredClone(ledger ?? { tickets: [] });
-  const { tickets, replans } = replanTickets(copy.tickets ?? []);
+  const { tickets, replans } = replanTickets(copy.tickets ?? [], options);
   copy.tickets = tickets;
   return { ledger: copy, replans };
 }
@@ -194,8 +224,24 @@ export function replanLedger(ledger) {
  * @param {object} ledger
  * @param {{ now?: number, by?: string }} [options]
  */
-export async function persistReplans(root, ledger, { now = Date.now(), by = 'sync' } = {}) {
-  const { ledger: next, replans } = replanLedger(ledger);
+export async function persistReplans(root, ledger, options = {}) {
+  const { now = Date.now(), by = 'sync', ...replanOptions } = options;
+  let priorReplannedIds = replanOptions.priorReplannedIds;
+  if (!priorReplannedIds) {
+    priorReplannedIds = new Set();
+    try {
+      const log = await readFile(logPath(root), 'utf8');
+      for (const line of log.split('\n')) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry?.event === 'replan' && typeof entry.id === 'string') priorReplannedIds.add(entry.id);
+        } catch { /* ignore an incomplete journal line */ }
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+  const { ledger: next, replans } = replanLedger(ledger, { ...replanOptions, priorReplannedIds });
   if (!replans.length) return { ledger: next, replans, changed: false };
   next.updatedAt = new Date(now).toISOString();
   await writeLedger(root, next);

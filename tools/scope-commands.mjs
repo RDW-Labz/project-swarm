@@ -122,7 +122,7 @@ function waveRefusal(sim, tickets) {
   return `${waveSummary(sim)}\nwave simulation failed; longest chain: ${chain.join(' -> ') || 'none'}; advice: re-split (merge chains / split the long chain), or rerun with --accept-waves`;
 }
 
-async function persistSyncReplans(root, deps = {}) {
+async function persistSyncReplans(root, deps = {}, blockedAtSyncStart = new Set()) {
   const current = await readLedger(root);
   if (!current) return { replans: [], lines: [] };
   const injectedNow = typeof deps.now === 'number'
@@ -130,7 +130,9 @@ async function persistSyncReplans(root, deps = {}) {
     : typeof deps.clock === 'function'
       ? deps.clock()
       : undefined;
-  const result = await persistReplans(root, current, injectedNow === undefined ? { by: 'sync' } : { now: injectedNow, by: 'sync' });
+  const options = { by: 'sync', onlyIds: blockedAtSyncStart, requireChange: true };
+  if (injectedNow !== undefined) options.now = injectedNow;
+  const result = await persistReplans(root, current, options);
   const lines = result.replans.map(entry => `${entry.ticketId} replanned: ${entry.reason}`);
   return { ...result, lines };
 }
@@ -1387,6 +1389,9 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
   if (rest.length !== 1) return bad('scope sync needs a run id');
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger', 1);
+  // Replanning is a response to a block that existed before this sync began.
+  // Tickets blocked or escalated while processing this pass wait for the next one.
+  const blockedAtSyncStart = new Set(ledger.tickets.filter((ticket) => ticket.status === 'blocked').map((ticket) => ticket.id));
   const state = await readRunState(root, rest[0]);
   if (flags.integrated === true) {
     if (!state.integratedAt) return out(`run ${rest[0]} is not integrated yet; run swarm integrate ${rest[0]} first`, 1);
@@ -1696,7 +1701,7 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
     if (acceptedNow.length) await appendLog(root, { event: 'accept-unreviewed', by: 'owner', run: rest[0], tickets: acceptedNow, reason: unreviewedReason, note: flags.note ?? null });
     const notAccepted = [...unreviewedOk].filter(id => !acceptedNow.includes(id));
     const notUnmet = [...unmetOk].filter(id => !unmetNow.includes(id));
-    const replanned = await persistSyncReplans(root, deps);
+    const replanned = await persistSyncReplans(root, deps, blockedAtSyncStart);
     let reviewLine = null;
     if (needReview.length) {
       const manifest = await securityReviewManifest(root, rest[0], needReview, ledger.tickets);
@@ -1749,7 +1754,7 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
     for (const m of moves) if (m.to === 'review') { const t = fresh.tickets.find(x => x.id === m.id); t.runId = rest[0]; delete t.infraRetries; }
     await writeLedger(root, fresh);
   }
-  const replanned = await persistSyncReplans(root, deps);
+  const replanned = await persistSyncReplans(root, deps, blockedAtSyncStart);
   await refreshPlan(root);
   const review = moves.filter(m => m.to === 'review').length;
   return out([`${review} ticket(s) in review${escalated.length ? `, ${escalated.length} sent back to ready one level higher (${escalated.join(', ')})` : ''}${stuck.length ? `, ${stuck.length} blocked after every level failed (${stuck.join(', ')})` : ''}${infra.length ? `, ${infra.length} back to ready at the same level (the failure was not theirs: ${infra.join(', ')})` : ''}. After swarm integrate ${rest[0]}: swarm scope sync ${rest[0]} --integrated`, ...replanned.lines].join('\n'));
