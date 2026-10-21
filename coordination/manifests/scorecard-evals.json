@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "scorecard-evals",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "TASK: the board's Benchmark scorecard panel (tools/benchmark-scorecard.mjs + its renderer in tools/watch-assets/project.js) currently reads a file format I proposed (docs/state/benchmarks/*.json). The MacBook seat has since shipped the real harness on main: tools/bench-scorecard.mjs (buildScorecard, scorecardForBoard, THRESHOLDS, SCORECARD_METRIC_NAMES, isoWeekString) and tools/bench-commands.mjs, where `swarm eval scorecard` writes evals/scorecard/latest.json (and keeps evals/scorecard/previous.json), `swarm eval baseline` writes evals/baseline/<project>.json. A scorecard card is { week: 'YYYY-Www', generatedAt: ISO, projects: [ { project, metrics: [ { name, value, status, grade: green|amber|red|unknown, trend, previous } ] } ], overall: {green, amber, red, unknown}, headline }. Rework the panel to read THAT output. Do NOT modify tools/bench-scorecard.mjs, tools/bench-commands.mjs, tools/bench-baseline.mjs or tools/swarm.mjs; package.json/CHANGELOG/README untouched.\n\n1) tools/benchmark-scorecard.mjs: replace its contents. Export `async readScorecards(root)`: read every *.json directly in <root>/evals/scorecard/ (cap 200 files, 512 KB each), keep objects with a string week matching /^\\d{4}-W\\d{2}$/ and an array projects; skip others into `skipped: [{file, reason}]`; never throws. Export `scorecardHistory(cards, { weeks = 12 })` (pure): de-duplicate by week keeping the card with the newest generatedAt; sort by week; `latest` = newest card or null; for each project in latest, for each metric (in SCORECARD_METRIC_NAMES order, imported from ./bench-scorecard.mjs) return { name, label: name with underscores -> spaces, value, grade, trend, previous, status, weekly: [ { week, value, grade } ] over the last `weeks` weeks of cards that have that project+metric with a non-null value }; and `verdict` = trend mapped to better|worse|flat|unknown (read metricTrend's output values from bench-scorecard.mjs to map correctly). Return { week: latest?.week ?? null, generatedAt, headline, overall, projects: [ { project, metrics } ], weeks: [...], files, skipped }. Keep exporting isoWeek? not needed \u2014 remove the old readBenchmarks/scorecard exports entirely and update every import (tools/board-data.mjs projectDetail currently calls readBenchmarks + scorecard: change it to scorecardHistory(await readScorecards(root)), field name stays `benchmarks`).\n2) docs/benchmarks-format.md: rewrite it short: the board's Benchmark scorecard reads the files `swarm eval scorecard` writes in evals/scorecard/ (latest.json, previous.json, and any other weekly card files kept there, e.g. evals/scorecard/2026-W43.json); to get a weekly trend, keep one card per week in that folder; shape summary as above; point to tools/bench-scorecard.mjs as the source of truth. Remove the old docs/state/benchmarks format description.\n3) tools/watch-assets/project.js renderBench: no cards -> 'No scorecard yet. Run swarm eval baseline then swarm eval scorecard (writes evals/scorecard/latest.json).'; else a header line 'Week ' + week + ' \u00b7 ' + headline; then per project a sub heading and one row per metric: grade dot (classes grade-green|amber|red|unknown already exist), label, value (format ms values as hours with 1 decimal when the name ends with _ms, rates in 0..1 as %, usd with $), 'was ' + previous when not null, verdict pill, and the existing inline SVG sparkline built from weekly values (createElementNS/setAttribute only, never innerHTML); skipped count line when > 0.\n4) Tests: rewrite tests/benchmark-scorecard.test.mjs for the new API: readScorecards skips bad files with reasons; duplicate week keeps newest generatedAt; history weekly points across 3 weeks incl. a year boundary week string ordering ('2026-W52' < '2027-W01'); metric order follows SCORECARD_METRIC_NAMES; verdict mapping; empty folder -> week null, projects []. Update the projectDetail assertions in tests/board-page.test.mjs that used docs/state/benchmarks fixtures to use evals/scorecard/latest.json + previous.json fixtures instead. Run `node --import ./tests/_isolate-config.mjs --test tests/benchmark-scorecard.test.mjs tests/board-page.test.mjs tests/bench-scorecard.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests use these files for unrelated behavior (kickoff.test.mjs scans docs links: keep docs/benchmarks-format.md links valid); the coordinator runs the full suite after integration.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/bench-scorecard.mjs",
+        "tools/bench-commands.mjs",
+        "tests/bench-scorecard.test.mjs"
+      ],
+      "outputs": [
+        "tools/benchmark-scorecard.mjs",
+        "tests/benchmark-scorecard.test.mjs",
+        "docs/benchmarks-format.md",
+        "tools/board-data.mjs",
+        "tools/watch-assets/project.js",
+        "tests/board-page.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/autopilot-lock.test.mjs",
+        "tests/bench-replay.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/completion.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10b-cli.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}
