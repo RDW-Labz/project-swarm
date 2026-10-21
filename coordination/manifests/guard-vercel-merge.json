@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "guard-vercel-merge",
+      "agent": "auto",
+      "prompt": "Two guard false positives reported by parts-app, in tools/handbuild.mjs (the policy for git, gh, vercel and swarm commands built on the ops array from tools/shell-writes.mjs: each ops entry has tool, sub, args, flags, globalOpts, hasConfig). Read tools/handbuild.mjs first. (1) Read-only vercel commands must be free: besides ls, list, inspect, logs, whoami (already free), allow when the subcommand is one of env, domains, projects, project, teams, team, dns, certs, certificates, alias, secrets, integration, redirects, rolling-release, and its first argument is ls, list or inspect (read-only listings: env pull and env add and alias set stay NOT free, domains add and rm stay not free); allow vercel help, --help, -h, --version and -v (note shell-writes classifies a vercel command with only options as sub deploy, so look at flags when the only options are these informational ones); every deploy form (bare vercel, vercel deploy, --prod, promote, rollback, rm, remove, link with changes, env add and so on) stays not free. (2) gh pr merge and swarm merge are MERGE operations (elevated op merge), not blocked git operations: give them their own reason text instead of the generic hand-building advice: say that a merge needs the owner's approval, name the three ways (the owner types merge and the PR number in chat; the machine policy file enables the merge-swarm-pr standing approval; or a hand-build approval that names merge), and say that swarm merge N is the sanctioned command because it refuses unless CI is green. Standing approval: read the machine policy file as plain JSON without importing other modules (path: the environment variable SWARM_POLICY_FILE when set, else policy.json in the same folder as the machine config file, which is SWARM_CONFIG's folder when SWARM_CONFIG is set and else the .config/project-swarm folder in the home directory); when it parses, has a rules array and contains a rule with id merge-swarm-pr that is not disabled (enabled is true or missing), then swarm merge N and gh pr merge N (exactly one numeric PR argument, no --admin option, no globalOpts, no --repo or -R, no hasConfig) are allowed, and the allow decision carries standing: merge-swarm-pr so callers can log it; with no file, a corrupt file, or the rule disabled, they are blocked exactly as today (with the new reason text). Elevated force-push, deploy and branch -D behavior is unchanged. Tests in a new file tests/handbuild-vercel-merge.test.mjs (node:test, strict assert, temp project with git init and a temp policy file; set SWARM_POLICY_FILE in the test): free: vercel ls, vercel list, vercel logs URL, vercel inspect ID, vercel env ls, vercel domains ls, vercel projects ls, vercel teams ls, vercel whoami, vercel --version, vercel help; not free: vercel, vercel --prod, vercel deploy, vercel promote URL, vercel rm app, vercel env pull, vercel env add NAME, vercel domains add x; merge: without a policy file gh pr merge 12 and swarm merge 12 are blocked with the merge reason text (and not the hand-building text); with a policy file enabling the rule both are allowed with standing set; with the rule disabled, a corrupt file, --admin, -R other/repo, two PR numbers, or no number they are blocked; git merge of a local branch keeps its existing treatment. Update existing tests in the guard test files only where the changed reason text for merge breaks an expectation. Write only tools/handbuild.mjs, tests/handbuild-vercel-merge.test.mjs and, if needed, the existing guard test files that pin the old merge text.",
+      "context": [
+        "tools/handbuild.mjs",
+        "tools/shell-writes.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-hardening.test.mjs",
+        "tests/handbuild-hardening2.test.mjs"
+      ],
+      "outputs": [
+        "tools/handbuild.mjs",
+        "tests/handbuild-vercel-merge.test.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-hardening.test.mjs",
+        "tests/handbuild-hardening2.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/git-hooks.test.mjs",
+        "tests/handbuild-accidents.test.mjs",
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/self-approval-hardening.test.mjs",
+        "tests/swarm-produced-hash.test.mjs"
+      ]
+    }
+  ]
+}
