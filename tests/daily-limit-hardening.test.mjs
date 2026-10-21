@@ -32,6 +32,7 @@ import {
 } from '../tools/budget-set-commands.mjs';
 
 const ms = iso => Date.parse(iso);
+const ownerTerminal = { stdinIsTTY: true, stdoutIsTTY: true };
 
 async function tempDir(prefix) {
   return await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP || os.tmpdir(), prefix));
@@ -94,6 +95,7 @@ describe('finding 2 budget set journal, log, and agent approval', () => {
       at: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 600000).toISOString(),
       by: 'owner',
+      request: { machine: false, patch: { usd: 12 } },
     }), { mode: 0o600 });
     const code = await budgetCommand(['set', '--daily', '12'], {
       out,
@@ -253,6 +255,7 @@ describe('finding 7 machine config mode preserved', () => {
       fs,
       homedir: () => root,
       appendEvent: async () => {},
+      ...ownerTerminal,
     });
     const stat = await fs.stat(configFile);
     assert.equal(stat.mode & 0o777, 0o600);

@@ -43,9 +43,6 @@ export function budgetSetActor(env = process.env, { stdinIsTTY, stdoutIsTTY, ove
   if (envNamesSuggestAgent(agentEnv)) return 'agent-session';
   const termProgram = String(env?.TERM_PROGRAM ?? '').toLowerCase();
   if (termProgram && AGENT_TERM_PROGRAMS.has(termProgram)) return 'agent-session';
-  if (env?.NODE_TEST_CONTEXT !== undefined && String(env.NODE_TEST_CONTEXT) !== '') {
-    return 'owner-terminal';
-  }
   const stdinTTY = stdinIsTTY ?? tty.isatty(0);
   const stdoutTTY = stdoutIsTTY ?? tty.isatty(1);
   if (!stdinTTY || !stdoutTTY) return 'agent-session';
@@ -349,8 +346,9 @@ async function applyBudgetSet({
   now,
   appendEvent,
   out,
+  actorOpts,
 }) {
-  const who = budgetSetActor(actorEnv);
+  const who = budgetSetActor(actorEnv, actorOpts);
   const nowMs = typeof now === 'function' ? now() : now;
   const at = new Date(nowMs).toISOString();
   const day = centralDayKey(() => nowMs);
@@ -418,8 +416,9 @@ async function refuseBudgetSet({
   now,
   out,
   reason,
+  actorOpts,
 }) {
-  const who = budgetSetActor(actorEnv);
+  const who = budgetSetActor(actorEnv, actorOpts);
   const nowMs = typeof now === 'function' ? now() : now;
   const at = new Date(nowMs).toISOString();
   const day = centralDayKey(() => nowMs);
@@ -512,6 +511,7 @@ export async function budgetCommand(args, { out, env, root, fs, homedir, billedT
             now,
             out,
             reason: 'missing-or-mismatched-approval',
+            actorOpts,
           });
         }
       }
@@ -529,6 +529,7 @@ export async function budgetCommand(args, { out, env, root, fs, homedir, billedT
       now,
       appendEvent,
       out,
+      actorOpts,
     });
   }
 

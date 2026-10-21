@@ -26,6 +26,7 @@ import {
 } from '../tools/budget-set-commands.mjs';
 
 const ms = iso => Date.parse(iso);
+const ownerTerminal = { stdinIsTTY: true, stdoutIsTTY: true };
 
 async function tempDir(prefix) {
   return await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP || os.tmpdir(), prefix));
@@ -144,6 +145,7 @@ describe('round4 (3) machine ceiling below project daily and budget set reports'
       fs,
       homedir: () => home,
       appendEvent: async () => {},
+      ...ownerTerminal,
     });
     assert.equal(code, 0);
     assert.match(out.chunks.join(''), /machine\.ceilingUsd is below the project daily limit/);
@@ -200,6 +202,7 @@ describe('round4 (4) owner terminal detection and bound approval', () => {
       fs,
       homedir: () => root,
       now,
+      ...ownerTerminal,
     });
     const approval = JSON.parse(await fs.readFile(path.join(root, BUDGET_RAISE_APPROVAL_REL), 'utf8'));
     assert.ok(approval.request);

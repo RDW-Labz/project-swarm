@@ -31,6 +31,7 @@ import {
 } from '../tools/budget-set-commands.mjs';
 
 const ms = iso => Date.parse(iso);
+const ownerTerminal = { stdinIsTTY: true, stdoutIsTTY: true };
 
 async function tempDir(prefix) {
   return await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP || os.tmpdir(), prefix));
@@ -96,6 +97,7 @@ describe('round3 (2) cumulative allowance and bound approval', () => {
       fs,
       homedir: () => root,
       now,
+      ...ownerTerminal,
     });
     const approval = JSON.parse(await fs.readFile(path.join(root, BUDGET_RAISE_APPROVAL_REL), 'utf8'));
     assert.deepEqual(approval.request.patch, { usd: 7 });
@@ -292,6 +294,7 @@ describe('round3 (7) changelog before settings and machine log', () => {
       fs: patchedFs,
       homedir: () => home,
       appendEvent: async () => {},
+      ...ownerTerminal,
     });
     assert.ok(logSeen);
 
@@ -302,6 +305,7 @@ describe('round3 (7) changelog before settings and machine log', () => {
       fs,
       homedir: () => home,
       appendEvent: async () => {},
+      ...ownerTerminal,
     });
     const machineLog = path.join(path.dirname(configFile), BUDGET_SET_MACHINE_LOG_BASENAME);
     const log = await fs.readFile(machineLog, 'utf8');

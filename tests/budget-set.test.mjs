@@ -6,6 +6,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { parseBudgetSetArgs, budgetCommand } from '../tools/budget-set-commands.mjs';
 
+const ownerTerminal = { stdinIsTTY: true, stdoutIsTTY: true };
+
 describe('parseBudgetSetArgs', () => {
   it('parses set and show', () => {
     assert.deepEqual(parseBudgetSetArgs(['budget', 'set', '--daily', '10', '--mode', 'notify', '--ceiling', '30']), {
@@ -45,6 +47,7 @@ describe('budgetCommand', () => {
       root,
       fs,
       homedir: () => root,
+      ...ownerTerminal,
     });
     assert.equal(code, 0);
     const saved = JSON.parse(await fs.readFile(configFile, 'utf8'));
@@ -80,6 +83,7 @@ describe('budgetCommand', () => {
       root,
       fs,
       homedir: () => root,
+      ...ownerTerminal,
     });
     assert.equal(code, 0);
     const projectFile = path.join(root, '.swarm', 'project', 'daily-limit.json');
@@ -100,7 +104,14 @@ describe('budgetCommand', () => {
     const configFile = path.join(root, 'machine.json');
     await fs.writeFile(configFile, JSON.stringify({ dailyLimit: { usd: 20 } }) + '\n');
     const env = { SWARM_CONFIG: configFile, HOME: root };
-    await budgetCommand(['set', '--daily', '9'], { out: { write() {} }, env, root, fs, homedir: () => root });
+    await budgetCommand(['set', '--daily', '9'], {
+      out: { write() {} },
+      env,
+      root,
+      fs,
+      homedir: () => root,
+      ...ownerTerminal,
+    });
     const out = { chunks: [], write(s) { this.chunks.push(s); } };
     await budgetCommand(['show', '--json'], { out, env, root, fs, homedir: () => root });
     const shown = JSON.parse(out.chunks.join(''));

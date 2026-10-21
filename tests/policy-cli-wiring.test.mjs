@@ -107,16 +107,16 @@ test('budget set then show round-trips project over machine default', async t =>
   await fs.writeFile(configFile, `${JSON.stringify({ dailyLimit: { usd: 20, mode: 'stop' } })}\n`);
   const env = { SWARM_CONFIG: configFile };
 
-  const set = await run(root, home, ['budget', 'set', '--daily', '8', '--mode', 'notify'], env);
+  const set = await run(root, home, ['budget', 'set', '--daily', '8'], env);
   assert.equal(set.stderr, '');
   const projectFile = path.join(root, '.swarm', 'project', 'daily-limit.json');
   const saved = JSON.parse(await fs.readFile(projectFile, 'utf8'));
-  assert.deepEqual(saved, { usd: 8, mode: 'notify' });
+  assert.deepEqual(saved, { usd: 8 });
 
   const show = await run(root, home, ['budget', 'show', '--json'], env);
   const payload = JSON.parse(show.stdout);
   assert.equal(payload.dailyLimitUsd, 8);
-  assert.equal(payload.dailyLimitMode, 'notify');
+  assert.equal(payload.dailyLimitMode, 'stop');
   assert.equal(payload.source, 'project');
   assert.equal(payload.machine.usd, 20);
 });
