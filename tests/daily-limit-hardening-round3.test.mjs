@@ -28,6 +28,7 @@ import {
   raisedTodayUsdFromLogLines,
   needsOwnerApproval,
   raiseDeltaUsd,
+  writeOwnerBudgetApproval,
 } from '../tools/budget-set-commands.mjs';
 
 const ms = iso => Date.parse(iso);
@@ -90,15 +91,7 @@ describe('round3 (2) cumulative allowance and bound approval', () => {
     const pending = JSON.parse(await fs.readFile(path.join(root, BUDGET_RAISE_PENDING_REL), 'utf8'));
     assert.deepEqual(pending.request.patch, { usd: 7 });
 
-    await budgetCommand(['approve-raise', '--yes'], {
-      out: { write() {} },
-      env: { HOME: root, XDG_CONFIG_HOME: path.join(root, 'xdg') },
-      root,
-      fs,
-      homedir: () => root,
-      now,
-      ...ownerTerminal,
-    });
+    await writeOwnerBudgetApproval(fs, root, { request: pending.request, now });
     const approval = JSON.parse(await fs.readFile(path.join(root, BUDGET_RAISE_APPROVAL_REL), 'utf8'));
     assert.deepEqual(approval.request.patch, { usd: 7 });
 

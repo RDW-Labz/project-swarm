@@ -28,6 +28,10 @@ import {
 const ms = iso => Date.parse(iso);
 const ownerTerminal = { stdinIsTTY: true, stdoutIsTTY: true };
 
+function ownerBudgetEnv(home) {
+  return { HOME: home, XDG_CONFIG_HOME: path.join(home, 'xdg'), TERM_PROGRAM: '' };
+}
+
 async function tempDir(prefix) {
   return await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP || os.tmpdir(), prefix));
 }
@@ -195,15 +199,18 @@ describe('round4 (4) owner terminal detection and bound approval', () => {
       `${JSON.stringify({ at: new Date(now()).toISOString(), request: { machine: false, patch: { usd: 20, ceilingUsd: 60 } } })}\n`,
       { mode: 0o600 },
     );
-    await budgetCommand(['approve-raise', '--yes'], {
-      out: { write() {} },
-      env: { HOME: root, XDG_CONFIG_HOME: path.join(root, 'xdg') },
-      root,
-      fs,
-      homedir: () => root,
-      now,
-      ...ownerTerminal,
-    });
+    assert.equal(
+      await budgetCommand(['approve-raise', '--yes'], {
+        out: { write() {} },
+        env: ownerBudgetEnv(root),
+        root,
+        fs,
+        homedir: () => root,
+        now,
+        ...ownerTerminal,
+      }),
+      0,
+    );
     const approval = JSON.parse(await fs.readFile(path.join(root, BUDGET_RAISE_APPROVAL_REL), 'utf8'));
     assert.ok(approval.request);
     assert.deepEqual(approval.request.patch, { usd: 20, ceilingUsd: 60 });
