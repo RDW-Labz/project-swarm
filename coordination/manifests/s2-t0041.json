@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0041",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "timeoutMs": 2700000,
+      "outputs": [
+        "tools/wiring.mjs",
+        "tests/wiring-build-owns.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tools/ticket-manifest.mjs"
+      ],
+      "prompt": "Ticket T-0041: keep test tickets after build modules in wiring order, now that build tickets own their tests (T-0040, already in tools/ticket-manifest.mjs on this branch). Acceptance: (1) orderTestsAfterBuild (tools/wiring.mjs) leaves build tickets that list tests (a non-empty tests field) without waiting on separate test tickets: it must not add a dependency from such a build ticket onto a test ticket, and a separate test ticket covering the same files still waits on the build module as today. (2) A split ingest note is emitted when test ordering is flipped: orderTestsAfterBuild returns notes (it already returns orderNotes to the ingest in tools/scope-commands.mjs; keep that interface) including one per ticket whose ordering was changed, e.g. 'T-0007: owns its tests; no longer waits on T-0009'. Tests in tests/wiring-build-owns.test.mjs. Keep tests/splitter-lesson-55.test.mjs passing. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Run `node --import ./tests/_isolate-config.mjs --test tests/wiring-build-owns.test.mjs tests/splitter-lesson-55.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/batch-c-eval.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/split-module.test.mjs",
+        "tests/wiring.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import tools/wiring.mjs for unrelated wiring behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}
