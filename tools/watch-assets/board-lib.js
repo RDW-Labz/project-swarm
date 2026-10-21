@@ -35,8 +35,8 @@
 
   // The project chip belongs to the page that owns both project reads. It only says
   // connecting before the first good answer, then allows two polling intervals before
-  // calling the page stale. An optional slack keeps callers with a request timeout from
-  // declaring a read stale while that timeout is still in flight.
+  // saying connecting again. An optional slack keeps callers with a request timeout
+  // from declaring a read unavailable while that timeout is still in flight.
   function chipState(options) {
     var o = options || {};
     var nowMs = Number(o.now);
@@ -48,7 +48,7 @@
     if (!isFinite(slackMs) || slackMs < 0) { slackMs = 0; }
     if (o.everOk !== true) { return { state: 'connecting', ageS: null }; }
     var age = Math.max(0, nowMs - (isFinite(lastOkMs) ? lastOkMs : nowMs));
-    return { state: age > (pollMs * 2 + slackMs) ? 'stale' : 'live', ageS: Math.round(age / 1000) };
+    return { state: age > (pollMs * 2 + slackMs) ? 'connecting' : 'live', ageS: Math.round(age / 1000) };
   }
 
   // EventSource exposes named events but not SSE comment lines. Treat any message or

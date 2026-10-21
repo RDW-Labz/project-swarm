@@ -22,7 +22,6 @@ const SECURITY = {
 
 const IDLE_FINISHED_MS = 10000;
 const MAX_STREAMS = 8;
-const MAX_SLOW_WRITES = 2;
 
 function safeEqual(a, b) {
   const x = Buffer.from(String(a), 'utf8');
@@ -46,6 +45,79 @@ function sendJson(res, method, obj) {
 
 function sse(event, data) {
   return 'event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n';
+}
+
+export function createWatchStreamManager({ getRunSnapshot, now = Date.now, onDrop = () => {}, onClose = () => {} }) {
+  const streams = new Set();
+
+  function dropStream(stream) {
+    if (!streams.delete(stream)) return;
+    onDrop(stream);
+  }
+
+  function open(res, run) {
+    const stream = { res, prev: run, throttle: createThrottle(250, now) };
+    streams.add(stream);
+    res.on('close', () => {
+      dropStream(stream);
+      onClose();
+    });
+    try {
+      res.write(sse('snapshot', run));
+    } catch {
+      dropStream(stream);
+    }
+    return stream;
+  }
+
+  function writeHeartbeats() {
+    const line = ': ping\n\n' + sse('ping', {});
+    for (const stream of [...streams]) {
+      try {
+        stream.res.write(line);
+      } catch {
+        dropStream(stream);
+      }
+    }
+  }
+
+  async function pushUpdates() {
+    const next = (await getRunSnapshot()) ?? null;
+    for (const stream of [...streams]) {
+      if (JSON.stringify(stream.prev) === JSON.stringify(next)) continue;
+      if (!stream.throttle.shouldSend()) continue;
+      try {
+        const line = (stream.prev === null || next === null)
+          ? sse('snapshot', next)
+          : sse('delta', diffSnapshots(stream.prev, next));
+        stream.res.write(line);
+        stream.prev = next;
+      } catch {
+        dropStream(stream);
+      }
+    }
+  }
+
+  function close() {
+    for (const stream of [...streams]) {
+      try {
+        stream.res.end();
+      } catch {
+        // already closed
+      }
+    }
+    streams.clear();
+  }
+
+  return {
+    open,
+    writeHeartbeats,
+    pushUpdates,
+    close,
+    get size() {
+      return streams.size;
+    },
+  };
 }
 
 export function createWatchServer(opts) {
@@ -78,7 +150,6 @@ export function createWatchServer(opts) {
 
   const token = fixedToken ?? randomBytes(24).toString('hex');
   const assets = new Map();
-  const streams = new Set();
   let server = null;
   let port = 0;
   let url = null;
@@ -91,6 +162,15 @@ export function createWatchServer(opts) {
   const done = new Promise((resolve) => { resolveDone = resolve; });
   let lastActivity = now();
   let noStreamSince = now();
+  const streamManager = createWatchStreamManager({
+    getRunSnapshot,
+    now,
+    onDrop: () => { streamEverClosed = true; },
+    onClose: () => {
+      lastActivity = now();
+      if (streamManager.size === 0) noStreamSince = now();
+    },
+  });
 
   async function loadAssets() {
     assets.clear();
@@ -127,68 +207,19 @@ export function createWatchServer(opts) {
     send(res, method, 200, { 'Content-Type': 'image/png', 'Content-Length': body.length }, body);
   }
 
-  function dropStream(s) {
-    streams.delete(s);
-    streamEverClosed = true;
-  }
-
-  function writeHeartbeats() {
-    const line = ': ping\n\n' + sse('ping', {});
-    for (const s of [...streams]) {
-      try {
-        s.res.write(line);
-      } catch {
-        dropStream(s);
-      }
-    }
-  }
-
   async function openEvents(res, method) {
     if (method === 'HEAD') {
       return send(res, method, 200, { 'Content-Type': 'text/event-stream; charset=utf-8' }, '');
     }
     if (closed) return sendText(res, method, 503, 'shutting down');
     const run = (await getRunSnapshot()) ?? null;
-    if (streams.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
+    if (streamManager.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
     res.writeHead(200, { ...SECURITY, 'Content-Type': 'text/event-stream; charset=utf-8' });
     if (res.socket) {
       res.socket.setTimeout(0);
       res.socket.setKeepAlive(true);
     }
-    res.write(sse('snapshot', run));
-    const stream = { res, prev: run, throttle: createThrottle(250, now), slow: 0 };
-    streams.add(stream);
-    res.on('close', () => {
-      dropStream(stream);
-      lastActivity = now();
-      if (streams.size === 0) noStreamSince = now();
-    });
-  }
-
-  async function pushUpdates() {
-    const next = (await getRunSnapshot()) ?? null;
-    for (const s of [...streams]) {
-      if (JSON.stringify(s.prev) === JSON.stringify(next)) continue;
-      if (!s.throttle.shouldSend()) continue;
-      try {
-        const line = (s.prev === null || next === null)
-          ? sse('snapshot', next)
-          : sse('delta', diffSnapshots(s.prev, next));
-        const ok = s.res.write(line);
-        s.prev = next;
-        s.slow = ok ? 0 : s.slow + 1;
-        if (s.slow >= MAX_SLOW_WRITES) {
-          dropStream(s);
-          try {
-            s.res.end();
-          } catch {
-            // already closed
-          }
-        }
-      } catch {
-        dropStream(s);
-      }
-    }
+    streamManager.open(res, run);
   }
 
   async function handle(req, res) {
@@ -273,18 +304,11 @@ export function createWatchServer(opts) {
   async function close() {
     if (closed && !server) return;
     closed = true;
-    if (timer) clearInterval(timer);
+    if (timer) clearIntervalFn(timer);
     timer = null;
     if (heartbeatTimer) clearIntervalFn(heartbeatTimer);
     heartbeatTimer = null;
-    for (const s of [...streams]) {
-      try {
-        s.res.end();
-      } catch {
-        // already closed
-      }
-    }
-    streams.clear();
+    streamManager.close();
     if (server && server.listening) {
       await new Promise((resolve) => {
         server.close(() => resolve());
@@ -299,8 +323,8 @@ export function createWatchServer(opts) {
     ticking = true;
     try {
       const t = now();
-      if (streams.size > 0) {
-        await pushUpdates();
+      if (streamManager.size > 0) {
+        await streamManager.pushUpdates();
       } else {
         if (t - lastActivity >= idleMs) {
           await close();
@@ -340,11 +364,11 @@ export function createWatchServer(opts) {
     streamEverClosed = false;
     lastActivity = now();
     noStreamSince = now();
-    timer = setInterval(() => {
+    timer = setIntervalFn(() => {
       tick();
     }, 1000);
     if (timer && typeof timer.unref === 'function') timer.unref();
-    heartbeatTimer = setIntervalFn(writeHeartbeats, Math.max(1, heartbeatMs));
+    heartbeatTimer = setIntervalFn(streamManager.writeHeartbeats, Math.max(1, heartbeatMs));
     if (heartbeatTimer && typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
     return { url, port };
   }

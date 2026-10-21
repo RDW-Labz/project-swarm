@@ -290,7 +290,12 @@
     var dot = $('liveDot'), label = $('liveText');
     if (dot && label) {
       dot.className = 'dot' + (live.state === 'live' ? '' : ' off');
-      label.textContent = live.state === 'live' ? 'Live' : live.state === 'stale' ? 'Stale (' + live.ageS + ' s)' : 'connecting';
+      label.textContent = live.state === 'live' ? 'Live' : 'connecting';
+      if (live.state === 'connecting' && live.ageS !== null) {
+        label.setAttribute('title', 'last update ' + live.ageS + ' s ago');
+      } else {
+        label.removeAttribute('title');
+      }
     }
   }, 250);
 
