@@ -9,7 +9,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { appTypes, runInterview, scopeFromAnswers } from './scope-interview.mjs';
 import readline from 'node:readline';
 import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText, isSensitiveText } from './scope.mjs';
-import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, validateSetTransition, ticketActor, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS } from './tickets.mjs';
+import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, validateSetTransition, validateDeliveredTicket, verifyMergedPullRequests, applyDelivered, deliveredNote, ticketActor, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS } from './tickets.mjs';
 import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
 import { missingToolConfigs, toolConfigLines, projectFileList, existsIn, e2eSpecWarnings } from './tool-config.mjs';
 import { isSecretLooking } from './ignored-artifacts.mjs';
@@ -55,6 +55,7 @@ export const SCOPE_USAGE = [
   '       swarm tickets ID --clear-note | --retry-note TEXT | --reopen --reason "why"   (drop or replace the note a failed attempt left; put a done ticket back to ready, logged)',
   '       swarm tickets ID --lane auto|claude|codex|cursor|anthropic[:MODEL] | --risk low|medium|high [--yes]   (logged; an approved ledger is sealed again)',
   '       swarm tickets ID --set STATUS [--yes|--force] [--dry-run] [--note TEXT]     (hand status change: previews the move; --yes or --force applies; reviews for done are never skipped)',
+  '       swarm tickets ID [ID...] --delivered PR[,PR] [--repo OWNER/NAME] [--dry-run] [--note TEXT] --yes     (merged PRs outside the ledger: marks todo, ready, blocked or running tickets done)',
   '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high (filter; with an ID use the --risk line above)] [--json]',
   '       swarm tickets ID --files a,b [--take-from TICKET] [--deletes x,y] [--dependencies pkg,pkg@^1] [--context c,d] [--tests t] [--acceptance "one || two"] [--add-acceptance TEXT] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
   '       swarm tickets ID... --release [--note TEXT]     (clean release of held tickets: blocked, todo or review go back to ready with attempts, escalation and retry notes cleared)',
@@ -72,7 +73,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note']);
+const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const out = (text, exitCode = 0) => ({ stdout: text.endsWith('\n') ? text : `${text}\n`, exitCode });
@@ -1772,7 +1773,7 @@ async function setTicketRoute(root, rest, flags) {
   const risk = flags.risk;
   const parsedLane = flags.lane === undefined || flags.lane === 'auto' ? null : parseLane(flags.lane);
   const lane = flags.lane === undefined ? undefined : flags.lane === 'auto' ? 'auto' : laneText(parsedLane) ?? flags.lane;
-  const others = ['set', 'files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from', 'json', 'release'].filter(k => flags[k] !== undefined);
+  const others = ['set', 'files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from', 'json', 'release', 'delivered'].filter(k => flags[k] !== undefined);
   if (others.length) return bad(`tickets --lane/--risk cannot be combined with --${others[0]}; run them one at a time`);
   if (risk !== undefined && !['low', 'medium', 'high'].includes(risk)) return out('risk must be low, medium or high', 1);
   if (lane !== undefined && lane !== 'auto' && !parsedLane) return out(`lane must be auto or one of ${TICKET_LANE_AGENTS.join(', ')} (optionally agent:model, like claude:opus)`, 1);
@@ -1938,6 +1939,59 @@ async function doneReviewRefusals(root, ledger, ticket) {
   return reasons;
 }
 
+async function sensitiveDeliveredRefusals(root, ledger, ticket) {
+  if (ticket.sensitive !== true) return [];
+  const reasons = await doneReviewRefusals(root, ledger, ticket);
+  return reasons.filter(r => r.startsWith('Opus security review'));
+}
+
+async function deliverTicketsCommand(root, ids, flags) {
+  if (!ids.length) return bad('tickets --delivered needs one or more ticket ids');
+  const prNumbers = String(flags.delivered ?? '').split(',').map(x => x.trim()).filter(Boolean);
+  if (!prNumbers.length) return bad('tickets --delivered needs PR numbers (comma-separated)');
+  const repo = flags.repo === undefined ? undefined : String(flags.repo).trim() || undefined;
+  const ledger = await readLedger(root);
+  if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
+  const problems = [];
+  const previews = [];
+  for (const id of ids) {
+    const check = validateDeliveredTicket(ledger, id);
+    if (!check.ok) { problems.push(check.message); continue; }
+    const reviewBlock = await sensitiveDeliveredRefusals(root, ledger, check.ticket);
+    if (reviewBlock.length) {
+      problems.push(`cannot deliver ${id} without required reviews:`);
+      for (const r of reviewBlock) problems.push(`  ${r}`);
+      continue;
+    }
+    previews.push(setPreviewLine(check.preview));
+  }
+  if (problems.length) {
+    const msg = ['refused:', ...problems.map(p => (p.startsWith('  ') ? p : `  ${p}`))].join('\n');
+    if (flags['dry-run'] === true) return out(`${msg}\n(dry-run: nothing changed)`, 1);
+    return out(msg, 1);
+  }
+  let prInfos;
+  try {
+    prInfos = await verifyMergedPullRequests(prNumbers, { repo });
+  } catch (error) {
+    if (error.code === 'pr-not-merged' || error.code === 'pr-invalid') return out(error.message, 1);
+    throw error;
+  }
+  const note = flags.note ?? deliveredNote(prInfos);
+  const summary = [...previews, `note: ${note}`].join('\n');
+  if (flags['dry-run'] === true) return out(`${summary}\n(dry-run: nothing changed)`);
+  if (flags.yes !== true) return out(`${summary}\nRerun with --yes to apply.`);
+  try {
+    const result = await withLock(root, () => applyDelivered(root, { ids, prNumbers, repo, by: 'owner', note: flags.note === undefined ? undefined : note, now: Date.now() }));
+    await refreshPlan(root);
+    return out([...result.tickets.map(t => `${t.id} is now done`), `note: ${result.note}`].join('\n'));
+  } catch (error) {
+    if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1);
+    if (['ticket-delivered', 'ticket-missing', 'pr-not-merged', 'pr-invalid'].includes(error.code)) return out(error.message, 1);
+    throw error;
+  }
+}
+
 async function setTicketStatus(root, rest, flags) {
   if (rest.length !== 1) return bad('tickets --set needs one ticket id');
   const to = flags.set;
@@ -1983,6 +2037,7 @@ export async function runTicketsCommand(root, args) {
   if (flags.reopen === true) return reopenTicket(root, rest, flags);
   if (flags['mark-deps']) return markDepsCommand(root, ledger, rest, flags);
   if (flags.release === true) return releaseTickets(root, rest, flags);
+  if (flags.delivered !== undefined) return deliverTicketsCommand(root, rest, flags);
   if (flags.approve === true) return approveProposed(root, rest, flags);
   if (flags.lane !== undefined || (flags.risk !== undefined && rest.length === 1 && flags.set === undefined)) return setTicketRoute(root, rest, flags);
   if (['files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from'].some(k => flags[k] !== undefined)) return editTicketFiles(root, ledger, rest, flags);
