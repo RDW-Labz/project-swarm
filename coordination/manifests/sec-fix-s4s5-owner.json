@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0111-fix",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tools/board-owner-actions.mjs",
+        "tests/board-owner-actions-handlers.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "contracts/watch-s4-ops.json",
+        "tools/approval-policy.mjs",
+        "tools/board-action-guard.mjs",
+        "tests/board-action-guard-unit.test.mjs"
+      ],
+      "prompt": "Opus security review (s4s5-sec3) failed T-0111 tools/board-owner-actions.mjs with three MEDIUM findings; fix all three and add tests. (1) Kind confusion: the guard and the approval policy read the action kind from different fields (guard input uses item.actionKind ?? item.action ?? item.kind while tools/approval-policy.mjs needsHuman reads event.kind), so a refused kind can be approved. Fix: derive ONE kind from item.kind (the field needsHuman reads) and pass that same value to needsHuman and to guard as both kind and itemKind; if the item carries any of actionKind, action or itemKind with a value different from item.kind (case-insensitive, trimmed), refuse (409 per contract, outcome 'refused-kind-mismatch'). (2) Fail-open booleans: refusals trigger only on strict true, so '1' or a missing value passes. Fix: proceed only when req.tokenOk === true AND req.tokenInQuery === false AND req.agentSession === false AND req.local === false; any other value (missing, string, number) refuses with the same codes as today. (3) Unverified identity: the Tailscale-User-Login header is trusted as given. Fix: accept the identity only when req.tailnetVerified === true (the watch server sets it in T-0114 only for requests that reached it through Tailscale Serve on loopback) AND an injected verifyIdentity(req, identity) option (default: refuse) returns true; otherwise 401 not-signed-in. Document in a header comment exactly what T-0114 must set. Also sanitize identities before they go into audit entries or responses (cap 254 chars, allow only [A-Za-z0-9@._+-], else record 'invalid'), including on the refusal path that reads the raw header. Keep the existing behavior and the contract shapes otherwise. Update tests/board-owner-actions-handlers.test.mjs: kind mismatch refused; each of tokenOk/tokenInQuery/agentSession/local missing or non-boolean refuses; unverified or verifyIdentity-false identity refuses; a crafted identity is sanitized in audit. Do NOT touch tools/watch-server.mjs, tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test, injected deps; never write token-shaped literals. Run `node --import ./tests/_isolate-config.mjs --test tests/board-owner-actions-handlers.test.mjs tests/board-action-guard-unit.test.mjs` and `node tools/check-package.mjs`."
+    }
+  ]
+}
