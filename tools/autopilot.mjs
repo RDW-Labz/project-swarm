@@ -50,14 +50,25 @@ export async function executePolicyPass(root, deps, { now = Date.now } = {}) {
   const listOpen = cfg.openRequests ?? cfg.listOpenRequests;
   const items = typeof listOpen === 'function' ? await listOpen(root) : [];
   const filtered = filterPolicyPassItems(items);
+  if (Object.hasOwn(cfg, 'billedTodayUsd') && typeof cfg.billedTodayUsd !== 'function') {
+    return { decided: [], left: filtered, skipped: true };
+  }
   const billedTodayUsd = typeof cfg.billedTodayUsd === 'function' ? await cfg.billedTodayUsd(root) : 0;
   const settings = typeof cfg.dailyLimitSettings === 'function' ? await cfg.dailyLimitSettings(root) : {};
   const factsOf = item => policyPassFacts({ billedTodayUsd, settings, factsOf: cfg.factsOf, item });
   if (typeof cfg.apply !== 'function') return null;
+  if (Object.hasOwn(cfg, 'events') && typeof cfg.events !== 'function') {
+    return { decided: [], left: filtered, skipped: true };
+  }
   const readHandled = typeof cfg.readHandled === 'function' ? cfg.readHandled : () => [];
   const appendDeps = typeof cfg.appendAutoDecisionDeps === 'object' ? cfg.appendAutoDecisionDeps : {};
   const journal = entry => appendAutoDecision({ root, entry, deps: { now, ...appendDeps } });
   const events = typeof cfg.events === 'function' ? cfg.events : () => {};
+  const billed = Number(billedTodayUsd) || 0;
+  const { dailyLimitUsd } = resolveDailyLimit(settings ?? {});
+  const limits = cfg.limits ?? {
+    pastDailyAutoLimit: () => billed >= dailyLimitUsd,
+  };
   return runPolicyPass({
     root,
     items: filtered,
@@ -69,7 +80,7 @@ export async function executePolicyPass(root, deps, { now = Date.now } = {}) {
     now,
     machine: cfg.machine ?? '',
     readHandled,
-    limits: cfg.limits,
+    limits,
   });
 }
 export const DEFAULT_AUTOPILOT_ACTIONS = ['integrate', 'resume', 'retry-failed', 'unlock-tickets', 'start-ready'];

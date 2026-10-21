@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { readJournal } from '../tools/journal.mjs';
 import { EVENTS_FILE } from '../tools/orchestrator-events.mjs';
+import { DEFAULT_POLICY_FILE } from '../tools/policy.mjs';
 
 const exec = promisify(execFile);
 const swarm = path.join(path.dirname(fileURLToPath(import.meta.url)), '../tools/swarm.mjs');
@@ -63,6 +64,8 @@ test('policy CLI verbs: init, show, validate, path, check, run', async t => {
 
   const validate = await run(root, home, ['policy', 'validate'], env);
   assert.match(validate.stdout, /ok/);
+
+  await fs.writeFile(policyFile, `${JSON.stringify(DEFAULT_POLICY_FILE, null, 2)}\n`);
 
   const auto = await run(root, home, ['policy', 'check', 'ticket-retry', '--facts', '{}'], env);
   const autoDecision = JSON.parse(auto.stdout.trim());

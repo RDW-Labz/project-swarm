@@ -4,6 +4,7 @@
 // Fresh, project-local workers. No daemon or terminal attachment; a worker shell exists only inside a sandbox (codex, claude shell jobs).
 import { isBuildArtifact, withoutIgnored } from './ignored-artifacts.mjs';
 import fs from 'node:fs/promises';
+import fss from 'node:fs';
 import { createReadStream, realpathSync, existsSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -53,6 +54,7 @@ import { resolveDefaultRoot, INSTALL_COMMANDS, runBriefCommand, runHandoffComman
 import { runAutopilot, integrableFromJobs, manifestWorkFingerprint } from './autopilot.mjs';
 import { readyAutopilotDeps } from './autopilot-ready-deps.mjs';
 import { acquireAutopilotLock } from './autopilot-lock.mjs';
+import { policyPath, loadPolicy, handledForYou } from './policy.mjs';
 import { looseKillCommands, LOOSE_KILL_RULE } from './process-guard.mjs';
 import { appendEvent, readJournal, safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 import { loadRuns } from './brief.mjs';
@@ -7516,6 +7518,129 @@ function autopilotCaps(...budgets) {
   return { maxUsd: pick('maxUsd') ?? GOAL_BUDGET.maxUsd, maxTokens: pick('maxTokens') ?? GOAL_BUDGET.maxTokens };
 }
 
+function centralResetLabel(ms) {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  }).format(new Date(ms));
+}
+
+function policyDayKey(isoOrMs, nowMs = Date.now()) {
+  const t = typeof isoOrMs === 'string' ? Date.parse(isoOrMs) : isoOrMs;
+  const ms = Number.isFinite(t) ? t : nowMs;
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+function raisedTodayUsdFromAutoDecisions(records, project, nowMs = Date.now()) {
+  const today = policyDayKey(null, nowMs);
+  let sum = 0;
+  for (const entry of records ?? []) {
+    if (entry?.kind !== 'auto-decision') continue;
+    if (entry.requestKind !== 'cap-raise') continue;
+    if (entry.project !== project) continue;
+    const at = entry.at ?? entry.ts;
+    if (policyDayKey(at, nowMs) !== today) continue;
+    const amt = entry.amountUsd;
+    if (typeof amt === 'number' && Number.isFinite(amt) && amt > 0) sum += amt;
+  }
+  return sum;
+}
+
+async function collectOpenPolicyRequests(root) {
+  const { openDecisions } = await import('./inbox.mjs');
+  const { listRequests } = await import('./handbuild.mjs');
+  const project = path.basename(root);
+  let branch = '';
+  try {
+    branch = (await execFileAsync('git', ['-C', root, 'branch', '--show-current'], { encoding: 'utf8' })).stdout.trim();
+  } catch { /* no branch name */ }
+  const events = await readJournal(root, { limit: Infinity });
+  const pendingHandbuild = new Map(
+    listRequests(root)
+      .filter(r => r && r.status === 'pending')
+      .map(r => [String(r.id), r]),
+  );
+  const items = [];
+  for (const decision of openDecisions(events)) {
+    const id = String(decision.id ?? '');
+    if (!id.startsWith('handbuild-')) continue;
+    const hbId = id.slice('handbuild-'.length);
+    const req = pendingHandbuild.get(hbId);
+    if (!req) continue;
+    items.push({
+      id,
+      kind: 'hand-build-request',
+      project,
+      raw: req,
+      facts: {
+        files: Array.isArray(req.files) ? req.files.map(String) : [],
+        git: Array.isArray(req.git) ? req.git.map(String) : [],
+        branch,
+      },
+    });
+  }
+  return items;
+}
+
+async function applyPolicyDecision(root, item, { now = Date.now } = {}) {
+  if (item?.kind === 'hand-build-request') {
+    const ref = String(item.id ?? '');
+    const hbId = ref.startsWith('handbuild-') ? ref.slice('handbuild-'.length) : ref;
+    const { decideRequest } = await import('./handbuild.mjs');
+    decideRequest(root, hbId, 'approve', { now, by: 'policy', channel: 'policy' });
+    await appendEvent(root, {
+      kind: 'decision',
+      id: ref,
+      confirmed: true,
+      choice: 'approve',
+      text: 'policy auto-approve',
+    }, { now });
+    return;
+  }
+  throw new Error(`policy-apply-unsupported: ${item?.kind ?? 'unknown'}`);
+}
+
+function autopilotPolicyPass(root) {
+  const policyFile = policyPath(process.env, os.homedir());
+  if (!existsSync(policyFile)) return undefined;
+  return {
+    loadRules: async () => {
+      const { rules, error } = loadPolicy(policyFile, { fs: fss });
+      if (error) return null;
+      return rules;
+    },
+    openRequests: collectOpenPolicyRequests,
+    factsOf: item => item?.facts ?? {},
+    apply: async ({ item }) => applyPolicyDecision(root, item),
+    billedTodayUsd: async r => {
+      const { billedTodayUsd } = await import('./spend.mjs');
+      return billedTodayUsd(r);
+    },
+    dailyLimitSettings: async r => {
+      const { loadDailyLimitSettings } = await import('./spend.mjs');
+      const loaded = await loadDailyLimitSettings(r, { env: process.env, homedir: () => os.homedir() });
+      return loaded.ok ? loaded.settings : {};
+    },
+    readHandled: async () => handledForYou(await readJournal(root, { limit: Infinity })),
+    appendAutoDecisionDeps: {
+      appendJournal: async (r, line, opts) => appendEvent(r, line, opts),
+      appendEvents: async (r, line) => {
+        const { appendEvent: appendOrchestratorEvent } = await import('./orchestrator-events.mjs');
+        return appendOrchestratorEvent(r, line);
+      },
+    },
+    events: async line => {
+      const { appendEvent: appendOrchestratorEvent } = await import('./orchestrator-events.mjs');
+      return appendOrchestratorEvent(root, line);
+    },
+    machine: os.hostname(),
+  };
+}
+
 function autopilotDeps(root) {
   let removeAutopilotBusyMarker = null;
   const readPlan = async root => { try { return JSON.parse(await fs.readFile(path.join(root, '.swarm', 'project', 'plan.json'), 'utf8')); } catch { return null; } };
@@ -7684,6 +7809,7 @@ function autopilotDeps(root) {
       if (out.messages.length) { const temp = `${file}.${process.pid}.${Date.now()}.tmp`; await fs.writeFile(temp, `${JSON.stringify(out.notified)}\n`, { flag: 'wx', mode: 0o600 }); await fs.rename(temp, file); }
     },
     ...readyAutopilotDeps(root, readyInject),
+    policyPass: autopilotPolicyPass(root),
     busy: {
       begin: async () => {
         try {
@@ -7868,22 +7994,39 @@ async function dispatchPolicyCli(root, args) {
       write(POLICY_USAGE);
       return 2;
     }
-    let facts;
+    let callerFacts;
     try {
-      facts = JSON.parse(args[factsAt + 1]);
+      callerFacts = JSON.parse(args[factsAt + 1]);
     } catch {
       process.stderr.write('invalid facts json\n');
       return 1;
     }
+    const ignoredFacts = [];
+    if (callerFacts && typeof callerFacts === 'object' && !Array.isArray(callerFacts)) {
+      if (Object.hasOwn(callerFacts, 'pastDailyAutoLimit')) ignoredFacts.push('pastDailyAutoLimit');
+      if (Object.hasOwn(callerFacts, 'raisedTodayUsd')) ignoredFacts.push('raisedTodayUsd');
+    }
     const { decide, loadPolicy, policyPath, autoDecisionEvent } = await import('./policy.mjs');
     const { appendAutoDecision } = await import('./policy-run.mjs');
+    const { billedTodayUsd, loadDailyLimitSettings } = await import('./spend.mjs');
+    const { resolveDailyLimit } = await import('./daily-limit.mjs');
     const file = policyPath(process.env, os.homedir());
     const { rules, error } = loadPolicy(file, { fs: fss.default });
-    const request = { kind, id: `policy-check-${Date.now()}`, project: path.basename(root), facts };
+    const project = path.basename(root);
+    const facts = { ...(callerFacts && typeof callerFacts === 'object' && !Array.isArray(callerFacts) ? callerFacts : {}) };
+    const nowMs = Date.now();
+    const billed = await billedTodayUsd(root, () => nowMs);
+    const limitLoad = await loadDailyLimitSettings(root, { env: process.env, homedir: () => os.homedir() });
+    const { dailyLimitUsd } = resolveDailyLimit(limitLoad.ok ? limitLoad.settings : {});
+    facts.pastDailyAutoLimit = Number(billed) >= dailyLimitUsd;
+    const journalEvents = await readJournal(root, { limit: Infinity, kinds: ['auto-decision'] });
+    facts.raisedTodayUsd = raisedTodayUsdFromAutoDecisions(journalEvents, project, nowMs);
+    const request = { kind, id: `policy-check-${Date.now()}`, project, facts };
     const result = error
       ? { decision: 'needs-owner', rule: null, reason: 'policy load error' }
       : decide(request, { rules });
-    write(JSON.stringify(result));
+    const payload = ignoredFacts.length ? { ...result, ignoredFacts } : result;
+    write(JSON.stringify(payload));
     if (result.decision === 'auto-approve') {
       const event = autoDecisionEvent(request, result, { machine: os.hostname() });
       const { journalPath } = await import('./journal.mjs');
@@ -8076,9 +8219,23 @@ async function mainInner() {
   }
   if(args[0]==='budget'){
     root=await fs.realpath(root);
-    const {budgetCommand}=await import('./budget-set-commands.mjs');
+    const {budgetCommand,parseBudgetSetArgs}=await import('./budget-set-commands.mjs');
+    const parsed=parseBudgetSetArgs(args);
+    if(parsed.command==='show'&&!parsed.json){
+      const chunks=[];
+      const out={write:text=>{chunks.push(text);}};
+      const {billedTodayUsd}=await import('./spend.mjs');
+      const code=await budgetCommand(['budget','show','--json'],{out,env:process.env,root,fs,homedir:()=>os.homedir(),billedToday:async({root:r})=>billedTodayUsd(r)});
+      if(code!==0){process.stdout.write(chunks.join(''));process.exitCode=code;return;}
+      const payload=JSON.parse(chunks.join(''));
+      process.stdout.write(`daily limit: $${payload.dailyLimitUsd.toFixed(2)} (${payload.dailyLimitMode}, ceiling $${payload.hardCeilingUsd.toFixed(2)}) [${payload.source}]\n`);
+      process.stdout.write(`billed today: $${Number(payload.billedTodayUsd).toFixed(2)}\n`);
+      process.stdout.write(`resets at: ${centralResetLabel(payload.resetsAt)}\n`);
+      return;
+    }
     const out={write:text=>process.stdout.write(text)};
-    process.exitCode=await budgetCommand(args,{out,env:process.env,root,fs,homedir:()=>os.homedir()});
+    const billedToday=async({root:r})=>(await import('./spend.mjs')).billedTodayUsd(r);
+    process.exitCode=await budgetCommand(args,{out,env:process.env,root,fs,homedir:()=>os.homedir(),billedToday});
     return;
   }
   if(args[0]==='policy'){

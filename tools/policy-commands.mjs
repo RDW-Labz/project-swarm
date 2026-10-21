@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   DEFAULT_POLICY_FILE,
   NEVER_AUTO,
+  effectiveRulesFromOverrides,
   loadPolicy,
   policyInitializedMarkerPath,
   policyPath,
@@ -45,10 +46,11 @@ export function policyCommand(args, { out, env = process.env, home = env?.HOME, 
   if (sub === 'show') {
     const file = policyPath(env, home);
     const { rules, error } = loadPolicy(file, { fs });
+    const displayRules = rules.length ? rules : effectiveRulesFromOverrides([]);
     const lines = ['Never auto-approved:', ...NEVER_AUTO.map(k => `  - ${k}`), ''];
     if (error) lines.push(`Policy file error (fail closed): ${error}`, '');
     lines.push('Auto-approve rules (effective):');
-    for (const rule of rules) {
+    for (const rule of displayRules) {
       const state = rule.enabled ? 'enabled' : 'disabled';
       const extra = [];
       if (rule.projects?.length) extra.push(`projects=${rule.projects.join(',')}`);
