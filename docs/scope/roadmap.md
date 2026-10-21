@@ -282,3 +282,16 @@ Acceptance:
 - A ticket tagged `lane:burst` runs on a registered cloud runner and writes completion to the event store within 60 seconds of local enqueue on a test job.
 - If the cloud runner misses heartbeat for 120 seconds, the lease returns to the local queue and a local worker can dequeue the ticket.
 - `burst=off` remains the default; projects with burst off show zero cloud jobs in `swarm queue list` for 24 hours after a burst-enabled project runs a job.
+
+### R-050 A rented GPU worker bursts only after the benchmark gates pass.
+Acceptance:
+- `swarm burst gpu status` prints three gate lines with measured values and PASS or FAIL: ready tickets greater than free slots across both Macs for 3 or more consecutive days; every flat-rate lane (Cursor, Codex) rate-limited during that period; GPU model first-try pass rate of 90 percent or more on the benchmark replay (bench harness, same ticket set as the Haiku baseline; last measured: GPU 73 percent, Haiku 100 percent).
+- With any gate FAIL, `swarm burst gpu start` exits non-zero with message `gates not met` and rents nothing, and the numbers are shown to the owner before any rental.
+- Once rented, the worker starts automatically when the queue stays long, shuts down automatically when the queue is empty for 10 minutes, and its cost counts toward the daily limit (stop or notify mode, hard ceiling still stops it).
+- The GPU worker is only given tickets not marked sensitive and never production code, secrets or customer data, verified by a test that a sensitive ticket is refused with `not allowed on rented lane`.
+
+### R-051 Cloud CPU runners run tests and end-to-end checks.
+Acceptance:
+- A registered cloud CPU runner runs a ticket's own test command and the full e2e suite and writes pass or fail plus duration to the event store.
+- It is the first burst feature built, before any GPU work, because test waiting is the likely larger win: the benchmark scorecard must show ticket ready-to-merged time and idle slot percent before and after, and the runner stays off unless that scorecard improves.
+- Same defaults as R-049: burst off by default, no sensitive code, local queue takes the ticket back after 120 seconds without a heartbeat, spend counted in the daily limit.

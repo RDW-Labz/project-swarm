@@ -74,6 +74,8 @@ Effort: M — reuse job isolation spec; add runner agent that registers with the
 
 Migration: Projects opt in with `burst=off|on`; only tagged tickets (e.g. `lane:burst`) leave the machine. Local runners always preferred; cloud jobs time out back to local queue on failure. Fallback: burst disabled by default.
 
+Gates and order: CPU runners for tests and e2e come first (R-051); a rented GPU worker (R-050) is allowed only after all three gates pass (queue pressure 3 days, flat-rate lanes rate-limited, GPU model 90 percent first-try on the benchmark replay); no rental until the numbers are shown to the owner; auto-start on a long queue, auto-shutdown when empty, counted in the daily limit, never given sensitive or production code.
+
 ## 7. One-command install, doctor, and `swarm add`
 
 Today: `node tools/install.mjs --user`, `swarm update` from tags, `swarm doctor` checks lanes, `swarm init` links a project; no `swarm add`.
