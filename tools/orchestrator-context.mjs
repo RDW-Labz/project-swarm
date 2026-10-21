@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveTranscript } from './orchestrator-usage.mjs';
+import { maskCommand } from './orchestrator-events.mjs';
 
 /** Default transcript size (bytes) past which the orchestrator should hand off before context gets expensive. */
 export const DEFAULT_HANDOFF_TRANSCRIPT_BYTES = 10 * 1024 * 1024;
@@ -79,7 +80,7 @@ function safeOrchestratorDir(root) {
   const swarm = path.join(root, '.swarm');
   const dir = path.join(root, '.swarm', 'orchestrator');
   if (isLink(swarm) || isLink(dir)) return null;
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
 }
 
@@ -96,8 +97,9 @@ function messageContentText(message) {
   return out;
 }
 
+// Transcript text can carry tokens or keys: mask them the same way event commands are masked before anything reaches memory.
 function trimSummary(text) {
-  const clean = String(text ?? '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ').trim();
+  const clean = maskCommand(text, SUMMARY_LIMIT + 1);
   if (clean.length <= SUMMARY_LIMIT) return clean;
   return clean.slice(0, SUMMARY_LIMIT - 1) + '…';
 }
@@ -111,8 +113,12 @@ export function transcriptHandoffSummary(name, { readSync = fs.readSync, openSyn
   if (!stat.isFile()) return null;
   const take = Math.min(stat.size, TAIL_READ);
   const buf = Buffer.alloc(take);
-  const fd = openSync(real, 'r');
-  try { readSync(fd, buf, 0, take, stat.size - take); } finally { closeSync(fd); }
+  try {
+    const fd = openSync(real, 'r');
+    try { readSync(fd, buf, 0, take, stat.size - take); } finally { closeSync(fd); }
+  } catch {
+    return null;
+  }
   let lastUser = null;
   let lastAssistant = null;
   for (const line of buf.toString('utf8').split('\n')) {
@@ -134,9 +140,9 @@ function claudeMemoryFileForTranscript(transcriptName) {
 }
 
 function appendMarkdown(file, block, { appendFileSync = fs.appendFileSync, mkdirSync = fs.mkdirSync } = {}) {
-  mkdirSync(path.dirname(file), { recursive: true });
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   if (isLink(file)) return false;
-  appendFileSync(file, block, { encoding: 'utf8', flag: 'a' });
+  appendFileSync(file, block, { encoding: 'utf8', flag: 'a', mode: 0o600 });
   return true;
 }
 
@@ -169,8 +175,13 @@ export async function persistOrchestratorHandoff({
   const dir = safeOrchestratorDir(root);
   if (!dir) return { ok: false, resume: null, error: 'handoff-path-unsafe' };
 
-  const at = new Date(now).toISOString();
-  const snap = summary ?? transcriptHandoffSummary(name) ?? { lastUser: null, lastAssistant: null };
+  const raw = typeof now === 'function' ? now() : now;
+  const nowMs = Number.isFinite(raw) ? raw : Date.now();
+  const at = new Date(nowMs).toISOString();
+  const given = isObj(summary) ? summary : null;
+  const snap = given
+    ? { lastUser: given.lastUser ? trimSummary(given.lastUser) : null, lastAssistant: given.lastAssistant ? trimSummary(given.lastAssistant) : null }
+    : transcriptHandoffSummary(name) ?? { lastUser: null, lastAssistant: null };
   const block = [
     '',
     `## Orchestrator context handoff ${at}`,
@@ -210,7 +221,7 @@ export async function persistOrchestratorHandoff({
       bytes,
       threshold,
       file: HANDOFF_STATE_FILE,
-    }, { now: () => now, best: true });
+    }, { now: () => nowMs, best: true });
   } catch { /* journal is best effort */ }
 
   return {
