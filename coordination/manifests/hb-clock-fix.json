@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "hb-clock-fix",
+      "agent": "auto",
+      "prompt": "Time bomb in tests/handbuild-guard.test.mjs: the test whose title starts with the request is a decision in Needs you creates the hand-build request with a fixed clock (now: () => T0, a constant date), lists it with the same fixed clock, but then answers it with runInboxCommand(root, decide, ...) and checks edit(root, src/env.ts, Date.now() + 1000) using the REAL clock, so once the real date is more than 24 hours after T0 the request is expired (handbuild-expired: waited more than 24 hours and expired) and the test fails (it started failing on every CI run today). Fix the test (test-only, do not change tools): give the decide call and the edit check the same fixed clock as the request (pass a deps object with now: () => T0 or the equivalent option runInboxCommand and the decision code accept; read tools/inbox-commands.mjs and tools/handbuild.mjs to find the injectable clock; use T0 + 1000 where the test passes Date.now() + 1000). Then search the rest of tests/handbuild-guard.test.mjs for the same pattern (a fixed constant clock mixed with Date.now() or a default clock in the same test) and fix each one the same way. Add one regression test in tests/handbuild-guard.test.mjs that sets T0 to a date 30 days in the past and runs the same flow to prove it no longer depends on the real clock. Write only test files. No token-shaped literals. ignoreTests reason: only test files change.",
+      "context": [
+        "tests/handbuild-guard.test.mjs",
+        "tools/inbox-commands.mjs",
+        "tools/handbuild.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/handbuild-guard.test.mjs"
+      ],
+      "timeoutMs": 1200000
+    }
+  ]
+}
