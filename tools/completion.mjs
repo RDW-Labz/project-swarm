@@ -43,6 +43,8 @@ export const COMMANDS = [
   command('sweep', 'Scan a list of goals for prior art.', 'none', '--model --brief --goals --max-usd --concurrency --top --candidates --known --timeout'),
   command('version', 'Show the installed version.', 'none', '--check'),
   command('update', 'Update the shared installation.', 'none', '--projects --yes'),
+  command('pin', 'Pin a project to a swarm release version.', 'none', ''),
+  command('unpin', 'Remove the version pin from a project.', 'none', ''),
   command('squash', 'Squash a branch.', 'none', '--branch --base'),
   command('clean-branch', 'Clean changes from a branch.', 'none', '--from --exclude'),
   command('scope', 'Scope file: template, check, split into tickets, approve, sync.', 'none', '--out --stage --ingest --merge --yes --integrated'),

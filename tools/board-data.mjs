@@ -14,8 +14,16 @@ import { projectOrchestrator } from './board-orchestrator.mjs';
 import { combinedUsage } from './orchestrator-usage.mjs';
 import { buildProgress, progressSummary } from './build-progress.mjs';
 import { ROUTE_ORDER } from './router.mjs';
+import { overviewPinnedVersion } from './pins.mjs';
 
 const DAY = 86400000;
+
+async function pinnedVersionOf(projectRoot) {
+  try {
+    const pointer = JSON.parse(await fs.readFile(path.join(projectRoot, '.project-swarm.json'), 'utf8'));
+    return overviewPinnedVersion(pointer);
+  } catch { return null; }
+}
 const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   // subscription lanes: not billed per use
 const ESTIMATED = new Set(['estimated-from-tokens', 'reservation']);
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -288,7 +296,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const readyTickets = tickets.byStatus.ready ?? 0;
   const idle = liveRuns.length === 0;
   return {
-    id: project.id, name: txt(project.name, 80), root: project.root,
+    id: project.id, name: txt(project.name, 80), root: project.root, pinnedVersion: await pinnedVersionOf(project.root),
     stage: tickets.stage, tickets, readyTickets, idleWithReady: idle && readyTickets > 0,
     live: liveRuns.map(r => { const hit = runs.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
     agents, cost,
@@ -415,7 +423,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const detailSpend = { usd: spend.spendUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis: spend.capBasis ?? 'billed+list' };
   const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null }).catch(() => null);
   return {
-    id: project.id, name: txt(project.name, 80), root: project.root,
+    id: project.id, name: txt(project.name, 80), root: project.root, pinnedVersion: await pinnedVersionOf(project.root),
     tickets, ticketCounts: ticketsOf(ledger),
     runs: runs.slice().reverse().map(({ id, state }) => {
       const jobs = state.jobs ?? [];
