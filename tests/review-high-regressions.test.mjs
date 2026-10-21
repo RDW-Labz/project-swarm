@@ -76,8 +76,62 @@ async function mkRegistryEnv(t, prefix) {
 }
 
 // Guards verifyRegistryPid + restartRegisteredServers strict PID checks (server-restart.mjs).
-test('regression high-1: a reused pid (alive, different command line or later start time) is never signalled and its record is removed', async t => {
-  const home = await mkHome('high1-');
+test('regression high-1a: command-line mismatch alone is never signalled and the record is kept', async t => {
+  const home = await mkHome('high1a-');
+  const port = 19_001;
+  const install = path.join(home, 'install');
+  const runner = path.join(install, 'current', 'tools', 'swarm.mjs');
+  await fs.mkdir(path.dirname(runner), { recursive: true });
+  await fs.writeFile(runner, 'export {}\n');
+  const holder = spawn(process.execPath, ['-e', 'setInterval(() => {}, 10000)'], { stdio: 'ignore' });
+  t.after(() => { try { holder.kill('SIGKILL'); } catch { /* gone */ } });
+  await new Promise((resolve, reject) => {
+    holder.once('spawn', resolve);
+    holder.once('error', reject);
+  });
+  const file = boardFile({ HOME: home }, home);
+  const record = {
+    pid: holder.pid,
+    url: `http://127.0.0.1:${port}/?t=x`,
+    startedAt: new Date('2020-01-01T00:00:00.000Z').toISOString(),
+    version: '1.0.0',
+    argv: ['watch', '--all'],
+    cwd: home,
+    port,
+    env: {},
+    mode: 'background',
+    explicitBackground: true,
+  };
+  await writeRegistryRecord(file, record);
+
+  let killCalls = 0;
+  const killImpl = () => {
+    killCalls += 1;
+    throw new Error('kill must not run for command-line mismatch');
+  };
+
+  const mismatch = await restartRegisteredServers({
+    installRoot: install,
+    targetVersion: '2.0.0',
+    env: registryEnv({ HOME: home, PATH: '' }, home),
+    home,
+    write: () => {},
+    execFileImpl: async (_cmd, args) => {
+      if (args.some(arg => String(arg).includes('command'))) return { stdout: 'node /other/reused-pid.mjs\n' };
+      return { stdout: '999999\n' };
+    },
+    strictPidCheck: true,
+    sleep: async () => {},
+    killImpl,
+  });
+  assert.equal(killCalls, 0);
+  assert.equal(mismatch.servers[0]?.status, 'identity-unverified');
+  const kept = JSON.parse(await fs.readFile(file, 'utf8'));
+  assert.equal(kept.pid, holder.pid);
+});
+
+test('regression high-1b: process start newer than record (pid reuse) is never signalled and the record is removed', async t => {
+  const home = await mkHome('high1b-');
   const port = 19_001;
   const install = path.join(home, 'install');
   const runner = path.join(install, 'current', 'tools', 'swarm.mjs');
@@ -110,22 +164,25 @@ test('regression high-1: a reused pid (alive, different command line or later st
     throw new Error('kill must not run for stale pid identity');
   };
 
-  const mismatch = await restartRegisteredServers({
+  const reused = await restartRegisteredServers({
     installRoot: install,
     targetVersion: '2.0.0',
     env: registryEnv({ HOME: home, PATH: '' }, home),
     home,
     write: () => {},
     execFileImpl: async (_cmd, args) => {
-      if (args.some(arg => String(arg).includes('command'))) return { stdout: 'node /other/reused-pid.mjs\n' };
-      return { stdout: '999999\n' };
+      if (args.some(arg => String(arg).includes('command'))) {
+        return { stdout: `${process.execPath} ${runner} watch --all\n` };
+      }
+      return { stdout: '1\n' };
     },
     strictPidCheck: true,
     sleep: async () => {},
     killImpl,
+    pidAliveImpl: () => true,
   });
   assert.equal(killCalls, 0);
-  assert.equal(mismatch.servers[0]?.status, 'stale-record');
+  assert.equal(reused.servers[0]?.status, 'stale-record');
   await assert.rejects(() => fs.readFile(file), { code: 'ENOENT' });
 
   const laterStart = await verifyRegistryPid(
@@ -143,11 +200,10 @@ test('regression high-1: a reused pid (alive, different command line or later st
   );
   assert.equal(laterStart.ok, false);
   assert.match(laterStart.reason ?? '', /start time/i);
-
 });
 
-test('regression high-1b: when process identity cannot be verified (ps fails or start time unknown), the pid is never signalled and the record is kept', async t => {
-  const home = await mkHome('high1b-');
+test('regression high-1c: when process identity cannot be verified (ps fails or start time unknown), the pid is never signalled and the record is kept', async t => {
+  const home = await mkHome('high1c-');
   const port = 19_002;
   const install = path.join(home, 'install');
   const runner = path.join(install, 'current', 'tools', 'swarm.mjs');

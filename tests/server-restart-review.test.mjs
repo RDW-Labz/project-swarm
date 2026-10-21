@@ -42,7 +42,7 @@ async function mkHome() {
   return home;
 }
 
-test('(1) stale pid identity is not signalled and record is removed', async () => {
+test('(1a) command-line mismatch is not signalled and record is kept', async () => {
   const home = await mkHome();
   const port = await freePort();
   const install = path.join(home, 'install');
@@ -87,6 +87,67 @@ test('(1) stale pid identity is not signalled and record is removed', async () =
       },
       strictPidCheck: true,
       sleep: async () => {},
+    });
+    assert.equal(signalled, false);
+    assert.equal(servers[0]?.status, 'identity-unverified');
+    assert.match(lines.join(''), /record kept/i);
+    const kept = JSON.parse(await fs.readFile(file, 'utf8'));
+    assert.equal(kept.pid, holder.pid);
+  } finally {
+    process.kill = realKill;
+    holder.kill('SIGKILL');
+  }
+});
+
+test('(1b) process start newer than record is not signalled and record is removed', async () => {
+  const home = await mkHome();
+  const port = await freePort();
+  const install = path.join(home, 'install');
+  const runner = path.join(install, 'current', 'tools', 'swarm.mjs');
+  await fs.mkdir(path.dirname(runner), { recursive: true });
+  await fs.writeFile(runner, 'export {}\n');
+  const holder = spawn(process.execPath, ['-e', 'setInterval(() => {}, 10000)'], { stdio: 'ignore' });
+  await new Promise((resolve, reject) => {
+    holder.once('spawn', resolve);
+    holder.once('error', reject);
+  });
+  const file = boardFile({ HOME: home }, home);
+  const recordStartedAt = new Date('2020-01-01T00:00:00.000Z').toISOString();
+  await writeRegistryRecord(file, {
+    pid: holder.pid,
+    url: `http://127.0.0.1:${port}/?t=x`,
+    startedAt: recordStartedAt,
+    version: '1.0.0',
+    argv: ['watch', '--all'],
+    cwd: home,
+    port,
+    env: {},
+    mode: 'background',
+    explicitBackground: true,
+  });
+  const lines = [];
+  let signalled = false;
+  const realKill = process.kill.bind(process);
+  process.kill = (pid, sig) => {
+    if (sig === 'SIGTERM' && pid === holder.pid) signalled = true;
+    return realKill(pid, sig);
+  };
+  try {
+    const { servers } = await restartRegisteredServers({
+      installRoot: install,
+      targetVersion: '2.0.0',
+      env: registryEnv({ HOME: home, PATH: process.env.PATH }, home),
+      home,
+      write: t => lines.push(t),
+      execFileImpl: async (_cmd, args) => {
+        if (args.some(arg => String(arg).includes('command'))) {
+          return { stdout: `${process.execPath} ${runner} watch --all\n` };
+        }
+        return { stdout: '1\n' };
+      },
+      strictPidCheck: true,
+      sleep: async () => {},
+      pidAliveImpl: () => true,
     });
     assert.equal(signalled, false);
     assert.equal(servers[0]?.status, 'stale-record');

@@ -57,10 +57,47 @@ test('(1) real ps reads this process and identity check passes for matching comm
   assert.ok(identity?.command);
   assert.ok(typeof identity.startedAt === 'number' || identity.startedAt === null);
 
+  const recordStartedAt = new Date((identity.startedAt ?? Date.now()) - 1000).toISOString();
   const verified = await verifyRegistryPid({
     kind: 'board',
     pid: child.pid,
-    startedAt: new Date(Date.now() - 3600_000).toISOString(),
+    startedAt: recordStartedAt,
+    argv: ['watch', '--all'],
+  }, runner, { execFileImpl: execFileAsync });
+  assert.equal(verified.ok, true);
+  child.kill('SIGKILL');
+});
+
+test('(1a) real ps: record startedAt after process start still verifies when command matches', async () => {
+  let psWorks = true;
+  try {
+    await execFileAsync('ps', ['-o', 'command=', '-p', String(process.pid)]);
+  } catch {
+    psWorks = false;
+  }
+  if (!psWorks) return;
+
+  const home = await mkHome();
+  const runner = path.join(home, 'swarm.mjs');
+  await fs.writeFile(runner, 'setInterval(() => {}, 1e6);\n');
+  const child = spawn(process.execPath, [runner, 'watch', '--all'], {
+    cwd: home,
+    stdio: 'ignore',
+    detached: true,
+  });
+  child.unref();
+  await new Promise((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+
+  const identity = await readProcessIdentity(child.pid, { execFileImpl: execFileAsync });
+  assert.ok(identity?.startedAt !== null);
+
+  const verified = await verifyRegistryPid({
+    kind: 'board',
+    pid: child.pid,
+    startedAt: new Date(identity.startedAt + 3600_000).toISOString(),
     argv: ['watch', '--all'],
   }, runner, { execFileImpl: execFileAsync });
   assert.equal(verified.ok, true);
