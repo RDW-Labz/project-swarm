@@ -4,8 +4,9 @@ import path from 'node:path';
 import { scrubText } from './errors.mjs';
 import { safeWritableDir } from './journal.mjs';
 
-const FAIL_STATUSES = new Set(['failed', 'timeout', 'blocked']);
+export const FAILURE_STATUSES = new Set(['failed', 'timed-out', 'timedout', 'timeout', 'blocked']);
 const SUMMARY_MAX = 120;
+const REGRESSION_KEY_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;
 const UUID_RE = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g;
 const HEX_RE = /\b[0-9a-fA-F]{16,}\b/g;
 const HOME_RE = /(?:[A-Za-z]:\\Users\\[^\\]{1,64}|\/(?:Users|home)\/[^/\\]{1,64}|\/root(?=\/|\b))(?:[\\/][^\s'"),;]+)?/g;
@@ -82,7 +83,7 @@ export function failureCausesFromRuns(runStates) {
   for (const [runId, state] of Object.entries(runStates)) {
     const jobs = Array.isArray(state?.jobs) ? state.jobs : [];
     for (const job of jobs) {
-      if (!FAIL_STATUSES.has(job?.status)) continue;
+      if (!FAILURE_STATUSES.has(job?.status)) continue;
       const cause = causeFromJob(runId, job, state);
       if (!cause.key) continue;
       byKey.set(cause.key, mergeCause(byKey.get(cause.key), cause));
@@ -130,6 +131,42 @@ export function regressionStubFor(cause) {
   return { path: relPath, content };
 }
 
+export async function materializeRegressionStubs(root, causes, { writeFile, mkdir, stat } = fs) {
+  const entries = (causes ?? []).map(cause => {
+    const key = cause?.key;
+    if (typeof key !== 'string' || !REGRESSION_KEY_RE.test(key)) throw new Error(`failure-regression-key-invalid: ${String(key ?? '')}`);
+    const stub = regressionStubFor(cause);
+    return { file: path.join(root, stub.path), content: stub.content };
+  });
+  if (!entries.length) return { written: [], skipped: [] };
+
+  const directory = path.join(root, 'tests', 'regressions');
+  await mkdir(directory, { recursive: true });
+  const written = [];
+  const skipped = [];
+  for (const { file, content } of entries) {
+    let exists = false;
+    try {
+      await stat(file);
+      exists = true;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    if (exists) {
+      skipped.push(file);
+      continue;
+    }
+    try {
+      await writeFile(file, content, { encoding: 'utf8', flag: 'wx', mode: 0o644 });
+      written.push(file);
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      skipped.push(file);
+    }
+  }
+  return { written, skipped };
+}
+
 export async function recordCauses(root, causes) {
   const existing = await knownCauses(root);
   const byKey = new Map(existing.map(entry => [entry.key, entry]));
@@ -142,4 +179,18 @@ export async function recordCauses(root, causes) {
   const file = path.join(dir, 'failure-causes.json');
   await fs.writeFile(file, `${JSON.stringify({ version: 1, causes: merged }, null, 2)}\n`, { mode: 0o600 });
   return merged;
+}
+
+// tools/swarm.mjs wiring is owned by the other seat; this is the single-call conversion hook.
+export async function captureNewFailureCauses(root, runStates, deps = {}) {
+  const readKnown = deps.knownCauses ?? knownCauses;
+  const materialize = deps.materializeRegressionStubs ?? materializeRegressionStubs;
+  const record = deps.recordCauses ?? recordCauses;
+  const causes = failureCausesFromRuns(runStates);
+  const known = await readKnown(root);
+  const newCauses = newFailureCauses(causes, known);
+  const fsDeps = deps.fs ?? (typeof deps.writeFile === 'function' && typeof deps.mkdir === 'function' && typeof deps.stat === 'function' ? deps : fs);
+  const { written } = await materialize(root, newCauses, fsDeps);
+  await record(root, newCauses);
+  return { newCauses, written };
 }
