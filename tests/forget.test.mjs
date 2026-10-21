@@ -214,6 +214,14 @@ test('swarm forget CLI and completion metadata', async t => {
   const entry = projectEntry(root, 'cli');
   await writeRegistry(env, [entry]);
   assert.ok(COMMANDS.some(c => c.name === 'forget'));
+  const help = spawnSync(process.execPath, [swarm, 'forget', '--help'], {
+    encoding: 'utf8',
+    env: { ...env, SWARM_CONFIG: process.env.SWARM_CONFIG },
+  });
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /Usage: swarm forget PATH\.\.\./);
+  assert.match(help.stdout, /--dry-run/);
+  assert.match(help.stdout, new RegExp(FORGET_REGISTRY_ONLY));
   const run = args => spawnSync(process.execPath, [swarm, 'forget', ...args], {
     encoding: 'utf8',
     env: { ...env, SWARM_CONFIG: process.env.SWARM_CONFIG },

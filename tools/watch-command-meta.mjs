@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
+export const FORGET_USAGE = `Usage: swarm forget PATH... [--dry-run] [--missing] [--scratch] [--yes]
+       --dry-run  List what would be forgotten without changing the registry.
+       --missing  Forget every registered project whose folder no longer exists.
+       --scratch  Forget every registered scratch or test checkout.
+       --yes      Confirm bulk --missing or --scratch when more than three match.
+registry only: no project files were touched
+`;
+
 export const COMMAND_META = {
   doctor: { what: 'Checks that each model provider is set up and answering.', when: 'Before a first run, or when a provider starts failing.', example: 'swarm doctor claude --probe-local', cost: 'local', approval: false },
   validate: { what: 'Checks a job manifest for missing fields and bad values.', when: 'After writing or editing a manifest, before running it.', example: 'swarm validate jobs/fix-login.json --evidence', cost: 'free', approval: false },
