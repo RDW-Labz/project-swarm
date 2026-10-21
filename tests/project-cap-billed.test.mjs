@@ -256,28 +256,24 @@ test('stored reservation larger than the lane default is used for billedUnknownU
 test('treeSpend cache misses when inode changes but mtime and size stay the same', async t => {
   const { root } = await repo(t);
   const id = 'cache-ino';
-  const pad = 'x'.repeat(40);
-  const stateA = { id, status: 'complete', jobs: [{ id: 'j', agent: 'anthropic', costUsd: 1, usage: { total_tokens: 1 } }], _pad: pad };
-  await writeRun(root, id, stateA);
+  await writeRun(root, id, { status: 'complete', jobs: [{ id: 'j', agent: 'anthropic', costUsd: 1, usage: { total_tokens: 1 } }] });
   const file = path.join(root, '.swarm/runs', id, 'state.json');
-  const first = await treeSpend(root);
+  const real = await fs.stat(file);
+  const fixed = { mtimeMs: real.mtimeMs, size: real.size };
+  let ino = 9001;
+  let ctimeMs = 1_700_000_000_000;
+  const statFn = async target => {
+    const stat = await fs.stat(target);
+    if (path.resolve(target) !== path.resolve(file)) return stat;
+    return { ...stat, ...fixed, ino, ctimeMs };
+  };
+  const first = await treeSpend(root, { statFn });
   assert.equal(first.billedUsd, 1);
-  const { mtimeMs, size, ino: firstIno } = await fs.stat(file);
-  const stateB = { ...stateA, jobs: [{ id: 'j', agent: 'anthropic', costUsd: 8, usage: { total_tokens: 1 } }] };
-  let payload = JSON.stringify({ id, ...stateB });
-  if (Buffer.byteLength(payload) !== size) {
-    const delta = size - Buffer.byteLength(payload);
-    stateB._pad = pad + (delta > 0 ? 'y'.repeat(delta) : pad.slice(0, pad.length + delta));
-    payload = JSON.stringify({ id, ...stateB });
-  }
-  assert.equal(Buffer.byteLength(payload), size, 'payload length must match for inode-only invalidation');
-  await fs.unlink(file);
-  await fs.writeFile(file, payload);
-  await fs.utimes(file, new Date(mtimeMs), new Date(mtimeMs));
-  const afterStat = await fs.stat(file);
-  assert.ok(Math.abs(afterStat.mtimeMs - mtimeMs) < 2, 'mtime preserved via utimes');
-  assert.equal(afterStat.size, size);
-  assert.notEqual(afterStat.ino, firstIno);
-  const second = await treeSpend(root);
+  await writeRun(root, id, { status: 'complete', jobs: [{ id: 'j', agent: 'anthropic', costUsd: 8, usage: { total_tokens: 1 } }] });
+  const cached = await treeSpend(root, { statFn });
+  assert.equal(cached.billedUsd, 1, 'cache hit when ino, ctime, mtime, and size are unchanged');
+  ino = 9002;
+  ctimeMs = 1_700_000_000_001;
+  const second = await treeSpend(root, { statFn });
   assert.equal(second.billedUsd, 8, 'cache must re-read when ino changes');
 });

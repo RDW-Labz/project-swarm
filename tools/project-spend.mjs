@@ -16,7 +16,7 @@ const cache = new Map(); // state.json path -> { mtimeMs, size, ctimeMs, ino, ru
 
 // Total of every run in one checkout. A run state that cannot be read, or has the wrong shape, is listed in `unreadable`; never silently skipped.
 // `exposureUsd` is what runs that are still running may yet spend under their own --max-usd (counted so runs started together cannot all slip under the cap).
-export async function treeSpend(root) {
+export async function treeSpend(root, { statFn = fs.stat.bind(fs) } = {}) {
   const dir = path.join(root, '.swarm', 'runs');
   const total = { usd: 0, listUsd: 0, billedUsd: 0, tokens: 0, runs: 0, unreadable: [], unknownUsd: 0, billedUnknown: 0, billedUnknownUsd: 0, billedUnknownRented: 0, exposureUsd: 0 };
   let ids = [];
@@ -24,7 +24,7 @@ export async function treeSpend(root) {
   for (const id of ids) {
     const file = path.join(dir, id, 'state.json');
     let stat;
-    try { stat = await fs.stat(file); } catch (error) { if (error.code !== 'ENOENT') total.unreadable.push(id); continue; }
+    try { stat = await statFn(file); } catch (error) { if (error.code !== 'ENOENT') total.unreadable.push(id); continue; }
     let entry = cache.get(file);
     if (!entry || entry.mtimeMs !== stat.mtimeMs || entry.size !== stat.size || entry.ctimeMs !== stat.ctimeMs || entry.ino !== stat.ino) {
       try {
