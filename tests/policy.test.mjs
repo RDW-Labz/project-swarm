@@ -206,7 +206,11 @@ test('policyCommand show, validate, path, and init', () => {
   const showText = chunks.join('');
   assert.match(showText, /Never auto-approved/);
   assert.match(showText, /merge-other-repo/);
+  assert.match(showText, /new-account/);
+  assert.match(showText, /irreversible-action/);
   assert.match(showText, /merge-swarm-pr:/);
+  assert.match(showText, /merge-live-site:/);
+  assert.match(showText, /hosted-migration:/);
   assert.match(showText, /commit-push-swarm-branch:/);
 
   chunks.length = 0;

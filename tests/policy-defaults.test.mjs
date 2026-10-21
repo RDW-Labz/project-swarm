@@ -26,11 +26,27 @@ test('merge-swarm-pr standing approval cases', () => {
     { label: 'reviews fail', facts: { ...mergeOk, reviewsPass: false }, expect: 'needs-owner' },
     { label: 'suite red', facts: { ...mergeOk, fullSuiteGreen: false }, expect: 'needs-owner' },
     { label: 'out of order', facts: { ...mergeOk, inMergeOrder: false }, expect: 'needs-owner' },
-    { label: 'deploys live', facts: { ...mergeOk, deploysLiveSite: true }, expect: 'needs-owner' },
+    { label: 'deploys live without live-site gates', facts: { ...mergeOk, deploysLiveSite: true }, expect: 'needs-owner' },
   ];
   for (const { facts, expect } of cases) {
     assert.equal(decide({ kind: 'merge-pr', id: 'm', facts }, { rules: rules() }).decision, expect);
   }
+});
+
+test('merge-live-site auto-approves when all deploying gates pass', () => {
+  const facts = {
+    repoClass: 'swarm',
+    deploysLiveSite: true,
+    ciGreen: true,
+    fullE2eGreen: true,
+    reviewsPass: true,
+    postDeployWatch: true,
+    autoRollback: true,
+    inMergeOrder: true,
+  };
+  const result = decide({ kind: 'merge-pr', id: 'm', facts }, { rules: rules() });
+  assert.equal(result.decision, 'auto-approve');
+  assert.equal(result.rule, 'merge-live-site');
 });
 
 test('swarm-update-idle standing approval cases', () => {
