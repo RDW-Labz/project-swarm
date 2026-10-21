@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "self-approval-claude-word",
+      "agent": "auto",
+      "prompt": "False positive (parts-app): the self-approval detector in tools/self-approval.mjs blocks any command that contains the word claude, for example swarm run with --agent claude, a model name, a path containing .claude, or a commit message with a Co-Authored-By: Claude trailer. The culprit is the pattern near line 37 that matches the word claude followed by any whitespace. Match only the real risky pattern: a headless Claude Code session started from the shell, which fires the owner's prompt hook. That means claude as the PROGRAM being run (the first word of a simple command, or the word right after wrappers such as env, command, exec, nice, nohup, time, sudo, xargs, or after a path whose basename is claude), AND with a headless or prompt form: -p, --print, or a positional prompt text argument (an argument that is not an option and not a known subcommand such as mcp, config, doctor, update, install, plugin, remote-control, login), plus the same program-position test inside shell -c strings, eval strings and here-documents (reuse the existing recursive handling and the existing normalization of quotes and backslashes in this file). The word claude anywhere else must NOT match: as an option value (--agent claude, --model claude-sonnet, agent: claude), inside a quoted commit message or echo text, inside a path (.claude, claude-code, the .claude folder), in a git commit trailer, after git or swarm or gh or node as an argument, or as part of a longer word. Keep every other pattern in the file unchanged (tmux send-keys, script, osascript, expect, swarm decide, handbuild approve, hook and chat-merge references, base64 forms) and keep the ordinary-commands-stay-false behavior. Tests in a new file tests/self-approval-claude-word.test.mjs (node:test, strict assert) importing isSelfApprovalCommand: false for: swarm run manifest.json --agent claude ; swarm go --agent claude --model sonnet ; git commit -m 'fix x' -m 'Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>' ; git commit with a heredoc message containing the trailer ; echo claude ; cat ~/.claude/settings.json ; ls .claude ; node tools/swarm.mjs ask --agent claude question ; agent: claude in a manifest line echoed ; a model id such as claude-opus-4 as an argument. true for: claude -p hello ; claude --print hello ; claude hello world (a positional prompt) ; env FOO=1 claude -p x ; command claude -p x ; /usr/local/bin/claude -p x ; bash -c with claude -p inside ; eval with claude -p inside ; nohup claude -p x & . Also keep false: claude mcp list ; claude --version ; claude doctor. Update tests/self-approval-hardening.test.mjs only if one of its existing cases expected the old broad match, and say so. Write only tools/self-approval.mjs, tests/self-approval-claude-word.test.mjs and, if needed, tests/self-approval-hardening.test.mjs.",
+      "context": [
+        "tools/self-approval.mjs",
+        "tests/self-approval-hardening.test.mjs"
+      ],
+      "outputs": [
+        "tools/self-approval.mjs",
+        "tests/self-approval-claude-word.test.mjs",
+        "tests/self-approval-hardening.test.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-hardening2.test.mjs"
+      ]
+    }
+  ]
+}

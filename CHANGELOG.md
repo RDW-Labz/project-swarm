@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.153.0
+
+The guard no longer blocks ordinary commands that contain the word claude.
+- **Self-approval detector:** the word claude is risky only when it is the program of a headless or prompt invocation (claude -p, claude --print, or a positional prompt), also after variable assignments and wrappers with their own options, in groups, loops, substitutions, shell -c and eval strings, tmux and screen sessions, package runners, node scripts named claude, and python or node code strings that spawn it. Commands such as swarm run --agent claude, commit messages with a Co-Authored-By: Claude trailer, claude mcp list, claude --version and command -v claude are no longer blocked (parts-app).
+- **Limits:** the accepted limits of this rule are documented in docs/handbuild-guard.md (honest but fallible orchestrator threat model; real enforcement for commits and pushes is the git hooks and branch protection).
+- **Tests:** tests/self-approval-claude-word.test.mjs.
+
 ## 1.152.0
 
 Orchestrator up: a project orchestrator seat that survives restarts.

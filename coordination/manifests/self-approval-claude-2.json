@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "self-approval-claude-v2",
+      "agent": "auto",
+      "prompt": "An Opus review of the first fix to the claude rule in tools/self-approval.mjs found real gaps. Rework the claude rule (keep every other self-approval pattern exactly as it is). Goal: catch a headless Claude Code session started from the shell (it fires the owner's prompt hook) in the forms an honest agent could plausibly type, and never block ordinary commands that merely contain the word. Method: do NOT split the raw text with a regex. Use the quote-aware tokenizer already in tools/shell-writes.mjs (the exported tokenize function; read how it splits a command line into simple commands, treats quoted text as one word, and handles semicolons, double ampersands, pipes, background ampersands and newlines) to get the simple commands as word lists, so that text inside quotes (a commit message such as Fix X; Claude review follow-ups, or Bob & Claude pairing) is never treated as a command. For each simple command: skip leading NAME=value assignment words; skip wrappers together with their own options and option values: env (with -i, -u NAME, -S, assignments), command, exec, nice (with -n N and -N), nohup, time, timeout (with its duration and options), stdbuf (with its option arguments), caffeinate, sudo (with -u USER and similar), xargs (with -n N, -I X and similar), builtin, setsid, chrt; the program is then the next word; it counts as claude when its basename is claude (also when it was quoted in the original text, and for paths that contain spaces inside quotes). A claude program counts as risky only with a headless or prompt form: -p, --print (anywhere among its options), or a positional prompt word that is not an option value and not a known subcommand or informational flag (known subcommands: mcp, config, doctor, update, install, plugin, plugins, remote-control, login, logout, setup-token, agents, migrate-installer, auth; informational: --version, -v, --help, -h); option values that follow options which take a value (--model, --resume, -r, --session-id, --add-dir, --permission-mode, --allowedTools, --disallowedTools, --mcp-config, --settings, --output-format, --input-format, --max-turns, --append-system-prompt) must not be taken as a prompt. Also look inside: subshell parentheses and curly groups, dollar-parenthesis and backtick substitutions, for and while and if constructs (the word after do, then, else and elif starts a command), here-documents and the strings given to bash, sh, zsh, eval -c style wrappers (re-run the same analysis on the inner string, recursively with a depth limit of 4), and the code strings given to python, python3, node, perl, ruby and php with -c or -e: for those code strings it is enough to find the word claude as a quoted token or list item followed within 40 characters by the quoted token -p or --print (subprocess.run(['claude','-p',...]) and execSync('claude -p hi') are the plausible forms). Anything in a variable, an alias, npx or a script file is out of scope. Remove the dead code the review found (the trailing ampersand strip and the unreachable double-ampersand alternatives). Update tests/self-approval-claude-word.test.mjs and keep tests/self-approval-hardening.test.mjs passing. Tests must cover FALSE (allowed): swarm run manifest.json --agent claude ; swarm go --agent claude --model claude-sonnet ; git commit -m 'Fix X; Claude review follow-ups' ; git commit -m 'Bob & Claude Sonnet pairing' ; git commit -m with a Co-Authored-By: Claude trailer ; a commit message with a pipe and the word claude in quotes ; echo claude -p hello (echo is the program) ; cat ~/.claude/settings.json ; ls .claude ; claude mcp list ; claude --version ; claude doctor ; claude setup-token ; claude --model opus (no prompt) ; claude --resume abc123 (no prompt). TRUE (blocked): claude -p hello ; claude --print hello ; claude hello world ; FOO=1 claude -p x ; CLAUDE_CONFIG_DIR=/tmp/x claude -p hi ; env -i claude -p x ; env -u X claude -p x ; timeout 600 claude -p x ; nice -n 10 claude -p x ; sudo -u bob claude -p x ; xargs -n 1 claude -p ; nohup claude -p x & ; /usr/local/bin/claude -p x ; a quoted path with spaces ending in claude -p x ; (claude -p x) ; echo $(claude -p x) ; a backtick substitution containing claude -p x ; for f in a b; do claude -p $f; done ; a newline separated command list where the second line is claude -p hi ; cd repo && claude -p hi ; echo x | claude -p y ; bash -c 'claude -p x' ; eval 'claude -p x' ; python3 -c with subprocess.run(['claude','-p','x']) ; node -e with execSync('claude -p hi'). Write only tools/self-approval.mjs, tests/self-approval-claude-word.test.mjs and, if needed, tests/self-approval-hardening.test.mjs.",
+      "context": [
+        "tools/self-approval.mjs",
+        "tools/shell-writes.mjs",
+        "tests/self-approval-claude-word.test.mjs",
+        "tests/self-approval-hardening.test.mjs"
+      ],
+      "outputs": [
+        "tools/self-approval.mjs",
+        "tests/self-approval-claude-word.test.mjs",
+        "tests/self-approval-hardening.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-hardening2.test.mjs"
+      ]
+    }
+  ]
+}

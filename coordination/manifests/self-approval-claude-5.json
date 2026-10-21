@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "self-approval-v5-final",
+      "agent": "auto",
+      "prompt": "Final small change to the claude rule in tools/self-approval.mjs plus its documentation; there will be no further review rounds. (1) Fix the one blocking finding of the final review: command -v claude (and command -V claude, and the same inside a substitution such as readlink -f of dollar-parenthesis command -v claude, or the quoted dollar-parenthesis command -v claude followed by --version) is blocked, because the skip-wrapper logic treats command as a wrapper and skips -v, leaving claude as the program with no arguments. When the wrapper is command and it has -v or -V it runs nothing: return no program for that simple command (nothing is executed; the word that follows is only looked up). Keep everything else as it is. Add tests to tests/self-approval-claude-word.test.mjs under the allowed cases: command -v claude; command -V claude; which claude; type claude; if command -v claude; then echo ok; fi; readlink -f of a substitution containing command -v claude; and keep blocked: command claude -p x. (2) Document the limits honestly in docs/handbuild-guard.md in the section about known limits (add a subsection titled Limits of the claude rule): the rule catches a headless Claude Code session started from the shell in the forms an honest agent could plausibly type (claude as the program, after variable assignments and wrappers with their own options, in groups, loops, substitutions, shell -c and eval strings, tmux and screen, package runners, node scripts named claude, and in python or node code strings that spawn claude with -p or --print); it does not catch: (a) text piped into a shell or interpreter as a here-document or echo body (cat with a here-document piped to bash, echo of a command piped to bash, a script file written and run in the same command); (b) python or node here-documents that spawn claude (they are read as shell text); (c) a here-document inside a command substitution that contains backticks (it can over-block, as the old rule did); (d) interpreter code that passes a prompt without -p, and string literals that merely mention claude -p inside interpreter code; (e) anything invisible to a text rule: a variable or alias for the program, node dollar-parenthesis which claude, script files, gtimeout, decoded text. State that these are accepted limits under the honest but fallible orchestrator threat model, that the real enforcement for commits and pushes is the git hooks and GitHub branch protection, and that a deliberately hidden headless session is out of scope. Keep the file's other content; keep it under 280 lines. Write only tools/self-approval.mjs, tests/self-approval-claude-word.test.mjs and docs/handbuild-guard.md.",
+      "context": [
+        "tools/self-approval.mjs",
+        "tests/self-approval-claude-word.test.mjs",
+        "docs/handbuild-guard.md"
+      ],
+      "outputs": [
+        "tools/self-approval.mjs",
+        "tests/self-approval-claude-word.test.mjs",
+        "docs/handbuild-guard.md"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-hardening2.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/phase10b-init.test.mjs",
+        "tests/self-approval-hardening.test.mjs"
+      ]
+    }
+  ]
+}

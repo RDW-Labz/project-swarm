@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 2.0
+  },
+  "jobs": [
+    {
+      "id": "review-self-approval-4",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "standing approval: guard code gets an Opus review before merge",
+      "type": "review",
+      "prompt": "FINAL REVIEW (the owner decided: this is the last round; the change ships with its limits documented) after fixes for a first review that found misses (variable prefixes, wrappers with their own options, groups, substitutions, loops, interpreter code strings) and an over-block of quoted commit messages. Review coordination/review/sa4.diff: a change to the hand-build guard's self-approval detector (tools/self-approval.mjs). Before: any command containing the word claude followed by whitespace was treated as an attempt by the orchestrator to approve its own requests, which blocked ordinary commands such as swarm run with --agent claude and git commits with a Co-Authored-By: Claude trailer. After: claude counts only when it is the program being run (command position, after wrappers such as env, command, exec, nice, nohup, time, sudo, xargs, or a path ending in claude, also inside shell -c strings, eval strings and here-documents) with a headless or prompt form (-p, --print, or a positional prompt that is not a known subcommand). Promise: ordinary commands containing the word claude as an option value, a model name, a path, or message text stay allowed; a headless Claude Code session started from the shell (which fires the owner's prompt hook, and could be used to record a chat merge approval) is still caught; every other self-approval pattern in the file (decide, handbuild approve and off, hook and chat-merge references, tmux send-keys, script, osascript, expect, base64 and decoded forms) is unchanged. Look for: a way to start a headless claude session that the new rule no longer catches (flags before -p such as --model or --dangerously-skip-permissions, claude placed after a pipe or a semicolon or && or a subshell or backticks, an alias, a path with spaces or quotes, claude through npx or a node wrapper, the program name in a variable, a script file that is not visible); anything the old broad rule caught that the narrow rule drops and that could matter for self-approval; patterns that now over-match other ordinary words; and weak tests. The threat model is an honest but fallible orchestrator, not an adversary, so judge risk on forms an honest agent could plausibly type. Answer first with one line: PASS (no plausible-accident bypass and no new over-blocking) or FAIL, then list concrete findings with file and line. The implementation now uses the quote-aware tokenizer from shell-writes.mjs. Check that the earlier misses are really closed and that quoted text such as a commit message is never treated as a command. This diff includes the tools change AND the new test file. The earlier review asked for: tmux and screen sessions started with claude, JavaScript spawn forms, npx and bunx runners, and here-document bodies treated as data; check each is handled and tested, and that no new over-blocking appears. Judge by the threat model (honest but fallible orchestrator): forms an honest agent could plausibly type; do not fail the change for deliberate obfuscation that no text rule can see. Verdict rule for this final round: answer PASS if there is no plausible honest-agent bypass and no new over-blocking of ordinary commands; list remaining known gaps as LIMITS (to be documented) rather than failing the change for them, and only answer FAIL for a regression of something the old rule caught that an honest agent could plausibly type, or for a new over-block of an ordinary command.",
+      "context": [
+        "coordination/review/sa4.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}
