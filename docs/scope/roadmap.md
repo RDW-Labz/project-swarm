@@ -15,6 +15,8 @@ Out of scope: building the 8 managers as separate long-running agents (S6 define
 - S4: Visibility on Swarm Watch
 - S5: Operations
 - S6: Managers, first versions
+- S7: Swarm v2 stage 1 (internal, about one month)
+- S8: Swarm v2 later stages
 
 ## S1 Unblock autonomy
 ### R-001 The policy engine auto-decides routine requests.
@@ -218,3 +220,78 @@ Acceptance:
 Acceptance:
 - Visual QA takes screenshots of changed pages at phone and desktop size and attaches them to the PR.
 - The Lessons keeper turns each logged lesson into a test or a rule and closes it.
+
+## S7 Swarm v2 stage 1
+### R-040 The event store answers the board.
+Acceptance:
+- One SQLite `events` table per machine; importers load existing ndjson and markdown; new events dual-publish until `event_store=primary` (flag off by default).
+- `swarm board` and Swarm Watch % done, open tickets, and spend today match today's file-based numbers on project-swarm within 1 ticket and $0.01 spend.
+- On Node 20, `event_store` stays off and event-store tests skip with a logged reason citing missing `node:sqlite` (requires Node 22.13+).
+
+### R-041 Swarm state lives outside the repo.
+Acceptance:
+- Each project has a state folder under `~/.project-swarm/projects/<project-id>/`; the repo commits a pointer file with that id.
+- `swarm migrate state` copies legacy `.swarm` once and dual-writes new runs until `external_state` is primary (flag off by default).
+- After a full wave with external state primary, `git status` reports no untracked paths under `.swarm`.
+
+### R-042 `swarm add` registers a project in one command.
+Acceptance:
+- `swarm add /path/to/repo` writes the pointer, registers the project, and exits 0 without manual `swarm init`.
+- `swarm doctor` required checks pass on a machine with stage-1 flags enabled; optional lane sections may warn only.
+- Swarm Watch lists the new project within 60 seconds of `swarm add` completing.
+
+### R-043 A per-machine swarm service runs under launchd.
+Acceptance:
+- Opt-in `swarm service install` loads a user launchd agent; `swarm service status` reports running; CLI works unchanged when the service is off.
+- The service owns the event store and machine worker limit when enabled (flags off by default).
+- After `kill -9` on the service process, launchd restarts it and a waiting client reconnects within 5 seconds.
+
+### R-044 Concurrent jobs share no test data.
+Acceptance:
+- Each job that runs tests or e2e gets its own test database (distinct name or file) and ports allocated by swarm before the job starts.
+- Five parallel e2e runs on one Mac finish exit 0; no two runs use the same database name, TCP port, or temp directory path.
+- `swarm doctor` reports allocation failures when ports or DB names cannot be assigned.
+
+### R-045 Pushes are limited by the server.
+Acceptance:
+- Orchestrator setup shows the exact fine-grained PAT scopes (Contents and Pull requests read/write, Metadata read, Actions read; no Administration, Workflows write, Secrets, or Environments) before the owner creates the token in GitHub.
+- Branch protection on `main` in every active repo requires a PR, blocks force pushes and branch deletion, enforces for admins, and keeps today's required checks.
+- A session using the branch-only token pushes a feature branch and opens a PR; `git push origin main`, `git push --force`, and `git push origin :main` exit non-zero with a server rejection message.
+
+## S8 Swarm v2 later stages
+### R-046 One chief orchestrator plans across projects.
+Acceptance:
+- With `chief_orchestrator` on (default off), exactly one chief process runs per machine; `swarm orchestrator status` lists every active project and slot share.
+- Starting a second chief exits non-zero and leaves the first chief unchanged.
+- When two projects each have ready tickets and the machine cap is 4, the chief starts jobs on both projects in the same wave.
+
+### R-047 Jobs run in containers with permissions enforced by the service.
+Acceptance:
+- Two concurrent isolated jobs receive different container grants; neither process can open the other's `DATABASE_URL` (connection refused or auth failure).
+- An isolated job denied `git push` fails at the service with exit code 1 before the agent invokes `git push`.
+- `legacy` sandbox jobs behave as today when `isolated` is not enabled for that project (default off).
+
+### R-048 One queue and one board across machines.
+Acceptance:
+- With cluster queue on MacBook and Mac mini, enqueueing ticket T on either machine shows T in `swarm queue list` on both within 3 seconds.
+- Only one machine holds an active lease on T; a second worker starting T gets exit non-zero and message `leased elsewhere`.
+- Swarm Watch queue depth for the shared project matches on both machines within 1 ticket.
+
+### R-049 Cloud runners take overflow work.
+Acceptance:
+- A ticket tagged `lane:burst` runs on a registered cloud runner and writes completion to the event store within 60 seconds of local enqueue on a test job.
+- If the cloud runner misses heartbeat for 120 seconds, the lease returns to the local queue and a local worker can dequeue the ticket.
+- `burst=off` remains the default; projects with burst off show zero cloud jobs in `swarm queue list` for 24 hours after a burst-enabled project runs a job.
+
+### R-050 A rented GPU worker bursts only after the benchmark gates pass.
+Acceptance:
+- `swarm burst gpu status` prints three gate lines with measured values and PASS or FAIL: ready tickets greater than free slots across both Macs for 3 or more consecutive days; every flat-rate lane (Cursor, Codex) rate-limited during that period; GPU model first-try pass rate of 90 percent or more on the benchmark replay (bench harness, same ticket set as the Haiku baseline; last measured: GPU 73 percent, Haiku 100 percent).
+- With any gate FAIL, `swarm burst gpu start` exits non-zero with message `gates not met` and rents nothing, and the numbers are shown to the owner before any rental.
+- Once rented, the worker starts automatically when the queue stays long, shuts down automatically when the queue is empty for 10 minutes, and its cost counts toward the daily limit (stop or notify mode, hard ceiling still stops it).
+- The GPU worker is only given tickets not marked sensitive and never production code, secrets or customer data, verified by a test that a sensitive ticket is refused with `not allowed on rented lane`.
+
+### R-051 Cloud CPU runners run tests and end-to-end checks.
+Acceptance:
+- A registered cloud CPU runner runs a ticket's own test command and the full e2e suite and writes pass or fail plus duration to the event store.
+- It is the first burst feature built, before any GPU work, because test waiting is the likely larger win: the benchmark scorecard must show ticket ready-to-merged time and idle slot percent before and after, and the runner stays off unless that scorecard improves.
+- Same defaults as R-049: burst off by default, no sensitive code, local queue takes the ticket back after 120 seconds without a heartbeat, spend counted in the daily limit.
