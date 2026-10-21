@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "bump-1-159-0",
+      "agent": "auto",
+      "prompt": "Bump the version from 1.159.0 to 1.159.0 as the 1.61.0 release did. In package.json and package-lock.json (both places in the lock) change 1.159.0 to 1.159.0. In README.md change every 1.159.0 pin (kickoff text, tag name) to 1.159.0. In these tests replace the 1.159.0 pin with 1.159.0 where it is the current-version pin (assertions, test titles, the pin map in the AH release test): tests/t101-release.test.mjs, tests/field-lesson-t80-cli.test.mjs, tests/field-lessons-batch-x.test.mjs, tests/field-lessons-batch-ab-release.test.mjs, tests/field-lessons-batch-ag-release.test.mjs, tests/field-lessons-batch-ah-release.test.mjs. In CHANGELOG.md the top entry is currently the 1.159.0 entry: keep it unchanged and add a NEW entry above it titled ## 1.159.0 with this text: 'T: the autonomy policy engine and the daily spend limit, wired and off by default for policy.' then bullets (make the lead-in of each bullet bold with double asterisks like the entries below): 'Daily limit: new per-project daily limit on BILLED spend (default 5 USD, stop mode; notify mode warns at 1x, 2x, 3x; hard ceiling default 3x always stops), enforced in the one place every paid launch passes (reserveSpend, and accrueSpend for rentals); free lanes never count; swarm budget set and show; changes are logged, raises beyond 5 USD per project per day need the owner when an agent session asks.'; 'Policy engine: swarm policy init, show, validate, path, check, run; standing-approval default rules that fail closed on missing or loose facts, log before they apply, and stay inert until the owner runs swarm policy init; autopilot runs a policy pass only when a policy file exists.'; 'Known limits from the Opus reviews: the limit is counted per project root; owner detection is by terminal and environment names; a few low findings (notifier lock cleanup on crash, reservation day at midnight) are documented in the PR.'; 'Tests: policy, daily limit, budget set, hardening rounds 2 to 4.'. Write no other changes. Many tests import package.json or CHANGELOG.md; the tests not in context are knowingly left uncovered.",
+      "context": [
+        "package.json",
+        "package-lock.json",
+        "README.md",
+        "CHANGELOG.md",
+        "tests/t101-release.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs"
+      ],
+      "outputs": [
+        "package.json",
+        "package-lock.json",
+        "README.md",
+        "CHANGELOG.md",
+        "tests/t101-release.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs"
+      ],
+      "timeoutMs": 600000,
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/cap-reroute.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-w.test.mjs",
+        "tests/fixtures/make-practice-project.mjs",
+        "tests/git-hooks.test.mjs",
+        "tests/goal.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/leads.test.mjs",
+        "tests/lessons120-ship.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/repo-map.test.mjs",
+        "tests/router.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/ship-125.test.mjs",
+        "tests/swarm-produced-hash.test.mjs",
+        "tests/ticket-context.test.mjs",
+        "tests/update.test.mjs"
+      ]
+    }
+  ]
+}
