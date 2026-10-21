@@ -4,7 +4,7 @@
   "info": {
     "title": "Swarm Watch S4 operations API",
     "version": "1.0.0",
-    "description": "Contract for the local Swarm Watch board and its tailnet-only owner actions. Read routes accept the board token in x-watch-token or the t query parameter. Owner routes require x-watch-token and the Tailscale identity header; the t query parameter is refused (401). Owner routes are never reachable with agent-session markers or through a remote board request carrying local=1."
+    "description": "Contract for the local Swarm Watch board and its tailnet-only owner actions. Read routes primarily accept the board token in x-watch-token; the legacy t query parameter is retained only for the initial HTML page load and is exchanged for an HttpOnly cookie or x-watch-token header. Owner routes require x-watch-token and the Tailscale identity header; the t query parameter is refused (401). Owner routes are never reachable with agent-session markers or through a remote board request carrying local=1."
   },
   "servers": [
     {
@@ -39,6 +39,9 @@
     "rejectsRemoteBoardLocalQuery": true,
     "description": "The owner action endpoints must refuse requests carrying agent-session markers and must not be exposed through a remote board fetched with local=1. Merge, deploy, cap-raise, spend, key, and migration actions are always refused server-side."
   },
+  "x-security-notes": [
+    "T-8006: server change to exchange the initial HTML-load query token for an HttpOnly cookie or the x-watch-token header."
+  ],
   "paths": {
     "/api/board": {
       "get": {
@@ -257,13 +260,14 @@
         "type": "apiKey",
         "in": "header",
         "name": "x-watch-token",
-        "description": "The board token sent as a request header. Read routes may use this or the t query parameter. Owner routes require this header and refuse the t query parameter."
+        "description": "The primary board-token scheme for read routes. The token is sent as the x-watch-token request header. Owner routes require this header and refuse the t query parameter."
       },
       "boardTokenQuery": {
         "type": "apiKey",
         "in": "query",
         "name": "t",
-        "description": "The board token sent as the existing t query parameter. Read routes may use this or x-watch-token."
+        "deprecated": true,
+        "description": "Legacy compatibility scheme accepted only for the initial HTML page load. The server will exchange it for an HttpOnly cookie or the x-watch-token header under T-8006; do not use it on subsequent read requests."
       },
       "tailnetSignIn": {
         "type": "apiKey",

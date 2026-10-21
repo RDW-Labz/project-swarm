@@ -36,6 +36,22 @@ test('every owner route requires board token header and tailnet sign-in only', (
   }
 });
 
+test('deprecated query token is legacy and header is primary on every read route', () => {
+  const queryScheme = contract.components?.securitySchemes?.boardTokenQuery;
+  assert.equal(queryScheme?.deprecated, true);
+  assert.match(queryScheme?.description ?? '', /initial HTML page load/i);
+  assert.match(queryScheme?.description ?? '', /HttpOnly cookie/i);
+  assert.match(queryScheme?.description ?? '', /x-watch-token header/i);
+  assert.match(JSON.stringify(contract['x-security-notes'] ?? []), /T-8006/);
+
+  for (const [path, item] of Object.entries(contract.paths ?? {})) {
+    if (!item.get) continue;
+    const security = item.get.security;
+    assert.ok(Array.isArray(security) && security.length > 0, `${path} must declare read security`);
+    assert.equal(Object.keys(security[0])[0], 'boardTokenHeader', `${path} must list boardTokenHeader first`);
+  }
+});
+
 test('refusedKinds contains every server-side refused action kind', () => {
   assert.deepEqual(contract.components?.schemas?.refusedKinds?.enum, [
     'merge',

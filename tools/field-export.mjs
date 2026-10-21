@@ -12,6 +12,9 @@ const SAFE_TAG = /^[a-z0-9-]{1,32}$/;
 const MAX_EXPORT_BYTES = 512 * 1024;
 const KNOWN_AREAS = new Set(['tool', 'gotchas', 'security', 'release', 'testing', 'workflow']);
 const KNOWN_LANES = new Set(['fast', 'standard', 'slow', 'cheap', 'mid', 'expensive']);
+const KNOWN_LESSON_STATUSES = new Set(['queued', 'built', 'shipped', 'dropped', 'open', 'closed']);
+const SEMVER_LIKE = /^\d+\.\d+\.\d+$/;
+const ISO_DATE_PREFIX = /^\d{4}-\d{2}-\d{2}T/;
 const HOME_PATH = /(?:^|[^A-Za-z0-9])\/(?:Users|home)\/[^/\s]+\//;
 const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 const IPV4 = /\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b/;
@@ -71,13 +74,25 @@ function safeCategory(value, known) {
   return typeof value === 'string' && (known.has(value) || SAFE_CATEGORY.test(value)) ? value : 'other';
 }
 
+function safeLessonStatus(value) {
+  return typeof value === 'string' && KNOWN_LESSON_STATUSES.has(value) ? value : 'other';
+}
+
+function safeLessonVersion(value) {
+  return typeof value === 'string' && SEMVER_LIKE.test(value) ? value : null;
+}
+
+function safeLessonCreatedAt(value) {
+  return typeof value === 'string' && ISO_DATE_PREFIX.test(value) && Number.isFinite(Date.parse(value)) ? value : null;
+}
+
 function projectLessons(lessons) {
   return lessons.map(lesson => ({
     id: safeLessonId(lesson?.id),
     area: safeCategory(lesson?.area, KNOWN_AREAS),
-    status: lesson?.status ?? null,
-    version: lesson?.version ?? null,
-    createdAt: lesson?.createdAt ?? null,
+    status: safeLessonStatus(lesson?.status),
+    version: safeLessonVersion(lesson?.version),
+    createdAt: safeLessonCreatedAt(lesson?.createdAt),
     ruleLength: typeof lesson?.rule === 'string' ? lesson.rule.length : 0,
     tags: Array.isArray(lesson?.tags) ? lesson.tags.filter(tag => typeof tag === 'string' && SAFE_TAG.test(tag)).slice(0, 10) : [],
   }));

@@ -40,6 +40,31 @@ test('exports metadata only and aggregates run outcomes', async () => {
   assert.equal(JSON.stringify(data).includes(root), false);
 });
 
+test('allow-lists lesson status and validates version and createdAt', async () => {
+  const root = await fixture();
+  const lessonFile = path.join(root, 'lessons', 'abcdef12', 'L-0001.json');
+  const lesson = JSON.parse(await fs.readFile(lessonFile, 'utf8'));
+  lesson.status = 'not-a-status';
+  lesson.version = '1.2';
+  lesson.createdAt = 'not-a-date';
+  await fs.writeFile(lessonFile, JSON.stringify(lesson));
+
+  const invalid = await exportFieldData(root, { now: new Date('2026-10-21T15:30:00.000Z'), projectId: 'abcdef12' });
+  assert.deepEqual(invalid.lessons[0], {
+    id: 'L-0001', area: 'tool', status: 'other', version: null,
+    createdAt: null, ruleLength: 33, tags: ['field', 'safe'],
+  });
+
+  lesson.status = 'closed';
+  lesson.version = '2.10.3';
+  lesson.createdAt = '2026-10-21T12:00:00.000Z';
+  await fs.writeFile(lessonFile, JSON.stringify(lesson));
+  const valid = await exportFieldData(root, { now: new Date('2026-10-21T15:30:00.000Z'), projectId: 'abcdef12' });
+  assert.equal(valid.lessons[0].status, 'closed');
+  assert.equal(valid.lessons[0].version, '2.10.3');
+  assert.equal(valid.lessons[0].createdAt, '2026-10-21T12:00:00.000Z');
+});
+
 test('refuses PII and runtime-built secret material in source lessons', async () => {
   const root = await fixture();
   const lessonFile = path.join(root, 'lessons', 'abcdef12', 'L-0001.json');
@@ -90,7 +115,7 @@ test('refuses serialized exports over the size cap before scanning', async () =>
   const root = await fixture();
   const lessonFile = path.join(root, 'lessons', 'abcdef12', 'L-0001.json');
   const lesson = JSON.parse(await fs.readFile(lessonFile, 'utf8'));
-  lesson.version = 'v'.repeat(512 * 1024);
+  lesson.version = `${'1'.repeat(512 * 1024)}.2.3`;
   await fs.writeFile(lessonFile, JSON.stringify(lesson));
   await assert.rejects(
     exportFieldData(root, {
