@@ -23,3 +23,13 @@ Same rules (board files are yours, swarm jobs, full local suite, tests against t
 6. Live shows 0 while 3 runs are live. Live must count every running run for the project on any branch or worktree: the main checkout and every linked worktree (the board already groups worktrees under their project: use that grouping), runs by any manifest or ledger wave, including runs started from a scratch root. Count a run as live when its state is running or paused with live workers, not by branch name. Test: three live runs spread over the main checkout and two worktrees show Live 3; a finished run is not counted; a run in an unrelated project is not counted.
 
 Report with the before/after Overview card text for atlas-seafloor.
+
+## Added 2026-10-21 (owner): the MacBook board lists about 30 projects, most of them idle scratch and test checkouts
+
+Same rules (board files are yours, swarm jobs, full local suite, tests, batch with items 1 to 6, no own version bump).
+
+7. Hide test and temp projects by default (the "show test/temp" toggle stays and shows them with a badge). A project is test/temp when ANY of: (a) tools/scratch-roots.mjs isScratchRoot(root) is true (the MacBook is landing this module in the next release: scratch base ~/.project-swarm-scratch and its worktrees, OS temp folders, folders whose name starts with .tmp-test, pointer scratch true, marker file .swarm-scratch; until it lands use the same rules inline behind one function so it is a one-line swap); (b) any path segment is exactly tmp, temp, test, tests or __tests__; (c) it has no scope (no approved ledger and no scope file) AND no run in the last 7 days AND no open ticket AND no spend. A project with a live or recent run, an approved ledger with open tickets, or a pin is never auto-hidden whatever its path. Tests with a fixture of 30 projects (5 real, 25 scratch/test/idle): default view lists 5, toggle lists 30 with badges, a scratch-path project with a live run stays visible.
+
+8. Sort real projects: active runs first, then blocked (needs-you items, failed run, cap reached), then idle; inside a group newest activity first, then name. Test: the order on the 30-project fixture and a stable order for ties.
+
+The registry command that drops dead projects (swarm forget PATH) is MacBook work (tools/projects.mjs and the CLI): do not build it.
