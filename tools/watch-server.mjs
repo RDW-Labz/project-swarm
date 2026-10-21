@@ -22,6 +22,8 @@ const SECURITY = {
 
 const IDLE_FINISHED_MS = 10000;
 const MAX_STREAMS = 8;
+export const MAX_STREAM_BUFFER_BYTES = 1024 * 1024;
+const MAX_STREAM_PAUSED_MS = 60000;
 
 function safeEqual(a, b) {
   const x = Buffer.from(String(a), 'utf8');
@@ -49,23 +51,79 @@ function sse(event, data) {
 
 export function createWatchStreamManager({ getRunSnapshot, now = Date.now, onDrop = () => {}, onClose = () => {} }) {
   const streams = new Set();
+  let latestSnapshot = null;
 
-  function dropStream(stream) {
+  function dropStream(stream, end = false) {
     if (!streams.delete(stream)) return;
     onDrop(stream);
+    if (end) {
+      try {
+        stream.res.end();
+      } catch {
+        // already closed
+      }
+    }
+  }
+
+  function writableLength(stream) {
+    return Number.isFinite(stream.res.writableLength) ? stream.res.writableLength : 0;
+  }
+
+  function shouldDrop(stream) {
+    return writableLength(stream) > MAX_STREAM_BUFFER_BYTES
+      || (stream.paused && now() - stream.pausedAt > MAX_STREAM_PAUSED_MS);
+  }
+
+  function pause(stream) {
+    if (!stream.paused) {
+      stream.paused = true;
+      stream.pausedAt = now();
+    }
+  }
+
+  function write(stream, chunk) {
+    try {
+      const ok = stream.res.write(chunk);
+      if (!ok) pause(stream);
+      return ok;
+    } catch {
+      dropStream(stream, true);
+      return false;
+    }
   }
 
   function open(res, run) {
-    const stream = { res, prev: run, throttle: createThrottle(250, now) };
+    latestSnapshot = run;
+    const stream = {
+      res,
+      prev: run,
+      paused: false,
+      pausedAt: null,
+      throttle: createThrottle(250, now),
+    };
     streams.add(stream);
     res.on('close', () => {
       dropStream(stream);
       onClose();
     });
+    res.on('drain', () => {
+      if (!streams.has(stream) || !stream.paused) return;
+      if (shouldDrop(stream)) {
+        dropStream(stream, true);
+        return;
+      }
+      const next = latestSnapshot;
+      const ok = write(stream, sse('snapshot', next));
+      stream.prev = next;
+      if (ok) {
+        stream.paused = false;
+        stream.pausedAt = null;
+      }
+    });
     try {
-      res.write(sse('snapshot', run));
+      write(stream, sse('snapshot', run));
     } catch {
-      dropStream(stream);
+      dropStream(stream, true);
     }
     return stream;
   }
@@ -73,27 +131,34 @@ export function createWatchStreamManager({ getRunSnapshot, now = Date.now, onDro
   function writeHeartbeats() {
     const line = ': ping\n\n' + sse('ping', {});
     for (const stream of [...streams]) {
-      try {
-        stream.res.write(line);
-      } catch {
-        dropStream(stream);
+      if (shouldDrop(stream)) {
+        dropStream(stream, true);
+        continue;
       }
+      if (stream.paused && writableLength(stream) >= MAX_STREAM_BUFFER_BYTES) continue;
+      write(stream, line);
     }
   }
 
   async function pushUpdates() {
     const next = (await getRunSnapshot()) ?? null;
+    latestSnapshot = next;
     for (const stream of [...streams]) {
+      if (stream.paused) {
+        if (shouldDrop(stream)) dropStream(stream, true);
+        continue;
+      }
+      if (shouldDrop(stream)) {
+        dropStream(stream, true);
+        continue;
+      }
       if (JSON.stringify(stream.prev) === JSON.stringify(next)) continue;
       if (!stream.throttle.shouldSend()) continue;
-      try {
-        const line = (stream.prev === null || next === null)
-          ? sse('snapshot', next)
-          : sse('delta', diffSnapshots(stream.prev, next));
-        stream.res.write(line);
+      const line = (stream.prev === null || next === null)
+        ? sse('snapshot', next)
+        : sse('delta', diffSnapshots(stream.prev, next));
+      if (write(stream, line)) {
         stream.prev = next;
-      } catch {
-        dropStream(stream);
       }
     }
   }

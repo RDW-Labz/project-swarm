@@ -7,8 +7,9 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
+import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { createWatchServer, createWatchStreamManager } from '../tools/watch-server.mjs';
+import { createWatchServer, createWatchStreamManager, MAX_STREAM_BUFFER_BYTES } from '../tools/watch-server.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const assets = path.join(root, 'tools', 'watch-assets');
@@ -45,75 +46,66 @@ test('streamState waits for two missed heartbeats before connecting', async () =
   assert.equal(L.streamState({ lastMessageAt: 0, now: 1000, heartbeatMs: 10000 }).state, 'connecting');
 });
 
-test('a slow snapshot and two back-pressured writes keep the stream open and Live pings flowing', async () => {
-  const L = await boardLib();
+test('back-pressure pauses deltas, drains with one fresh snapshot, and bounds stuck streams', async () => {
   let now = 1000;
-  let reads = 0;
-  const timers = [];
-  const advance = async (ms) => {
-    now += ms;
-    for (let i = timers.length - 1; i >= 0; i -= 1) {
-      if (timers[i].at <= now) timers.splice(i, 1)[0].resolve();
-    }
-    await Promise.resolve();
+  let latest = { schema: 1, runId: 'r1', status: 'live' };
+  const res = new EventEmitter();
+  res.writableLength = 0;
+  res.writes = [];
+  res.results = [true, false, false, true];
+  res.write = function write(chunk) {
+    this.writes.push(String(chunk));
+    return this.results.shift() ?? true;
   };
-  const getRunSnapshot = async () => {
-    reads += 1;
-    await new Promise((resolve) => timers.push({ at: now + 1500, resolve }));
-    return { schema: 1, runId: 'r1', status: 'changed-' + reads };
+  res.end = function end() {
+    this.ended = true;
+    this.emit('close');
   };
-  const manager = createWatchStreamManager({ getRunSnapshot, now: () => now });
-  let updateWrites = 0;
-  const chunks = [];
-  const listeners = {};
-  const res = {
-    on(event, fn) { listeners[event] = fn; },
-    write(chunk) {
-      const text = String(chunk);
-      chunks.push(text);
-      if (text.includes('event: delta')) {
-        updateWrites += 1;
-        return updateWrites > 2;
-      }
-      return true;
-    },
-    end() { listeners.end?.(); },
-  };
-  manager.open(res, { schema: 1, runId: 'r1', status: 'live' });
-  assert.equal(updateWrites, 0);
+  const manager = createWatchStreamManager({ getRunSnapshot: () => latest, now: () => now });
+  manager.open(res, latest);
 
-  const update = manager.pushUpdates();
-  assert.equal(reads, 1, 'the update read is in flight');
-  let lastMessageAt = now;
-  await advance(500);
+  now += 1000;
+  latest = { ...latest, status: 'first' };
+  await manager.pushUpdates();
+  latest = { ...latest, status: 'second' };
+  await manager.pushUpdates();
   manager.writeHeartbeats();
-  lastMessageAt = now;
-  assert.equal(manager.size, 1, 'a false write is back-pressure, not a closed stream');
-  assert.equal(L.streamState({ lastMessageAt, now, heartbeatMs: 1000 }).state, 'live');
+  assert.equal(manager.size, 1, 'two false writes keep the stream open');
+  assert.equal(res.writes.filter((chunk) => chunk.includes('event: delta')).length, 1, 'deltas pause after back-pressure');
 
-  await advance(500);
-  manager.writeHeartbeats();
-  lastMessageAt = now;
-  assert.equal(L.streamState({ lastMessageAt, now, heartbeatMs: 1000 }).state, 'live');
-  assert.equal(chunks.filter((chunk) => chunk.includes('event: ping')).length, 2, 'heartbeats go out while the read is slow');
+  res.emit('drain');
+  assert.equal(res.writes.filter((chunk) => chunk.includes('event: snapshot')).length, 2, 'drain sends one fresh snapshot');
+  assert.match(res.writes.at(-1), /"status":"second"/);
 
-  await advance(500);
-  await update;
-  assert.equal(updateWrites, 1, 'the first changed snapshot hit back-pressure');
-  const nextUpdate = manager.pushUpdates();
-  await advance(500);
-  manager.writeHeartbeats();
-  lastMessageAt = now;
-  assert.equal(L.streamState({ lastMessageAt, now, heartbeatMs: 1000 }).state, 'live');
-  await advance(500);
-  manager.writeHeartbeats();
-  lastMessageAt = now;
-  assert.equal(L.streamState({ lastMessageAt, now, heartbeatMs: 1000 }).state, 'live');
-  await advance(500);
-  await nextUpdate;
-  assert.equal(updateWrites, 2, 'the second changed snapshot also hit back-pressure');
-  assert.equal(manager.size, 1, 'the slow snapshot does not close the stream');
+  now += 1000;
+  latest = { ...latest, status: 'resumed' };
+  await manager.pushUpdates();
+  assert.equal(res.writes.filter((chunk) => chunk.includes('event: delta')).length, 2, 'updates resume after the drain snapshot');
   manager.close();
+
+  const capped = new EventEmitter();
+  capped.writableLength = 0;
+  capped.write = () => false;
+  capped.end = function end() { this.ended = true; this.emit('close'); };
+  const cappedManager = createWatchStreamManager({ getRunSnapshot: () => ({ status: 'changed' }), now: () => now });
+  cappedManager.open(capped, { status: 'live' });
+  await cappedManager.pushUpdates();
+  capped.writableLength = MAX_STREAM_BUFFER_BYTES + 1;
+  cappedManager.writeHeartbeats();
+  assert.equal(cappedManager.size, 0, 'a buffer over the cap drops the stream');
+  assert.equal(capped.ended, true);
+
+  const expired = new EventEmitter();
+  expired.writableLength = 0;
+  expired.write = () => false;
+  expired.end = function end() { this.ended = true; this.emit('close'); };
+  const expiredManager = createWatchStreamManager({ getRunSnapshot: () => ({ status: 'changed' }), now: () => now });
+  expiredManager.open(expired, { status: 'live' });
+  await expiredManager.pushUpdates();
+  now += 60001;
+  expiredManager.writeHeartbeats();
+  assert.equal(expiredManager.size, 0, 'a pause over 60 seconds drops the stream');
+  assert.equal(expired.ended, true);
 });
 
 function openStream(port, token) {
