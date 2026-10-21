@@ -258,13 +258,16 @@ function progressLine(p) {
   var progress = p.progress;
   if (!progress) { return null; }
   var value = typeof progress.overall === 'number' ? progress.overall : 0;
-  var label = progress.finished ? 'Finished' : (progress.overall === null || progress.overall === undefined ? 'Unknown' : String(progress.overall) + '%');
+  var headline = progress.headline || (progress.finished ? 'Finished' : 'Unknown');
   var eta = progress.eta === null || progress.eta === undefined ? '' : ' · ETA ' + progress.eta + 'd';
-  var offLedger = typeof progress.offLedger === 'number' ? progress.offLedger : progress.offLedger && progress.offLedger.count || 0;
-  var offLedgerText = offLedger > 0 ? ' · ' + offLedger + ' off-ledger run' + (offLedger === 1 ? '' : 's') : '';
+  var untrackedRuns = progress.untracked && typeof progress.untracked.runs === 'number' ? progress.untracked.runs : (typeof progress.offLedger === 'number' ? progress.offLedger : 0);
   var line = el('div', 'sub progress-line');
   line.appendChild(meter(value));
-  line.appendChild(el('span', '', label + ' · ' + (progress.current || 'Unknown') + eta + offLedgerText));
+  line.appendChild(el('span', '', headline + ' · ' + (progress.current || 'Unknown') + eta));
+  if (untrackedRuns > 0) {
+    line.appendChild(el('span', '', ' · '));
+    line.appendChild(el('span', 'warn', 'untracked work: ' + untrackedRuns + ' run' + (untrackedRuns === 1 ? '' : 's')));
+  }
   return line;
 }
 function splitLine(p) {

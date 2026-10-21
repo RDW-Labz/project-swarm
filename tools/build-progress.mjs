@@ -699,10 +699,18 @@ export function progressSummary(progress) {
   const current = progress.finished ? 'Finished' : progress.milestones?.find(item => item.state === 'current')?.label ?? 'Unknown';
   const build = progress.percent?.tickets ?? { done: 0, total: 0 };
   const human = progress.scopes?.reduce((total, scope) => ({ done: total.done + (scope.human?.done ?? 0), total: total.total + (scope.human?.total ?? 0) }), { done: 0, total: 0 }) ?? { done: 0, total: 0 };
-  const summary = { overall: progress.percent?.overall ?? null, ticketsPct: progress.percent?.tickets?.pct ?? null, current, eta: progress.eta?.days ?? null, finished: Boolean(progress.finished), offLedger: progress.offLedger?.count ?? progress.untracked?.count ?? 0 };
-  Object.defineProperties(summary, {
-    headline: { value: progress.headline ?? headlineFor(build, human), enumerable: false },
-    untracked: { value: { runs: progress.untracked?.count ?? progress.offLedger?.count ?? 0, jobs: progress.untracked?.jobs ?? 0 }, enumerable: false },
-  });
+  const untrackedRuns = progress.untracked?.count ?? progress.offLedger?.count ?? 0;
+  const headline = progress.headline ?? headlineFor(build, human);
+  const untracked = { runs: untrackedRuns, jobs: progress.untracked?.jobs ?? 0 };
+  const summary = {
+    overall: progress.percent?.overall ?? null,
+    ticketsPct: progress.percent?.tickets?.pct ?? null,
+    current,
+    eta: progress.eta?.days ?? null,
+    finished: Boolean(progress.finished),
+    offLedger: untrackedRuns,
+    headline,
+    untracked,
+  };
   return summary;
 }

@@ -47,12 +47,25 @@ test('atlas excludes human-only S2 from stage rows and uses the exact build/huma
       return [{ number: 5, state: 'OPEN', mergedAt: '2026-10-20T12:00:00.000Z', headRefName: branch }];
     },
   });
-  assert.equal(progress.headline, 'build 22/33 · human 0/11');
-  assert.equal(progressSummary(progress).headline, 'build 22/33 · human 0/11');
+  const expectedHeadline = 'build 22/33 · human 0/11';
+  assert.equal(progress.headline, expectedHeadline);
+  assert.equal(progressSummary(progress).headline, expectedHeadline);
+  assert.equal(JSON.parse(JSON.stringify(progressSummary(progress))).headline, expectedHeadline);
   assert.equal(progress.stages.some(stage => stage.stageId === 'S2'), false);
   assert.equal(progress.left.human.filter(ticket => ticket.stageId === 'S2').length, 9);
   assert.equal(progress.milestones.find(item => item.key === 'pr').state, 'done');
   assert.equal(progress.milestones.find(item => item.key === 'merged').state, 'current');
+});
+
+test('headline omits human segment when the ledger has no human tickets', async t => {
+  const fixture = await atlasFixture(t, ledger => ({
+    ...ledger,
+    tickets: ledger.tickets.filter(ticket => ticket.type !== 'human'),
+  }));
+  const progress = await buildProgress({ ...fixture, now: NOW });
+  const expectedHeadline = `build ${progress.percent.tickets.done}/${progress.percent.tickets.total}`;
+  assert.equal(progress.headline, expectedHeadline);
+  assert.equal(JSON.parse(JSON.stringify(progressSummary(progress))).headline, expectedHeadline);
 });
 
 test('atlas PR state distinguishes open-only from unreadable GitHub state', async t => {
