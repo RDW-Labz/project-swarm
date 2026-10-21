@@ -162,8 +162,56 @@ function duplicateFileOwners(active) {
   return [...owners].filter(([, ids]) => ids.length > 1).map(([file, tickets]) => ({ file, tickets: [...new Set(tickets)].sort() }));
 }
 
+const depsOf = (t) => (Array.isArray(t.dependsOn) ? t.dependsOn : []);
+const BLOCK_REASON_KEYS = ['blockedReason', 'blocker', 'blockReason'];
+
+/**
+ * Tickets that may move to ready: approved (todo) or dependency-blocked, not human, every dependency done.
+ * Dependency-blocked tickets come first (they unlock by themselves), then todo, each in id order.
+ *
+ * @param {object[]} tickets
+ * @param {Set<string>} held ticket ids with a needs-you finding
+ * @returns {{ unlock: object[], todo: object[] }}
+ */
+function promotionCandidates(tickets, held) {
+  const statusById = new Map(tickets.filter(Boolean).map((t) => [t.id, t.status]));
+  const depsDone = (t) => depsOf(t).every((d) => statusById.get(d) === 'done' || statusById.get(d) === 'cancelled');
+  const eligible = (t) => t && t.type !== 'human' && !held.has(t.id) && depsDone(t);
+  const byId = (a, b) => String(a.id).localeCompare(String(b.id));
+  const unlock = tickets
+    .filter((t) => eligible(t) && t.status === 'blocked' && depsOf(t).length > 0 && !BLOCK_REASON_KEYS.some((k) => t[k]))
+    .sort(byId);
+  const todo = tickets.filter((t) => eligible(t) && t.status === 'todo').sort(byId);
+  return { unlock, todo };
+}
+
+/**
+ * Move tickets to ready until the active project holds at least READY_POOL_MIN ready tickets (R-036 AC1).
+ * Tickets blocked only by finished dependencies always unlock; todo tickets fill the remaining gap.
+ * Returns a new ticket list; the input is not changed.
+ *
+ * @param {{ tickets?: object[], held?: Set<string> }} [params]
+ * @returns {{ tickets: object[], promoted: { ticket: string, from: string }[] }}
+ */
+export function fillReadyPool({ tickets = [], held = new Set() } = {}) {
+  const before = checkReadyPool({ tickets });
+  if (!before.active) return { tickets, promoted: [] };
+  const { unlock, todo } = promotionCandidates(tickets, held);
+  const promote = new Map(unlock.map((t) => [t.id, t.status]));
+  let readyCount = before.readyCount + unlock.length;
+  for (const t of todo) {
+    if (readyCount >= READY_POOL_MIN) break;
+    promote.set(t.id, t.status);
+    readyCount += 1;
+  }
+  if (!promote.size) return { tickets, promoted: [] };
+  const next = tickets.map((t) => (t && promote.has(t.id) ? { ...t, status: 'ready' } : t));
+  return { tickets: next, promoted: [...promote].map(([ticket, from]) => ({ ticket, from })) };
+}
+
 /**
  * Scope-time gate for the Ticket Manager: ready pool (R-036 AC1), ownership, context on the ledger, and gating chains.
+ * The ready pool is filled (see fillReadyPool) and the updated list is returned as `tickets` for the caller to save.
  *
  * @param {{
  *   scope?: object,
@@ -174,7 +222,7 @@ function duplicateFileOwners(active) {
  *   profileContext?: Record<string, string[]>,
  *   sizeBudget?: object,
  * }} [params]
- * @returns {{ ok: boolean, findings: object[], tree: ReturnType<typeof checkTicketTree>, readyPool: ReturnType<typeof checkReadyPool> }}
+ * @returns {{ ok: boolean, findings: object[], tree: ReturnType<typeof checkTicketTree>, readyPool: ReturnType<typeof checkReadyPool>, tickets: object[], promoted: { ticket: string, from: string }[] }}
  */
 export function checkTicketManagerScopeIntegrity({
   scope,
@@ -187,7 +235,6 @@ export function checkTicketManagerScopeIntegrity({
 } = {}) {
   const findings = [];
   const tree = checkTicketTree({ scope, tickets, sizeBudget });
-  const readyPool = checkReadyPool({ tickets });
 
   for (const err of tree.errors) findings.push(treeItemToFinding(err, 'error'));
   for (const warn of tree.warnings) {
@@ -195,7 +242,8 @@ export function checkTicketManagerScopeIntegrity({
     findings.push(treeItemToFinding(warn, 'warning'));
   }
 
-  for (const { file, tickets: ids } of duplicateFileOwners(activeOf(tickets))) {
+  const duplicates = duplicateFileOwners(activeOf(tickets));
+  for (const { file, tickets: ids } of duplicates) {
     findings.push({
       code: 'duplicate-file-owner',
       severity: 'needs_you',
@@ -218,6 +266,23 @@ export function checkTicketManagerScopeIntegrity({
     });
   }
 
+  // Fill the ready pool, leaving tickets that need the owner where they are.
+  const held = new Set(duplicates.flatMap((d) => d.tickets));
+  for (const err of tree.errors) for (const c of Array.isArray(err.conflicts) ? err.conflicts : []) for (const id of c.tickets || []) held.add(id);
+  const filled = fillReadyPool({ tickets, held });
+  for (const p of filled.promoted) {
+    findings.push({
+      code: 'ready-pool-promote',
+      severity: 'info',
+      action: 'move-to-checklist',
+      ticket: p.ticket,
+      reason: p.from === 'blocked'
+        ? `${p.ticket} moved from blocked to ready: all of its dependencies are done.`
+        : `${p.ticket} moved from todo to ready to keep at least ${READY_POOL_MIN} ready tickets.`,
+    });
+  }
+  const readyPool = checkReadyPool({ tickets: filled.tickets });
+
   if (readyPool.active && !readyPool.ok) {
     const need = readyPool.shortfall;
     findings.push({
@@ -234,5 +299,5 @@ export function checkTicketManagerScopeIntegrity({
 
   const blocking = findings.some((f) => f.severity === 'needs_you');
   const ok = tree.ok && readyPool.ok && !blocking;
-  return { ok, findings, tree, readyPool };
+  return { ok, findings, tree, readyPool, tickets: filled.tickets, promoted: filled.promoted };
 }
