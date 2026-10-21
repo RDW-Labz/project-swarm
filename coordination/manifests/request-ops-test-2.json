@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "request-ops-test-2",
+      "agent": "auto",
+      "prompt": "In tests/handbuild-guard.test.mjs the assertion that createRequest refuses git rebase uses a regular expression with the wrong message text. The real message thrown by createRequest in tools/handbuild.mjs is exactly: handbuild-git: --git must name one of commit, push, merge, deploy, force-push, branch-D, gh . Change only that regular expression to /--git must name one of/ (keep the git: 'rebase' input and the intent). Do not change any other line and no tools file. Write only tests/handbuild-guard.test.mjs.",
+      "context": [
+        "tests/handbuild-guard.test.mjs"
+      ],
+      "outputs": [
+        "tests/handbuild-guard.test.mjs"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}
