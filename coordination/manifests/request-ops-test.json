@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "request-ops-test",
+      "agent": "auto",
+      "prompt": "createRequest in tools/handbuild.mjs now also accepts the git operation name gh (a request may name commit, push and gh, besides the elevated names merge, deploy, force-push and branch-D). The test named a request must give a valid reason, real files, and a short time; anything else is write a ticket instead in tests/handbuild-guard.test.mjs still expects the old message that says --git may name commit and push only. Update only that expectation to the current message text of createRequest (read tools/handbuild.mjs for the exact wording) and keep the intent: an invalid operation name such as rebase is still refused. Do not change any tools file. Write only tests/handbuild-guard.test.mjs.",
+      "context": [
+        "tests/handbuild-guard.test.mjs",
+        "tools/handbuild.mjs"
+      ],
+      "outputs": [
+        "tests/handbuild-guard.test.mjs"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}

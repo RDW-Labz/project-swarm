@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 2.0
+  },
+  "jobs": [
+    {
+      "id": "review-vercel-merge-final",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "standing approval: guard changes that loosen behavior get an Opus review",
+      "type": "review",
+      "prompt": "Review coordination/review/vm3.diff: a change to the hand-build guard policy (tools/handbuild.mjs) that (1) makes read-only vercel commands free (ls, list, inspect, logs, whoami, help, version, and the ls, list and inspect forms of env, domains, projects, teams, dns, certs, alias, secrets and similar) while deploys and every mutating form stay blocked, and (2) treats gh pr merge as always blocked with a message to use swarm merge N (which checks CI first), and allows swarm merge N only when the machine policy file (plain JSON, path from SWARM_POLICY_FILE or next to the machine config) enables a rule with id merge-swarm-pr that is not disabled, for exactly one numeric PR argument with no force or admin flags and no global options. Threat model: an honest but fallible orchestrator, not an adversary. Look for: a vercel form that deploys, promotes, rolls back, removes, links or changes configuration but is now free (for example env pull, env add, alias set, domains add, project rm, teams switch, rolling-release approve, integration add, secrets add), because the first argument test is wrong or flags hide it; a way for gh pr merge to reach allow (aliases, gh -R, flags before the subcommand, gh api, gh pr merge through another wrapper); swarm merge allowed without the policy rule (corrupt file, rule disabled, wrong id, enabled stringly typed, file path from an env var the orchestrator could set to a file it wrote itself: judge whether that is an accidental risk for an honest agent), extra arguments or flags that skip CI checks (--admin, --auto, --delete-branch, --force, --no-verify, --yes), merge of more than one PR; stale or wrong standing tag; and weak tests. Answer first with one line: PASS (no plausible honest-agent bypass and no over-loosening) or FAIL, then concrete findings with file and line. Remaining known gaps that only a deliberate adversary would use are LIMITS, not failures. FINAL REVIEW (the owner decided this is the last round). The earlier review found: vercel --scope=team classified free; policy enabled parsing too permissive; standing swarm merge allowed extra flags; gh -R owner/repo pr merge escaped the always-blocked rule; the block message told the agent to edit the policy file. Check each is closed. The diff now also adds free forms for git switch and git checkout of branches (no force or discard options, plain names, no pathspec) and for restoring generated journal files (HANDOFF, ledger, TASK, build-plan, docs/state, manifests json) with git checkout or git restore: look for a form that loses or overwrites real work (for example git checkout -- on a source file, a directory, a dot, a glob, git switch with --discard-changes or -f hidden behind combined short flags or an equals form, checkout of a pathspec through a ref that looks like a path, restore with --staged or --worktree on source files) and for over-blocking of ordinary commands. Final-round rule: answer PASS if there is no plausible honest-agent bypass and no over-loosening; list remaining gaps as LIMITS; answer FAIL only for a plausible honest-agent bypass or a new over-block. The previous review's findings were: git checkout X without a double dash could count as a free branch switch even when X is a path; command-specific config flags (rebase --exec, fetch --upload-pack, push --receive-pack) were no longer checked; gh commands off the free list pushed a config op that no approval could name. Check each is closed. FINAL VERDICT RULE (owner, 2026-10-21): if you find only deliberate-adversary cases (forms an honest agent would not type) answer PASS and list them as LIMITS to document; answer FAIL only for a plausible honest-agent mistake that loses work, deploys, merges or escapes a block, or for a new over-block of an ordinary command.",
+      "context": [
+        "coordination/review/vm3.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

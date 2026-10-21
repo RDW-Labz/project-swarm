@@ -134,7 +134,7 @@ test('(8) gh api/workflow, vercel deploy, and non-free gh need elevated approval
   for (const [cmd, pat] of [
     ['gh api repos/o/r/merges -f base=main -f head=f', /gh api write|merge/],
     ['gh api user', /gh api write|merge/],
-    ['gh workflow run deploy.yml', /merge/],
+    ['gh workflow run deploy.yml', /gh|ticket/i],
     ['vercel --prod', /deploy/],
     ['vercel promote', /deploy/],
   ]) {
@@ -178,12 +178,13 @@ test('(12) elevated hand-build approve requires computer channel in decideReques
   decideRequest(root, r.id, 'approve', { now: () => T0, channel: 'computer' });
 });
 
-test('(13) chat merge token consumed only after full allow; -R blocks chat merge', async t => {
+test('(13) chat merge token for swarm merge only; gh pr merge always blocked', async t => {
   const { bash, root } = await project(t);
   recordChatMerge(root, 5, { now: () => T0 });
-  assert.equal(bash('gh pr merge 5', { now: () => T0 + 1000 }).allow, true);
-  assert.equal(bash('gh pr merge 5', { now: () => T0 + 2000 }).allow, false);
+  assert.equal(bash('swarm merge 5', { now: () => T0 + 1000 }).allow, true);
+  assert.equal(bash('swarm merge 5', { now: () => T0 + 2000 }).allow, false);
   recordChatMerge(root, 5, { now: () => T0 });
-  const blocked = bash('gh pr merge 5 -R o/r', { now: () => T0 + 1000 });
-  assert.equal(blocked.allow, false);
+  assert.equal(bash('gh pr merge 5', { now: () => T0 + 1000 }).allow, false);
+  assert.match(bash('gh pr merge 5', { now: () => T0 + 1000 }).reason, /use swarm merge/i);
+  assert.equal(bash('gh pr merge 5 -R o/r', { now: () => T0 + 1000 }).allow, false);
 });

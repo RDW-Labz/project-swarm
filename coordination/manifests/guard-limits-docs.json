@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "guard-limits-docs",
+      "agent": "auto",
+      "prompt": "Add a subsection titled Limits of the vercel, merge, switch and restore rules to the known-limits part of docs/handbuild-guard.md (keep every other section; keep the file under 330 lines). State that the final review of these rules (Opus, owner's threat model: an honest but fallible orchestrator) found no plausible honest-agent bypass, and list these accepted limits plainly: (1) gh pr -R owner/repo merge N written with a flag between pr and merge is not recognized as a merge, and an approval naming gh would then allow it; gh api with a write method and gh aliases are covered by an approval naming gh because gh is not an elevated operation; the sanctioned merge path is swarm merge N, which checks CI; (2) git checkout with --pathspec-from-file or -p restores files without a double dash and passes as a branch switch; (3) git checkout --conflict=diff3 acts like the blocked -m merge option; (4) restore paths are checked against the project root, not the working directory, so a restore run from a subfolder acts on a different path than the one checked, and paths starting with a dash after the double dash are not checked; (5) in the final allow step one free switch, checkout or restore operation exempts the other switch, checkout and restore operations the analyzer saw in the same command line, backstopped by the earlier per-operation check; (6) the policy file path comes from the guard process environment (SWARM_POLICY_FILE or SWARM_CONFIG), so setting them inline in a command does not reach the guard; several standing swarm merge commands in one line are each checked separately. Add one sentence that the merge standing approval needs the machine policy file to enable the merge-swarm-pr rule (enabled true, not disabled) and that gh pr merge is always blocked. Write only docs/handbuild-guard.md.",
+      "context": [
+        "docs/handbuild-guard.md"
+      ],
+      "outputs": [
+        "docs/handbuild-guard.md"
+      ],
+      "timeoutMs": 900000,
+      "ignoreTests": [
+        "tests/handbuild-guard.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/phase10b-init.test.mjs"
+      ]
+    }
+  ]
+}

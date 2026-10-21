@@ -145,7 +145,7 @@ test('a request must give a valid reason, real files, and a short time; anything
   assert.throws(() => createRequest(root, { ...base, files: '**' }), /catch-all/);
   assert.throws(() => createRequest(root, { ...base, files: '../x,/etc/passwd' }), /not specific enough/);
   assert.throws(() => createRequest(root, { ...base, minutes: 500 }), /1 to 120/);
-  assert.throws(() => createRequest(root, { ...base, git: 'reset' }), /commit and push only/);
+  assert.throws(() => createRequest(root, { ...base, git: 'rebase' }), /--git must name one of/);
   assert.throws(() => createRequest(root, { ...base, files: Array.from({ length: 30 }, (_, i) => `src/${i}.ts`).join(',') }), /at most 20/);
   for (const kind of ['swarm-cannot', 'emergency', 'secret', 'tiny']) assert.ok(createRequest(root, { ...base, kind }).id.startsWith('hb-'));
   const denied = createRequest(root, base);

@@ -102,11 +102,12 @@ test('chat merge: record, consume once, wrong PR and expiry', async t => {
   const { root } = await project(t);
   const bash = (command, now = T0) => guardDecision({ tool: 'Bash', toolInput: { command }, root, cwd: root, now: () => now, branchOf: () => 'feature/x' });
   recordChatMerge(root, 5, { now: () => T0 });
-  assert.equal(bash('gh pr merge 5', T0 + 1000).allow, true);
-  assert.equal(bash('gh pr merge 5', T0 + 2000).allow, false);
-  assert.equal(bash('gh pr merge 6', T0 + 2000).allow, false);
-  recordChatMerge(root, 9, { now: () => T0 });
-  assert.equal(bash('swarm merge 9', T0 + CHAT_MERGE_MS + 1).allow, false);
+  assert.equal(bash('gh pr merge 5', T0 + 500).allow, false);
+  assert.equal(bash('swarm merge 5', T0 + 1000).allow, true);
+  assert.equal(bash('swarm merge 5', T0 + 2000).allow, false);
+  assert.equal(bash('swarm merge 6', T0 + 2000).allow, false);
+  recordChatMerge(root, 5, { now: () => T0 });
+  assert.equal(bash('swarm merge 5', T0 + CHAT_MERGE_MS + 1).allow, false);
 });
 
 async function fakeClaudeHome(t) {
