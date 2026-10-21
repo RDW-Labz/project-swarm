@@ -2,6 +2,7 @@
 // The board's "Needs you" panel: what is waiting for the owner in every registered project (inbox decisions, human tasks, blockers, proposed tickets)
 // and which of those were also asked on the phone. READ-ONLY: the board never answers anything. Answers go through the commands shown here at the
 // computer, or through the private swarm-inbox issues from the phone (swarm phone sync).
+import os from 'node:os';
 import path from 'node:path';
 import { collectInbox } from './inbox.mjs';
 import { inboxDeps } from './inbox-commands.mjs';
@@ -66,19 +67,21 @@ function nextFor(item, root) {
   return { commands, next };
 }
 
-function filterScratchFromInbox(projects, ownerInbox) {
+function filterScratchFromInbox(projects, ownerInbox, { forOwner, scratchOpts } = {}) {
   const all = projects ?? [];
-  if (ownerInbox === false) return all;
-  const withoutScratch = all.filter(p => p?.root && !isScratchRoot(p.root, { strict: true }));
-  if (ownerInbox === true) return withoutScratch;
-  if (withoutScratch.length) return withoutScratch;
-  const stack = new Error().stack ?? '';
-  if (/board-inbox\.test\.mjs/.test(stack) || /watch-cli\.mjs/.test(stack)) return all;
-  return [];
+  if (ownerInbox === false || forOwner === false) return all;
+  return all.filter(p => p?.root && !isScratchRoot(p.root, { strict: true, ...scratchOpts }));
 }
 
-export async function boardInbox({ projects, now = Date.now(), env = process.env, collect = collectInbox, deps = inboxDeps({ channel: 'board' }), ledgerOf = readLedger, phoneDirectory = phoneDir(env), projectMs = PROJECT_MS, ownerInbox } = {}) {
-  const ownerProjects = filterScratchFromInbox(projects, ownerInbox);
+function phoneRecordScratch(rec, scratchOpts) {
+  const root = rec?.root ?? String(rec?.key ?? '').split('|')[0];
+  if (!root) return false;
+  return isScratchRoot(root, { strict: true, ...scratchOpts });
+}
+
+export async function boardInbox({ projects, now = Date.now(), env = process.env, home = os.homedir(), collect = collectInbox, deps = inboxDeps({ channel: 'board' }), ledgerOf = readLedger, phoneDirectory = phoneDir(env), projectMs = PROJECT_MS, ownerInbox, forOwner } = {}) {
+  const scratchOpts = { env, home: env.HOME ?? home };
+  const ownerProjects = filterScratchFromInbox(projects, ownerInbox, { forOwner, scratchOpts });
   const config = await readPhoneConfig(phoneDirectory).catch(() => null);
   const state = config ? await readPhoneState(phoneDirectory, config.repo).catch(() => ({ issues: {} })) : { issues: {} };
   const asked = new Map();
@@ -115,12 +118,11 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
     for (const it of mine.slice(0, MAX_PER_PROJECT)) items.push({ projectId: project.id, project: txt(project.name, 80), ...it });
   }
   items.sort((a, b) => (b.unblocks - a.unblocks) || String(a.since).localeCompare(String(b.since)) || String(a.project).localeCompare(String(b.project)));
-  const scratchRoots = new Set(ownerProjects.filter(p => p?.root && isScratchRoot(p.root, { strict: true })).map(p => p.root));
   const phoneIssue = rec => {
-    if (!rec?.root || scratchRoots.has(rec.root)) return false;
+    if (phoneRecordScratch(rec, scratchOpts)) return false;
     return rec.status === 'open' || rec.status === 'confirming';
   };
-  const open = [...asked.values()].filter(r => r.status === 'open' && !scratchRoots.has(r.root)).length;
+  const open = [...asked.values()].filter(r => r.status === 'open' && !phoneRecordScratch(r, scratchOpts)).length;
   const confirming = [...asked.values()].filter(phoneIssue).length - open;
   return {
     total: items.length + hidden,

@@ -24,7 +24,12 @@ function nextBackupPath(hookPath, fsMod) {
 function hookBody(kind, { nodePath, checkScript }) {
   const nodeQ = shellQuoteSingle(nodePath);
   const checkQ = shellQuoteSingle(checkScript);
-  const prevLatest = `PREV="$(ls -1 "$HOOKS_DIR/${kind}.before-swarm"* 2>/dev/null | LC_ALL=C sort -V | tail -1)"`;
+  const prevLatest = `PREV="$(ls -1 "$HOOKS_DIR/${kind}.before-swarm"* 2>/dev/null | LC_ALL=C sort -V 2>/dev/null | tail -1)"`;
+  const runPrev = `if [ -n "$PREV" ] && [ -f "$PREV" ]; then
+  if [ -x "$PREV" ]; then "$PREV" "$@" || exit $?;
+  else sh "$PREV" "$@" || exit $?;
+  fi
+fi`;
   const resolveNode = `
 NODE="$NODE_RECORD"
 if [ ! -x "$NODE" ]; then NODE="$(command -v node 2>/dev/null || true)"; fi`;
@@ -47,7 +52,9 @@ STDIN_FILE="$HOOKS_DIR/.swarm-pre-push.stdin"
 cat > "$STDIN_FILE" || exit 0
 ${prevLatest}
 if [ -n "$PREV" ] && [ -f "$PREV" ]; then
-  cat "$STDIN_FILE" | "$PREV" "$@" || exit $?
+  if [ -x "$PREV" ]; then cat "$STDIN_FILE" | "$PREV" "$@" || exit $?;
+  else cat "$STDIN_FILE" | sh "$PREV" "$@" || exit $?;
+  fi
 fi
 "$NODE" "$CHECK" ${kind} "$@" < "$STDIN_FILE"
 exit $?
@@ -57,7 +64,7 @@ exit $?
   const commitInfra = kind === 'commit-msg' ? `
 "$NODE" "$CHECK" ${kind} "$@"
 CODE=$?
-if [ "$CODE" -eq 1 ]; then exit 1; fi
+if [ "$CODE" -eq 3 ]; then exit 1; fi
 if [ "$CODE" -ne 0 ]; then echo "swarm git hook: manifest check skipped (infrastructure)" >&2; fi
 exit 0` : `
 "$NODE" "$CHECK" ${kind} "$@"
@@ -72,9 +79,7 @@ CHECK=${checkQ}
 ${resolveNode}
 ${kind === 'commit-msg' ? infraSkip : infraSkip}
 ${prevLatest}
-if [ -n "$PREV" ] && [ -f "$PREV" ]; then
-  "$PREV" "$@" || exit $?
-fi
+${runPrev}
 ${commitInfra}
 `;
 }
@@ -83,6 +88,16 @@ function hooksDir(root, exec) {
   const run = exec ?? ((cmd, args, opts) => execFileSync(cmd, args, opts));
   const rel = run('git', ['rev-parse', '--git-path', 'hooks'], { cwd: root, encoding: 'utf8', timeout: 5000 }).trim();
   return path.isAbsolute(rel) ? rel : path.join(root, rel);
+}
+
+function hooksDirInsideRepo(root, dir, fsMod) {
+  try {
+    const rootReal = fsMod.realpathSync.native(root);
+    const dirReal = fsMod.realpathSync.native(dir);
+    return dirReal === rootReal || dirReal.startsWith(`${rootReal}${path.sep}`);
+  } catch {
+    return false;
+  }
 }
 
 function isOurHook(content) {
@@ -104,15 +119,19 @@ function backupUserHook(fsMod, hookPath) {
   fsMod.renameSync(hookPath, dest);
 }
 
-/** @param {string} root project root @param {{ fs?: typeof fs, exec?: Function, checkScript: string, nodePath?: string }} opts */
-export function installGitHooks(root, { fs: fsMod = fs, exec, checkScript, nodePath = process.execPath } = {}) {
+/** @param {string} root project root @param {{ fs?: typeof fs, exec?: Function, checkScript: string, nodePath?: string, forceShared?: boolean, warn?: (msg: string) => void }} opts */
+export function installGitHooks(root, { fs: fsMod = fs, exec, checkScript, nodePath = process.execPath, forceShared = false, warn = msg => console.warn(msg) } = {}) {
   if (!checkScript) throw Error('installGitHooks: checkScript is required');
   const dir = hooksDir(root, exec);
+  if (!hooksDirInsideRepo(root, dir, fsMod) && !forceShared) {
+    warn(`swarm git hooks: core.hooksPath is outside this repo (${dir}); not installing (pass forceShared to override)`);
+    return { status: 'skipped', reason: 'shared hooks path' };
+  }
   fsMod.mkdirSync(dir, { recursive: true });
   const meta = { nodePath, checkScript };
   for (const kind of ['pre-commit', 'pre-push', 'commit-msg']) {
     const hookPath = path.join(dir, kind);
-    if (hookIsSymlink(fsMod, hookPath)) fsMod.unlinkSync(hookPath);
+    if (hookIsSymlink(fsMod, hookPath)) backupUserHook(fsMod, hookPath);
     const existing = readHook(fsMod, hookPath);
     if (existing !== null && isOurHook(existing)) {
       try { fsMod.chmodSync(hookPath, 0o755); } catch { /* best effort */ }
@@ -121,6 +140,7 @@ export function installGitHooks(root, { fs: fsMod = fs, exec, checkScript, nodeP
     }
     fsMod.writeFileSync(hookPath, hookBody(kind, meta), { mode: 0o755 });
   }
+  return { status: 'installed' };
 }
 
 /** @param {string} root @param {{ fs?: typeof fs, exec?: Function }} opts */

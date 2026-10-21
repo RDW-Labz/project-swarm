@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
-import { open } from 'node:fs/promises';
+import { open, readFile, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { constants as fsConstants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,6 +14,7 @@ export const WHEN_IDLE_TRY_AGAIN_EXIT = 75;
 const WAIT_LINE = 'waiting for swarm update\n';
 const HELD_LOCK_BASENAME = '.update-pending-held.lock';
 const HELD_LOG_BASENAME = '.update-pending-held.log';
+const HELD_LOG_MAX_LINES = 500;
 
 function isPositiveInteger(value) {
   return Number.isInteger(value) && value > 0;
@@ -88,6 +90,33 @@ export async function removePendingRecord(installRoot) {
   await fs.rm(pendingPath(installRoot), { force: true });
 }
 
+async function withCrossProcessLock(lockPath, fn, { sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), timeoutMs = 30_000 } = {}) {
+  await fs.mkdir(path.dirname(lockPath), { recursive: true }).catch(() => {});
+  const deadline = Date.now() + timeoutMs;
+  let handle = null;
+  while (Date.now() < deadline) {
+    try {
+      handle = await open(lockPath, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600);
+      await handle.writeFile(`${process.pid}\n`);
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      await sleep(25);
+    }
+  }
+  if (!handle) throw Object.assign(new Error('pending-lock-timeout'), { code: 'EBUSY' });
+  try {
+    return await fn();
+  } finally {
+    await handle.close().catch(() => {});
+    await fs.rm(lockPath, { force: true }).catch(() => {});
+  }
+}
+
+async function withPendingFileLock(installRoot, fn, opts = {}) {
+  return await withCrossProcessLock(heldLockPath(installRoot), fn, opts);
+}
+
 async function atomicWritePending(installRoot, record, { createOnly = false } = {}) {
   const target = pendingPath(installRoot);
   await fs.mkdir(installRoot, { recursive: true });
@@ -118,39 +147,59 @@ async function atomicWritePending(installRoot, record, { createOnly = false } = 
 }
 
 export async function writePendingRecord(installRoot, record) {
-  await atomicWritePending(installRoot, record);
+  await withPendingFileLock(installRoot, () => atomicWritePending(installRoot, record));
 }
 
 export async function acquirePendingSlot(installRoot, record) {
-  const existing = await readLivePending(installRoot);
-  if (existing && existing.pid !== record.pid) {
-    return { ok: false, existing };
-  }
-  if (existing && existing.pid === record.pid) return { ok: true };
-  try {
-    await atomicWritePending(installRoot, record, { createOnly: true });
-    return { ok: true };
-  } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-    const again = await readLivePending(installRoot);
-    if (again && again.pid !== record.pid) return { ok: false, existing: again };
-    if (again && again.pid === record.pid) return { ok: true };
-    throw error;
-  }
+  return await withPendingFileLock(installRoot, async () => {
+    const existing = await readLivePending(installRoot);
+    if (existing && existing.pid !== record.pid) {
+      return { ok: false, existing };
+    }
+    if (existing && existing.pid === record.pid) return { ok: true };
+    try {
+      await atomicWritePending(installRoot, record, { createOnly: true });
+      return { ok: true };
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const again = await readLivePending(installRoot);
+      if (again && again.pid !== record.pid) return { ok: false, existing: again };
+      if (again && again.pid === record.pid) return { ok: true };
+      throw error;
+    }
+  });
 }
 
 async function rewritePending(installRoot, mutate) {
-  const record = await readPendingRaw(installRoot);
-  if (!record || !isPendingRecordLive(record)) return;
-  const next = mutate({ ...record, heldPids: Array.isArray(record.heldPids) ? [...record.heldPids] : [] });
-  if (!next) return;
-  await atomicWritePending(installRoot, next);
+  await withPendingFileLock(installRoot, async () => {
+    const record = await readPendingRaw(installRoot);
+    if (!record || !isPendingRecordLive(record)) return;
+    const next = mutate({ ...record, heldPids: Array.isArray(record.heldPids) ? [...record.heldPids] : [] });
+    if (!next) return;
+    await atomicWritePending(installRoot, next);
+  });
+}
+
+async function trimHeldLog(installRoot) {
+  const log = heldLogPath(installRoot);
+  try {
+    const text = await readFile(log, 'utf8');
+    const lines = text.split('\n').filter(line => line.trim());
+    if (lines.length <= HELD_LOG_MAX_LINES) return;
+    const kept = lines.slice(-HELD_LOG_MAX_LINES);
+    await writeFile(log, `${kept.join('\n')}\n`, { mode: 0o600 });
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
 }
 
 async function appendHeldPidAtomic(installRoot, launcherPid) {
   const log = heldLogPath(installRoot);
   await fs.mkdir(installRoot, { recursive: true });
-  await fs.appendFile(log, `${launcherPid}\n`, { mode: 0o600, flag: 'a' });
+  await withCrossProcessLock(`${log}.lock`, async () => {
+    await fs.appendFile(log, `${launcherPid}\n`, { mode: 0o600, flag: 'a' });
+    await trimHeldLog(installRoot);
+  });
 }
 
 export async function registerHeldLauncher(installRoot, launcherPid) {
@@ -216,20 +265,28 @@ export async function resolveInstallRootForPending({ env = process.env, ownRoot,
   return await fs.realpath(ownRoot).catch(() => ownRoot);
 }
 
-export function isPidHeldOrAncestor(pid, heldPids, { parentOf = defaultParentOf } = {}) {
+export function parentOfPid(pid, { execFileSyncImpl = execFileSync } = {}) {
+  if (!isPositiveInteger(pid)) return null;
+  try {
+    const out = execFileSyncImpl('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' });
+    const ppid = Number(String(out).trim());
+    if (!isPositiveInteger(ppid) || ppid === pid) return null;
+    return ppid;
+  } catch {
+    return null;
+  }
+}
+
+export function isPidHeldOrAncestor(pid, heldPids, { parentOf = parentOfPid, maxDepth = 64 } = {}) {
   if (!isPositiveInteger(pid) || !heldPids?.size) return false;
   const seen = new Set();
   let current = pid;
-  while (isPositiveInteger(current) && !seen.has(current)) {
+  while (isPositiveInteger(current) && !seen.has(current) && seen.size <= maxDepth) {
     seen.add(current);
     if (heldPids.has(current)) return true;
     current = parentOf(current);
   }
   return false;
-}
-
-function defaultParentOf() {
-  return null;
 }
 
 function markerWaitsForUpdate(marker) {
@@ -258,7 +315,7 @@ export async function machineBusySnapshot({
   excludePids = [],
   selfPid = process.pid,
   heldPids = [],
-  parentOf = defaultParentOf,
+  parentOf = parentOfPid,
 } = {}) {
   const exclude = new Set(excludePids);
   const held = new Set((heldPids ?? []).filter(isPositiveInteger));
@@ -313,6 +370,7 @@ export async function waitForMachineIdleWhilePending(installRoot, {
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
   now = () => Date.now(),
   timeoutMinutes = DEFAULT_WHEN_IDLE_TIMEOUT_MINUTES,
+  shouldAbort = () => false,
 } = {}) {
   const pollMs = pollIntervalMs(env);
   const statusMs = statusIntervalMs(env);
@@ -323,6 +381,7 @@ export async function waitForMachineIdleWhilePending(installRoot, {
   let lastStatus = 0;
 
   for (;;) {
+    if (shouldAbort()) return { timedOut: false, aborted: true, snapshot: { busy: false, liveRuns: [], processes: [], markers: [] } };
     const current = Date.now();
     await refreshPendingExpiry(installRoot);
     if (current >= idleDeadline) {
@@ -375,13 +434,31 @@ export async function runWhenIdleUpdate({
   }
 
   let removed = false;
+  let aborted = false;
+  let abortExitCode = null;
   const cleanup = async () => {
     if (removed) return;
     removed = true;
     await removePendingRecord(installRoot).catch(() => {});
   };
 
-  const abortHandler = () => { onAbort?.(); cleanup(); };
+  const detachAbortHandlers = () => {
+    process.off('SIGINT', abortHandler);
+    process.off('SIGTERM', abortHandler);
+    process.off('SIGHUP', abortHandler);
+  };
+
+  const abortHandler = received => {
+    aborted = true;
+    const signal = typeof received === 'string' ? received : 'SIGTERM';
+    abortExitCode = signal === 'SIGINT' ? 130 : 143;
+    onAbort?.();
+    void cleanup().then(() => {
+      detachAbortHandlers();
+      process.exit(abortExitCode);
+    });
+  };
+
   process.on('SIGINT', abortHandler);
   process.on('SIGTERM', abortHandler);
   process.on('SIGHUP', abortHandler);
@@ -394,7 +471,13 @@ export async function runWhenIdleUpdate({
       write,
       sleep,
       timeoutMinutes,
+      shouldAbort: () => aborted,
     });
+    if (wait.aborted) {
+      await cleanup();
+      detachAbortHandlers();
+      process.exit(abortExitCode ?? 130);
+    }
     if (wait.timedOut) {
       await cleanup();
       const detail = formatBusyStatus(wait.snapshot);
@@ -411,8 +494,6 @@ export async function runWhenIdleUpdate({
     await cleanup();
     throw error;
   } finally {
-    process.off('SIGINT', abortHandler);
-    process.off('SIGTERM', abortHandler);
-    process.off('SIGHUP', abortHandler);
+    detachAbortHandlers();
   }
 }

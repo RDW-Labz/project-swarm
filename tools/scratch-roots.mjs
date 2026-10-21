@@ -50,6 +50,28 @@ function isAncestorOf(ancestor, candidate) {
   return a !== c && c.startsWith(`${a}${path.sep}`);
 }
 
+const scratchBaseWarned = new Set();
+function warnScratchBase(warn, msg) {
+  if (scratchBaseWarned.has(msg)) return;
+  scratchBaseWarned.add(msg);
+  warn(msg);
+}
+
+function registeredProjectGitRoot(root) {
+  try {
+    const git = path.join(root, '.git');
+    const st = fs.lstatSync(git);
+    return st.isDirectory() || st.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function scratchBaseNameOk(resolved) {
+  const base = path.basename(resolved).toLowerCase();
+  return base.includes('scratch');
+}
+
 /** Validate SWARM_SCRATCH_BASE; returns the base path to use (default when invalid). */
 export function resolveScratchBase({ env = process.env, home = os.homedir(), registeredRoots = [], warn = msg => console.warn(msg) } = {}) {
   const raw = env.SWARM_SCRATCH_BASE;
@@ -58,22 +80,27 @@ export function resolveScratchBase({ env = process.env, home = os.homedir(), reg
   if (raw === '') return defaultBase;
   const candidate = String(raw);
   if (!path.isAbsolute(candidate)) {
-    warn(`SWARM_SCRATCH_BASE ignored (not an absolute path): ${candidate}`);
+    warnScratchBase(warn, `SWARM_SCRATCH_BASE ignored (not an absolute path): ${candidate}`);
     return defaultBase;
   }
   const resolved = safeRealpath(candidate) ?? path.resolve(candidate);
   const homeR = normalizedPath(home);
   const rootR = path.parse(resolved).root;
   if (resolved === rootR || resolved === homeR || (homeR && isAncestorOf(resolved, homeR))) {
-    warn('SWARM_SCRATCH_BASE ignored (root, home, or ancestor of home)');
+    warnScratchBase(warn, 'SWARM_SCRATCH_BASE ignored (root, home, or ancestor of home)');
     return defaultBase;
   }
   for (const reg of registeredRoots) {
     const rr = normalizedPath(reg);
-    if (rr && (resolved === rr || isUnder(resolved, rr))) {
-      warn('SWARM_SCRATCH_BASE ignored (inside a registered project)');
+    if (!rr || !registeredProjectGitRoot(rr)) continue;
+    if (resolved === rr || isUnder(resolved, rr) || isUnder(rr, resolved)) {
+      warnScratchBase(warn, 'SWARM_SCRATCH_BASE ignored (contains or sits inside a registered project with its own .git)');
       return defaultBase;
     }
+  }
+  if (!scratchBaseNameOk(resolved)) {
+    warnScratchBase(warn, 'SWARM_SCRATCH_BASE ignored (must be named like scratch or sit under the OS temp dir when it holds real projects)');
+    return defaultBase;
   }
   return resolved;
 }
@@ -102,20 +129,22 @@ function prefixParts(root) {
   return r ? r.split(path.sep).filter(Boolean) : [];
 }
 
-function segmentIsBroadTest(parts, index, { home, installRoot } = {}) {
-  const seg = parts[index];
+function segmentIsBroadTest(resolved, segs, index, { home, installRoot } = {}) {
+  const seg = segs[index];
   if (!seg || !BROAD_SEGMENTS.has(seg.toLowerCase())) return false;
   const homeParts = prefixParts(home);
-  const installParts = installRoot ? prefixParts(installRoot) : [];
-  const head = parts.slice(0, index + 1).join(path.sep);
+  const head = segs.slice(0, index + 1).join(path.sep);
   if (homeParts.length && head === homeParts.slice(0, index + 1).join(path.sep)) return false;
-  if (installParts.length && head === installParts.slice(0, index + 1).join(path.sep)) return false;
+  const installR = installRoot ? normalizedPath(installRoot) : null;
+  const prefix = `${path.sep}${segs.slice(0, index + 1).join(path.sep)}`;
+  if (installR && (prefix === installR || prefix.startsWith(`${installR}${path.sep}`))) return false;
   return true;
 }
 
-function hasBroadTestSegment(parts, options = {}) {
-  for (let i = 0; i < parts.length; i += 1) {
-    if (segmentIsBroadTest(parts, i, options)) return true;
+function hasBroadTestSegment(resolved, options = {}) {
+  const segs = resolved.split(path.sep).filter(Boolean);
+  for (let i = 0; i < segs.length; i += 1) {
+    if (segmentIsBroadTest(resolved, segs, i, options)) return true;
   }
   return false;
 }
@@ -156,8 +185,15 @@ function strictScratchCore(root, options = {}) {
     if (isUnder(raw, base)) return true;
   }
   const parts = resolved.split(path.sep).filter(Boolean);
-  const homeResolved = normalizedPath(options.home ?? os.homedir());
+  const homeResolved = normalizedPath(options.home ?? options.env?.HOME ?? os.homedir());
   if (homeResolved && resolved === homeResolved) return false;
+  const testTmp = options.env?.SWARM_TEST_TMP ?? process.env.SWARM_TEST_TMP;
+  if (testTmp) {
+    const tt = normalizedPath(testTmp);
+    if (tt && isUnder(resolved, tt) && !(homeResolved && isUnder(resolved, homeResolved)) && hasBroadTestSegment(resolved, options)) {
+      return true;
+    }
+  }
   if (hasTmpTestSegment(parts)) return true;
   if (pointerMarksScratch(resolved)) return true;
   if (hasScratchMarker(resolved)) return true;
@@ -177,8 +213,7 @@ export function isTestTempRoot(root, options = {}) {
   if (!raw) return false;
   const resolved = normalizedPath(raw);
   if (!resolved) return false;
-  const parts = resolved.split(path.sep).filter(Boolean);
-  return hasBroadTestSegment(parts, options);
+  return hasBroadTestSegment(resolved, options);
 }
 
 export { isTestTempRoot as isScratchRootBroad };

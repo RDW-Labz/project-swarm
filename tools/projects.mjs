@@ -9,6 +9,13 @@ import { createHash, randomBytes } from 'node:crypto';
 import { isScratchRoot as scratchRootOf, isTestTempRoot, scratchRootList } from './scratch-roots.mjs';
 
 export const projectsFile = (env = process.env, home = os.homedir()) => env.SWARM_PROJECTS_FILE || path.join(home, '.project-swarm', 'projects.json');
+
+function homeFromProjectsFile(file) {
+  const dir = path.dirname(String(file ?? ''));
+  const base = path.basename(dir);
+  if (base === '.project-swarm') return path.dirname(dir);
+  return null;
+}
 export const projectId = root => createHash('sha256').update(root).digest('hex').slice(0, 12);
 const isObj = v => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -91,12 +98,42 @@ async function parentExistsReadable(root) {
   }
 }
 
+function underRemovableMountPrefix(root) {
+  const r = path.resolve(String(root ?? ''));
+  return r.startsWith(`${path.sep}Volumes${path.sep}`)
+    || r.startsWith(`${path.sep}mnt${path.sep}`)
+    || r.startsWith(`${path.sep}media${path.sep}`);
+}
+
+async function parentEmptyOrMountpoint(root) {
+  const parent = path.dirname(root);
+  if (parent === root) return false;
+  try {
+    const entries = await fs.readdir(parent);
+    if (entries.length === 0) return true;
+    const pst = await fs.stat(parent);
+    const grandparent = path.dirname(parent);
+    if (grandparent === parent) return false;
+    const gst = await fs.stat(grandparent);
+    return pst.dev !== gst.dev;
+  } catch {
+    return false;
+  }
+}
+
+async function missingLooksLikeUnmount(root) {
+  return underRemovableMountPrefix(root) || (await parentEmptyOrMountpoint(root));
+}
+
 /** @returns {'present'|'missing'|'unreachable'} */
 async function rootReachability(root) {
   const { code, isDirectory } = await statRootWithTimeout(root);
   if (code === null && isDirectory) return 'present';
   if (code === 'ENOENT' || code === 'ENOTDIR') {
-    if (await parentExistsReadable(root)) return 'missing';
+    if (await parentExistsReadable(root)) {
+      if (await missingLooksLikeUnmount(root)) return 'unreachable';
+      return 'missing';
+    }
     return 'unreachable';
   }
   return 'unreachable';
@@ -107,8 +144,9 @@ async function rootExists(root) {
 }
 
 // Owner inbox, phone sync and swarm inbox pass forOwner: true; the board listing uses forOwner false and hides isTestTempRoot only.
-export async function listProjects({ file = projectsFile(), forOwner = false, includeScratch, pruneGone, unreachable } = {}) {
+export async function listProjects({ file = projectsFile(), forOwner = false, includeScratch, pruneGone, unreachable, env = process.env, home = os.homedir(), installRoot } = {}) {
   const reportUnreachable = unreachable ?? [];
+  const effectiveHome = homeFromProjectsFile(file) ?? env.HOME ?? home;
   let damaged = false;
   try {
     const data = JSON.parse(await fs.readFile(file, 'utf8'));
@@ -128,29 +166,27 @@ export async function listProjects({ file = projectsFile(), forOwner = false, in
         }
       }
       if (missing.length) {
-        let wrote = false;
         try {
           await withRegistryLock(file, async () => {
             const onDisk = await listForWrite(file);
             const left = onDisk.filter(p => !missing.some(m => m.id === p.id));
-            if (left.length !== onDisk.length) {
-              await write(file, left);
-              wrote = true;
-            }
+            if (left.length !== onDisk.length) await write(file, left);
           });
         } catch (error) {
           if (error.code === 'projects-unreadable') damaged = true;
         }
         if (!damaged) projects = existing;
-        else projects = existing;
       } else {
         projects = existing;
       }
     }
+    const registeredRoots = projects.map(p => p.root);
+    const install = installRoot ?? (env.SWARM_TEST_TMP || process.env.SWARM_TEST_TMP ? null : await resolveInstallRoot(undefined, env));
+    const scratchOpts = { env, home: effectiveHome, installRoot: install, registeredRoots };
     if (owner) {
-      projects = projects.filter(p => !isScratchRoot(p.root, { strict: true }));
+      projects = projects.filter(p => !isScratchRoot(p.root, { ...scratchOpts, strict: true }));
     } else if (includeScratch !== true) {
-      projects = projects.filter(p => !isTestTempRoot(p.root));
+      projects = projects.filter(p => !isTestTempRoot(p.root, scratchOpts));
     }
     return projects;
   } catch (error) {
@@ -306,6 +342,15 @@ async function isInstallRootProject(project, install) {
   return root === install;
 }
 
+async function looksLikeSwarmInstallRoot(rootPath) {
+  try {
+    await fs.access(path.join(rootPath, 'tools', 'swarm.mjs'), fssync.constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function forgetFooter() {
   return `${FORGET_REGISTRY_ONLY}\n`;
 }
@@ -335,7 +380,7 @@ export async function forgetProjects({
     }
     if (scratch) {
       for (const project of projects) {
-        if (isScratchRoot(project.root, { ...scratchOpts, strict: true }) || isTestTempRoot(project.root, scratchOpts)) ids.add(project.id);
+        if (isScratchRoot(project.root, { ...scratchOpts, strict: true, registeredRoots: projects.map(p => p.root) })) ids.add(project.id);
       }
     }
     for (const arg of paths) {
@@ -344,9 +389,15 @@ export async function forgetProjects({
         if (await projectMatchesInput(project, arg)) matches.push(project);
       }
       if (!matches.length) return { error: `not registered: ${arg}`, exitCode: 1 };
-      const normArg = install ? await normalizeMatchPath(arg) : null;
+      const normArg = await normalizeMatchPath(arg);
+      if (!install && normArg && (await looksLikeSwarmInstallRoot(normArg))) {
+        return { error: 'refusing to forget the swarm install root itself (install dir could not be resolved)', exitCode: 1 };
+      }
       const argIsInstall = install && normArg && normArg === install;
       for (const project of matches) {
+        if (!install && normArg && (await looksLikeSwarmInstallRoot(await normalizeMatchPath(project.root)))) {
+          return { error: 'refusing to forget the swarm install root itself (install dir could not be resolved)', exitCode: 1 };
+        }
         if (install && (await isInstallRootProject(project, install))) {
           if (paths.length === 1 && matches.length === 1) {
             return { error: 'refusing to forget the swarm install root itself', exitCode: 1 };
@@ -391,7 +442,7 @@ export async function forgetProjects({
       return { stdout: `${lines.join('\n')}\n`, exitCode: 0 };
     } catch (error) {
       if (error.code === 'projects-unreadable') return { stdout: `${error.message}\n${forgetFooter()}`, exitCode: 1 };
-      return { stdout: `nothing to forget\n${forgetFooter()}`, exitCode: 0 };
+      return { stdout: `${error.message}\n${forgetFooter()}`, exitCode: 1 };
     }
   }
 

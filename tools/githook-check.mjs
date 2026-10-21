@@ -63,6 +63,9 @@ const filesDenyMessage = rels => {
 
 const MANIFEST_DIR_PREFIX = 'coordination/manifests/';
 
+/** Distinct exit code for manifest rule violations (shell wrapper maps this to hook failure). */
+export const COMMIT_MSG_VIOLATION_EXIT = 3;
+
 const commitDenyMain = `${DENY_ADVICE} (blocked: git commit on a protected branch)`;
 
 const manifestCommitRefused = rels => {
@@ -104,10 +107,25 @@ export function pathsFromCachedNameStatus(text) {
 
 function gitCommentChar(root) {
   try {
-    const ch = execFileSync('git', ['config', '--get', 'commit.commentChar'], { cwd: root, encoding: 'utf8', timeout: 3000 }).trim();
+    const ch = execFileSync('git', ['config', '--get', 'core.commentChar'], { cwd: root, encoding: 'utf8', timeout: 3000 }).trim();
+    if (ch === 'auto') return '#';
     if (ch) return ch[0];
   } catch { /* default */ }
   return '#';
+}
+
+function gitDir(root) {
+  try {
+    const gitPath = path.join(root, '.git');
+    const raw = fs.readFileSync(gitPath, 'utf8').trim();
+    if (raw.startsWith('gitdir:')) {
+      const rel = raw.slice('gitdir:'.length).trim();
+      return path.isAbsolute(rel) ? rel : path.join(root, rel);
+    }
+    return gitPath;
+  } catch {
+    return path.join(root, '.git');
+  }
 }
 
 function readCommitSubjectFromFile(messagePath, { commentChar = '#' } = {}) {
@@ -124,7 +142,7 @@ function readCommitSubjectFromFile(messagePath, { commentChar = '#' } = {}) {
 export function isManifestCommitSubject(subject) {
   const t = String(subject ?? '').trim();
   if (/^(?:manifests?:|manifest\s+for\b)/i.test(t)) return true;
-  if (/^manifest\s+/i.test(t) && !/^manifest\s+parser:/i.test(t)) return true;
+  if (/^manifest\s+/i.test(t) && !/^manifest\s+parser:/i.test(t) && !/\d/.test(t)) return true;
   return false;
 }
 
@@ -133,15 +151,23 @@ function pathUnderManifestsCaseSensitive(rel) {
   return n === 'coordination/manifests' || n.startsWith(MANIFEST_DIR_PREFIX);
 }
 
-export function shouldSkipCommitMsgCheck({ root, env = process.env, argv = process.argv } = {}) {
+export function shouldSkipCommitMsgCheck({ root, env = process.env, argv = process.argv, messagePath } = {}) {
   if (env.GITMERGE_AUTOEDIT === 'no') return true;
   if (root) {
     try {
-      if (fs.existsSync(path.join(root, '.git', 'MERGE_HEAD'))) return true;
+      const gd = gitDir(root);
+      if (fs.existsSync(path.join(gd, 'MERGE_HEAD'))) return true;
+      if (fs.existsSync(path.join(gd, 'rebase-merge')) || fs.existsSync(path.join(gd, 'rebase-apply'))) return true;
+      if (fs.existsSync(path.join(gd, 'CHERRY_PICK_HEAD'))) return true;
     } catch { /* ignore */ }
   }
-  const amendNoMessage = argv.includes('--amend') && !argv.some(a => a === '-m' || a === '-F' || a === '-c' || a === '-C' || a.startsWith('--message='));
-  if (amendNoMessage) return true;
+  const msgPath = messagePath ?? argv[3];
+  if (msgPath) {
+    try {
+      const subj = readCommitSubjectFromFile(msgPath, { commentChar: root ? gitCommentChar(root) : '#' });
+      if (/^(fixup|squash)!/i.test(subj.trim())) return true;
+    } catch { /* ignore */ }
+  }
   const msg = env.GIT_COMMIT_MSG ?? '';
   if (/^(fixup|squash)!/i.test(msg.trim())) return true;
   return false;
@@ -309,8 +335,8 @@ function defaultReadStagedBlob(root, rel) {
 }
 
 function runCommitMsgCheckSync(root) {
-  if (shouldSkipCommitMsgCheck({ root, env: process.env, argv: process.argv })) return { ok: true };
   const messagePath = process.argv[3];
+  if (shouldSkipCommitMsgCheck({ root, env: process.env, argv: process.argv, messagePath })) return { ok: true };
   let nameStatusText;
   try {
     const zbuf = execFileSync('git', ['diff', '--cached', '--name-status', '-z', '--no-renames'], {
@@ -345,7 +371,7 @@ function runCli(kind) {
       const result = runCommitMsgCheckSync(root);
       if (!result.ok) {
         process.stderr.write(`${result.message}\n`);
-        process.exit(1);
+        process.exit(COMMIT_MSG_VIOLATION_EXIT);
       }
       process.exit(0);
     } catch {

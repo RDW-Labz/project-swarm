@@ -9,17 +9,8 @@ import { isScratchRoot } from './scratch-roots.mjs';
 import { listProjects, projectsFile } from './projects.mjs';
 
 async function registeredScratchHandbuildRoot(root, installRoot) {
-  if (!isScratchRoot(root, { installRoot, strict: true })) return false;
-  let real;
-  try { real = await fsPromises.realpath(root); } catch { real = path.resolve(root); }
-  const norm = async candidate => {
-    try { return await fsPromises.realpath(candidate); } catch { return path.resolve(candidate); }
-  };
   const projects = await listProjects({ file: projectsFile(), forOwner: false, includeScratch: true, pruneGone: false });
-  for (const project of projects) {
-    if ((await norm(project.root)) === real) return true;
-  }
-  return false;
+  return isScratchRoot(root, { installRoot, strict: true, registeredRoots: projects.map(p => p.root) });
 }
 import { ensureHandbuildGuard, removeHandbuildGuard, stableInstallDir } from './install.mjs';
 import { installGitHooks, removeGitHooks } from './git-hooks.mjs';
@@ -81,8 +72,9 @@ export async function runHandbuildCommand(root, args, { installRoot, now = Date.
       const r = await ensureHandbuildGuard(root, installRoot);
       if (r.status === 'skipped') return out(`not installed: ${r.reason}`, 1);
       const install = stableInstallDir(installRoot);
-      installGitHooks(root, { checkScript: path.join(install, 'tools', 'githook-check.mjs') });
-      return out(`hand-build guard ${r.status} in ${root}/.claude/settings.local.json (it applies to new Claude Code sessions in this project)\ngit hooks installed`);
+      const hooks = installGitHooks(root, { checkScript: path.join(install, 'tools', 'githook-check.mjs') });
+      const hookNote = hooks?.status === 'skipped' ? `git hooks not installed (${hooks.reason})` : 'git hooks installed';
+      return out(`hand-build guard ${r.status} in ${root}/.claude/settings.local.json (it applies to new Claude Code sessions in this project)\n${hookNote}`);
     }
     if (sub === 'uninstall') {
       const r = await removeHandbuildGuard(root);

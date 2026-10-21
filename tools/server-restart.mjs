@@ -18,9 +18,19 @@ export const remoteServerFile = (env = process.env, home = os.homedir()) => {
   return env.SWARM_REMOTE_SERVER_FILE || path.join(path.dirname(board), 'remote-server.json');
 };
 
+export function pidProbe(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return 'dead';
+  try {
+    process.kill(pid, 0);
+    return 'alive';
+  } catch (error) {
+    if (error?.code === 'EPERM') return 'denied';
+    return 'dead';
+  }
+}
+
 export function pidAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try { process.kill(pid, 0); return true; } catch { return false; }
+  return pidProbe(pid) === 'alive';
 }
 
 export function validServerPort(port) {
@@ -49,7 +59,7 @@ function shellQuote(value) {
 
 export function manualCommand({ runner, argv, cwd, env }) {
   const restartArgv = argvWithoutOpen(argv);
-  const parts = [process.execPath, shellQuote(runner), ...restartArgv.map(a => shellQuote(a))];
+  const parts = [shellQuote(process.execPath), shellQuote(runner), ...restartArgv.map(a => shellQuote(a))];
   const prefix = cwd && cwd !== process.cwd() ? `cd ${shellQuote(cwd)} && ` : '';
   const envKeys = Object.keys(env ?? {});
   const envPrefix = envKeys.length
@@ -73,7 +83,10 @@ function parseRecord(text, kind) {
   if (typeof data.cwd !== 'string' || !data.cwd) return { error: `missing cwd in ${kind} server record` };
   if (!Number.isInteger(data.port)) return { error: `missing port in ${kind} server record` };
   if (data.mode !== 'terminal' && data.mode !== 'background') return { error: `invalid mode in ${kind} server record` };
-  return { record: { ...data, kind } };
+  const env = data.env && typeof data.env === 'object' && !Array.isArray(data.env)
+    ? safeEnvSubset(data.env)
+    : {};
+  return { record: { ...data, env, kind } };
 }
 
 async function readKind(file, kind) {
@@ -105,18 +118,50 @@ export function expectedSubcommandForRecord(record) {
   return { tokens: ['watch'] };
 }
 
-export function commandLineMatchesRecord(commandLine, record, runnerPath) {
-  if (!commandLine || typeof commandLine !== 'string') return false;
-  const line = commandLine;
-  const runnerBase = path.basename(runnerPath);
-  if (!line.includes('swarm.mjs') && !line.includes(runnerBase)) return false;
-  const { tokens } = expectedSubcommandForRecord(record);
-  for (const token of tokens) {
-    if (!line.includes(token)) return false;
+function tokenizeCommandLine(line) {
+  const tokens = [];
+  let i = 0;
+  while (i < line.length) {
+    while (i < line.length && /\s/.test(line[i])) i += 1;
+    if (i >= line.length) break;
+    const quote = line[i];
+    if (quote === '\'' || quote === '"') {
+      i += 1;
+      let word = '';
+      while (i < line.length && line[i] !== quote) {
+        if (quote === '\'' && line[i] === '\\' && i + 1 < line.length) {
+          word += line[i + 1];
+          i += 2;
+          continue;
+        }
+        word += line[i];
+        i += 1;
+      }
+      if (line[i] === quote) i += 1;
+      tokens.push(word);
+      continue;
+    }
+    const start = i;
+    while (i < line.length && !/\s/.test(line[i])) i += 1;
+    tokens.push(line.slice(start, i));
   }
-  for (const arg of record.argv ?? []) {
-    if (arg === '--open') continue;
-    if (arg.length > 2 && !line.includes(arg)) return false;
+  return tokens;
+}
+
+export function commandLineMatchesRecord(commandLine, record, runnerPath) {
+  if (!commandLine || typeof commandLine !== 'string' || !runnerPath) return false;
+  const tokens = tokenizeCommandLine(commandLine.trim());
+  const resolvedRunner = path.resolve(runnerPath);
+  const hasRunner = tokens.some(token => {
+    try { return path.resolve(token) === resolvedRunner; } catch { return false; }
+  });
+  if (!hasRunner) return false;
+  const { tokens: subcommand } = expectedSubcommandForRecord(record);
+  for (const token of subcommand) {
+    if (!tokens.includes(token)) return false;
+  }
+  for (const arg of argvWithoutOpen(record.argv ?? [])) {
+    if (!tokens.includes(arg)) return false;
   }
   return true;
 }
@@ -137,17 +182,23 @@ export async function readProcessIdentity(pid, { execFileImpl = execFileAsync, n
   }
 }
 
+export function identityMismatchRemovesRecord(reason) {
+  return reason === 'process command line does not match server record'
+    || reason === 'process start time is newer than the server record';
+}
+
 export async function verifyRegistryPid(record, runnerPath, { execFileImpl = execFileAsync } = {}) {
   const identity = await readProcessIdentity(record.pid, { execFileImpl });
-  if (!identity) return { ok: false, reason: 'could not read process command line' };
+  if (!identity) return { ok: false, reason: 'could not read process command line', removeRecord: false };
   if (!commandLineMatchesRecord(identity.command, record, runnerPath)) {
-    return { ok: false, reason: 'process command line does not match server record' };
+    return { ok: false, reason: 'process command line does not match server record', removeRecord: true };
+  }
+  if (identity.startedAt === null) {
+    return { ok: false, reason: 'could not read process start time', removeRecord: false };
   }
   const recordStart = Date.parse(record.startedAt);
-  if (Number.isFinite(recordStart) && identity.startedAt !== null) {
-    if (identity.startedAt > recordStart + 5000) {
-      return { ok: false, reason: 'process start time is newer than the server record' };
-    }
+  if (Number.isFinite(recordStart) && identity.startedAt > recordStart + 5000) {
+    return { ok: false, reason: 'process start time is newer than the server record', removeRecord: true };
   }
   return { ok: true, identity };
 }
@@ -227,12 +278,30 @@ async function pollNewVersion(record, targetVersion, { timeoutMs = 20000, pollMs
   return { ok: false };
 }
 
-async function pollRemoteFile(file, targetVersion, { timeoutMs = 20000, pollMs = 250, sleep } = {}) {
+async function pollRemoteFile(file, targetVersion, { timeoutMs = 20000, pollMs = 250, sleep, pidAliveImpl = pidAlive } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
       const data = JSON.parse(await fs.readFile(file, 'utf8'));
-      if (data?.version === targetVersion && pidAlive(data.pid)) return { ok: true, pid: data.pid };
+      if (data?.version === targetVersion && pidAliveImpl(data.pid)) return { ok: true, pid: data.pid };
+    } catch { /* not ready */ }
+    await (sleep ?? (ms => new Promise(r => setTimeout(r, ms))))(pollMs);
+  }
+  return { ok: false };
+}
+
+async function pollBoardRecord(file, targetVersion, { timeoutMs = 20000, pollMs = 250, sleep, fetchImpl, pidAliveImpl = pidAlive } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const data = JSON.parse(await fs.readFile(file, 'utf8'));
+      const port = data?.port;
+      if (data?.version === targetVersion && pidAliveImpl(data.pid) && validServerPort(port)) {
+        const body = await fetchHealth(`http://127.0.0.1:${port}/api/health`, fetchImpl);
+        if (body?.version === targetVersion) {
+          return { ok: true, pid: data.pid, port };
+        }
+      }
     } catch { /* not ready */ }
     await (sleep ?? (ms => new Promise(r => setTimeout(r, ms))))(pollMs);
   }
@@ -258,14 +327,41 @@ async function assertStartable({ runner, cwd, argv }) {
   return { ok: true };
 }
 
+const RESTART_LOCK_BASENAME = '.server-restart.lock';
+
+async function withRestartLock(installRoot, fn, { sleep = ms => new Promise(r => setTimeout(r, ms)), lockTimeoutMs = 60_000 } = {}) {
+  const lockPath = path.join(installRoot, RESTART_LOCK_BASENAME);
+  await fs.mkdir(installRoot, { recursive: true }).catch(() => {});
+  const deadline = Date.now() + lockTimeoutMs;
+  let handle = null;
+  while (Date.now() < deadline) {
+    try {
+      handle = await fs.open(lockPath, 'wx', 0o600);
+      await handle.writeFile(`${process.pid}\n`);
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      await sleep(50);
+    }
+  }
+  if (!handle) return { ok: false, reason: 'another server restart is already in progress' };
+  try {
+    return { ok: true, result: await fn() };
+  } finally {
+    await handle.close().catch(() => {});
+    await fs.rm(lockPath, { force: true }).catch(() => {});
+  }
+}
+
 function spawnDetached(runner, argv, { cwd, env, spawnImpl = spawn }) {
   const restartArgv = argvWithoutOpen(argv);
+  const childEnv = safeEnvSubset(env ?? {});
   return new Promise(resolve => {
     const child = spawnImpl(process.execPath, [runner, ...restartArgv], {
       detached: true,
       stdio: 'ignore',
       cwd,
-      env: { ...process.env, ...env },
+      env: { ...safeEnvSubset(process.env), ...childEnv },
     });
     child.on?.('error', () => resolve({ pid: null, error: true }));
     child.unref?.();
@@ -296,6 +392,7 @@ export async function restartRegisteredServers({
   const servers = [];
   if (noRestart || !targetVersion) return { servers, lines: [] };
 
+  const locked = await withRestartLock(installRoot, async () => {
   const pathEnv = registryEnv(env, home);
   const entries = [
     await readKind(boardFile(pathEnv, home), 'board'),
@@ -332,7 +429,13 @@ export async function restartRegisteredServers({
       continue;
     }
 
-    if (!pidAliveImpl(record.pid)) {
+    const probe = pidAliveImpl === pidAlive ? pidProbe(record.pid) : (pidAliveImpl(record.pid) ? 'alive' : 'dead');
+    if (probe === 'denied') {
+      emit(`${label} server record (pid ${record.pid}): process exists but is not owned by this user; record kept`);
+      servers.push({ kind, pid: record.pid, from: record.version, to: targetVersion, port: record.port, status: 'unowned-pid' });
+      continue;
+    }
+    if (probe === 'dead') {
       await fs.rm(file, { force: true }).catch(() => {});
       continue;
     }
@@ -367,9 +470,15 @@ export async function restartRegisteredServers({
       ? await verifyRegistryPid(record, runner, { execFileImpl })
       : { ok: true };
     if (!identity.ok) {
-      emit(`${label} stale server record (pid ${record.pid}): ${identity.reason}; record removed`);
-      await fs.rm(file, { force: true }).catch(() => {});
-      servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'stale-record' });
+      const remove = identity.removeRecord === true || identityMismatchRemovesRecord(identity.reason);
+      if (remove) {
+        emit(`${label} stale server record (pid ${record.pid}): ${identity.reason}; record removed`);
+        await fs.rm(file, { force: true }).catch(() => {});
+        servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'stale-record' });
+      } else {
+        emit(`${label} server record (pid ${record.pid}): ${identity.reason}; record kept`);
+        servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified' });
+      }
       continue;
     }
 
@@ -398,11 +507,12 @@ export async function restartRegisteredServers({
       const { pid: newPid, error: spawnError } = await spawnDetached(runner, record.argv, { cwd: record.cwd, env: record.env, spawnImpl });
       if (spawnError || !newPid) continue;
       const confirm = kind === 'remote'
-        ? await pollRemoteFile(file, targetVersion, { sleep })
-        : await pollNewVersion({ ...record, port }, targetVersion, { sleep, fetchImpl });
+        ? await pollRemoteFile(file, targetVersion, { sleep, pidAliveImpl })
+        : await pollBoardRecord(file, targetVersion, { sleep, fetchImpl, pidAliveImpl });
       if (confirm.ok) {
-        emit(`${label} restarted: ${from} to ${targetVersion} (port ${port}, pid ${confirm.pid ?? newPid})`);
-        servers.push({ kind, pid: confirm.pid ?? newPid, from, to: targetVersion, port, status: 'restarted' });
+        const confirmedPort = confirm.port ?? port;
+        emit(`${label} restarted: ${from} to ${targetVersion} (port ${confirmedPort}, pid ${confirm.pid ?? newPid})`);
+        servers.push({ kind, pid: confirm.pid ?? newPid, from, to: targetVersion, port: confirmedPort, status: 'restarted' });
         started = true;
       } else if (newPid && pidAliveImpl(newPid)) {
         try { killImpl(newPid, 'SIGTERM'); } catch { /* best effort */ }
@@ -417,6 +527,13 @@ export async function restartRegisteredServers({
   }
 
   return { servers, lines: [] };
+  }, { sleep });
+
+  if (!locked.ok) {
+    emit(locked.reason);
+    return { servers, lines: [] };
+  }
+  return locked.result;
 }
 
 export function noRestartFromArgv(argv = process.argv) {
