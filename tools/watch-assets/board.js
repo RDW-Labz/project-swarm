@@ -155,8 +155,10 @@ function renderKpis(m) {
   var seg = el('div', 'seg');
   Object.keys(m.agents.byLane).forEach(function (lane) { if (m.agents.byLane[lane]) { var i = el('i'); i.style.flex = String(m.agents.byLane[lane]); i.style.background = L.laneColor(lane); seg.appendChild(i); } });
   box.appendChild(tile('Live agents', String(m.agents.total), m.liveRuns + ' live run' + (m.liveRuns === 1 ? '' : 's') + (L.agentCounts(m).unshown ? ', ' + L.agentCounts(m).held + ' worker slots held' : ''), m.agents.total ? seg : null));
-  box.appendChild(tile('Spend today', usd(c.todayUsd), 'last 7 days ' + usd(c.weekUsd)));
-  box.appendChild(tile('Billed, all time', usd(c.paidUsd), 'of which estimated ' + usd(c.paidEstimatedUsd) + ' | flat-rate list value ' + usd(c.flatRateListUsd)));
+  box.appendChild(tile('Billed today', usd(c.todayUsd), 'last 7 days billed ' + usd(c.weekUsd)));
+  box.appendChild(tile('List value today', usd(c.flatRateTodayUsd), 'flat-rate lanes, not billed; 7 days ' + usd(c.flatRateWeekUsd)));
+  box.appendChild(tile('Billed, all time', usd(c.paidUsd), 'of which estimated ' + usd(c.paidEstimatedUsd)));
+  box.appendChild(tile('List value, all time', usd(c.flatRateListUsd), 'not billed'));
   var w = m.workers;
   if (w) {
     var limit = w.invalid ? 'LIMIT INVALID' : w.max ? w.total + ' / ' + w.max : String(w.total);
@@ -198,14 +200,20 @@ function renderBays(m) {
 }
 function capCell(p) {
   var s = p.spend, box = el('div');
+  function breakdown() {
+    box.appendChild(el('div', 'sub', 'billed ' + usd(s.billedUsd) + ' · list value ' + usd(s.listUsd) + ' (not billed)'));
+    box.appendChild(el('div', 'sub', 'cap counts: ' + (s.capBasis === 'billed' ? 'billed only' : 'billed + list value')));
+  }
   if (s.capUsd) {
     var used = s.sharedTrees > 1 && typeof s.familyUsd === 'number' ? s.familyUsd : s.usd;
     box.appendChild(meter(100 * used / s.capUsd, used / s.capUsd > 0.75));
     box.appendChild(el('span', 'mono sub', usd(used) + ' of ' + usd(s.capUsd)));
+    breakdown();
     if (s.sharedTrees > 1) { box.appendChild(el('div', 'sub', 'shared by ' + s.sharedTrees + ' trees (this one ' + usd(s.usd) + ')')); }
     if (s.capInherited) { box.appendChild(el('div', 'sub', 'cap inherited from ' + String(s.inheritedFrom || '').split(/[\\/]/).pop())); }
   } else {
-    var r = el('div', 'livebar'); r.appendChild(pill(s.capInvalid ? 'CAP INVALID' : 'NO CAP', s.capInvalid ? 'bad' : 'warn')); r.appendChild(el('span', 'mono sub', usd(s.usd))); box.appendChild(r);
+    var r = el('div', 'livebar'); r.appendChild(pill(s.capInvalid ? 'CAP INVALID' : 'NO CAP', s.capInvalid ? 'bad' : 'warn')); box.appendChild(r);
+    breakdown();
   }
   if (s.reached) { box.appendChild(pill('CAP REACHED', 'bad')); }
   if (s.why) { box.appendChild(el('div', 'sub why', 'Why capped: ' + s.why)); }
@@ -381,8 +389,8 @@ function renderCost(data) {
   state.costSig = csig;
   var c = data.machine.cost;
   var k = $('costKpis'); k.textContent = '';
-  k.appendChild(tile('Today', usd(c.todayUsd), 'billed lanes and rented GPUs'));
-  k.appendChild(tile('Last 7 days', usd(c.weekUsd), 'billed'));
+  k.appendChild(tile('Billed today', usd(c.todayUsd), 'billed lanes and rented GPUs'));
+  k.appendChild(tile('Billed, 7 days', usd(c.weekUsd), 'billed lanes and rented GPUs'));
   k.appendChild(tile('Billed, all time', usd(c.paidUsd), 'estimated part ' + usd(c.paidEstimatedUsd)));
   k.appendChild(tile('Flat-rate list value', usd(c.flatRateListUsd), 'Codex, Cursor, Claude subscription: not billed'));
   var oc = data.machine.orchestrator || { todayListUsd: 0, allListUsd: 0 };
@@ -414,7 +422,7 @@ function renderCost(data) {
       var nameCell = el('div', 'livebar'); var sw = el('i'); sw.style.cssText = 'width:10px;height:10px;border-radius:3px;display:block;background:' + L.laneColor(l.label); nameCell.appendChild(sw); nameCell.appendChild(el('span', 'name', l.label));
       tr.appendChild(td(nameCell)); tr.appendChild(td(l.kind === 'billed' ? pill('billed', 'good') : pill('flat-rate, list value', 'info')));
       tr.appendChild(td(String(l.jobsToday || 0), 'mono'));
-      tr.appendChild(td(l.todayUsd ? usd(l.todayUsd) : (l.kind === 'flat-rate' && l.jobsToday ? 'not reported' : usd(0)), 'mono'));
+      tr.appendChild(td(l.todayUsd ? usd(l.todayUsd) + (l.kind === 'billed' ? ' billed' : ' list value') : (l.kind === 'flat-rate' && l.jobsToday ? 'not reported list value' : usd(0) + (l.kind === 'billed' ? ' billed' : ' list value')), 'mono'));
       var cap = el('div');
       if (l.dailyCapUsd) { cap.appendChild(meter(100 * l.todayUsd / l.dailyCapUsd, l.todayUsd / l.dailyCapUsd > 0.75)); cap.appendChild(el('span', 'mono sub', usd(l.todayUsd) + ' of ' + usd(l.dailyCapUsd))); } else { cap.appendChild(el('span', 'sub', 'no daily cap')); }
       tr.appendChild(td(cap));
@@ -428,12 +436,12 @@ function renderCost(data) {
   }
   $('laneNote').textContent = 'Billed lanes count what they were charged today; flat-rate lanes show what the work is worth at list price. A pause comes from a real rate-limit or quota event recorded by the lane scheduler.';
   var s = $('spendTable'); s.textContent = '';
-  s.appendChild(th(['Project', 'Today', '7 days', 'All time', 'Spend and cap']));
+  s.appendChild(th(['Project', 'Billed today', 'Billed, 7 days', 'Billed, all time', 'List value, all time', 'Spend and cap']));
   var sb = el('tbody');
   data.projects.forEach(function (p) {
     var bp = data.machine.cost.byProject[p.id] || {};
     var tr = el('tr');
-    tr.appendChild(td(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)]))); tr.appendChild(td(usd(bp.todayUsd), 'mono')); tr.appendChild(td(usd(bp.weekUsd), 'mono')); tr.appendChild(td(usd(bp.allUsd), 'mono')); tr.appendChild(td(capCell(p)));
+    tr.appendChild(td(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)]))); tr.appendChild(td(usd(bp.todayUsd), 'mono')); tr.appendChild(td(usd(bp.weekUsd), 'mono')); tr.appendChild(td(usd(bp.paidUsd), 'mono')); tr.appendChild(td(usd(bp.flatRateListUsd), 'mono')); tr.appendChild(td(capCell(p)));
     sb.appendChild(tr);
   });
   s.appendChild(sb);
