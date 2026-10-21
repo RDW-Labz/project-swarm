@@ -8,6 +8,12 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LANE_AGENTS } from './lanes.mjs';
 import { validateRentedConfig } from './rented.mjs';
+import {
+  centralDayKey,
+  dailyLimitNotice,
+  evaluateDailyLimit,
+  isPaidLane,
+} from './daily-limit.mjs';
 
 export const LANE_DAILY_DEFAULTS = Object.freeze({ openrouter: Object.freeze({ dailyUsd: 5 }), anthropic: Object.freeze({ dailyUsd: 20 }) });
 export const PAID_LANES = Object.freeze(['openrouter', 'openai', 'gemini', 'lambda', 'anthropic', 'rented']);
@@ -180,6 +186,63 @@ export function laneDayTotals(store, { day = utcDay(Date.now) } = {}) {
   return totals;
 }
 
+const BILLED_SPEND_KINDS = new Set(['actual', 'estimated', 'reserved-as-cost']);
+
+// Metered lanes only: settled spend for the America/Chicago calendar day (in-flight reservations are excluded).
+export function billedMeteredTodayUsd(store, { now = Date.now } = {}) {
+  const day = centralDayKey(now);
+  let total = 0;
+  for (const entry of Object.values(store.entries ?? {})) {
+    if (!PAID_LANES.includes(entry.lane) || !BILLED_SPEND_KINDS.has(entry.kind)) continue;
+    const at = entry.at ? Date.parse(entry.at) : Date.parse(`${entry.day}T12:00:00.000Z`);
+    if (!Number.isFinite(at) || centralDayKey(() => at) !== day) continue;
+    total += entry.usd;
+  }
+  return total;
+}
+
+function dailyLimitState(store, now) {
+  const day = centralDayKey(now);
+  if (!object(store.dailyLimit) || store.dailyLimit.day !== day) store.dailyLimit = { day, notified: [] };
+  else if (!Array.isArray(store.dailyLimit.notified)) store.dailyLimit.notified = [];
+  return store.dailyLimit;
+}
+
+function applyDailyLimit({ store, lane, dailyLimit, now }) {
+  if (dailyLimit === undefined || !isPaidLane(lane)) return null;
+  const settings = dailyLimit.settings ?? dailyLimit;
+  const state = dailyLimitState(store, now);
+  const billedTodayUsd = billedMeteredTodayUsd(store, { now });
+  const evaluation = evaluateDailyLimit({
+    settings,
+    billedTodayUsd,
+    lane,
+    now,
+    notifiedLevels: state.notified,
+  });
+  const project = dailyLimit.project ?? 'project';
+  const notices = [];
+  for (const level of evaluation.notify) {
+    state.notified.push(level);
+    if (level === 'ceiling') continue;
+    notices.push(dailyLimitNotice({ project, level, billedTodayUsd, settings, now }));
+  }
+  if (!evaluation.allow) {
+    return {
+      evaluation,
+      notices,
+      decision: {
+        reason: 'daily-limit',
+        action: evaluation.action,
+        key: 'daily-limit',
+        message: evaluation.reason,
+        billedTodayUsd,
+      },
+    };
+  }
+  return { evaluation, notices, decision: null };
+}
+
 // In-flight work on codex, cursor, hermes, and qwen does not reserve against spend caps; only metered lanes reserve spend while a job runs. Claude still reserves a list-price
 // estimate below (the most a finished job of this lane and model cost in the run with five or more samples, else a conservative default per model) so parallel claude jobs count against the cap.
 export const FLAT_RATE_RESERVE_DEFAULTS = Object.freeze({ claude: Object.freeze({ opus: 1.0, sonnet: 0.5, haiku: 0.2, other: 0.5 }), codex: 0, cursor: 0, hermes: 0, qwen: 0 });
@@ -216,13 +279,18 @@ export function estimateReservation({ job, lane, model, inputChars, rates, laneD
   return { usd, tokens, source };
 }
 
-export async function reserveSpend({ dir, key, lane, runId, root, jobId, usd, tokens, budget, runTotals, now = Date.now, isAlive }) {
+export async function reserveSpend({ dir, key, lane, runId, root, jobId, usd, tokens, budget, runTotals, now = Date.now, isAlive, dailyLimit }) {
   return withSpendStore(store => {
+    const limit = applyDailyLimit({ store, lane, dailyLimit, now });
+    if (limit?.decision) return { decision: limit.decision, dailyLimit: { evaluation: limit.evaluation, notices: limit.notices } };
     const day = utcDay(now);
     const decision = capDecision({ budget, run: runTotals, laneToday: laneDayTotals(store, { day }), agent: lane, add: { usd, tokens } });
-    if (decision) return { decision };
+    if (decision) return { decision, ...(limit?.notices?.length ? { dailyLimit: { evaluation: limit.evaluation, notices: limit.notices } } : {}) };
     store.entries[key] = { day, lane, runId, root, jobId, usd, tokens, kind: 'reservation', pid: process.pid, host: os.hostname(), at: new Date(now()).toISOString(), flagged: false };
-    return { decision: null };
+    return {
+      decision: null,
+      ...(limit ? { dailyLimit: { evaluation: limit.evaluation, notices: limit.notices } } : {}),
+    };
   }, { dir, now, isAlive });
 }
 export async function settleSpend({ dir, key, usd, tokens, kind, flagged, now = Date.now }) {
