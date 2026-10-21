@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "pins-cycle",
+      "agent": "auto",
+      "prompt": "Regression in the new tools/pins.mjs: it has a static import { patchPointer, snapshotVersion, versionDirFor } from ./install.mjs (line 8) while tools/install.mjs installUser does await import(./pins.mjs) (line ~148). When install.mjs runs as a script (node tools/install.mjs --user, which has a top-level await main at the bottom), the dynamic import of pins.mjs waits for install.mjs to finish evaluating, and pins.mjs waits for install.mjs: a circular import with a top-level await, so the process ends with Warning: Detected unsettled top-level await at tools/install.mjs:466 and exit code 13. This broke all 10 tests of tests/installed-swarm.test.mjs (installed launcher, version, status, remote, unknown word, subcommands, update from another checkout, dev install, launcher runner, launcher reader) although they pass on main. Fix: remove every static import of install.mjs from tools/pins.mjs; the functions that need patchPointer, snapshotVersion or versionDirFor (pinProject, unpinProject and the missing-version install path) load them lazily with await import(./install.mjs) at call time (or take them as an optional injected dependency defaulting to the lazy import), so pins.mjs has no import-time dependency on install.mjs and pinnedVersions and readPins (used inside installUser) never touch install.mjs. Check the other new imports for the same cycle: tools/projects.mjs must not import install.mjs or pins.mjs statically either. Add a regression test in tests/pins.test.mjs (or tests/pins-cycle.test.mjs): spawn node tools/install.mjs --user against a temp copy of the source tree with a temp HOME (mirror how tests/installed-swarm.test.mjs builds its install, with the same SKIP list of top-level folders) and require exit code 0 and no unsettled top-level await warning; plus a static check that tools/pins.mjs has no top-level import from ./install.mjs. Keep every existing test passing, including tests/installed-swarm.test.mjs (10 tests) and tests/pins.test.mjs. Do not edit tools/swarm.mjs. No token-shaped literals. ignoreTests reason: only pins files and their tests change.",
+      "context": [
+        "tools/pins.mjs",
+        "tools/install.mjs",
+        "tools/projects.mjs",
+        "tests/pins.test.mjs",
+        "tests/installed-swarm.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/pins.mjs",
+        "tests/pins-cycle.test.mjs",
+        "tests/pins.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ]
+}
