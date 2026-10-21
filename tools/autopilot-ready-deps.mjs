@@ -1,12 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listRequests } from './handbuild.mjs';
 
 const swarmEntry = path.join(path.dirname(fileURLToPath(import.meta.url)), 'swarm.mjs');
+const realpathCache = new Map();
 
-function sameRoot(a, b) {
-  return path.resolve(a) === path.resolve(b);
+function canonicalRoot(root) {
+  if (typeof root !== 'string' || !root) return null;
+  const resolved = path.resolve(root);
+  if (realpathCache.has(resolved)) return realpathCache.get(resolved);
+  let canonical;
+  try {
+    canonical = fs.realpathSync.native(resolved);
+  } catch {
+    canonical = resolved;
+  }
+  realpathCache.set(resolved, canonical);
+  return canonical;
+}
+
+export function sameRoot(a, b) {
+  const ca = canonicalRoot(a);
+  const cb = canonicalRoot(b);
+  if (ca === null || cb === null) return false;
+  return ca === cb;
 }
 
 function ticketFiles(ticket) {
@@ -65,14 +84,29 @@ export function readyAutopilotDeps(projectRoot, {
     },
 
     async startScope({ root }) {
+      const cwd = path.resolve(root);
       try {
-        const child = spawnImpl(process.execPath, [swarmEntry, '--root', path.resolve(root), 'go', '--scope'], {
+        const child = spawnImpl(process.execPath, [swarmEntry, '--root', cwd, 'go', '--scope'], {
           detached: true,
           stdio: 'ignore',
           env,
+          cwd,
         });
-        child.unref();
-        return { ok: true, result: `started go --scope (pid ${child.pid})` };
+        return await new Promise((resolve) => {
+          let settled = false;
+          const finish = (out) => {
+            if (settled) return;
+            settled = true;
+            resolve(out);
+          };
+          child.once('error', (error) => finish({ ok: false, result: String(error?.message ?? error) }));
+          // Deliberately detached: the child may outlive autopilot and is guarded by its own busy marker.
+          queueMicrotask(() => {
+            if (settled) return;
+            child.unref();
+            finish({ ok: true, result: `started go --scope (pid ${child.pid})` });
+          });
+        });
       } catch (error) {
         return { ok: false, result: String(error?.message ?? error) };
       }

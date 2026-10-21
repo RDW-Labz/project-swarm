@@ -8,6 +8,9 @@ import path from 'node:path';
 import { ACTIONS, autopilotStep, pickReadyTickets } from '../tools/autopilot.mjs';
 
 const NOW = Date.parse('2030-01-01T12:00:00.000Z');
+const MIN = 60_000;
+const START_READY_MIN_MS = 120_000;
+const START_READY_STALE_MS = 10 * MIN;
 const iso = ms => new Date(ms).toISOString();
 const BASE_ACTIONS = ['integrate', 'resume', 'retry-failed', 'start-wave', 'start-deferred', 'start-backlog', 'unlock-tickets'];
 
@@ -60,9 +63,9 @@ function scopeDeps(overrides = {}) {
     runs: overrides.runs ?? [],
     readyTickets: async () => tickets,
     pendingApprovals: async () => overrides.approvals ?? [],
-    liveRuns: async () => overrides.liveRuns ?? [],
-    busyMarkers: async () => overrides.busyMarkers ?? [],
-    capRoom: async () => overrides.capRoom ?? true,
+    liveRuns: async () => (typeof overrides.liveRuns === 'function' ? await overrides.liveRuns() : overrides.liveRuns ?? []),
+    busyMarkers: async () => (typeof overrides.busyMarkers === 'function' ? await overrides.busyMarkers() : overrides.busyMarkers ?? []),
+    capRoom: async () => (typeof overrides.capRoom === 'function' ? await overrides.capRoom() : overrides.capRoom ?? true),
     ...overrides.deps,
   });
   deps.startScope = async arg => {
@@ -77,7 +80,7 @@ test('start-ready is the only new autopilot action', () => {
   assert.deepEqual(ACTIONS, [...BASE_ACTIONS, 'start-ready']);
 });
 
-test('pickReadyTickets treats ready and releasable todo tickets as ready', () => {
+test('pickReadyTickets treats only status ready tickets as startable', () => {
   const tickets = [
     ticket('r1', ['a.ts']),
     { id: 't2', status: 'todo', type: 'build', files: ['b.ts'], dependsOn: ['d1'] },
@@ -86,7 +89,7 @@ test('pickReadyTickets treats ready and releasable todo tickets as ready', () =>
     { id: 'x1', status: 'blocked', files: ['d.ts'], dependsOn: [] },
   ];
   const { startable, held } = pickReadyTickets({ tickets, approvals: [] });
-  assert.deepEqual(startable.map(t => t.id), ['r1', 't2']);
+  assert.deepEqual(startable.map(t => t.id), ['r1']);
   assert.deepEqual(held, []);
 });
 
@@ -106,6 +109,14 @@ test('pickReadyTickets ignores decided approvals and non-overlapping globs', () 
   assert.deepEqual(pickReadyTickets({ tickets, approvals: [{ status: 'approved', files: ['src/a.ts'] }] }).startable.map(t => t.id), ['T-1']);
   assert.deepEqual(pickReadyTickets({ tickets, approvals: [{ status: 'pending', files: ['docs/other.md'] }] }).startable.map(t => t.id), ['T-1']);
   assert.deepEqual(pickReadyTickets({ tickets, approvals: [{ status: 'pending', files: ['src/*.ts'] }] }).held.map(t => t.id), ['T-1']);
+});
+
+test('pickReadyTickets holds when a concrete approval path matches a ticket glob', () => {
+  const tickets = [ticket('T-1', ['src/*.ts'])];
+  const approvals = [{ status: 'pending', files: ['src/a.ts'] }];
+  const { startable, held } = pickReadyTickets({ tickets, approvals });
+  assert.deepEqual(startable.map(t => t.id), []);
+  assert.deepEqual(held.map(t => t.id), ['T-1']);
 });
 
 test('starts go --scope once when ready tickets exist and nothing runs', async t => {
@@ -157,7 +168,9 @@ test('does not start with a running run from loadRuns', async t => {
 
 test('does not start with a live busy marker', async t => {
   const root = await tempRoot(t);
-  const deps = scopeDeps({ busyMarkers: ['scope-busy'] });
+  const deps = scopeDeps({
+    busyMarkers: [{ pid: 4242, command: 'swarm go --scope', root }],
+  });
   await autopilotStep(root, deps, { now: () => NOW });
   assert.equal(callsNamed(deps, 'startScope').length, 0);
 });
@@ -199,13 +212,90 @@ test('an approval naming other files holds nothing back', async t => {
   assert.equal(callsNamed(deps, 'startScope').length, 1);
 });
 
-test('second pass in the same process does not start again', async t => {
+test('second start-ready is blocked inside the 120 second cooldown', async t => {
   const root = await tempRoot(t);
   const deps = scopeDeps({ tickets: [ticket('T-1', ['src/a.ts'])] });
   const memory = new Set();
   await autopilotStep(root, deps, { now: () => NOW, memory });
-  await autopilotStep(root, deps, { now: () => NOW, memory });
+  await autopilotStep(root, deps, { now: () => NOW + START_READY_MIN_MS - 1000, memory });
   assert.equal(callsNamed(deps, 'startScope').length, 1);
+});
+
+test('start-ready runs again after cooldown when a live run was seen since the last start', async t => {
+  const root = await tempRoot(t);
+  let step = 0;
+  const deps = scopeDeps({
+    tickets: [ticket('T-1', ['src/a.ts'])],
+    liveRuns: async () => {
+      step += 1;
+      if (step === 2) return [{ id: 'r-scope', root }];
+      return [];
+    },
+  });
+  const memory = new Set();
+  await autopilotStep(root, deps, { now: () => NOW, memory });
+  await autopilotStep(root, deps, { now: () => NOW + 60_000, memory });
+  assert.equal(callsNamed(deps, 'startScope').length, 1);
+  await autopilotStep(root, deps, { now: () => NOW + START_READY_MIN_MS + 1000, memory });
+  assert.equal(callsNamed(deps, 'startScope').length, 2);
+});
+
+test('start-ready runs again after ten minutes without seeing live activity', async t => {
+  const root = await tempRoot(t);
+  const deps = scopeDeps({ tickets: [ticket('T-1', ['src/a.ts'])] });
+  const memory = new Set();
+  await autopilotStep(root, deps, { now: () => NOW, memory });
+  await autopilotStep(root, deps, { now: () => NOW + START_READY_STALE_MS + 1000, memory });
+  assert.equal(callsNamed(deps, 'startScope').length, 2);
+});
+
+test('when start-wave and start-ready are both eligible only the wave starts', async t => {
+  const root = await tempRoot(t);
+  const plan = { waves: [{ id: 'w1', manifest: 'm.json' }] };
+  const deps = scopeDeps({
+    tickets: [ticket('T-1', ['src/a.ts'])],
+    deps: { plan, readPlan: async () => plan, startWave: async () => ({ run: 'r-wave', status: 'running' }) },
+  });
+  const step = await autopilotStep(root, deps, { now: () => NOW });
+  assert.equal(callsNamed(deps, 'startScope').length, 0);
+  assert.equal(step.actions.some(a => a.action === 'start-wave'), true);
+  assert.equal(step.actions.some(a => a.action === 'start-ready'), false);
+});
+
+test('a throwing start-ready dependency logs dependency-error and does not start', async t => {
+  const root = await tempRoot(t);
+  for (const field of ['readyTickets', 'pendingApprovals', 'liveRuns', 'busyMarkers', 'capRoom']) {
+    const deps = scopeDeps({
+      tickets: [ticket('T-1', ['src/a.ts'])],
+      deps: {
+        [field]: async () => { throw new Error(`boom-${field}`); },
+      },
+    });
+    const journal = [];
+    deps.readJournal = async () => journal;
+    deps.appendEvent = async (_r, event) => { journal.push(event); };
+    const step = await autopilotStep(root, deps, { now: () => NOW });
+    assert.equal(callsNamed(deps, 'startScope').length, 0);
+    const event = journal.find(e => e.kind === 'action' && e.action === 'start-ready');
+    assert.ok(event, field);
+    assert.equal(event.result, 'dependency-error');
+    assert.doesNotMatch(String(event.reason ?? ''), /boom/);
+    assert.equal(step.actions.filter(a => a.action === 'start-ready').length, 1);
+  }
+});
+
+test('start-ready does not run in the same pass as another action', async t => {
+  const root = await tempRoot(t);
+  const deps = scopeDeps({
+    tickets: [ticket('T-1', ['src/a.ts'])],
+    deps: {
+      unlockTickets: async () => ['T-9'],
+    },
+  });
+  const step = await autopilotStep(root, deps, { now: () => NOW });
+  assert.equal(callsNamed(deps, 'startScope').length, 0);
+  assert.equal(step.actions.some(a => a.action === 'unlock-tickets'), true);
+  assert.equal(step.actions.some(a => a.action === 'start-ready'), false);
 });
 
 test('two start-ready attempts in one step are impossible (memory within pass)', async t => {

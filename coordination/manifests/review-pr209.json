@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1.0
+  },
+  "jobs": [
+    {
+      "id": "review-pr209",
+      "agent": "claude",
+      "model": "sonnet",
+      "type": "review",
+      "prompt": "Review coordination/review/pr209.diff: the keep-the-lanes-busy feature. Promises: (1) swarm autopilot has a new start-ready action that starts go --scope only when the project has ready tickets, no run or busy marker is live for it, and the project cap has room; it makes no model calls and never approves, merges, deploys, raises a cap or overrides; a pending approval holds back only the tickets whose files it names; one pass never starts it twice; (2) swarm init and swarm update --projects --yes write a keep-the-lanes-busy section into CLAUDE.md and AGENTS.md between markers, replacing only the marked block, never touching other text, refusing symlinks, and a dry run without --yes writes nothing; (3) the board shows a red idle-with-ready-tickets flag, display only. Look for concrete bugs: autopilot starting a second run while one is live or starting when the cap is full, a busy marker or live-run filter that matches the wrong project, a child process started without the right root or left running when the parent exits, an infinite start loop when go --scope exits at once, a held-back ticket logic that holds too much or too little, marker handling that can corrupt a user's CLAUDE.md, path traversal or symlink following when writing the rule files, and tests that do not prove what they claim. Report only real findings with file and line, most severe first, or say none found.",
+      "context": [
+        "coordination/review/pr209.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

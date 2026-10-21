@@ -93,3 +93,41 @@ test('updateProjects without --yes does not write rule markers; with --yes does'
   assert.match(updated, /^# linked/);
   assert.ok(updated.includes(RULE_START));
 });
+
+test('initProject reports malformed rule markers without failing and still updates the other file', async t => {
+  const root = await tempGitProject(t);
+  const agentsPath = path.join(root, 'AGENTS.md');
+  const agentsBefore = `${RULE_START}\nkeep this text\n`;
+  await fs.writeFile(agentsPath, agentsBefore);
+  const result = await initProject(root, { source, map: false });
+  const agents = await fs.readFile(agentsPath, 'utf8');
+  assert.equal(agents.slice(0, agentsBefore.length), agentsBefore);
+  assert.ok(result.ruleFiles?.errors?.['AGENTS.md']);
+  assert.match(result.ruleFiles.errors['AGENTS.md'], /start marker without end marker/);
+  const claude = await fs.readFile(path.join(root, 'CLAUDE.md'), 'utf8');
+  assert.ok(claude.includes(RULE_START));
+  assert.ok(agents.includes('<!-- project-swarm:start -->'));
+  assert.equal(result.ruleFilesError, undefined);
+});
+
+test('updateProjects with --yes reports malformed rule markers without failing', async t => {
+  const installRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-rule-update-malformed-'));
+  t.after(() => fs.rm(installRoot, { recursive: true, force: true }));
+  await fs.writeFile(path.join(installRoot, 'package.json'), JSON.stringify({ name: 'x', version: '1.0.0' }));
+
+  const project = await tempGitProject(t);
+  await fs.writeFile(
+    path.join(project, '.project-swarm.json'),
+    JSON.stringify({ install: installRoot, version: '1.0.0' }),
+  );
+  const claudePath = path.join(project, 'CLAUDE.md');
+  const claudeBefore = `${RULE_END}\ntrailer\n`;
+  await fs.writeFile(claudePath, claudeBefore);
+
+  const applied = await updateProjects(installRoot, { projects: [project], yes: true });
+  assert.equal(applied.projects[0].action, 'up-to-date');
+  assert.equal(await fs.readFile(claudePath, 'utf8'), claudeBefore);
+  assert.ok(applied.projects[0].ruleFiles?.errors?.['CLAUDE.md']);
+  assert.match(applied.projects[0].ruleFiles.errors['CLAUDE.md'], /end marker without start marker/);
+  assert.equal(applied.projects[0].ruleFilesError, undefined);
+});

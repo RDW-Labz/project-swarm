@@ -10,13 +10,8 @@ function ticketFiles(ticket) {
   return [];
 }
 
-function isReadyForStart(ticket, tickets) {
-  if (!ticket || typeof ticket.id !== 'string') return false;
-  if (ticket.status === 'ready') return true;
-  if (ticket.status !== 'todo' || ticket.type === 'human') return false;
-  const done = new Set(tickets.filter(t => t && t.status === 'done').map(t => t.id));
-  const deps = Array.isArray(ticket.dependsOn) ? ticket.dependsOn : [];
-  return deps.every(d => done.has(d));
+function isReadyForStart(ticket) {
+  return ticket && typeof ticket.id === 'string' && ticket.status === 'ready';
 }
 
 function pendingApproval(approval) {
@@ -24,16 +19,19 @@ function pendingApproval(approval) {
 }
 
 function heldByApproval(ticket, approval) {
-  const patterns = Array.isArray(approval.files) ? approval.files : [];
-  if (!patterns.length) return false;
-  return ticketFiles(ticket).some(rel => matchesFile(patterns, rel));
+  const approvalPatterns = Array.isArray(approval.files) ? approval.files : [];
+  const ticketPatterns = ticketFiles(ticket);
+  if (!approvalPatterns.length || !ticketPatterns.length) return false;
+  if (ticketPatterns.some(rel => matchesFile(approvalPatterns, rel))) return true;
+  if (approvalPatterns.some(rel => matchesFile(ticketPatterns, rel))) return true;
+  return false;
 }
 
 /** Ready tickets split by pending hand-build / ticket approvals that name overlapping files. */
 export function pickReadyTickets({ tickets, approvals }) {
   const list = Array.isArray(tickets) ? tickets : [];
   const pending = (Array.isArray(approvals) ? approvals : []).filter(pendingApproval);
-  const ready = list.filter(t => isReadyForStart(t, list));
+  const ready = list.filter(t => isReadyForStart(t));
   const startable = [];
   const held = [];
   for (const ticket of ready) {
@@ -44,6 +42,8 @@ export function pickReadyTickets({ tickets, approvals }) {
 }
 
 const MINUTE = 60_000;
+const START_READY_MIN_MS = 120_000;
+const START_READY_STALE_MS = 10 * MINUTE;
 const MAX_ACTIONS_PER_RUN = 3;
 const MAX_RUNS = 10;
 const RESULT_LIMIT = 500;
@@ -169,6 +169,21 @@ export function decide(run, ctx) {
 
 async function safe(fn, fallback) {
   try { return await fn(); } catch { return fallback; }
+}
+
+function startReadyCooldownOpen(memory, nowMs) {
+  const last = memory.startReadyLastAt;
+  if (last == null || !Number.isFinite(last)) return true;
+  const elapsed = nowMs - last;
+  if (elapsed < START_READY_MIN_MS) return false;
+  if ((memory.startReadyLastLiveAt ?? 0) > last) return true;
+  return elapsed >= START_READY_STALE_MS;
+}
+
+function noteStartReadyLive(memory, nowMs, { live, busy, runs }) {
+  const hasLiveRun = (Array.isArray(live) && live.length > 0) || runs.some(r => r.status === 'running');
+  const hasBusy = Array.isArray(busy) && busy.some(m => m != null && m !== false);
+  if (hasLiveRun || hasBusy) memory.startReadyLastLiveAt = nowMs;
 }
 
 // Every once-only rule (one retry, one start per wave, no repeated integration) is read from the journal.
@@ -377,21 +392,50 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     }
   }
 
-  if (!journalBroken && typeof deps.readyTickets === 'function') {
-    const ticketList = await safe(() => deps.readyTickets(root), []);
-    const approvalList = typeof deps.pendingApprovals === 'function'
-      ? await safe(() => deps.pendingApprovals(root), [])
-      : [];
-    const { startable } = pickReadyTickets({ tickets: ticketList, approvals: approvalList });
-    if (startable.length) {
-      const live = typeof deps.liveRuns === 'function' ? await safe(() => deps.liveRuns(root), []) : [];
-      const busy = typeof deps.busyMarkers === 'function' ? await safe(() => deps.busyMarkers(), []) : [];
-      const capRoom = typeof deps.capRoom === 'function' ? await safe(() => deps.capRoom(root), true) : true;
-      const hasLiveRun = (Array.isArray(live) && live.length > 0) || runs.some(r => r.status === 'running');
-      const hasBusy = Array.isArray(busy) && busy.some(m => m != null && m !== false);
-      const key = 'start-ready';
-      if (!memory.has(key) && !hasLiveRun && !hasBusy && capRoom !== false && typeof deps.startScope === 'function') {
-        memory.add(key);
+  if (!journalBroken && typeof deps.readyTickets === 'function' && actions.length < MAX_ACTIONS_PER_RUN) {
+    let ticketList;
+    let approvalList = [];
+    let depError = false;
+    let readyTicketsError = false;
+    try { ticketList = await deps.readyTickets(root); } catch { depError = true; readyTicketsError = true; ticketList = []; }
+    if (!depError && typeof deps.pendingApprovals === 'function') {
+      try { approvalList = await deps.pendingApprovals(root); } catch { depError = true; approvalList = []; }
+    }
+    const { startable } = pickReadyTickets({
+      tickets: Array.isArray(ticketList) ? ticketList : [],
+      approvals: Array.isArray(approvalList) ? approvalList : [],
+    });
+    let live = [];
+    let busy = [];
+    let capRoom = true;
+    if (!depError && typeof deps.liveRuns === 'function') {
+      try {
+        live = await deps.liveRuns(root);
+        if (!Array.isArray(live)) live = [];
+      } catch { depError = true; live = []; }
+    }
+    if (!depError && typeof deps.busyMarkers === 'function') {
+      try {
+        busy = await deps.busyMarkers();
+        if (!Array.isArray(busy)) busy = [];
+      } catch { depError = true; busy = []; }
+    }
+    if (!depError && typeof deps.capRoom === 'function') {
+      try { capRoom = await deps.capRoom(root); } catch { depError = true; capRoom = false; }
+    }
+    if (!depError) noteStartReadyLive(memory, nowMs, { live, busy, runs });
+
+    const hasLiveRun = (Array.isArray(live) && live.length > 0) || runs.some(r => r.status === 'running');
+    const hasBusy = Array.isArray(busy) && busy.some(m => m != null && m !== false);
+    const cooldownOpen = startReadyCooldownOpen(memory, nowMs);
+    const passIdle = actions.length === 0;
+
+    if (passIdle && (startable.length || readyTicketsError) && (depError || startable.length)) {
+      if (depError) {
+        const reason = 'start-ready skipped';
+        await write({ kind: 'action', action: 'start-ready', reason, result: 'dependency-error' });
+        actions.push({ action: 'start-ready', ok: false, result: 'dependency-error', reason });
+      } else if (cooldownOpen && !hasLiveRun && !hasBusy && capRoom !== false && typeof deps.startScope === 'function') {
         const ids = startable.map(t => t.id).slice(0, 8);
         const reason = `${startable.length} startable ticket(s)${ids.length ? `: ${ids.join(', ')}` : ''}`;
         let ok = true;
@@ -399,8 +443,10 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
         try {
           const out = await deps.startScope({ root });
           ok = out?.ok !== false;
-          if (ok) result = out?.result ?? 'ok';
-          else result = String(out?.result ?? 'failed').slice(0, RESULT_LIMIT);
+          if (ok) {
+            result = out?.result ?? 'ok';
+            memory.startReadyLastAt = nowMs;
+          } else result = String(out?.result ?? 'failed').slice(0, RESULT_LIMIT);
         } catch (error) {
           ok = false;
           result = String(error?.message ?? error).slice(0, RESULT_LIMIT);

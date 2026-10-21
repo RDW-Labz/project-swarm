@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readyAutopilotDeps } from '../tools/autopilot-ready-deps.mjs';
+import { readyAutopilotDeps, sameRoot } from '../tools/autopilot-ready-deps.mjs';
 
 const swarmEntry = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'tools', 'swarm.mjs');
 const ROOT = '/tmp/project-a';
@@ -16,7 +16,15 @@ function makeDeps(overrides = {}) {
   const spawnCalls = [];
   const spawnImpl = (execPath, args, opts) => {
     spawnCalls.push({ execPath, args, opts });
-    const child = { pid: 4242, unref() { this.unrefed = true; } };
+    const child = {
+      pid: 4242,
+      unref() { this.unrefed = true; },
+      once(event, fn) {
+        if (event === 'error' && overrides.spawnAsyncError) {
+          queueMicrotask(() => fn(overrides.spawnAsyncError));
+        }
+      },
+    };
     if (overrides.spawnThrows) throw overrides.spawnThrows;
     return child;
   };
@@ -113,4 +121,28 @@ test('startScope returns ok false when spawn throws', async () => {
   const { deps } = makeDeps({ spawnThrows: new Error('spawn failed') });
   const out = await deps.startScope({ root: ROOT });
   assert.deepEqual(out, { ok: false, result: 'spawn failed' });
+});
+
+test('startScope returns ok false on an asynchronous spawn error', async () => {
+  const { deps } = makeDeps({ spawnAsyncError: new Error('async spawn failed') });
+  const out = await deps.startScope({ root: ROOT });
+  assert.deepEqual(out, { ok: false, result: 'async spawn failed' });
+});
+
+test('startScope passes cwd as the resolved project root', async () => {
+  const { deps, spawnCalls } = makeDeps();
+  await deps.startScope({ root: './relative-root' });
+  assert.equal(spawnCalls[0].opts.cwd, path.resolve('./relative-root'));
+});
+
+test('sameRoot is false for non-string roots and matches symlinked paths', async t => {
+  assert.equal(sameRoot(null, ROOT), false);
+  assert.equal(sameRoot(ROOT, 42), false);
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-deps-root-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const link = path.join(dir, 'link');
+  await fs.symlink(dir, link);
+  assert.equal(sameRoot(dir, link), true);
+  assert.equal(sameRoot('/definitely/missing/root-a', '/definitely/missing/root-b'), false);
+  assert.equal(sameRoot('/definitely/missing/root-a', '/definitely/missing/root-a'), true);
 });
