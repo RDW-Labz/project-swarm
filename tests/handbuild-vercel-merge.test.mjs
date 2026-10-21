@@ -16,6 +16,7 @@ import {
 } from '../tools/handbuild.mjs';
 
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0);
+const T1 = T0 + 5000;
 const tmp = async t => {
   const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-hb-vm-')));
   t.after(() => fs.rm(d, { recursive: true, force: true }));
@@ -236,4 +237,34 @@ test('git merge keeps generic hand-build denial', async t => {
   assert.match(d.reason, /write a ticket instead/);
   assert.match(d.reason, /git merge/);
   assert.notEqual(d.reason, MERGE_BLOCKED_REASON);
+});
+
+test('git config-style flags anywhere in git commands are not free', async t => {
+  const { bash } = await project(t);
+  for (const cmd of [
+    'git rebase -x CMD origin/main',
+    'git fetch --upload-pack=X .',
+    'git push --receive-pack=X origin feature/x',
+  ]) {
+    const d = bash(cmd);
+    assert.equal(d.allow, false, cmd);
+    assert.match(d.reason, /blocked: git (config|commit|push|fetch)/i, cmd);
+  }
+});
+
+test('gh commands off the free list need approval naming gh; pr merge stays blocked', async t => {
+  const { bash, root } = await project(t);
+  const blocked = bash('gh pr comment 5');
+  assert.equal(blocked.allow, false);
+  assert.match(blocked.reason, /blocked: gh\b/);
+
+  const r = createRequest(root, { kind: 'tiny', reason: 'the swarm cannot comment on prs from here', files: 'src/x.mjs', git: 'gh', minutes: 30 }, { now: () => T0 });
+  decideRequest(root, r.id, 'approve', { now: () => T0 });
+  assert.equal(bash('gh pr comment 5', { now: () => T1 }).allow, true);
+
+  const withGh = createRequest(root, { kind: 'tiny', reason: 'the swarm cannot merge prs with gh cli', files: 'src/x.mjs', git: 'gh', minutes: 30 }, { now: () => T0 });
+  decideRequest(root, withGh.id, 'approve', { now: () => T0, channel: 'phone' });
+  const merge = bash('gh pr merge 5', { now: () => T1 });
+  assert.equal(merge.allow, false);
+  assert.equal(merge.reason, GH_PR_MERGE_BLOCKED);
 });

@@ -30,6 +30,8 @@ async function project(t) {
   git('commit', '-q', '-m', 'base');
   const baseRef = git('rev-parse', 'HEAD').stdout.trim();
   git('branch', '-q', 'main', baseRef);
+  git('branch', '-q', 'master', baseRef);
+  git('branch', '-q', 'feature/y', baseRef);
   git('checkout', '-q', '-b', 'feature/x');
   git('remote', 'add', 'origin', root);
   git('update-ref', 'refs/remotes/origin/main', baseRef);
@@ -47,19 +49,38 @@ async function project(t) {
   return { root, bash, git };
 }
 
-test('git switch and checkout branch forms are free', async t => {
+test('git switch and checkout branch forms are free when ref resolves and is not a path', async t => {
   const { bash } = await project(t);
   for (const cmd of [
+    'git switch feature/x',
+    'git checkout feature/x',
     'git switch feature/y',
     'git checkout feature/y',
-    'git switch -c feat/x',
-    'git checkout -b feat/x',
+    'git switch -c feat/new',
+    'git checkout -b feat/new',
     'git switch --detach origin/main',
     'git checkout --detach origin/main',
     'git switch main',
+    'git checkout main',
+    'git switch master',
     'git checkout master',
   ]) {
     assert.equal(bash(cmd).allow, true, cmd);
+  }
+});
+
+test('git switch and checkout without -- refuse paths and non-commits', async t => {
+  const { bash } = await project(t);
+  for (const cmd of [
+    'git checkout tools/swarm.mjs',
+    'git checkout src',
+    'git checkout .',
+    'git checkout nosuchbranch',
+    'git switch src',
+    'git switch tools/swarm.mjs',
+  ]) {
+    const d = bash(cmd);
+    assert.equal(d.allow, false, cmd);
   }
 });
 

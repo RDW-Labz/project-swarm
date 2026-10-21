@@ -134,7 +134,7 @@ test('(8) gh api/workflow, vercel deploy, and non-free gh need elevated approval
   for (const [cmd, pat] of [
     ['gh api repos/o/r/merges -f base=main -f head=f', /gh api write|merge/],
     ['gh api user', /gh api write|merge/],
-    ['gh workflow run deploy.yml', /config|ticket/i],
+    ['gh workflow run deploy.yml', /gh|ticket/i],
     ['vercel --prod', /deploy/],
     ['vercel promote', /deploy/],
   ]) {

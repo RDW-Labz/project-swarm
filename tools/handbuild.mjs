@@ -14,7 +14,7 @@ import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 import { swarmProducedFiles, isSwarmProducedContent } from './swarm-produced.mjs';
 import { isSelfApprovalCommand, SELF_APPROVAL_REASON } from './self-approval.mjs';
 
-export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D']);
+export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D', 'gh']);
 export const ELEVATED_GIT_OPS = Object.freeze(['merge', 'deploy', 'force-push', 'branch-D']);
 const CHAT_MERGE_MS = 60 * 60000;
 const ALLOWED_GH = new Set(['pr create', 'pr view', 'pr list', 'pr checks', 'pr diff', 'run list', 'run watch', 'run view']);
@@ -34,6 +34,14 @@ const GH_REPO_OPTS = new Set(['-R', '--repo', '--repository']);
 export function branchOf(root) {
   try { return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, encoding: 'utf8', timeout: 3000 }).trim(); }
   catch { return 'HEAD'; }
+}
+
+/** True when `ref` resolves to a commit in the repo at `root`. */
+export function revParseCommit(root, ref) {
+  try {
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd: root, encoding: 'utf8', timeout: 3000, stdio: 'pipe' });
+    return true;
+  } catch { return false; }
 }
 
 export const isProtectedBranch = b => b === 'main' || b === 'master' || b === 'HEAD';
@@ -403,7 +411,10 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
     const sub = i < args.length && !args[i].startsWith('-') ? args[i] : null;
     const rest = sub ? args.slice(i + 1) : [];
     const gitEnv = plain.slice(0, k).some(w => /^GIT_[A-Z0-9_]+=/.test(w));
-    const gitHasConfig = hasConfigInWords(globalWords);
+    const gitHasConfigGlobal = hasConfigInWords(globalWords);
+    const gitHasConfig = (sub === 'switch' || sub === 'checkout')
+      ? gitHasConfigGlobal
+      : hasConfigInWords([...globalWords, ...rest]);
     const meta = { globalOpts, hasConfig: gitHasConfig, gitEnv, target: null };
     if (sub === 'push') ops.push(gitPushPolicy(rest, meta));
     else if (sub === 'fetch') ops.push(gitFetchPolicy(rest, meta));
@@ -642,17 +653,44 @@ const switchCheckoutFlagBlocked = flags => {
   return false;
 };
 
-const isFreeGitSwitchCheckout = op => {
+const switchCheckoutCreateFlag = flags => {
+  for (const f of flags) {
+    if (f === '-b' || f === '-c' || f === '--create') return true;
+    if (!f.startsWith('--') && f.startsWith('-')) {
+      for (const ch of f.slice(1)) {
+        if (ch === 'b' || ch === 'c') return true;
+      }
+    }
+  }
+  return false;
+};
+
+const refUnsafeForFreeSwitch = ref => ref === '.' || ref === '-' || ref.startsWith('.') || ref.includes('..');
+
+const refExistsAsProjectPath = (root, ref) => {
+  const n = normRel(ref);
+  if (!n || n.includes('..')) return true;
+  try {
+    fs.accessSync(path.join(root, n));
+    return true;
+  } catch { return false; }
+};
+
+const isFreeGitSwitchCheckout = (op, root, revParseCommitFn) => {
   if (op.sub !== 'switch' && op.sub !== 'checkout') return false;
   if (op.globalOpts || op.hasConfig || op.gitEnv) return false;
   const rest = op.rest ?? [];
   if (rest.includes('--')) return false;
   const flags = rest.filter(a => a.startsWith('-') && a !== '--');
   if (switchCheckoutFlagBlocked(flags)) return false;
+  if (switchCheckoutCreateFlag(flags)) return true;
   const plainRefs = rest.filter(a => a && !a.startsWith('-'));
   if (plainRefs.length !== 1) return false;
   const ref = plainRefs[0];
   if (!PLAIN_REF.test(ref) || ref.includes(':')) return false;
+  if (refUnsafeForFreeSwitch(ref)) return false;
+  if (refExistsAsProjectPath(root, ref)) return false;
+  if (!revParseCommitFn(root, ref)) return false;
   return true;
 };
 
@@ -950,7 +988,7 @@ export function createRequest(root, { kind, reason, files, minutes, git }, { now
   const mins = minutes === undefined ? DEFAULT_MINUTES : Number(minutes);
   if (!Number.isInteger(mins) || mins < 1 || mins > MAX_MINUTES) throw Error(`handbuild-minutes: --minutes must be a whole number from 1 to ${MAX_MINUTES}`);
   const ops = (Array.isArray(git) ? git : String(git ?? '').split(',')).map(g => g.trim()).filter(Boolean);
-  for (const g of ops) if (!GIT_REQUEST_OPS.includes(g)) throw Error('handbuild-git: --git may name commit and push only');
+  for (const g of ops) if (!GIT_REQUEST_OPS.includes(g)) throw Error(`handbuild-git: --git must name one of ${GIT_REQUEST_OPS.join(', ')}`);
   return withStateLock(root, () => {
   const state = readState(root);
   const id = newId(now());
@@ -1041,7 +1079,14 @@ const underAbs = (abs, list) => list.some(prefix => abs === prefix || abs.starts
 const AllowRel = rel => { const r = rel.toLowerCase(); return ORCHESTRATOR_OWN.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix)) || TOOL_DIRS.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix)); };
 
 /** { allow, reason, files, approval } for one tool call. `input` is the hook input (tool_name, tool_input, cwd). */
-export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home, branchOf: branchOfFn = branchOf } = {}) {
+const policyOpDenyLabel = (policyGitOps, command, policyOps) => {
+  const op0 = policyGitOps[0];
+  if (op0 === 'gh-api-write' || (op0 === 'gh' && ghApiWrite(command, policyOps))) return 'gh api write';
+  if (op0 === 'gh') return 'gh';
+  return `git ${op0}`;
+};
+
+export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home, branchOf: branchOfFn = branchOf, revParseCommit: revParseCommitFn = revParseCommit } = {}) {
   const ti = toolInput && typeof toolInput === 'object' ? toolInput : {};
   const h = home ?? os.homedir();
   const approvals = activeApprovals(root, now());
@@ -1050,7 +1095,11 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
   const headCarryOk = rel => carryBytesOk(root, rel, readGitShowBytes(root, `HEAD:${rel}`));
   const workingCarryOk = rel => carryBytesOk(root, rel, readWorkingTreeBytes(root, rel));
   const writeFree = rel => AllowRel(rel) || isRoutingPathResolved(root, rel);
-  const approvalGitOp = op => (op === 'swarm-merge' ? 'merge' : op);
+  const approvalGitOp = op => {
+    if (op === 'swarm-merge') return 'merge';
+    if (op === 'gh-api-write') return 'gh';
+    return op;
+  };
   const covers = (rels, gitOps = []) => {
     // every file and every git operation must be covered by one live approval
     for (const rel of rels) if (!approvals.some(a => matchesFile(a.files, rel))) return { ok: false, missing: rel };
@@ -1153,7 +1202,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
           continue;
         }
         if (op.sub === 'switch' || op.sub === 'checkout') {
-          if (isFreeGitSwitchCheckout(op) || isFreeGitRestorePaths(op, root)) continue;
+          if (isFreeGitSwitchCheckout(op, root, revParseCommitFn) || isFreeGitRestorePaths(op, root)) continue;
         }
         if (op.sub === 'restore') {
           if (isFreeGitRestorePaths(op, root)) continue;
@@ -1165,9 +1214,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
           continue;
         }
         if (ALLOWED_GH.has(op.sub)) continue;
-        if (op.globalOpts) { policyGitOps.push('config'); continue; }
-        if (String(op.sub ?? '').startsWith('api')) policyGitOps.push('gh-api-write');
-        else policyGitOps.push('config');
+        policyGitOps.push('gh');
       } else if (op.tool === 'vercel') {
         if (isFreeVercel(op)) continue;
         policyGitOps.push('deploy');
@@ -1182,7 +1229,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
         }
       }
     }
-    if (ghApiWrite(ti.command, policyOps)) policyGitOps.push('gh-api-write');
+    if (ghApiWrite(ti.command, policyOps) && !policyGitOps.includes('gh')) policyGitOps.push('gh');
     if (policyGitOps.includes('gh-pr-merge')) {
       return { allow: false, files: [], reason: GH_PR_MERGE_BLOCKED };
     }
@@ -1195,7 +1242,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       if (policyGitOps.includes('swarm-merge')) {
         return { allow: false, files: [], reason: MERGE_BLOCKED_REASON };
       }
-      const label = policyGitOps[0] === 'gh-api-write' ? 'gh api write' : `git ${policyGitOps[0]}`;
+      const label = policyOpDenyLabel(policyGitOps, ti.command, policyOps);
       return { allow: false, files: [], reason: `${DENY_ADVICE} (blocked: ${label})` };
     }
     const finishAllow = result => {
@@ -1257,7 +1304,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       if (policyGitOps.includes('swarm-merge')) {
         return { allow: false, files: a.writes, reason: MERGE_BLOCKED_REASON };
       }
-      const label = policyGitOps[0] === 'gh-api-write' ? 'gh api write' : `git ${policyGitOps[0]}`;
+      const label = policyOpDenyLabel(policyGitOps, ti.command, policyOps);
       return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${label})` };
     }
     const residualGit = a.git.filter(g => {
@@ -1265,7 +1312,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       if (g === 'push' && policyOps.some(o => o.tool === 'git' && o.sub === 'push' && isFreeGitPush(o, current, root))) return false;
       if (g === 'branch' && policyOps.some(o => o.tool === 'git' && o.sub === 'branch' && o.delete === 'safe')) return false;
       if (g === 'commit' && commitStagedCheck === 'allowlist' && staged.length && staged.every(stagedCarryOk)) return false;
-      if (['switch', 'checkout', 'restore'].includes(g) && policyOps.some(o => o.tool === 'git' && (isFreeGitSwitchCheckout(o) || isFreeGitRestorePaths(o, root)))) return false;
+      if (['switch', 'checkout', 'restore'].includes(g) && policyOps.some(o => o.tool === 'git' && (isFreeGitSwitchCheckout(o, root, revParseCommitFn) || isFreeGitRestorePaths(o, root)))) return false;
       return true;
     });
     if (!fileRels.length && !residualGit.length) return finishAllow({ allow: true, files: [...a.writes, ...staged] });
