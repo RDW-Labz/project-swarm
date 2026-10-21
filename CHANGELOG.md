@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.163.0
+
+tools/swarm.mjs is split into modules (pure move).
+- **Split:** 24 modules under tools/swarm/ (patterns, warnings, mutants, shell sandbox, checks, run state, context, integrate, workspace and 15 layered core modules) hold about 5,700 lines moved out of tools/swarm.mjs, which goes from 9,520 to 4,020 lines. Every moved name stays exported from tools/swarm.mjs by re-export, so no importer changes and behavior is identical.
+- **Tooling:** tools/split-scan.mjs (acorn AST scanner, scope-aware uses) and tools/split-module.mjs (plan, move and verify with a byte-for-byte check, unresolved-name check, smoke import and dynamic import rewrite) did the move; acorn 8.18.0 and acorn-walk 8.3.5 are dev dependencies, npm ci --ignore-scripts runs in CI.
+- **Tests:** tests/split-scan.test.mjs, tests/split-module.test.mjs and a shared helper so tests that grep the source read the combined swarm source.
+
 ## 1.162.0
 
 Hotfix: guard regressions from 1.159 and version pinning.

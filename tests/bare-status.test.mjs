@@ -8,6 +8,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { projectStatus, formatStatus } from '../tools/status.mjs';
+import { readSwarmSource } from './helpers/swarm-source.mjs';
 
 const SWARM = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
 const tmp = async t => { const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'bare-status-'))); t.after(() => fs.rm(d, { recursive: true, force: true })); return d; };
@@ -63,7 +64,7 @@ test('status formatting: a remote lane is neither up nor down, and the line is a
 });
 
 test('swarm doctor on a remote lane still does the real check (only status skips it): the skip is opt-in', async () => {
-  const src = await fs.readFile(SWARM, 'utf8');
+  const src = await readSwarmSource();
   assert.match(src, /options\.skipRemote\?resolveCliHosts/);
   assert.equal([...src.matchAll(/skipRemote:true/g)].length, 1, 'only the status path asks to skip');
 });

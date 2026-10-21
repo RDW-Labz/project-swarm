@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "split-skip-return",
+      "agent": "auto",
+      "prompt": "On Node 20 the CI job exits with code 1 although the TAP summary says fail 0, because five tests in tests/split-module.test.mjs and tests/split-scan.test.mjs that skip themselves once tools/swarm.mjs is already split call t.skip(reason) at runtime and then keep executing their body: the assertions then fail (no stage-1 names, no pattern-stage names, no movable layer-0 function found, export AGENTS uses API_AGENTS) and are reported as not ok even with the SKIP marker; Node 22 swallows that, Node 20 does not. The five tests: stage-1 pattern constants move on swarm copy smoke-imports, swarm copy stages patterns warnings and mutants succeed, swarm copy split stages patterns through core-12 succeed, dry-run move of layer-0 function on swarm.mjs does not touch file (all in tests/split-module.test.mjs) and tools/swarm.mjs records spread-in-paren agent dependencies (tests/split-scan.test.mjs). Fix every test in those two files that decides to skip at runtime: compute the condition once at module top level (for example const SPLIT_APPLIED = existsSync tools/swarm directory or the swarm.mjs line count below 5000) and pass it as the test option { skip: SPLIT_APPLIED ? reason : false } so the body never runs when skipped; where a runtime t.skip() is unavoidable, make it return immediately (t.skip(reason); return;). Then search the whole tests folder for any other test with a runtime t.skip( that is not followed by a return on the next statement and fix those the same way without changing their conditions. Add a small test (tests/skip-discipline.test.mjs) that scans tests/*.test.mjs sources and fails when a line with t.skip( or ctx.skip( is not immediately followed by a return statement (allow the condition-option form), with a short allow-list printed in the failure message if any file needs it. Write only test files. No token-shaped literals. ignoreTests reason: only test files change.",
+      "context": [
+        "tests/split-module.test.mjs",
+        "tests/split-scan.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/split-module.test.mjs",
+        "tests/split-scan.test.mjs",
+        "tests/skip-discipline.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ]
+}
