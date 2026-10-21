@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Detect shell commands that try to record chat merge approvals or approve hand-build / guard state from an orchestrator session.
 
+import path from 'node:path';
+import { tokenize } from './shell-writes.mjs';
+
 export const SELF_APPROVAL_REASON = 'Hand-build guard: approving or denying a hand-build, or switching the guard off, is the owner\'s alone (swarm handbuild approve, or the phone). An orchestrator session cannot approve its own request.';
 
 const SHELL_CODE_RE = /\b(?:bash|sh|zsh)\s+(?:[^\s|;&]+\s+)*-(?:[A-Za-z]*c|--command)(?:=|\s+)(['"])([\s\S]*?)\1/gi;
@@ -30,55 +33,243 @@ const SAFE_SWARM = [
 ];
 
 const CLAUDE_KNOWN_SUBCOMMANDS = new Set([
-  'mcp', 'config', 'doctor', 'update', 'install', 'plugin', 'remote-control', 'login',
+  'mcp', 'config', 'doctor', 'update', 'install', 'plugin', 'plugins', 'remote-control', 'login',
+  'logout', 'setup-token', 'agents', 'migrate-installer', 'auth',
 ]);
-const PROGRAM_WRAPPERS = new Set(['env', 'command', 'exec', 'nice', 'nohup', 'time', 'sudo', 'xargs']);
+const CLAUDE_INFO_FLAGS = new Set(['--version', '-v', '--help', '-h']);
+const CLAUDE_VALUE_OPTIONS = new Set([
+  '--model', '--resume', '-r', '--session-id', '--add-dir', '--permission-mode', '--allowedTools',
+  '--disallowedTools', '--mcp-config', '--settings', '--output-format', '--input-format', '--max-turns',
+  '--append-system-prompt',
+]);
+
+const PROGRAM_WRAPPERS = new Set([
+  'env', 'command', 'exec', 'nice', 'nohup', 'time', 'timeout', 'stdbuf', 'caffeinate', 'sudo', 'xargs',
+  'builtin', 'setsid', 'chrt',
+]);
+
+const WRAPPER_VALUE_OPTS = {
+  sudo: ['-u', '-g', '-C', '-h', '-p', '-r', '-t', '-U'],
+  env: ['-u', '-C'],
+  nice: ['-n'],
+  stdbuf: ['-i', '-o', '-e'],
+  timeout: ['-s', '-k', '--signal', '--kill-after'],
+  xargs: ['-n', '-I', '-L', '-P', '-s', '-d', '-E'],
+};
+
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh', 'pwsh', 'powershell']);
+const SHELL_KEYWORDS = new Set([
+  'if', 'then', 'do', 'else', 'elif', 'while', 'until', '!', 'fi', 'done', 'case', 'esac', 'for', 'in',
+  'select', 'function', 'coproc',
+]);
+
+const CODE_INTERPRETERS = /^(?:node|python3?|perl|ruby|php[\d.]*)$/;
 
 function claudeProgramBasename(token) {
-  const base = token.split('/').pop();
-  return base === 'claude';
+  return path.basename(token) === 'claude';
 }
 
-function skipProgramWrappers(tokens, start) {
-  let i = start;
-  while (i < tokens.length && PROGRAM_WRAPPERS.has(tokens[i])) {
-    const wrapper = tokens[i];
-    i += 1;
-    if (wrapper === 'env') {
-      while (i < tokens.length && /^[a-z_][a-z0-9_]*=/i.test(tokens[i])) i += 1;
-    } else if (wrapper === 'sudo' || wrapper === 'xargs') {
-      while (i < tokens.length && tokens[i].startsWith('-')) i += 1;
+function plainWords(words) {
+  const plain = [];
+  for (let i = 0; i < words.length; i += 1) {
+    if (['>', '>>', '>|', '>&', '&>', '<', '<<<', '<<'].includes(words[i])) {
+      if (words[i] !== '<<') i += 1;
+      continue;
     }
+    if (/^\d+$/.test(words[i]) && ['>', '>>', '>&'].includes(words[i + 1])) continue;
+    plain.push(words[i]);
   }
-  return i;
+  return plain;
 }
 
-function claudeHasHeadlessOrPromptArgs(tokens, claudeIndex) {
-  const rest = tokens.slice(claudeIndex + 1);
-  for (let i = 0; i < rest.length; i += 1) {
-    const t = rest[i];
-    if (t === '-p' || t === '--print') return true;
-    if (t.startsWith('-')) continue;
+function skipToProgram(plain) {
+  let k = 0;
+  let wrapperName = null;
+  while (k < plain.length) {
+    if (SHELL_KEYWORDS.has(plain[k])) { k += 1; continue; }
+    if (!wrapperName && /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) { k += 1; continue; }
+    if (PROGRAM_WRAPPERS.has(plain[k])) {
+      wrapperName = plain[k];
+      k += 1;
+      continue;
+    }
+    if (wrapperName === 'env') {
+      if (plain[k] === '-S' || plain[k] === '--split-string') {
+        return { index: k + 2, envSplit: plain[k + 1] };
+      }
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) { k += 1; continue; }
+    }
+    if (wrapperName === 'nice' && /^-\d+$/.test(plain[k])) { k += 1; continue; }
+    if (wrapperName && plain[k].startsWith('-')) {
+      const takes = (WRAPPER_VALUE_OPTS[wrapperName] ?? []).includes(plain[k]);
+      k += takes ? 2 : 1;
+      continue;
+    }
+    if (wrapperName === 'timeout' && /^\d+(?:\.\d+)?[smhd]?$/.test(plain[k])) {
+      k += 1;
+      wrapperName = null;
+      continue;
+    }
+    if (wrapperName) wrapperName = null;
+    break;
+  }
+  return { index: k };
+}
+
+function claudeInvocationIsRisky(args) {
+  let i = 0;
+  while (i < args.length) {
+    const t = args[i];
+    if (t === '-p' || t === '--print' || t.startsWith('--print=')) return true;
+    if (t.startsWith('-')) {
+      const opt = t.includes('=') ? t.slice(0, t.indexOf('=')) : t;
+      if (CLAUDE_INFO_FLAGS.has(opt)) return false;
+      if (CLAUDE_VALUE_OPTIONS.has(opt) || opt === '-r') {
+        if (t.includes('=')) { i += 1; continue; }
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
     if (CLAUDE_KNOWN_SUBCOMMANDS.has(t)) return false;
     return true;
   }
   return false;
 }
 
-/** Headless Claude Code: claude as the invoked program with -p, --print, or a positional prompt. */
-function normalizedHasHeadlessClaudeInvocation(normalized) {
-  const segments = normalized.split(/\s*(?:[|;&]|\&\&|\|\|)\s*/);
-  for (const seg of segments) {
-    let trimmed = seg.trim();
-    if (!trimmed) continue;
-    trimmed = trimmed.replace(/\s*&\s*$/, '').trim();
-    const tokens = trimmed.split(/\s+/).filter(Boolean);
-    if (!tokens.length) continue;
-    const prog = skipProgramWrappers(tokens, 0);
-    if (prog >= tokens.length) continue;
-    if (tokens[prog] !== 'claude' && !claudeProgramBasename(tokens[prog])) continue;
-    if (claudeHasHeadlessOrPromptArgs(tokens, prog)) return true;
+function shellCodeFlagIndex(cmd, args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === '--command' || a.startsWith('--command=')) return i;
+    if (/^-[A-Za-z]*c$/.test(a)) return i;
+    if (a.startsWith('-') && !a.startsWith('--') && a.slice(1).includes('c')) return i;
   }
+  return -1;
+}
+
+function interpreterCodeFlagIndex(cmd, args) {
+  if (SHELLS.has(cmd)) return shellCodeFlagIndex(cmd, args);
+  if (/^python/.test(cmd)) {
+    const i = args.findIndex(a => /^-[A-Za-z]*c$/.test(a));
+    return i;
+  }
+  if (cmd === 'node') {
+    return args.findIndex(a => ['-e', '--eval', '-p', '--print'].includes(a) || /^--eval=|^--print=/.test(a));
+  }
+  if (/^(?:perl|ruby)/.test(cmd)) {
+    return args.findIndex(a => /^-[A-Za-z]*[eE]$/.test(a));
+  }
+  if (/^php/.test(cmd)) return args.findIndex(a => a === '-r');
+  return -1;
+}
+
+function codeArgValue(args, at) {
+  const a = args[at];
+  if (a.includes('=')) return a.slice(a.indexOf('=') + 1);
+  return args[at + 1] ?? '';
+}
+
+/** claude as quoted token or list item, then within 40 chars quoted -p or --print. */
+function interpreterCodeHasRiskyClaude(code) {
+  const s = String(code ?? '');
+  const listRe = /\[\s*['"]claude['"][\s\S]{0,40}['"](?:-p|--print)['"]/;
+  if (listRe.test(s)) return true;
+  for (const q of ["'", '"']) {
+    let from = 0;
+    while (from < s.length) {
+      const start = s.indexOf(q, from);
+      if (start === -1) break;
+      let j = start + 1;
+      while (j < s.length && s[j] !== q) {
+        if (s[j] === '\\') j += 2;
+        else j += 1;
+      }
+      const inner = s.slice(start + 1, j);
+      const claudeAt = inner.indexOf('claude');
+      if (claudeAt !== -1) {
+        const window = inner.slice(claudeAt, claudeAt + 40);
+        if (/\bclaude\b/.test(window) && /(?:\s|^)(?:-p|--print)\b/.test(window)) return true;
+      }
+      from = j + 1;
+    }
+  }
+  return false;
+}
+
+function substitutions(text) {
+  const out = [];
+  const str = String(text ?? '');
+  let single = false;
+  let double = false;
+  for (let i = 0; i < str.length; i += 1) {
+    const c = str[i];
+    if (c === '\\' && !single) { i += 1; continue; }
+    if (c === "'" && !double) { single = !single; continue; }
+    if (c === '"' && !single) { double = !double; continue; }
+    if (single) continue;
+    if (c === '$' && str[i + 1] === '(') {
+      let depth = 1;
+      let j = i + 2;
+      for (; j < str.length && depth > 0; j += 1) {
+        if (str[j] === '(') depth += 1;
+        else if (str[j] === ')') depth -= 1;
+      }
+      out.push(str.slice(i + 2, j - 1));
+      i = j - 1;
+    } else if (c === '`') {
+      const j = str.indexOf('`', i + 1);
+      if (j === -1) break;
+      out.push(str.slice(i + 1, j));
+      i = j;
+    }
+  }
+  return out;
+}
+
+function commandWordsRiskyClaude(words, depth) {
+  const plain = plainWords(words);
+  const { index, envSplit } = skipToProgram(plain);
+  if (envSplit !== undefined) return rawHasRiskyClaudeInvocation(envSplit, depth + 1);
+  if (index >= plain.length) return false;
+  const cmd = path.basename(plain[index]);
+  const args = plain.slice(index + 1);
+
+  if (claudeProgramBasename(plain[index]) && claudeInvocationIsRisky(args)) return true;
+
+  if (cmd === 'eval') {
+    return rawHasRiskyClaudeInvocation(args.join(' '), depth + 1);
+  }
+
+  const codeAt = interpreterCodeFlagIndex(cmd, args);
+  if (codeAt !== -1) {
+    const code = codeArgValue(args, codeAt);
+    if (SHELLS.has(cmd)) {
+      if (rawHasRiskyClaudeInvocation(code, depth + 1)) return true;
+    } else if (CODE_INTERPRETERS.test(cmd)) {
+      if (interpreterCodeHasRiskyClaude(code)) return true;
+    }
+  }
+
+  return false;
+}
+
+const MAX_CLAUDE_DEPTH = 4;
+
+/** Headless Claude Code via quote-aware tokenization (not normalized regex splitting). */
+function rawHasRiskyClaudeInvocation(commandText, depth = 0) {
+  if (depth > MAX_CLAUDE_DEPTH) return false;
+  const text = String(commandText ?? '');
+  if (!text) return false;
+
+  for (const sub of substitutions(text)) {
+    if (rawHasRiskyClaudeInvocation(sub, depth + 1)) return true;
+  }
+
+  for (const words of tokenize(text)) {
+    if (commandWordsRiskyClaude(words, depth)) return true;
+  }
+
   return false;
 }
 
@@ -112,7 +303,6 @@ function matchesNormalized(normalized) {
   if (!normalized) return false;
   if (SAFE_SWARM.some(re => re.test(normalized))) return false;
   if (STATIC_MARKERS.some(re => re.test(normalized))) return true;
-  if (normalizedHasHeadlessClaudeInvocation(normalized)) return true;
   if (HAND_BUILD_ACTION.test(normalized)) return true;
   if (HAND_BUILD_ACTION_NODE.test(normalized)) return true;
   if (DECIDE_APPROVE.test(normalized)) return true;
@@ -126,6 +316,7 @@ function matchesNormalized(normalized) {
 export function isSelfApprovalCommand(commandText) {
   const text = String(commandText ?? '');
   if (!text) return false;
+  if (rawHasRiskyClaudeInvocation(text, 0)) return true;
   const normalized = normalizeSelfApprovalCommandText(text);
   if (matchesNormalized(normalized)) return true;
   for (const inner of nestedCommandStrings(text)) {
