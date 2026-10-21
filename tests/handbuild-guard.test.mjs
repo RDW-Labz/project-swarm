@@ -211,22 +211,35 @@ test('the request is a decision in Needs you; the owner approves with swarm hand
   assert.match(item.title, /Hand-build request \(secret\)/);
   assert.match(item.title, /Recommendation: deny unless/);
   // the way the board and phone answer it
-  const decided = await runInboxCommand(root, 'decide', [`handbuild-${req.id}`, 'approve'], {});
+  const decided = await runInboxCommand(root, 'decide', [`handbuild-${req.id}`, 'approve'], { now: () => T0 });
   assert.equal(decided.exitCode, 0, decided.stdout);
   assert.equal(listRequests(root)[0].status, 'approved');
-  assert.equal(edit(root, 'src/env.ts', Date.now() + 1000).allow, true);
+  assert.equal(edit(root, 'src/env.ts', T0 + 1000).allow, true);
   const backlog = await fs.readFile(path.join(root, '.swarm/project/backlog.json'), 'utf8').catch(() => '');
   assert.ok(!/Change decision/.test(backlog), 'no plan goal for a hand-build decision');
   assert.equal((await collectInbox([root], inboxDeps({ now: () => T0 }))).some(i => i.id === `handbuild-${req.id}`), false, 'answered: gone from Needs you');
   // the plain command, and deny
   await runHandbuildCommand(root, ['request', '--kind', 'tiny', '--reason', 'three lines and the swarm is blocked', '--files', 'src/t.ts'], { now: () => T0 });
   const second = listRequests(root).find(r => r.status === 'pending');
-  assert.match((await runHandbuildCommand(root, ['deny', second.id])).stdout, /denied/);
+  assert.match((await runHandbuildCommand(root, ['deny', second.id], { now: () => T0 })).stdout, /denied/);
   const bad = await runHandbuildCommand(root, ['request', '--kind', 'because', '--reason', 'it would be quicker by hand', '--files', 'src/t.ts']);
   assert.equal(bad.exitCode, 1);
   assert.match(bad.stdout, /write a ticket instead/);
   assert.match((await runHandbuildCommand(root, ['status'])).stdout, /live approval/);
   assert.match((await runHandbuildCommand(root, ['log'])).stdout, /request/);
+});
+
+test('hand-build inbox approve flow uses one injectable clock (not the real clock)', async t => {
+  const root = await project(t);
+  const clock = T0 - 30 * 24 * 60 * 60 * 1000;
+  const now = () => clock;
+  const asked = await runHandbuildCommand(root, ['request', '--kind', 'secret', '--reason', 'it writes the service key into .env', '--files', 'src/env.ts', '--minutes', '15'], { now });
+  assert.equal(asked.exitCode, 0, asked.stdout);
+  const [req] = listRequests(root);
+  const decided = await runInboxCommand(root, 'decide', [`handbuild-${req.id}`, 'approve'], { now });
+  assert.equal(decided.exitCode, 0, decided.stdout);
+  assert.equal(listRequests(root)[0].status, 'approved');
+  assert.equal(guardDecision({ tool: 'Edit', toolInput: { file_path: path.join(root, 'src/env.ts') }, root, cwd: root, now }).allow, true);
 });
 
 test('shell writes make the hand-built share complete: the lane lists the files a command wrote, and blocked attempts are counted', async t => {
