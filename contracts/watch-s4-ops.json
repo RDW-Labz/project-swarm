@@ -4,7 +4,7 @@
   "info": {
     "title": "Swarm Watch S4 operations API",
     "version": "1.0.0",
-    "description": "Contract for the local Swarm Watch board and its tailnet-only owner actions. Read routes primarily accept the board token in x-watch-token; the legacy t query parameter is retained only for the initial HTML page load and is exchanged for an HttpOnly cookie or x-watch-token header. Owner routes require x-watch-token and the Tailscale identity header; the t query parameter is refused (401). Owner routes are never reachable with agent-session markers or through a remote board request carrying local=1."
+    "description": "Contract for the local Swarm Watch board and its tailnet-only owner actions. Every /api/* route requires the board token in x-watch-token; the contract already forbids the t query parameter there, and those routes refuse t with 401 once T-8006 lands. The legacy t query parameter is retained only for the initial HTML page load (GET /) and is exchanged for an HttpOnly SameSite=Strict cookie or x-watch-token header under T-8006. Owner routes require x-watch-token and the Tailscale identity header; the t query parameter is refused (401). Owner routes are never reachable with agent-session markers or through a remote board request carrying local=1."
   },
   "servers": [
     {
@@ -43,6 +43,26 @@
     "T-8006: server change to exchange the initial HTML-load query token for an HttpOnly cookie or the x-watch-token header."
   ],
   "paths": {
+    "/": {
+      "get": {
+        "tags": ["board-read"],
+        "operationId": "getBoardPage",
+        "summary": "Load the board HTML page",
+        "description": "Initial HTML board page load only. The t query parameter is accepted only here and is exchanged for an HttpOnly SameSite=Strict cookie under T-8006.",
+        "security": [
+          {"boardTokenHeader": []},
+          {"boardTokenQuery": []}
+        ],
+        "responses": {
+          "200": {
+            "description": "Board HTML page"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
     "/api/board": {
       "get": {
         "tags": ["board-read"],
@@ -50,8 +70,7 @@
         "summary": "Get the board snapshot",
         "description": "Returns machine totals and project overviews. local=1 limits federation data to this machine and never enables owner actions.",
         "security": [
-          {"boardTokenHeader": []},
-          {"boardTokenQuery": []}
+          {"boardTokenHeader": []}
         ],
         "parameters": [
           {
@@ -74,8 +93,7 @@
         "operationId": "getProject",
         "summary": "Get one project detail",
         "security": [
-          {"boardTokenHeader": []},
-          {"boardTokenQuery": []}
+          {"boardTokenHeader": []}
         ],
         "parameters": [
           {
@@ -101,8 +119,7 @@
         "operationId": "getLiveProject",
         "summary": "Get live runs for one project",
         "security": [
-          {"boardTokenHeader": []},
-          {"boardTokenQuery": []}
+          {"boardTokenHeader": []}
         ],
         "parameters": [
           {
@@ -128,8 +145,7 @@
         "operationId": "getHistory",
         "summary": "Get board history",
         "security": [
-          {"boardTokenHeader": []},
-          {"boardTokenQuery": []}
+          {"boardTokenHeader": []}
         ],
         "parameters": [
           {
@@ -267,7 +283,7 @@
         "in": "query",
         "name": "t",
         "deprecated": true,
-        "description": "Legacy compatibility scheme accepted only for the initial HTML page load. The server will exchange it for an HttpOnly cookie or the x-watch-token header under T-8006; do not use it on subsequent read requests."
+        "description": "Legacy compatibility scheme accepted only for the initial HTML page load (GET /). The t parameter is only accepted here and is exchanged for an HttpOnly SameSite=Strict cookie or the x-watch-token header under T-8006; /api/* routes refuse t with 401 once T-8006 lands, and this contract already forbids it there."
       },
       "tailnetSignIn": {
         "type": "apiKey",

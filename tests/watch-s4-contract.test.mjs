@@ -36,11 +36,35 @@ test('every owner route requires board token header and tailnet sign-in only', (
   }
 });
 
+test('every /api/* operation forbids query tokens and read routes require the header only', () => {
+  for (const [path, item] of Object.entries(contract.paths ?? {})) {
+    if (!path.startsWith('/api/')) continue;
+    for (const [method, operation] of Object.entries(item)) {
+      if (!['get', 'post', 'put', 'patch', 'delete', 'head', 'options'].includes(method)) continue;
+      const security = operation.security;
+      assert.ok(Array.isArray(security) && security.length > 0, `${method.toUpperCase()} ${path} must declare security`);
+      assert.ok(
+        security.every((requirement) => !Object.hasOwn(requirement, 'boardTokenQuery')),
+        `${method.toUpperCase()} ${path} must not accept boardTokenQuery`,
+      );
+      if (!ownerPaths.includes(path)) {
+        assert.deepEqual(security, [{ boardTokenHeader: [] }], `${method.toUpperCase()} ${path} must require boardTokenHeader only`);
+      }
+    }
+  }
+});
+
 test('deprecated query token is legacy and header is primary on every read route', () => {
   const queryScheme = contract.components?.securitySchemes?.boardTokenQuery;
   assert.equal(queryScheme?.deprecated, true);
   assert.match(queryScheme?.description ?? '', /initial HTML page load/i);
-  assert.match(queryScheme?.description ?? '', /HttpOnly cookie/i);
+  assert.match(queryScheme?.description ?? '', /GET \/\)/i);
+  assert.match(queryScheme?.description ?? '', /\/api\/\* routes refuse t with 401 once T-8006 lands/i);
+  assert.match(queryScheme?.description ?? '', /contract already forbids it/i);
+  assert.match(contract.info?.description ?? '', /those routes refuse t with 401 once T-8006 lands/i);
+  assert.match(contract.info?.description ?? '', /contract already forbids the t query parameter there/i);
+  assert.match(queryScheme?.description ?? '', /HttpOnly(?: SameSite=Strict)? cookie/i);
+  assert.match(queryScheme?.description ?? '', /SameSite=Strict/i);
   assert.match(queryScheme?.description ?? '', /x-watch-token header/i);
   assert.match(JSON.stringify(contract['x-security-notes'] ?? []), /T-8006/);
 
