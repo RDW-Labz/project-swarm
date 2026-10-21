@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "q1-dead-run",
+      "agent": "auto",
+      "prompt": "Item Q1: a killed runner leaves its run running and holding a cap reservation forever. Create tools/dead-run.mjs (SPDX header, ES module) and tests/dead-run.test.mjs (node:test, strict assert, temp directories, injected isAlive). Exports: async findDeadRun(root, id, {readState, listLiveRuns, isAlive}) returning {dead: true, reason: 'pid-gone'} when the run's state.status is running and the pid recorded for it in the live-run registry (tools/board.mjs listLiveRuns and registerLiveRun show the record shape: runId, pid, root) is not alive, or when no registry record exists and the state file has not changed for the run's stale period (use 30 minutes, injectable now), else {dead: false}; async finalizeDeadRun(root, id, {readState, writeState, unregisterLiveRun, releaseSpend, spendKeys, now}) that marks every job with status queued, pending, held or running as cancelled with finishedAt, sets state.status to cancelled with state.cancelledAt and state.cancelReason 'runner-gone', calls unregisterLiveRun(id), and calls releaseSpend once for every reservation key that run still holds (spendKeys(id) returns them; the spend store is tools/spend.mjs, look at reserveSpend, settleSpend and releaseSpend to see key shapes and how a run's keys can be listed; export a listRunSpendKeys(dir, runId) helper from tools/dead-run.mjs itself (read the spend store files the way tools/spend.mjs does; do not edit tools/spend.mjs)) and returns {id, status: 'cancelled', cancelledJobs, releasedKeys}. It must be safe to call twice. Do not touch tools/swarm.mjs (a later step wires cancelRun to call these when the pid is gone). Tests: a live pid is not dead; a dead pid is dead; finalize marks jobs cancelled and the run cancelled; releases each reservation key once; second call is a no-op; a run that is not running is refused with a clear error. Write only tools/dead-run.mjs and tests/dead-run.test.mjs.",
+      "context": [
+        "tools/board.mjs",
+        "tools/spend.mjs"
+      ],
+      "outputs": [
+        "tools/dead-run.mjs",
+        "tests/dead-run.test.mjs"
+      ],
+      "timeoutMs": 1200000
+    },
+    {
+      "id": "q3-cost-guards",
+      "agent": "auto",
+      "prompt": "Item Q3: a missing result or missing cost must never crash with a TypeError that hides the real error. Parts-app saw: swarm ask with an untracked context file fails validation, state.jobs is empty, and a handler reads state.jobs[0] then record.costUsd, so a TypeError hides state.error. In tools/go.mjs and tools/goal.mjs the lines that read waited.costUsd (waited may be undefined or null) must read it safely, and finalCost in tools/spend.mjs must treat a missing or non-object record as an empty record (a flat-rate lane with a missing cost is zero dollars; a metered lane keeps its existing behavior). Add a small exported helper firstJobOrError(state) in tools/go.mjs that returns {record} when state.jobs has a first job, otherwise {error: state.error or a message built from the run status, never undefined} so callers can surface it, and use it in go.mjs and goal.mjs where they read the first job. Also add a pure function warnUntrackedContext(contextPaths, trackedPaths) in a new tools/context-warn.mjs returning an array of warning strings, one per context path that is not in trackedPaths, each saying that Cursor and Codex see the committed files only and the file must be committed first. Tests in tests/crash-guards.test.mjs (node:test, strict assert): finalCost with undefined, null and empty record for a flat lane gives usd 0 and for a metered lane the existing reservation fallback; firstJobOrError with empty jobs and an error string returns that error; with a job returns the record; the go and goal reads do not throw when waited is undefined (call the smallest exported function that reads them, or add one); warnUntrackedContext lists only the untracked path and is empty when all are tracked. Write only tools/go.mjs, tools/goal.mjs, tools/spend.mjs, tools/context-warn.mjs and tests/crash-guards.test.mjs.",
+      "context": [
+        "tools/go.mjs",
+        "tools/goal.mjs",
+        "tools/spend.mjs"
+      ],
+      "outputs": [
+        "tools/go.mjs",
+        "tools/goal.mjs",
+        "tools/spend.mjs",
+        "tools/context-warn.mjs",
+        "tests/crash-guards.test.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/api-short-report.test.mjs",
+        "tests/auto-run-check.test.mjs",
+        "tests/batch-run.test.mjs",
+        "tests/flat-rate-reserve.test.mjs",
+        "tests/goal.test.mjs",
+        "tests/hard-cap.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/phase10-swarm-command.test.mjs",
+        "tests/phase10b-cli.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/phase11-cli.test.mjs",
+        "tests/phase12-cli.test.mjs",
+        "tests/phase14.test.mjs",
+        "tests/plan-preview.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/rented-run.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tests/spend.test.mjs"
+      ]
+    }
+  ]
+}
