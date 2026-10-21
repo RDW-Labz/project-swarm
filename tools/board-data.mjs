@@ -15,7 +15,7 @@ import { combinedUsage } from './orchestrator-usage.mjs';
 import { buildProgress, progressSummary } from './build-progress.mjs';
 import { ROUTE_ORDER } from './router.mjs';
 import { splitQuality } from './split-quality.mjs';
-import { readBenchmarks, scorecard } from './benchmark-scorecard.mjs';
+import { readScorecards, scorecardHistory } from './benchmark-scorecard.mjs';
 
 const DAY = 86400000;
 const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   // subscription lanes: not billed per use
@@ -424,7 +424,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const detailSpend = { usd: spend.spendUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis: spend.capBasis ?? 'billed+list' };
   const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null }).catch(() => null);
   const split = await splitQuality({ root: project.root, now, slots }).catch(() => null);
-  const benchmarks = await readBenchmarks(project.root).then(input => scorecard(input, { now })).catch(() => null);
+  const benchmarks = await readScorecards(project.root).then(input => scorecardHistory(input)).catch(() => null);
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
     tickets, ticketCounts: ticketsOf(ledger),

@@ -181,14 +181,20 @@ test('project panels expose split quality and benchmark scorecards', async t => 
   assert.equal(empty.splitQuality.metrics.length, 7);
   assert.equal(empty.benchmarks.files, 0);
 
-  const directory = path.join(A.root, 'docs/state/benchmarks');
+  const directory = path.join(A.root, 'evals/scorecard');
   await fs.mkdir(directory, { recursive: true });
-  const benchmark = (at, label, value) => ({ version: 1, at, label, source: 'tests/board-page', metrics: { latency: { value, unit: 'ms', better: 'lower', label: 'Latency' } } });
-  await fs.writeFile(path.join(directory, '2026-10-20-baseline.json'), JSON.stringify(benchmark('2026-10-20T15:00:00Z', 'baseline', 10)));
-  await fs.writeFile(path.join(directory, '2026-10-27-after.json'), JSON.stringify(benchmark('2026-10-27T15:00:00Z', 'after', 8)));
+  const scorecard = (week, generatedAt, value, extra = {}) => ({
+    week,
+    generatedAt,
+    projects: [{ project: A.name, metrics: [{ name: 'billed_usd', value, status: 'measured', grade: 'green', trend: 'flat', previous: null, ...extra }] }],
+    overall: { green: 1, amber: 0, red: 0, unknown: 0 },
+    headline: '1 green, 0 amber, 0 red',
+  });
+  await fs.writeFile(path.join(directory, 'previous.json'), JSON.stringify(scorecard('2026-W41', '2026-10-11T15:00:00Z', 10)));
+  await fs.writeFile(path.join(directory, 'latest.json'), JSON.stringify(scorecard('2026-W42', '2026-10-18T15:00:00Z', 8, { trend: 'up', previous: 10 })));
   const detail = await projectDetail(A, { now: NOW });
   assert.equal(detail.benchmarks.files, 2);
-  assert.equal(detail.benchmarks.metrics.find(metric => metric.key === 'latency').verdict, 'better');
+  assert.equal(detail.benchmarks.projects[0].metrics.find(metric => metric.name === 'billed_usd').verdict, 'better');
 
   const overview = await projectOverview(A, [], { now: NOW });
   assert.ok(overview.split && 'grade' in overview.split);

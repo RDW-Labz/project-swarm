@@ -1,50 +1,30 @@
-# Benchmark files
+# Benchmark scorecards
 
-Benchmark files live in `docs/state/benchmarks/`.
+The board's Benchmark scorecard reads the JSON files written by `swarm eval scorecard` in
+`evals/scorecard/`: `latest.json`, `previous.json`, and any other weekly cards kept there,
+such as `evals/scorecard/2026-W43.json`.
 
-Use one file for each measurement. Do not rewrite a file.
-
-The file name is:
-
-`<YYYY-MM-DD>-<label>.json`
-
-The label is `baseline` for the first measurement. Later labels can be short
-words made of `a-z`, `0-9`, and `-`, such as `after` or `weekly`.
-
-Each file has this shape:
+To show a weekly trend, keep one card per week in that folder. A card has this shape:
 
 ```json
 {
-  "version": 1,
-  "at": "2026-10-20T15:30:00Z",
-  "label": "baseline",
-  "source": "bench/throughput",
-  "metrics": {
-    "deploy-time": {
-      "value": 18.5,
-      "unit": "min",
-      "better": "lower",
-      "label": "Deploy time"
-    },
-    "success-rate": {
-      "value": 97.2,
-      "unit": "%",
-      "better": "higher"
-    },
-    "cost": {
-      "value": 12.4,
-      "unit": "$",
-      "better": "lower"
-    }
-  }
+  "week": "2026-W43",
+  "generatedAt": "2026-10-20T15:30:00Z",
+  "projects": [{
+    "project": "example",
+    "metrics": [{
+      "name": "first_try_pass_rate",
+      "value": 0.8,
+      "status": "measured",
+      "grade": "green",
+      "trend": "up",
+      "previous": 0.75
+    }]
+  }],
+  "overall": {"green": 1, "amber": 0, "red": 0, "unknown": 0},
+  "headline": "1 green, 0 amber, 0 red"
 }
 ```
 
-`at` is an ISO time. `source` is a short string. A metric key has 1 to 60
-letters, numbers, dots, underscores, or dashes. A metric value is a number.
-Its unit is a short string. `better` is either `lower` or `higher`.
-`label` is optional and is only a display name.
-
-The board reads only this folder. It ignores files whose names or contents do
-not match this format. If a metric is missing from a week, that week has no
-point for the metric.
+The source of truth for reading and shaping these cards is
+`tools/bench-scorecard.mjs`.

@@ -1,106 +1,94 @@
 // SPDX-License-Identifier: Apache-2.0
-
+import './_isolate-config.mjs';
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import { SCORECARD_METRIC_NAMES } from '../tools/bench-scorecard.mjs';
+import { readScorecards, scorecardHistory } from '../tools/benchmark-scorecard.mjs';
 
-import { isoWeek, readBenchmarks, scorecard } from '../tools/benchmark-scorecard.mjs';
-
-const roots = new Set();
-
-async function fixture(files) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'benchmark-scorecard-'));
-  roots.add(root);
-  const directory = path.join(root, 'docs', 'state', 'benchmarks');
-  await mkdir(directory, { recursive: true });
-  for (const [name, value] of Object.entries(files)) {
-    await writeFile(path.join(directory, name), typeof value === 'string' ? value : JSON.stringify(value));
-  }
+const tempRoot = async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'scorecard-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
-}
+};
 
-test.after(async () => {
-  await Promise.all([...roots].map((root) => rm(root, { recursive: true, force: true })));
+const metric = (name, value, extra = {}) => ({ name, value, status: 'measured', grade: 'green', trend: 'flat', previous: null, ...extra });
+const card = (week, generatedAt, value, extra = {}) => ({
+  week,
+  generatedAt,
+  projects: [{ project: 'demo', metrics: [metric('billed_usd', value, extra)] }],
+  overall: { green: 1, amber: 0, red: 0, unknown: 0 },
+  headline: `${week} headline`,
 });
 
-function record(at, label, metrics) {
-  return { version: 1, at, label, source: 'test', metrics };
-}
+test('readScorecards skips malformed cards with reasons', async t => {
+  const root = await tempRoot(t);
+  const directory = path.join(root, 'evals', 'scorecard');
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, 'good.json'), JSON.stringify(card('2026-W43', '2026-10-20T15:00:00Z', 1)));
+  await fs.writeFile(path.join(directory, 'bad-json.json'), '{');
+  await fs.writeFile(path.join(directory, 'bad-week.json'), JSON.stringify({ week: 'not-a-week', projects: [] }));
+  await fs.writeFile(path.join(directory, 'bad-projects.json'), JSON.stringify({ week: '2026-W44', projects: {} }));
 
-function metric(value, better, label = 'Metric') {
-  return { value, unit: 'count', better, label };
-}
-
-test('readBenchmarks reports bad names, JSON, version, and values', async () => {
-  const root = await fixture({
-    'bad-name.json': '{}',
-    '2026-10-01-json.json': '{',
-    '2026-10-02-version.json': record('2026-10-02T00:00:00Z', 'weekly', { x: metric(1, 'higher') }),
-    '2026-10-03-value.json': record('2026-10-03T00:00:00Z', 'weekly', { x: { value: 'one', unit: 'count', better: 'higher' } }),
-  });
-  const versionFile = path.join(root, 'docs/state/benchmarks/2026-10-02-version.json');
-  await writeFile(versionFile, JSON.stringify({ ...JSON.parse(await (await import('node:fs/promises')).readFile(versionFile, 'utf8')), version: 2 }));
-
-  const result = await readBenchmarks(root);
-  assert.equal(result.files.length, 0);
-  assert.equal(result.skipped.length, 4);
-  assert.match(result.skipped.find((item) => item.file === 'bad-name.json').reason, /name/);
-  assert.match(result.skipped.find((item) => item.file === '2026-10-01-json.json').reason, /JSON/);
-  assert.match(result.skipped.find((item) => item.file === '2026-10-02-version.json').reason, /version/);
-  assert.match(result.skipped.find((item) => item.file === '2026-10-03-value.json').reason, /number/);
+  const result = await readScorecards(root);
+  assert.equal(result.files, 1);
+  assert.equal(result.cards.length, 1);
+  assert.equal(result.skipped.length, 3);
+  assert.match(result.skipped.find(item => item.file === 'bad-json.json').reason, /invalid JSON/);
+  assert.match(result.skipped.find(item => item.file === 'bad-week.json').reason, /week/);
+  assert.match(result.skipped.find(item => item.file === 'bad-projects.json').reason, /projects/);
 });
 
-test('baseline label wins over an earlier non-baseline file', () => {
-  const files = [
-    { name: 'early', ...record('2026-10-01T00:00:00Z', 'weekly', { x: metric(10, 'higher') }) },
-    { name: 'baseline', ...record('2026-10-02T00:00:00Z', 'baseline', { x: metric(20, 'higher') }) },
-    { name: 'latest', ...record('2026-10-03T00:00:00Z', 'after', { x: metric(30, 'higher') }) },
-  ];
-  const result = scorecard(files, { now: '2026-10-03T12:00:00Z', weeks: 1 });
-  assert.equal(result.metrics[0].baseline.value, 20);
-  assert.equal(result.metrics[0].latest.value, 30);
-});
-
-test('better, worse, and flat work for both directions', () => {
-  const files = [
-    { name: 'baseline', ...record('2026-10-01T00:00:00Z', 'baseline', {
-      down: metric(100, 'lower'), up: metric(100, 'higher'), flat: metric(100, 'lower'),
-    }) },
-    { name: 'latest', ...record('2026-10-02T00:00:00Z', 'after', {
-      down: metric(80, 'lower'), up: metric(80, 'higher'), flat: metric(101, 'lower'),
-    }) },
-  ];
-  const result = scorecard(files, { now: '2026-10-02T12:00:00Z', weeks: 1 });
-  assert.equal(result.metrics.find((item) => item.key === 'down').verdict, 'better');
-  assert.equal(result.metrics.find((item) => item.key === 'up').verdict, 'worse');
-  assert.equal(result.metrics.find((item) => item.key === 'flat').verdict, 'flat');
-});
-
-test('weekly buckets use ISO weeks across a year boundary', () => {
-  assert.equal(isoWeek(new Date('2026-12-31T12:00:00Z')), '2026-W53');
-  assert.equal(isoWeek(new Date('2027-01-04T12:00:00Z')), '2027-W01');
-  const files = [
-    { name: 'old', ...record('2026-12-31T12:00:00Z', 'weekly', { x: metric(1, 'higher') }) },
-    { name: 'new', ...record('2027-01-04T12:00:00Z', 'weekly', { x: metric(2, 'higher') }) },
-  ];
-  const result = scorecard(files, { now: '2027-01-04T12:00:00Z', weeks: 2 });
-  assert.deepEqual(result.weeks, ['2026-W53', '2027-W01']);
-  assert.deepEqual(result.metrics[0].weekly, [
-    { week: '2026-W53', value: 1 },
-    { week: '2027-W01', value: 2 },
+test('duplicate week keeps the card with the newest generatedAt', () => {
+  const history = scorecardHistory([
+    card('2026-W43', '2026-10-20T15:00:00Z', 1),
+    card('2026-W43', '2026-10-20T16:00:00Z', 2, { trend: 'up', previous: 1 }),
   ]);
+  assert.equal(history.files, 2);
+  assert.equal(history.week, '2026-W43');
+  assert.equal(history.projects[0].metrics.find(item => item.name === 'billed_usd').value, 2);
+  assert.deepEqual(history.weeks, ['2026-W43']);
 });
 
-test('weeks without data are omitted and later-only metrics use their first file', () => {
-  const files = [
-    { name: 'first', ...record('2026-10-01T00:00:00Z', 'weekly', { old: metric(1, 'higher') }) },
-    { name: 'later', ...record('2026-10-15T00:00:00Z', 'weekly', { later: metric(3, 'higher') }) },
-  ];
-  const result = scorecard(files, { now: '2026-10-15T12:00:00Z', weeks: 3 });
-  const later = result.metrics.find((item) => item.key === 'later');
-  assert.equal(later.baseline.value, 3);
-  assert.equal(later.latest.value, 3);
-  assert.deepEqual(later.weekly, [{ week: '2026-W42', value: 3 }]);
+test('history keeps weekly points across the ISO year boundary', () => {
+  const history = scorecardHistory([
+    card('2026-W51', '2026-12-20T12:00:00Z', 3),
+    card('2026-W52', '2026-12-27T12:00:00Z', 2, { trend: 'down', previous: 3 }),
+    card('2027-W01', '2027-01-04T12:00:00Z', 1, { trend: 'down', previous: 2 }),
+  ], { weeks: 3 });
+  const billed = history.projects[0].metrics.find(item => item.name === 'billed_usd');
+  assert.deepEqual(history.weeks, ['2026-W51', '2026-W52', '2027-W01']);
+  assert.deepEqual(billed.weekly.map(point => point.week), ['2026-W51', '2026-W52', '2027-W01']);
+  assert.deepEqual(billed.weekly.map(point => point.value), [3, 2, 1]);
+  assert.equal(billed.verdict, 'worse');
+});
+
+test('metric order follows SCORECARD_METRIC_NAMES and maps trends to verdicts', () => {
+  const history = scorecardHistory([{
+    ...card('2026-W43', '2026-10-20T15:00:00Z', 1),
+    projects: [{ project: 'demo', metrics: [
+      metric('retries', 2, { trend: 'up' }),
+      metric('billed_usd', 1, { trend: 'down' }),
+      metric('list_usd', 1, { trend: 'flat' }),
+      metric('first_try_pass_rate', 1, { trend: 'new' }),
+    ] }],
+  }]);
+  const metrics = history.projects[0].metrics;
+  assert.deepEqual(metrics.map(item => item.name), SCORECARD_METRIC_NAMES);
+  assert.equal(metrics.find(item => item.name === 'retries').verdict, 'better');
+  assert.equal(metrics.find(item => item.name === 'billed_usd').verdict, 'worse');
+  assert.equal(metrics.find(item => item.name === 'list_usd').verdict, 'flat');
+  assert.equal(metrics.find(item => item.name === 'first_try_pass_rate').verdict, 'unknown');
+});
+
+test('empty folder produces an empty history', async t => {
+  const root = await tempRoot(t);
+  await fs.mkdir(path.join(root, 'evals', 'scorecard'), { recursive: true });
+  const result = scorecardHistory(await readScorecards(root));
+  assert.equal(result.week, null);
+  assert.deepEqual(result.projects, []);
+  assert.deepEqual(result.weeks, []);
+  assert.equal(result.files, 0);
 });
