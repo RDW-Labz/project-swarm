@@ -95,9 +95,19 @@ describe('executePolicyPass', () => {
       item,
     });
     assert.equal(facts.pastDailyAutoLimit, true);
-    const decision = decide({ kind: 'cap-raise', id: item.id, facts }, { rules: baseRules() });
+    const decision = decide(
+      { kind: 'cap-raise', id: item.id, project: item.project, facts },
+      { rules: baseRules() },
+    );
     assert.equal(decision.decision, 'needs-owner');
     assert.match(decision.reason, /past daily auto limit/);
+  });
+
+  it('refuses cap-raise without a project', () => {
+    const facts = { amountUsd: 1, raisedTodayUsd: 0, pastDailyAutoLimit: false };
+    const decision = decide({ kind: 'cap-raise', id: 'cap-no-project', facts }, { rules: baseRules() });
+    assert.equal(decision.decision, 'needs-owner');
+    assert.match(decision.reason, /project missing/);
   });
 });
 
