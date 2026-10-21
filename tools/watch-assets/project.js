@@ -37,17 +37,40 @@
     var overall = progress.percent && progress.percent.overall;
     var tickets = progress.percent && progress.percent.tickets || { done: 0, total: 0 };
     var requirements = progress.percent && progress.percent.requirements;
+    var headlineText = progress.headline || ('build ' + tickets.done + '/' + tickets.total);
     var headline = el('div', 'livebar'); headline.appendChild(meter(overall));
     headline.appendChild(el('strong', 'big num', overall === null || overall === undefined ? 'Unknown' : String(overall) + '%'));
-    headline.appendChild(el('span', 'sub', 'tickets ' + tickets.done + '/' + tickets.total + ' · requirements ' + (requirements && typeof requirements.pct === 'number' ? requirements.pct + '%' : '—')));
+    headline.appendChild(el('span', 'sub', headlineText));
     host.appendChild(headline);
 
     var milestones = el('ol', 'milestones');
     (progress.milestones || []).forEach(function (item) {
       var classes = item.state + (item.state === 'current' && item.currentDone ? ' done' : '');
-      var li = el('li', classes, item.label); var title = [item.evidence, item.at].filter(Boolean).join(' · '); if (title) { li.setAttribute('title', title); } if (item.state === 'current') { li.setAttribute('aria-current', 'step'); } milestones.appendChild(li);
+      var label = item.label + (item.evidence === 'not tracked' ? ' · not tracked' : '');
+      var li = el('li', classes, label); var title = [item.evidence, item.at].filter(Boolean).join(' · '); if (title) { li.setAttribute('title', title); } if (item.state === 'current') { li.setAttribute('aria-current', 'step'); } milestones.appendChild(li);
     });
     host.appendChild(milestones);
+
+    if (progress.scopes && progress.scopes.length) {
+      host.appendChild(el('div', 'label', 'Scopes'));
+      var scopeList = el('div', 'board-list');
+      progress.scopes.forEach(function (scope) {
+        var label = scope.name + ' · build ' + scope.build.done + '/' + scope.build.total + ' · human ' + scope.human.done + '/' + scope.human.total;
+        if (scope.done) {
+          var details = el('details', 'board-entry');
+          details.appendChild(el('summary', '', label + ' · done'));
+          details.appendChild(el('div', 'sub', scope.current || 'Finished'));
+          scopeList.appendChild(details);
+        } else {
+          var row = el('div', 'board-entry');
+          row.appendChild(el('span', 'name', scope.name));
+          row.appendChild(meter(scope.build.total ? scope.build.done * 100 / scope.build.total : 0));
+          row.appendChild(el('span', 'mono sub', 'build ' + scope.build.done + '/' + scope.build.total + ' · human ' + scope.human.done + '/' + scope.human.total + ' · ' + (scope.current || 'Unknown')));
+          scopeList.appendChild(row);
+        }
+      });
+      host.appendChild(scopeList);
+    }
 
     var stages = el('div', 'board-list');
     (progress.stages || []).forEach(function (stage) {
@@ -66,6 +89,15 @@
     host.appendChild(progressList('Human tickets', humans));
     host.appendChild(progressList('Blockers', blockers));
     host.appendChild(progressList('Approvals', approvals));
+
+    var untracked = progress.untracked || progress.offLedger;
+    if (untracked && (untracked.count || untracked.jobs)) {
+      host.appendChild(el('div', 'label', 'Untracked work'));
+      host.appendChild(el('div', 'board-note', untracked.warning || 'untracked work: no ledger ticket'));
+      (untracked.newest || []).forEach(function (run) {
+        host.appendChild(el('div', 'board-entry', run.runId + ' · ' + run.name + ' · ' + run.status + ' · ' + when(run.startedAt)));
+      });
+    }
 
     host.appendChild(el('div', 'board-note', progress.eta ? 'ETA ~' + progress.eta.days + ' days (' + progress.eta.basis + ')' : 'ETA: not enough history'));
     if (progress.spend) {

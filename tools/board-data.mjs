@@ -6,7 +6,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runTotals, jobSpend, laneDayTotals } from './spend.mjs';
 import { readLedger } from './tickets.mjs';
-import { mainWorktreeRoot, projectSummary } from './project-spend.mjs';
+import { mainWorktreeRoot, projectSummary, worktreeFamily } from './project-spend.mjs';
+import { isScratchRoot } from './projects.mjs';
 import { listLessons } from './lesson-store.mjs';
 import { sanitizeWorkerText } from './worker-text.mjs';
 import os from 'node:os';
@@ -31,6 +32,48 @@ const dict = () => Object.create(null);
 // What leaves the module is an ordinary object again (Object.fromEntries defines each key as an own property, even one called __proto__).
 const plain = d => Object.fromEntries(Object.entries(d));
 const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+
+const pathInside = (child, parent) => child === parent || child.startsWith(`${parent}${path.sep}`);
+const activeRunState = state => state?.status === 'running' || state?.status === 'paused';
+const runActivityMs = ({ state, mtimeMs } = {}) => Math.max(
+  Number.isFinite(mtimeMs) ? mtimeMs : 0,
+  Date.parse(state?.startedAt ?? '') || 0,
+  Date.parse(state?.finishedAt ?? '') || 0,
+  ...((state?.jobs ?? []).map(job => Date.parse(job?.finishedAt ?? '') || 0)),
+);
+
+// This deliberately stays as one exported predicate so the MacBook scratch-root helper can
+// replace the path checks later without changing the board's callers. `facts` is injectable for
+// tests; callers that inspect the filesystem should fill it from their own read-only snapshot.
+export function isTestOrTempProject(project, facts = {}) {
+  const root = path.resolve(String(project?.root ?? ''));
+  const parts = root.split(path.sep).filter(Boolean);
+  const tmpdir = path.resolve(String(facts.tmpdir ?? os.tmpdir()));
+  const scratchBase = path.resolve(String(facts.scratchBase ?? path.join(os.homedir(), '.project-swarm-scratch')));
+  const ledger = valueObject(facts.ledger);
+  const openTickets = facts.openTickets ?? (Array.isArray(ledger.tickets) && ledger.tickets.some(ticket => ['todo', 'ready', 'running', 'review', 'blocked'].includes(ticket?.status)));
+  const approvedLedger = facts.approvedLedger ?? Boolean(ledger.approved === true || ledger.approval === true || ledger.scope);
+  const scopeFile = facts.scopeFile ?? facts.scope?.file ?? facts.scope === true;
+  const spend = facts.spendUsd ?? facts.spend?.usd ?? facts.spend?.spendUsd ?? facts.spend ?? 0;
+  const scratchFact = typeof facts.isScratchRoot === 'function' ? facts.isScratchRoot(root) : facts.isScratchRoot;
+  const pathScratch = Boolean(
+    scratchFact ?? isScratchRoot(root, { tmpdir }),
+  ) || pathInside(root, scratchBase) || parts.some(part => part.startsWith('.tmp-test'));
+  const segmentScratch = parts.some(part => ['tmp', 'temp', 'test', 'tests', '__tests__'].includes(part));
+  const pointerScratch = Boolean(facts.pointerScratch ?? facts.pointer?.scratch ?? facts.pointer?.profile?.scratch);
+  const markerScratch = Boolean(facts.marker ?? facts.markerFile);
+  const pathLike = pathScratch || segmentScratch || pointerScratch || markerScratch;
+  const pinned = Boolean(project?.pinned || facts.pinned);
+  const live = Boolean(facts.live || facts.recentLive || facts.liveRun || (Array.isArray(facts.liveRuns) && facts.liveRuns.length));
+  const recentRun = Boolean(facts.recentRun || facts.hasRunInLast7Days);
+  const approvedOpen = Boolean(approvedLedger && (openTickets || (Array.isArray(facts.openTicketsList) && facts.openTicketsList.length)));
+  if (pinned || live || recentRun || approvedOpen) return false;
+  const hasScope = Boolean(scopeFile || approvedLedger || facts.hasScope);
+  const hasRecentRun = recentRun;
+  const hasSpend = Number(spend) > 0;
+  const noScopeIdle = !hasScope && !hasRecentRun && !openTickets && !hasSpend;
+  return pathLike || noScopeIdle;
+}
 
 async function pinnedVersionFor(root) {
   try {
@@ -302,7 +345,17 @@ export function ticketsOf(ledger, scope = null) {
 // One project's lane on the board. `liveRuns` are the alive runs of THIS project only.
 export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
   const runs = await readRunStates(project.root);
-  const liveIds = new Set(liveRuns.map(r => r.runId));
+  const liveStateRuns = [];
+  for (const record of liveRuns) {
+    const root = await fs.realpath(record.root ?? project.root).catch(() => record.root ?? project.root);
+    const stateRun = (root === await fs.realpath(project.root).catch(() => project.root) ? runs : await readRunStates(root)).find(run => run.id === record.runId);
+    if (stateRun) liveStateRuns.push({ ...stateRun, liveRoot: root });
+  }
+  const visibleRuns = new Map(runs.map(run => [`${project.root}|${run.id}`, run]));
+  for (const run of liveStateRuns) visibleRuns.set(`${run.liveRoot}|${run.id}`, run);
+  const liveRunsForAgents = [...visibleRuns.values()];
+  const activeLiveRuns = liveRuns.filter(record => activeRunState(record.state));
+  const liveIds = new Set(activeLiveRuns.map(r => r.runId));
   let selected;
   try { selected = await ledgerRoot(project.root); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
   const ledger = selected.ledger;
@@ -313,12 +366,16 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const overviewSpend = { usd: capUsedUsd ?? spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
   const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null }).then(progressSummary, () => null);
   const cost = costOf(runs, now);
-  const agents = agentsOf(runs, liveIds, now);
+  const agents = agentsOf(liveRunsForAgents, liveIds, now);
   const lastRun = runs.length ? runs[runs.length - 1].state : null;
-  const lastActivityMs = Math.max(0, ...runs.map(r => r.mtimeMs), Date.parse(ledger?.updatedAt ?? '') || 0);
+  const lastActivityMs = Math.max(0, ...runs.map(runActivityMs), ...liveRuns.map(r => Date.parse(r.startedAt ?? '') || 0), Date.parse(ledger?.updatedAt ?? '') || 0);
+  const recentFailure = runs.some(run => {
+    const at = Math.max(Date.parse(run.state?.finishedAt ?? '') || 0, Date.parse(run.state?.startedAt ?? '') || 0);
+    return ['failed', 'timeout'].includes(run.state?.status) && at > 0 && at <= now && now - at <= 7 * DAY;
+  });
   const tickets = ticketsOf(ledger, scope);
   const readyTickets = tickets.byStatus.ready ?? 0;
-  const idle = liveRuns.length === 0;
+  const idle = activeLiveRuns.length === 0;
   const split = await splitQuality({ root: project.root, now, slots }).then(result => {
     const metrics = Array.isArray(result?.metrics) ? result.metrics : [];
     const red = metrics.filter(metric => metric?.grade === 'red');
@@ -331,7 +388,8 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     id: project.id, name: txt(project.name, 80), root: project.root,
     pinnedVersion,
     stage: tickets.stage, tickets, readyTickets, idleWithReady: idle && readyTickets > 0,
-    live: liveRuns.map(r => { const hit = runs.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
+    live: liveRuns.map(r => { const hit = liveStateRuns.find(x => x.id === r.runId && x.liveRoot === r.root) ?? liveStateRuns.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? hit?.state.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
+    liveCount: activeLiveRuns.length,
     agents, cost,
     handled,
     orchestrator: (() => { try { return projectOrchestrator(project, { runs, now }); } catch { return { sessions: [], handBuilt: { files: 0, edits: 0, list: [] }, swarmBuilt: { files: 0 }, swarmPct: null, handPct: null, cost: { todayListUsd: 0, allListUsd: 0, todayTokens: 0, allTokens: 0 } }; } })(),
@@ -342,6 +400,9 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     lastRunAt: lastRun?.startedAt ?? null,
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
     idle,
+    testOrTemp: Boolean(project.testOrTemp),
+    lastRunStatus: lastRun?.status ?? null,
+    recentFailure,
   };
 }
 
@@ -358,38 +419,90 @@ export function underfilledWaves(counts, slots) {
 export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, laneState = null, worktreeRoot = mainWorktreeRoot, deployStatus = null } = {}) {
   const overviews = [];
   const realRoot = async root => await fs.realpath(root).catch(() => path.resolve(root));
-  // A live run belongs to the project whose real root it ran in, however the path was spelled.
-  const live = await Promise.all(liveRuns.map(async r => ({ ...r, root: await fs.realpath(r.root).catch(() => r.root) })));
-  for (const project of projects) {
+  const inputProjects = Array.isArray(projects) ? projects : [];
+  // A live registry entry is not enough by itself: a process can leave a stale entry after the
+  // run state has finished. Paused runs remain live while their registry entry (and therefore
+  // their worker process) is alive.
+  const liveCandidates = await Promise.all((Array.isArray(liveRuns) ? liveRuns : []).map(async r => {
+    const root = await realRoot(r.root);
+    const state = (await readRunStates(root)).find(run => run.id === r.runId)?.state;
+    // A registry record with no state status is still watchable for the short window in which
+    // the state file is being finalized; it is not included in liveCount unless the state is live.
+    return state && (activeRunState(state) || r.status === undefined) ? { ...r, root, state } : null;
+  }));
+  const live = liveCandidates.filter(Boolean);
+  const registered = new Map();
+  for (const project of inputProjects) registered.set(await realRoot(project.root), project);
+  const parentIds = [];
+  for (const project of inputProjects) {
+    let parentRoot = null;
+    try { parentRoot = await worktreeRoot(project.root); } catch { parentRoot = null; }
+    const childReal = await realRoot(project.root);
+    const parentReal = parentRoot ? await realRoot(parentRoot) : null;
+    parentIds.push(parentReal && parentReal !== childReal && registered.has(parentReal) ? registered.get(parentReal).id : null);
+  }
+  const families = await Promise.all(inputProjects.map(async project => {
+    const root = await realRoot(project.root);
+    try { return new Set(await Promise.all((await worktreeFamily(root, { all: true })).map(member => realRoot(member)))); } catch { return new Set([root]); }
+  }));
+  // Keep injected/custom parent discovery useful in tests and for a registry that was written
+  // before git's worktree metadata settled; the real family call above still adds unregistered
+  // scratch/job worktrees.
+  for (let i = 0; i < inputProjects.length; i += 1) {
+    if (!parentIds[i]) continue;
+    const childRoot = await realRoot(inputProjects[i].root);
+    const parentIndex = inputProjects.findIndex(project => project.id === parentIds[i]);
+    if (parentIndex >= 0) families[parentIndex].add(childRoot);
+  }
+  for (let i = 0; i < inputProjects.length; i += 1) {
+    const project = inputProjects[i];
     const projectRoot = await realRoot(project.root);
-    const mine = live.filter(r => r.root === projectRoot);
+    const family = families[i];
+    const candidates = parentIds[i]
+      ? live.filter(r => r.root === projectRoot)
+      : live.filter(r => family.has(r.root));
+    const activeMine = candidates.filter(record => activeRunState(record.state));
+    const mine = activeMine.length ? activeMine : candidates;
     overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null }));
   }
-  const registered = new Map();
-  for (const project of projects) registered.set(await realRoot(project.root), project);
   for (const overview of overviews) {
     overview.parentId = null;
     overview.worktree = false;
     overview.worktreeIds = [];
   }
-  for (let i = 0; i < projects.length; i += 1) {
-    let parentRoot = null;
-    try { parentRoot = await worktreeRoot(projects[i].root); } catch { parentRoot = null; }
-    if (!parentRoot) continue;
-    const childReal = await realRoot(projects[i].root);
-    const parentReal = await realRoot(parentRoot);
-    const parent = registered.get(parentReal);
-    if (!parent || parentReal === childReal) continue;
+  const byId = new Map(overviews.map(overview => [overview.id, overview]));
+  for (let i = 0; i < inputProjects.length; i += 1) {
+    const parentId = parentIds[i];
+    if (!parentId) continue;
     const child = overviews[i];
-    child.parentId = parent.id;
+    child.parentId = parentId;
     child.worktree = true;
-    const parentOverview = overviews.find(o => o.id === parent.id);
+    const parentOverview = byId.get(parentId);
     if (parentOverview) parentOverview.worktreeIds.push(child.id);
   }
   for (const overview of overviews) {
     overview.worktreeIds.sort((a, b) => String(overviews.find(o => o.id === a)?.name ?? '').localeCompare(String(overviews.find(o => o.id === b)?.name ?? '')) || String(a).localeCompare(String(b)));
   }
   for (const o of overviews) { const warn = underfilledWaves(o.recentJobCounts, workers?.max); o.warnings = warn ? [{ code: 'waves-underfilled', text: warn }] : []; }
+  const blocked = overview => Boolean(
+    overview.idleWithReady || overview.tickets?.blocked > 0 || overview.spend?.reached ||
+    overview.recentFailure || overview.needsYou || overview.progress?.needsYou || overview.progress?.blocked,
+  );
+  const projectOrder = (a, b) => {
+    const group = overview => (overview.liveCount ?? overview.live.length) ? 0 : blocked(overview) ? 1 : 2;
+    return group(a) - group(b)
+      || (Date.parse(b.lastActivityAt ?? '') || 0) - (Date.parse(a.lastActivityAt ?? '') || 0)
+      || String(a.name ?? '').localeCompare(String(b.name ?? ''))
+      || String(a.id ?? '').localeCompare(String(b.id ?? ''));
+  };
+  const top = overviews.filter(overview => !overview.parentId).sort(projectOrder);
+  const ordered = [];
+  for (const parent of top) {
+    ordered.push(parent);
+    overviews.filter(child => child.parentId === parent.id).sort((a, b) => String(a.name ?? '').localeCompare(String(b.name ?? '')) || String(a.id ?? '').localeCompare(String(b.id ?? ''))).forEach(child => ordered.push(child));
+  }
+  for (const overview of overviews) if (!ordered.includes(overview)) ordered.push(overview);
+  overviews.splice(0, overviews.length, ...ordered);
   const transcripts = new Set();
   const machine = { agents: { total: 0, byLane: dict(), byProject: dict(), list: [] }, cost: { todayUsd: 0, weekUsd: 0, allUsd: 0, flatRateTodayUsd: 0, flatRateWeekUsd: 0, paidUsd: 0, paidEstimatedUsd: 0, flatRateListUsd: 0, byProject: {} }, liveRuns: 0, orchestrator: { sessions: [], todayListUsd: 0, allListUsd: 0, handBuiltFiles: 0, swarmBuiltFiles: 0 } };
   for (const o of overviews) {
@@ -401,11 +514,13 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
     for (const [agent, usd] of Object.entries(o.cost.laneToday ?? {})) (machine.cost.laneToday ??= dict())[agent] = (machine.cost.laneToday[agent] ?? 0) + usd;
     for (const [agent, n] of Object.entries(o.cost.laneJobsToday ?? {})) (machine.cost.laneJobsToday ??= dict())[agent] = (machine.cost.laneJobsToday[agent] ?? 0) + n;
     machine.cost.byProject[o.id] = { name: o.name, ...o.cost };
-    machine.liveRuns += o.live.length;
+    // Parent cards include their worktree runs, so the machine count uses the normalized registry
+    // once rather than summing the intentionally overlapping parent/child cards.
     machine.orchestrator.sessions.push(...(o.orchestrator?.sessions ?? []));
     for (const name of o.orchestrator?.transcripts ?? []) transcripts.add(name);
     machine.orchestrator.handBuiltFiles += o.orchestrator?.handBuilt.files ?? 0; machine.orchestrator.swarmBuiltFiles += o.orchestrator?.swarmBuilt.files ?? 0;
   }
+  machine.liveRuns = live.filter(run => activeRunState(run.state)).length;
   for (const key of ['todayUsd', 'weekUsd', 'flatRateTodayUsd', 'flatRateWeekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] = Math.round(machine.cost[key] * 1e6) / 1e6;
   // One session can be in two projects' logs: the machine totals count each message once over all transcripts.
   { const c = transcripts.size ? combinedUsage([...transcripts], { now }) : { todayListUsd: 0, allListUsd: 0 }; machine.orchestrator.todayListUsd = c.todayListUsd; machine.orchestrator.allListUsd = c.allListUsd; }
@@ -421,7 +536,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   const queued = dict();
   const recent = dict();
   try {
-    for (const project of projects) {
+    for (const project of inputProjects) {
       const states = await readRunStates(project.root);
       const projectRoot = await realRoot(project.root);
       const liveIds = new Set(live.filter(run => run.root === projectRoot).map(run => run.runId));

@@ -228,11 +228,12 @@ function capCell(p) {
 }
 function liveCell(p) {
   var box = el('div');
+  var liveCount = p.liveCount === undefined ? p.live.length : p.liveCount;
   if (p.remote) {
-    box.appendChild(el('span', 'sub', p.live.length ? p.live.length + ' live run' + (p.live.length === 1 ? '' : 's') + ' on ' + (p.machine || 'peer') + ' board' : 'remote project'));
+    box.appendChild(el('span', 'sub', liveCount ? liveCount + ' live run' + (liveCount === 1 ? '' : 's') + ' on ' + (p.machine || 'peer') + ' board' : 'remote project'));
     return box;
   }
-  if (!p.live.length) { box.appendChild(el('span', 'sub', 'idle, last run ' + ago(p.lastRunAt))); return box; }
+  if (!liveCount) { box.appendChild(el('span', 'sub', 'idle, last run ' + ago(p.lastRunAt))); }
   p.live.forEach(function (r) {
     var row = el('div', 'livebar');
     row.appendChild(dot());
@@ -315,13 +316,13 @@ function renderProjects(projects) {
   if (psig === state.projSig) { return; }
   state.projSig = psig;
   var byId = Object.create(null); projects.forEach(function (p) { byId[p.id] = p; });
-  var compare = function (a, b) { return (b.live.length - a.live.length) || String(b.lastActivityAt).localeCompare(String(a.lastActivityAt)); };
-  var childCompare = function (a, b) { return String(a.name).localeCompare(String(b.name)) || compare(a, b); };
-  var top = projects.filter(function (p) { return !p.parentId || !byId[p.parentId]; }).sort(compare);
+  // The API owns project ordering so every client sees the same active/blocked/idle groups.
+  // Only the parent-child layout is assembled here.
+  var top = projects.filter(function (p) { return !p.parentId || !byId[p.parentId]; });
   var sorted = [];
   top.forEach(function (p) {
     sorted.push({ project: p, worktree: false });
-    projects.filter(function (child) { return child.parentId === p.id; }).sort(childCompare).forEach(function (child) { sorted.push({ project: child, worktree: true }); });
+    projects.filter(function (child) { return child.parentId === p.id; }).forEach(function (child) { sorted.push({ project: child, worktree: true }); });
   });
   var table = $('projTable'); table.textContent = '';
   var cards = $('projCards'); cards.textContent = '';
@@ -336,7 +337,7 @@ function renderProjects(projects) {
   sorted.forEach(function (entry) {
     var p = entry.project, isWorktree = entry.worktree;
     var tr = el('tr'); if (isWorktree) { tr.className = 'wt'; }
-    var name = el('div'); name.appendChild(projectName(p, (isWorktree ? '↳ ' : '') + p.name)); name.appendChild(el('span', '', ' ')); name.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); appendPinnedBadge(name, p); name.appendChild(machineLine(p));
+    var name = el('div'); name.appendChild(projectName(p, (isWorktree ? '↳ ' : '') + p.name)); name.appendChild(el('span', '', ' ')); name.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); if (p.testOrTemp) { name.appendChild(el('span', '', ' ')); name.appendChild(pill('test', 'warn')); } appendPinnedBadge(name, p); name.appendChild(machineLine(p));
     var tableProgress = progressLine(p); if (tableProgress) { name.appendChild(tableProgress); }
     var tableSplit = splitLine(p); if (tableSplit) { name.appendChild(tableSplit); }
     var tableHandled = handledLine(p); if (tableHandled) { name.appendChild(tableHandled); }
@@ -348,7 +349,7 @@ function renderProjects(projects) {
     tr.appendChild(td(capCell(p))); tr.appendChild(td(laneDots(p))); tr.appendChild(td(ago(p.lastActivityAt), 'mono'));
     body.appendChild(tr);
     var c = el('div', 'pcard');
-    var head = el('div', 'row'); head.appendChild(projectName(p, (isWorktree ? '↳ ' : '') + p.name)); head.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); appendPinnedBadge(head, p); c.appendChild(head); c.appendChild(machineLine(p));
+    var head = el('div', 'row'); head.appendChild(projectName(p, (isWorktree ? '↳ ' : '') + p.name)); head.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); if (p.testOrTemp) { head.appendChild(el('span', '', ' ')); head.appendChild(pill('test', 'warn')); } appendPinnedBadge(head, p); c.appendChild(head); c.appendChild(machineLine(p));
     var cardProgress = progressLine(p); if (cardProgress) { c.appendChild(cardProgress); }
     var cardSplit = splitLine(p); if (cardSplit) { c.appendChild(cardSplit); }
     var cardHandled = handledLine(p); if (cardHandled) { c.appendChild(cardHandled); }
