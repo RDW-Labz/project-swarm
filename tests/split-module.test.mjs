@@ -50,6 +50,20 @@ function mkFixture(name, files) {
   return dir;
 }
 
+function splitVerifyTempPathsUnder(rootDir) {
+  const found = [];
+  function walk(d) {
+    if (!fs.existsSync(d)) return;
+    for (const name of fs.readdirSync(d)) {
+      const full = path.join(d, name);
+      if (name.startsWith('.split-verify')) found.push(full);
+      if (fs.statSync(full).isDirectory()) walk(full);
+    }
+  }
+  walk(rootDir);
+  return found;
+}
+
 test('leaf move splits a function with no internal deps', () => {
   const dir = mkFixture('leaf', {
     'main.mjs': [
@@ -618,6 +632,71 @@ test('swarm copy split stages patterns through core-12 succeed', (t) => {
   assert.ok(elapsed < 60_000, `stages took ${elapsed}ms`);
   const smoke = smokeImportModules([...modules, copy], { timeoutMs: 30_000 });
   assert.equal(smoke.length, 0, smoke.join('; '));
+});
+
+test('two-stage move smoke-imports when second module imports first sibling', () => {
+  const dir = mkFixture('two-stage-sibling', {
+    'main.mjs': [
+      'export function firstFn() { return 1; }',
+      'export function secondFn() { return firstFn() + 1; }',
+      'const stay = 0;',
+      '',
+    ].join('\n'),
+  });
+  const main = path.join(dir, 'main.mjs');
+  const pack = path.join(dir, 'pack');
+  fs.mkdirSync(pack, { recursive: true });
+  const modFirst = path.join(pack, 'first.mjs');
+  const r1 = moveItems(main, modFirst, ['firstFn']);
+  assert.equal(r1.ok, true, r1.errors?.join('; '));
+  const modSecond = path.join(pack, 'second.mjs');
+  const r2 = moveItems(main, modSecond, ['secondFn']);
+  assert.equal(r2.ok, true, r2.errors?.join('; '));
+  assert.ok(fs.readFileSync(modSecond, 'utf8').includes('./first.mjs'));
+  const run = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import { secondFn } from ${JSON.stringify(modSecond)}; if (secondFn() !== 2) process.exit(1);`,
+    ],
+    { encoding: 'utf8', cwd: dir },
+  );
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  assert.deepEqual(splitVerifyTempPathsUnder(dir), []);
+});
+
+test('move refused when target module path already exists', () => {
+  const dir = mkFixture('collision', {
+    'main.mjs': 'function solo() { return 1; }\nconst a = 1;\n',
+    'solo.mjs': 'export const taken = 1;\n',
+  });
+  const main = path.join(dir, 'main.mjs');
+  const mod = path.join(dir, 'solo.mjs');
+  const result = moveItems(main, mod, ['solo']);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.includes('already exists')));
+  assert.deepEqual(splitVerifyTempPathsUnder(dir), []);
+});
+
+test('failed smoke move removes co-located split-verify temp files', () => {
+  const dir = mkFixture('smoke-fail-cleanup', {
+    'main.mjs': [
+      'import { V } from "./missing.mjs";',
+      'function useV() { return V; }',
+      'const stay = 0;',
+      '',
+    ].join('\n'),
+  });
+  const main = path.join(dir, 'main.mjs');
+  const mod = path.join(dir, 'pack', 'use.mjs');
+  const result = moveItems(main, mod, ['useV']);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.errors.some((e) => e.includes('smoke import') || e.includes('Cannot find module')),
+    result.errors?.join('; '),
+  );
+  assert.deepEqual(splitVerifyTempPathsUnder(dir), []);
 });
 
 test('dry-run move of layer-0 function on swarm.mjs does not touch file', (t) => {

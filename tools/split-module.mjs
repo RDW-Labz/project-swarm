@@ -917,6 +917,37 @@ function nodeCheck(filePath) {
   return { ok: r.status === 0, stderr: r.stderr || r.stdout || '' };
 }
 
+/** Temp smoke-verify copy beside final target so relative imports resolve like after the move. */
+function coLocatedSmokeVerifyPath(targetPath) {
+  const resolved = path.resolve(targetPath);
+  const dir = path.dirname(resolved);
+  const stem = path.basename(resolved, path.extname(resolved));
+  const ext = path.extname(resolved) || '.mjs';
+  return path.join(dir, `.split-verify-${stem}${ext}`);
+}
+
+function removeSmokeVerifyTemp(tempPath) {
+  try {
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+  } catch {
+    // ignore
+  }
+}
+
+/** Point rewritten-file imports at the co-located module verify copy (final target not written yet). */
+function smokeVerifyRewrittenFileContent(rewrittenContent, filePath, modulePath, verifyModPath) {
+  const finalRel = relativeImportPath(filePath, modulePath);
+  const verifyRel = relativeImportPath(filePath, verifyModPath);
+  if (finalRel === verifyRel) return rewrittenContent;
+  let out = rewrittenContent;
+  for (const q of ["'", '"']) {
+    const from = `${q}${finalRel}${q}`;
+    const to = `${q}${verifyRel}${q}`;
+    if (out.includes(from)) out = out.split(from).join(to);
+  }
+  return out;
+}
+
 function isIdentifierChar(ch, first) {
   if (ch === '$' || ch === '_') return true;
   const code = ch.charCodeAt(0);
@@ -1207,8 +1238,10 @@ const t = setTimeout(() => fail('smoke import timeout'), ${timeoutMs});
 try {
   await import(${JSON.stringify(url)});
 } catch (e) {
-  if (e instanceof SyntaxError || e instanceof ReferenceError) fail(String(e));
-  else if (e?.name === 'SyntaxError' || e?.name === 'ReferenceError') fail(String(e));
+  const msg = String(e);
+  if (e instanceof SyntaxError || e instanceof ReferenceError) fail(msg);
+  else if (e?.name === 'SyntaxError' || e?.name === 'ReferenceError') fail(msg);
+  else if (e?.code === 'ERR_MODULE_NOT_FOUND' || msg.includes('Cannot find module')) fail(msg);
 } finally {
   clearTimeout(t);
   process.exit = origExit;
@@ -1235,7 +1268,8 @@ export function verifyMove(filePath, modulePath, originalFilePath, options = {})
   const issues = [];
   const originalText = readText(originalFilePath);
   const origScan = scanModule(originalText);
-  const fileText = fs.existsSync(filePath) ? readText(filePath) : '';
+  const fileTextOnDisk = fs.existsSync(filePath) ? readText(filePath) : '';
+  const fileText = options.rewrittenFileText ?? fileTextOnDisk;
   const modText = fs.existsSync(modulePath) ? readText(modulePath) : '';
 
   const modScan = modText ? scanModule(modText) : { items: [], exports: [] };
@@ -1399,6 +1433,10 @@ export function moveItems(filePath, modulePath, names, options = {}) {
     return { ok: false, errors: callPathIssues, wrote: false };
   }
 
+  if (!dryRun && fs.existsSync(path.resolve(modulePath))) {
+    return { ok: false, errors: [`target module already exists: ${modulePath}`], wrote: false };
+  }
+
   const moduleContent = buildNewModuleContent(originalText, filePath, modulePath, processedMovedItems, items);
   const newFileContent = buildRewrittenFile(
     originalText,
@@ -1409,18 +1447,20 @@ export function moveItems(filePath, modulePath, names, options = {}) {
     nameList,
   );
 
-  const verifyDir = path.join(path.dirname(filePath), '.split-module-verify');
-  const tmpFile = path.join(verifyDir, `file-${path.basename(filePath)}`);
-  const tmpMod = path.join(verifyDir, `mod-${path.basename(modulePath)}`);
+  const tmpMod = coLocatedSmokeVerifyPath(modulePath);
+  const tmpFile = coLocatedSmokeVerifyPath(filePath);
 
   if (!dryRun) {
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });
   }
 
   try {
-    fs.mkdirSync(verifyDir, { recursive: true });
     fs.writeFileSync(tmpMod, moduleContent, 'utf8');
-    fs.writeFileSync(tmpFile, newFileContent, 'utf8');
+    fs.writeFileSync(
+      tmpFile,
+      smokeVerifyRewrittenFileContent(newFileContent, filePath, modulePath, tmpMod),
+      'utf8',
+    );
 
     const unresolved = checkUnresolvedImportsForMove(originalText, moduleContent, processedMovedItems);
     if (unresolved.length) {
@@ -1438,7 +1478,11 @@ export function moveItems(filePath, modulePath, names, options = {}) {
       }
     }
 
-    const verify = verifyMove(tmpFile, tmpMod, filePath, { noSmoke, specifierRewrites });
+    const verify = verifyMove(tmpFile, tmpMod, filePath, {
+      noSmoke,
+      specifierRewrites,
+      rewrittenFileText: newFileContent,
+    });
     if (!verify.ok) {
       return { ok: false, errors: verify.issues, wrote: false };
     }
@@ -1449,13 +1493,8 @@ export function moveItems(filePath, modulePath, names, options = {}) {
     fs.writeFileSync(filePath, newFileContent, 'utf8');
     return { ok: true, errors: [], wrote: true, rewrittenSpecifiers };
   } finally {
-    for (const p of [tmpFile, tmpMod]) {
-      try {
-        if (fs.existsSync(p)) fs.unlinkSync(p);
-      } catch {
-        // ignore
-      }
-    }
+    removeSmokeVerifyTemp(tmpFile);
+    removeSmokeVerifyTemp(tmpMod);
   }
 }
 
