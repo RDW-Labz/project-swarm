@@ -4,7 +4,15 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
+import { tokenizer, tokTypes } from 'acorn';
 import { scanModule, topLevelNameIndex } from './split-scan.mjs';
+
+const ACORN_TOKENIZE_OPTS = {
+  ecmaVersion: 'latest',
+  sourceType: 'module',
+  allowHashBang: true,
+  allowAwaitOutsideFunction: true,
+};
 
 const JS_KEYWORDS = new Set([
   'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete',
@@ -632,6 +640,39 @@ function isIdentifierChar(ch, first) {
   return (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57);
 }
 
+/** Acorn tokenizer pass: name tokens not after `.`/`?.` and not object-literal keys (`name:` inside braces). */
+export function acornIdentifierTokens(text) {
+  const all = [];
+  try {
+    const tokIter = tokenizer(text, ACORN_TOKENIZE_OPTS);
+    let cur;
+    while ((cur = tokIter.getToken()).type !== tokTypes.eof) {
+      all.push(cur);
+    }
+  } catch {
+    return [];
+  }
+
+  const out = [];
+  let braceDepth = 0;
+  for (let i = 0; i < all.length; i++) {
+    const cur = all[i];
+    if (cur.type === tokTypes.braceL) braceDepth++;
+    else if (cur.type === tokTypes.braceR) braceDepth--;
+
+    if (cur.type !== tokTypes.name) continue;
+
+    const prev = i > 0 ? all[i - 1] : null;
+    if (prev && (prev.type === tokTypes.dot || prev.type === tokTypes.questionDot)) continue;
+
+    const next = i + 1 < all.length ? all[i + 1] : null;
+    if (next && next.type === tokTypes.colon && braceDepth > 0) continue;
+
+    out.push({ name: cur.value, index: cur.start });
+  }
+  return out;
+}
+
 /** Regex-style pass: identifier-like tokens not immediately preceded by `.` (outside comments/strings). */
 export function regexIdentifierTokens(text) {
   const out = [];
@@ -772,7 +813,7 @@ export function possiblyUnresolvedNames(text) {
   const declared = declaredNamesRegex(text);
   const propKeys = propertyKeyPositions(text);
   const unresolved = new Set();
-  for (const { name, index } of regexIdentifierTokens(text)) {
+  for (const { name, index } of acornIdentifierTokens(text)) {
     if (JS_KEYWORDS.has(name)) continue;
     if (BUILTIN_GLOBALS.has(name)) continue;
     if (declared.has(name)) continue;

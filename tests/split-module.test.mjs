@@ -17,6 +17,7 @@ if (!acornInstalled) {
     moveItems,
     verifyMove,
     checkUnresolvedImportsForMove,
+    possiblyUnresolvedNames,
     smokeImportModules,
   } = await import('../tools/split-module.mjs');
   const { scanModule } = await import('../tools/split-scan.mjs');
@@ -243,16 +244,7 @@ test('verify catches module missing import after deliberate drop', () => {
   assert.ok(issues.length > 0, issues.join('; '));
 });
 
-test('stage-1 pattern constants move on swarm copy smoke-imports', () => {
-  const toolsDir = path.join(root, '..', 'tools');
-  const swarmPath = path.join(toolsDir, 'swarm.mjs');
-  const dir = mkFixture('swarm-stage1', {});
-  for (const name of fs.readdirSync(toolsDir)) {
-    if (!name.endsWith('.mjs')) continue;
-    fs.copyFileSync(path.join(toolsDir, name), path.join(dir, name));
-  }
-  const copy = path.join(dir, 'swarm.mjs');
-  const plan = planSplit(copy);
+function stage1PatternNames(plan, copy) {
   const layer0 = plan.layers[0] || [];
   const names = [];
   for (const g of layer0) {
@@ -270,12 +262,109 @@ test('stage-1 pattern constants move on swarm copy smoke-imports', () => {
       if (onlyImports && it.names.length === 1) names.push(it.names[0]);
     }
   }
+  return names;
+}
+
+function layer0MovableNames(plan, copy, filter) {
+  const layer0 = plan.layers[0] || [];
+  const names = [];
+  const text = fs.readFileSync(copy, 'utf8');
+  const { items } = scanModule(text);
+  for (const g of layer0) {
+    for (const it of g.items) {
+      if (it.cannotMoveAlone.length > 0) continue;
+      if (it.kind !== 'function') continue;
+      if (!it.names.every((n) => filter(n))) continue;
+      const full = items.find((x) => x.names[0] === it.names[0]);
+      if (!full || full.names.length !== it.names.length) continue;
+      names.push(...it.names);
+    }
+  }
+  return names;
+}
+
+function copyToolsDir(name) {
+  const toolsDir = path.join(root, '..', 'tools');
+  const dir = mkFixture(name, {});
+  for (const file of fs.readdirSync(toolsDir)) {
+    if (!file.endsWith('.mjs')) continue;
+    fs.copyFileSync(path.join(toolsDir, file), path.join(dir, file));
+  }
+  return { dir, copy: path.join(dir, 'swarm.mjs') };
+}
+
+test('possiblyUnresolvedNames ignores go in comment string template and regex', () => {
+  const body = [
+    '// 8 of 11 reader lines go unmeasured',
+    '/* block go here */',
+    'const s = "go";',
+    'const t = `prefix go suffix`;',
+    'const re = /\\.(?:rs|go|java)$/i;',
+    'const obj = { go: 1 };',
+    'function usesProp() { return obj.go; }',
+    '',
+  ].join('\n');
+  const original = `import go from "go-pkg";\n${body}`;
+  const moduleMissingImport = body;
+  assert.ok(!possiblyUnresolvedNames(moduleMissingImport).has('go'));
+  const { items } = scanModule(original);
+  const movedItem = items.find((it) => it.names.includes('usesProp'));
+  const issues = checkUnresolvedImportsForMove(original, moduleMissingImport, [movedItem]);
+  assert.ok(!issues.some((i) => i.includes(' go')));
+});
+
+test('possiblyUnresolvedNames flags real go() when import missing from module', () => {
+  const original = [
+    'import go from "go-pkg";',
+    'function callsGo() { return go(); }',
+    '',
+  ].join('\n');
+  const moduleText = 'function callsGo() { return go(); }\n';
+  assert.ok(possiblyUnresolvedNames(moduleText).has('go'));
+  const { items } = scanModule(original);
+  const movedItem = items.find((it) => it.names.includes('callsGo'));
+  const issues = checkUnresolvedImportsForMove(original, moduleText, [movedItem]);
+  assert.ok(issues.some((i) => i.includes('go')));
+});
+
+test('stage-1 pattern constants move on swarm copy smoke-imports', () => {
+  const { dir, copy } = copyToolsDir('swarm-stage1');
+  const plan = planSplit(copy);
+  const names = stage1PatternNames(plan, copy);
   assert.ok(names.length > 0, 'no stage-1 names');
   const batch = names.slice(0, Math.min(8, names.length));
   const mod = path.join(dir, 'swarm-patterns.mjs');
   const result = moveItems(copy, mod, batch);
   assert.equal(result.ok, true, result.errors?.join('; '));
   const smoke = smokeImportModules([mod, copy], { timeoutMs: 20_000 });
+  assert.equal(smoke.length, 0, smoke.join('; '));
+});
+
+test('swarm copy stages patterns warnings and mutants succeed', () => {
+  const { dir, copy } = copyToolsDir('swarm-stages-3');
+  let plan = planSplit(copy);
+
+  const patternNames = stage1PatternNames(plan, copy);
+  assert.ok(patternNames.length > 0, 'no pattern-stage names');
+  const patternBatch = patternNames.slice(0, Math.min(8, patternNames.length));
+  const patternsMod = path.join(dir, 'swarm-patterns.mjs');
+  let result = moveItems(copy, patternsMod, patternBatch);
+  assert.equal(result.ok, true, `patterns: ${result.errors?.join('; ')}`);
+
+  plan = planSplit(copy);
+  const warningNames = layer0MovableNames(plan, copy, (n) => /Warnings$/.test(n));
+  assert.ok(warningNames.length > 0, 'no warnings-stage names');
+  const warningsBatch = warningNames.slice(0, Math.min(6, warningNames.length));
+  const warningsMod = path.join(dir, 'swarm-warnings.mjs');
+  result = moveItems(copy, warningsMod, warningsBatch, { allowBackReferences: true });
+  assert.equal(result.ok, true, `warnings: ${result.errors?.join('; ')}`);
+
+  const mutantsBatch = ['reviewSourcePath', 'parseContractEventRows'];
+  const mutantsMod = path.join(dir, 'swarm-mutants-core.mjs');
+  result = moveItems(copy, mutantsMod, mutantsBatch, { allowBackReferences: true });
+  assert.equal(result.ok, true, `mutants: ${result.errors?.join('; ')}`);
+
+  const smoke = smokeImportModules([patternsMod, warningsMod, mutantsMod, copy], { timeoutMs: 30_000 });
   assert.equal(smoke.length, 0, smoke.join('; '));
 });
 
