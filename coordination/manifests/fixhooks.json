@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "fixhooks",
+      "agent": "auto",
+      "prompt": "Two tests fail on the release branch after the hook changes; fix the TESTS only (the hooks are right: a positive violation exits non-zero with the violation code, a crash or missing node or missing script warns and exits 0). (1) tests/commit-msg-round3.test.mjs test (8) pre-commit hook maps node crash to skip not block asserts on the hook source text (no exit status line after the check); replace it with a behavioral test: install the hooks into a real temp git repo with a check script that has a syntax error, run the real pre-commit hook with spawnSync and an explicit environment, and assert exit 0 and the one-line warning on stderr; and with a check script that exits with the violation code assert the hook exits non-zero. (2) tests/review-high-regressions.test.mjs high-4 expects exit status 1 for a positive violation but the violation exit code is now 3: import or derive the code from tools/githook-check.mjs (export it as a named constant there if it is not exported, a one-line change) and assert the hook exits with that code, and assert it is not 0. Run both files and tests/commit-msg-manifest.test.mjs tests/git-hooks.test.mjs tests/commit-msg-review.test.mjs tests/commit-msg-round2.test.mjs. ignoreTests reason: only the named files change.",
+      "context": [
+        "tests/commit-msg-round3.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tools/githook-check.mjs",
+        "tools/git-hooks.mjs",
+        "tests/commit-msg-manifest.test.mjs",
+        "tests/git-hooks.test.mjs",
+        "tests/commit-msg-review.test.mjs",
+        "tests/commit-msg-round2.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/commit-msg-round3.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tools/githook-check.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    }
+  ]
+}
