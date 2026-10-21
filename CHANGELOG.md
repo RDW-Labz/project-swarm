@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.151.0
+
+The board no longer hangs a test run.
+- **Board:** startBoardServer returns a cleaned promise that resolves after the board closes its API and removes its file entry. The board-nav test awaits it instead of watching the filesystem; the earlier fs.watch wait could miss its event on macOS and hang CI for 30 minutes (7 of 14 parallel local runs hung before, 28 of 28 pass now).
+- **Tests:** tests/board-nav.test.mjs.
+
 ## 1.150.0
 
 Keep the lanes busy: the swarm starts ready tickets itself.
