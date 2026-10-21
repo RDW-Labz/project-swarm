@@ -72,6 +72,34 @@ function scratchBaseNameOk(resolved) {
   return base.includes('scratch');
 }
 
+const TRUSTED_OS_TEMP_PREFIXES = ['/tmp', '/private/tmp', '/var/folders', '/private/var/folders'];
+
+function underTrustedOsTemp(resolved) {
+  if (!resolved) return false;
+  return TRUSTED_OS_TEMP_PREFIXES.some(
+    prefix => resolved === prefix || resolved.startsWith(`${prefix}${path.sep}`),
+  );
+}
+
+function scratchBaseLocationRejected(resolved, homeR) {
+  const rootR = path.parse(resolved).root;
+  return resolved === rootR || resolved === homeR || (homeR && isAncestorOf(resolved, homeR));
+}
+
+function registeredRootAlreadyScratch(reg, { env, home, registeredRoots, customResolved }) {
+  const rr = normalizedPath(reg);
+  if (!rr) return false;
+  if (hasScratchMarker(rr) || pointerMarksScratch(rr)) return true;
+  if (customResolved && isUnder(rr, path.join(customResolved, 'worktrees'))) return true;
+  const envNoCustom = { ...env };
+  delete envNoCustom.SWARM_SCRATCH_BASE;
+  for (const base of scratchRootList({ env: envNoCustom, home, registeredRoots })) {
+    if (isUnder(rr, base)) return true;
+  }
+  if (hasTmpTestSegment(rr.split(path.sep).filter(Boolean))) return true;
+  return false;
+}
+
 /** Validate SWARM_SCRATCH_BASE; returns the base path to use (default when invalid). */
 export function resolveScratchBase({ env = process.env, home = os.homedir(), registeredRoots = [], warn = msg => console.warn(msg) } = {}) {
   const raw = env.SWARM_SCRATCH_BASE;
@@ -85,20 +113,20 @@ export function resolveScratchBase({ env = process.env, home = os.homedir(), reg
   }
   const resolved = safeRealpath(candidate) ?? path.resolve(candidate);
   const homeR = normalizedPath(home);
-  const rootR = path.parse(resolved).root;
-  if (resolved === rootR || resolved === homeR || (homeR && isAncestorOf(resolved, homeR))) {
+  if (scratchBaseLocationRejected(resolved, homeR)) {
     warnScratchBase(warn, 'SWARM_SCRATCH_BASE ignored (root, home, or ancestor of home)');
     return defaultBase;
   }
   for (const reg of registeredRoots) {
     const rr = normalizedPath(reg);
     if (!rr || !registeredProjectGitRoot(rr)) continue;
-    if (resolved === rr || isUnder(resolved, rr) || isUnder(rr, resolved)) {
-      warnScratchBase(warn, 'SWARM_SCRATCH_BASE ignored (contains or sits inside a registered project with its own .git)');
+    if (!isUnder(rr, resolved) || rr === resolved) continue;
+    if (!registeredRootAlreadyScratch(reg, { env, home, registeredRoots, customResolved: resolved })) {
+      warnScratchBase(warn, 'SWARM_SCRATCH_BASE ignored (would treat a registered non-scratch project as scratch)');
       return defaultBase;
     }
   }
-  if (!scratchBaseNameOk(resolved)) {
+  if (!scratchBaseNameOk(resolved) && !underTrustedOsTemp(resolved)) {
     warnScratchBase(warn, 'SWARM_SCRATCH_BASE ignored (must be named like scratch or sit under the OS temp dir when it holds real projects)');
     return defaultBase;
   }
@@ -110,13 +138,17 @@ export function scratchRootList({ env = process.env, home = os.homedir(), tmp, r
   const scratchBase = resolveScratchBase({ env, home, registeredRoots });
   const bases = [path.join(scratchBase, 'worktrees'), scratchBase];
   const tmpResolved = tmp !== undefined ? (safeRealpath(tmp) ?? path.resolve(tmp)) : null;
+  const homeR = normalizedPath(home);
+  const trustedTmp = candidate => candidate && underTrustedOsTemp(candidate) && !scratchBaseLocationRejected(candidate, homeR);
   const custom = env.SWARM_SCRATCH_BASE !== undefined && env.SWARM_SCRATCH_BASE !== '';
   if (custom) {
-    if (tmpResolved) bases.push(tmpResolved);
+    if (trustedTmp(tmpResolved)) bases.push(tmpResolved);
   } else if (!(env.SWARM_TEST_TMP ?? process.env.SWARM_TEST_TMP)) {
     const systemTmp = safeRealpath(os.tmpdir()) ?? path.resolve(os.tmpdir());
-    bases.push(systemTmp, tmpResolved ?? systemTmp, '/tmp', '/private/tmp', '/var/folders', '/private/var/folders');
-  } else if (tmpResolved) {
+    if (trustedTmp(systemTmp)) bases.push(systemTmp);
+    if (trustedTmp(tmpResolved) && tmpResolved !== systemTmp) bases.push(tmpResolved);
+    bases.push('/tmp', '/private/tmp', '/var/folders', '/private/var/folders');
+  } else if (trustedTmp(tmpResolved)) {
     bases.push(tmpResolved);
   }
   return [...new Set(bases.filter(Boolean))];
@@ -155,9 +187,20 @@ function prefixParts(root) {
 function segmentIsBroadTest(resolved, segs, index, { home, installRoot } = {}) {
   const seg = segs[index];
   if (!seg || !BROAD_SEGMENTS.has(seg.toLowerCase())) return false;
+  const homeResolved = normalizedPath(home);
   const homeParts = prefixParts(home);
-  const head = segs.slice(0, index + 1).join(path.sep);
-  if (homeParts.length && head === homeParts.slice(0, index + 1).join(path.sep)) return false;
+  const headParts = segs.slice(0, index + 1);
+  if (homeParts.length && headParts.length <= homeParts.length) {
+    let onHomePath = true;
+    for (let j = 0; j < headParts.length; j += 1) {
+      if (headParts[j] !== homeParts[j]) onHomePath = false;
+    }
+    if (onHomePath) return false;
+  }
+  if (homeResolved && isUnder(resolved, homeResolved)) {
+    const homeName = path.basename(homeResolved).toLowerCase();
+    if (homeName && seg.toLowerCase() === homeName) return false;
+  }
   const installR = installRoot ? normalizedPath(installRoot) : null;
   const prefix = `${path.sep}${segs.slice(0, index + 1).join(path.sep)}`;
   if (installR && (prefix === installR || prefix.startsWith(`${installR}${path.sep}`))) return false;

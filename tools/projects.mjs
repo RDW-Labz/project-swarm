@@ -57,7 +57,13 @@ async function acquireRegistryLock(file) {
       if (error.code !== 'EEXIST') throw error;
       try {
         const st = await fs.stat(lock);
-        if (Date.now() - st.mtimeMs > LOCK_STALE_MS) await fs.rm(lock, { recursive: true, force: true });
+        if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+          const stalePath = `${lock}.stale.${process.pid}.${Date.now()}`;
+          try {
+            await fs.rename(lock, stalePath);
+            await fs.rm(stalePath, { recursive: true, force: true });
+          } catch { /* another writer won */ }
+        }
       } catch { /* gone */ }
       if (Date.now() - started > 10_000) throw Object.assign(new Error('projects-lock-timeout'), { code: 'projects-lock-timeout' });
       await new Promise(r => setTimeout(r, 25));
@@ -66,6 +72,13 @@ async function acquireRegistryLock(file) {
 }
 
 async function releaseRegistryLock(lock) {
+  const ownerPath = path.join(lock, 'owner');
+  try {
+    const text = await fs.readFile(ownerPath, 'utf8');
+    if (text.trim() !== String(process.pid)) return;
+  } catch {
+    return;
+  }
   await fs.rm(lock, { recursive: true, force: true }).catch(() => {});
 }
 
@@ -352,8 +365,25 @@ async function isInstallRootProject(project, install) {
 }
 
 async function looksLikeSwarmInstallRoot(rootPath) {
+  const swarmTool = path.join(rootPath, 'tools', 'swarm.mjs');
   try {
-    await fs.access(path.join(rootPath, 'tools', 'swarm.mjs'), fssync.constants.R_OK);
+    await fs.access(swarmTool, fssync.constants.R_OK);
+    return true;
+  } catch {
+    try {
+      await fs.access(path.dirname(swarmTool), fssync.constants.R_OK);
+      return false;
+    } catch {
+      return false;
+    }
+  }
+}
+
+async function registryRowLooksLikeInstallRoot(project) {
+  if (await looksLikeSwarmInstallRoot(project.root)) return true;
+  const swarmTool = path.join(project.root, 'tools', 'swarm.mjs');
+  try {
+    await fs.access(path.dirname(swarmTool), fssync.constants.R_OK);
     return true;
   } catch {
     return false;
@@ -379,12 +409,15 @@ export async function forgetProjects({
   const install = await resolveInstallRoot(installRoot, env);
   const scratchOpts = { env, home, installRoot: install };
 
-  const pickFromRegistry = async projects => {
+  const pickFromRegistry = async (projects, { reachability = 'full' } = {}) => {
     const ids = new Set();
     const skippedInstall = [];
     if (missing) {
       for (const project of projects) {
-        if ((await rootReachability(project.root)) === 'missing') ids.add(project.id);
+        const reach = reachability === 'cached'
+          ? (project._forgetReach ?? await rootReachability(project.root))
+          : await rootReachability(project.root);
+        if (reach === 'missing') ids.add(project.id);
       }
     }
     if (scratch) {
@@ -427,6 +460,10 @@ export async function forgetProjects({
         ids.delete(id);
         skippedInstall.push(project);
       }
+      if (project && !install && (missing || scratch) && (await registryRowLooksLikeInstallRoot(project))) {
+        ids.delete(id);
+        skippedInstall.push(project);
+      }
     }
     const bulk = missing || scratch;
     if (bulk && ids.size > 3 && !yes) {
@@ -437,9 +474,17 @@ export async function forgetProjects({
     return { forgotten, left, ids, skippedInstall };
   };
 
+  async function annotateReachability(projects) {
+    if (!missing) return projects;
+    return Promise.all(projects.map(async project => ({
+      ...project,
+      _forgetReach: await rootReachability(project.root),
+    })));
+  }
+
   if (dryRun) {
     try {
-      const projects = await listForWrite(file);
+      const projects = await annotateReachability(await listForWrite(file));
       const picked = await pickFromRegistry(projects);
       if (picked.error) return { stdout: `${picked.error}\n${forgetFooter()}`, exitCode: picked.exitCode };
       const lines = [];
@@ -455,11 +500,27 @@ export async function forgetProjects({
     }
   }
 
+  const preReach = missing ? await annotateReachability(await listForWrite(file)) : null;
+  const reachById = preReach ? new Map(preReach.map(p => [p.id, p._forgetReach])) : null;
+
   return serial(() => withRegistryLock(file, async () => {
     try {
       const projects = await listForWrite(file);
-      const picked = await pickFromRegistry(projects);
+      if (reachById) {
+        for (const project of projects) {
+          if (reachById.has(project.id)) project._forgetReach = reachById.get(project.id);
+        }
+      }
+      const picked = await pickFromRegistry(projects, { reachability: missing ? 'cached' : 'full' });
       if (picked.error) return { stdout: `${picked.error}\n${forgetFooter()}`, exitCode: picked.exitCode };
+      if (missing) {
+        for (const id of [...picked.ids]) {
+          const project = projects.find(p => p.id === id);
+          if (!project || (await rootReachability(project.root)) !== 'missing') picked.ids.delete(id);
+        }
+        picked.forgotten = projects.filter(p => picked.ids.has(p.id));
+        picked.left = projects.filter(p => !picked.ids.has(p.id));
+      }
       const lines = [];
       for (const p of picked.skippedInstall ?? []) lines.push(`skipped install root: ${p.id}  ${p.root}`);
       if (!picked.forgotten.length) {

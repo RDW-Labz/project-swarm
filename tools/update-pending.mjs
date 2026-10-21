@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { constants as fsConstants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pidAlive } from './server-restart.mjs';
+import { pidAlive, withProcessLock } from './server-restart.mjs';
 
 export const PENDING_BASENAME = '.update-pending.json';
 export const DEFAULT_WHEN_IDLE_TIMEOUT_MINUTES = 60;
@@ -90,27 +90,9 @@ export async function removePendingRecord(installRoot) {
   await fs.rm(pendingPath(installRoot), { force: true });
 }
 
-async function withCrossProcessLock(lockPath, fn, { sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), timeoutMs = 30_000 } = {}) {
-  await fs.mkdir(path.dirname(lockPath), { recursive: true }).catch(() => {});
-  const deadline = Date.now() + timeoutMs;
-  let handle = null;
-  while (Date.now() < deadline) {
-    try {
-      handle = await open(lockPath, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600);
-      await handle.writeFile(`${process.pid}\n`);
-      break;
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      await sleep(25);
-    }
-  }
-  if (!handle) throw Object.assign(new Error('pending-lock-timeout'), { code: 'EBUSY' });
-  try {
-    return await fn();
-  } finally {
-    await handle.close().catch(() => {});
-    await fs.rm(lockPath, { force: true }).catch(() => {});
-  }
+async function withCrossProcessLock(lockPath, fn, opts = {}) {
+  const { sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), timeoutMs = 30_000 } = opts;
+  return await withProcessLock(lockPath, fn, { sleep, timeoutMs, openFlags: 'wx' });
 }
 
 async function withPendingFileLock(installRoot, fn, opts = {}) {

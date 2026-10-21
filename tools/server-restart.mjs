@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // After `swarm update`, restart board and remote-serve processes that still run an older version.
 import { spawn, execFile } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
@@ -51,6 +52,21 @@ export async function removeRegistryRecord(file, { pid, url } = {}) {
     if (url !== undefined && data.url !== url) return;
     await fs.rm(file, { force: true });
   } catch { /* already gone */ }
+}
+
+export async function removeRegistryRecordIfUnchanged(file, snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return false;
+  try {
+    const data = JSON.parse(await fs.readFile(file, 'utf8'));
+    if (data.pid !== snapshot.pid) return false;
+    if (snapshot.startedAt !== undefined && data.startedAt !== snapshot.startedAt) return false;
+    if (snapshot.url !== undefined && data.url !== snapshot.url) return false;
+    if (snapshot.version !== undefined && data.version !== snapshot.version) return false;
+    await fs.rm(file, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function shellQuote(value) {
@@ -148,12 +164,21 @@ function tokenizeCommandLine(line) {
   return tokens;
 }
 
+function resolvePathReal(candidate) {
+  if (!candidate || typeof candidate !== 'string') return null;
+  try { return realpathSync(candidate); } catch {
+    try { return path.resolve(candidate); } catch { return null; }
+  }
+}
+
 export function commandLineMatchesRecord(commandLine, record, runnerPath) {
   if (!commandLine || typeof commandLine !== 'string' || !runnerPath) return false;
   const tokens = tokenizeCommandLine(commandLine.trim());
-  const resolvedRunner = path.resolve(runnerPath);
+  const resolvedRunner = resolvePathReal(runnerPath);
+  if (!resolvedRunner) return false;
   const hasRunner = tokens.some(token => {
-    try { return path.resolve(token) === resolvedRunner; } catch { return false; }
+    const resolved = resolvePathReal(token);
+    return resolved !== null && resolved === resolvedRunner;
   });
   if (!hasRunner) return false;
   const { tokens: subcommand } = expectedSubcommandForRecord(record);
@@ -166,32 +191,67 @@ export function commandLineMatchesRecord(commandLine, record, runnerPath) {
   return true;
 }
 
+export function parsePsEtime(etimeStr) {
+  const raw = String(etimeStr).trim();
+  if (!raw) return null;
+  let days = 0;
+  let timePart = raw;
+  if (raw.includes('-')) {
+    const [dayText, rest] = raw.split('-', 2);
+    days = Number(dayText);
+    timePart = rest ?? '';
+    if (!Number.isFinite(days) || days < 0) return null;
+  }
+  const parts = timePart.split(':').map(part => Number(part));
+  if (!parts.length || parts.some(part => !Number.isFinite(part))) return null;
+  let seconds = 0;
+  if (parts.length === 2) seconds = parts[0] * 60 + parts[1];
+  else if (parts.length === 3) seconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+  else return null;
+  return seconds + days * 86_400;
+}
+
 export async function readProcessIdentity(pid, { execFileImpl = execFileAsync, now = Date.now } = {}) {
+  let command;
   try {
-    const [{ stdout: commandOut }, { stdout: etimesOut }] = await Promise.all([
-      execFileImpl('ps', ['-o', 'command=', '-p', String(pid)]),
-      execFileImpl('ps', ['-o', 'etimes=', '-p', String(pid)]),
-    ]);
-    const command = String(commandOut).trim();
-    const etimes = Number(String(etimesOut).trim());
-    if (!command) return null;
-    const startedAt = Number.isFinite(etimes) ? now() - Math.round(etimes * 1000) : null;
-    return { command, startedAt };
+    const { stdout: commandOut } = await execFileImpl('ps', ['-o', 'command=', '-p', String(pid)]);
+    command = String(commandOut).trim();
   } catch {
     return null;
   }
+  if (!command) return null;
+
+  let startedAt = null;
+  try {
+    const { stdout: etimeOut } = await execFileImpl('ps', ['-o', 'etime=', '-p', String(pid)]);
+    let elapsedSec = parsePsEtime(etimeOut);
+    if (elapsedSec === null) {
+      const asNumber = Number(String(etimeOut).trim());
+      if (Number.isFinite(asNumber) && asNumber >= 0) elapsedSec = asNumber;
+    }
+    if (elapsedSec !== null) startedAt = now() - elapsedSec * 1000;
+  } catch { /* start time unknown */ }
+
+  if (startedAt === null) {
+    try {
+      const { stdout: lstartOut } = await execFileImpl('ps', ['-o', 'lstart=', '-p', String(pid)]);
+      const parsed = Date.parse(String(lstartOut).trim());
+      if (Number.isFinite(parsed)) startedAt = parsed;
+    } catch { /* start time unknown */ }
+  }
+
+  return { command, startedAt };
 }
 
 export function identityMismatchRemovesRecord(reason) {
-  return reason === 'process command line does not match server record'
-    || reason === 'process start time is newer than the server record';
+  return reason === 'process start time is newer than the server record';
 }
 
 export async function verifyRegistryPid(record, runnerPath, { execFileImpl = execFileAsync } = {}) {
   const identity = await readProcessIdentity(record.pid, { execFileImpl });
   if (!identity) return { ok: false, reason: 'could not read process command line', removeRecord: false };
   if (!commandLineMatchesRecord(identity.command, record, runnerPath)) {
-    return { ok: false, reason: 'process command line does not match server record', removeRecord: true };
+    return { ok: false, reason: 'process command line does not match server record', removeRecord: false };
   }
   if (identity.startedAt === null) {
     return { ok: false, reason: 'could not read process start time', removeRecord: false };
@@ -329,27 +389,94 @@ async function assertStartable({ runner, cwd, argv }) {
 
 const RESTART_LOCK_BASENAME = '.server-restart.lock';
 
-async function withRestartLock(installRoot, fn, { sleep = ms => new Promise(r => setTimeout(r, ms)), lockTimeoutMs = 60_000 } = {}) {
-  const lockPath = path.join(installRoot, RESTART_LOCK_BASENAME);
-  await fs.mkdir(installRoot, { recursive: true }).catch(() => {});
-  const deadline = Date.now() + lockTimeoutMs;
+export const STALE_LOCK_MAX_AGE_MS = 60_000;
+
+export function formatProcessLockPayload(pid = process.pid, createdAt = new Date().toISOString()) {
+  return `${pid}\n${createdAt}\n`;
+}
+
+export function parseProcessLockPayload(text) {
+  const lines = String(text).trim().split('\n');
+  const pid = Number(lines[0]);
+  const createdAt = lines[1] ? Date.parse(lines[1]) : NaN;
+  return {
+    pid: Number.isInteger(pid) && pid > 0 ? pid : null,
+    createdAt: Number.isFinite(createdAt) ? createdAt : null,
+  };
+}
+
+export async function isProcessLockStale(lockPath, { isAlive = pidAlive, now = Date.now, maxAgeMs = STALE_LOCK_MAX_AGE_MS } = {}) {
+  try {
+    const text = await fs.readFile(lockPath, 'utf8');
+    const { pid, createdAt } = parseProcessLockPayload(text);
+    if (pid !== null && !isAlive(pid)) return true;
+    if (createdAt !== null) return now() - createdAt > maxAgeMs;
+    const stat = await fs.stat(lockPath);
+    return now() - stat.mtimeMs > maxAgeMs;
+  } catch {
+    return false;
+  }
+}
+
+export async function stealProcessLockIfStale(lockPath, opts = {}) {
+  if (!(await isProcessLockStale(lockPath, opts))) return false;
+  try {
+    const stolen = `${lockPath}.stale.${process.pid}.${randomBytes(4).toString('hex')}`;
+    await fs.rename(lockPath, stolen);
+    await fs.rm(stolen, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function releaseProcessLock(lockPath, { pid = process.pid } = {}) {
+  try {
+    const text = await fs.readFile(lockPath, 'utf8');
+    const { pid: owner } = parseProcessLockPayload(text);
+    if (owner === pid) await fs.rm(lockPath, { force: true });
+  } catch { /* already gone */ }
+}
+
+export async function withProcessLock(lockPath, fn, {
+  sleep = ms => new Promise(r => setTimeout(r, ms)),
+  timeoutMs = 60_000,
+  openFlags = 'wx',
+  isAlive = pidAlive,
+  maxAgeMs = STALE_LOCK_MAX_AGE_MS,
+} = {}) {
+  await fs.mkdir(path.dirname(lockPath), { recursive: true }).catch(() => {});
+  const deadline = Date.now() + timeoutMs;
   let handle = null;
+  const createdAt = new Date().toISOString();
   while (Date.now() < deadline) {
     try {
-      handle = await fs.open(lockPath, 'wx', 0o600);
-      await handle.writeFile(`${process.pid}\n`);
+      handle = await fs.open(lockPath, openFlags, 0o600);
+      await handle.writeFile(formatProcessLockPayload(process.pid, createdAt));
       break;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
+      await stealProcessLockIfStale(lockPath, { isAlive, maxAgeMs });
       await sleep(50);
     }
   }
-  if (!handle) return { ok: false, reason: 'another server restart is already in progress' };
+  if (!handle) throw Object.assign(new Error('process-lock-timeout'), { code: 'EBUSY' });
   try {
-    return { ok: true, result: await fn() };
+    return await fn();
   } finally {
     await handle.close().catch(() => {});
-    await fs.rm(lockPath, { force: true }).catch(() => {});
+    await releaseProcessLock(lockPath);
+  }
+}
+
+async function withRestartLock(installRoot, fn, { sleep = ms => new Promise(r => setTimeout(r, ms)), lockTimeoutMs = 60_000 } = {}) {
+  const lockPath = path.join(installRoot, RESTART_LOCK_BASENAME);
+  try {
+    const result = await withProcessLock(lockPath, fn, { sleep, timeoutMs: lockTimeoutMs });
+    return { ok: true, result };
+  } catch (error) {
+    if (error?.code === 'EBUSY') return { ok: false, reason: 'another server restart is already in progress' };
+    throw error;
   }
 }
 
@@ -436,7 +563,12 @@ export async function restartRegisteredServers({
       continue;
     }
     if (probe === 'dead') {
-      await fs.rm(file, { force: true }).catch(() => {});
+      await removeRegistryRecordIfUnchanged(file, {
+        pid: record.pid,
+        startedAt: record.startedAt,
+        url: record.url,
+        version: record.version,
+      });
       continue;
     }
 
@@ -472,9 +604,19 @@ export async function restartRegisteredServers({
     if (!identity.ok) {
       const remove = identity.removeRecord === true || identityMismatchRemovesRecord(identity.reason);
       if (remove) {
-        emit(`${label} stale server record (pid ${record.pid}): ${identity.reason}; record removed`);
-        await fs.rm(file, { force: true }).catch(() => {});
-        servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'stale-record' });
+        const removed = await removeRegistryRecordIfUnchanged(file, {
+          pid: record.pid,
+          startedAt: record.startedAt,
+          url: record.url,
+          version: record.version,
+        });
+        if (removed) {
+          emit(`${label} stale server record (pid ${record.pid}): ${identity.reason}; record removed`);
+          servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'stale-record' });
+        } else {
+          emit(`${label} server record (pid ${record.pid}): ${identity.reason}; record kept (changed concurrently)`);
+          servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified' });
+        }
       } else {
         emit(`${label} server record (pid ${record.pid}): ${identity.reason}; record kept`);
         servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified' });

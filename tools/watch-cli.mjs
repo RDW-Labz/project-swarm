@@ -234,6 +234,21 @@ export function serverMode({ stdin = process.stdin, stdout = process.stdout, exp
   return 'terminal';
 }
 
+export function argvForRemoteServe(remote, registry = {}) {
+  if (Array.isArray(registry.argv) && registry.argv.length) return registry.argv;
+  const argv = ['remote', 'serve'];
+  if (remote?.port != null) argv.push('--port', String(remote.port));
+  if (typeof remote?.login === 'string' && remote.login) argv.push('--login', remote.login);
+  if (Array.isArray(remote?.hosts)) {
+    for (const host of remote.hosts) {
+      if (typeof host === 'string') argv.push('--host', host);
+      else if (host && typeof host.host === 'string') argv.push('--host', host.host);
+      else if (host && typeof host.name === 'string') argv.push('--host', host.name);
+    }
+  }
+  return argv;
+}
+
 export function registryModeFields(mode, { stdin = process.stdin, stdout = process.stdout, explicitBackground = false } = {}) {
   const fromTty = !stdin.isTTY && !stdout.isTTY;
   return {
@@ -493,17 +508,26 @@ export async function startBoardServer({ env = process.env, root, remote, regist
   const boardMode = remote ? 'background' : serverMode({ explicitBackground: registry?.explicitBackground === true });
   const baseRegistry = {
     version,
-    argv: remote ? ['remote', 'serve'] : ['watch', '--all'],
+    argv: remote ? argvForRemoteServe(remote, registry ?? {}) : ['watch', '--all'],
     cwd: process.cwd(),
     port,
     env: safeEnvSubset(env),
     ...registryModeFields(boardMode, { explicitBackground: remote || registry?.explicitBackground === true }),
     ...(registry && typeof registry === 'object' ? registry : {}),
   };
-  if (!remote) await writeBoardFile(url, { env, registry: baseRegistry }).catch(() => {});
-  else {
+  if (!remote) {
+    try {
+      await writeBoardFile(url, { env, registry: baseRegistry });
+    } catch (error) {
+      process.stderr.write(`board server record write failed: ${error.message}\n`);
+    }
+  } else {
     const { writeRegistryRecord, remoteServerFile } = await import('./server-restart.mjs');
-    await writeRegistryRecord(remoteServerFile(env), { pid: process.pid, url, startedAt: new Date().toISOString(), ...baseRegistry }).catch(() => {});
+    try {
+      await writeRegistryRecord(remoteServerFile(env), { pid: process.pid, url, startedAt: new Date().toISOString(), ...baseRegistry });
+    } catch (error) {
+      process.stderr.write(`remote server record write failed: ${error.message}\n`);
+    }
   }
   const cleaned = server.done.then(async () => {
     try {

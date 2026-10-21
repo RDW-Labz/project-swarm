@@ -39,6 +39,22 @@ if [ -z "$NODE" ] || [ ! -f "$CHECK" ]; then
   exit 0
 fi`;
 
+  const swarmCheckCommitMsg = `
+"$NODE" "$CHECK" ${kind} "$@"
+CODE=$?
+if [ "$CODE" -eq 3 ]; then exit 1; fi
+if [ "$CODE" -ne 0 ]; then echo "swarm git hook: manifest check skipped (infrastructure)" >&2; fi
+exit 0`;
+
+  const swarmCheckOther = `
+"$NODE" "$CHECK" ${kind} "$@"
+CODE=$?
+if [ "$CODE" -ne 0 ]; then
+  echo "swarm git hook: hand-build check skipped (infrastructure)" >&2
+  exit 0
+fi
+exit 0`;
+
   if (kind === 'pre-push') {
     return `#!/bin/sh
 ${HOOK_MARKER}
@@ -47,7 +63,6 @@ HOOKS_DIR="$(git rev-parse --git-path hooks)"
 NODE_RECORD=${nodeQ}
 CHECK=${checkQ}
 ${resolveNode}
-${infraSkip}
 STDIN_FILE="$HOOKS_DIR/.swarm-pre-push.stdin"
 cat > "$STDIN_FILE" || exit 0
 ${prevLatest}
@@ -56,19 +71,18 @@ if [ -n "$PREV" ] && [ -f "$PREV" ]; then
   else cat "$STDIN_FILE" | sh "$PREV" "$@" || exit $?;
   fi
 fi
+${infraSkip}
 "$NODE" "$CHECK" ${kind} "$@" < "$STDIN_FILE"
-exit $?
+CODE=$?
+if [ "$CODE" -ne 0 ]; then
+  echo "swarm git hook: hand-build check skipped (infrastructure)" >&2
+  exit 0
+fi
+exit 0
 `;
   }
 
-  const commitInfra = kind === 'commit-msg' ? `
-"$NODE" "$CHECK" ${kind} "$@"
-CODE=$?
-if [ "$CODE" -eq 3 ]; then exit 1; fi
-if [ "$CODE" -ne 0 ]; then echo "swarm git hook: manifest check skipped (infrastructure)" >&2; fi
-exit 0` : `
-"$NODE" "$CHECK" ${kind} "$@"
-exit $?`;
+  const swarmCheck = kind === 'commit-msg' ? swarmCheckCommitMsg : swarmCheckOther;
 
   return `#!/bin/sh
 ${HOOK_MARKER}
@@ -77,10 +91,10 @@ HOOKS_DIR="$(git rev-parse --git-path hooks)"
 NODE_RECORD=${nodeQ}
 CHECK=${checkQ}
 ${resolveNode}
-${kind === 'commit-msg' ? infraSkip : infraSkip}
 ${prevLatest}
 ${runPrev}
-${commitInfra}
+${infraSkip}
+${swarmCheck}
 `;
 }
 
@@ -93,7 +107,9 @@ function hooksDir(root, exec) {
 function hooksDirInsideRepo(root, dir, fsMod) {
   try {
     const rootReal = fsMod.realpathSync.native(root);
-    const dirReal = fsMod.realpathSync.native(dir);
+    const dirAbs = path.isAbsolute(dir) ? dir : path.join(root, dir);
+    const parentReal = fsMod.realpathSync.native(path.dirname(dirAbs));
+    const dirReal = path.join(parentReal, path.basename(dirAbs));
     return dirReal === rootReal || dirReal.startsWith(`${rootReal}${path.sep}`);
   } catch {
     return false;
@@ -123,11 +139,11 @@ function backupUserHook(fsMod, hookPath) {
 export function installGitHooks(root, { fs: fsMod = fs, exec, checkScript, nodePath = process.execPath, forceShared = false, warn = msg => console.warn(msg) } = {}) {
   if (!checkScript) throw Error('installGitHooks: checkScript is required');
   const dir = hooksDir(root, exec);
+  fsMod.mkdirSync(dir, { recursive: true });
   if (!hooksDirInsideRepo(root, dir, fsMod) && !forceShared) {
     warn(`swarm git hooks: core.hooksPath is outside this repo (${dir}); not installing (pass forceShared to override)`);
     return { status: 'skipped', reason: 'shared hooks path' };
   }
-  fsMod.mkdirSync(dir, { recursive: true });
   const meta = { nodePath, checkScript };
   for (const kind of ['pre-commit', 'pre-push', 'commit-msg']) {
     const hookPath = path.join(dir, kind);
@@ -146,11 +162,17 @@ export function installGitHooks(root, { fs: fsMod = fs, exec, checkScript, nodeP
 /** @param {string} root @param {{ fs?: typeof fs, exec?: Function }} opts */
 export function removeGitHooks(root, { fs: fsMod = fs, exec } = {}) {
   const dir = hooksDir(root, exec);
+  let names = [];
+  try {
+    names = fsMod.readdirSync(dir);
+  } catch {
+    return;
+  }
   for (const kind of ['pre-commit', 'pre-push', 'commit-msg']) {
     const hookPath = path.join(dir, kind);
     const existing = readHook(fsMod, hookPath);
     if (existing !== null && isOurHook(existing)) fsMod.rmSync(hookPath, { force: true });
-    const backups = fsMod.readdirSync(dir).filter(n => n === `${kind}.before-swarm` || n.startsWith(`${kind}.before-swarm-`)).sort();
+    const backups = names.filter(n => n === `${kind}.before-swarm` || n.startsWith(`${kind}.before-swarm-`)).sort();
     const latest = backups[backups.length - 1];
     if (latest && readHook(fsMod, hookPath) === null) {
       fsMod.renameSync(path.join(dir, latest), hookPath);

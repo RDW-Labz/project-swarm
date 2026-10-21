@@ -142,7 +142,7 @@ function readCommitSubjectFromFile(messagePath, { commentChar = '#' } = {}) {
 export function isManifestCommitSubject(subject) {
   const t = String(subject ?? '').trim();
   if (/^(?:manifests?:|manifest\s+for\b)/i.test(t)) return true;
-  if (/^manifest\s+/i.test(t) && !/^manifest\s+parser:/i.test(t) && !/\d/.test(t)) return true;
+  if (/^manifest\s+/i.test(t) && !/^manifest\s+parser:/i.test(t) && !/^manifest\s+\w+:/i.test(t) && !/\d/.test(t)) return true;
   return false;
 }
 
@@ -334,9 +334,25 @@ function defaultReadStagedBlob(root, rel) {
   return readBlobAt(root, `:${rel}`);
 }
 
+function stagedPathsForCommitMsg(root) {
+  try {
+    const zbuf = execFileSync('git', ['ls-files', '-z', '--cached'], {
+      cwd: root,
+      encoding: 'buffer',
+      timeout: 5000,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    return zbuf.toString('utf8').split('\0').filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
 function runCommitMsgCheckSync(root) {
   const messagePath = process.argv[3];
   if (shouldSkipCommitMsgCheck({ root, env: process.env, argv: process.argv, messagePath })) return { ok: true };
+  const stagedPaths = stagedPathsForCommitMsg(root);
+  if (stagedPaths) return checkCommitMsg({ root, messagePath, stagedPaths });
   let nameStatusText;
   try {
     const zbuf = execFileSync('git', ['diff', '--cached', '--name-status', '-z', '--no-renames'], {
