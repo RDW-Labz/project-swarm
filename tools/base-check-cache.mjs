@@ -29,10 +29,16 @@ export function parseBaseCheckCacheRecord(bytes) {
 export function reusableCachedBaseCheck(record, checksKey) {
   if (!record || record.checksKey !== checksKey) return null;
   if (record.status !== 'green') return null;
+  if (Array.isArray(record.failures) && record.failures.length) return null;
   return record;
+}
+
+/** Raw cache file bytes (e.g. from `bytesAt`); null when checks must run again. */
+export function resolveCachedBaseCheckBytes(cachedBytes, checksKey) {
+  return reusableCachedBaseCheck(parseBaseCheckCacheRecord(cachedBytes), checksKey);
 }
 
 export async function readCachedBaseCheck(root, { baseSha, checksKey, readBytes }) {
   const cached = await readBytes(root, baseChecksCacheRel(baseSha), true);
-  return reusableCachedBaseCheck(parseBaseCheckCacheRecord(cached), checksKey);
+  return resolveCachedBaseCheckBytes(cached, checksKey);
 }

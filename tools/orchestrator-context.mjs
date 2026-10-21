@@ -1,15 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
-// Orchestrator context handoff (R-030): measure a Claude Code session transcript on disk against a configurable byte threshold.
+// Orchestrator context handoff (R-030): measure a Claude Code session transcript on disk against a configurable byte
+// threshold; when over the limit, persist continuity into project and Claude memory so a fresh session can resume.
 // The events log stores only the transcript file name; size is read through resolveTranscript (same roots as orchestrator-usage.mjs).
-// Saving state and starting a fresh session are handled elsewhere; this module only measures and compares.
 import fs from 'node:fs';
+import path from 'node:path';
 import { resolveTranscript } from './orchestrator-usage.mjs';
 
 /** Default transcript size (bytes) past which the orchestrator should hand off before context gets expensive. */
 export const DEFAULT_HANDOFF_TRANSCRIPT_BYTES = 10 * 1024 * 1024;
 export const HANDOFF_TRANSCRIPT_BYTES_ENV = 'SWARM_ORCHESTRATOR_HANDOFF_TRANSCRIPT_BYTES';
+export const PROJECT_MEMORY_FILE = '.swarm/orchestrator/memory.md';
+export const HANDOFF_STATE_FILE = '.swarm/orchestrator/context-handoff.json';
+export const CLAUDE_HANDOFF_MEMORY = 'swarm-orchestrator-handoff.md';
+
 const MIN_HANDOFF_BYTES = 256 * 1024;
 const MAX_HANDOFF_BYTES = 64 * 1024 * 1024;
+const TAIL_READ = 96 * 1024;
+const SUMMARY_LIMIT = 2400;
 
 const isObj = v => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -65,14 +72,210 @@ export function transcriptBytes(name, { statSync = fs.statSync } = {}) {
   }
 }
 
+const isLink = p => { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } };
+
+function safeOrchestratorDir(root) {
+  if (typeof root !== 'string' || !root) return null;
+  const swarm = path.join(root, '.swarm');
+  const dir = path.join(root, '.swarm', 'orchestrator');
+  if (isLink(swarm) || isLink(dir)) return null;
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function messageContentText(message) {
+  if (!message || typeof message !== 'object') return '';
+  const content = message.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  let out = '';
+  for (const part of content) {
+    if (typeof part === 'string') out += part;
+    else if (part && typeof part.text === 'string') out += part.text;
+  }
+  return out;
+}
+
+function trimSummary(text) {
+  const clean = String(text ?? '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ').trim();
+  if (clean.length <= SUMMARY_LIMIT) return clean;
+  return clean.slice(0, SUMMARY_LIMIT - 1) + '…';
+}
+
+/** Last user and assistant lines from a transcript file (tail read only); null when unreadable. */
+export function transcriptHandoffSummary(name, { readSync = fs.readSync, openSync = fs.openSync, closeSync = fs.closeSync, statSync = fs.statSync } = {}) {
+  const real = resolveTranscript(name);
+  if (!real) return null;
+  let stat;
+  try { stat = statSync(real); } catch { return null; }
+  if (!stat.isFile()) return null;
+  const take = Math.min(stat.size, TAIL_READ);
+  const buf = Buffer.alloc(take);
+  const fd = openSync(real, 'r');
+  try { readSync(fd, buf, 0, take, stat.size - take); } finally { closeSync(fd); }
+  let lastUser = null;
+  let lastAssistant = null;
+  for (const line of buf.toString('utf8').split('\n')) {
+    if (!line) continue;
+    let row;
+    try { row = JSON.parse(line); } catch { continue; }
+    if (row?.type === 'user') lastUser = trimSummary(messageContentText(row.message));
+    if (row?.type === 'assistant') lastAssistant = trimSummary(messageContentText(row.message));
+  }
+  return { lastUser, lastAssistant };
+}
+
+function claudeMemoryFileForTranscript(transcriptName) {
+  const real = resolveTranscript(transcriptName);
+  if (!real) return null;
+  const memoryDir = path.join(path.dirname(real), 'memory');
+  if (isLink(memoryDir)) return null;
+  return path.join(memoryDir, CLAUDE_HANDOFF_MEMORY);
+}
+
+function appendMarkdown(file, block, { appendFileSync = fs.appendFileSync, mkdirSync = fs.mkdirSync } = {}) {
+  mkdirSync(path.dirname(file), { recursive: true });
+  if (isLink(file)) return false;
+  appendFileSync(file, block, { encoding: 'utf8', flag: 'a' });
+  return true;
+}
+
+function writeJsonAtomic(file, value, { writeFileSync = fs.writeFileSync, mkdirSync = fs.mkdirSync } = {}) {
+  mkdirSync(path.dirname(file), { recursive: true });
+  if (isLink(file)) return false;
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(value)}\n`, { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tmp, file);
+  return true;
+}
+
 /**
- * Whether the session transcript has reached the handoff threshold.
- * @returns {{ transcript: string|null, bytes: number|null, threshold: number, over: boolean, handoff: boolean }}
+ * Persist orchestrator continuity for a fresh session: project memory, Claude project memory, state file, journal.
+ * @returns {{ ok: boolean, resume: object|null, error?: string }}
  */
-export function contextHandoffOf(transcript, options = {}) {
+export async function persistOrchestratorHandoff({
+  root,
+  sessionId,
+  transcript,
+  bytes,
+  threshold,
+  summary = null,
+  now = Date.now,
+} = {}) {
+  if (typeof root !== 'string' || !root) return { ok: false, resume: null, error: 'handoff-needs-root' };
+  if (typeof sessionId !== 'string' || !sessionId) return { ok: false, resume: null, error: 'handoff-needs-session' };
+  const name = typeof transcript === 'string' && transcript ? transcript : null;
+  if (!name || bytes === null) return { ok: false, resume: null, error: 'handoff-needs-transcript' };
+  const dir = safeOrchestratorDir(root);
+  if (!dir) return { ok: false, resume: null, error: 'handoff-path-unsafe' };
+
+  const at = new Date(now).toISOString();
+  const snap = summary ?? transcriptHandoffSummary(name) ?? { lastUser: null, lastAssistant: null };
+  const block = [
+    '',
+    `## Orchestrator context handoff ${at}`,
+    `Session \`${sessionId.slice(0, 80)}\` transcript \`${path.basename(name)}\` reached ${bytes} bytes (threshold ${threshold}).`,
+    'Start a fresh Claude Code session; read coordination HANDOFF.md and TASK.md, then this file.',
+    '',
+    snap.lastUser ? `### Last user message\n${snap.lastUser}\n` : '### Last user message\n(none captured)\n',
+    snap.lastAssistant ? `### Last assistant message\n${snap.lastAssistant}\n` : '### Last assistant message\n(none captured)\n',
+  ].join('\n');
+
+  const projectMemory = path.join(root, PROJECT_MEMORY_FILE);
+  if (!appendMarkdown(projectMemory, block)) return { ok: false, resume: null, error: 'handoff-memory-write-failed' };
+
+  const claudeMemory = claudeMemoryFileForTranscript(name);
+  if (claudeMemory && !appendMarkdown(claudeMemory, block)) return { ok: false, resume: null, error: 'handoff-claude-memory-write-failed' };
+
+  const state = {
+    version: 1,
+    at,
+    sessionId: sessionId.slice(0, 80),
+    transcript: path.basename(name),
+    bytes,
+    threshold,
+    projectMemory: PROJECT_MEMORY_FILE,
+    claudeMemory: claudeMemory ? path.relative(path.dirname(resolveTranscript(name)), claudeMemory).replace(/\\/g, '/') : null,
+  };
+  const statePath = path.join(root, HANDOFF_STATE_FILE);
+  if (!writeJsonAtomic(statePath, state)) return { ok: false, resume: null, error: 'handoff-state-write-failed' };
+
+  try {
+    const { appendEvent } = await import('./journal.mjs');
+    await appendEvent(root, {
+      kind: 'action',
+      action: 'orchestrator-context-handoff',
+      session: state.sessionId,
+      transcript: state.transcript,
+      bytes,
+      threshold,
+      file: HANDOFF_STATE_FILE,
+    }, { now: () => now, best: true });
+  } catch { /* journal is best effort */ }
+
+  return {
+    ok: true,
+    resume: {
+      stateFile: HANDOFF_STATE_FILE,
+      projectMemory: PROJECT_MEMORY_FILE,
+      claudeMemory: claudeMemory ?? null,
+      at,
+    },
+  };
+}
+
+/** Read the latest handoff state written under the project, or null. */
+export function readOrchestratorHandoffState(root, { readFileSync = fs.readFileSync } = {}) {
+  if (typeof root !== 'string' || !root) return null;
+  const file = path.join(root, HANDOFF_STATE_FILE);
+  if (isLink(file)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8'));
+    return isObj(raw) && raw.version === 1 ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Measure transcript size against the handoff threshold; when over and `apply` is true, save state to memory for a fresh session.
+ * @returns {Promise<{ transcript: string|null, bytes: number|null, threshold: number, over: boolean, handoff: boolean, saved: boolean, freshSession: boolean, resume: object|null, error?: string }>}
+ */
+export async function contextHandoffOf(transcript, options = {}) {
   const threshold = handoffTranscriptBytes(options);
   const name = typeof transcript === 'string' && transcript ? transcript : null;
   const bytes = name ? transcriptBytes(name, options) : null;
   const over = bytes !== null && bytes >= threshold;
-  return { transcript: name, bytes, threshold, over, handoff: over };
+  const base = {
+    transcript: name,
+    bytes,
+    threshold,
+    over,
+    handoff: over,
+    saved: false,
+    freshSession: false,
+    resume: null,
+  };
+  if (!over) return { ...base, handoff: false };
+
+  const apply = options.apply !== false && !options.dryRun && !options.measureOnly;
+  if (!apply) return base;
+
+  const { root, sessionId } = options;
+  const persisted = await persistOrchestratorHandoff({
+    root,
+    sessionId,
+    transcript: name,
+    bytes,
+    threshold,
+    summary: options.summary,
+    now: options.now,
+  });
+  if (!persisted.ok) return { ...base, error: persisted.error ?? 'handoff-failed' };
+  return {
+    ...base,
+    saved: true,
+    freshSession: true,
+    resume: persisted.resume,
+  };
 }

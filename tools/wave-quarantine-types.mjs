@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// Shared quarantine folder layout and wave-failure records for scope wave retries (R-017).
+// Shared quarantine folder layout, wave-failure records, moves, and retry read-only context (R-017).
+
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 const norm = (value) => String(value ?? '').replace(/\\/g, '/').replace(/^\.\//, '');
 
@@ -152,6 +155,182 @@ export function quarantineReadOnlyContext(record) {
   const paths = new Set([waveFailureRecordRel({ runId: record.runId, ticketId: record.ticketId })]);
   for (const output of record.outputs) paths.add(normalizeProjectRel(output.path));
   return [...paths].sort();
+}
+
+/**
+ * Absolute path for a safe project-relative `rel` under `root`.
+ *
+ * @param {string} root
+ * @param {string} rel
+ * @returns {string}
+ */
+export function projectAbsPath(root, rel) {
+  assertSafeProjectRel(rel);
+  const rootAbs = path.resolve(String(root ?? ''));
+  const abs = path.resolve(rootAbs, ...normalizeProjectRel(rel).split('/'));
+  const back = path.relative(rootAbs, abs);
+  if (back.startsWith('..') || path.isAbsolute(back)) {
+    throw Object.assign(new Error(`wave-quarantine-escapes-root: ${normalizeProjectRel(rel).slice(0, 120)}`), { code: 'wave-quarantine-escapes-root' });
+  }
+  return abs;
+}
+
+/**
+ * @param {string} absPath
+ * @param {unknown} data
+ */
+async function atomicJsonWrite(absPath, data) {
+  await fs.mkdir(path.dirname(absPath), { recursive: true });
+  const tmp = `${absPath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await fs.writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, { flag: 'wx', mode: 0o644 });
+    await fs.rename(tmp, absPath);
+  } catch (error) {
+    await fs.unlink(tmp).catch(() => {});
+    throw error;
+  }
+}
+
+/**
+ * Move one project file into a quarantine destination (rename, or copy+unlink across devices).
+ *
+ * @param {string} root
+ * @param {string} fromRel
+ * @param {string} toRel
+ */
+async function moveProjectFileIntoQuarantine(root, fromRel, toRel) {
+  const from = normalizeProjectRel(fromRel);
+  const to = normalizeProjectRel(toRel);
+  assertSafeProjectRel(from, 'source');
+  assertSafeProjectRel(to, 'dest');
+  if (!isWaveQuarantinePath(to)) {
+    throw Object.assign(new Error(`wave-quarantine-dest-outside-root: ${to.slice(0, 120)}`), { code: 'wave-quarantine-dest-outside-root' });
+  }
+  const fromAbs = projectAbsPath(root, from);
+  const toAbs = projectAbsPath(root, to);
+  await fs.mkdir(path.dirname(toAbs), { recursive: true });
+  try {
+    await fs.rename(fromAbs, toAbs);
+  } catch (error) {
+    if (error?.code !== 'EXDEV') throw error;
+    await fs.copyFile(fromAbs, toAbs);
+    await fs.unlink(fromAbs);
+  }
+}
+
+/**
+ * After a scope wave failure, move declared ticket outputs into quarantine and persist
+ * {@link WaveFailureRecord} metadata beside them.
+ *
+ * @param {{
+ *   root: string,
+ *   runId: string,
+ *   wave: number,
+ *   ticketId: string,
+ *   jobId: string,
+ *   outputPaths?: string[],
+ *   reason?: string,
+ *   passingTicketIds?: string[],
+ *   failedAt?: string,
+ * }} args
+ * @returns {Promise<WaveFailureRecord>}
+ */
+export async function moveFailedTicketOutputsToQuarantine(args) {
+  const {
+    root,
+    runId,
+    wave,
+    ticketId,
+    jobId,
+    outputPaths = [],
+    reason,
+    passingTicketIds = [],
+    failedAt,
+  } = args ?? {};
+  if (!root || typeof root !== 'string') {
+    throw Object.assign(new Error('wave-quarantine-missing-root'), { code: 'wave-quarantine-missing-root' });
+  }
+  const outputs = [];
+  const seen = new Set();
+  for (const raw of outputPaths) {
+    const source = normalizeProjectRel(raw);
+    if (!source || seen.has(source)) continue;
+    seen.add(source);
+    if (isWaveQuarantinePath(source)) continue;
+    assertSafeProjectRel(source, 'output');
+    const entry = waveQuarantineOutputEntry({ runId, ticketId, sourcePath: source });
+    const fromAbs = projectAbsPath(root, source);
+    const stat = await fs.stat(fromAbs).catch(() => null);
+    if (!stat?.isFile()) continue;
+    await moveProjectFileIntoQuarantine(root, source, entry.path);
+    outputs.push(entry);
+  }
+  const record = buildWaveFailureRecord({
+    runId,
+    wave,
+    ticketId,
+    jobId,
+    failedAt,
+    reason,
+    outputs,
+    passingTicketIds,
+  });
+  await atomicJsonWrite(projectAbsPath(root, waveFailureRecordRel({ runId, ticketId })), record);
+  return record;
+}
+
+/**
+ * @param {{ root: string, runId: string, ticketId: string }} ids
+ * @returns {Promise<WaveFailureRecord>}
+ */
+export async function readWaveFailureRecordFromProject(ids) {
+  const { root, runId, ticketId } = ids ?? {};
+  const rel = waveFailureRecordRel({ runId, ticketId });
+  const raw = JSON.parse(await fs.readFile(projectAbsPath(root, rel), 'utf8'));
+  return parseWaveFailureRecord(raw);
+}
+
+/**
+ * Load quarantine metadata and return project-relative paths for a ticket retry (read-only context).
+ *
+ * @param {{ root: string, runId: string, ticketId: string }} ids
+ * @returns {Promise<string[]>}
+ */
+export async function quarantineReadOnlyContextForRetry(ids) {
+  const record = await readWaveFailureRecordFromProject(ids);
+  return quarantineReadOnlyContext(record);
+}
+
+/**
+ * Attach quarantined files and wave-failure metadata to a retry job manifest as read-only context.
+ *
+ * @param {object} job
+ * @param {{ root: string, runId: string, ticketId: string }} ids
+ * @returns {Promise<object>}
+ */
+export async function attachQuarantineReadOnlyContextToRetryJob(job, ids) {
+  const readOnly = await quarantineReadOnlyContextForRetry(ids);
+  const context = [...(Array.isArray(job?.context) ? job.context : [])];
+  for (const file of readOnly) {
+    if (!context.includes(file)) context.push(file);
+  }
+  return { ...job, context };
+}
+
+/**
+ * Same as {@link attachQuarantineReadOnlyContextToRetryJob} when the failure record is already loaded.
+ *
+ * @param {object} job
+ * @param {WaveFailureRecord} record
+ * @returns {object}
+ */
+export function attachQuarantineReadOnlyContextFromRecord(job, record) {
+  const readOnly = quarantineReadOnlyContext(record);
+  const context = [...(Array.isArray(job?.context) ? job.context : [])];
+  for (const file of readOnly) {
+    if (!context.includes(file)) context.push(file);
+  }
+  return { ...job, context };
 }
 
 /**

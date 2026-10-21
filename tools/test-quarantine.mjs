@@ -134,12 +134,112 @@ export function finalizeRepeatAttempts(check, attempts, options = {}) {
   }
 
   const last = list[list.length - 1];
+  const gate = blockSilentRetryToGreen({ attempts: list, result: last, quarantined: false });
+  if (!gate.allowRetry) {
+    const result = flakeQuarantineGuard(check, last, { ...options, attempts: list, runs: list.length });
+    return {
+      result,
+      runs: list.length,
+      quarantined: true,
+      retryBlocked: gate.reason,
+    };
+  }
   const result = flakeQuarantineGuard(check, last, { ...options, attempts: list, runs: list.length });
   return {
     result,
     runs: list.length,
     ...(result.quarantined ? { quarantined: true } : {}),
   };
+}
+
+const ERRORED_CHECK_STATUSES = new Set(['spawn-error', 'unrunnable', 'cannot-run', 'check-env-missing']);
+
+/**
+ * Integrate check runner hook (T-0080 wires `runChecks` here): finalize a repeat series, apply
+ * quarantine reporting, and refuse silent retry-to-green on errored-check respawn.
+ *
+ * @param {object} check manifest check `{ name, ... }`
+ * @param {{
+ *   attempts?: CheckAttempt[],
+ *   result?: object,
+ *   failedFile?: string,
+ *   flakeOnBase?: object,
+ *   erroredRetryResult?: object|null,
+ * }} bundle
+ */
+export function integrateCheckRunner(check, bundle = {}) {
+  const list = Array.isArray(bundle.attempts) ? bundle.attempts.slice() : [];
+  const raw = bundle.result && typeof bundle.result === 'object' ? bundle.result : { status: FAILED, tail: '' };
+  const options = {
+    failedFile: typeof bundle.failedFile === 'string' ? bundle.failedFile : undefined,
+    flakeOnBase: bundle.flakeOnBase,
+  };
+
+  const attemptSeries = list.length ? list : [raw];
+  let { result, runs, quarantined, unusedAttempts, retryBlocked } = list.length
+    ? finalizeRepeatAttempts(check, list, options)
+    : {
+      result: flakeQuarantineGuard(check, raw, { ...options, attempts: attemptSeries, runs: 1 }),
+      runs: 1,
+      quarantined: Boolean(raw.quarantined),
+    };
+
+  const erroredRetry = bundle.erroredRetryResult && typeof bundle.erroredRetryResult === 'object'
+    ? bundle.erroredRetryResult
+    : null;
+  if (erroredRetry && ERRORED_CHECK_STATUSES.has(raw.status)) {
+    const beforeRetry = blockSilentRetryToGreen({ attempts: attemptSeries, result, quarantined });
+    if (!beforeRetry.allowRetry) {
+      result = flakeQuarantineGuard(check, result, { ...options, attempts: attemptSeries, runs });
+      quarantined = true;
+      retryBlocked = beforeRetry.reason;
+    } else {
+      const extended = [...attemptSeries, erroredRetry];
+      const after = finalizeRepeatAttempts(check, extended, options);
+      result = after.result;
+      runs = after.runs;
+      quarantined = after.quarantined;
+      unusedAttempts = after.unusedAttempts;
+      retryBlocked = after.retryBlocked;
+      const afterGate = blockSilentRetryToGreen({ attempts: extended, result, quarantined });
+      if (!afterGate.allowRetry) {
+        result = flakeQuarantineGuard(check, result, { ...options, attempts: extended, runs });
+        quarantined = true;
+        retryBlocked = afterGate.reason;
+      }
+    }
+  } else {
+    const gate = blockSilentRetryToGreen({ attempts: attemptSeries, result, quarantined });
+    if (!gate.allowRetry) {
+      result = flakeQuarantineGuard(check, result, { ...options, attempts: attemptSeries, runs });
+      quarantined = true;
+      retryBlocked = gate.reason;
+    }
+  }
+
+  const policy = blockSilentRetryToGreen({ attempts: attemptSeries, result, quarantined });
+  return {
+    result,
+    runs,
+    quarantined: Boolean(quarantined || result.quarantined),
+    allowRetry: policy.allowRetry,
+    retryBlockReason: policy.reason ?? retryBlocked ?? null,
+    ...(unusedAttempts ? { unusedAttempts } : {}),
+  };
+}
+
+/** Persist a quarantined outcome from {@link integrateCheckRunner} when `root` is known. */
+export async function integrateCheckRunnerRecord(root, check, outcome, { runId, fsImpl = fs } = {}) {
+  const result = outcome?.result;
+  if (!result?.quarantined) return null;
+  const testFile = result.quarantinedFile ?? outcome?.failedFile;
+  if (!testFile || typeof testFile !== 'string') return null;
+  return recordQuarantinedFlakyCheck(root, {
+    checkName: check?.name ?? 'check',
+    testFile,
+    reason: result.quarantineReason ?? 'flaky',
+    runId,
+  }, fsImpl);
 }
 
 export async function loadTestQuarantine(root, fsImpl = fs) {

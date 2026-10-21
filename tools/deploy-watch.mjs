@@ -3,19 +3,21 @@
 // window that checks deployment status, production health, and error logs; on failure, offer rollback.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { appendEvent, safeWritableDir } from './journal.mjs';
 import { previewBase, realGet, validateHandoffConfig } from './handoff-docs.mjs';
 import { pullErrors, validateErrorsConfig } from './errors.mjs';
 
 const execFileP = promisify(execFile);
+const deployWatchScript = fileURLToPath(import.meta.url);
 
 export const WATCH_WINDOW_MS = 15 * 60 * 1000;
 export const POLL_INTERVAL_MS = 60 * 1000;
 export const DEPLOY_WATCH_STATE = '.swarm/deploy-watch/state.json';
-export const USAGE = 'usage: deploy-watch start --pr N --repo OWNER/NAME --sha COMMIT [--run] | status | run';
+export const USAGE =
+  'usage: deploy-watch start --pr N --repo OWNER/NAME --sha COMMIT [--run] | status | run | merge PR [--repo OWNER/NAME]';
 
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const SHA_RE = /^[0-9a-f]{7,40}$/i;
@@ -104,6 +106,100 @@ export function rollbackOffer(handoffConfig, reason) {
     ? `Deploy watch failed (${reason}). Roll back from the project folder: ${argv.join(' ')}`
     : `Deploy watch failed (${reason}). Set profile.handoff.rollback with the command that rolls production back.`;
   return { offered, argv: offered ? [...argv] : null, reason, guidance };
+}
+
+export async function readProjectProfile(root, deps = {}) {
+  if (deps.profile !== undefined && deps.profile !== null) return deps.profile;
+  try {
+    const { readProfile } = await import('./scope-commands.mjs');
+    return await readProfile(root);
+  } catch {
+    return null;
+  }
+}
+
+export function profileWatchConfigs(profile) {
+  const handoff = profile?.handoff ? validateHandoffConfig(profile.handoff).config : null;
+  const errorsConfig = profile?.errors ? validateErrorsConfig(profile.errors).config : null;
+  return { handoff, errorsConfig };
+}
+
+export function mergeRefsFromShipOrMergeResult(result) {
+  if (!result || typeof result !== 'object') return null;
+  const prRaw = result.pr && typeof result.pr === 'object' ? result.pr.number : result.pr;
+  const pr = Number(prRaw);
+  const repo = typeof result.repo === 'string' ? result.repo : null;
+  const sha = String(result.mergeSha ?? result.sha ?? '');
+  if (!Number.isFinite(pr) || pr < 1 || !repo || !SHA_RE.test(sha)) return null;
+  return { pr, repo, sha };
+}
+
+/** Spawn a detached `deploy-watch run` to poll through the 15-minute window. */
+export function spawnDetachedDeployWatchRun(root) {
+  const child = spawn(process.execPath, [deployWatchScript, 'run'], {
+    cwd: root,
+    detached: true,
+    stdio: 'ignore',
+  });
+  child.unref();
+  return { pid: child.pid ?? null };
+}
+
+/**
+ * After `swarm merge` or a merged `ship` result: start the watch (when handoff.deploy is set) and
+ * spawn the polling window in the background unless `runWindow` is true (run inline in-process).
+ */
+export async function kickoffDeployWatchAfterMergeShip(root, result, deps = {}) {
+  if (!result || result.status !== 'merged') return { status: 'skipped', reason: 'not-merged' };
+  const refs = mergeRefsFromShipOrMergeResult(result);
+  if (!refs) return { status: 'refused', reason: 'bad-merge-refs' };
+  const existing = await readDeployWatchState(root);
+  if (
+    isObj(existing)
+    && existing.merge?.sha === refs.sha
+    && (existing.status === 'active' || existing.status === 'passed' || existing.status === 'failed')
+  ) {
+    return { status: 'already-watching', state: existing };
+  }
+  const profile = await readProjectProfile(root, deps);
+  const { handoff, errorsConfig } = profileWatchConfigs(profile);
+  const runInline = deps.runWindow === true;
+  const started = await startDeployWatch(
+    root,
+    {
+      pr: refs.pr,
+      repo: refs.repo,
+      sha: refs.sha,
+      handoffConfig: handoff,
+      errorsConfig,
+      runWindow: runInline,
+    },
+    deps,
+  );
+  if (started.status === 'watching' && !runInline && deps.spawnRunner !== false) {
+    started.runner = spawnDetachedDeployWatchRun(root);
+  }
+  return started;
+}
+
+/** Merge guard with post-merge deploy watch (used by swarm merge / ship once wired). */
+export async function runMerge(root, args, deps = {}) {
+  const { runMerge: merge } = await import('./merge-guard.mjs');
+  const res = await merge(root, args, deps);
+  if (res.status === 'merged') {
+    res.deployWatch = await kickoffDeployWatchAfterMergeShip(root, res, deps);
+  }
+  return res;
+}
+
+/** Ship/merge history hook: record history then start deploy watch on merged results. */
+export async function recordShipHistoryWithDeployWatch(root, result, opts = {}) {
+  const { recordShipHistory } = await import('./history-hooks.mjs');
+  await recordShipHistory(root, result, opts);
+  if (result?.status === 'merged') {
+    return kickoffDeployWatchAfterMergeShip(root, result, opts);
+  }
+  return { status: 'skipped', reason: 'not-merged' };
 }
 
 async function checkGithubDeployStatus(exec, repo, sha) {
@@ -340,6 +436,13 @@ export async function runDeployWatchCli(root, argv, deps = {}) {
       },
       deps,
     );
+  }
+  if (command === 'merge') {
+    const mergePos = positional.slice(1);
+    const mergeArgs = [...mergePos];
+    if (opts.repo) mergeArgs.push('--repo', opts.repo);
+    const profile = deps.profile ?? (await readProjectProfile(root, deps));
+    return runMerge(root, mergeArgs, { ...deps, profile });
   }
   return { status: 'refused', reason: USAGE };
 }

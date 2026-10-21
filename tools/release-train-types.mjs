@@ -325,6 +325,142 @@ export function parseReleaseTrainStore(text) {
 }
 
 /**
+ * @param {ReleaseTrainStore} store
+ * @returns {string}
+ */
+export function formatReleaseTrainStore(store) {
+  const validated = validateReleaseTrainStore(store);
+  return `${JSON.stringify(validated, null, 2)}\n`;
+}
+
+/**
+ * @param {ReleaseTrainStore} store
+ * @param {string} sha
+ */
+function assertRunnerShaNotOnTrain(store, sha) {
+  if (store.pendingRunnerMerges.some((merge) => merge.sha === sha)) {
+    trainError('runner-merge', `sha ${sha} is already pending on the train`);
+  }
+  for (const release of store.releases) {
+    if (release.sha === sha || release.runnerMergeShas.includes(sha)) {
+      trainError('runner-merge', `sha ${sha} is already part of a release bump`);
+    }
+  }
+}
+
+/**
+ * Runner PR merged on the train: accumulate without bumping `package.json` / `lastReleasedVersion`.
+ * @param {ReleaseTrainStore} store
+ * @param {unknown} record
+ * @returns {ReleaseTrainStore}
+ */
+export function recordRunnerMerge(store, record) {
+  const validated = validateReleaseTrainStore(store);
+  const merge = validateRunnerMergeRecord(record);
+  assertRunnerShaNotOnTrain(validated, merge.sha);
+  return {
+    ...validated,
+    pendingRunnerMerges: [...validated.pendingRunnerMerges, merge],
+  };
+}
+
+/**
+ * @param {ReleaseTrainStore} store
+ * @param {readonly string[]} runnerMergeShas
+ */
+function assertRunnerMergesPending(store, runnerMergeShas) {
+  const pending = new Map(store.pendingRunnerMerges.map((merge) => [merge.sha, merge]));
+  const seen = new Set();
+  for (const sha of runnerMergeShas) {
+    if (seen.has(sha)) trainError('release-bump', `duplicate runner merge sha ${sha}`);
+    seen.add(sha);
+    if (!pending.has(sha)) {
+      trainError('release-bump', `runner merge ${sha} is not pending on the train`);
+    }
+  }
+}
+
+/**
+ * @param {ReleaseTrainStore} store
+ * @param {{
+ *   version: unknown,
+ *   trigger: unknown,
+ *   sha: unknown,
+ *   mergedAt: unknown,
+ *   runnerMergeShas?: unknown,
+ *   releaseTitle?: unknown,
+ *   tag?: unknown,
+ * }} fields
+ * @returns {ReleaseBumpRecord}
+ */
+export function buildReleaseBumpFromPending(store, fields) {
+  const validated = validateReleaseTrainStore(store);
+  const runnerMergeShas = Array.isArray(fields.runnerMergeShas)
+    ? fields.runnerMergeShas
+    : validated.pendingRunnerMerges.map((merge) => merge.sha);
+  return validateReleaseBumpRecord({
+    kind: RELEASE_BUMP_KIND,
+    version: fields.version,
+    trigger: fields.trigger,
+    sha: fields.sha,
+    mergedAt: fields.mergedAt,
+    runnerMergeShas,
+    ...(fields.releaseTitle !== undefined ? { releaseTitle: fields.releaseTitle } : {}),
+    ...(fields.tag !== undefined ? { tag: fields.tag } : {}),
+  });
+}
+
+/**
+ * @param {{
+ *   packageVersion?: unknown,
+ *   titleVersion?: unknown,
+ *   changelogHeading?: unknown,
+ * }} fields
+ */
+export function assertReleaseBumpCoherence(fields) {
+  const result = checkReleaseBumpCoherence(fields);
+  if (!result.ok) {
+    trainError('release-bump', 'package version, release title, and changelog heading must agree', result.code ?? 'release-version-mismatch');
+  }
+  return result;
+}
+
+/**
+ * One release bump batches pending runner merges (scheduled or on-demand) and advances the train version.
+ * @param {ReleaseTrainStore} store
+ * @param {unknown} record
+ * @param {{
+ *   packageVersion?: unknown,
+ *   titleVersion?: unknown,
+ *   changelogHeading?: unknown,
+ * }} [coherence]
+ * @returns {ReleaseTrainStore}
+ */
+export function recordReleaseBump(store, record, coherence) {
+  const validated = validateReleaseTrainStore(store);
+  const bump = validateReleaseBumpRecord(record);
+  if (compareReleaseSemver(bump.version, validated.lastReleasedVersion) <= 0) {
+    trainError('release-bump', 'version must be greater than lastReleasedVersion');
+  }
+  assertRunnerMergesPending(validated, bump.runnerMergeShas);
+  if (coherence !== undefined) {
+    assertReleaseBumpCoherence({
+      packageVersion: coherence.packageVersion ?? bump.version,
+      titleVersion: coherence.titleVersion ?? bump.releaseTitle,
+      changelogHeading: coherence.changelogHeading,
+    });
+  }
+  const batched = new Set(bump.runnerMergeShas);
+  const pendingRunnerMerges = validated.pendingRunnerMerges.filter((merge) => !batched.has(merge.sha));
+  return {
+    ...validated,
+    lastReleasedVersion: bump.version,
+    pendingRunnerMerges,
+    releases: [...validated.releases, bump],
+  };
+}
+
+/**
  * @param {{
  *   packageVersion?: unknown,
  *   titleVersion?: unknown,

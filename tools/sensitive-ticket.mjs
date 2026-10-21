@@ -5,8 +5,10 @@ import { isSensitiveText } from './scope.mjs';
 export const SENSITIVE_TICKET_TOPICS = Object.freeze(['auth', 'database', 'payments', 'secrets', 'public-routes']);
 
 const TOPIC_PATTERNS = Object.freeze({
-  auth: /\b(?:auth(?:entication|orization)?|sign[- ]?in|signed[- ]?in|log[- ]?in|log[- ]?out|oauth|openid|session|jwt|password|passkey|sso|clerk|better auth)\b/iu,
-  database: /\b(?:database|postgres(?:ql)?|sql|migration|supabase|pgtap|neon|drizzle|prisma|sqlite|mysql|lakebase)\b/iu,
+  auth:
+    /\b(?:auth(?:entication|orization|z)?|sign[- ]?in|signed[- ]?in|log[- ]?in|log[- ]?out|oauth|openid|session|jwt|password|passkey|sso|clerk|better auth|tokens?|(?:refresh|access)\s+tokens?|cookies?|csrf|permissions?|roles?)\b/iu,
+  database:
+    /\b(?:database|postgres(?:ql)?|sql|migration|supabase|pgtap|neon|drizzle|prisma|sqlite|mysql|lakebase|rls|row[- ]level security|(?:rls|row[- ]level security)\s+polic(?:y|ies))\b/iu,
   payments: /\b(?:payments?|stripe|billing|checkout|invoice|paywall|merchant|card(?:holder)?)\b/iu,
   secrets: /\b(?:secrets?|credentials?|api[- ]?keys?|private[- ]?keys?|keychain|\.env\b)\b/iu,
   'public-routes': /\b(?:public routes?|unauthenticated routes?|anonymous (?:access|route)|public api|public endpoint)\b/iu,

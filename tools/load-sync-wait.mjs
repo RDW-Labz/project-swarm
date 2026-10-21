@@ -4,7 +4,18 @@
 // and print only when a waiter fails or times out.
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+
+function assertStableMarkerDir(markerDir) {
+  const resolved = path.resolve(markerDir);
+  const tmpRoot = path.resolve(os.tmpdir());
+  if (resolved === tmpRoot || resolved.startsWith(`${tmpRoot}${path.sep}`)) {
+    throw new Error(
+      `markerDir must not live under the system temp directory (${tmpRoot}); use a stable path: ${resolved}`,
+    );
+  }
+}
 
 /** Runs under artificial load that must all pass (T-0076 harness). */
 export const LOAD_TIMING_RUNS = 5;
@@ -209,6 +220,7 @@ export async function createMarkerBarrier(markerDir, expected, { trace, signal }
   if (!Number.isSafeInteger(expected) || expected < 1) {
     throw new TypeError('expected must be a positive integer');
   }
+  assertStableMarkerDir(markerDir);
   await fsp.mkdir(markerDir, { recursive: true });
   const sync = createLoadSync({ trace });
   let closed = false;
@@ -308,11 +320,19 @@ export function createManualGate({ trace, signal } = {}) {
       gate.resolve(payload);
     },
     wait(options = {}) {
+      const { signal: waitSignal } = options;
+      if (waitSignal?.aborted) return Promise.reject(abortError(waitSignal));
       if (open) {
         trace?.record('gate.wait:immediate');
         return Promise.resolve();
       }
-      return gate.promise.then(() => {});
+      if (!waitSignal) return gate.promise.then(() => {});
+      return Promise.race([
+        gate.promise.then(() => {}),
+        new Promise((_resolve, reject) => {
+          waitSignal.addEventListener('abort', () => reject(abortError(waitSignal)), { once: true });
+        }),
+      ]);
     },
   };
 }

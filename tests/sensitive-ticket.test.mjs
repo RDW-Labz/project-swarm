@@ -41,6 +41,12 @@ test('AC1: tickets are tagged sensitive only for auth, database, payments, secre
   assert.equal(isSensitiveTicketText(null, 'supabase migration for users'), true);
   assert.equal(isSensitiveTicketText(null, 'Load API keys from keychain'), true);
   assert.equal(isSensitiveTicketText(null, 'Expose unauthenticated route for health'), true);
+  assert.equal(isSensitiveTicketText(null, 'Rotate refresh tokens on sign-out'), true);
+  assert.equal(isSensitiveTicketText(null, 'Set HttpOnly cookie flags'), true);
+  assert.equal(isSensitiveTicketText(null, 'Validate CSRF on POST'), true);
+  assert.equal(isSensitiveTicketText(null, 'Assign admin role to service account'), true);
+  assert.equal(isSensitiveTicketText(null, 'Add RLS policy on orders table'), true);
+  assert.equal(isSensitiveTicketText(null, 'Enable row-level security for tenants'), true);
   assert.equal(isSensitiveTicketText(null, 'Format CSV export columns'), false);
   assert.equal(isSensitiveTicketText(null, 'customer data retention policy'), false);
 });
