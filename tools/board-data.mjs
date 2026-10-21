@@ -12,8 +12,13 @@ import { sanitizeWorkerText } from './worker-text.mjs';
 import os from 'node:os';
 import { projectOrchestrator } from './board-orchestrator.mjs';
 import { combinedUsage } from './orchestrator-usage.mjs';
-import { buildProgress, progressSummary } from './build-progress.mjs';
+import { buildProgress, ledgerRoot, progressSummary } from './build-progress.mjs';
+import { effectiveStage, stageDisplay } from './build-progress.mjs';
+import { parseScope } from './scope.mjs';
 import { ROUTE_ORDER } from './router.mjs';
+import { splitQuality } from './split-quality.mjs';
+import { readScorecards, scorecardHistory } from './benchmark-scorecard.mjs';
+import { handledForProject } from './handled.mjs';
 
 const DAY = 86400000;
 const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   // subscription lanes: not billed per use
@@ -262,39 +267,65 @@ export function agentsOf(runs, liveIds, now = Date.now()) {
   return { total: jobs.running, byLane: plain(byLane), jobs, list: list.slice(0, 200) };
 }
 
-export function ticketsOf(ledger) {
-  const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object');
+async function scopeFor(root, ledger) {
+  let relative = ledger?.scope?.file ? String(ledger.scope.file) : null;
+  if (!relative) {
+    const roadmap = path.join(root, 'docs', 'scope', 'roadmap.md');
+    try { await fs.stat(roadmap); relative = path.join('docs', 'scope', 'roadmap.md'); } catch { relative = path.join('docs', 'scope', 'scope.md'); }
+  }
+  const file = path.resolve(root, relative);
+  const base = path.resolve(root);
+  if (file !== base && !file.startsWith(`${base}${path.sep}`)) return null;
+  try { return parseScope(await fs.readFile(file, 'utf8')); } catch { return null; }
+}
+
+export function ticketsOf(ledger, scope = null) {
+  const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object' && t.type !== 'human');
   const byStatus = dict();
   for (const t of tickets) byStatus[t.status] = (byStatus[t.status] ?? 0) + 1;
   const open = tickets.filter(t => ['todo', 'ready', 'running', 'review', 'blocked'].includes(t.status));
-  const stages = open.map(t => stageNumber(t.stage)).filter(n => n > 0);
-  const stage = !tickets.length ? null : stages.length ? `S${Math.min(...stages)}` : (tickets.some(t => stageNumber(t.stage) > 0) ? 'done' : null);
-  return { total: tickets.filter(t => !['cancelled', 'proposed'].includes(t.status)).length, open: open.length, blocked: byStatus.blocked ?? 0, proposed: byStatus.proposed ?? 0, byStatus: plain(byStatus), stage };
+  const stageIds = open.map(ticket => effectiveStage(scope, ticket)).filter(stage => stage && stage !== 'none');
+  const stageId = !tickets.length ? 'none' : stageIds.length ? stageIds.slice().sort((a, b) => stageNumber(a) - stageNumber(b) || a.localeCompare(b))[0] : (tickets.some(t => stageNumber(effectiveStage(scope, t)) > 0) ? 'done' : 'none');
+  return { total: tickets.filter(t => !['cancelled', 'proposed'].includes(t.status)).length, open: open.length, blocked: byStatus.blocked ?? 0, proposed: byStatus.proposed ?? 0, byStatus: plain(byStatus), stage: stageId === 'done' ? 'done' : stageDisplay(scope, stageId), stageId };
 }
 
 // One project's lane on the board. `liveRuns` are the alive runs of THIS project only.
-export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null } = {}) {
+export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
   const runs = await readRunStates(project.root);
   const liveIds = new Set(liveRuns.map(r => r.runId));
-  const ledger = await readLedger(project.root).catch(() => null);
+  let selected;
+  try { selected = await ledgerRoot(project.root); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
+  const ledger = selected.ledger;
+  const scope = await scopeFor(selected.root, ledger);
   const spend = await summary(project.root).catch(error => ({ spendUsd: null, capUsd: null, capError: String(error.message).slice(0, 120) }));
-  const overviewSpend = { usd: spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis: spend.capBasis ?? 'billed+list' };
+  const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
+  const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
+  const overviewSpend = { usd: capUsedUsd ?? spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
   const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null }).then(progressSummary, () => null);
   const cost = costOf(runs, now);
   const agents = agentsOf(runs, liveIds, now);
   const lastRun = runs.length ? runs[runs.length - 1].state : null;
   const lastActivityMs = Math.max(0, ...runs.map(r => r.mtimeMs), Date.parse(ledger?.updatedAt ?? '') || 0);
-  const tickets = ticketsOf(ledger);
+  const tickets = ticketsOf(ledger, scope);
   const readyTickets = tickets.byStatus.ready ?? 0;
   const idle = liveRuns.length === 0;
+  const split = await splitQuality({ root: project.root, now, slots }).then(result => {
+    const metrics = Array.isArray(result?.metrics) ? result.metrics : [];
+    const red = metrics.filter(metric => metric?.grade === 'red');
+    const amber = metrics.find(metric => metric?.grade === 'amber');
+    return { grade: result?.grade ?? 'unknown', reds: red.length, worst: red[0]?.label ?? amber?.label ?? null };
+  }).catch(() => null);
+  const handled = await handledForProject(project.root, { now }).catch(() => null);
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
     stage: tickets.stage, tickets, readyTickets, idleWithReady: idle && readyTickets > 0,
     live: liveRuns.map(r => { const hit = runs.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
     agents, cost,
+    handled,
     orchestrator: (() => { try { return projectOrchestrator(project, { runs, now }); } catch { return { sessions: [], handBuilt: { files: 0, edits: 0, list: [] }, swarmBuilt: { files: 0 }, swarmPct: null, handPct: null, cost: { todayListUsd: 0, allListUsd: 0, todayTokens: 0, allTokens: 0 } }; } })(),
-    spend: { usd: cost.allUsd, familyUsd: spend.spendUsd ?? null, sharedTrees: spend.sharedTrees ?? 1, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached), capSource: spend.capSource ?? null, capInherited: Boolean(spend.capInherited), inheritedFrom: spend.inheritedFrom ?? null, why: spend.why ?? null, billedUsd: cost.paidUsd, listUsd: cost.flatRateListUsd, capBasis: spend.capBasis ?? 'billed+list' },
+    spend: { usd: cost.allUsd, familyUsd: spend.spendUsd ?? null, familyBilledUsd: spend.billedUsd ?? null, capUsedUsd: capUsedUsd ?? null, sharedTrees: spend.sharedTrees ?? 1, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached), capSource: spend.capSource ?? null, capInherited: Boolean(spend.capInherited), inheritedFrom: spend.inheritedFrom ?? null, why: spend.why ?? null, billedUsd: cost.paidUsd, listUsd: cost.flatRateListUsd, capBasis },
     progress,
+    split,
     recentJobCounts: runs.slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0)),
     lastRunAt: lastRun?.startedAt ?? null,
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
@@ -320,7 +351,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   for (const project of projects) {
     const projectRoot = await realRoot(project.root);
     const mine = live.filter(r => r.root === projectRoot);
-    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus }));
+    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null }));
   }
   const registered = new Map();
   for (const project of projects) registered.set(await realRoot(project.root), project);
@@ -403,26 +434,37 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
 }
 
 // One project's page: its tickets by status, its run history, its spend by lane and its lessons. Reads only under project.root.
-export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), summary = projectSummary, historyFile = undefined, deployStatus = null } = {}) {
+export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
   const runs = await readRunStates(project.root, { limit: 200 });
-  const ledger = await readLedger(project.root).catch(() => null);
-  const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 1000).map(t => ({ id: txt(t.id, 20), title: txt(t.title, 140), status: txt(t.status, 20), stage: txt(t.stage, 10), risk: txt(t.risk, 10) }));
+  let selected;
+  try { selected = await ledgerRoot(project.root); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
+  const ledger = selected.ledger;
+  const scope = await scopeFor(selected.root, ledger);
+  const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 1000).map(t => { const stageId = effectiveStage(scope, t); return { id: txt(t.id, 20), title: txt(t.title, 140), status: txt(t.status, 20), stage: stageDisplay(scope, stageId), stageId, risk: txt(t.risk, 10) }; });
   const byLane = dict();
   for (const { state } of runs) for (const job of state.jobs ?? []) { if (!job || typeof job !== 'object') continue; const usd = num(jobSpend(job).usd); if (!usd) continue; const label = laneLabel(job.agent, job.model); byLane[label] = Math.round(((byLane[label] ?? 0) + usd) * 1e6) / 1e6; }
-  const lessons = await listLessons(project.root).then(r => r.lessons.slice(0, 200).map(l => ({ id: txt(l.id, 40), what: txt(l.what ?? l.title ?? l.rule, 200), stage: txt(l.stage, 20), status: txt(l.guard?.status ?? l.status, 20) })), () => []);
+  const lessons = await listLessons(project.root).then(r => r.lessons.slice(0, 200).map(l => ({ id: txt(l.id, 40), what: txt(l.what ?? l.title ?? l.rule, 200), stage: stageDisplay(scope, l.stage), stageId: txt(l.stage, 20) || 'none', status: txt(l.guard?.status ?? l.status, 20) })), () => []);
   const detailCost = costOf(runs, now);
   const spend = (await summary(project.root).catch(() => ({}))) ?? {};
-  const detailSpend = { usd: spend.spendUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis: spend.capBasis ?? 'billed+list' };
+  const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
+  const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
+  const detailSpend = { usd: capUsedUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
   const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null }).catch(() => null);
+  const split = await splitQuality({ root: project.root, now, slots }).catch(() => null);
+  const benchmarks = await readScorecards(project.root).then(input => scorecardHistory(input)).catch(() => null);
+  const handled = await handledForProject(project.root, { now, limit: 20 }).catch(() => null);
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
-    tickets, ticketCounts: ticketsOf(ledger),
+    tickets, ticketCounts: ticketsOf(ledger, scope),
     runs: runs.slice().reverse().map(({ id, state }) => {
       const jobs = state.jobs ?? [];
       return { runId: id, status: txt(state.status, 30), live: liveRunIds.has(id), startedAt: state.startedAt ?? null, finishedAt: state.finishedAt ?? null, jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length, failed: jobs.filter(j => ['failed', 'timeout'].includes(j.status)).length, costUsd: Math.round(runTotals(state).usd * 1e6) / 1e6 };
     }),
-    spend: { ...detailCost, byLane: plain(byLane), billedUsd: detailCost.paidUsd, listUsd: detailCost.flatRateListUsd, capBasis: spend.capBasis ?? 'billed+list' },
+    spend: { ...detailCost, byLane: plain(byLane), billedUsd: detailCost.paidUsd, listUsd: detailCost.flatRateListUsd, capBasis },
     progress,
+    splitQuality: split,
+    benchmarks,
+    handled,
     lessons,
   };
 }
