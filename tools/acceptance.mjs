@@ -2,8 +2,11 @@
 // Acceptance enforcement (docs/plans/acceptance-design.md): which acceptance lines a passing test covers, which need the review, and whether a ticket is met.
 import { verdictLine } from './review-text.mjs';
 import fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { expandTicketRefs } from './ticket-refs.mjs';
+import { readLedger, resolveTargetWorktree } from './tickets.mjs';
+import { worktreeFamily } from './project-spend.mjs';
 
 const NL = String.fromCharCode(10);
 
@@ -214,14 +217,19 @@ export function evaluate({ ticket, cov, record, filesHash, testsPassed, accepted
   return { state, lines, missing, failing };
 }
 
-export function reviewManifest(runId, items, { model = 'sonnet', agent = 'claude', tickets = [], exists = null } = {}) {
+export function reviewManifest(runId, items, { model = 'sonnet', agent = 'claude', tickets = [], exists = null, root = null } = {}) {
   const list = arr(items);
   const context = [];
+  const canSee = typeof exists === 'function'
+    ? exists
+    : root
+      ? candidate => existsSync(path.resolve(root, candidate))
+      : null;
   for (const item of list) {
     const ticket = item.ticket ?? {};
     const paths = expandTicketRefs([...arr(ticket.files), ...arr(ticket.tests), ...arr(ticket.context)], tickets);
     for (const p of paths) {
-      if (typeof p === 'string' && !/(^|\/)\.env(\.|$)/.test(p) && !/(^|\/)\.project-swarm\.json$/.test(p) && !p.includes('..') && !context.includes(p) && (typeof exists !== 'function' || exists(p))) {
+      if (typeof p === 'string' && !/(^|\/)\.env(\.|$)/.test(p) && !/(^|\/)\.project-swarm\.json$/.test(p) && !p.includes('..') && !context.includes(p) && (!canSee || canSee(p))) {
         context.push(p);
       }
     }
@@ -303,16 +311,64 @@ export function parseAcceptanceVerdicts(text) {
 // The stored verdicts of acceptance reviews, per ticket: {filesHash, lines:[{n, h, verdict, evidence}], run, at}. A record counts only for the code it was made on.
 const RECORDS = '.swarm/acceptance-reviews/records.json';
 
-export async function readAcceptanceRecords(root) {
+const statePath = (root, runId) => path.join(root, '.swarm', 'runs', runId, 'state.json');
+
+async function readJson(file) {
+  try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch { return null; }
+}
+
+const jobBuiltTicket = (state, ticketId) => Array.isArray(state?.jobs) && state.jobs.find(job => job?.id === ticketId || job?.ticketId === ticketId);
+
+// Acceptance state follows the code under review. A ticket pin wins; otherwise locate the
+// worktree whose run state contains the ticket (and prefer that job's workspace when recorded).
+export async function resolveAcceptanceRoot(root, ticket, { runId = ticket?.runId ?? ticket?.run } = {}) {
+  if (ticket?.targetWorktree !== undefined) return resolveTargetWorktree(root, ticket.targetWorktree);
+  const members = await worktreeFamily(root, { all: true });
+  const wantedRun = runId ? String(runId) : null;
+  for (const member of members) {
+    let runIds = wantedRun ? [wantedRun] : [];
+    if (!wantedRun) {
+      try { runIds = await fs.readdir(path.join(member, '.swarm', 'runs')); } catch { runIds = []; }
+    }
+    for (const candidateRun of runIds) {
+      const state = await readJson(statePath(member, candidateRun));
+      const job = jobBuiltTicket(state, ticket?.id);
+      if (!job) continue;
+      if (typeof job.workspace === 'string' && job.workspace) {
+        const candidate = await fs.realpath(path.isAbsolute(job.workspace) ? job.workspace : path.resolve(member, job.workspace)).catch(() => null);
+        if (candidate && members.includes(candidate)) return candidate;
+      }
+      return member;
+    }
+  }
+  return await fs.realpath(root).catch(() => path.resolve(root));
+}
+
+export async function acceptanceInputs(root, ticket, options = {}) {
+  const resolvedRoot = await resolveAcceptanceRoot(root, ticket, options);
+  return {
+    root: resolvedRoot,
+    ledger: await readLedger(resolvedRoot),
+    records: await readAcceptanceRecords(resolvedRoot, { ticket }),
+  };
+}
+
+export async function readAcceptanceRecords(root, { ticket = null, runId } = {}) {
+  if (ticket) {
+    const resolvedRoot = await resolveAcceptanceRoot(root, ticket, { runId });
+    if (resolvedRoot !== root) return readAcceptanceRecords(resolvedRoot);
+  }
   try {
     const data = JSON.parse(await fs.readFile(path.join(root, RECORDS), 'utf8'));
-    return data && typeof data === 'object' && data.tickets && typeof data.tickets === 'object' ? data : { tickets: {} };
+    const own = data && typeof data === 'object' && data.tickets && typeof data.tickets === 'object' ? data : { tickets: {} };
+    return own;
   } catch {
     return { tickets: {} };
   }
 }
 
-export async function writeAcceptanceRecords(root, data) {
-  await fs.mkdir(path.join(root, path.dirname(RECORDS)), { recursive: true });
-  await fs.writeFile(path.join(root, RECORDS), JSON.stringify(data, null, 2) + NL);
+export async function writeAcceptanceRecords(root, data, { ticket = null, runId } = {}) {
+  const resolvedRoot = ticket ? await resolveAcceptanceRoot(root, ticket, { runId }) : root;
+  await fs.mkdir(path.join(resolvedRoot, path.dirname(RECORDS)), { recursive: true });
+  await fs.writeFile(path.join(resolvedRoot, RECORDS), JSON.stringify(data, null, 2) + NL);
 }

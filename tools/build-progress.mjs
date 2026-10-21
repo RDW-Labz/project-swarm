@@ -164,9 +164,9 @@ const dateScore = value => {
   return Number.isFinite(at) ? at : Number.NEGATIVE_INFINITY;
 };
 
-export async function ledgerRoot(root, { family = worktreeFamily } = {}) {
+export async function ledgerRoot(root, { family = worktreeFamily, ownOnly = false } = {}) {
   const realRoot = await fs.realpath(root).catch(() => path.resolve(root));
-  const members = await family(root, { all: true });
+  const members = ownOnly ? [root] : await family(root, { all: true });
   const roots = [];
   for (const member of [...(Array.isArray(members) ? members : []), root]) {
     const candidateRoot = await fs.realpath(member).catch(() => path.resolve(member));
@@ -399,6 +399,29 @@ function runCost(state) {
   try { return Math.round(Number(runTotals(state).usd || 0) * 1e6) / 1e6; } catch { return 0; }
 }
 
+const IGNORED_RUN_WORDS = /\b(?:smoke|lane-test|lane-bench|probe|doctor)\b/i;
+
+function runHasIgnoredName(state, jobs) {
+  const manifestNames = [
+    state?.manifest,
+    state?.manifest?.file,
+    state?.manifest?.fileName,
+    state?.manifest?.filename,
+    state?.manifest?.name,
+    state?.manifest?.path,
+    state?.manifestFile,
+    state?.manifestFileName,
+    state?.manifestName,
+    state?.manifestPath,
+    state?.request?.manifest,
+    state?.request?.manifestFile,
+    state?.options?.manifest,
+    state?.options?.manifestFile,
+  ];
+  if (manifestNames.some(value => typeof value === 'string' && IGNORED_RUN_WORDS.test(value))) return true;
+  return jobs.some(job => typeof job?.id === 'string' && IGNORED_RUN_WORDS.test(job.id));
+}
+
 function offLedgerRuns(records, ledger, history, now, ticketIds = null) {
   const ids = ticketIds ?? new Set((ledger?.tickets ?? []).map(ticket => ticket?.id).filter(Boolean));
   const prsByRun = new Map();
@@ -416,6 +439,7 @@ function offLedgerRuns(records, ledger, history, now, ticketIds = null) {
     const started = Date.parse(record.state.startedAt ?? '');
     if (Number.isFinite(started) ? (started > now || (!live && started < now - 14 * DAY)) : !live) continue;
     const jobs = Array.isArray(record.state.jobs) ? record.state.jobs : [];
+    if (record.state.nonIntegrating === true || runHasIgnoredName(record.state, jobs)) continue;
     const stateIds = stateTicketIds(record.state);
     const stateMapped = [...stateIds].some(id => ids.has(id));
     const untrackedJobs = jobs.filter(job => ![...jobTicketIds(job)].some(id => ids.has(id)));
@@ -548,10 +572,10 @@ function headlineFor(build, human) {
   return human.total > 0 ? `${buildText} · human ${human.done}/${human.total}` : buildText;
 }
 
-export async function buildProgress({ root, projectId, now = Date.now(), historyFile, spend = null, deploy = null, prState = undefined } = {}) {
+export async function buildProgress({ root, projectId, now = Date.now(), historyFile, spend = null, deploy = null, prState = undefined, ownOnly = false } = {}) {
   const notes = [];
   try {
-    const selected = await ledgerRoot(root);
+    const selected = await ledgerRoot(root, { ownOnly });
     const sourceCandidate = selected.candidates.find(candidate => candidate.root === selected.root);
     const source = { root: selected.root, approvedAt: sourceCandidate?.approvedAt ?? null, updatedAt: sourceCandidate?.updatedAt ?? null, differs: selected.differs, candidates: selected.candidates.length };
     if (selected.differs) notes.push(`ledger read from ${path.basename(selected.root)} (newest approved of ${selected.candidates.length} checkouts)`);
@@ -561,7 +585,9 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
     const journal = await readJournalSafe(selected.root, notes);
     const history = await readHistorySafe(projectId, historyFile, notes);
     const times = await readDoneTimes(selected.root, notes);
-    const runRoots = [...new Set([root, selected.root, ...selected.candidates.map(candidate => candidate.root)])];
+    const runRoots = ownOnly
+      ? [root]
+      : [...new Set([root, selected.root, ...selected.candidates.map(candidate => candidate.root)])];
     const runRecords = await readRunRecords(runRoots);
     const allTickets = Array.isArray(ledger?.tickets) ? ledger.tickets.filter(ticket => ticket && typeof ticket === 'object') : [];
     const tickets = allTickets.filter(COUNTED);
@@ -671,7 +697,7 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
     const allLedgerTicketIds = new Set();
     for (const candidate of selected.candidates) for (const ticket of candidate.ledger?.tickets ?? []) if (ticket?.id) allLedgerTicketIds.add(ticket.id);
     const untracked = offLedgerRuns(runRecords, ledger, history, now, allLedgerTicketIds);
-    const headline = headlineFor(buildStats, humanStats);
+    const headline = ledger ? headlineFor(buildStats, humanStats) : 'no ledger';
     const result = {
       percent: { tickets: { done: buildStats.done, total: buildStats.total, pct: pct(buildStats.done, buildStats.total) }, requirements, overall: pct(buildStats.done, buildStats.total) },
       stages: stageRows(scope, tickets),

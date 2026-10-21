@@ -10,6 +10,7 @@
   function meter(pct) { var m = el('div', 'meter'); var i = el('i'); i.style.width = Math.max(0, Math.min(100, typeof pct === 'number' ? pct : 0)) + '%'; m.appendChild(i); m.setAttribute('role', 'img'); m.setAttribute('aria-label', (typeof pct === 'number' ? Math.round(pct) : 0) + ' percent'); return m; }
   function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
   function when(iso) { return iso ? String(iso).slice(0, 16).replace('T', ' ') : '-'; }
+  function runHref(runId) { return '/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(runId) + '&t=' + T; }
   $('back').href = '/?t=' + T;
   $('crumbBack').href = '/?t=' + T;
   $('crumbAll').href = '/?t=' + T;
@@ -228,12 +229,15 @@
       a.appendChild(el('span', 'num mono', usd(run.costUsd))); a.appendChild(el('span', 'mono', when(run.startedAt)));
       r.appendChild(a);
     });
-    var off = p.offLedger;
+    var off = p.offLedger || (p.progress && (p.progress.offLedger || p.progress.untracked));
     if (off && off.count) {
-      r.appendChild(el('div', 'label', 'Off-ledger work'));
+      var offTitle = el('div', 'label', 'Off-ledger work'); offTitle.id = 'untracked'; r.appendChild(offTitle);
       off.runs.forEach(function (run) {
-        var prs = run.prs && run.prs.length ? ' · ' + run.prs.join(', ') : '';
-        r.appendChild(el('div', 'board-entry', run.runId + ' · ' + run.status + ' · ' + run.done + '/' + run.jobs + ' jobs' + prs));
+        var row = el('div', 'board-entry');
+        row.appendChild(el('span', 'mono', run.runId));
+        row.appendChild(el('span', 'sub', ' · ' + when(run.startedAt) + ' · ' + run.status + ' · ' + run.jobs + ' jobs'));
+        var open = el('a', 'board-link', ' Open'); open.href = runHref(run.runId); open.title = 'Open the run inspector'; row.appendChild(open);
+        r.appendChild(row);
       });
     }
   }
