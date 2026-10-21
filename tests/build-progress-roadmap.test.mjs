@@ -93,7 +93,7 @@ test('build progress follows the newest approved roadmap ledger across linked wo
 
   const overview = await projectOverview(fixture.project, [], { now: NOW, historyFile: fixture.historyFile, summary: async () => ({}) });
   assert.deepEqual([overview.tickets.total, overview.tickets.open, overview.tickets.stage], [51, 39, 'Ticket Manager v2']);
-  assert.deepEqual(overview.progress, { overall: 23, ticketsPct: 23, current: 'Building', eta: progress.eta.days, finished: false, offLedger: 0 });
+  assert.deepEqual(overview.progress, { overall: 23, ticketsPct: 23, current: 'Building', eta: progress.eta.days, finished: false, offLedger: 0, headline: 'build 12/51 · human 0/2', untracked: { runs: 0, jobs: 0 } });
 
   const detail = await projectDetail(fixture.project, { now: NOW, historyFile: fixture.historyFile, summary: async () => ({}) });
   assert.equal(detail.ticketCounts.total, 51);

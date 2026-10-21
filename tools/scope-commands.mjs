@@ -41,13 +41,14 @@ import { promisify } from 'node:util';
 import { acceptanceLines, coverage, evaluate, reviewManifest as acceptanceManifest, parseAcceptanceVerdicts, readAcceptanceRecords, writeAcceptanceRecords } from './acceptance.mjs';
 import { securityReviewReason, securityReviewManifest, parseReviewVerdicts, filesHash, readReviewRecords, writeReviewRecords } from './security-review.mjs';
 import { validateTicketPaths, formatTicketPathRefusal } from './ticket-paths.mjs';
+import { simulateBeforeIngest } from './split-wave-sim.mjs';
 
 export const SCOPE_USAGE = [
   'Usage: swarm scope new [--type web-portal] [--out FILE] [--answers FILE]   (an interview that writes the scope: no model, no cost; --answers takes the same answers as JSON)',
   '       swarm scope template [--out FILE]',
   '       swarm scope check [FILE]',
-  '       swarm scope split [FILE] [--stage S1] | scope split --wire [--all] | scope split --ingest RUN [--merge] [--wire]',
-  '       swarm scope approve [FILE] [--yes]',
+  '       swarm scope split [FILE] [--stage S1] | scope split --wire [--all] | scope split --ingest RUN [--merge] [--wire] [--accept-waves]',
+  '       swarm scope approve [FILE] [--yes] [--accept-waves]',
   '       swarm scope sync RUN [--integrated] [--accept-unreviewed T-0001 --reason TEXT --yes] [--accept-unmet T-0001 --reason TEXT --yes]',
   '       swarm scope security-review RUN     (records the verdicts of an Opus security review run)',
   '       swarm scope acceptance-review RUN   (records the per-line verdicts of an acceptance review run)',
@@ -77,6 +78,65 @@ const LOCK_STALE_MS = 10 * 60 * 1000;
 const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
+
+function machineSlots(override) {
+  let configured = override;
+  if (configured !== undefined) return Number.isInteger(configured) && configured > 0 ? configured : 8;
+  try {
+    const config = loadLocalConfig();
+    configured = config?.machineConcurrency ?? config?.machine?.concurrency ?? config?.lanes?.machineConcurrency;
+  } catch { /* an absent or invalid local config uses the safe fallback */ }
+  return Number.isInteger(configured) && configured > 0 ? configured : 8;
+}
+
+function longestWaveChain(tickets) {
+  const active = (tickets ?? []).filter(t => t && t.status !== 'cancelled' && t.status !== 'proposed');
+  const ids = new Set(active.map(t => t.id));
+  const byId = new Map(active.map(t => [t.id, t]));
+  const memo = new Map();
+  const chain = id => {
+    if (memo.has(id)) return memo.get(id);
+    const deps = (byId.get(id)?.dependsOn ?? []).filter(dep => ids.has(dep));
+    const best = deps.reduce((longest, dep) => {
+      const candidate = chain(dep);
+      return candidate.length > longest.length ? candidate : longest;
+    }, []);
+    const result = [...best, id];
+    memo.set(id, result);
+    return result;
+  };
+  return active.reduce((longest, ticket) => {
+    const candidate = chain(ticket.id);
+    return candidate.length > longest.length ? candidate : longest;
+  }, []);
+}
+
+function waveSummary(sim) {
+  return `waves: ${sim.waveCount}, critical path ${sim.criticalPathLength} of ${sim.ticketCount} (${Math.round(sim.criticalPathTicketRatio * 100)}%), average fill ${Math.round(sim.averageFill * 100)}% of ${sim.slots} slots`;
+}
+
+function waveRefusal(sim, tickets) {
+  const chain = longestWaveChain(tickets);
+  return `${waveSummary(sim)}\nwave simulation failed; longest chain: ${chain.join(' -> ') || 'none'}; advice: re-split (merge chains / split the long chain), or rerun with --accept-waves`;
+}
+
+// A tiny ledger cannot be made meaningfully wider by re-splitting. Keep its measured summary,
+// while reserving the refusal/acceptance gate for batches large enough to act on.
+const waveGateFails = sim => !sim.ok && sim.ticketCount >= 10;
+
+async function logAcceptedWaveSimulation(root, sim, tickets, command) {
+  await appendLog(root, {
+    event: 'wave-sim-accepted',
+    warning: 'wave simulation failed; owner accepted the waves',
+    command,
+    slots: sim.slots,
+    ticketCount: sim.ticketCount,
+    criticalPathLength: sim.criticalPathLength,
+    criticalPathTicketRatio: sim.criticalPathTicketRatio,
+    averageFill: sim.averageFill,
+    longestChain: longestWaveChain(tickets),
+  });
+}
 
 function walkRepoFiles(root, dir = '', out = []) {
   const abs = dir ? path.join(root, dir) : root;
@@ -798,7 +858,7 @@ async function cmdCheck(root, { rest }) {
   return out(lines.join('\n'), result.ok ? 0 : 1);
 }
 
-async function cmdSplit(root, { rest, flags }) {
+async function cmdSplit(root, { rest, flags }, deps = {}) {
   const { file, scope, hash } = await loadScope(root, rest[0]);
   const checked = checkScope(scope);
   if (!checked.ok) return out(`${file} has errors; run swarm scope check ${file} first`, 1);
@@ -864,7 +924,10 @@ async function cmdSplit(root, { rest, flags }) {
   const { tree, lines } = treeReport(scope, ledger.tickets);
   const structural = tree.errors.filter(e => e.code !== 'uncovered');
   if (structural.length) return out(`split refused; the tickets are inconsistent:\n${lines.join('\n')}`, 1);
+  const waveSimulation = simulateBeforeIngest(ledger.tickets, machineSlots(deps.machineConcurrency));
+  if (waveGateFails(waveSimulation) && flags['accept-waves'] !== true) return out(waveRefusal(waveSimulation, ledger.tickets), 1);
   await writeLedger(root, ledger);
+  if (waveGateFails(waveSimulation)) await logAcceptedWaveSimulation(root, waveSimulation, ledger.tickets, 'scope split --ingest');
   await appendLog(root, { event: flags.merge ? 'split-merge' : 'split', tickets: tickets.length, run: flags.ingest, ok: tree.ok });
   const gaps = tree.ok ? [] : ['Some requirements still have no tickets: run swarm scope split again (it splits only those), then --ingest RUN --merge.'];
   // Requirements the worker left without an integration ticket: the wire manifest is written now, so the next step is one run and one ingest.
@@ -882,7 +945,7 @@ async function cmdSplit(root, { rest, flags }) {
   return out([`ledger written: ${tickets.length} tickets added (not approved)`, ...notes.map(n => `note: ${n}`), ...[...built.notes, ...orderNotes].slice(0, 12).map(n => `note: ${n}`), ...(built.notes.length + orderNotes.length > 12 ? [`note: ...and ${built.notes.length + orderNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`] : []), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, ...wireLines, tree.ok && !wireLines.length ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
 }
 
-async function cmdApprove(root, { rest, flags }) {
+async function cmdApprove(root, { rest, flags }, deps = {}) {
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
   const { scope, hash, text, file } = await loadScope(root, rest[0] ?? ledger.scope?.file);
@@ -903,8 +966,11 @@ async function cmdApprove(root, { rest, flags }) {
   const bigTickets = ledger.tickets.filter(t => t.status !== 'cancelled' && t.type !== 'human' && !sizeTicket(t, { sizes }).ok).map(t => t.id);
   const uiNoScreens = uiProfile?.ui ? ledger.tickets.filter(t => !(t.screens ?? []).length && (t.files ?? []).some(f => /\.(?:tsx|jsx|css|html|vue|svelte)$/.test(f))).length : 0;
   const summary = formatSummary(summarizeTree({ scope, tickets: ledger.tickets }));
+  const waveSimulation = simulateBeforeIngest(ledger.tickets, machineSlots(deps.machineConcurrency));
+  const waveLine = waveSummary(waveSimulation);
+  if (waveGateFails(waveSimulation) && flags['accept-waves'] !== true) return out(`${waveLine}\n${waveRefusal(waveSimulation, ledger.tickets).split('\n').slice(1).join('\n')}`, 1);
   const policy = await readApprovalPolicy(root);
-  if (needsHuman(policy, { kind: 'scope' }) && flags.yes !== true) return out(`${summary}\n\nThis needs your approval. Review it, then: swarm scope approve --yes`);
+  if (needsHuman(policy, { kind: 'scope' }) && flags.yes !== true) return out(`${waveLine}\n${summary}\n\nThis needs your approval. Review it, then: swarm scope approve --yes`);
   const by = flags.yes === true ? 'owner' : 'policy';
   const next = approveLedger(ledger, { by });
   next.scope = { ...next.scope, hash, file };
@@ -922,9 +988,10 @@ async function cmdApprove(root, { rest, flags }) {
   if (/\b(python|django|fastapi|flask)\b/i.test(`${scope.overview}`)) stacks.add('python');
   const ignored = stacks.size ? await ensureGitignore(root, [...stacks].filter(s => ['node', 'python'].includes(s))).catch(() => ({ changed: false })) : { changed: false };
   await appendLog(root, { event: 'approve', by, scopeHash: hash, ticketsHash: next.approved.ticketsHash });
+  if (waveGateFails(waveSimulation)) await logAcceptedWaveSimulation(root, waveSimulation, ledger.tickets, 'scope approve');
   // A snapshot of swarm's own state at every approval (best effort; never blocks the approval).
   try { await (await import('./state-backup.mjs')).createBackup(root, { reason: 'scope approve' }); } catch { /* a failed backup must not undo an approval */ }
-  return out([summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...await toolConfigWarnings(root, next.tickets), ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
+  return out([waveLine, summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...await toolConfigWarnings(root, next.tickets), ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
 }
 
 // A failed run or check sends the ticket back to ready one level higher (bigger output, then Codex, then Claude); only after the last level does it block. One locked ledger write.
@@ -2133,8 +2200,8 @@ export async function runScopeCommand(root, command, args, deps = {}) {
     if (verb === 'new') return await cmdNew(root, sub, deps);
     if (verb === 'template') return await cmdTemplate(root, sub);
     if (verb === 'check') return await cmdCheck(root, sub);
-    if (verb === 'split') return await cmdSplit(root, sub);
-    if (verb === 'approve') return await cmdApprove(root, sub);
+    if (verb === 'split') return await cmdSplit(root, sub, deps);
+    if (verb === 'approve') return await cmdApprove(root, sub, deps);
     if (verb === 'sync') return await cmdSync(root, sub, deps);
     if (verb === 'security-review') return await cmdSecurityReview(root, sub, deps);
     if (verb === 'acceptance-review') return await cmdAcceptanceReview(root, sub, deps);
