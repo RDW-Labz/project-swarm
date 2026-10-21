@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "self-approval-claude-v3",
+      "agent": "auto",
+      "prompt": "A second Opus review of the claude rule in tools/self-approval.mjs (now built on the quote-aware tokenizer from tools/shell-writes.mjs) found remaining gaps. Fix them and keep every other self-approval pattern and every existing test passing. (1) tmux and screen: the old rule caught a Claude session started inside tmux. Treat the word claude as risky when it appears as (or inside) the command argument of tmux new-session, new-window, split-window, respawn-pane, tmux send-keys, tmux run-shell, or of screen, in any form (interactive claude included: starting a session from the shell is deliberate), after the tokenizer has resolved quoting; the word claude as an unrelated tmux argument value such as a session name (tmux new-session -s claude-seat without a command containing the program) must not match when the program word is not claude: decide by whether any word of the command argument, after splitting the quoted command string with the tokenizer, is a program claude (basename claude) at command position. (2) JavaScript and other spawn forms: node -e and similar code strings with spawn, spawnSync, execFile, execFileSync, exec, execSync, Popen, subprocess.run, system, popen: match a quoted claude token followed within 60 characters by a quoted -p or --print token (no opening square bracket required), and execSync with a single string such as 'claude -p hi'. (3) Package runners: npx, bunx, pnpm dlx, yarn dlx, pnpm exec and npm exec followed by claude or @anthropic-ai/claude-code (with optional version) count as the program claude: apply the same headless and prompt tests to the rest of the words. (4) Here-documents: the body of a here-document (text after a <<WORD or <<-WORD or <<'WORD' marker up to the closing WORD line) is data and must not be scanned as commands, also when the here-document sits inside a dollar-parenthesis substitution or a bash -c string; a commit message given through a here-document containing the word claude stays allowed. (5) base64: a decoded string is not visible and stays out of scope, but a command that pipes base64 -d or --decode output into sh, bash, zsh or eval is already treated as dynamic by tools/shell-writes.mjs: do not change that. Add tests in tests/self-approval-claude-word.test.mjs for every form in this list, both blocked (tmux new-session -d 'claude -p x'; tmux send-keys -t pane 'claude -p hi' Enter; screen -dmS s claude -p x; node -e with spawnSync('claude', ['-p', 'x']); node -e with execFileSync(\"claude\", [\"--print\", 'x']); node -e with execSync('claude -p hi'); npx claude -p x; npx @anthropic-ai/claude-code -p x; bunx claude -p hi; pnpm dlx claude -p x) and allowed (tmux new-session -s claude-seat -d 'node tools/orchestrator-up.mjs up' ; tmux new-session -d -s swarm-orch-claude 'echo hi'; a git commit with a here-document message containing Co-Authored-By: Claude; $(cat <<EOF ... Claude ... EOF) used as a commit message; npx prettier --check claude.md; npm exec -- prettier x). Write only tools/self-approval.mjs, tests/self-approval-claude-word.test.mjs and, if needed, tests/self-approval-hardening.test.mjs.",
+      "context": [
+        "tools/self-approval.mjs",
+        "tools/shell-writes.mjs",
+        "tests/self-approval-claude-word.test.mjs",
+        "tests/self-approval-hardening.test.mjs"
+      ],
+      "outputs": [
+        "tools/self-approval.mjs",
+        "tests/self-approval-claude-word.test.mjs",
+        "tests/self-approval-hardening.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-hardening2.test.mjs"
+      ]
+    }
+  ]
+}

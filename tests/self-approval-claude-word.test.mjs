@@ -27,6 +27,14 @@ EOF
     'claude setup-token',
     'claude --model opus',
     'claude --resume abc123',
+    "tmux new-session -s claude-seat -d 'node tools/orchestrator-up.mjs up'",
+    "tmux new-session -d -s swarm-orch-claude 'echo hi'",
+    `git commit -F - <<'EOF'
+fix things
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+EOF`,
+    'npx prettier --check claude.md',
+    'npm exec -- prettier x',
   ];
   for (const cmd of falseCases) {
     assert.equal(isSelfApprovalCommand(cmd), false, cmd);
@@ -62,6 +70,15 @@ test('isSelfApprovalCommand: headless claude invocations stay true', () => {
     'eval "claude -p x"',
     "python3 -c \"import subprocess; subprocess.run(['claude','-p','x'])\"",
     "node -e \"require('child_process').execSync('claude -p hi')\"",
+    "tmux new-session -d 'claude -p x'",
+    "tmux send-keys -t pane 'claude -p hi' Enter",
+    'screen -dmS s claude -p x',
+    "node -e \"require('child_process').spawnSync('claude', ['-p', 'x'])\"",
+    "node -e \"require('child_process').execFileSync('claude', ['--print', 'x'])\"",
+    'npx claude -p x',
+    'npx @anthropic-ai/claude-code -p x',
+    'bunx claude -p hi',
+    'pnpm dlx claude -p x',
   ];
   for (const cmd of trueCases) {
     assert.ok(isSelfApprovalCommand(cmd), cmd);

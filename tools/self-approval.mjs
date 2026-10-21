@@ -69,6 +69,138 @@ function claudeProgramBasename(token) {
   return path.basename(token) === 'claude';
 }
 
+function isClaudePackageToken(token) {
+  if (!token || token.startsWith('-')) return false;
+  const versionAt = token.startsWith('@') ? token.indexOf('@', 1) : token.indexOf('@');
+  const pkg = versionAt === -1 ? token : token.slice(0, versionAt);
+  if (pkg === '@anthropic-ai/claude-code') return true;
+  return path.basename(pkg) === 'claude';
+}
+
+const TMUX_EMBED_SUBS = new Set(['new-session', 'new-window', 'split-window', 'respawn-pane', 'send-keys', 'run-shell']);
+const TMUX_VALUE_OPTS = new Set(['-s', '-n', '-t', '-c', '-F', '-f', '-e', '-x', '-y', '-L', '-S', '-l']);
+
+function skipTmuxFlags(args, i) {
+  while (i < args.length) {
+    const a = args[i];
+    if (TMUX_VALUE_OPTS.has(a)) { i += 2; continue; }
+    if (a === '-t' || a === '-b') { i += 2; continue; }
+    if (a === '-X') { i += 1; continue; }
+    if (a.startsWith('-')) { i += 1; continue; }
+    break;
+  }
+  return i;
+}
+
+function tmuxEmbeddedCommandStrings(sub, args) {
+  const out = [];
+  if (!TMUX_EMBED_SUBS.has(sub)) return out;
+  if (sub === 'send-keys') {
+    let i = skipTmuxFlags(args, 0);
+    for (; i < args.length; i += 1) {
+      const r = args[i];
+      if (r === 'Enter' || r === 'C-m' || r === 'C-M') continue;
+      out.push(r);
+    }
+    return out;
+  }
+  if (sub === 'run-shell') {
+    const i = skipTmuxFlags(args, 0);
+    const rest = args.slice(i);
+    if (rest.length) out.push(rest.join(' '));
+    return out;
+  }
+  let i = 0;
+  while (i < args.length) {
+    const a = args[i];
+    if (TMUX_VALUE_OPTS.has(a)) { i += 2; continue; }
+    if (a.startsWith('-')) { i += 1; continue; }
+    break;
+  }
+  const rest = args.slice(i);
+  if (rest.length) out.push(rest.join(' '));
+  return out;
+}
+
+function screenEmbeddedCommandString(args) {
+  let i = 0;
+  while (i < args.length) {
+    const a = args[i];
+    if (!a.startsWith('-')) break;
+    if (a === '-S' || a === '-t' || a === '-c' || a === '-s' || a === '-r' || a === '-T' || a === '-X') {
+      i += 2;
+      continue;
+    }
+    if (a.length > 2 && /^-[dmDRxX]+/.test(a)) {
+      const tail = a.slice(1);
+      if (tail.includes('S') || tail.includes('t') || tail.includes('c') || tail.includes('s') || tail.includes('r') || tail.includes('T')) {
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    i += 1;
+  }
+  const rest = args.slice(i);
+  return rest.length ? rest.join(' ') : '';
+}
+
+function skipPackageRunnerFlags(args, i) {
+  while (i < args.length) {
+    const a = args[i];
+    if (a === '--') { i += 1; break; }
+    if (!a.startsWith('-')) break;
+    const takesValue = a === '-p' || a === '--package' || a === '--prefix' || a === '--node-options'
+      || a === '--workspace' || a === '-w' || a === '--cwd' || a === '-C';
+    i += takesValue ? 2 : 1;
+  }
+  return i;
+}
+
+/** When a package runner invokes claude or @anthropic-ai/claude-code, return args after the package token. */
+function packageRunnerClaudeArgs(plain, programIndex) {
+  const cmd = plain[programIndex];
+  let i = programIndex + 1;
+
+  if (cmd === 'npx' || cmd === 'bunx') {
+    i = skipPackageRunnerFlags(plain, i);
+    const pkg = plain[i];
+    if (!isClaudePackageToken(pkg)) return null;
+    return plain.slice(i + 1);
+  }
+
+  if (cmd === 'pnpm') {
+    const sub = plain[i];
+    if (sub !== 'dlx' && sub !== 'exec') return null;
+    i += 1;
+    i = skipPackageRunnerFlags(plain, i);
+    const pkg = plain[i];
+    if (!isClaudePackageToken(pkg)) return null;
+    return plain.slice(i + 1);
+  }
+
+  if (cmd === 'yarn') {
+    if (plain[i] !== 'dlx') return null;
+    i += 1;
+    i = skipPackageRunnerFlags(plain, i);
+    const pkg = plain[i];
+    if (!isClaudePackageToken(pkg)) return null;
+    return plain.slice(i + 1);
+  }
+
+  if (cmd === 'npm') {
+    if (plain[i] !== 'exec') return null;
+    i += 1;
+    i = skipPackageRunnerFlags(plain, i);
+    const pkg = plain[i];
+    if (!isClaudePackageToken(pkg)) return null;
+    return plain.slice(i + 1);
+  }
+
+  return null;
+}
+
 function plainWords(words) {
   const plain = [];
   for (let i = 0; i < words.length; i += 1) {
@@ -170,11 +302,16 @@ function codeArgValue(args, at) {
   return args[at + 1] ?? '';
 }
 
-/** claude as quoted token or list item, then within 40 chars quoted -p or --print. */
+const SPAWN_EXEC_NAMES = /(?:spawn(?:Sync)?|exec(?:File)?(?:Sync)?|Popen|subprocess\.run|system|popen)\s*\(/;
+
+/** claude as quoted token (or list item), then within 60 chars quoted -p or --print; execSync('claude -p hi'). */
 function interpreterCodeHasRiskyClaude(code) {
   const s = String(code ?? '');
-  const listRe = /\[\s*['"]claude['"][\s\S]{0,40}['"](?:-p|--print)['"]/;
+  const quotedClaudeThenPrint = /['"]claude['"][\s\S]{0,60}['"](?:-p|--print)['"]/;
+  if (quotedClaudeThenPrint.test(s)) return true;
+  const listRe = /\[\s*['"]claude['"][\s\S]{0,60}['"](?:-p|--print)['"]/;
   if (listRe.test(s)) return true;
+  if (SPAWN_EXEC_NAMES.test(s) && quotedClaudeThenPrint.test(s)) return true;
   for (const q of ["'", '"']) {
     let from = 0;
     while (from < s.length) {
@@ -188,7 +325,7 @@ function interpreterCodeHasRiskyClaude(code) {
       const inner = s.slice(start + 1, j);
       const claudeAt = inner.indexOf('claude');
       if (claudeAt !== -1) {
-        const window = inner.slice(claudeAt, claudeAt + 40);
+        const window = inner.slice(claudeAt, claudeAt + 60);
         if (/\bclaude\b/.test(window) && /(?:\s|^)(?:-p|--print)\b/.test(window)) return true;
       }
       from = j + 1;
@@ -237,6 +374,23 @@ function commandWordsRiskyClaude(words, depth) {
 
   if (claudeProgramBasename(plain[index]) && claudeInvocationIsRisky(args)) return true;
 
+  const pkgClaudeArgs = packageRunnerClaudeArgs(plain, index);
+  if (pkgClaudeArgs && claudeInvocationIsRisky(pkgClaudeArgs)) return true;
+
+  if (cmd === 'tmux' && args.length > 0) {
+    const sub = args[0];
+    if (TMUX_EMBED_SUBS.has(sub)) {
+      for (const embedded of tmuxEmbeddedCommandStrings(sub, args.slice(1))) {
+        if (rawHasRiskyClaudeInvocation(embedded, depth + 1)) return true;
+      }
+    }
+  }
+
+  if (cmd === 'screen') {
+    const embedded = screenEmbeddedCommandString(args);
+    if (embedded && rawHasRiskyClaudeInvocation(embedded, depth + 1)) return true;
+  }
+
   if (cmd === 'eval') {
     return rawHasRiskyClaudeInvocation(args.join(' '), depth + 1);
   }
@@ -278,12 +432,31 @@ const STATIC_MARKERS = [
   /\brecordchatmerge\b/,
   /\binbox-commands(?:\.mjs)?\b/,
   /\.swarm\/handbuild\b/,
-  /\btmux\s+(?:send-keys|new-session|split-window)\b[\s\S]*(?:\bswarm\b|\bnode\b)/,
   /\bscript\b/,
   /\bosascript\b/,
   /\bexpect\b/,
   /base64\b[\s\S]*\|\s*(?:sh|bash|zsh|node)\b/,
 ];
+
+function tmuxOrchestratorMarker(commandText) {
+  for (const words of tokenize(commandText)) {
+    const plain = plainWords(words);
+    const { index } = skipToProgram(plain);
+    if (index >= plain.length) continue;
+    if (path.basename(plain[index]) !== 'tmux') continue;
+    const args = plain.slice(index + 1);
+    if (!args.length) continue;
+    const sub = args[0];
+    if (sub !== 'send-keys' && sub !== 'new-session' && sub !== 'split-window') continue;
+    for (const embedded of tmuxEmbeddedCommandStrings(sub, args.slice(1))) {
+      const n = normalizeSelfApprovalCommandText(embedded);
+      if (!n) continue;
+      if (sub === 'send-keys' && (/\bswarm\b/.test(n) || /\bnode\b/.test(n))) return true;
+      if ((sub === 'new-session' || sub === 'split-window') && /\bswarm\b/.test(n)) return true;
+    }
+  }
+  return false;
+}
 
 function nestedCommandStrings(text) {
   const out = [];
@@ -293,15 +466,13 @@ function nestedCommandStrings(text) {
     let m;
     while ((m = re.exec(s)) !== null) out.push(m[2]);
   }
-  const hd = /<<-?\s*['"]?(\w+)['"]?[\s\S]*?\n([\s\S]*?)\n\1/g;
-  let h;
-  while ((h = hd.exec(s)) !== null) out.push(h[2]);
   return out;
 }
 
-function matchesNormalized(normalized) {
+function matchesNormalized(normalized, rawText = '') {
   if (!normalized) return false;
   if (SAFE_SWARM.some(re => re.test(normalized))) return false;
+  if (rawText && tmuxOrchestratorMarker(rawText)) return true;
   if (STATIC_MARKERS.some(re => re.test(normalized))) return true;
   if (HAND_BUILD_ACTION.test(normalized)) return true;
   if (HAND_BUILD_ACTION_NODE.test(normalized)) return true;
@@ -318,7 +489,7 @@ export function isSelfApprovalCommand(commandText) {
   if (!text) return false;
   if (rawHasRiskyClaudeInvocation(text, 0)) return true;
   const normalized = normalizeSelfApprovalCommandText(text);
-  if (matchesNormalized(normalized)) return true;
+  if (matchesNormalized(normalized, text)) return true;
   for (const inner of nestedCommandStrings(text)) {
     if (isSelfApprovalCommand(inner)) return true;
   }
