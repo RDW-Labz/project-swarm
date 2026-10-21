@@ -21,7 +21,14 @@ import { MAX_FILE } from './patterns.mjs';
 import { costNotReported, costPer1kOutputTokens, jobTokens, tokensTotal } from './run-state.mjs';
 import { designOnlyBlockedOnTestWarning, runWarnings } from './warnings.mjs';
 import { isWorktreeWriter, resolveWorktree, usesWorktree } from './workspace.mjs';
-import { noRestartFromArgv, restartRegisteredServers } from '../server-restart.mjs';
+import { noRestartFromArgv, restartRegisteredServers, resolveRunnerForRestart } from '../server-restart.mjs';
+import {
+  machineBusySnapshot,
+  parentOfPid,
+  resolveInstallRootForPending,
+  runWhenIdleUpdate,
+  waitBeforeLaunchingWork,
+} from '../update-pending.mjs';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -201,13 +208,21 @@ async function attachServerRestart(result, root, { home, env = process.env, noRe
   const targetVersion = result.to ?? result.from;
   if (!targetVersion) return result;
   const restartHome = home ?? env.HOME ?? os.homedir();
+  const installRoot = await resolveInstallRootForPending({ env, ownRoot: root, home: restartHome });
+  const { runner } = await resolveRunnerForRestart(installRoot, targetVersion);
+  if (!runner) {
+    const warn = write ?? (text => { try { process.stderr.write(text); } catch { /* tests */ } });
+    warn(`server restart skipped: installed runner not found under ${installRoot}\n`);
+    return result;
+  }
   const { servers } = await restartRegisteredServers({
-    installRoot: root,
+    installRoot,
     targetVersion,
     noRestart: noRestart ?? noRestartFromArgv(),
     env,
     home: restartHome,
     write: write ?? (text => { try { process.stderr.write(text); } catch { /* tests */ } }),
+    strictPidCheck: true,
   });
   return servers.length ? { ...result, servers } : result;
 }
@@ -506,3 +521,36 @@ async function planLaneInfo(manifest, { batch = false, root } = {}) {
 }
 
 export { monitorView, planLaneInfo };
+
+// Work-launch paths that must call waitBeforeLaunchingWork (wired in tools/swarm.mjs).
+export const WORK_LAUNCH_COMMANDS = Object.freeze(['run', 'go', 'scope', 'autopilot']);
+
+// Read-only or non-launch commands that must not block on a pending update.
+export const READ_ONLY_SWARM_COMMANDS = Object.freeze([
+  'doctor', 'validate', 'preflight', 'board', 'orphans', 'status', 'monitor', 'wait', 'inspect',
+  'rollup', 'integrate', 'mutants', 'watch', 'gallery', 'version', 'update', 'help',
+]);
+
+export function createDescribeUpdateBusy({
+  boardSummary,
+  runningSwarmCommands,
+  liveBusyMarkers,
+  installDirs,
+  selfPid = process.pid,
+}) {
+  return ({ excludePids = [] } = {}) => machineBusySnapshot({
+    boardSummary,
+    runningSwarmCommands,
+    liveBusyMarkers,
+    installDirs,
+    excludePids,
+    selfPid,
+    parentOf: parentOfPid,
+  });
+}
+
+export async function waitForSwarmUpdateAtInstall(installRoot, opts = {}) {
+  await waitBeforeLaunchingWork(installRoot, opts);
+}
+
+export { machineBusySnapshot, parentOfPid, runWhenIdleUpdate, waitBeforeLaunchingWork };

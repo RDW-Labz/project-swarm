@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.164.0
+
+Update restarts servers, --when-idle, forget, scratch projects stay out of the owner inbox, manifest commit guard.
+- **Servers:** swarm update restarts a running board and swarm remote serve on the new version, same port and flags, gracefully (SIGTERM, never SIGKILL), confirmed through a health route; a server in your terminal is not killed and gets a restart needed banner; --no-restart skips it.
+- **Update when idle:** swarm update --when-idle [--timeout MIN] waits for a gap between waves, holds only new launches, never kills a run, exits 75 on timeout; the plain update is still refused while busy.
+- **Scratch and test projects:** never post to the owner inbox, the phone or swarm-inbox, requests filed from them are auto-denied, the registry skips them and drops entries whose folder is gone; a scratch root is under .project-swarm-scratch, an OS temp folder, a folder with a tmp, temp, test, tests or __tests__ segment, a tmp-test folder, or marked scratch.
+- **swarm forget PATH** removes dead projects from the registry only (no project file is touched); --dry-run, --missing, --scratch, --yes for bulk.
+- **Manifest commits:** a commit-msg hook refuses a commit whose subject starts with Manifest when anything outside coordination/manifests is staged (a failed git add can leave files staged).
+
 ## 1.163.0
 
 tools/swarm.mjs is split into modules (pure move).

@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "fix-d6-process",
+      "agent": "auto",
+      "prompt": "URGENT, shipping blocker. Fix round 3 findings in the process-control part (tools/server-restart.mjs, tools/update-pending.mjs, tools/watch-cli.mjs, tools/swarm/core-52.mjs). Finding 1 is HIGH: macOS ps does not support the etimes keyword, so every real restart ends identity-unverified; read the start time with ps -o etime= (parse [[dd-]hh:]mm:ss) in a separate call from the command-line read, fall back to ps -o lstart= and parse it, and treat a failed start-time read as unknown (not as a failed command-line read); add a test that runs the REAL ps against the test process own pid and asserts the identity check passes for a matching command (skip only if ps is missing). Finding 2: all lock files (restart lock, pending-held lock, held-log lock) get stale detection: write pid and start time into the lock, a lock whose pid is dead or whose age is over 60 seconds is stolen atomically (rename to a unique name then remove, then retry create), release removes only a lock this process owns; tests with a dead-pid lock file and an old lock. Finding 3: realpath both sides in the identity comparison, and on a command mismatch keep the record and report it as unverified; delete only when the pid is dead or the start time proves reuse. Finding 4: record the real argv of the remote server (port, login and host flags) from watch-cli and the remote entry. Finding 9: re-read the record before deleting it and delete only if unchanged. Finding 10: a failed record write is reported. Reviewer text as data: 1. High: tools/server-restart.mjs. ps -o etimes= is not supported by macOS ps, and this is darwin. Both ps calls sit in one Promise.all, so the whole read fails, and verifyRegistryPid returns \"could not read process command line\". Every real restart then ends as identity-unverified and nothing is ever restarted. The tests stub execFileImpl, so they never hit this. Fix: use ps -o etime= and parse [[dd-]hh:]mm:ss, or use lstart. Add a test against the real ps. 2. Medium: server-restart.mjs and update-pending.mjs. All three lock files (the restart lock, the pending-held lock and the held-log lock) are plain O_EXCL files with no stale detection. If a process is SIGKILLed or crashes while holding one, the next swarm update waits 60s and then reports \"another server restart is already in progress\", and no server is ever restarted. A stale .update-pending-held.lock makes update --when-idle throw EBUSY after 30s, forever. While an update is pending, it also makes held launchers throw instead of waiting. Fix: write the pid and mtime into the lock, and break the lock when that pid is dead or the lock is older than a bound. 3. Medium: server-restart.mjs 473-477. The identity check compares path.resolve(token) with the runner path, and does not resolve symlinks. A server started through versions/x/... or a resolved current link, or from a path containing spaces, fails the match. That deletes the live server's record and reports stale-record, and the server is no longer tracked. Fix: realpath both sides, and on a command mismatch keep the record and report it as unverified. Only delete when the pid is dead or the start time proves reuse. 4. Medium: tools/watch-cli.mjs. The remote record's argv is hard-coded to ['remote','serve'], so the actual --port, --login and host flags are not recorded. A restart may come up on a different port or token. Then waitForPortFree waits on the wrong port, and pollRemoteFile accepts the new version even if the port differs. This holds unless the remote caller passes registry, which I couldn't see. Fix: record the real argv. 5. Low: update-pending.mjs 53-59. heldPids are never pruned when a held launcher is killed, and the pending record's pid check has no identity check. A reused pid can be excluded from the busy count, or can keep the hold up until expiresAt. The hold is bounded by expiresAt (at most the timeout after the last refresh), so it cannot last forever. 6. Low: update-pending.mjs. Ctrl-C during performUpdate calls process.exit in the middle of the install. This is the same as a plain update being interrupted. 7. Low: server-restart.mjs 469. The SWARM_TEST_TMP hooks are in the production path. They write a stub runner and skip the identity check when the variable is set and strictPidCheck is false. core-52.mjs always passes strictPidCheck: true, so this is currently harmless. 8. Low: server-restart.mjs. manualCommand prints export KEY; with no values, so a copy-pasted \"run by hand\" command drops SWARM_BOARD_FILE and similar settings. Env key names are also not quoted. 9. Low: server-restart.mjs. The record is removed on a dead pid without re-checking that it is still the same record. A server that just wrote a new record could lose it. 10. Low: watch-cli.mjs. A failed writeBoardFile is swallowed, so a server whose record write failed is never restarted and nothing says so. 11. Low, adversarial only: anyone running as the same user can write the record. Its argv goes to spawn as an array with process.execPath and the runner, so there is no shell. The cwd is only checked to be a directory, and env is limited to HOME, PATH and SWARM. A forged record can only start node <runner> <swarm args>, and only if the live process's command line matches it. printed manual commands do include unquoted env keys (see finding 8). Checks that passed - Port wait and failure reports: the port wait is bounded at 15s, the SIGTERM wait at 15s, and the confirmation poll at 20s. SIGKILL is never used. Every failure path emits a report with a manual command, so a server cannot be left stopped silently. - Terminal servers: they are not killed (:448). - Two updates racing: the lock serializes them, apart from the stale-lock case in finding 2. - /api/health (tools/watch-server.mjs): it is loopback-only. The Host header must be exactly 127.0.0.1:port or localhost:port, and it returns 421 for remote. It returns only ok, version and pid, without a token. That is a minor local disclosure of pid and version. - Pending record expiry and stale cases: a dead owner's record is removed on read, and expiry is refreshed every poll. A crashed update cannot block launches for more than the timeout window. - Read-only commands: READ_ONLY_SWARM_COMMANDS excludes the right commands (core-52.mjs), but the actual wiring is in tools/swarm.mjs, which I could not see. Limits: I did not see the wiring in tools/swarm.mjs, so I could not check that failed servers affect the exit code or that 75 is returned. I also did not check the two test files line by line. I did not run anything. The etimes finding is from my knowledge of macOS ps, not a run, so verify it.  New tests in tests/server-restart-round3.test.mjs and tests/update-pending-round3.test.mjs. Fix every finding named (verify each against the code first). Keep every existing test passing. Add a test per fixed finding in the new test file named. Never import install.mjs statically from new modules. Hermetic tests (no ambient environment, no network); no token-shaped literals and no URL with credentials. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/server-restart.mjs",
+        "tools/update-pending.mjs",
+        "tools/watch-cli.mjs",
+        "tools/swarm/core-52.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/update-pending-round2.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/server-restart.mjs",
+        "tools/update-pending.mjs",
+        "tools/watch-cli.mjs",
+        "tools/swarm/core-52.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/update-pending-round3.test.mjs"
+      ],
+      "timeoutMs": 3600000,
+      "ignoreTests": [
+        "tests/helpers/swarm-source.mjs",
+        "tests/swarm-source-helper.test.mjs",
+        "tests/update-pending-review.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/gallery-tickets.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/update-when-idle.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/board-page.test.mjs"
+      ]
+    },
+    {
+      "id": "fix-d6-registry",
+      "agent": "auto",
+      "prompt": "URGENT, shipping blocker. Fix round 3 findings in the registry and hook part (tools/git-hooks.mjs, tools/githook-check.mjs, tools/scratch-roots.mjs, tools/projects.mjs, tools/handbuild-commands.mjs). Priorities: 1 the node-or-script-missing skip must run the backed-up user hook first (runPrev) and exit with its status instead of exit 0 before it, for commit-msg, pre-commit and pre-push (pre-push needs the stdin lines); 2 a custom SWARM_SCRATCH_BASE is only rejected when a registered project that is NOT itself inside the base convention would become scratch: compare by the registered root being a strict child of the base; do not reject because a scratch worktree with a .git sits inside the base (scratch worktrees live there by design); 3 the home exemption must cover any path component equal to the home folder name only when the path is under the home folder; 4 os.tmpdir is trusted only when it resolves under /tmp, /private/tmp, /var/folders or /private/var/folders; 5 projects.mjs lock steal is atomic (rename) and release removes only an owned lock; 6 hooksDirInsideRepo does not call realpath before the directory exists; 8 hooks use exit with the status of the chained command, never a bare exit status of an unrelated command; 9 removeGitHooks tolerates a missing hooks folder; 11 the strict scratch rule gets the install root passed. Reviewer text as data: Round 2 items in my scope - Forget used the broad scratch rule. Fixed. projects.mjs now calls isScratchRoot with strict: true. - Pruning unmounted mount points. Fixed. projects.mjs and :106-127 mark a missing folder \"unreachable\", so it is kept, when the path is under /Volumes, /mnt or /media, when the parent is empty, or when the parent sits on a different device. A missing parent, a stat timeout or any other error is also treated as unreachable. - Commit hook with a crashing node. Fixed for commit-msg. git-hooks.mjs blocks only on exit code 3 and turns other non-zero exits into a warning and exit 0. - Stack sniffing in board-inbox.mjs. Gone. - Wrong scratch base. Partly fixed. scratch-roots.mjs validates SWARM_SCRATCH_BASE, but the validation causes finding 2 below. - I did not review the other round 2 items (restart, pending file, parentOf and so on) because they are outside these files. Findings 1. medium, git-hooks.mjs 80-82 (also :50-53 for pre-push). The \"node or script missing\" skip runs exit 0 before the user's backed-up hook is run (runPrev at :82). - Scenario: the swarm install dir is moved or removed. Every commit then silently skips the user's own commit-msg, pre-commit and pre-push hooks, such as lint or secret scans. - Fix: run PREV first, then do the infrastructure skip. 2. medium, scratch-roots.mjs called with registeredRoots from projects.mjs. A custom SWARM_SCRATCH_BASE is rejected if any registered project with a .git folder sits inside it. - Scenario: scratch and test projects are normally git repos and registered. So the custom base is dropped, the default base is used, and projects under the custom base reach the owner inbox. Only the .swarm-scratch marker or .project-swarm.json pointer still catches them. - board-inbox.mjs passes no registeredRoots, so the board listing and the inbox disagree about what is scratch. - Fix: exempt registered roots that are already scratch, or validate only against unregistered or non-scratch projects. Pass registeredRoots consistently. 3. medium, scratch-roots.mjs used at projects.mjs. The home exemption only covers segments that are part of the home path itself. - Scenario: ~/code/test/app, ~/Test/proj or ~/work/tests/x is hidden from the board listing, because segment matching is case-insensitive and the exemption does not apply that deep. - If the board passes this listing to boardInbox, that project's inbox is hidden too. I did not see the caller. - Fix: exempt everything under home, or hide only paths under the OS temp dir or SWARM_TEST_TMP. 4. medium/low, scratch-roots.mjs. os.tmpdir() is trusted as a strict scratch base without any check. - Scenario: TMPDIR=$HOME or a projects folder makes every real project scratch. They are then hidden from the owner inbox and phone, and their handbuild requests are auto-denied. - Fix: apply the root, home and ancestor-of-home rejection from :89 to the temp dir as well. 5. low/medium, projects.mjs 69, 386-388. The stale-lock steal is not atomic, and the holder's release removes the lock directory unconditionally. - pickFromRegistry stats each unreachable root in turn (2s each) while holding the lock. With 15 or more dead network entries that exceeds LOCK_STALE_MS (30s). A second writer then steals the lock, and the registry can lose an update. - Fix: verify the owner file before releasing. Do the reachability checks before taking the lock, and re-check inside it. 6. low/medium, git-hooks.mjs 126. hooksDirInsideRepo calls realpathSync before the mkdirSync at :130. - Scenario: a repo with no .git/hooks folder, for example when init.templateDir is empty. Install is skipped with the misleading message \"core.hooksPath is outside this repo\". - In a linked worktree, --git-path hooks resolves to the main repo's hooks, so install is skipped there too. - Fix: check the parent directory, or create the folder first. 7. low, githook-check.mjs. The subject heuristic is wide. Manifest <word>… with no digit, other than Manifest parser:, counts as a manifest commit. - Scenario: in a browser-extension or Android repo with the hook installed, \"Manifest validation: …\" or \"Manifest: bump version\" is refused when manifest.json is staged. It is not a lockout, because the user can reword or use --no-verify. - A subject like \"Manifest round 3\" contains a digit, so the check is skipped for it. - Fix: apply the rule only when coordination/manifests exists in the repo, or only to the Manifest: form. 8. low, git-hooks.mjs 80 and githook-check.mjs. Pre-commit and pre-push still use exit $?. - Scenario: a node that cannot run the script (too old, syntax error) exits 1, and every commit or push is blocked, including for non-agent users. - Fix: map crashes to a skip, as commit-msg does. 9. low, git-hooks.mjs. removeGitHooks calls readdirSync(dir), which throws if the hooks folder is missing. The uninstall command then crashes after the guard has already been removed. 10. low, githook-check.mjs. On --amend, only the newly staged diff is checked, so amending a code commit's message to \"Manifest: …\" passes. 11. low, handbuild-commands.mjs 47. installRoot is ignored by the strict rule. - Any real project under /tmp or /var/folders is auto-denied. This is by design, but note CI checkouts under /tmp. - The message says \"move out of the scratch base or remove .swarm-scratch\" for every scratch reason, and the exit code is 0. - Fix: name the actual reason and return a non-zero exit code. 12. low, board-inbox.mjs 79 and scratch-roots.mjs. Synchronous realpathSync, readFileSync and accessSync run for each project and each phone record, with no timeout. A hung network share blocks the whole board event loop. - This also reads project files, which contradicts the header comment in projects.mjs. 13. low, projects.mjs 249-263. Any write, forget included, drops malformed or hand-edited entries and unknown top-level keys. A failed write leaves a .tmp file behind, and the directory is not fsynced. 14. low, projects.mjs. If the install dir cannot be resolved, or SWARM_INSTALL_DIR is wrong, --missing and --scratch have no install-root protection. 15. low (adversarial only), git-hooks.mjs. A hook that is a symlink to our own hook, or a dangling symlink, is written through, so writeFileSync modifies the link's target. Forget checks (1) - Writes: it only touches the registry file and its lock. There is no path traversal, because arguments are only matched against registered roots. - Symlinks: a symlinked registry file is resolved to its target before writing. - Atomicity: the write is a tmp file, fsync and rename, and it takes the lock. - Install root: a single install-root argument is refused. - Mistyped path: a typo fails with \"not registered\" before any write, so nothing is forgotten by mistake. - Bulk limit: the cap of 3 without --yes works.  New tests in tests/registry-round3.test.mjs and tests/commit-msg-round3.test.mjs. Fix every finding named (verify each against the code first). Keep every existing test passing. Add a test per fixed finding in the new test file named. Never import install.mjs statically from new modules. Hermetic tests (no ambient environment, no network); no token-shaped literals and no URL with credentials. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/git-hooks.mjs",
+        "tools/githook-check.mjs",
+        "tools/scratch-roots.mjs",
+        "tools/projects.mjs",
+        "tools/handbuild-commands.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/commit-msg-round2.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/git-hooks.mjs",
+        "tools/githook-check.mjs",
+        "tools/scratch-roots.mjs",
+        "tools/projects.mjs",
+        "tools/handbuild-commands.mjs",
+        "tests/registry-round3.test.mjs",
+        "tests/commit-msg-round3.test.mjs"
+      ],
+      "timeoutMs": 3600000,
+      "ignoreTests": [
+        "tests/commit-msg-review.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/registry-review.test.mjs",
+        "tests/bare-status.test.mjs",
+        "tests/scratch-strict-broad.test.mjs",
+        "tests/goal-guard.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/git-hooks.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/commit-msg-manifest.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/forget.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/quotes.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/handbuild-guard.test.mjs"
+      ]
+    }
+  ]
+}

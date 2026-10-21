@@ -20,6 +20,7 @@ import { COMMANDS } from './completion.mjs';
 import { readLedger } from './tickets.mjs';
 import { boardSummary, listLiveRuns } from './board.mjs';
 import { listProjects, projectsFile, projectId, isScratchRoot } from './projects.mjs';
+import { isBoardTempRoot } from './scratch-roots.mjs';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { readHistory, historyCsv, historyFile } from './history.mjs';
@@ -161,10 +162,15 @@ async function safeBoard() {
   return { runs: runs.filter(run => RUN_ID_RE.test(String(run.runId)) && typeof run.root === 'string' && !/[\u0000-\u001f]/.test(run.root)) };
 }
 
+function boardProjectOpts(env = process.env) {
+  return { env, home: env.HOME ?? os.homedir() };
+}
+
 async function boardText({ env = process.env } = {}) {
   const { runs } = await safeBoard();
-  const projects = await listProjects({ file: projectsFile(env) }).catch(() => []);
-  const needs = inboxText(await boardInbox({ projects, env }).catch(() => null));
+  const opts = boardProjectOpts(env);
+  const projects = await listProjects({ file: projectsFile(env), forOwner: true, ...opts }).catch(() => []);
+  const needs = inboxText(await boardInbox({ projects, env, forOwner: true }).catch(() => null));
   if (!runs.length) return `No live runs on this machine.\n${needs}`;
   return runs.map(run => {
     const done = run.jobs.filter(job => job.status === 'complete').length;
@@ -221,8 +227,34 @@ export function safeEnvSubset(env = process.env) {
   return out;
 }
 
-export function serverMode({ stdin = process.stdin, stdout = process.stdout } = {}) {
-  return stdin.isTTY && stdout.isTTY ? 'terminal' : 'background';
+export function serverMode({ stdin = process.stdin, stdout = process.stdout, explicitBackground = false } = {}) {
+  if (stdin.isTTY && stdout.isTTY) return 'terminal';
+  if (explicitBackground && !stdin.isTTY && !stdout.isTTY) return 'background';
+  if (!explicitBackground) return stdin.isTTY && stdout.isTTY ? 'terminal' : 'background';
+  return 'terminal';
+}
+
+export function argvForRemoteServe(remote, registry = {}) {
+  if (Array.isArray(registry.argv) && registry.argv.length) return registry.argv;
+  const argv = ['remote', 'serve'];
+  if (remote?.port != null) argv.push('--port', String(remote.port));
+  if (typeof remote?.login === 'string' && remote.login) argv.push('--login', remote.login);
+  if (Array.isArray(remote?.hosts)) {
+    for (const host of remote.hosts) {
+      if (typeof host === 'string') argv.push('--host', host);
+      else if (host && typeof host.host === 'string') argv.push('--host', host.host);
+      else if (host && typeof host.name === 'string') argv.push('--host', host.name);
+    }
+  }
+  return argv;
+}
+
+export function registryModeFields(mode, { stdin = process.stdin, stdout = process.stdout, explicitBackground = false } = {}) {
+  const fromTty = !stdin.isTTY && !stdout.isTTY;
+  return {
+    mode,
+    ...(mode === 'background' && explicitBackground ? { explicitBackground: true, modeFromTty: fromTty } : {}),
+  };
 }
 
 async function readPackageVersion(root = here) {
@@ -311,8 +343,13 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
   let boardUrl = null;
   const cachedBy = new Map();                // by whether test/temp projects and peers are shown
   const showsScratch = q => q?.scratch === '1' || q?.scratch === true;
-  const scratchIds = async () => new Set((await listProjects({ file: projectsFile(env) })).filter(p => isScratchRoot(p.root)).map(p => p.id));
-  const find = async id => (await listProjects({ file: projectsFile(env) })).find(p => p.id === id) ?? null;
+  const projectOpts = () => boardProjectOpts(env);
+  const scratchIds = async () => {
+    const opts = projectOpts();
+    const all = await listProjects({ file: projectsFile(env), includeScratch: true, pruneGone: false, ...opts });
+    return new Set(all.filter(p => isBoardTempRoot(p.root, opts)).map(p => p.id));
+  };
+  const find = async id => (await listProjects({ file: projectsFile(env), includeScratch: true, ...projectOpts() })).find(p => p.id === id) ?? null;
   const api = {
     // One snapshot at a time: requests that arrive while one is being built share it.
     snapshot(q = {}) {
@@ -324,9 +361,10 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       const promise = (async () => {
         let config = {}, max = null, invalid = false;
         try { config = loadLocalConfig({ env }) ?? {}; max = machineConcurrency(config); } catch { config = {}; invalid = true; /* the runs that read it refuse to start; the board says so */ }
-        const all = await listProjects({ file: projectsFile(env) });
+        const opts = projectOpts();
+        const all = await listProjects({ file: projectsFile(env), includeScratch: true, pruneGone: false, ...opts });
         // Test and temp projects are left out of everything (lanes, totals, the inbox) unless asked for, so the numbers still add up.
-        const projects = scratch ? all : all.filter(p => !isScratchRoot(p.root));
+        const projects = scratch ? all : all.filter(p => !isBoardTempRoot(p.root, opts));
         const caps = (() => { try { const lanes = resolveBudget({ config }).lanes ?? {}; return Object.fromEntries(Object.entries(lanes).map(([k, v]) => [k, v?.dailyUsd])); } catch { return {}; } })();
         const configured = (() => { try { return Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k]) => k); } catch { return []; } })();
         const configuredModels = (() => { try { return Object.fromEntries(Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k, v]) => [k, v.model])); } catch { return {}; } })();
@@ -342,7 +380,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
         };
         const snapshotNow = now();
         const workers = await workersHeld({ dir: lanesDir(env), max, invalid });
-        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: snapshotNow, laneState, workers, lanes: (laneToday, jobsToday) => laneUsage({ laneToday, jobsToday, configured, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: snapshotNow }), deployStatus: root => isScratchRoot(root) ? null : deployTracker.get(root) });
+        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: snapshotNow, laneState, workers, lanes: (laneToday, jobsToday) => laneUsage({ laneToday, jobsToday, configured, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: snapshotNow }), deployStatus: root => isBoardTempRoot(root, opts) ? null : deployTracker.get(root) });
         let peers = [];
         let remoteResults = [];
         if (!localOnly) {
@@ -372,8 +410,8 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
           snapshot.pools = { source: 'stub', pools: [], at: new Date(snapshotNow).toISOString() };
         }
         // What waits for the owner (read-only); a failure here never hides the rest of the board.
-        snapshot.inbox = await boardInbox({ projects, now: now(), env }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
-        snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : all.length - projects.length, total: all.filter(p => isScratchRoot(p.root)).length };
+        snapshot.inbox = await boardInbox({ projects, now: now(), env, forOwner: true }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
+        snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : all.length - projects.length, total: all.filter(p => isBoardTempRoot(p.root, opts)).length };
         return snapshot;
       })();
       cachedBy.set(cacheKey, { at: now(), promise });
@@ -386,7 +424,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       const liveRuns = (await live()).filter(r => r.root === project.root);
       let max = null;
       try { max = machineConcurrency(loadLocalConfig({ env })); } catch { /* invalid local config leaves split quality without a slot limit */ }
-      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), slots: max, deployStatus: root => isScratchRoot(root) ? null : deployTracker.get(root) });
+      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), slots: max, deployStatus: root => isBoardTempRoot(root, projectOpts()) ? null : deployTracker.get(root) });
     },
     // Every run alive in one project, combined (the Live tab of the project page).
     async live(id) {
@@ -467,19 +505,29 @@ export async function startBoardServer({ env = process.env, root, remote, regist
   const { url, port } = await server.listen();
   api.setBoardUrl(remote ? null : url);
   const version = await readPackageVersion();
+  const boardMode = remote ? 'background' : serverMode({ explicitBackground: registry?.explicitBackground === true });
   const baseRegistry = {
     version,
-    argv: remote ? ['remote', 'serve'] : ['watch', '--all'],
+    argv: remote ? argvForRemoteServe(remote, registry ?? {}) : ['watch', '--all'],
     cwd: process.cwd(),
     port,
     env: safeEnvSubset(env),
-    mode: remote ? 'background' : serverMode(),
+    ...registryModeFields(boardMode, { explicitBackground: remote || registry?.explicitBackground === true }),
     ...(registry && typeof registry === 'object' ? registry : {}),
   };
-  if (!remote) await writeBoardFile(url, { env, registry: baseRegistry }).catch(() => {});
-  else {
+  if (!remote) {
+    try {
+      await writeBoardFile(url, { env, registry: baseRegistry });
+    } catch (error) {
+      process.stderr.write(`board server record write failed: ${error.message}\n`);
+    }
+  } else {
     const { writeRegistryRecord, remoteServerFile } = await import('./server-restart.mjs');
-    await writeRegistryRecord(remoteServerFile(env), { pid: process.pid, url, startedAt: new Date().toISOString(), ...baseRegistry }).catch(() => {});
+    try {
+      await writeRegistryRecord(remoteServerFile(env), { pid: process.pid, url, startedAt: new Date().toISOString(), ...baseRegistry });
+    } catch (error) {
+      process.stderr.write(`remote server record write failed: ${error.message}\n`);
+    }
   }
   const cleaned = server.done.then(async () => {
     try {
@@ -515,7 +563,13 @@ export async function runWatchCommand(root, args, { write = text => process.stdo
     const board = await startBoardServer({
       env: process.env,
       root,
-      registry: { argv: watchArgv, mode: serverMode(), cwd: process.cwd(), env: safeEnvSubset(process.env) },
+      registry: {
+        argv: watchArgv,
+        cwd: process.cwd(),
+        env: safeEnvSubset(process.env),
+        explicitBackground: true,
+        ...registryModeFields(serverMode({ explicitBackground: true }), { explicitBackground: true }),
+      },
     });
     write(`Swarm Watch board (every project on this machine)\n${board.url}\nRead-only, on this machine only. Opening a run starts that run's own page. Stops after 30 minutes idle. Ctrl-C stops it now. (swarm watch --all --text prints the live runs instead.)\n`);
     if (opts.open) openUrl(board.url);

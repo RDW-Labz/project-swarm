@@ -131,12 +131,12 @@ test('forget --missing and --scratch bulk limits and --yes', async t => {
   const real = path.join(base, 'real-app');
   await fs.mkdir(real, { recursive: true });
   const missingRoots = Array.from({ length: 4 }, (_, i) => path.join(base, `missing-${i}`));
+  // forget --scratch uses strict scratch only; a path segment named tmp is broad (board hide), not registry bulk forget.
   const scratchRoots = [
     path.join(scratchBase, 'wt-a'),
     path.join(scratchBase, 'wt-b'),
     path.join(scratchBase, 'wt-c'),
     path.join(scratchBase, 'wt-d'),
-    path.join(base, 'tmp', 'seg-proj'),
   ];
   for (const root of [...missingRoots, ...scratchRoots, real]) await fs.mkdir(root, { recursive: true });
   const projects = [
@@ -152,7 +152,7 @@ test('forget --missing and --scratch bulk limits and --yes', async t => {
   const missingOk = await forgetProjects({ missing: true, yes: true, file, env, home: opts.home, installRoot });
   assert.equal(missingOk.exitCode, 0);
   let left = JSON.parse(await fs.readFile(file, 'utf8')).projects;
-  assert.equal(left.length, 6);
+  assert.equal(left.length, 5);
   const scratchOnly = [
     ...scratchRoots.map((root, i) => projectEntry(root, `s${i}`)),
     projectEntry(real, 'real'),

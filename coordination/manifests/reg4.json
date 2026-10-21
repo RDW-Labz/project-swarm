@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reg4",
+      "agent": "auto",
+      "prompt": "Add one new test file tests/review-high-regressions.test.mjs holding four explicitly named regression tests for the four HIGH review findings of this batch; read the existing tests/server-restart-review.test.mjs, tests/registry-review.test.mjs, tests/scratch-strict-broad.test.mjs and tests/commit-msg-review.test.mjs first for fixtures and reuse their helpers, and do not edit any non-test file. Names: (1) \"regression high-1: a reused pid (alive, different command line or later start time) is never signalled and its record is removed\" using an injected process table and an injected kill that fails the test if called; also a case where the check cannot be made (ps fails) so nothing is signalled. (2) \"regression high-2: a stat error other than ENOENT/ENOTDIR (EACCES, EIO, ETIMEDOUT) keeps the project row as unreachable and a missing directory with a missing parent (unmounted volume) is not pruned; a hung stat does not hang the listing past 2 seconds\" with injected stat. (3) \"regression high-3: a real project in a folder named test, tests or Temp keeps its owner inbox items and a handbuild request filed there is not auto-denied, while a scratch-base worktree is\" via isScratchRoot and the real inbox and auto-deny code paths. (4) \"regression high-4: the commit-msg hook exits 0 with a one-line warning when node is missing (recorded node path missing and PATH without node), when the check script is missing, and when the check throws; it exits non-zero only for a positive violation\" by installing the hook in a temp git repo and running it with spawnSync with an explicit environment (PATH set to an empty temp folder). Hermetic: temp dirs, explicit env, no ambient environment, no network, no token-shaped literals. Each test must fail against the code before the fixes where practical (note in a comment which fix it guards). ignoreTests reason: only a new test file is added.",
+      "context": [
+        "tools/server-restart.mjs",
+        "tools/projects.mjs",
+        "tools/scratch-roots.mjs",
+        "tools/githook-check.mjs",
+        "tools/git-hooks.mjs",
+        "tools/handbuild.mjs",
+        "tools/board-inbox.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/registry-review.test.mjs",
+        "tests/scratch-strict-broad.test.mjs",
+        "tests/commit-msg-review.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/review-high-regressions.test.mjs"
+      ],
+      "timeoutMs": 2400000
+    }
+  ]
+}
