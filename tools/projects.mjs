@@ -80,10 +80,15 @@ async function withRegistryLock(file, fn) {
 
 async function statRootWithTimeout(root) {
   const statPromise = fs.stat(root).then(s => ({ code: null, isDirectory: s.isDirectory() })).catch(err => ({ code: err.code ?? 'ERROR', isDirectory: false }));
+  let timer;
   const timeout = new Promise(resolve => {
-    setTimeout(() => resolve({ code: 'ETIMEDOUT', isDirectory: false }), STAT_TIMEOUT_MS);
+    timer = setTimeout(() => resolve({ code: 'ETIMEDOUT', isDirectory: false }), STAT_TIMEOUT_MS);
   });
-  return Promise.race([statPromise, timeout]);
+  try {
+    return await Promise.race([statPromise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function parentExistsReadable(root) {

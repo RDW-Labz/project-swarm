@@ -187,10 +187,15 @@ function strictScratchCore(root, options = {}) {
   const parts = resolved.split(path.sep).filter(Boolean);
   const homeResolved = normalizedPath(options.home ?? options.env?.HOME ?? os.homedir());
   if (homeResolved && resolved === homeResolved) return false;
+  const registeredRoots = options.registeredRoots ?? [];
+  const underRegisteredProject = registeredRoots.some(reg => {
+    const rr = normalizedPath(reg);
+    return rr && (resolved === rr || isUnder(resolved, rr));
+  });
   const testTmp = options.env?.SWARM_TEST_TMP ?? process.env.SWARM_TEST_TMP;
   if (testTmp) {
     const tt = normalizedPath(testTmp);
-    if (tt && isUnder(resolved, tt) && !(homeResolved && isUnder(resolved, homeResolved)) && hasBroadTestSegment(resolved, options)) {
+    if (tt && isUnder(resolved, tt) && !(homeResolved && isUnder(resolved, homeResolved)) && hasBroadTestSegment(resolved, options) && !underRegisteredProject) {
       return true;
     }
   }
