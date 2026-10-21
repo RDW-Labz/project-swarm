@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "scorecard-verdict",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "Bug in tools/benchmark-scorecard.mjs verdictFor: it maps the scorecard trend 'up' -> 'better' and 'down' -> 'worse'. But metricTrend in tools/bench-scorecard.mjs returns RAW direction ('up' = value went up), and THRESHOLDS[name].direction says which way is good: most metrics are 'lower' (ready_to_merged_ms, billed_usd, retries, ...), only some are 'higher' (first_try_pass_rate). So a cost increase currently shows as 'better'. Fix: import THRESHOLDS from ./bench-scorecard.mjs; verdict(name, trend) = 'flat' for flat; 'unknown' for new or anything else; for up/down: better when (direction === 'higher' && trend === 'up') || (direction === 'lower' && trend === 'down'), else worse; unknown when the metric has no THRESHOLDS entry. Pass the metric name. Change nothing else. Update tests/benchmark-scorecard.test.mjs: billed_usd up -> worse, billed_usd down -> better, first_try_pass_rate up -> better, first_try_pass_rate down -> worse, flat -> flat, new -> unknown. Edit only tools/benchmark-scorecard.mjs and tests/benchmark-scorecard.test.mjs. Do NOT touch tools/swarm.mjs or tools/bench-scorecard.mjs. Run `node --import ./tests/_isolate-config.mjs --test tests/benchmark-scorecard.test.mjs tests/board-page.test.mjs` and `node tools/check-package.mjs`.",
+      "context": ["tests/_isolate-config.mjs", "tools/bench-scorecard.mjs", "tests/board-page.test.mjs"],
+      "outputs": ["tools/benchmark-scorecard.mjs", "tests/benchmark-scorecard.test.mjs"],
+      "timeoutMs": 1200000
+    }
+  ]
+}

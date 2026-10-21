@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "scenario": "s11-budget-cap",
+  "manager": "budget",
+  "kind": "seeded",
+  "description": "Seeded parts-app S11-style ramp: billed spend approaches and crosses the project cap inside one scope day (historical S11 finished about $6 over cap before the hard-cap fix).",
+  "projectCap": 40,
+  "recordedWindow": {
+    "start": "2026-09-12T14:00:00.000Z",
+    "end": "2026-09-12T23:00:00.000Z"
+  },
+  "spendCurve": [
+    { "at": "2026-09-12T14:00:00.000Z", "cumulativeUsd": 0 },
+    { "at": "2026-09-12T16:20:00.000Z", "cumulativeUsd": 11.75 },
+    { "at": "2026-09-12T18:45:00.000Z", "cumulativeUsd": 25.9 },
+    { "at": "2026-09-12T20:30:00.000Z", "cumulativeUsd": 36.4 },
+    { "at": "2026-09-12T21:40:00.000Z", "cumulativeUsd": 39.85 },
+    { "at": "2026-09-12T22:25:00.000Z", "cumulativeUsd": 42.6 },
+    { "at": "2026-09-12T22:55:00.000Z", "cumulativeUsd": 46.2 }
+  ],
+  "steps": [
+    { "at": "2026-09-12T14:00:00.000Z", "kind": "scope", "note": "scope wave 1 starts under cap" },
+    { "at": "2026-09-12T16:20:00.000Z", "kind": "run", "runId": "s11-wave-1", "note": "first wave integrated" },
+    { "at": "2026-09-12T18:45:00.000Z", "kind": "run", "runId": "s11-wave-2", "note": "second wave; spend nears cap" },
+    { "at": "2026-09-12T20:30:00.000Z", "kind": "run", "runId": "s11-wave-3", "note": "third wave; manager should warn before hard stop" },
+    { "at": "2026-09-12T22:25:00.000Z", "kind": "run", "runId": "s11-wave-4", "note": "fourth wave; cumulative spend crosses projectCap" },
+    { "at": "2026-09-12T22:55:00.000Z", "kind": "run", "runId": "s11-review-1", "note": "review re-ask counts as its own run (S11 overrun class)" }
+  ],
+  "files": {
+    ".project-swarm.json": "{\"version\":1,\"profile\":{\"sensitive\":true,\"protectedPaths\":[\".env\"],\"budget\":{\"maxUsd\":8,\"projectMaxUsd\":40}}}",
+    ".swarm/project/tickets.json": "{\"version\":1,\"scope\":{\"name\":\"parts-app\",\"version\":\"s11-seeded\"},\"tickets\":[{\"id\":\"T-0101\",\"type\":\"build\",\"status\":\"done\",\"title\":\"Seeded wave 1 ticket\",\"acceptance\":[\"AC1: placeholder\"]},{\"id\":\"T-0102\",\"type\":\"build\",\"status\":\"done\",\"title\":\"Seeded wave 2 ticket\",\"acceptance\":[\"AC1: placeholder\"]},{\"id\":\"T-0103\",\"type\":\"build\",\"status\":\"running\",\"title\":\"Seeded wave 3 ticket\",\"acceptance\":[\"AC1: placeholder\"]},{\"id\":\"T-0104\",\"type\":\"build\",\"status\":\"ready\",\"title\":\"Seeded wave 4 ticket\",\"acceptance\":[\"AC1: placeholder\"]}],\"changeOrders\":[],\"approved\":{\"hash\":\"seeded-s11-budget-cap\",\"at\":\"2026-09-12T14:00:00.000Z\"},\"createdAt\":\"2026-09-12T14:00:00.000Z\",\"updatedAt\":\"2026-09-12T22:55:00.000Z\"}",
+    ".swarm/project/journal.ndjson": "{\"kind\":\"run\",\"ts\":\"2026-09-12T16:20:00.000Z\",\"runId\":\"s11-wave-1\",\"summary\":\"scope wave 1 complete\"}\n{\"kind\":\"run\",\"ts\":\"2026-09-12T18:45:00.000Z\",\"runId\":\"s11-wave-2\",\"summary\":\"scope wave 2 complete\"}\n{\"kind\":\"run\",\"ts\":\"2026-09-12T20:30:00.000Z\",\"runId\":\"s11-wave-3\",\"summary\":\"scope wave 3 complete\"}\n{\"kind\":\"run\",\"ts\":\"2026-09-12T22:25:00.000Z\",\"runId\":\"s11-wave-4\",\"summary\":\"scope wave 4 complete\"}\n{\"kind\":\"run\",\"ts\":\"2026-09-12T22:55:00.000Z\",\"runId\":\"s11-review-1\",\"summary\":\"acceptance review re-ask\"}",
+    ".swarm/runs/s11-wave-1/state.json": "{\"id\":\"s11-wave-1\",\"status\":\"complete\",\"budget\":{\"maxUsd\":8},\"jobs\":[{\"id\":\"j1\",\"agent\":\"anthropic\",\"model\":\"claude-haiku-5-5\",\"costUsd\":6.25,\"usage\":{\"total_tokens\":120000}},{\"id\":\"j2\",\"agent\":\"anthropic\",\"model\":\"claude-haiku-5-5\",\"costUsd\":5.5,\"usage\":{\"total_tokens\":98000}}]}",
+    ".swarm/runs/s11-wave-2/state.json": "{\"id\":\"s11-wave-2\",\"status\":\"complete\",\"budget\":{\"maxUsd\":8},\"jobs\":[{\"id\":\"j1\",\"agent\":\"anthropic\",\"model\":\"claude-haiku-5-5\",\"costUsd\":7.05,\"usage\":{\"total_tokens\":140000}},{\"id\":\"j2\",\"agent\":\"openrouter\",\"model\":\"gpt-5.6-sol-medium\",\"costUsd\":7.1,\"usage\":{\"total_tokens\":85000}}]}",
+    ".swarm/runs/s11-wave-3/state.json": "{\"id\":\"s11-wave-3\",\"status\":\"complete\",\"budget\":{\"maxUsd\":8},\"jobs\":[{\"id\":\"j1\",\"agent\":\"anthropic\",\"model\":\"claude-haiku-5-5\",\"costUsd\":5.9,\"usage\":{\"total_tokens\":110000}},{\"id\":\"j2\",\"agent\":\"anthropic\",\"model\":\"claude-haiku-5-5\",\"costUsd\":4.6,\"usage\":{\"total_tokens\":90000}}]}",
+    ".swarm/runs/s11-wave-4/state.json": "{\"id\":\"s11-wave-4\",\"status\":\"complete\",\"budget\":{\"maxUsd\":8},\"jobs\":[{\"id\":\"j1\",\"agent\":\"anthropic\",\"model\":\"claude-sonnet-5-5-high\",\"costUsd\":4.25,\"usage\":{\"total_tokens\":75000}},{\"id\":\"j2\",\"agent\":\"anthropic\",\"model\":\"claude-haiku-5-5\",\"costUsd\":1.95,\"usage\":{\"total_tokens\":42000}}]}",
+    ".swarm/runs/s11-review-1/state.json": "{\"id\":\"s11-review-1\",\"status\":\"complete\",\"budget\":{\"maxUsd\":3},\"jobs\":[{\"id\":\"review-1\",\"agent\":\"claude\",\"model\":\"opus\",\"costUsd\":3.6,\"usage\":{\"total_tokens\":55000}}]}",
+    "docs/state/usage-ledger.md": "# Usage ledger\n\nRecorded worker attempts and reported usage.\n\n| date | phase | task | worker | model | result | tokens | rough cost |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| 2026-09-12 | build | j1: seeded ticket | anthropic | claude-haiku-5-5 | pass | 120,000 | $6.25 |\n| 2026-09-12 | build | j2: seeded ticket | anthropic | claude-haiku-5-5 | pass | 98,000 | $5.50 |\n| 2026-09-12 | build | j1: seeded ticket | anthropic | claude-haiku-5-5 | pass | 140,000 | $7.05 |\n| 2026-09-12 | build | j2: seeded ticket | openrouter | gpt-5.6-sol-medium | pass | 85,000 | $7.10 |\n| 2026-09-12 | build | j1: seeded ticket | anthropic | claude-haiku-5-5 | pass | 110,000 | $5.90 |\n| 2026-09-12 | build | j2: seeded ticket | anthropic | claude-haiku-5-5 | pass | 90,000 | $4.60 |\n| 2026-09-12 | build | j1: seeded ticket | anthropic | claude-sonnet-5-5-high | pass | 75,000 | $4.25 |\n| 2026-09-12 | build | j2: seeded ticket | anthropic | claude-haiku-5-5 | pass | 42,000 | $1.95 |\n| 2026-09-12 | review | review-1: acceptance review | claude | opus | pass | 55,000 | $3.60 |\n"
+  }
+}

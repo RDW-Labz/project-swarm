@@ -6,6 +6,7 @@ import os from 'node:os';
 import { readEvents, sessionsOf, handBuiltOf } from './orchestrator-events.mjs';
 import { sessionUsage, combinedUsage } from './orchestrator-usage.mjs';
 import { sanitizeWorkerText } from './worker-text.mjs';
+import { chatUrlFor } from './orchestrator-chat.mjs';
 
 const txt = (v, n) => (v === null || v === undefined ? null : sanitizeWorkerText(v, n));
 
@@ -25,13 +26,16 @@ export function swarmBuiltFiles(runs) {
 }
 
 /** { sessions, handBuilt, swarmBuilt, swarmPct, listUsd } for one project; `runs` are its run states (swarmBuiltFiles). */
-export function projectOrchestrator(project, { runs = [], now = Date.now(), usage = sessionUsage, isAlive = defaultIsAlive } = {}) {
+export function projectOrchestrator(project, { runs = [], now = Date.now(), usage = sessionUsage, isAlive = defaultIsAlive, chatUrl = chatUrlFor } = {}) {
   const events = readEvents(project.root);
   const all = sessionsOf(events, now, { isAlive, host: os.hostname() });
   const sessions = all.filter(s => s.shown).slice(0, 8).map(s => {
     const u = s.transcript ? usage(s.transcript, { now }) : null;
+    const fullSessionId = typeof s.id === 'string' ? s.id : '';
+    let sessionChatUrl = null;
+    try { sessionChatUrl = chatUrl(fullSessionId) ?? null; } catch { sessionChatUrl = null; }
     return {
-      id: String(s.id).replace(/[^A-Za-z0-9-]/g, '').slice(0, 8), project: txt(project.name, 80), projectId: project.id, state: s.state, lastAt: s.lastAt, since: s.since, endedAt: s.endedAt,
+      id: fullSessionId.replace(/[^A-Za-z0-9-]/g, '').slice(0, 8), chatUrl: sessionChatUrl, project: txt(project.name, 80), projectId: project.id, state: s.state, lastAt: s.lastAt, since: s.since, endedAt: s.endedAt,
       doing: s.doing ? { tool: txt(s.doing.tool, 40), file: s.doing.file ? txt(s.doing.file, 120) : null, command: s.doing.command ? txt(s.doing.command, 80) : null, startedAt: s.doing.startedAt } : null,
       edits: s.edits, handBuilt: s.handBuilt, blocked: s.blocked,
       tokensToday: u?.todayTokens ?? null, listUsdToday: u?.todayListUsd ?? null, tokensAll: u?.allTokens ?? null, listUsdAll: u?.allListUsd ?? null, unpriced: Boolean(u?.unpricedTokens), models: u?.models ?? [],

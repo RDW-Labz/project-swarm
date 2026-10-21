@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.162.0
+
+Hotfix: guard regressions from 1.159 and version pinning.
+- **Guard:** orchestrators can file hand-build requests in every invocation form (node PATH/swarm.mjs, --root, env and cd prefixes); only approve, deny, on, off, install, uninstall and decide stay owner-only. The inline-code detector no longer fires on direct script calls.
+- **Read-only forms allowed:** git rev-parse, branch --show-current and listing, remote -v, config --get, ls-files, ls-remote, describe, for-each-ref, merge-base, cat-file, blame, tag -l, stash list, worktree list and more; gh pr, issue, run, release, workflow and repo views and lists, gh auth status, gh api in GET form; vercel git ls. Every write form stays blocked.
+- **Pinning:** a project with pinned true or pinnedVersion x.y.z in .project-swarm.json is skipped by swarm update (printed as skipped, pinned at x.y.z), its hooks and guard are not refreshed, its version is never pruned, update --projects lists pinned projects separately, swarm pin PROJECT VERSION installs the version from its git tag if needed and swarm unpin PROJECT releases it; the board card shows a pinned at x.y.z badge.
+
 ## 1.159.0
 
 T: the autonomy policy engine and the daily spend limit, wired and off by default for policy.

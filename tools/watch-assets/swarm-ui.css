@@ -243,3 +243,11 @@ body.paused-motion *, body.paused-motion *::before, body.paused-motion *::after 
 .milestones li.done { color: var(--faint); }
 .milestones li.done::before { content: '✓ '; color: var(--accent); }
 .milestones li.unknown { border-style: dashed; color: var(--faint); }
+
+.grade-green { background: var(--accent); }
+.grade-amber { background: var(--warn); }
+.grade-red { background: var(--bad); }
+.grade-unknown { background: var(--muted); }
+.split-red { color: var(--bad); }
+.split-amber { color: var(--warn); }
+.spark { width: 120px; height: 24px; flex: none; color: var(--accent); }

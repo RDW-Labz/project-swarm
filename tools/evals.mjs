@@ -133,6 +133,14 @@ export function validateEvalSpec(spec) {
   return { ok: errors.length === 0, errors };
 }
 
+export const EVAL_GROUP_MARKER = '.eval-group';
+
+async function isEvalFixtureGroup(dir) {
+  const marker = path.join(dir, EVAL_GROUP_MARKER);
+  const st = await fs.lstat(marker).catch(() => null);
+  return Boolean(st && !st.isSymbolicLink() && st.isFile());
+}
+
 export async function listEvals(root, { dir = 'evals' } = {}) {
   const base = path.join(root, dir);
   const evals = [];
@@ -144,6 +152,7 @@ export async function listEvals(root, { dir = 'evals' } = {}) {
   for (const ent of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
     if (ent.name.startsWith('.') || !ent.isDirectory()) continue;
     const d = path.join(base, ent.name);
+    if (await isEvalFixtureGroup(d)) continue;
     let spec;
     try {
       spec = await readJson(path.join(d, 'eval.json'));
@@ -217,7 +226,7 @@ export async function checkEval(evalDir, outputsDir, { run = defaultRun } = {}) 
     }
     const hidden = path.join(evalDir, 'hidden');
     if (await fs.lstat(hidden).catch(() => null)) await copyTree(hidden, work);
-    const env = { PATH: process.env.PATH ?? '', HOME: tmp, NODE_ENV: 'test' };
+    const env = { PATH: process.env.PATH ?? '', HOME: tmp, TMPDIR: tmp, NODE_ENV: 'test' };
     const res = await run(spec.check.argv[0], spec.check.argv.slice(1), {
       cwd: work,
       env,
