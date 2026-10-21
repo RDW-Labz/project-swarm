@@ -3,9 +3,12 @@ import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildProgress } from '../tools/build-progress.mjs';
+import { buildProgress, offLedgerRunHref, OFF_LEDGER_LIST_ANCHOR_ID } from '../tools/build-progress.mjs';
+
+const projectJsPath = new URL('../tools/watch-assets/project.js', import.meta.url);
 
 const NOW = Date.UTC(2026, 9, 21, 12, 0, 0);
 
@@ -44,4 +47,19 @@ test('off-ledger counts exclude smoke, probe, lane tests, and non-integrating ru
   assert.deepEqual(progress.untracked.runs.map(item => item.runId), ['manifest-run']);
   assert.equal(progress.untracked.jobs, 1);
   assert.deepEqual(progress.untracked.newest, [{ runId: 'manifest-run', name: 'manifest-run', startedAt: new Date(NOW - 1000).toISOString(), status: 'complete' }]);
+  assert.equal(progress.untracked.listAnchorId, OFF_LEDGER_LIST_ANCHOR_ID);
+  assert.equal(progress.untracked.countHref, `#${OFF_LEDGER_LIST_ANCHOR_ID}`);
+  const manifest = progress.untracked.runs.find(item => item.runId === 'manifest-run');
+  assert.ok(manifest);
+  assert.equal(manifest.href, offLedgerRunHref('filter-fixture', 'manifest-run'));
+  for (const excluded of ['smoke-run', 'probe-run', 'lane-test-run', 'lane-bench-run', 'doctor-run', 'non-integrating']) {
+    assert.equal(progress.untracked.runs.some(item => item.runId === excluded), false);
+  }
+});
+
+test('project.js links untracked count to the off-ledger list anchor', () => {
+  const source = readFileSync(projectJsPath, 'utf8');
+  assert.match(source, /untrackedCount\.setAttribute\('href',\s*untracked\.countHref/);
+  assert.match(source, /offTitle\.id\s*=\s*listAnchor/);
+  assert.match(source, /runLink\.setAttribute\('href',\s*run\.href/);
 });

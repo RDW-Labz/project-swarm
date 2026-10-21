@@ -112,6 +112,18 @@ export function validateTargetWorktree(value) {
   return null;
 }
 
+export function effectiveTargetWorktree(ledger, ticket) {
+  if (ticket?.targetWorktree !== undefined) return ticket.targetWorktree;
+  const stages = Array.isArray(ledger?.scope?.stages)
+    ? ledger.scope.stages
+    : Array.isArray(ledger?.stages)
+      ? ledger.stages
+      : [];
+  const stage = stages.find(candidate => candidate?.id === ticket?.stage);
+  if (stage?.targetWorktree !== undefined) return stage.targetWorktree;
+  return ledger?.stageTargets?.[ticket?.stage] ?? ledger?.scope?.stageTargets?.[ticket?.stage];
+}
+
 export function ticketSetHash(tickets) {
   // Proposed tickets, and comment tickets the owner has not approved (cancelled or hand-edited), are outside what was approved.
   const picked = [...tickets].filter(t => t.status !== 'proposed' && !unapprovedProposal(t)).sort(byId).map(t => Object.fromEntries(HASH_FIELDS.map(k => [k, t[k]])));
@@ -232,7 +244,7 @@ export async function appendLog(root, event) {
   }
 }
 
-export function createLedger({ scope, tickets = [], now = Date.now() } = {}) {
+export function createLedger({ scope, stageTargets, tickets = [], now = Date.now() } = {}) {
   const seen = new Set();
   for (const t of tickets) {
     const r = validateTicket(t);
@@ -246,8 +258,12 @@ export function createLedger({ scope, tickets = [], now = Date.now() } = {}) {
       if (error) throw fail('ticket-invalid', `${stage.id ?? '?'}: ${error}`);
     }
   }
+  for (const [stageId, target] of Object.entries(stageTargets ?? scope?.stageTargets ?? {})) {
+    const error = validateTargetWorktree(target);
+    if (error) throw fail('ticket-invalid', `${stageId}: ${error}`);
+  }
   const at = new Date(now).toISOString();
-  return { version: 1, scope, tickets, changeOrders: [], approved: null, createdAt: at, updatedAt: at };
+  return { version: 1, scope, ...(stageTargets === undefined ? {} : { stageTargets }), tickets, changeOrders: [], approved: null, createdAt: at, updatedAt: at };
 }
 
 const unknownTarget = target => fail('target-worktree-unknown', `target-worktree-unknown: ${String(target ?? '')}`);

@@ -8,7 +8,7 @@ import {
   waveBlockingTicketIds,
   wavePlanningTickets,
 } from './human-progress.mjs';
-import { resolveTargetWorktree } from './tickets.mjs';
+import { effectiveTargetWorktree, resolveTargetWorktree } from './tickets.mjs';
 // `swarm go --scope` as a loop: wave after wave until the ledger is finished or something needs the owner.
 // Each wave does what the owner used to do by hand: build the wave, run it, integrate and commit it (go), move the tickets (scope sync),
 // mark the integrated ones done (scope sync --integrated) and run the security / acceptance reviews that step asks for.
@@ -124,16 +124,19 @@ export async function scopeLoop({ maxWaves = DEFAULT_MAX_WAVES, deps, root: requ
   const summaryNow = async () => ledgerSummary(await deps.ledger());
 
   const rootsForTickets = async tickets => {
-    const explicit = tickets.filter(ticket => ticket?.targetWorktree !== undefined);
+    const ledger = await deps.ledger();
+    const targets = new Map(tickets.map(ticket => [ticket.id, effectiveTargetWorktree(ledger, ticket)]));
+    const explicit = tickets.filter(ticket => targets.get(ticket.id) !== undefined);
     if (!explicit.length && !mainRoot) return null;
     const roots = {};
     for (const ticket of tickets) {
-      if (ticket?.targetWorktree === undefined) {
+      const target = targets.get(ticket.id);
+      if (target === undefined) {
         if (mainRoot) roots[ticket.id] = mainRoot;
         continue;
       }
-      if (!mainRoot) throw Object.assign(new Error(`target-worktree-unknown: ${ticket.targetWorktree}`), { code: 'target-worktree-unknown' });
-      roots[ticket.id] = await resolveTargetWorktree(mainRoot, ticket.targetWorktree);
+      if (!mainRoot) throw Object.assign(new Error(`target-worktree-unknown: ${target}`), { code: 'target-worktree-unknown' });
+      roots[ticket.id] = await resolveTargetWorktree(mainRoot, target);
     }
     const unique = [...new Set(Object.values(roots))];
     return {
@@ -194,23 +197,35 @@ export async function scopeLoop({ maxWaves = DEFAULT_MAX_WAVES, deps, root: requ
 
   const recordReview = async ({ kind, file, tickets, source, waveId }) => {
     const rootOptions = await rootsForTickets(tickets);
-    const context = reviewContext(tickets, source, waveId, rootOptions);
-    let review;
-    try {
-      review = await deps.review(kind, file, context, rootOptions ?? undefined);
-    } catch (error) {
-      return { stop: await reviewStartStop(error, tickets[0], waveId) };
+    const groups = [];
+    for (const ticket of tickets) {
+      const root = rootOptions?.ticketRoots?.[ticket.id] ?? null;
+      const group = groups.find(candidate => candidate.root === root);
+      if (group) group.tickets.push(ticket);
+      else groups.push({ root, tickets: [ticket] });
     }
-    if (!review?.runId) {
-      return { stop: await reviewStartStop(new Error('review dependency returned no run id'), tickets[0], waveId) };
+    const reviews = [];
+    for (const group of groups) {
+      const groupOptions = await rootsForTickets(group.tickets);
+      const context = reviewContext(group.tickets, source, waveId, groupOptions);
+      let review;
+      try {
+        review = await deps.review(kind, file, context, groupOptions ?? undefined);
+      } catch (error) {
+        return { stop: await reviewStartStop(error, group.tickets[0], waveId) };
+      }
+      if (!review?.runId) {
+        return { stop: await reviewStartStop(new Error('review dependency returned no run id'), group.tickets[0], waveId) };
+      }
+      try {
+        await deps.record(kind, review.runId, context, groupOptions ?? undefined);
+      } catch (error) {
+        return { stop: stepStop(error) };
+      }
+      for (const ticket of group.tickets) reviewRecord.add(ticket.id);
+      reviews.push({ review, context });
     }
-    try {
-      await deps.record(kind, review.runId, context, rootOptions ?? undefined);
-    } catch (error) {
-      return { stop: stepStop(error) };
-    }
-    for (const ticket of tickets) reviewRecord.add(ticket.id);
-    return { review, context };
+    return { ...reviews[0], reviews };
   };
 
   const queueResumeReviews = async () => {
@@ -327,8 +342,10 @@ export async function scopeLoop({ maxWaves = DEFAULT_MAX_WAVES, deps, root: requ
             if (reviewed.stop.status === 'stuck') return finish('stuck', `wave ${n}: ${reviewed.stop.reason}`, { summary: await summaryNow() });
             return finish(reviewed.stop.status, `wave ${n}: ${reviewed.stop.reason}`, { summary: await summaryNow() });
           }
-          wave.reviewRecord.push({ kind, runId: reviewed.review.runId, ticketIds: reviewed.context.ticketIds });
-          wave.reviews += 1;
+          for (const entry of reviewed.reviews ?? [reviewed]) {
+            wave.reviewRecord.push({ kind, runId: entry.review.runId, ticketIds: entry.context.ticketIds });
+            wave.reviews += 1;
+          }
         }
         const again = await step(() => deps.sync(wave.runId, { integrated: true, ...(rootOptions ?? {}) }));
         if (again.stop) return stopHere(again);
