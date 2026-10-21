@@ -63,10 +63,6 @@ function hasKindMismatch(item) {
   return KIND_FIELDS.some(field => item?.[field] !== undefined && !sameKind(item[field], item?.kind));
 }
 
-function guardArgs(kind) {
-  return { kind, source: 'board', itemKind: kind };
-}
-
 function summaryOf(item) {
   return String(item?.summary ?? item?.title ?? item?.text ?? item?.id ?? '');
 }
@@ -144,11 +140,15 @@ export function createOwnerActions({
     if (!needsHuman(approvalPolicy(item), approvalEvent(item, kind))) {
       return { error: response(422, 'not-owner-decidable', 'the item is not currently decidable by the owner') };
     }
-    const guarded = await guard(guardArgs(kind));
+    return { item };
+  };
+
+  const guardItem = async (kind, itemKind) => {
+    const guarded = await guard({ kind, source: 'board', itemKind });
     if (!guarded || guarded.allowed !== true) {
       return { error: response(403, 'owner-forbidden', guarded?.reason || 'the board action is refused') };
     }
-    return { item };
+    return null;
   };
 
   const auditEntry = (time, itemId, decision, identity, outcome) => ({
@@ -170,6 +170,9 @@ export function createOwnerActions({
     if (authorized.status) return authorized;
     const checked = await itemCheck(itemId);
     if (checked.error) return checked.error;
+    // Prepare uses approve only to reject protected item kinds before issuing a token.
+    const guardError = await guardItem('approve', checked.item.kind);
+    if (guardError) return guardError.error;
 
     let confirmToken = String(randomId());
     while (confirms.has(confirmToken)) confirmToken = `${String(randomId())}-${++confirmSuffix}`;
@@ -201,6 +204,14 @@ export function createOwnerActions({
     }
     if (!body || typeof body !== 'object' || Array.isArray(body) || !DECISIONS.has(body.decision) || typeof body.confirm !== 'string' || body.confirm.length === 0 || Object.keys(body).some(key => !['decision', 'confirm', 'reason'].includes(key)) || (body.reason !== undefined && (typeof body.reason !== 'string' || body.reason.length === 0 || body.reason.length > 2000))) {
       return refusal(time, itemId, body, authorized.identity, { response: response(422, 'not-owner-decidable', 'decision and confirm are required'), outcome: 'refused-invalid-request' });
+    }
+
+    const guardError = await guardItem(body.decision, checked.item.kind);
+    if (guardError) {
+      return refusal(time, itemId, body, authorized.identity, {
+        response: guardError.error,
+        outcome: `refused-${guardError.error.body.error}`,
+      });
     }
 
     const pending = confirms.get(body.confirm);

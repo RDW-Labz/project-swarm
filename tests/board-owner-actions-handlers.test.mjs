@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createOwnerActions } from '../tools/board-owner-actions.mjs';
+import { guardBoardAction } from '../tools/board-action-guard.mjs';
 
 const identity = 'owner@example.test';
 const req = (overrides = {}) => ({
@@ -14,7 +15,7 @@ const req = (overrides = {}) => ({
   ...overrides,
 });
 
-function fixture({ item = { id: 'item-1', kind: 'scope', title: 'Review scope' }, policy = { humanApprovals: ['scope'] }, guardResult = { allowed: true }, clock = 1000, verifyIdentity = () => true } = {}) {
+function fixture({ item = { id: 'item-1', kind: 'scope', title: 'Review scope' }, policy = { humanApprovals: ['scope'] }, guardResult = { allowed: true }, guardImpl, clock = 1000, verifyIdentity = () => true } = {}) {
   let time = clock;
   const audit = [];
   let sequence = 0;
@@ -24,7 +25,7 @@ function fixture({ item = { id: 'item-1', kind: 'scope', title: 'Review scope' }
     readAudit: () => audit,
     guard: args => {
       assert.equal(args.source, 'board');
-      return guardResult;
+      return guardImpl ? guardImpl(args) : guardResult;
     },
     now: () => time,
     randomId: () => `confirm-${++sequence}`,
@@ -105,6 +106,25 @@ test('decision consumes confirmation, records approve and deny, and rejects repl
   assert.equal(denied.status, 200);
   assert.equal(denied.body.result, 'denied');
   assert.equal(audit.length, 3);
+});
+
+test('real action guard allows approve and deny, but refuses deploy items end to end', async () => {
+  const allowed = fixture({ guardImpl: guardBoardAction });
+  const preparedApprove = await allowed.actions.prepare('item-1', req());
+  assert.equal(preparedApprove.status, 200);
+  assert.equal((await allowed.actions.decide('item-1', { decision: 'approve', confirm: preparedApprove.body.confirmToken }, req())).status, 200);
+
+  const preparedDeny = await allowed.actions.prepare('item-1', req());
+  assert.equal(preparedDeny.status, 200);
+  assert.equal((await allowed.actions.decide('item-1', { decision: 'deny', confirm: preparedDeny.body.confirmToken }, req())).status, 200);
+
+  const refused = fixture({
+    item: { id: 'item-1', kind: 'deploy', title: 'Deploy release' },
+    guardImpl: guardBoardAction,
+  });
+  const refusedPrepare = await refused.actions.prepare('item-1', req());
+  assert.equal(refusedPrepare.status, 403);
+  assert.equal(refusedPrepare.body.error, 'owner-forbidden');
 });
 
 test('expired and wrong-identity confirmations are refused without consuming a wrong-owner confirmation', async () => {

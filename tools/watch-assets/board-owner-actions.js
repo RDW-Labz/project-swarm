@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Approve / deny controls for owner-decidable Needs-you items (tailnet sign-in + board token header only).
 var REFUSED_OWNER_KINDS = ['merge', 'deploy', 'cap-raise', 'spend', 'key', 'migration'];
+var REFUSED_OWNER_KIND_RE = /^(?:merge|deploy|cap-raise|spend|key|migration)(?:$|[^a-z0-9])/;
+
+function isRefusedOwnerKind(value) {
+  var normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return REFUSED_OWNER_KIND_RE.test(normalized);
+}
 
 function el(doc, tag, cls, text) {
   var n = doc.createElement(tag);
@@ -28,7 +34,7 @@ export function ownerActionAvailable(item, options) {
   if (!options || !options.signedIn) { return false; }
   if (!item || item.needsOwner !== true) { return false; }
   var kind = item.kind ? String(item.kind) : '';
-  return REFUSED_OWNER_KINDS.indexOf(kind) === -1;
+  return !isRefusedOwnerKind(kind);
 }
 
 export function renderOwnerActions(container, item, options) {
