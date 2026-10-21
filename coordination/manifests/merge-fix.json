@@ -92,7 +92,8 @@
         "tests/update-pending-round3.test.mjs",
         "tests/update.test.mjs",
         "tests/watch-leftovers.test.mjs",
-        "tests/watch-ui.test.mjs"
+        "tests/watch-ui.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json"
       ],
       "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
     }
