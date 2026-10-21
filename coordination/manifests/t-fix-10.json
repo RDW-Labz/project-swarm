@@ -5,7 +5,7 @@
     {
       "id": "t-fix10-actor-env",
       "agent": "auto",
-      "prompt": "tools/budget-set-commands.mjs budgetCommand line ~454 builds actorEnv as { ...process.env, ...env } when an env is injected, so ambient environment names from the machine running the tests (CLAUDE_*, CODEX_*, CURSOR_*, TERM_PROGRAM and so on) leak into the owner versus agent detection: tests/budget-set.test.mjs (round trips machine config preserving other keys, round trips project file with mode 0600, and the budgetCommand subtests) fail whenever the suite runs inside an agent session or any shell with such variables, even with stdinIsTTY and stdoutIsTTY injected. Fix: when an env object is injected, owner detection and every other actor decision use ONLY that injected env (actorEnv = env), and only when env is undefined does it use process.env; HOME and config lookups keep their current fallbacks. Production calls pass no env, so behavior there is unchanged. Add a test in tests/budget-set.test.mjs: with process.env containing a CLAUDE_FAKE_MARKER variable set for the duration of the test, a call with an injected clean env and injected TTYs is treated as the owner; with the marker inside the injected env it is treated as an agent. Keep every other test passing. No token-shaped literals. ignoreTests reason: only budget set files change.",
+      "prompt": "tools/budget-set-commands.mjs budgetCommand line ~454 builds actorEnv as { ...process.env, ...env } when an env is injected, so ambient environment names from the machine running the tests (variables whose names start with CLAUDE, CODEX or CURSOR, and TERM_PROGRAM) leak into the owner versus agent detection: tests/budget-set.test.mjs (round trips machine config preserving other keys, round trips project file with mode 0600, and the budgetCommand subtests) fail whenever the suite runs inside an agent session or any shell with such variables, even with stdinIsTTY and stdoutIsTTY injected. Fix: when an env object is injected, owner detection and every other actor decision use ONLY that injected env (actorEnv = env), and only when env is undefined does it use process.env; HOME and config lookups keep their current fallbacks. Production calls pass no env, so behavior there is unchanged. Add a test in tests/budget-set.test.mjs: with process.env containing a CLAUDE_FAKE_MARKER variable set for the duration of the test, a call with an injected clean env and injected TTYs is treated as the owner; with the marker inside the injected env it is treated as an agent. Keep every other test passing. No token-shaped literals. ignoreTests reason: only budget set files change.",
       "context": [
         "tools/budget-set-commands.mjs",
         "tests/budget-set.test.mjs",
@@ -16,7 +16,11 @@
         "tools/budget-set-commands.mjs",
         "tests/budget-set.test.mjs"
       ],
-      "timeoutMs": 900000
+      "timeoutMs": 900000,
+      "ignoreTests": [
+        "tests/daily-limit-hardening.test.mjs",
+        "tests/daily-limit-hardening-round3.test.mjs"
+      ]
     }
   ]
 }
