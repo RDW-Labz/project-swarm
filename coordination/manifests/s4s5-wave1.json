@@ -1,0 +1,292 @@
+{
+  "version": 1,
+  "concurrency": 8,
+  "jobs": [
+    {
+      "id": "T-0102-contract",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "outputs": [
+        "contracts/watch-s4-ops.json",
+        "tests/watch-s4-contract.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/watch-server.mjs",
+        "tools/board-data.mjs",
+        "tools/board-inbox.mjs",
+        "tools/inbox.mjs",
+        "tools/remote.mjs",
+        "docs/scope/roadmap.md",
+        "docs/remote.md"
+      ],
+      "prompt": "Ticket T-0102 (S4, sensitive, contract-first for R-029 'The owner can act from the board': Approve and Deny buttons for requests the policy leaves to the owner, tailnet only, with sign-in, a confirm step and an audit log; merge, deploy and cap actions refused from the phone or board server-side). Write contracts/watch-s4-ops.json: an OpenAPI 3.1 JSON document for the Swarm Watch board server (tools/watch-server.mjs) covering (a) the existing read routes the board already serves (GET /api/board, /api/project?id=, /api/live?id=, /api/history; auth: x-watch-token header or ?t=) with response schemas for the S4 fields: money (billedUsd, listUsd, capBasis, capUsedUsd), idle lane reasons (machine.laneIdle), split quality (projectDetail.splitQuality), federation (machines, drift, peers without tokens, local=1 query) \u2014 read board-data.mjs/watch-server.mjs for the real shapes; and (b) the NEW owner-action routes that tickets T-0111/T-0112/T-0114/T-0123 will build: POST /api/owner/actions/{itemId}/decision with body {decision: 'approve'|'deny', confirm: string (the confirm token returned by step 1), reason?: string}; a step-1 POST /api/owner/actions/{itemId}/prepare returning {confirmToken, expiresAt, summary}; GET /api/owner/audit returning the audit log entries {at, actor, itemId, kind, decision, result, machine}. Security in the contract: securitySchemes for the board token AND a tailnet sign-in (Tailscale identity headers from `tailscale serve`, e.g. Tailscale-User-Login) both required for owner routes; responses 401 (not signed in), 403 (not on tailnet / agent session / action kind refused), 409 (confirm token expired or reused), 422 (item not owner-decidable). A refusedKinds enum in components: merge, deploy, cap-raise, spend, key, migration \u2014 always refused server-side whatever the client sends (T-0112). Document that owner routes are never reachable when the request carries agent-session markers and never from remote boards fetched with local=1. Keep it valid JSON OpenAPI 3.1; add an x-tickets map naming which ticket implements each route. Also add a test tests/watch-s4-contract.test.mjs that parses the file, checks it is OpenAPI 3.1, every owner route requires both security schemes, refusedKinds contains the six kinds, and every path in x-tickets exists. Rules: do NOT touch tools/swarm.mjs, the tools/swarm folder, tools/autopilot.mjs, tools/spend.mjs, tools/project-spend.mjs, tools/policy*.mjs, package files or .github. Tests use node:test with injected deps (no wall clock, no ambient env, no TTY, no network). Never write token-shaped literals; build fake secrets at runtime. Run your tests with `node --import ./tests/_isolate-config.mjs --test <files>` and `node tools/check-package.mjs`. The coordinator runs the full suite.",
+      "timeoutMs": 3000000
+    },
+    {
+      "id": "T-0141-context",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "outputs": [
+        "tools/orchestrator-context.mjs",
+        "tests/orchestrator-context.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/orchestrator-usage.mjs",
+        "tools/orchestrator-events.mjs"
+      ],
+      "prompt": "Ticket T-0141 (S5, R-030 'Orchestrators hand off before their context gets expensive': when an orchestrator's context passes a set size, it saves state to memory and a fresh session continues with no lost work). tools/orchestrator-context.mjs already exists on main (DEFAULT_HANDOFF_TRANSCRIPT_BYTES, HANDOFF_TRANSCRIPT_BYTES_ENV, validateOrchestratorConfig, handoffTranscriptBytes, transcriptBytes, transcriptHandoffSummary, persistOrchestratorHandoff, readOrchestratorHandoffState, contextHandoffOf). Verify it meets T-0141's own scope (measure transcript size against a configurable threshold: config value, env override, default; report over/under with bytes and threshold) and fix any gap minimally. Write tests/orchestrator-context.test.mjs (the file tests/orchestrator-handoff.test.mjs belongs to T-0144, do not create it): threshold precedence (explicit > orchestrator config > env > default), invalid config refused, transcriptBytes on a temp file, over/under decision, missing transcript handled. Rules: do NOT touch tools/swarm.mjs, the tools/swarm folder, tools/autopilot.mjs, tools/spend.mjs, tools/project-spend.mjs, tools/policy*.mjs, package files or .github. Tests use node:test with injected deps (no wall clock, no ambient env, no TTY, no network). Never write token-shaped literals; build fake secrets at runtime. Run your tests with `node --import ./tests/_isolate-config.mjs --test <files>` and `node tools/check-package.mjs`. The coordinator runs the full suite. Tests in ignoreTests (and the ledger fixture JSON, which only mentions file names) use these modules for unrelated behavior; keep them passing \u2014 the coordinator runs the FULL suite.",
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/split-module.test.mjs"
+      ]
+    },
+    {
+      "id": "T-0160-e2e-cleanup",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "outputs": [
+        "tools/e2e-data-cleanup.mjs",
+        "tests/e2e-data-cleanup.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/verify-config.mjs",
+        "tools/ui-check.mjs"
+      ],
+      "prompt": "Ticket T-0160 (S5, R-034 'Test environments stay clean': e2e runs clean up their own local test data). New module tools/e2e-data-cleanup.mjs: export `createE2eDataTracker({ root, runId })` that records local test-data artifacts an e2e run creates (temp dirs, local sqlite/files under the project's .swarm/e2e/<runId>/, local db names) via track(kind, value), and `cleanupE2eData(tracker, { rm, dropDb })` that removes only what it tracked, only under the project root or the OS temp dir (refuse anything else), and returns {removed, refused, errors}; `withE2eCleanup(fn, opts)` runs fn(tracker) and always cleans up in finally. Read tools/verify-config.mjs and tools/ui-check.mjs for where e2e/verify runs start and describe in your notes where to call it (do not edit those files). Tests tests/e2e-data-cleanup.test.mjs (tests/test-env-clean.test.mjs belongs to T-0163, do not create it): cleanup after success and after a thrown error; a tracked path outside root/temp is refused, not removed. Rules: do NOT touch tools/swarm.mjs, the tools/swarm folder, tools/autopilot.mjs, tools/spend.mjs, tools/project-spend.mjs, tools/policy*.mjs, package files or .github. Tests use node:test with injected deps (no wall clock, no ambient env, no TTY, no network). Never write token-shaped literals; build fake secrets at runtime. Run your tests with `node --import ./tests/_isolate-config.mjs --test <files>` and `node tools/check-package.mjs`. The coordinator runs the full suite.",
+      "timeoutMs": 3000000
+    },
+    {
+      "id": "T-0161-db-guard",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "outputs": [
+        "tools/test-db-cleanup.mjs",
+        "tests/test-db-cleanup.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/verify-config.mjs"
+      ],
+      "prompt": "Ticket T-0161 (S5, R-034): 'A cleanup command exits with an error when the database URL host is not localhost.' New module tools/test-db-cleanup.mjs: export `assertLocalDatabaseUrl(url)` that accepts only postgres://, postgresql://, mysql://, sqlite: / file: URLs whose host is localhost, 127.0.0.1, ::1 or a unix socket path (or no host for sqlite/file); anything else (any other hostname, IP, a host ending .local, a supabase.co / rds / neon / planetscale host, a URL with no parseable host) throws Error with code 'test-db-not-local' and a message that names the host but NEVER prints the password or the full URL (mask credentials). Export `cleanupTestDatabase(url, { dropSchema, dryRun })` that calls assertLocalDatabaseUrl first and only then calls the injected dropSchema(name); and a tiny CLI entry when run directly (`node tools/test-db-cleanup.mjs <url> [--dry-run]`) that exits 1 with the error code for a non-local URL. Tests tests/test-db-cleanup.test.mjs (not tests/test-env-clean.test.mjs, which T-0163 owns): each accepted and refused form; the password never appears in the error text (build the URL with a runtime-built password); CLI exit code 1 for a remote host. Rules: do NOT touch tools/swarm.mjs, the tools/swarm folder, tools/autopilot.mjs, tools/spend.mjs, tools/project-spend.mjs, tools/policy*.mjs, package files or .github. Tests use node:test with injected deps (no wall clock, no ambient env, no TTY, no network). Never write token-shaped literals; build fake secrets at runtime. Run your tests with `node --import ./tests/_isolate-config.mjs --test <files>` and `node tools/check-package.mjs`. The coordinator runs the full suite.",
+      "timeoutMs": 3000000
+    },
+    {
+      "id": "T-0162-ci-mirror",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "outputs": [
+        "templates/coordination/ci-docker-hub-mirror.yml",
+        "tools/ci-image-cache.mjs",
+        "tests/ci-image-cache.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "templates/coordination/ORCHESTRATOR.md",
+        "templates/ci-diag.yml"
+      ],
+      "prompt": "Ticket T-0162 (S5, R-034): 'CI caches or mirrors images so Docker Hub rate limits don't fail runs.' (1) templates/coordination/ci-docker-hub-mirror.yml: a GitHub Actions workflow TEMPLATE (not installed into this repo's .github) that projects can copy: pulls service images through a configurable registry mirror (input/env MIRROR, default mirror.gcr.io), retries pulls with backoff, and caches image tarballs with actions/cache keyed on the image list + digest; no secrets in the template (use ${{ secrets.NAME }} placeholders only where a user must add one, documented in comments; never literal tokens). (2) tools/ci-image-cache.mjs: export `imagesFromCompose(text)` (parse image: lines from a docker-compose YAML or a list) , `mirroredRef(image, mirror)` (docker.io library and user images rewritten to the mirror; non-Docker-Hub registries like ghcr.io, quay.io, gcr.io left unchanged), `cacheKey(images)` (stable sorted hash). Tests tests/ci-image-cache.test.mjs (tests/test-env-clean.test.mjs belongs to T-0163): rewrite rules incl. library/ images, tags and digests kept; non-Hub registries untouched; stable cache key; the YAML template parses as YAML-ish text containing the mirror input and actions/cache step (string checks are fine). Rules: do NOT touch tools/swarm.mjs, the tools/swarm folder, tools/autopilot.mjs, tools/spend.mjs, tools/project-spend.mjs, tools/policy*.mjs, package files or .github. Tests use node:test with injected deps (no wall clock, no ambient env, no TTY, no network). Never write token-shaped literals; build fake secrets at runtime. Run your tests with `node --import ./tests/_isolate-config.mjs --test <files>` and `node tools/check-package.mjs`. The coordinator runs the full suite.",
+      "timeoutMs": 3000000
+    },
+    {
+      "id": "T-0165-field-export",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "outputs": [
+        "tools/field-export.mjs",
+        "tests/field-export.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/lessons.mjs",
+        "tools/security-scan.mjs",
+        "tools/lesson-store.mjs"
+      ],
+      "prompt": "Ticket T-0165 (S5, SENSITIVE, R-035 'Field data from every project improves the swarm': field export, push and report work across both machines with metadata only and secret and PII scanning). New module tools/field-export.mjs: export `async exportFieldData(root, { now, projectId, scan = scanSecrets })` that builds a METADATA-ONLY export of a project's field lessons and run outcomes: per lesson {id, area, status, version, createdAt, rule-length only (no rule text), tags}; per run aggregate {lane, jobs, pass, fail, medianMinutes} (read run states .swarm/runs/*/state.json); NO free text, file paths, prompts, code, emails, URLs or project names except the projectId hash. Then run the export JSON through tools/security-scan.mjs scanSecrets plus a PII pass (emails, phone numbers, IPv4, absolute home paths /Users/<name>/ or /home/<name>/) and REFUSE (throw code 'field-export-unsafe' listing finding kinds, never values) if anything is found. Export `writeFieldExport(root, data, { dir })` to .swarm/field/exports/<date>-<projectId>.json (mode 600). Tests tests/field-export.test.mjs (tests/field-ops.test.mjs belongs to T-0170): metadata only (no rule text, no paths); an injected lesson containing an email or a runtime-built fake token makes the export refuse; projectId is a hash, not the name; file written with mode 600. This ticket is sensitive: keep the export allow-list explicit (only listed fields copied), never spread objects. Rules: do NOT touch tools/swarm.mjs, the tools/swarm folder, tools/autopilot.mjs, tools/spend.mjs, tools/project-spend.mjs, tools/policy*.mjs, package files or .github. Tests use node:test with injected deps (no wall clock, no ambient env, no TTY, no network). Never write token-shaped literals; build fake secrets at runtime. Run your tests with `node --import ./tests/_isolate-config.mjs --test <files>` and `node tools/check-package.mjs`. The coordinator runs the full suite.",
+      "timeoutMs": 3000000
+    },
+    {
+      "id": "T-0168-failure-stubs",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "outputs": [
+        "tools/failure-regression.mjs",
+        "tests/failure-regression-stubs.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/lesson-mine.mjs"
+      ],
+      "prompt": "Ticket T-0168 (S5, R-035): 'Each new failure cause becomes a regression test.' New module tools/failure-regression.mjs: export `failureCausesFromRuns(runStates)` -> distinct causes {key, lane, firstSeenAt, runId, jobId, summary (<= 120 chars, sanitized)} from failed/timeout/blocked jobs (cause key = normalized error class: strip numbers, paths, hashes); `knownCauses(root)` reads .swarm/field/failure-causes.json; `newFailureCauses(causes, known)`; and `regressionStubFor(cause)` returning {path: 'tests/regressions/<key>.test.mjs', content} where content is a node:test file with one `test.todo` describing the cause and how to reproduce (run id, job id) \u2014 a STUB, no assertions that could fail CI; `recordCauses(root, causes)` updates the known list. Read tools/lesson-mine.mjs for existing failure parsing helpers and reuse them where they fit (do not edit it). Tests tests/failure-regression-stubs.test.mjs (tests/failure-regression.test.mjs belongs to T-0171): normalization merges two runs of the same cause; a known cause is not new; the stub is valid JS with test.todo and contains the run id; summaries are sanitized (no absolute home paths). Rules: do NOT touch tools/swarm.mjs, the tools/swarm folder, tools/autopilot.mjs, tools/spend.mjs, tools/project-spend.mjs, tools/policy*.mjs, package files or .github. Tests use node:test with injected deps (no wall clock, no ambient env, no TTY, no network). Never write token-shaped literals; build fake secrets at runtime. Run your tests with `node --import ./tests/_isolate-config.mjs --test <files>` and `node tools/check-package.mjs`. The coordinator runs the full suite.",
+      "timeoutMs": 3000000
+    },
+    {
+      "id": "T-8001-8002-board",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "outputs": [
+        "tools/board-data.mjs",
+        "tools/build-progress.mjs",
+        "tools/watch-assets/board.js",
+        "tools/watch-assets/project.js",
+        "tests/board-worktree-own-stats.test.mjs",
+        "tests/build-progress-untracked-filter.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/build-progress-atlas.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tools/project-spend.mjs"
+      ],
+      "prompt": "Tickets T-8001 and T-8002 (owner requests relayed by the MacBook orchestrator). T-8001: on Swarm Watch a worktree row copies the parent's stats (same %, same '11 open / 6 blocked'), because build progress picks the newest approved ledger across the whole worktree family (ledgerRoot in tools/build-progress.mjs) for every member. Fix: a worktree row (overview.worktree true) shows per-branch numbers read from THAT worktree's own ledger (its own .swarm/project/tickets.json; if it has none, show 'no ledger' rather than the parent's numbers); the parent row keeps the family-wide rollup but marks it ('incl. N worktrees'). Never copy parent numbers into a child row. Test tests/board-worktree-own-stats.test.mjs with real `git worktree add`: parent and worktree with different ledgers show different numbers; a worktree without a ledger shows 'no ledger'. T-8002: 'Off-ledger runs' / untracked counts (86, 88, 188 on the real board) include smoke and lane tests. Exclude runs whose manifest file name or job ids match smoke|lane-test|lane-bench|probe|doctor (case-insensitive word match) and any run whose state has nonIntegrating: true; count only the rest. The count on the card and the project page links to a list page: add a route-free view in tools/watch-assets/project.js (e.g. #untracked anchor section listing those runs: run id, started, status, job count, link to /run?id=...) \u2014 no new server route. Test tests/build-progress-untracked-filter.test.mjs: smoke/probe/lane-test runs and a nonIntegrating run are excluded; a real manifest run is counted and appears in the list data. Keep the existing board/build-progress tests green (tests in context). Rules: do NOT touch tools/swarm.mjs, the tools/swarm folder, tools/autopilot.mjs, tools/spend.mjs, tools/project-spend.mjs, tools/policy*.mjs, package files or .github. Tests use node:test with injected deps (no wall clock, no ambient env, no TTY, no network). Never write token-shaped literals; build fake secrets at runtime. Run your tests with `node --import ./tests/_isolate-config.mjs --test <files>` and `node tools/check-package.mjs`. The coordinator runs the full suite. Tests in ignoreTests (and the ledger fixture JSON, which only mentions file names) use these modules for unrelated behavior; keep them passing \u2014 the coordinator runs the FULL suite.",
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/autopilot-lock.test.mjs",
+        "tests/bench-replay.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-peers.test.mjs",
+        "tests/board.test.mjs",
+        "tests/build-progress-ledgers.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/completion.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/managers/r038-version-merge.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10b-cli.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scope-sync-delete.test.mjs",
+        "tests/scope-sync-replan.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    },
+    {
+      "id": "T-8003-8004-worktree",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "outputs": [
+        "tools/acceptance.mjs",
+        "tools/scope-loop.mjs",
+        "tools/tickets.mjs",
+        "tests/acceptance-review-worktree.test.mjs",
+        "tests/ticket-target-worktree.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scope-loop-review-stall.test.mjs",
+        "tests/acceptance-sync.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tools/project-spend.mjs"
+      ],
+      "prompt": "Tickets T-8003 and T-8004 (owner requests relayed by the MacBook orchestrator). T-8004: add an OPTIONAL `targetWorktree` field (string: an absolute path of a git worktree of this repo, or a branch name) on a ticket and on a stage entry of the ledger; tools/tickets.mjs validateTicket accepts it (string, 1..400 chars, no NUL, no '..' segments for paths) and it is part of what is stored/printed; ledgers without it behave exactly as today. Resolution helper `resolveTargetWorktree(root, target)` (export from tools/tickets.mjs or a small helper in scope-loop): a path must be a member of worktreeFamily(root, { all: true }) from tools/project-spend.mjs; a branch name resolves to the worktree that has it checked out (read <common git dir>/worktrees/*/HEAD files, no git process); unknown -> error 'target-worktree-unknown'. tools/scope-loop.mjs: dispatch, verify and acceptance review for a ticket with targetWorktree run with that worktree as root/cwd (pass it through the existing deps, e.g. deps.run/deps.verify/deps.review get { root: target }); tickets without it use the main root. T-8003: acceptance-review manifests are not generated for tickets built in a linked worktree; make tools/acceptance.mjs (and its caller in scope-loop) resolve the ledger, run records and ticket files from the ticket's target worktree (targetWorktree, else the worktree whose runs built it), not only the main checkout. Tests: tests/ticket-target-worktree.test.mjs (real `git worktree add`; validateTicket accepts/rejects; two stages with targetWorktree on two worktrees dispatched at once via injected deps record their own roots and write only there \u2014 no cross-writes) and tests/acceptance-review-worktree.test.mjs (from a linked worktree, a review manifest is generated listing that worktree's files). Tell the coordinator the exact field name in your notes (the MacBook will add the autopilot dispatch side). Keep the scope-loop/acceptance tests in context green. Rules: do NOT touch tools/swarm.mjs, the tools/swarm folder, tools/autopilot.mjs, tools/spend.mjs, tools/project-spend.mjs, tools/policy*.mjs, package files or .github. Tests use node:test with injected deps (no wall clock, no ambient env, no TTY, no network). Never write token-shaped literals; build fake secrets at runtime. Run your tests with `node --import ./tests/_isolate-config.mjs --test <files>` and `node tools/check-package.mjs`. The coordinator runs the full suite. Tests in ignoreTests (and the ledger fixture JSON, which only mentions file names) use these modules for unrelated behavior; keep them passing \u2014 the coordinator runs the FULL suite.",
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/_watch-fixture.mjs",
+        "tests/acceptance.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/budgets.test.mjs",
+        "tests/build-progress-atlas.test.mjs",
+        "tests/build-progress-ledgers.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/ci-queue.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/day0.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/handoff.test.mjs",
+        "tests/human-progress.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/managers/r036-cli.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/practice-tooling.test.mjs",
+        "tests/quotes.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scope-approve-managers.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/scope-delete-tickets.test.mjs",
+        "tests/scope-ingest-acceptance.test.mjs",
+        "tests/scope-ingest-paths.test.mjs",
+        "tests/scope-ingest-sensitive.test.mjs",
+        "tests/scope-ingest-waves.test.mjs",
+        "tests/scope-ownership.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/scope-spec-gate.test.mjs",
+        "tests/scope-spec-no-runner.test.mjs",
+        "tests/scope-split-lane-size.test.mjs",
+        "tests/scope-sync-delete.test.mjs",
+        "tests/scope-sync-replan.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/split-quality.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/state-backup.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/ticket-paths.test.mjs",
+        "tests/ticket-rename-type.test.mjs",
+        "tests/ticket-replan.test.mjs",
+        "tests/tickets-delivered.test.mjs",
+        "tests/tickets.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/ui-check.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/wiring.test.mjs"
+      ]
+    }
+  ]
+}

@@ -12,6 +12,7 @@ import { safeWritableDir, assertRegularOrMissing, appendEvent } from './journal.
 import { wiringGaps } from './wiring.mjs';
 import { isExampleFile } from './init-profile.mjs';
 import { isSensitivePath } from './sensitive-paths.mjs';
+import { mainWorktreeRoot, worktreeFamily } from './project-spend.mjs';
 
 // Tickets made from outside text (a gallery comment, a production error) are proposals: no worker runs one until the owner approves it.
 export const PROPOSAL_ORIGINS = ['comment', 'error', 'handoff'];
@@ -34,7 +35,7 @@ export const laneText = lane => (lane ? `${lane.agent}${lane.model ? `:${lane.mo
 // A sensitive ticket may only go to a lane that stays with a known provider: cursor routes to whatever model is named, so it only counts without one.
 export const laneOkForSensitive = lane => Boolean(lane) && (lane.agent !== 'cursor' || !lane.model);
 const NEEDS_ACCEPTANCE = ['build', 'test', 'migration'];
-const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'lane', 'approvedBy', 'sensitive', 'hard', 'steps', 'skeleton', 'tests', 'screens', 'integration', 'deletes', 'dependencies'];
+const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'lane', 'approvedBy', 'sensitive', 'hard', 'steps', 'skeleton', 'tests', 'screens', 'integration', 'deletes', 'dependencies', 'targetWorktree'];
 const RESERVED_FIRST = ['.git', '.swarm', '.github-hooks-free'];
 // Build output anywhere in a path, and any dot-env file, are never ticket files.
 const BUILD_DIRS = ['.next', 'node_modules', 'dist'];
@@ -99,6 +100,30 @@ const badPath = (p, readOnly = false) => {
     segs.some(s => SECRET_NAMES.includes(s.toLowerCase()));
 };
 
+const absolutePath = value => path.isAbsolute(value) || path.win32.isAbsolute(value);
+
+export function validateTargetWorktree(value) {
+  if (typeof value !== 'string' || value.length < 1 || value.length > 400 || value.includes('\0')) {
+    return 'targetWorktree must be a string of 1 to 400 characters without NUL';
+  }
+  if (absolutePath(value) && value.split(/[\\/]/).some(segment => segment === '..')) {
+    return 'targetWorktree path must not contain .. segments';
+  }
+  return null;
+}
+
+export function effectiveTargetWorktree(ledger, ticket) {
+  if (ticket?.targetWorktree !== undefined) return ticket.targetWorktree;
+  const stages = Array.isArray(ledger?.scope?.stages)
+    ? ledger.scope.stages
+    : Array.isArray(ledger?.stages)
+      ? ledger.stages
+      : [];
+  const stage = stages.find(candidate => candidate?.id === ticket?.stage);
+  if (stage?.targetWorktree !== undefined) return stage.targetWorktree;
+  return ledger?.stageTargets?.[ticket?.stage] ?? ledger?.scope?.stageTargets?.[ticket?.stage];
+}
+
 export function ticketSetHash(tickets) {
   // Proposed tickets, and comment tickets the owner has not approved (cancelled or hand-edited), are outside what was approved.
   const picked = [...tickets].filter(t => t.status !== 'proposed' && !unapprovedProposal(t)).sort(byId).map(t => Object.fromEntries(HASH_FIELDS.map(k => [k, t[k]])));
@@ -142,6 +167,10 @@ export function validateTicket(t) {
   if (t.sensitive !== undefined && typeof t.sensitive !== 'boolean') errors.push('sensitive must be a boolean');
   if (t.skeleton !== undefined && typeof t.skeleton !== 'boolean') errors.push('skeleton must be a boolean');
   if (t.integration !== undefined && typeof t.integration !== 'boolean') errors.push('integration must be a boolean');
+  if (t.targetWorktree !== undefined) {
+    const error = validateTargetWorktree(t.targetWorktree);
+    if (error) errors.push(error);
+  }
   if (t.screens !== undefined && !(isStrArr(t.screens) && t.screens.length <= 5 && t.screens.every(id => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id) && id.length >= 2 && id.length <= 40))) errors.push('screens must be up to 5 kebab-case screen ids');
   if (t.securityReview !== undefined) {
     const r = t.securityReview;
@@ -215,7 +244,7 @@ export async function appendLog(root, event) {
   }
 }
 
-export function createLedger({ scope, tickets = [], now = Date.now() } = {}) {
+export function createLedger({ scope, stageTargets, tickets = [], now = Date.now() } = {}) {
   const seen = new Set();
   for (const t of tickets) {
     const r = validateTicket(t);
@@ -223,8 +252,64 @@ export function createLedger({ scope, tickets = [], now = Date.now() } = {}) {
     if (seen.has(t.id)) throw fail('ticket-invalid', `duplicate ticket id: ${t.id}`);
     seen.add(t.id);
   }
+  for (const stage of scope?.stages ?? []) {
+    if (stage?.targetWorktree !== undefined) {
+      const error = validateTargetWorktree(stage.targetWorktree);
+      if (error) throw fail('ticket-invalid', `${stage.id ?? '?'}: ${error}`);
+    }
+  }
+  for (const [stageId, target] of Object.entries(stageTargets ?? scope?.stageTargets ?? {})) {
+    const error = validateTargetWorktree(target);
+    if (error) throw fail('ticket-invalid', `${stageId}: ${error}`);
+  }
   const at = new Date(now).toISOString();
-  return { version: 1, scope, tickets, changeOrders: [], approved: null, createdAt: at, updatedAt: at };
+  return { version: 1, scope, ...(stageTargets === undefined ? {} : { stageTargets }), tickets, changeOrders: [], approved: null, createdAt: at, updatedAt: at };
+}
+
+const unknownTarget = target => fail('target-worktree-unknown', `target-worktree-unknown: ${String(target ?? '')}`);
+
+async function worktreeGitDir(worktree) {
+  try {
+    const gitPath = path.join(worktree, '.git');
+    const stat = await fs.lstat(gitPath);
+    if (stat.isDirectory()) return gitPath;
+    if (!stat.isFile()) return null;
+    const pointer = /^gitdir:\s*(.+)$/i.exec((await fs.readFile(gitPath, 'utf8')).trim());
+    return pointer ? path.resolve(worktree, pointer[1].trim()) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function checkedOutBranch(worktree) {
+  const gitDir = await worktreeGitDir(worktree);
+  if (!gitDir) return null;
+  try {
+    const head = (await fs.readFile(path.join(gitDir, 'HEAD'), 'utf8')).trim();
+    return head.startsWith('ref: refs/heads/') ? head.slice('ref: refs/heads/'.length) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Resolve only from worktree metadata. This deliberately does not invoke git: target paths must
+// be registered members of the repository family, and branch targets must be checked out now.
+export async function resolveTargetWorktree(root, target) {
+  const invalid = validateTargetWorktree(target);
+  if (invalid) throw unknownTarget(target);
+  const members = await worktreeFamily(root, { all: true });
+  if (absolutePath(target)) {
+    const wanted = await fs.realpath(target).catch(() => path.resolve(target));
+    const found = members.find(member => member === wanted);
+    if (found) return found;
+    throw unknownTarget(target);
+  }
+  const main = await mainWorktreeRoot(root) ?? await fs.realpath(root).catch(() => path.resolve(root));
+  const candidates = [main, ...members.filter(member => member !== main)];
+  for (const member of candidates) {
+    if ((await checkedOutBranch(member)) === target) return member;
+  }
+  throw unknownTarget(target);
 }
 
 let viewPullRequestOverride = null;
@@ -451,12 +536,18 @@ export function renderBuildPlan(ledger, scope) {
   out.push(`Tickets: ${stats.total} total (${STATUSES.map(s => `${s} ${stats.byStatus[s] ?? 0}`).join(', ')})`);
   const cos = ledger?.changeOrders ?? [];
   out.push(`Change orders: ${cos.length}${cos.length ? ' (' + cos.map(c => c.id).join(', ') + ')' : ''}`, '');
-  const stageList = Array.isArray(scope?.stages) ? scope.stages.map(s => ({ id: s.id, title: s.title ?? '' })) : [];
+  const sourceStages = scope?.stages ?? ledger?.scope?.stages;
+  const stageList = Array.isArray(sourceStages) ? sourceStages.map(s => ({ id: s.id, title: s.title ?? '', ...(s.targetWorktree !== undefined ? { targetWorktree: s.targetWorktree } : {}) })) : [];
   for (const id of [...new Set(tickets.map(t => t.stage ?? 'none'))].sort()) if (!stageList.some(s => s.id === id)) stageList.push({ id, title: '' });
+  const hasTarget = tickets.some(t => t.targetWorktree !== undefined) || stageList.some(s => s.targetWorktree !== undefined);
   for (const st of stageList) {
     const rows = tickets.filter(t => (t.stage ?? 'none') === st.id);
-    out.push(`## ${cell(st.id)} ${cell(st.title)}`.trimEnd(), '', '| Ticket | Title | Status | Risk |', '| --- | --- | --- | --- |');
-    for (const t of rows) out.push(`| ${cell(t.id)} | ${cell(t.title)} | ${t.status} | ${t.risk} |`);
+    const stageTarget = st.targetWorktree === undefined ? '' : ` [targetWorktree: ${cell(st.targetWorktree)}]`;
+    out.push(`## ${cell(st.id)} ${cell(st.title)}${stageTarget}`.trimEnd(), '');
+    out.push(hasTarget ? '| Ticket | Title | Status | Risk | Target worktree |' : '| Ticket | Title | Status | Risk |', hasTarget ? '| --- | --- | --- | --- | --- |' : '| --- | --- | --- | --- |');
+    for (const t of rows) out.push(hasTarget
+      ? `| ${cell(t.id)} | ${cell(t.title)} | ${t.status} | ${t.risk} | ${cell(t.targetWorktree ?? '')} |`
+      : `| ${cell(t.id)} | ${cell(t.title)} | ${t.status} | ${t.risk} |`);
     if (!rows.length) out.push('_No tickets._');
     out.push('');
   }
