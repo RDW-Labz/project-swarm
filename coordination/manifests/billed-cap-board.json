@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "billed-cap-board",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "cheap",
+      "prompt": "Main 1.158.0 (#243) made the project cap count BILLED spend only: tools/project-spend.mjs projectSummary now returns spendUsd (billed + list value, kept for compatibility), listUsd, billedUsd, billedUnknown, and projectCapDecision compares billed (+ unknown-cost reserve + exposure) to the cap. The board was not updated: it still draws the cap meter from familyUsd = spendUsd (the mixed total) and labels 'cap counts: billed + list value' (capBasis defaults to 'billed+list' because projectSummary has no capBasis). So a project working on flat-rate lanes looks near or over its cap when it is not. Fix the board side only. Do NOT touch tools/project-spend.mjs, tools/spend.mjs or tools/swarm.mjs.\n1) tools/board-data.mjs: derive capBasis = summary.capBasis ?? (typeof summary.billedUsd === 'number' ? 'billed' : 'billed+list') everywhere it is set (projectOverview spend + overviewSpend, projectDetail detailSpend + spend). In projectOverview.spend add `capUsedUsd` = the number the cap compares: when capBasis is 'billed', summary.billedUsd (family billed total, already includes worktrees) ; else summary.spendUsd. Keep familyUsd as is for compatibility, and add `familyBilledUsd: summary.billedUsd ?? null`. The build-progress spend passed to buildProgress uses usd = capUsedUsd (fall back as today).\n2) tools/watch-assets/board.js capCell: the meter and the 'X of Y' text use s.capUsedUsd when it is a number (else today's behavior); the breakdown line stays 'billed $A \u00b7 list value $B (not billed)'; the label says 'cap counts: billed only' when s.capBasis === 'billed'. The 'shared by N trees (this one $Y)' line uses billed numbers when capBasis is billed (this tree's billed = cost.paidUsd i.e. s.billedUsd).\n3) tools/watch-assets/run-kpis.js: the project forecast shows pj.billedUsd when pj.capBasis === 'billed' or when pj.billedUsd is a number (label '(cap counts billed only)'), else pj.spendUsd as today. Check tools/watch-cli.mjs line where snapshot.project = projectSummary(root): add capBasis the same way so the run page gets it.\n4) tools/watch-assets/project.js Build progress spend line: uses progress.spend.usd (now billed) and the cap-basis label.\nTests: tests/board-page.test.mjs: with an injected summary { spendUsd: 9, listUsd: 9, billedUsd: 2, capUsd: 5 } projectOverview.spend has capBasis 'billed', capUsedUsd 2; with a legacy summary without billedUsd, capBasis 'billed+list' and capUsedUsd = spendUsd; projectDetail.spend.capBasis 'billed'. Run `node --import ./tests/_isolate-config.mjs --test tests/board-page.test.mjs tests/board-worktrees.test.mjs tests/build-progress.test.mjs tests/build-progress-roadmap.test.mjs tests/project-spend.test.mjs tests/watch-ui.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests use these files for unrelated behavior; the coordinator runs the full suite.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/project-spend.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "outputs": [
+        "tools/board-data.mjs",
+        "tools/watch-assets/board.js",
+        "tools/watch-assets/run-kpis.js",
+        "tools/watch-cli.mjs",
+        "tools/watch-assets/project.js",
+        "tests/board-page.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/autopilot-lock.test.mjs",
+        "tests/bench-replay.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-peers.test.mjs",
+        "tests/board.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/completion.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10b-cli.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs"
+      ]
+    }
+  ]
+}

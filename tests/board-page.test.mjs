@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { registerProject, listProjects, removeProject, projectId } from '../tools/projects.mjs';
 import { appendHistory, readHistory, historyCsv } from '../tools/history.mjs';
 import { laneLabel, costOf, readRunStates, boardSnapshot, projectDetail, projectOverview, historyEventsOf } from '../tools/board-data.mjs';
+import { projectOrchestrator } from '../tools/board-orchestrator.mjs';
 import { projectSpend } from '../tools/project-spend.mjs';
 import { createBoardApi, makeRunServer } from '../tools/watch-cli.mjs';
 import { createWatchServer } from '../tools/watch-server.mjs';
@@ -161,13 +162,18 @@ test('cost splits billed and flat-rate list value by day and cap basis is surfac
   assert.equal(overview.spend.billedUsd, 2);
   assert.equal(overview.spend.listUsd, 7);
   assert.equal(overview.spend.capBasis, 'billed+list');
-  const injected = await projectOverview(A, [], { now: NOW, summary: async () => ({ spendUsd: 9, capUsd: 10, capBasis: 'billed' }) });
+  assert.equal(overview.spend.capUsedUsd, 9);
+  const injectedSummary = async () => ({ spendUsd: 9, listUsd: 9, billedUsd: 2, capUsd: 5 });
+  const injected = await projectOverview(A, [], { now: NOW, summary: injectedSummary });
   assert.equal(injected.spend.capBasis, 'billed');
+  assert.equal(injected.spend.capUsedUsd, 2);
+  assert.equal(injected.spend.familyUsd, 9);
+  assert.equal(injected.spend.familyBilledUsd, 2);
 
-  const detail = await projectDetail(A, { now: NOW, summary: defaultSummary });
+  const detail = await projectDetail(A, { now: NOW, summary: injectedSummary });
   assert.equal(detail.spend.billedUsd, 2);
   assert.equal(detail.spend.listUsd, 7);
-  assert.equal(detail.spend.capBasis, 'billed+list');
+  assert.equal(detail.spend.capBasis, 'billed');
 
   const snap = await boardSnapshot({ projects: [A, B], liveRuns: [], now: NOW, summary: async () => ({}) });
   for (const key of ['flatRateTodayUsd', 'flatRateWeekUsd', 'paidUsd', 'flatRateListUsd']) {
@@ -175,12 +181,105 @@ test('cost splits billed and flat-rate list value by day and cap basis is surfac
   }
 });
 
+test('project panels expose split quality and benchmark scorecards', async t => {
+  const { A } = await twoProjects(t);
+  const empty = await projectDetail(A, { now: NOW });
+  assert.equal(empty.splitQuality.metrics.length, 7);
+  assert.equal(empty.benchmarks.files, 0);
+
+  const directory = path.join(A.root, 'evals/scorecard');
+  await fs.mkdir(directory, { recursive: true });
+  const scorecard = (week, generatedAt, value, extra = {}) => ({
+    week,
+    generatedAt,
+    projects: [{ project: A.name, metrics: [{ name: 'billed_usd', value, status: 'measured', grade: 'green', trend: 'flat', previous: null, ...extra }] }],
+    overall: { green: 1, amber: 0, red: 0, unknown: 0 },
+    headline: '1 green, 0 amber, 0 red',
+  });
+  await fs.writeFile(path.join(directory, 'previous.json'), JSON.stringify(scorecard('2026-W41', '2026-10-11T15:00:00Z', 10)));
+  await fs.writeFile(path.join(directory, 'latest.json'), JSON.stringify(scorecard('2026-W42', '2026-10-18T15:00:00Z', 8, { trend: 'down', previous: 10 })));
+  const detail = await projectDetail(A, { now: NOW });
+  assert.equal(detail.benchmarks.files, 2);
+  assert.equal(detail.benchmarks.projects[0].metrics.find(metric => metric.name === 'billed_usd').verdict, 'better');
+
+  const overview = await projectOverview(A, [], { now: NOW });
+  assert.ok(overview.split && 'grade' in overview.split);
+});
+
+test('board snapshots tag local cards, merge a local-view peer, keep tokens out, and expose stub pools', async t => {
+  const home = await tmp(t);
+  const A = await project(t, 'local-board-project', { home });
+  const env = { SWARM_PROJECTS_FILE: path.join(home, 'projects.json'), SWARM_HISTORY_FILE: path.join(home, 'history.ndjson'), SWARM_CONFIG: path.join(home, 'missing-config.json'), SWARM_LANES_DIR: path.join(home, 'lanes'), SWARM_SPEND_DIR: path.join(home, 'spend') };
+  await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({ version: 1, projects: [A] }));
+  const peer = { name: 'mini', url: 'https://mini.ts.net', token: 'peer-token-123456' };
+  const seen = {};
+  const api = createBoardApi({
+    env, now: () => NOW, live: async () => [], cacheMs: 0,
+    listPeers: async () => [peer], versionInfo: async () => ({ version: '1.155.0' }),
+    fetchImpl: async (url, init) => {
+      seen.url = String(url); seen.headers = init.headers;
+      return new Response(JSON.stringify({
+        projects: [{ id: 'remote-project', name: 'remote-project', live: [], machine: 'mini' }],
+        machine: { host: 'mini', orchestrator: { sessions: [] } }, server: { version: '1.154.0' },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+  t.after(() => api.close());
+  const merged = await api.snapshot({ scratch: true });
+  const local = merged.projects.find(p => p.id === A.id);
+  const remote = merged.projects.find(p => p.id === 'remote-project');
+  assert.deepEqual([local.machine, local.version, local.remote, merged.drift.drifted], [os.hostname(), '1.155.0', undefined, true]);
+  assert.deepEqual([remote.remote, remote.machine, remote.version, remote.versionDrift], [true, 'mini', '1.154.0', true]);
+  assert.match(seen.url, /[?&]local=1(?:&|$)/);
+  assert.equal(new URL(seen.url).searchParams.has('t'), false);
+  assert.equal(seen.headers['x-watch-token'], peer.token);
+  assert.deepEqual(merged.peers, [{ name: peer.name, url: peer.url }]);
+  assert.equal(JSON.stringify(merged.peers).includes(peer.token), false);
+  assert.equal(merged.pools.source, 'stub');
+  assert.ok(merged.pools.pools.some(pool => pool.id === 'machine'));
+
+  const localOnly = await api.snapshot({ local: true, scratch: true });
+  assert.equal(localOnly.projects.some(p => p.remote), false);
+  assert.deepEqual(localOnly.peers, []);
+  assert.equal(localOnly.drift.drifted, false);
+});
+
+test('the HTTP board local=1 skips peer discovery after token verification', async t => {
+  const ctx = await twoProjects(t);
+  let calls = 0;
+  const board = await boardServer(t, ctx, {
+    listPeers: async () => { calls += 1; throw new Error('peer discovery should be skipped'); },
+    versionInfo: async () => ({ version: '1.155.0' }),
+  });
+  const data = JSON.parse((await get(board.port, `/api/board?local=1&t=${board.token}`)).body);
+  assert.equal(calls, 0);
+  assert.equal(data.projects.every(p => p.machine === os.hostname()), true);
+  assert.deepEqual(data.peers, []);
+});
+
+test('project detail reports handled auto-decisions and orchestrator chat uses the full session id', async t => {
+  const home = await tmp(t);
+  const A = await project(t, 'handled-project', { home });
+  await fs.mkdir(path.join(A.root, '.swarm/orchestrator'), { recursive: true });
+  await fs.writeFile(path.join(A.root, '.swarm/orchestrator/events.ndjson'), `${JSON.stringify({ kind: 'auto-decision', at: iso(NOW - 1000), rule: 'safe-default', requestKind: 'ticket', requestId: 'T-1', reason: 'approved by policy' })}\n`);
+  const detail = await projectDetail(A, { now: NOW });
+  assert.equal(detail.handled.today, 1);
+  assert.deepEqual(detail.handled.items[0], { at: iso(NOW - 1000), rule: 'safe-default', requestKind: 'ticket', requestId: 'T-1', reason: 'approved by policy', machine: '' });
+
+  const fullId = 'session-full-id-1234567890';
+  await fs.writeFile(path.join(A.root, '.swarm/orchestrator/events.ndjson'), `${JSON.stringify({ at: iso(NOW - 1000), s: fullId, e: 'prompt' })}\n`);
+  const seen = [];
+  const orchestrator = projectOrchestrator(A, { now: NOW, usage: () => null, chatUrl: id => { seen.push(id); return 'https://claude.ai/code/session_ABCDEFGHIJ'; } });
+  assert.equal(seen[0], fullId);
+  assert.equal(orchestrator.sessions[0].chatUrl, 'https://claude.ai/code/session_ABCDEFGHIJ');
+});
+
 test('stage, tickets, caps and last activity per project; a project is never mixed with another (same run id, same ticket ids)', async t => {
   const { A, B } = await twoProjects(t);
   const summaries = { [A.root]: { spendUsd: 7.6, capUsd: 10 }, [B.root]: { spendUsd: 0.1, capUsd: null } };
   const snap = await boardSnapshot({ projects: [A, B], liveRuns: [{ runId: 'run-a1', root: A.root }], now: NOW, summary: async root => summaries[root] });
   const a = snap.projects.find(p => p.id === A.id), b = snap.projects.find(p => p.id === B.id);
-  assert.equal(a.stage, 'S2');
+  assert.equal(a.stage, 'Stage 2');
   assert.deepEqual([a.tickets.open, a.tickets.blocked, a.tickets.total], [3, 1, 4]);
   assert.equal(b.stage, 'done');
   assert.equal(a.spend.capUsd, 10);
@@ -256,11 +355,11 @@ const get = (port, pathname, { method = 'GET', headers = {}, host } = {}) => new
   req.on('error', reject); req.end();
 });
 
-async function boardServer(t, { A, B, home }) {
+async function boardServer(t, { A, B, home }, apiOptions = {}) {
   const env = { SWARM_PROJECTS_FILE: path.join(home, 'projects.json'), SWARM_HISTORY_FILE: path.join(home, 'h.ndjson') };
   await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({ version: 1, projects: [A, B] }));
   await backfillHistory({ env });
-  const api = createBoardApi({ env, now: () => NOW, live: async () => [{ runId: 'run-a1', root: A.root, startedAt: iso(NOW) }], cacheMs: 0 });
+  const api = createBoardApi({ env, now: () => NOW, live: async () => [{ runId: 'run-a1', root: A.root, startedAt: iso(NOW) }], cacheMs: 0, ...apiOptions });
   const server = createWatchServer({ root: home, assetDir: realAssets, deltaFile, idleMs: 600000, getRunSnapshot: async () => null, getPlanSnapshot: async () => ({ present: false }), getGallery: async () => ({ schema: 1, screens: [] }), getBoard: async () => ({ runs: [] }), board: api, indexName: 'board.html', commandList: [], contextCommands: () => [] });
   await server.listen();
   t.after(async () => { await server.close(); await api.close(); });
