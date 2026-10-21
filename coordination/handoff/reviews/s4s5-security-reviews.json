@@ -1,0 +1,121 @@
+{
+  "note": "Opus security review records from the Mac mini checkout (Anthropic API lane, owner-approved). filesHash is tools/security-review.mjs filesHash over each ticket files list at review time; merged in #259.",
+  "tickets": {
+    "T-0102": {
+      "verdict": "pass",
+      "findings": [
+        {
+          "file": "contracts/watch-s4-ops.json",
+          "line": 62,
+          "severity": "low",
+          "issue": "GET / still documents boardTokenQuery (token in URL), which can leak via history or logs until T-8006 exchanges it for an HttpOnly cookie.",
+          "fix": "After T-8006 lands, redirect to strip t after setting the cookie, and remove boardTokenQuery."
+        },
+        {
+          "file": "contracts/watch-s4-ops.json",
+          "line": 618,
+          "severity": "low",
+          "issue": "Forbidden (403) is described as 'board token missing or invalid', while the descriptions say a t-query token is refused with 401; the status semantics are inconsistent.",
+          "fix": "Document a single status code for token failures and add the corresponding response to the /api routes."
+        }
+      ],
+      "run": "1792619781613-74b02962",
+      "at": "2026-10-21T21:56:37.624Z",
+      "filesHash": "2a680825d7e2cab586e703de67c5be0be367e257a32a17a59581f672088a1214",
+      "reviewer": {
+        "agent": "anthropic",
+        "model": "claude-opus-5-5"
+      }
+    },
+    "T-0111": {
+      "verdict": "pass",
+      "findings": [
+        {
+          "file": "tools/board-owner-actions.mjs",
+          "line": 189,
+          "severity": "low",
+          "issue": "The confirms Map is never swept of expired or unused tokens. Repeated prepare calls grow memory without bound.",
+          "fix": "Remove expired entries on each prepare and decide, and cap the number of pending confirmations per identity."
+        }
+      ],
+      "run": "1792621124928-15fc5770",
+      "at": "2026-10-21T22:18:58.372Z",
+      "filesHash": "f6f2310e7f1a5bc4356e452ca68a7f5486d7835784191a3d3a61b293ea420b1a",
+      "reviewer": {
+        "agent": "anthropic",
+        "model": "claude-opus-5-5"
+      }
+    },
+    "T-0112": {
+      "verdict": "pass",
+      "findings": [],
+      "run": "1792620828154-0854ad37",
+      "at": "2026-10-21T22:14:09.964Z",
+      "filesHash": "0a31311c4b399212846fdbc5eeb7797216208710be27853288f1a4c4c83b2d87",
+      "reviewer": {
+        "agent": "anthropic",
+        "model": "claude-opus-5-5"
+      }
+    },
+    "T-0123": {
+      "verdict": "pass",
+      "findings": [
+        {
+          "file": "tools/watch-assets/board-owner-actions.js",
+          "line": 104,
+          "severity": "low",
+          "issue": "Prepare and decision are sent back to back in one click, so the server summary is never shown to the owner before the decision is committed.",
+          "fix": "Call prepare when Confirm mode is entered, show summary and expiresAt, and submit the decision on the confirm click."
+        }
+      ],
+      "run": "1792621124928-15fc5770",
+      "at": "2026-10-21T22:18:58.373Z",
+      "filesHash": "3f6b7cd478a0035f1797f2313b610d4e65ec1f4385ae2f2cdc624583180c24ae",
+      "reviewer": {
+        "agent": "anthropic",
+        "model": "claude-opus-5-5"
+      }
+    },
+    "T-0141": {
+      "verdict": "pass",
+      "findings": [],
+      "run": "1792619268803-88a5e8c1",
+      "at": "2026-10-21T21:48:20.396Z",
+      "filesHash": "f241f087f965878f6a1730f9f28918d85e848047b8b27542f39f94c9555a78dd",
+      "reviewer": {
+        "agent": "anthropic",
+        "model": "claude-opus-5-5"
+      }
+    },
+    "T-0165": {
+      "verdict": "pass",
+      "findings": [],
+      "run": "1792619477825-203f77c3",
+      "at": "2026-10-21T21:51:57.378Z",
+      "filesHash": "b5906d14b49bf1da511169fb9cdb3574a931e2f49fe68ffec827e95c49bb62a9",
+      "reviewer": {
+        "agent": "anthropic",
+        "model": "claude-opus-5-5"
+      }
+    },
+    "T-8005": {
+      "verdict": "pass",
+      "findings": [
+        {
+          "file": "tools/scope-commands.mjs",
+          "line": 1268,
+          "severity": "low",
+          "issue": "normalizeReviewerJob treats a run-state job with no agent field as an implicit claude reviewer if its model matches. A state file missing the agent field is therefore recorded as agent claude, which the run never stated.",
+          "fix": "Limit the legacy fallback to test fixtures or to runs before a cutoff, or record the reviewer as 'claude (implied)' so the stored record does not claim an agent the state never listed."
+        }
+      ],
+      "run": "1792619595828-127fab08",
+      "at": "2026-10-21T21:55:55.487Z",
+      "filesHash": "6935bf3996c0f0785c7c3b58cad42bd556578ca8d4e7f303e7a4bc96632b004b",
+      "reviewer": {
+        "agent": "anthropic",
+        "model": "claude-opus-5-5"
+      }
+    }
+  }
+}
