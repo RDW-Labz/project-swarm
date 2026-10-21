@@ -1,0 +1,230 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Swarm managers",
+    "version": "1.0.0",
+    "description": "Shapes for a manager run result, each finding, and the journal report written for the board."
+  },
+  "paths": {
+    "/manager-runs": {
+      "post": {
+        "operationId": "reportManagerRun",
+        "summary": "Record the outcome of one manager execution",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ManagerRun" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Run recorded",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ManagerRun" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/manager-findings": {
+      "post": {
+        "operationId": "reportManagerFinding",
+        "summary": "Record a single manager finding",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ManagerFinding" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Finding recorded",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ManagerFinding" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/journal-reports": {
+      "post": {
+        "operationId": "reportJournalReport",
+        "summary": "Record the journal lines emitted by a manager run",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/JournalReport" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Journal report recorded",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JournalReport" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ManagerId": {
+        "type": "string",
+        "enum": [
+          "budget",
+          "lane-health",
+          "version",
+          "ticket-manager",
+          "unblocker",
+          "merge-queue",
+          "lessons-keeper",
+          "visual-qa"
+        ]
+      },
+      "ManagerActionMode": {
+        "type": "string",
+        "enum": ["off", "shadow", "auto"]
+      },
+      "ManagerTrigger": {
+        "type": "string",
+        "enum": ["scope", "wave", "replay", "idle"]
+      },
+      "ManagerRunStatus": {
+        "type": "string",
+        "enum": ["ok", "skipped", "error"]
+      },
+      "FindingSeverity": {
+        "type": "string",
+        "enum": ["info", "warn", "needs_you"]
+      },
+      "JournalEventKind": {
+        "type": "string",
+        "enum": [
+          "goal",
+          "plan",
+          "decision",
+          "run",
+          "integration",
+          "pr",
+          "blocker",
+          "human",
+          "note",
+          "command",
+          "action",
+          "checkpoint"
+        ]
+      },
+      "ManagerJournalLine": {
+        "type": "object",
+        "required": ["kind", "manager", "action", "reason", "mode", "cost"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "goal",
+              "plan",
+              "decision",
+              "run",
+              "integration",
+              "pr",
+              "blocker",
+              "human",
+              "note",
+              "command",
+              "action",
+              "checkpoint"
+            ]
+          },
+          "manager": {
+            "type": "string",
+            "enum": [
+              "budget",
+              "lane-health",
+              "version",
+              "ticket-manager",
+              "unblocker",
+              "merge-queue",
+              "lessons-keeper",
+              "visual-qa"
+            ]
+          },
+          "action": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "ticket": { "type": "string", "minLength": 1, "maxLength": 16 },
+          "lane": { "type": "string", "minLength": 1, "maxLength": 40 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "mode": { "type": "string", "enum": ["off", "shadow", "auto"] },
+          "cost": { "type": "number", "minimum": 0 }
+        }
+      },
+      "ManagerFinding": {
+        "type": "object",
+        "required": ["id", "managerId", "severity", "code", "reason", "action", "mode"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "managerId": { "$ref": "#/components/schemas/ManagerId" },
+          "severity": { "$ref": "#/components/schemas/FindingSeverity" },
+          "code": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "action": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "mode": { "$ref": "#/components/schemas/ManagerActionMode" },
+          "ticket": { "type": "string", "minLength": 1, "maxLength": 16 },
+          "lane": { "type": "string", "minLength": 1, "maxLength": 40 },
+          "gatesCount": { "type": "integer", "minimum": 0 },
+          "recommendation": { "type": "string", "minLength": 1, "maxLength": 500 }
+        }
+      },
+      "JournalReport": {
+        "type": "object",
+        "required": ["runId", "managerId", "lines"],
+        "properties": {
+          "runId": { "type": "string", "format": "uuid" },
+          "managerId": { "$ref": "#/components/schemas/ManagerId" },
+          "lines": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ManagerJournalLine" },
+            "minItems": 1
+          }
+        }
+      },
+      "ManagerRun": {
+        "type": "object",
+        "required": [
+          "runId",
+          "managerId",
+          "trigger",
+          "status",
+          "startedAt",
+          "finishedAt",
+          "costUsd",
+          "findingCount",
+          "journalLineCount"
+        ],
+        "properties": {
+          "runId": { "type": "string", "format": "uuid" },
+          "managerId": { "$ref": "#/components/schemas/ManagerId" },
+          "trigger": { "$ref": "#/components/schemas/ManagerTrigger" },
+          "status": { "$ref": "#/components/schemas/ManagerRunStatus" },
+          "startedAt": { "type": "string", "format": "date-time" },
+          "finishedAt": { "type": "string", "format": "date-time" },
+          "costUsd": { "type": "number", "minimum": 0 },
+          "findingCount": { "type": "integer", "minimum": 0 },
+          "journalLineCount": { "type": "integer", "minimum": 0 },
+          "error": { "type": "string", "minLength": 1, "maxLength": 2000 }
+        }
+      }
+    }
+  }
+}

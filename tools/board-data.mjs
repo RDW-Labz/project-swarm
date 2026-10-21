@@ -19,6 +19,7 @@ import { ROUTE_ORDER } from './router.mjs';
 import { splitQuality } from './split-quality.mjs';
 import { readScorecards, scorecardHistory } from './benchmark-scorecard.mjs';
 import { handledForProject } from './handled.mjs';
+import { overviewPinnedVersion } from './pins.mjs';
 
 const DAY = 86400000;
 const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   // subscription lanes: not billed per use
@@ -30,6 +31,15 @@ const dict = () => Object.create(null);
 // What leaves the module is an ordinary object again (Object.fromEntries defines each key as an own property, even one called __proto__).
 const plain = d => Object.fromEntries(Object.entries(d));
 const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+
+async function pinnedVersionFor(root) {
+  try {
+    const pointer = JSON.parse(await fs.readFile(path.join(root, '.project-swarm.json'), 'utf8'));
+    return overviewPinnedVersion(pointer);
+  } catch {
+    return null;
+  }
+}
 
 // The name the board uses for a worker: Haiku, Sonnet, Opus, Codex, Cursor, GPU (our own or rented GPUs and local models).
 export function laneLabel(agent, model) {
@@ -316,8 +326,10 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     return { grade: result?.grade ?? 'unknown', reds: red.length, worst: red[0]?.label ?? amber?.label ?? null };
   }).catch(() => null);
   const handled = await handledForProject(project.root, { now }).catch(() => null);
+  const pinnedVersion = await pinnedVersionFor(project.root);
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
+    pinnedVersion,
     stage: tickets.stage, tickets, readyTickets, idleWithReady: idle && readyTickets > 0,
     live: liveRuns.map(r => { const hit = runs.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
     agents, cost,
@@ -453,8 +465,10 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const split = await splitQuality({ root: project.root, now, slots }).catch(() => null);
   const benchmarks = await readScorecards(project.root).then(input => scorecardHistory(input)).catch(() => null);
   const handled = await handledForProject(project.root, { now, limit: 20 }).catch(() => null);
+  const pinnedVersion = await pinnedVersionFor(project.root);
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
+    pinnedVersion,
     tickets, ticketCounts: ticketsOf(ledger, scope),
     runs: runs.slice().reverse().map(({ id, state }) => {
       const jobs = state.jobs ?? [];

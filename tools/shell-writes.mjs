@@ -260,7 +260,7 @@ const ghOpFromArgs = args => {
   const { globalOpts, rest } = ghSkipGlobal(args);
   const flags = args.filter(a => a.startsWith('-'));
   const pos = rest.filter(a => a !== '' && !a.startsWith('-'));
-  const sub = pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null;
+  const sub = pos[0] === 'api' ? 'api' : (pos[0] === 'search' ? 'search' : (pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null));
   const target = sub === 'pr merge' && pos[2] !== undefined ? String(pos[2]) : null;
   const opArgs = sub === 'pr merge' ? pos.slice(3) : pos.length >= 2 ? pos.slice(2) : pos.slice(1);
   return opFields({ tool: 'gh', sub, flags, branch: null, force: false, delete: null, target }, { args: opArgs, globalOpts, allArgs: args });
@@ -328,7 +328,99 @@ const INLINE_CHARS = /^[A-Za-z0-9_\s.,()+\-*/%'":<>=!;\[\]{}]*$/;
 const INLINE_RISKY = /\b(?:require|import|importlib|open|file|fs|os|sys|subprocess|exec|eval|spawn|system|popen|write|unlink|remove|rename|rmdir|mkdir|process|child_process|deno|bun|globalthis|builtins|compile|__\w+__|shutil|pathlib|io|socket|net|http|fetch|chmod|chown|symlink|truncate|append|dump|save|put|copy|move|sh|bash|backtick|kernel|popen3|ruby|perl|fileutils|qx|shell_exec|passthru|file_put_contents|fopen|readfile|dir|file|io|pty|expect|osascript|lua)\b|[`|]|>>?\s*['"A-Za-z./~$]/i;
 export const inlineLooksReadOnly = code => String(code ?? '').length <= 300 && INLINE_CHARS.test(String(code ?? '')) && !INLINE_RISKY.test(String(code ?? ''));
 const CODE_FLAGS = { node: ['-e', '--eval', '-p', '--print'], python: ['-c'], python3: ['-c'], ruby: ['-e'], perl: ['-e', '-E'], php: ['-r'], deno: ['eval'], bun: ['-e', '--eval'], tsx: ['-e', '--eval'], 'ts-node': ['-e', '--eval'] };
-const READ_ONLY_GIT = new Set(['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'ls-tree', 'describe', 'blame', 'grep', 'shortlog', 'cat-file', 'rev-list', 'fetch', 'add', 'version', 'help', 'for-each-ref', 'merge-base', 'name-rev', 'show-ref', 'count-objects', 'whatchanged', 'diff-tree', 'diff-index', 'check-ignore', 'ls-remote']);
+const READ_ONLY_GIT = new Set(['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'ls-tree', 'describe', 'blame', 'grep', 'shortlog', 'cat-file', 'rev-list', 'fetch', 'add', 'version', 'help', 'for-each-ref', 'merge-base', 'name-rev', 'show-ref', 'count-objects', 'whatchanged', 'diff-tree', 'diff-index', 'check-ignore', 'ls-remote', 'var']);
+
+const GIT_BRANCH_WRITE_FLAGS = new Set(['-d', '-D', '-m', '-M', '-c', '-C', '-u', '-f', '--force', '--delete', '--move', '--copy', '--set-upstream-to', '--unset-upstream']);
+const GIT_BRANCH_LIST_FLAGS = new Set(['-l', '--list', '-a', '-r', '-v', '-vv', '--contains', '--merged', '--no-merged', '--format', '--sort', '--show-current']);
+const GIT_CONFIG_WRITE_FLAGS = new Set(['--unset', '--unset-all', '--add', '--replace-all', '-e', '--edit', '--fixed-value']);
+const GIT_CONFIG_READ_FLAGS = new Set(['--get', '--get-all', '--get-regexp', '--list', '-l', '--show-origin', '--show-scope', '--default']);
+const GIT_STASH_WRITE = new Set(['push', 'save', 'pop', 'apply', 'drop', 'clear', 'branch', 'create', 'store']);
+const GIT_WORKTREE_WRITE = new Set(['add', 'remove', 'prune', 'move', 'lock', 'unlock']);
+const GIT_REMOTE_WRITE = new Set(['add', 'remove', 'rename', 'set-url', 'prune', 'update', 'set-head', 'set-branches', 'set-url', 'delete']);
+const GIT_TAG_WRITE_FLAGS = new Set(['-d', '-a', '-m', '-s', '-u', '-f', '--delete', '--annotate', '--sign', '--localize']);
+
+export function isReadOnlyGitSub(sub, rest = []) {
+  if (!sub) return true;
+  const args = Array.isArray(rest) ? rest : [];
+  if (sub === 'add' || sub === 'fetch') return false;
+  if (READ_ONLY_GIT.has(sub)) return true;
+  if (sub === 'branch') {
+    if (args.some(a => GIT_BRANCH_WRITE_FLAGS.has(a) || a.startsWith('--set-upstream-to='))) return false;
+    const pos = args.filter(a => a !== '' && !a.startsWith('-'));
+    if (pos.length === 0) return true;
+    if (args.some(a => GIT_BRANCH_LIST_FLAGS.has(a))) return true;
+    return false;
+  }
+  if (sub === 'config') {
+    if (args.some(a => GIT_CONFIG_WRITE_FLAGS.has(a) || a.startsWith('--unset'))) return false;
+    if (args.some(a => GIT_CONFIG_READ_FLAGS.has(a))) return true;
+    const pos = args.filter(a => a !== '' && !a.startsWith('-'));
+    if (pos.length === 1 && !pos[0].includes('=')) return true;
+    if (pos.length === 0 && args.some(a => a === '--global' || a === '-g' || a === '--system' || a === '--local')) return false;
+    return false;
+  }
+  if (sub === 'remote') {
+    const verb = args.find(a => a !== '' && !a.startsWith('-'));
+    if (!verb) return args.every(a => a === '-v' || a === '-vv' || a.startsWith('-'));
+    if (verb === 'show' || verb === 'get-url') return true;
+    if (GIT_REMOTE_WRITE.has(verb)) return false;
+    return args.every(a => a === '-v' || a === '-vv' || a.startsWith('-'));
+  }
+  if (sub === 'stash') {
+    const verb = args.find(a => a !== '' && !a.startsWith('-'));
+    if (!verb) return false;
+    if (verb === 'list' || verb === 'show') return true;
+    if (GIT_STASH_WRITE.has(verb)) return false;
+    return false;
+  }
+  if (sub === 'worktree') {
+    const verb = args.find(a => a !== '' && !a.startsWith('-'));
+    if (verb === 'list' || !verb) return true;
+    if (GIT_WORKTREE_WRITE.has(verb)) return false;
+    return false;
+  }
+  if (sub === 'tag') {
+    if (args.some(a => GIT_TAG_WRITE_FLAGS.has(a))) return false;
+    const pos = args.filter(a => a !== '' && !a.startsWith('-'));
+    if (pos.length === 0) return true;
+    if (args.some(a => a === '-l' || a === '--list')) return true;
+    return false;
+  }
+  if (sub === 'symbolic-ref') {
+    if (args.includes('-d') || args.includes('--delete')) return false;
+    const pos = args.filter(a => a !== '' && !a.startsWith('-'));
+    return pos.length === 1;
+  }
+  return false;
+}
+
+const READ_ONLY_PIPE_FILTERS = new Set(['jq', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'cut', 'sort', 'uniq', 'tr']);
+const SWARM_HANDBUILD_FILE_OPS = new Set(['request', 'status', 'show', 'list']);
+const SWARM_CLI_READ_VERBS = new Set(['status', 'tickets', 'run', 'go', 'scope']);
+
+function swarmCliArgsReadOnly(args) {
+  let i = 0;
+  while (i < args.length) {
+    const a = args[i];
+    if (a === '--root' || a.startsWith('--root=')) {
+      if (a === '--root') i += 2;
+      else i += 1;
+      continue;
+    }
+    if (a.startsWith('-')) { i += 1; continue; }
+    break;
+  }
+  if (args[i] === 'handbuild' && SWARM_HANDBUILD_FILE_OPS.has(args[i + 1])) return true;
+  if (SWARM_CLI_READ_VERBS.has(args[i])) return true;
+  return false;
+}
+
+function nodeInvokesSwarmHandbuildReadOnly(args) {
+  const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));
+  if (scriptAt === -1) return false;
+  if (path.basename(args[scriptAt]) !== 'swarm.mjs') return false;
+  return swarmCliArgsReadOnly(args.slice(scriptAt + 1));
+}
 
 /** { writes, git, inline, unknown, protectedOutside, selfApproval } for one command line. `protectedAbs`: absolute path prefixes (the install, the user's own Claude settings) no write may touch. */
 export function analyzeShell(command, { root, cwd = root, home = process.env.HOME || '/', protectedAbs = [], depth = 0 } = {}) {
@@ -441,7 +533,11 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
     if (plainExp[k] || /^\$[A-Za-z_][A-Za-z0-9_]*$/.test(plain[k]) || /^\$\{/.test(plain[k])) { markDynamic(); continue; }
     const cmd = path.basename(plain[k]);
     const args = plain.slice(k + 1);
-    if (words.piped && pipeMakesInterpreterDynamic(cmd, args)) markDynamic();
+    if (words.piped) {
+      if (READ_ONLY_PIPE_FILTERS.has(cmd)) { /* read-only filter */ }
+      else if (SHELLS.has(cmd) || cmd === 'eval' || cmd === 'xargs') markDynamic();
+      else if (pipeMakesInterpreterDynamic(cmd, args)) markDynamic();
+    }
     const argExp = plainExp.slice(k + 1);
     const operands = [], operandExp = [];
     for (let ai = 0; ai < args.length; ai += 1) {
@@ -623,7 +719,12 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
       else if (config || gitEnv) git.add('config');
       else if (sub === null) { /* git --version */ }
       else if (rest.some(a => a === '--output' || a.startsWith('--output=') || a === '-O')) git.add('output');
-      else if (sub === 'remote') { if (rest[0] && !['-v', 'show', 'get-url'].includes(rest[0])) git.add('remote'); }
+      else if (sub === 'remote') { if (!isReadOnlyGitSub('remote', rest)) git.add('remote'); }
+      else if (sub === 'config') { if (!isReadOnlyGitSub('config', rest)) git.add('config'); }
+      else if (sub === 'stash') { if (!isReadOnlyGitSub('stash', rest)) git.add('stash'); }
+      else if (sub === 'worktree') { if (!isReadOnlyGitSub('worktree', rest)) git.add('worktree'); }
+      else if (sub === 'tag') { if (!isReadOnlyGitSub('tag', rest)) git.add('tag'); }
+      else if (sub === 'symbolic-ref') { if (!isReadOnlyGitSub('symbolic-ref', rest)) git.add('symbolic-ref'); }
       else if (READ_ONLY_GIT.has(sub)) { /* reads, or only the index/refs */ }
       else if (sub === 'checkout' || sub === 'switch') {
         const ops = rest.filter(a => !a.startsWith('-'));
@@ -632,8 +733,7 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
         if (rest.some(a => a === '-b' || a === '-B' || a === '-c' || a === '-C') && !rest.includes('--') && sub === 'checkout') { /* a new branch */ }
         else if (pathy || rest.includes('-f') || rest.includes('--force') || rest.includes('--discard-changes')) git.add(sub);
       }
-      else if (sub === 'branch') { if (rest.some(a => ['-f', '-D', '-d', '-M', '-m', '-C', '-c', '--force', '--delete', '--move', '--copy', '--set-upstream-to', '-u', '--unset-upstream'].includes(a))) git.add('branch'); }
-      else if (sub === 'tag') { if (rest.some(a => !a.startsWith('-')) && !rest.some(a => a === '-l' || a === '--list')) git.add('tag'); }
+      else if (sub === 'branch') { if (!isReadOnlyGitSub('branch', rest)) git.add('branch'); }
       else git.add(sub);
     } else if (cmd === 'gh') {
       ops.push(ghOpFromArgs(args));
@@ -642,6 +742,7 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
     } else if (cmd === 'swarm') {
       ops.push(swarmOpFromArgs(args));
     } else if (isInterpreter(cmd)) {
+      if (cmd === 'node' && nodeInvokesSwarmHandbuildReadOnly(args)) continue;
       const isCode = codeFlagFor(cmd);
       const at = args.findIndex(isCode);
       if (at !== -1) {

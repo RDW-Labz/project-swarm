@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "guard-regression-159",
+      "agent": "auto",
+      "prompt": "HOTFIX for a guard regression in 1.159.0 (tools/handbuild.mjs, tools/shell-writes.mjs, tools/self-approval.mjs). Two problems reported by the parts-app orchestrator; both reproduced with the real guardDecision on current main. PART 1, orchestrators must be able to FILE hand-build requests; only APPROVAL is owner or policy. Reproduced block (message: approving or denying a hand-build, or switching the guard off, is the owner's alone): node /Users/bean/.project-swarm/current/tools/swarm.mjs --root /Users/bean/x handbuild request --kind secret --reason \"needs it\" --files src/a.ts --minutes 15. The plain swarm handbuild request form is already allowed. Cause: SWARM_INLINE in tools/self-approval.mjs (line 27, used at lines 736 and 778) matches ANY command that has the word node or python, then swarm, then decide or handbuild, so a direct script invocation filing a request or reading status is treated as a forgery. Fix: SWARM_INLINE must only apply to INLINE code (node -e, node --eval, node -p, node --print, python -c, python3 -c, and scripts piped or heredoc-fed to node or python). For a direct invocation of the swarm script by any path form (node PATH/swarm.mjs, node PATH/tools/swarm.mjs, with or without --root X before the verb, with env VAR=x prefixes, cd DIR && prefixes, absolute or relative script path), decide by the verb after handbuild: request and status (and show, list) are ALLOWED; approve, deny, on, off, install, uninstall and decide with a handbuild id stay owner-only in EVERY invocation form, including the node form, tmux send-keys, script, base64 pipes and the other forgery channels the existing tests (tests/handbuild-hardening2.test.mjs, tests/self-approval-hardening.test.mjs, tests/handbuild-channels-hardening.test.mjs) cover; those tests keep passing unchanged. PART 2, read-only forms must be allowed. Today these are BLOCKED by the shell allow-lists and must be ALLOWED: git rev-parse (every form: HEAD, --abbrev-ref HEAD, --git-dir, --show-toplevel, --short HEAD), git branch --show-current, git branch with only listing flags (--list, -l, -a, -r, -v, -vv, --contains X, --merged, --no-merged, --format=..., --sort=..., a pattern after --list) and a bare git branch; git remote -v and git remote show NAME and git remote get-url NAME; git config --get K, --get-all, --get-regexp, --list, -l, --show-origin, and git config K with exactly one key and no value (a read); git ls-files, git ls-remote, git ls-tree, git describe, git for-each-ref, git merge-base, git cat-file, git blame, git tag -l or --list or no arguments, git stash list and git stash show, git worktree list, git rev-list, git symbolic-ref with exactly one argument, git show-ref, git name-rev, git shortlog, git count-objects, git diff-tree, git grep, git check-ignore, git var, git version, git --version, git help; the global options -C DIR and --no-pager before the subcommand are fine. gh: view, list, status, diff and checks for pr, issue, run, release, workflow and repo (gh repo view, gh issue list, gh issue view, gh release list, gh workflow list, gh run view), gh search, gh auth status, gh --version, and gh api in READ form: allowed only when there is no -X or --method other than GET, none of -f, -F, --field, --raw-field, --input, the endpoint is not graphql, and the flags -q, --jq, --template, -t, --paginate, --slurp, -H, --header, --cache, -i, --include, --silent, --hostname are accepted; gh pr view --web and gh run download stay blocked. Query strings with ? and & and jq expressions with pipes or braces INSIDE QUOTES are not shell operators. A pipe into a read-only filter (jq, head, tail, wc, grep, cut, sort, uniq, tr) after an allowed read is fine; a pipe into sh, bash, zsh, eval, xargs or a subshell stays blocked. These must STAY BLOCKED (existing tests plus new ones): git branch with a bare name (create), -d, -D, -m, -M, -c, -C, -u, --set-upstream-to, --unset-upstream, --delete, --move, --copy; git config with a value or --unset, --add, --replace-all, -e, --edit, --global with a value; git tag NAME or -d or -a or -m; git stash push, save, pop, apply, drop, clear, branch; git worktree add, remove, prune, move, lock; git remote add, remove, rename, set-url, prune, update; git symbolic-ref with two arguments or -d; git push, commit, reset, checkout, switch, restore, clean, rebase, merge, am, apply, cherry-pick, revert, fetch --prune forms exactly as today; gh pr merge, pr create (unchanged), gh api with -X POST, PUT, PATCH, DELETE, --method DELETE, -f, -F, --field, --raw-field, --input, graphql; gh issue create, comment, close, edit, delete; gh release create, delete, upload; gh repo create, delete, edit, fork; gh workflow run, enable, disable; gh run rerun, cancel, delete; gh auth login, logout, refresh, token; gh secret and gh variable anything. Fail closed on anything not listed. PART 3, read-only vercel forms (owner request): allow vercel ls and vercel list, vercel inspect (with a deployment id or url, with --logs, --wait, --timeout, --scope X, -S X, --cwd DIR), and vercel git ls (also with --scope X and -S X). Already allowed today and must stay allowed: vercel ls, vercel list, vercel inspect, vercel whoami, vercel --version, vercel project ls, vercel domains ls, vercel env ls, vercel logs ID. Must stay BLOCKED: vercel git connect, vercel git disconnect, vercel deploy, vercel --prod, vercel rm, vercel remove, vercel promote, vercel rollback, vercel env pull, vercel env add, vercel env rm, vercel link, vercel unlink, vercel login, vercel logout, vercel switch, vercel dev, vercel build, vercel pull, vercel redeploy, vercel alias set, vercel domains add, vercel domains rm, and any use of --token (a secret on the command line) or a pipe into sh or bash. Add these cases to tests/guard-readonly-forms.test.mjs (at least 12 allow and 20 block). Tests: add tests/guard-readonly-forms.test.mjs with a table of at least 70 ALLOW cases (every form named above, several with quoted query strings, jq expressions and -C DIR or --no-pager prefixes, cd DIR && prefixes, and a read piped into jq or head) and at least 50 BLOCK cases (every write form named above plus pipes into sh and bash), run through guardDecision from tools/handbuild.mjs with a temp project root, plus the node-form handbuild request and status cases (allowed) and node-form approve, deny, on, off, install, uninstall, decide handbuild-id (blocked), plus six end-to-end cases that spawn tools/handbuild-guard.mjs with a PreToolUse JSON on stdin (an allowed read prints nothing, a blocked write prints a deny). The tests must be hermetic: no reading of the ambient environment (the session may carry CLAUDECODE, CLAUDE, CODEX or CURSOR variables or a TTY): pass any environment the code needs explicitly, and they must pass both with and without CLAUDECODE set. Keep every existing test in tests/handbuild-*.test.mjs, tests/self-approval-*.test.mjs, tests/guard-*.test.mjs and tests/shell-writes*.test.mjs passing. Do not edit tools/swarm.mjs. No token-shaped literals. ignoreTests reason: only guard files and their tests change.",
+      "context": [
+        "tools/handbuild.mjs",
+        "tools/shell-writes.mjs",
+        "tools/self-approval.mjs",
+        "tools/handbuild-guard.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-accidents.test.mjs",
+        "tests/handbuild-hardening2.test.mjs",
+        "tests/self-approval-hardening.test.mjs",
+        "tests/guard-word-false-positive.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/handbuild.mjs",
+        "tools/shell-writes.mjs",
+        "tools/self-approval.mjs",
+        "tests/guard-readonly-forms.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/handbuild-switch.test.mjs",
+        "tests/shell-writes-accidents.test.mjs",
+        "tests/swarm-produced-hash.test.mjs",
+        "tests/shell-writes-quotes.test.mjs",
+        "tests/self-approval-claude-word.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/policy-wiring-phase2.test.mjs",
+        "tests/git-hooks.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-hardening.test.mjs",
+        "tests/handbuild-vercel-merge.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-guard.test.mjs"
+      ]
+    }
+  ]
+}
