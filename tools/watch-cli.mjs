@@ -20,6 +20,7 @@ import { COMMANDS } from './completion.mjs';
 import { readLedger } from './tickets.mjs';
 import { boardSummary, listLiveRuns } from './board.mjs';
 import { listProjects, projectsFile, projectId, isScratchRoot } from './projects.mjs';
+import { isBoardTempRoot } from './scratch-roots.mjs';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { readHistory, historyCsv, historyFile } from './history.mjs';
@@ -161,10 +162,15 @@ async function safeBoard() {
   return { runs: runs.filter(run => RUN_ID_RE.test(String(run.runId)) && typeof run.root === 'string' && !/[\u0000-\u001f]/.test(run.root)) };
 }
 
+function boardProjectOpts(env = process.env) {
+  return { env, home: env.HOME ?? os.homedir() };
+}
+
 async function boardText({ env = process.env } = {}) {
   const { runs } = await safeBoard();
-  const projects = await listProjects({ file: projectsFile(env) }).catch(() => []);
-  const needs = inboxText(await boardInbox({ projects, env }).catch(() => null));
+  const opts = boardProjectOpts(env);
+  const projects = await listProjects({ file: projectsFile(env), forOwner: true, ...opts }).catch(() => []);
+  const needs = inboxText(await boardInbox({ projects, env, forOwner: true }).catch(() => null));
   if (!runs.length) return `No live runs on this machine.\n${needs}`;
   return runs.map(run => {
     const done = run.jobs.filter(job => job.status === 'complete').length;
@@ -322,8 +328,13 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
   let boardUrl = null;
   const cachedBy = new Map();                // by whether test/temp projects and peers are shown
   const showsScratch = q => q?.scratch === '1' || q?.scratch === true;
-  const scratchIds = async () => new Set((await listProjects({ file: projectsFile(env) })).filter(p => isScratchRoot(p.root)).map(p => p.id));
-  const find = async id => (await listProjects({ file: projectsFile(env) })).find(p => p.id === id) ?? null;
+  const projectOpts = () => boardProjectOpts(env);
+  const scratchIds = async () => {
+    const opts = projectOpts();
+    const all = await listProjects({ file: projectsFile(env), includeScratch: true, pruneGone: false, ...opts });
+    return new Set(all.filter(p => isBoardTempRoot(p.root, opts)).map(p => p.id));
+  };
+  const find = async id => (await listProjects({ file: projectsFile(env), includeScratch: true, ...projectOpts() })).find(p => p.id === id) ?? null;
   const api = {
     // One snapshot at a time: requests that arrive while one is being built share it.
     snapshot(q = {}) {
@@ -335,9 +346,10 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       const promise = (async () => {
         let config = {}, max = null, invalid = false;
         try { config = loadLocalConfig({ env }) ?? {}; max = machineConcurrency(config); } catch { config = {}; invalid = true; /* the runs that read it refuse to start; the board says so */ }
-        const all = await listProjects({ file: projectsFile(env) });
+        const opts = projectOpts();
+        const all = await listProjects({ file: projectsFile(env), includeScratch: true, pruneGone: false, ...opts });
         // Test and temp projects are left out of everything (lanes, totals, the inbox) unless asked for, so the numbers still add up.
-        const projects = scratch ? all : all.filter(p => !isScratchRoot(p.root));
+        const projects = scratch ? all : all.filter(p => !isBoardTempRoot(p.root, opts));
         const caps = (() => { try { const lanes = resolveBudget({ config }).lanes ?? {}; return Object.fromEntries(Object.entries(lanes).map(([k, v]) => [k, v?.dailyUsd])); } catch { return {}; } })();
         const configured = (() => { try { return Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k]) => k); } catch { return []; } })();
         const configuredModels = (() => { try { return Object.fromEntries(Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k, v]) => [k, v.model])); } catch { return {}; } })();
@@ -353,7 +365,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
         };
         const snapshotNow = now();
         const workers = await workersHeld({ dir: lanesDir(env), max, invalid });
-        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: snapshotNow, laneState, workers, lanes: (laneToday, jobsToday) => laneUsage({ laneToday, jobsToday, configured, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: snapshotNow }), deployStatus: root => isScratchRoot(root) ? null : deployTracker.get(root) });
+        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: snapshotNow, laneState, workers, lanes: (laneToday, jobsToday) => laneUsage({ laneToday, jobsToday, configured, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: snapshotNow }), deployStatus: root => isBoardTempRoot(root, opts) ? null : deployTracker.get(root) });
         let peers = [];
         let remoteResults = [];
         if (!localOnly) {
@@ -383,8 +395,8 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
           snapshot.pools = { source: 'stub', pools: [], at: new Date(snapshotNow).toISOString() };
         }
         // What waits for the owner (read-only); a failure here never hides the rest of the board.
-        snapshot.inbox = await boardInbox({ projects, now: now(), env }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
-        snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : all.length - projects.length, total: all.filter(p => isScratchRoot(p.root)).length };
+        snapshot.inbox = await boardInbox({ projects, now: now(), env, forOwner: true }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
+        snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : all.length - projects.length, total: all.filter(p => isBoardTempRoot(p.root, opts)).length };
         return snapshot;
       })();
       cachedBy.set(cacheKey, { at: now(), promise });
@@ -397,7 +409,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       const liveRuns = (await live()).filter(r => r.root === project.root);
       let max = null;
       try { max = machineConcurrency(loadLocalConfig({ env })); } catch { /* invalid local config leaves split quality without a slot limit */ }
-      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), slots: max, deployStatus: root => isScratchRoot(root) ? null : deployTracker.get(root) });
+      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), slots: max, deployStatus: root => isBoardTempRoot(root, projectOpts()) ? null : deployTracker.get(root) });
     },
     // Every run alive in one project, combined (the Live tab of the project page).
     async live(id) {

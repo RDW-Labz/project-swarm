@@ -191,7 +191,11 @@ export async function listProjects({ file = projectsFile(), forOwner = false, in
     if (owner) {
       projects = projects.filter(p => !isScratchRoot(p.root, { ...scratchOpts, strict: true }));
     } else if (includeScratch !== true) {
-      projects = projects.filter(p => !isTestTempRoot(p.root, scratchOpts));
+      const defaultFile = path.resolve(projectsFile(env, effectiveHome));
+      const explicitRegistry = Boolean(env.SWARM_PROJECTS_FILE) || path.resolve(file) !== defaultFile;
+      if (!explicitRegistry) {
+        projects = projects.filter(p => !isTestTempRoot(p.root, scratchOpts));
+      }
     }
     return projects;
   } catch (error) {

@@ -124,6 +124,29 @@ export function scratchRootList({ env = process.env, home = os.homedir(), tmp, r
 
 const BROAD_SEGMENTS = new Set(['tmp', 'temp', 'test', 'tests', '__tests__']);
 
+/** OS temp trees (broad board hide only): honored even when SWARM_TEST_TMP narrows strict bases, except paths under SWARM_TEST_TMP (hermetic fixtures). */
+function underSystemTemp(resolved, options = {}) {
+  if (!resolved) return false;
+  const testTmp = options.env?.SWARM_TEST_TMP ?? process.env.SWARM_TEST_TMP;
+  if (testTmp) {
+    const tt = normalizedPath(testTmp);
+    if (tt && isUnder(resolved, tt)) return false;
+  }
+  const bases = [
+    safeRealpath(os.tmpdir()),
+    path.resolve(os.tmpdir()),
+    '/tmp',
+    '/private/tmp',
+    '/var/folders',
+    '/private/var/folders',
+  ].filter(Boolean);
+  for (const base of bases) {
+    const b = normalizedPath(base) ?? base;
+    if (isUnder(resolved, b)) return true;
+  }
+  return false;
+}
+
 function prefixParts(root) {
   const r = normalizedPath(root);
   return r ? r.split(path.sep).filter(Boolean) : [];
@@ -219,6 +242,16 @@ export function isTestTempRoot(root, options = {}) {
   const resolved = normalizedPath(raw);
   if (!resolved) return false;
   return hasBroadTestSegment(resolved, options);
+}
+
+/** Board listing hide: broad test/temp rules plus OS temp dirs (not used by listProjects registry reads). */
+export function isBoardTempRoot(root, options = {}) {
+  if (isTestTempRoot(root, options)) return true;
+  const resolved = normalizedPath(String(root ?? ''));
+  if (!resolved) return false;
+  const homeResolved = normalizedPath(options.home ?? options.env?.HOME ?? os.homedir());
+  if (homeResolved && resolved === homeResolved) return false;
+  return underSystemTemp(resolved, options);
 }
 
 export { isTestTempRoot as isScratchRootBroad };
