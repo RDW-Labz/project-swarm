@@ -2,9 +2,13 @@
 
 ## 1.156.0
 
-Autopilot starts only ledger tickets.
+Batch 1: autopilot ledger-only start, crash fixes, init base detail, machine limit resolver, integrated snapshot module.
 - **Ledger only:** swarm autopilot starts go --scope only for tickets in the ledger and never from a stale manifest; runs without outputs no longer raise a blocker.
 - **Tests:** tests/autopilot-ledger-only.test.mjs, tests/autopilot-no-outputs.test.mjs.
+- **Crash fixes:** the lane scheduler leaves no orphaned wake timer after close (removes the roughly 44 second process tail in the CLI test); dead runs are finalized and a missing cost is treated as 0 for flat-rate lanes.
+- **Init base detail:** a red base check in swarm init says which check failed and why (name, exit code, output tail) and prints detail only when a check has info.
+- **Autotune:** new machine limit resolver (hardware default, back off on CPU and RAM, per-lane caps from rate limits); modules and tests only, not yet wired.
+- **Integrated snapshot:** new module that snapshots the integrated tree for follow-up jobs; not yet wired.
 
 ## 1.155.0
 
