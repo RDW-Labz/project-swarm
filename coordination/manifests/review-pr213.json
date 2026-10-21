@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 2.0
+  },
+  "jobs": [
+    {
+      "id": "review-pr213",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "standing approval requires an Opus review for any workflow change",
+      "type": "review",
+      "prompt": "Review coordination/review/pr213.diff: a change to the CI workflow and the npm test script. Claims: it only (1) adds a per-test timeout of 600000 ms to the npm test script, (2) adds timeout-minutes 30 to the test job, (3) limits the push trigger to the main branch while pull_request still runs, and (4) adds a test that pins those settings. Check strictly for: any added or changed secret, token, permission, environment variable, deploy step, publish step, release step, cache or artifact upload, third-party action or changed action version, trigger broadening (for example pull_request_target or workflow_run), changes to who can trigger runs, anything that would let a pull request from a fork run with write permissions, any step that now skips tests or checks, and whether limiting push to main could stop the release workflow or any required check from running. Also say whether the 600000 ms test timeout could wrongly fail a legitimately slow test in this repository (the slowest known test files take under 3 minutes). Answer first with one line: PASS (no secrets, deploys or publish steps added and no concerns) or FAIL, then list any concrete findings with file and line.",
+      "context": [
+        "coordination/review/pr213.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}
