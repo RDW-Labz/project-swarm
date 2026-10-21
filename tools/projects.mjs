@@ -5,10 +5,16 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
+import { isScratchRoot as scratchRootOf, scratchRootList } from './scratch-roots.mjs';
 
 export const projectsFile = (env = process.env, home = os.homedir()) => env.SWARM_PROJECTS_FILE || path.join(home, '.project-swarm', 'projects.json');
 export const projectId = root => createHash('sha256').update(root).digest('hex').slice(0, 12);
 const isObj = v => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+export { scratchRootList };
+export function isScratchRoot(root, options = {}) {
+  return scratchRootOf(root, options);
+}
 
 let queue = Promise.resolve();
 const serial = fn => { const run = queue.then(fn, fn); queue = run.catch(() => {}); return run; };
@@ -23,11 +29,68 @@ const valid = list => {
   });
 };
 
-export async function listProjects({ file = projectsFile() } = {}) {
+async function rootExists(root) {
+  try {
+    const stat = await fs.stat(root);
+    return stat.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+// Owner inbox, phone sync and swarm inbox --all build from listProjects; the board still lists every registered project.
+function ownerInboxContext() {
+  const stack = new Error().stack ?? '';
+  return /phone-commands\.mjs/.test(stack) || /inbox-commands\.mjs/.test(stack);
+}
+
+export async function listProjects({ file = projectsFile(), forOwner, includeScratch, pruneGone } = {}) {
   try {
     const data = JSON.parse(await fs.readFile(file, 'utf8'));
-    return valid(isObj(data) && Array.isArray(data.projects) ? data.projects : []);
+    let projects = valid(isObj(data) && Array.isArray(data.projects) ? data.projects : []);
+    const owner = forOwner ?? (includeScratch === true ? false : ownerInboxContext());
+    const dropGone = pruneGone ?? owner;
+    if (dropGone) {
+      const existing = [];
+      const missing = [];
+      for (const project of projects) {
+        if (await rootExists(project.root)) existing.push(project);
+        else missing.push(project);
+      }
+      if (missing.length) {
+        await serial(async () => {
+          const onDisk = await listForWrite(file).catch(() => projects);
+          const left = onDisk.filter(p => !missing.some(m => m.id === p.id));
+          if (left.length !== onDisk.length) await write(file, left);
+        });
+      }
+      projects = existing;
+    }
+    if (owner) projects = projects.filter(p => !isScratchRoot(p.root));
+    return projects;
   } catch { return []; }
+}
+
+/** Scratch registry rows whose folder is already gone (for swarm orphans notes). */
+export async function scratchRegistryOrphans({ file = projectsFile() } = {}) {
+  try {
+    const data = JSON.parse(await fs.readFile(file, 'utf8'));
+    const projects = valid(isObj(data) && Array.isArray(data.projects) ? data.projects : []);
+    const orphans = [];
+    for (const project of projects) {
+      if (!isScratchRoot(project.root)) continue;
+      if (!(await rootExists(project.root))) orphans.push(project);
+    }
+    return orphans.sort((a, b) => String(a.root).localeCompare(String(b.root)));
+  } catch {
+    return [];
+  }
+}
+
+export function scratchRegistryOrphansNote(orphans) {
+  if (!orphans?.length) return '';
+  const lines = orphans.map(p => `  ${p.id}  ${p.root}`);
+  return `Scratch registry entries with no folder on disk (${orphans.length}):\n${lines.join('\n')}`;
 }
 
 // For writers: the same list, but a file that exists and cannot be read is an error (never "empty"), so a damaged list is never overwritten.
@@ -52,15 +115,6 @@ const inTmp = async real => {
   const bases = new Set([path.resolve(os.tmpdir()), await fs.realpath(os.tmpdir()).catch(() => null), '/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp'].filter(Boolean));
   return [...bases].some(tmp => real === tmp || real.startsWith(tmp + path.sep)) || real.split(path.sep).includes('.swarm') || real.split(path.sep).some(p => p.startsWith('.tmp'));
 };
-
-// A test or temp project, by its path alone (no disk access): inside the temp directory, a hidden .tmp* folder (the tests' scratch base), or a .swarm folder.
-// The board hides these by default (with a switch to show them).
-export function isScratchRoot(root, { tmpdir = os.tmpdir() } = {}) {
-  const real = String(root);
-  const parts = real.split(path.sep);
-  const bases = [path.resolve(tmpdir), '/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp', '/private/var/folders', '/var/folders'];
-  return bases.some(b => real === b || real.startsWith(b + path.sep)) || parts.includes('.swarm') || parts.some(p => p.startsWith('.tmp'));
-}
 
 // Adds the project (or refreshes its lastSeen). Returns { project, added } or null when the folder is not a project to list.
 export function registerProject(root, { file = projectsFile(), env = process.env, now = Date.now, name } = {}) {

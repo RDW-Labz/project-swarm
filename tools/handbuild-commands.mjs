@@ -1,9 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 // `swarm handbuild request | approve | deny | status | log | install | uninstall | off | on`: the hand-build guard's commands (see tools/handbuild.mjs and docs/handbuild-guard.md).
 import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import { appendEvent, sanitizeText } from './journal.mjs';
-import { createRequest, decideRequest, listRequests, activeApprovals, REASON_KINDS, KIND_LIST, MAX_MINUTES, DEFAULT_MINUTES, LOG_FILE, OFF_FILE } from './handbuild.mjs';
+import { createRequest, createScratchDeniedHandbuildRequest, decideRequest, listRequests, activeApprovals, REASON_KINDS, KIND_LIST, MAX_MINUTES, DEFAULT_MINUTES, LOG_FILE, OFF_FILE, SCRATCH_DENY_REASON } from './handbuild.mjs';
+import { isScratchRoot } from './scratch-roots.mjs';
+import { listProjects, projectsFile } from './projects.mjs';
+
+async function registeredScratchHandbuildRoot(root) {
+  if (!isScratchRoot(root)) return false;
+  let real;
+  try { real = await fsPromises.realpath(root); } catch { real = path.resolve(root); }
+  const norm = async candidate => {
+    try { return await fsPromises.realpath(candidate); } catch { return path.resolve(candidate); }
+  };
+  const projects = await listProjects({ file: projectsFile(), forOwner: false, pruneGone: false });
+  for (const project of projects) {
+    if ((await norm(project.root)) === real) return true;
+  }
+  return false;
+}
 import { ensureHandbuildGuard, removeHandbuildGuard, stableInstallDir } from './install.mjs';
 import { installGitHooks, removeGitHooks } from './git-hooks.mjs';
 
@@ -31,7 +48,13 @@ export async function runHandbuildCommand(root, args, { installRoot, now = Date.
   const { flags, rest } = flagsOf(tail);
   try {
     if (sub === 'request') {
-      const r = createRequest(root, { kind: flags.kind, reason: flags.reason, files: flags.files, minutes: flags.minutes, git: flags.git }, { now });
+      const fields = { kind: flags.kind, reason: flags.reason, files: flags.files, minutes: flags.minutes, git: flags.git };
+      const r = (await registeredScratchHandbuildRoot(root))
+        ? createScratchDeniedHandbuildRequest(root, fields, { now })
+        : createRequest(root, fields, { now });
+      if (r.status === 'denied' && r.denyReason === SCRATCH_DENY_REASON) {
+        return out('Hand-build request auto-denied: scratch project.');
+      }
       const id = `handbuild-${r.id}`;
       // It shows up in Needs you (the board and the phone) as a decision with approve and deny.
       await appendEvent(root, { kind: 'decision', id, confirm: true, choice: 'deny', options: ['approve', 'deny'], text: sanitizeText(`Hand-build request (${r.kind}): ${r.reason} | files: ${r.files.join(', ')} | ${r.minutes} min${r.git.length ? ` | git: ${r.git.join(', ')}` : ''}. Recommendation: deny unless the swarm truly cannot do it; otherwise a ticket is the better route.`) }, { now });

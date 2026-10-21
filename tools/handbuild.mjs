@@ -13,6 +13,7 @@ import { analyzeShell, writesAnything, TOOL_DIRS, tokenize, isReadOnlyGitSub } f
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 import { swarmProducedFiles, isSwarmProducedContent } from './swarm-produced.mjs';
 import { isSelfApprovalCommand, SELF_APPROVAL_REASON } from './self-approval.mjs';
+export const SCRATCH_DENY_REASON = 'scratch project';
 
 export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D', 'gh']);
 export const ELEVATED_GIT_OPS = Object.freeze(['merge', 'deploy', 'force-push', 'branch-D']);
@@ -1086,6 +1087,23 @@ export function createRequest(root, { kind, reason, files, minutes, git }, { now
   writeState(root, state);
   logAction(root, { event: 'request', id, by, files: list, reason: `${kind}: ${why}` }, { now });
   return state.requests[id];
+  });
+}
+
+/** Owner-facing `swarm handbuild request` in a scratch project: stored denied, never queued for Needs you. */
+export function createScratchDeniedHandbuildRequest(root, fields, { now = Date.now, by = 'orchestrator' } = {}) {
+  const req = createRequest(root, fields, { now, by });
+  return withStateLock(root, () => {
+    const state = readState(root);
+    const r = state.requests[req.id];
+    if (!r) return req;
+    const at = new Date(now()).toISOString();
+    r.status = 'denied';
+    r.denyReason = SCRATCH_DENY_REASON;
+    r.decidedAt = at;
+    r.decidedBy = 'scratch';
+    writeState(root, state);
+    return r;
   });
 }
 
