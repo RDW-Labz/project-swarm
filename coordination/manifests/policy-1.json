@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "policy-engine",
+      "agent": "auto",
+      "prompt": "Build the autonomy policy engine as new modules only (do not edit tools/swarm.mjs). Create tools/policy.mjs (SPDX header, ES module) and tests/policy.test.mjs (node:test, strict assert). Concept: a per-machine rules file decides which owner requests the swarm may approve by itself, so the owner's Needs you list shows only what truly needs the owner. Exports: POLICY_FILE_NAME ('policy.json'), policyPath(env, home) giving the machine config folder file (same folder logic as tools/local-config.mjs resolveConfigPath: read it), loadPolicy(path, {fs}) returning {rules, error} (a missing file means the built-in defaults; a malformed file returns error and NO auto rules, fail closed), validatePolicy(obj) returning a list of plain error strings, NEVER_AUTO (frozen list of request kinds that can never be auto-approved by any rules file: merge-main, deploy, publish, cap-raise, hand-edit-app-code, new-workflow, new-secret, auth-change, payments-change, migration, override, accept-unmet-acceptance), DEFAULT_RULES (frozen list of {id, kind, conditions}): commit-push-swarm-branch (commit or push of swarm-produced files on a branch that is not main or master), setup-files-branch (project setup files on a non-main branch), accept-failed-checks-new-tests-only (see decide), retry, park, release, change-order-path-fix, change-order-split. decide(request, {rules, now}) where request is {kind, id, project, facts}: it returns {decision: 'auto-approve' or 'needs-owner', rule: rule id or null, reason: short plain text}. A kind in NEVER_AUTO always returns needs-owner with reason 'owner-only' even if a rules file lists a rule for it (validatePolicy must reject such a rule). commit-push-swarm-branch auto-approves only when facts.branch is not main or master and facts.allSwarmProduced is true. accept-failed-checks auto-approves only when facts.failingChecks is a non-empty array, every failing check name appears in facts.newTestChecks (checks that run only the test files the wave itself added), and facts.otherChecksPassing is true; otherwise needs-owner. retry, park, release and the two change-order kinds auto-approve by default when facts.project is present. A rules file may only turn default rules off (enabled false) or narrow them (a projects list the rule applies to, a maxPerDay number); it can never add an approval for a kind outside DEFAULT_RULES. autoDecisionEvent(request, result, {now, machine}) returns the journal and Events record {kind: 'auto-decision', at, rule, requestKind, requestId, project, machine, reason} with no free text from the request. handledForYou(events, {limit}) filters those records newest first for the board's collapsed Handled for you list. Also create tools/policy-commands.mjs exporting policyCommand(args, {out, env, home, fs}) handling: swarm policy show (prints the effective rules and the never-auto list as plain text), swarm policy validate (prints errors or ok), swarm policy path; no other subcommand, unknown input prints usage. Do not wire it into the CLI yet. Tests: every default rule auto-approves with the right facts and refuses without them; every NEVER_AUTO kind is needs-owner even with a rules file naming it; a malformed rules file gives no auto rules; accept-failed-checks needs all three conditions (a failing check outside the new tests, an empty list, and otherChecksPassing false each refuse); maxPerDay and projects narrowing; autoDecisionEvent has no request free text; policyCommand show, validate and path output. Write only tools/policy.mjs, tools/policy-commands.mjs and tests/policy.test.mjs.",
+      "context": [
+        "tools/local-config.mjs",
+        "tools/phone.mjs",
+        "tools/handbuild.mjs"
+      ],
+      "outputs": [
+        "tools/policy.mjs",
+        "tools/policy-commands.mjs",
+        "tests/policy.test.mjs"
+      ],
+      "timeoutMs": 1200000
+    }
+  ]
+}
