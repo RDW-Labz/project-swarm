@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
+import crypto from 'node:crypto';
 import { stopGuard } from './stop-all.mjs';
 import { matchesFile } from './handbuild.mjs';
-export const ACTIONS = ['integrate', 'resume', 'retry-failed', 'start-wave', 'start-deferred', 'start-backlog', 'unlock-tickets', 'start-ready'];
+export const DEFAULT_AUTOPILOT_ACTIONS = ['integrate', 'resume', 'retry-failed', 'unlock-tickets', 'start-ready'];
+export const LEGACY_PLAN_ACTIONS = ['start-wave', 'start-deferred', 'start-backlog'];
+export const ACTIONS = [...DEFAULT_AUTOPILOT_ACTIONS, ...LEGACY_PLAN_ACTIONS];
 
 function ticketFiles(ticket) {
   if (!ticket || typeof ticket !== 'object') return [];
@@ -157,6 +160,59 @@ export function nextWave(events, plan) {
   return null;
 }
 
+/** Stable job-id list and outputs fingerprint for comparing plan waves to saved runs. */
+export function manifestWorkFingerprint(manifest) {
+  const jobs = Array.isArray(manifest?.jobs) ? manifest.jobs : [];
+  const jobIds = jobs.map(job => job?.id).filter(id => typeof id === 'string' && id).sort();
+  const outputsPayload = jobs
+    .filter(job => job && typeof job.id === 'string')
+    .map(job => ({
+      id: job.id,
+      outputs: [...(Array.isArray(job.outputs) ? job.outputs : [])].map(String).sort(),
+      outputDirs: [...(Array.isArray(job.outputDirs) ? job.outputDirs : [])].map(String).sort(),
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const outputsHash = crypto.createHash('sha256').update(JSON.stringify(outputsPayload)).digest('hex');
+  return { jobIds, outputsHash };
+}
+
+function fingerprintsMatch(a, b) {
+  return a && b && a.outputsHash === b.outputsHash && a.jobIds.length === b.jobIds.length
+    && a.jobIds.every((id, index) => id === b.jobIds[index]);
+}
+
+/**
+ * True when a plan wave manifest should not start again (hand rerun, integrated run, or stale file).
+ * `existing` entries come from saved runs (any starter): fingerprint, completed job ids, status, times.
+ */
+export function legacyWaveAlreadyRun({ manifest, manifestMtimeMs, existing }) {
+  if (!manifest || typeof manifest !== 'object') return false;
+  const fingerprint = manifestWorkFingerprint(manifest);
+  if (!fingerprint.jobIds.length) return false;
+  const waveJobSet = new Set(fingerprint.jobIds);
+  const mtime = Number.isFinite(manifestMtimeMs) ? manifestMtimeMs : null;
+  let newestOverlapMs = null;
+  for (const run of Array.isArray(existing) ? existing : []) {
+    if (!run || typeof run !== 'object') continue;
+    const runFp = run.fingerprint;
+    const runJobIds = Array.isArray(runFp?.jobIds) ? runFp.jobIds : [];
+    const overlaps = runJobIds.some(id => waveJobSet.has(id));
+    if (overlaps) {
+      const runTime = Number.isFinite(run.timeMs) ? run.timeMs : null;
+      if (runTime !== null && (newestOverlapMs === null || runTime > newestOverlapMs)) newestOverlapMs = runTime;
+    }
+    const completed = new Set(Array.isArray(run.completedJobIds) ? run.completedJobIds : []);
+    const allWaveJobsComplete = fingerprint.jobIds.every(id => completed.has(id));
+    const status = run.status ?? null;
+    const integrated = run.integrated === true;
+    const runComplete = status === 'complete' || status === 'integrated' || integrated || run.allJobsComplete === true;
+    if (runFp && fingerprintsMatch(fingerprint, runFp) && runComplete) return true;
+    if (allWaveJobsComplete) return true;
+  }
+  if (mtime !== null && newestOverlapMs !== null && mtime < newestOverlapMs) return true;
+  return false;
+}
+
 export function decide(run, ctx) {
   if (!run || typeof run !== 'object') return null;
   const c = ctx ?? {};
@@ -247,7 +303,7 @@ export function integrationBlocker(checkout) {
   return null;
 }
 
-export async function autopilotStep(root, deps, { now = Date.now, memory = new Set() } = {}) {
+export async function autopilotStep(root, deps, { now = Date.now, memory = new Set(), legacyPlan = false } = {}) {
   const nowMs = nowValue(now);
   let loadedEvents;
   try { loadedEvents = await deps.readJournal(root); }
@@ -376,25 +432,42 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     actions.push(await execute(decision));
   }
 
-  const wave = journalBroken ? null : nextWave(events, plan);
+  const wave = journalBroken || !legacyPlan ? null : nextWave(events, plan);
   if (wave && !memory.has(`start-wave:${wave.id}`)) {
     memory.add(`start-wave:${wave.id}`);
-    let ok = true;
-    let message = 'ok';
-    try {
-      const out = await deps.startWave(root, wave);
-      if (typeof out?.run === 'string') await write({ kind: 'run', id: out.run, status: out.status ?? 'running', manifest: wave.manifest });
-    } catch (error) {
-      ok = false;
-      message = String(error?.message ?? error);
+    let manifestInfo = null;
+    if (typeof deps.readCoordinationManifest === 'function') {
+      manifestInfo = await safe(() => deps.readCoordinationManifest(root, wave.manifest), null);
     }
-    const result = ok ? 'ok' : message.slice(0, RESULT_LIMIT);
-    await write({ kind: 'action', action: 'start-wave', wave: wave.id, reason: 'dependencies complete', result });
-    actions.push({ action: 'start-wave', wave: wave.id, ok, result });
+    const existing = typeof deps.existingRunWork === 'function'
+      ? await safe(() => deps.existingRunWork(root, runs), [])
+      : [];
+    const skip = legacyWaveAlreadyRun({
+      manifest: manifestInfo?.manifest ?? null,
+      manifestMtimeMs: manifestInfo?.mtimeMs,
+      existing,
+    });
+    if (skip) {
+      await write({ kind: 'action', action: 'start-wave', wave: wave.id, reason: 'already-run', result: 'ok' });
+      actions.push({ action: 'start-wave', wave: wave.id, ok: true, result: 'ok', reason: 'already-run' });
+    } else {
+      let ok = true;
+      let message = 'ok';
+      try {
+        const out = await deps.startWave(root, wave);
+        if (typeof out?.run === 'string') await write({ kind: 'run', id: out.run, status: out.status ?? 'running', manifest: wave.manifest });
+      } catch (error) {
+        ok = false;
+        message = String(error?.message ?? error);
+      }
+      const result = ok ? 'ok' : message.slice(0, RESULT_LIMIT);
+      await write({ kind: 'action', action: 'start-wave', wave: wave.id, reason: 'dependencies complete', result });
+      actions.push({ action: 'start-wave', wave: wave.id, ok, result });
+    }
   }
 
   // Jobs that waited for human tasks start once every task is done and the run that held them is integrated.
-  if (!journalBroken && typeof deps.humanGroups === 'function') {
+  if (legacyPlan && !journalBroken && typeof deps.humanGroups === 'function') {
     const groups = await safe(() => deps.humanGroups(root), []);
     const integratedIds = new Set(events.filter(e => e && e.kind === 'integration' && (e.status === 'complete' || e.status === 'integrated')).map(e => e.run));
     for (const group of Array.isArray(groups) ? groups : []) {
@@ -423,7 +496,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
   }
 
   // Never sit idle: when every live run is waiting (on a person or a quota window), start the next backlog goal.
-  if (!journalBroken && typeof deps.nextBacklog === 'function' && !actions.some(x => ['start-deferred', 'start-backlog'].includes(x.action))) {
+  if (legacyPlan && !journalBroken && typeof deps.nextBacklog === 'function' && !actions.some(x => ['start-deferred', 'start-backlog'].includes(x.action))) {
     // Waiting means a quota window or an open human task. A run paused on a spend cap is the owner's call, not idle time.
     const capped = r => (r.pause?.reasons ?? []).some(reason => ['run-cap', 'child-paused', 'lane-cap'].includes(reason));
     const groupsWaiting = typeof deps.humanGroups === 'function' && (await safe(() => deps.humanGroups(root), [])).some(group => !group.started && group.humans?.some(human => !human.done));
@@ -529,7 +602,7 @@ async function defaultSleep(ms, signal) {
 
 export const MIN_INTERVAL_MS = 5000;
 
-export async function runAutopilot(root, deps, { intervalMs = 30000, once = false, maxSteps = Infinity, signal, sleep = defaultSleep, now = Date.now } = {}) {
+export async function runAutopilot(root, deps, { intervalMs = 30000, once = false, maxSteps = Infinity, signal, sleep = defaultSleep, now = Date.now, legacyPlan = false } = {}) {
   const results = [];
   const memory = new Set();
   const wait = Math.max(MIN_INTERVAL_MS, Number(intervalMs) || MIN_INTERVAL_MS);
@@ -539,7 +612,7 @@ export async function runAutopilot(root, deps, { intervalMs = 30000, once = fals
     let step;
     try {
       try { await deps.busy?.begin?.(); } catch { /* marker must never stop the loop */ }
-      step = await autopilotStep(root, deps, { now, memory });
+      step = await autopilotStep(root, deps, { now, memory, legacyPlan });
     } finally {
       try { await deps.busy?.end?.(); } catch { /* marker must never stop the loop */ }
     }

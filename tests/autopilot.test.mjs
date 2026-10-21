@@ -46,7 +46,7 @@ function callsNamed(deps, name) {
 }
 
 test('ACTIONS lists the autopilot actions', () => {
-  assert.deepEqual(ACTIONS, ['integrate', 'resume', 'retry-failed', 'start-wave', 'start-deferred', 'start-backlog', 'unlock-tickets', 'start-ready']);
+  assert.deepEqual(ACTIONS, ['integrate', 'resume', 'retry-failed', 'unlock-tickets', 'start-ready', 'start-wave', 'start-deferred', 'start-backlog']);
 });
 
 test('decide integrates a complete run that is not integrated', () => {
@@ -154,11 +154,11 @@ test('autopilotStep starts at most one wave per step', async t => {
   const plan = { waves: [{ id: 'a', manifest: 'm-a' }, { id: 'b', manifest: 'm-b', after: ['a'] }, { id: 'c', manifest: 'm-c' }] };
   const journal = [];
   const deps = fakeDeps({ journal, plan });
-  await autopilotStep(root, deps, { now: () => NOW });
+  await autopilotStep(root, deps, { now: () => NOW, legacyPlan: true });
   const first = callsNamed(deps, 'startWave');
   assert.equal(first.length, 1);
   assert.equal(first[0][2].id, 'a');
-  await autopilotStep(root, deps, { now: () => NOW });
+  await autopilotStep(root, deps, { now: () => NOW, legacyPlan: true });
   const second = callsNamed(deps, 'startWave');
   assert.equal(second.length, 2);
   assert.equal(second[1][2].id, 'c');
@@ -340,7 +340,7 @@ test('autopilotStep journals run status changes, integrations, retry runs and st
     retryFailed: async () => ({ run: 'r-retry', status: 'running' }),
     startWave: async () => ({ run: 'r-wave', status: 'running' }),
   };
-  await autopilotStep(root, deps, { now: () => NOW });
+  await autopilotStep(root, deps, { now: () => NOW, legacyPlan: true });
   const kinds = journal.map(e => `${e.kind}:${e.action ?? e.status ?? ''}`);
   assert.ok(journal.some(e => e.kind === 'run' && e.id === 'r-done' && e.status === 'complete'), 'run status synced');
   assert.ok(journal.some(e => e.kind === 'integration' && e.run === 'r-done' && e.files === 3), kinds.join(','));
@@ -372,8 +372,8 @@ test('the once-only memory stops a paid retry or wave from repeating when the jo
   const root = await tempRoot(t);
   const deps = fakeDeps({ runs: [{ id: 'r2', status: 'failed', counts: { failed: 1 } }], readJournal: async () => [], plan: { waves: [{ id: 'w1', manifest: 'm.json' }] } });
   const memory = new Set();
-  await autopilotStep(root, deps, { now: () => NOW, memory });
-  await autopilotStep(root, deps, { now: () => NOW, memory });
+  await autopilotStep(root, deps, { now: () => NOW, memory, legacyPlan: true });
+  await autopilotStep(root, deps, { now: () => NOW, memory, legacyPlan: true });
   assert.equal(callsNamed(deps, 'retryFailed').length, 1);
   assert.equal(callsNamed(deps, 'startWave').length, 1);
 });
