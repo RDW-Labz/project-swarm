@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "pin-test-script",
+      "agent": "auto",
+      "prompt": "The npm test script in package.json is now: node --import ./tests/_isolate-config.mjs --test --test-timeout=600000 tests/*.test.mjs (a per-test timeout was added). Existing tests that pin the exact old script text fail: for example the test named T80 release docs describe the bounded loop and pin kickoff to 1.150.0 in tests/field-lesson-t80-cli.test.mjs asserts pkg.scripts.test equals the old string. Update every test file listed in your outputs so it expects the new script text exactly, keeping every other assertion unchanged. Search each file for every occurrence (also in other assertions or fixtures). Do not change package.json or any tools file. Write only the test files listed.",
+      "context": [
+        "tests/field-lesson-t80-cli.test.mjs"
+      ],
+      "outputs": [
+        "tests/field-lesson-t80-cli.test.mjs"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}
