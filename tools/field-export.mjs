@@ -2,9 +2,16 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { scanSecrets } from './security-scan.mjs';
+import { scanSecretsDetailed } from './security-scan.mjs';
 
 const HASH = /^[a-f0-9]{64}$/;
+const PROJECT_ID = /^[a-f0-9]{8,64}$/;
+const SAFE_ID = /^[A-Za-z0-9._-]{1,64}$/;
+const SAFE_CATEGORY = /^[a-z0-9-]{1,32}$/;
+const SAFE_TAG = /^[a-z0-9-]{1,32}$/;
+const MAX_EXPORT_BYTES = 512 * 1024;
+const KNOWN_AREAS = new Set(['tool', 'gotchas', 'security', 'release', 'testing', 'workflow']);
+const KNOWN_LANES = new Set(['fast', 'standard', 'slow', 'cheap', 'mid', 'expensive']);
 const HOME_PATH = /(?:^|[^A-Za-z0-9])\/(?:Users|home)\/[^/\s]+\//;
 const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 const IPV4 = /\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b/;
@@ -35,33 +42,44 @@ function piiKinds(text) {
   return kinds;
 }
 
-function safeFindings(scanResult) {
-  return Array.isArray(scanResult) && scanResult.length > 0 ? ['secret'] : [];
+function unsafeError(reason, findings = []) {
+  const label = reason ?? [...findings].sort().join(', ');
+  const error = new Error(`field-export-unsafe: ${label}`);
+  error.code = 'field-export-unsafe';
+  if (reason) error.reason = reason;
+  error.findings = reason ? [reason] : [...findings].sort();
+  return error;
 }
 
 async function assertSafe(text, scan, kinds = []) {
   const found = new Set(kinds);
+  const scanResult = await scan([{ path: 'field-export.json', content: text }]);
+  const secretFindings = Array.isArray(scanResult) ? scanResult : scanResult?.findings;
+  if (Array.isArray(scanResult?.skipped) && scanResult.skipped.length > 0) throw unsafeError('scan-skipped');
   const pii = piiKinds(text);
   for (const kind of pii) found.add(kind);
-  const secretFindings = await scan([{ path: 'field-export.json', content: text }]);
-  for (const kind of safeFindings(secretFindings)) found.add(kind);
-  if (found.size > 0) {
-    const error = new Error(`field-export-unsafe: ${[...found].sort().join(', ')}`);
-    error.code = 'field-export-unsafe';
-    error.findings = [...found].sort();
-    throw error;
-  }
+  if (Array.isArray(secretFindings) && secretFindings.length > 0) found.add('secret');
+  if (found.size > 0) throw unsafeError(null, found);
+}
+
+function safeLessonId(value) {
+  const id = asString(value);
+  return SAFE_ID.test(id) ? id : createHash('sha256').update(String(value ?? ''), 'utf8').digest('hex').slice(0, 12);
+}
+
+function safeCategory(value, known) {
+  return typeof value === 'string' && (known.has(value) || SAFE_CATEGORY.test(value)) ? value : 'other';
 }
 
 function projectLessons(lessons) {
   return lessons.map(lesson => ({
-    id: lesson?.id ?? null,
-    area: lesson?.area ?? null,
+    id: safeLessonId(lesson?.id),
+    area: safeCategory(lesson?.area, KNOWN_AREAS),
     status: lesson?.status ?? null,
     version: lesson?.version ?? null,
     createdAt: lesson?.createdAt ?? null,
     ruleLength: typeof lesson?.rule === 'string' ? lesson.rule.length : 0,
-    tags: Array.isArray(lesson?.tags) ? lesson.tags.filter(tag => typeof tag === 'string') : [],
+    tags: Array.isArray(lesson?.tags) ? lesson.tags.filter(tag => typeof tag === 'string' && SAFE_TAG.test(tag)).slice(0, 10) : [],
   }));
 }
 
@@ -120,7 +138,7 @@ function runAggregate(state) {
     : durationValues.map(value => finiteNumber(value)).filter(value => value !== null);
   const explicitMedian = firstValue([...countSources], ['medianMinutes', 'medianDurationMinutes']);
   return {
-    lane: typeof root.lane === 'string' ? root.lane : (typeof summary.lane === 'string' ? summary.lane : null),
+    lane: safeCategory(typeof root.lane === 'string' ? root.lane : summary.lane, KNOWN_LANES),
     jobs: jobs ? jobs.length : explicitJobs,
     pass: counts && explicitPass === null ? counts.pass : explicitPass,
     fail: counts && explicitFail === null ? counts.fail : explicitFail,
@@ -156,7 +174,14 @@ async function readRunStates(root) {
 }
 
 async function readProjectLessons(root, projectId) {
-  const folder = path.join(root, 'lessons', projectId);
+  const lessonsRoot = path.resolve(root, 'lessons');
+  const folder = path.resolve(lessonsRoot, projectId);
+  const relative = path.relative(lessonsRoot, folder);
+  if (!PROJECT_ID.test(projectId) || relative.startsWith('..') || path.isAbsolute(relative)) {
+    const error = new Error('field-export-bad-project');
+    error.code = 'field-export-bad-project';
+    throw error;
+  }
   let entries;
   try {
     entries = await fs.readdir(folder, { withFileTypes: true });
@@ -180,7 +205,7 @@ function exportedAt(now) {
   return date.toISOString();
 }
 
-export async function exportFieldData(root, { now, projectId, scan = scanSecrets } = {}) {
+export async function exportFieldData(root, { now, projectId, scan = scanSecretsDetailed } = {}) {
   if (typeof scan !== 'function') throw new TypeError('field export scan must be a function');
   if (projectId === undefined || projectId === null || String(projectId).length === 0) {
     throw new TypeError('field export requires projectId');
@@ -188,14 +213,16 @@ export async function exportFieldData(root, { now, projectId, scan = scanSecrets
   const rawProjectId = String(projectId);
   const lessons = await readProjectLessons(root, rawProjectId);
   const inputText = jsonText(lessons);
-  await assertSafe(inputText, scan);
   const data = {
     projectId: projectHash(rawProjectId),
     exportedAt: exportedAt(now),
     lessons: projectLessons(lessons),
     runs: await readRunStates(root),
   };
-  await assertSafe(JSON.stringify(data), scan);
+  const serialized = JSON.stringify(data);
+  if (Buffer.byteLength(serialized, 'utf8') > MAX_EXPORT_BYTES) throw unsafeError('export-too-large');
+  await assertSafe(inputText, scan);
+  await assertSafe(serialized, scan);
   return data;
 }
 

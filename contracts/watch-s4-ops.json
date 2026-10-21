@@ -4,7 +4,7 @@
   "info": {
     "title": "Swarm Watch S4 operations API",
     "version": "1.0.0",
-    "description": "Contract for the local Swarm Watch board and its tailnet-only owner actions. Read routes accept the board token in x-watch-token or the t query parameter. Owner routes additionally require the Tailscale identity header and are never reachable with agent-session markers or through a remote board request carrying local=1."
+    "description": "Contract for the local Swarm Watch board and its tailnet-only owner actions. Read routes accept the board token in x-watch-token or the t query parameter. Owner routes require x-watch-token and the Tailscale identity header; the t query parameter is refused (401). Owner routes are never reachable with agent-session markers or through a remote board request carrying local=1."
   },
   "servers": [
     {
@@ -151,10 +151,9 @@
         "tags": ["owner-actions"],
         "operationId": "prepareOwnerAction",
         "summary": "Prepare an owner decision",
-        "description": "Step 1 of the confirmation flow. The returned confirmToken is short-lived, single-use, and bound to itemId. This route is unavailable to agent sessions and to remote-board requests with local=1.",
+        "description": "Step 1 of the confirmation flow. The returned confirmToken is short-lived, single-use, and bound to itemId. Authenticate with x-watch-token only; a board token in the t query parameter is refused (401). This route is unavailable to agent sessions and to remote-board requests with local=1.",
         "security": [
-          {"boardTokenHeader": [], "tailnetSignIn": []},
-          {"boardTokenQuery": [], "tailnetSignIn": []}
+          {"boardTokenHeader": [], "tailnetSignIn": []}
         ],
         "parameters": [
           {
@@ -185,10 +184,9 @@
         "tags": ["owner-actions"],
         "operationId": "submitOwnerDecision",
         "summary": "Approve or deny an owner-decidable request",
-        "description": "Step 2 of the confirmation flow. The server refuses merge, deploy, cap-raise, spend, key, and migration actions regardless of client input. Agent-session markers and remote-board local=1 requests are always refused.",
+        "description": "Step 2 of the confirmation flow. The server refuses merge, deploy, cap-raise, spend, key, and migration actions regardless of client input. Authenticate with x-watch-token only; a board token in the t query parameter is refused (401). Agent-session markers and remote-board local=1 requests are always refused.",
         "security": [
-          {"boardTokenHeader": [], "tailnetSignIn": []},
-          {"boardTokenQuery": [], "tailnetSignIn": []}
+          {"boardTokenHeader": [], "tailnetSignIn": []}
         ],
         "parameters": [
           {
@@ -229,10 +227,9 @@
         "tags": ["owner-actions"],
         "operationId": "getOwnerAudit",
         "summary": "Get owner action audit entries",
-        "description": "Returns owner action audit entries without board tokens or other secret material. This endpoint is unavailable to agent sessions and to remote-board requests with local=1.",
+        "description": "Returns owner action audit entries without board tokens or other secret material. Authenticate with x-watch-token only; a board token in the t query parameter is refused (401). This endpoint is unavailable to agent sessions and to remote-board requests with local=1.",
         "security": [
-          {"boardTokenHeader": [], "tailnetSignIn": []},
-          {"boardTokenQuery": [], "tailnetSignIn": []}
+          {"boardTokenHeader": [], "tailnetSignIn": []}
         ],
         "responses": {
           "200": {
@@ -260,7 +257,7 @@
         "type": "apiKey",
         "in": "header",
         "name": "x-watch-token",
-        "description": "The board token sent as a request header. Read routes may use this or the t query parameter."
+        "description": "The board token sent as a request header. Read routes may use this or the t query parameter. Owner routes require this header and refuse the t query parameter."
       },
       "boardTokenQuery": {
         "type": "apiKey",

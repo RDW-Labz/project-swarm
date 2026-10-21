@@ -18,20 +18,20 @@ test('watch S4 contract is OpenAPI 3.1', () => {
   assert.ok(contract.paths && typeof contract.paths === 'object');
 });
 
-test('every owner route requires a board token and tailnet sign-in', () => {
+test('every owner route requires board token header and tailnet sign-in only', () => {
   for (const path of ownerPaths) {
     const operations = Object.values(contract.paths[path] ?? {});
     assert.ok(operations.length > 0, `${path} must be declared`);
     for (const operation of operations) {
       const security = operation.security;
-      assert.ok(Array.isArray(security) && security.length > 0, `${path} must declare security`);
-      assert.ok(
-        security.every(requirement =>
-          Object.hasOwn(requirement, 'tailnetSignIn')
-          && (Object.hasOwn(requirement, 'boardTokenHeader') || Object.hasOwn(requirement, 'boardTokenQuery')),
-        ),
-        `${path} must require tailnet sign-in and a board token in every security alternative`,
+      assert.ok(Array.isArray(security) && security.length === 1, `${path} must declare exactly one security requirement`);
+      const requirement = security[0];
+      assert.deepEqual(
+        Object.keys(requirement).sort(),
+        ['boardTokenHeader', 'tailnetSignIn'],
+        `${path} must require boardTokenHeader and tailnetSignIn together`,
       );
+      assert.ok(!Object.hasOwn(requirement, 'boardTokenQuery'), `${path} must not accept boardTokenQuery`);
     }
   }
 });

@@ -8,10 +8,12 @@ import path from 'node:path';
 import {
   DEFAULT_HANDOFF_TRANSCRIPT_BYTES,
   HANDOFF_TRANSCRIPT_BYTES_ENV,
+  PROJECT_MEMORY_FILE,
   validateOrchestratorConfig,
   handoffTranscriptBytes,
   transcriptBytes,
   contextHandoffOf,
+  persistOrchestratorHandoff,
 } from '../tools/orchestrator-context.mjs';
 
 const MIN_BYTES = 256 * 1024;
@@ -127,4 +129,62 @@ test('contextHandoffOf treats empty transcript as missing', async () => {
   assert.equal(out.transcript, null);
   assert.equal(out.bytes, null);
   assert.equal(out.over, false);
+});
+
+test('persistOrchestratorHandoff refuses unsafe sessionId and writes nothing', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-orch-ctx-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const saved = process.env.SWARM_TRANSCRIPT_ROOTS;
+  process.env.SWARM_TRANSCRIPT_ROOTS = root;
+  t.after(() => { process.env.SWARM_TRANSCRIPT_ROOTS = saved; });
+
+  const name = 'sess-bad-id.jsonl';
+  fs.writeFileSync(path.join(root, name), '{"type":"user"}\n', 'utf8');
+  const memoryPath = path.join(root, PROJECT_MEMORY_FILE);
+  const badIds = [
+    'sess\ninject',
+    'sess`break`',
+    '**markdown**',
+  ];
+
+  for (const sessionId of badIds) {
+    await assert.rejects(
+      () => persistOrchestratorHandoff({
+        root,
+        sessionId,
+        transcript: name,
+        bytes: MIN_BYTES,
+        threshold: MIN_BYTES,
+        now: () => 1_700_000_000_000,
+      }),
+      (err) => err?.code === 'orchestrator-bad-session-id',
+    );
+    assert.equal(fs.existsSync(memoryPath), false);
+  }
+});
+
+test('persistOrchestratorHandoff writes validated sessionId in inline code', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-orch-ctx-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const saved = process.env.SWARM_TRANSCRIPT_ROOTS;
+  process.env.SWARM_TRANSCRIPT_ROOTS = root;
+  t.after(() => { process.env.SWARM_TRANSCRIPT_ROOTS = saved; });
+
+  const sessionId = 'orch-session-9aZ';
+  const name = 'sess-good-id.jsonl';
+  fs.writeFileSync(path.join(root, name), '{"type":"user"}\n', 'utf8');
+
+  const out = await persistOrchestratorHandoff({
+    root,
+    sessionId,
+    transcript: name,
+    bytes: MIN_BYTES,
+    threshold: MIN_BYTES,
+    now: () => 1_700_000_000_000,
+  });
+  assert.equal(out.ok, true);
+
+  const memoryPath = path.join(root, PROJECT_MEMORY_FILE);
+  const memory = fs.readFileSync(memoryPath, 'utf8');
+  assert.match(memory, new RegExp(`Session \\\`${sessionId}\\\` transcript`));
 });
