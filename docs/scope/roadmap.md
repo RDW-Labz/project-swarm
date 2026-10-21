@@ -15,6 +15,7 @@ Out of scope: building the 8 managers as separate long-running agents (S6 define
 - S4: Visibility on Swarm Watch
 - S5: Operations
 - S6: Managers, first versions
+- S7: Swarm v2 architecture
 
 ## S1 Unblock autonomy
 ### R-001 The policy engine auto-decides routine requests.
@@ -218,3 +219,52 @@ Acceptance:
 Acceptance:
 - Visual QA takes screenshots of changed pages at phone and desktop size and attaches them to the PR.
 - The Lessons keeper turns each logged lesson into a test or a rule and closes it.
+
+## S7 Swarm v2 architecture
+### R-040 A per-machine swarm service runs under launchd and sessions connect as clients.
+Acceptance:
+- `swarm service install` loads a user launchd agent that starts on login and survives reboot; `swarm service status` reports running within 10 seconds of boot.
+- `swarm run` with service mode enabled submits the job to the daemon and the client exits when the job finishes; stopping the service falls back to direct CLI execution with no config change.
+- After `kill -9` on the service process, launchd restarts it and a waiting client reconnects within 5 seconds.
+
+### R-041 One chief orchestrator schedules work across all registered projects on the machine.
+Acceptance:
+- With chief mode on, exactly one chief process is running per machine; `swarm orchestrator status` lists every active project and its slot share.
+- Starting a second chief exits with a non-zero code and leaves the first chief unchanged.
+- When two projects each have ready tickets and the machine cap is 4, the chief starts jobs on both projects in the same wave instead of filling only the first project.
+
+### R-042 Project runtime state lives outside the git repo; the repo keeps scope, tickets, and a pointer only.
+Acceptance:
+- After `swarm migrate state` on a sample project, new run artifacts write only under `~/.project-swarm/projects/<project-id>/` and the repo contains a committed pointer file with that id.
+- `git status` shows no untracked files under `.swarm` after a full wave when external state is primary.
+- `swarm board` and Swarm Watch read the pointer and show the same open ticket count as before migration on that project.
+
+### R-043 Each job gets isolated ports and database credentials and permissions enforced by the service, not only text guards.
+Acceptance:
+- Two jobs started at the same time on one machine receive different `DATABASE_URL` ports and neither process can connect to the other's port (connection refused or auth failure).
+- An isolated job denied `git push` by policy fails at the service with exit code 1 before the agent runs `git push`.
+- A job on `legacy` sandbox mode behaves as today when isolation is not enabled for that project.
+
+### R-044 Two machines share one ticket queue and one board view of that queue.
+Acceptance:
+- With cluster queue enabled on MacBook and Mac mini, enqueueing ticket T on either machine shows T in `swarm queue list` on both within 3 seconds.
+- Only one machine holds an active lease on T at a time; a second worker that tries to start T gets a clear "leased elsewhere" message.
+- Swarm Watch shows the same queue depth number on both machines for the shared project.
+
+### R-045 Cloud burst runners pull leased jobs with the same isolation contract as local jobs.
+Acceptance:
+- A ticket tagged for burst runs on a registered cloud runner and reports completion back to the event store within 60 seconds of local enqueue on a test job.
+- If the cloud runner does not heartbeat for 2 minutes, the lease returns to the local queue and a local worker can take the job.
+- Burst defaults off; enabling burst on a project does not change behavior for projects with burst off.
+
+### R-046 Install, doctor, and `swarm add` onboard a repo in one flow.
+Acceptance:
+- The documented one-command install finishes with `swarm doctor` exit 0 on a fresh macOS user account (lanes optional sections may warn but must not fail required checks).
+- `swarm add /path/to/repo` registers the project, writes the pointer, and the project appears on Swarm Watch within 60 seconds without manual `swarm init`.
+- `swarm init` on an already-added repo is idempotent and does not duplicate registry entries.
+
+### R-047 One SQLite event store replaces scattered ndjson and markdown ledgers for board views.
+Acceptance:
+- New orchestrator and run events append to a single SQLite `events` table; no new ndjson ledger files are created when `event_store=primary`.
+- `swarm board` and Swarm Watch panels (% done, open tickets, spend today) match the pre-migration file-based numbers on a fixed sample export within 1 ticket and $0.01 spend.
+- `swarm events export` writes committed repo artifacts (usage summary) from SQL views without reading legacy `.swarm` journal files.
