@@ -139,8 +139,8 @@ test('BLOCKED merge, deploy, branch -D, and gh api write without approval', asyn
   const { bash } = await project(t);
   for (const [cmd, pat] of [
     ['git merge origin/main', /git merge/],
-    ['gh pr merge 5', /git merge/],
-    ['swarm merge 5', /git merge/],
+    ['gh pr merge 5', /gh pr merge is blocked/],
+    ['swarm merge 5', /merging a pull request needs the owner/],
     ['vercel deploy', /git deploy/],
     ['git branch -D stale', /branch-D/],
     ['gh api -X POST repos/o/r/issues', /gh api write/],
@@ -151,11 +151,14 @@ test('BLOCKED merge, deploy, branch -D, and gh api write without approval', asyn
   }
 });
 
-test('approval naming merge allows gh pr merge', async t => {
+test('approval naming merge allows swarm merge but not gh pr merge', async t => {
   const { bash, root } = await project(t);
   const r = createRequest(root, { kind: 'tiny', reason: 'the swarm cannot merge from here', files: 'src/hand.ts', git: 'merge', minutes: 30 }, { now: () => T0 });
   decideRequest(root, r.id, 'approve', { now: () => T0, channel: 'computer' });
-  assert.equal(bash('gh pr merge 5', { now: () => T0 + 1000 }).allow, true);
+  assert.equal(bash('swarm merge 5', { now: () => T0 + 1000 }).allow, true);
+  const gh = bash('gh pr merge 5', { now: () => T0 + 1000 });
+  assert.equal(gh.allow, false);
+  assert.match(gh.reason, /use swarm merge/i);
 });
 
 test('outside deletes: session scratchpad dir allowed, home path blocked', async t => {

@@ -18,7 +18,11 @@ export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy
 export const ELEVATED_GIT_OPS = Object.freeze(['merge', 'deploy', 'force-push', 'branch-D']);
 const CHAT_MERGE_MS = 60 * 60000;
 const ALLOWED_GH = new Set(['pr create', 'pr view', 'pr list', 'pr checks', 'pr diff', 'run list', 'run watch', 'run view']);
-const ALLOWED_VERCEL = new Set(['ls', 'inspect', 'logs', 'whoami', '--version']);
+const VERCEL_TOP_FREE = new Set(['ls', 'list', 'inspect', 'logs', 'whoami', '--version', 'help']);
+const VERCEL_LIST_PARENTS = new Set(['env', 'domains', 'projects', 'project', 'teams', 'team', 'dns', 'certs', 'certificates', 'alias', 'secrets', 'integration', 'redirects', 'rolling-release']);
+const VERCEL_INFO_FLAGS = new Set(['--help', '-h', '--version', '-v']);
+export const GH_PR_MERGE_BLOCKED = 'Hand-build guard: gh pr merge is blocked; use swarm merge N, which checks CI first.';
+export const MERGE_BLOCKED_REASON = 'Hand-build guard: merging a pull request needs the owner\'s approval. The owner can type merge and the PR number in chat; enable the merge-swarm-pr rule in the machine policy file for standing approval; or grant a hand-build approval that names merge (at the computer for merge).';
 const READ_GIT_SUBS = new Set(['status', 'log', 'diff', 'show']);
 const WRITE_HTTP = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const CONFIG_FLAGS = new Set(['-c', '--config', '--output', '--exec', '-x', '--exec-path', '--upload-pack', '--receive-pack', '--ext-diff']);
@@ -423,7 +427,7 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
       const globalOpts = args.some(a => a.startsWith('-'));
       const prod = args.includes('--prod');
       const pos = args.filter(a => !a.startsWith('-'));
-      const onlyVersion = args.includes('--version') && pos.length === 0;
+      const onlyVersion = (args.includes('--version') || args.includes('-v')) && pos.length === 0;
       const sub = onlyVersion ? '--version' : (prod || pos.length === 0 || args.every(a => a.startsWith('-')) ? 'deploy' : pos[0]);
       ops.push({ tool: 'vercel', sub, args: sub === 'deploy' ? pos : pos.slice(1), globalOpts, hasConfig, flags: args.filter(a => a.startsWith('-')), branch: null, force: false, delete: null, target: null });
     } else if (cmd === 'swarm') {
@@ -537,6 +541,52 @@ const isFreeGitRebase = (op, protBranch) => {
 };
 
 const isFreeReadGit = op => !op.globalOpts && !op.hasConfig && !op.gitEnv && !(op.flags ?? []).some(f => f === '--output' || f.startsWith('--output='));
+
+const vercelFlagIsInfoOnly = f => VERCEL_INFO_FLAGS.has(f) || f === '--token' || f === '-t' || f === '--scope' || f.startsWith('--scope=');
+
+const isFreeVercel = op => {
+  if (op.hasConfig) return false;
+  const flags = op.flags ?? [];
+  const args = op.args ?? [];
+  const sub = op.sub;
+  if (flags.includes('--prod')) return false;
+  if (sub === 'deploy') {
+    if (args.length > 0) return false;
+    if (flags.length === 0) return false;
+    return flags.every(vercelFlagIsInfoOnly);
+  }
+  if (VERCEL_TOP_FREE.has(sub)) return true;
+  if (VERCEL_LIST_PARENTS.has(sub) && args.length >= 1 && ['ls', 'list', 'inspect'].includes(args[0])) return true;
+  return false;
+};
+
+const swarmConfigDir = home => (process.env.SWARM_CONFIG ? path.dirname(process.env.SWARM_CONFIG) : path.join(home, '.config', 'project-swarm'));
+
+const policyFilePath = home => process.env.SWARM_POLICY_FILE || path.join(swarmConfigDir(home), 'policy.json');
+
+/** True when policy.json enables standing approval for `swarm merge N`. */
+export const mergeSwarmPrStandingEnabled = (home = os.homedir()) => {
+  try {
+    const policy = JSON.parse(fs.readFileSync(policyFilePath(home), 'utf8'));
+    if (!policy || !Array.isArray(policy.rules)) return false;
+    const rule = policy.rules.find(r => r?.id === 'merge-swarm-pr');
+    if (!rule || rule.enabled === false) return false;
+    return true;
+  } catch { return false; }
+};
+
+const SWARM_MERGE_BYPASS_FLAGS = new Set(['--force', '-f', '--admin']);
+
+const isStandingSwarmMerge = (op, home) => {
+  if (!mergeSwarmPrStandingEnabled(home)) return false;
+  if (op.tool !== 'swarm' || op.sub !== 'merge') return false;
+  if (op.globalOpts || op.hasConfig) return false;
+  const flags = op.flags ?? [];
+  if (flags.some(f => SWARM_MERGE_BYPASS_FLAGS.has(f) || f.startsWith('--admin'))) return false;
+  const args = op.args ?? [];
+  if (args.length !== 1 || !/^\d+$/.test(String(args[0]))) return false;
+  return true;
+};
 
 const GIT_SHOW_MAX = 16 * 1024 * 1024;
 const readGitShowBytes = (root, object) => {
@@ -882,11 +932,12 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
   const headCarryOk = rel => carryBytesOk(root, rel, readGitShowBytes(root, `HEAD:${rel}`));
   const workingCarryOk = rel => carryBytesOk(root, rel, readWorkingTreeBytes(root, rel));
   const writeFree = rel => AllowRel(rel) || isRoutingPathResolved(root, rel);
+  const approvalGitOp = op => (op === 'swarm-merge' ? 'merge' : op);
   const covers = (rels, gitOps = []) => {
     // every file and every git operation must be covered by one live approval
     for (const rel of rels) if (!approvals.some(a => matchesFile(a.files, rel))) return { ok: false, missing: rel };
-    const gitCovered = op => approvals.some(a => a.git.includes(op) || (op === 'add' && a.git.includes('commit')));
-    for (const op of gitOps) if (!gitCovered(op)) return { ok: false, missing: `git ${op}` };
+    const gitCovered = op => approvals.some(a => a.git.includes(approvalGitOp(op)) || (op === 'add' && a.git.includes('commit')));
+    for (const op of gitOps) if (!gitCovered(op)) return { ok: false, missing: `git ${approvalGitOp(op)}` };
     const used = approvals.find(a => rels.some(rel => matchesFile(a.files, rel)) || gitOps.some(op => gitCovered(op)));
     return { ok: true, approval: used?.id };
   };
@@ -934,6 +985,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     let commitStagedCheck = null;
     let pushNeedsCarryCheck = false;
     const chatMergeCandidates = [];
+    let standingMergeAllow = false;
     for (const op of policyOps) {
       if (op.opaque) { policyGitOps.push('commit'); continue; }
       if (op.tool === 'git') {
@@ -987,36 +1039,45 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
         if (op.globalOpts) { policyGitOps.push('merge'); continue; }
         if (ALLOWED_GH.has(op.sub)) continue;
         if (op.sub === 'pr merge') {
-          chatMergeCandidates.push(op.target);
-          policyGitOps.push('merge');
+          policyGitOps.push('gh-pr-merge');
           continue;
         }
         if (String(op.sub ?? '').startsWith('api')) policyGitOps.push('gh-api-write');
         else policyGitOps.push('merge');
       } else if (op.tool === 'vercel') {
-        if (op.globalOpts && op.sub !== '--version') { policyGitOps.push('deploy'); continue; }
-        if (ALLOWED_VERCEL.has(op.sub)) continue;
+        if (isFreeVercel(op)) continue;
         policyGitOps.push('deploy');
       } else if (op.tool === 'swarm') {
         if (op.sub === 'merge') {
+          if (isStandingSwarmMerge(op, h)) {
+            standingMergeAllow = true;
+            continue;
+          }
           chatMergeCandidates.push(op.target);
-          policyGitOps.push('merge');
+          policyGitOps.push('swarm-merge');
         }
       }
     }
     if (ghApiWrite(ti.command, policyOps)) policyGitOps.push('gh-api-write');
-    const mergeOps = policyOps.filter(o => (o.tool === 'gh' && o.sub === 'pr merge') || (o.tool === 'swarm' && o.sub === 'merge'));
+    if (policyGitOps.includes('gh-pr-merge')) {
+      return { allow: false, files: [], reason: GH_PR_MERGE_BLOCKED };
+    }
+    const mergeOps = policyOps.filter(o => o.tool === 'swarm' && o.sub === 'merge');
     const chatMergeOk = !commandHasGhRepoFlag(ti.command) && mergeOps.length === 1 && mergeOps[0].target && peekChatMerge(root, mergeOps[0].target, now());
     if (chatMergeOk) {
-      for (let i = policyGitOps.length - 1; i >= 0; i -= 1) if (policyGitOps[i] === 'merge') policyGitOps.splice(i, 1);
+      for (let i = policyGitOps.length - 1; i >= 0; i -= 1) if (policyGitOps[i] === 'swarm-merge') policyGitOps.splice(i, 1);
     }
     if (policyGitOps.length && !covers([], policyGitOps).ok) {
+      if (policyGitOps.includes('swarm-merge')) {
+        return { allow: false, files: [], reason: MERGE_BLOCKED_REASON };
+      }
       const label = policyGitOps[0] === 'gh-api-write' ? 'gh api write' : `git ${policyGitOps[0]}`;
       return { allow: false, files: [], reason: `${DENY_ADVICE} (blocked: ${label})` };
     }
     const finishAllow = result => {
       if (chatMergeOk && mergeOps[0]?.target) tryConsumeChatMerge(root, mergeOps[0].target, now());
-      return result;
+      const out = standingMergeAllow ? { ...result, standing: 'merge-swarm-pr' } : result;
+      return out;
     };
     if (!writesAnything(a)) return finishAllow({ allow: true });
     if (a.dynamic || a.inline || a.unknown) {
@@ -1069,6 +1130,9 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (policyGitOps.length) {
       const c = covers(fileRels, policyGitOps);
       if (c.ok) return finishAllow({ allow: true, files: [...a.writes, ...staged], approval: c.approval });
+      if (policyGitOps.includes('swarm-merge')) {
+        return { allow: false, files: a.writes, reason: MERGE_BLOCKED_REASON };
+      }
       const label = policyGitOps[0] === 'gh-api-write' ? 'gh api write' : `git ${policyGitOps[0]}`;
       return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${label})` };
     }

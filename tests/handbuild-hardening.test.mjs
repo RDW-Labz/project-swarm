@@ -178,12 +178,13 @@ test('(12) elevated hand-build approve requires computer channel in decideReques
   decideRequest(root, r.id, 'approve', { now: () => T0, channel: 'computer' });
 });
 
-test('(13) chat merge token consumed only after full allow; -R blocks chat merge', async t => {
+test('(13) chat merge token for swarm merge only; gh pr merge always blocked', async t => {
   const { bash, root } = await project(t);
   recordChatMerge(root, 5, { now: () => T0 });
-  assert.equal(bash('gh pr merge 5', { now: () => T0 + 1000 }).allow, true);
-  assert.equal(bash('gh pr merge 5', { now: () => T0 + 2000 }).allow, false);
+  assert.equal(bash('swarm merge 5', { now: () => T0 + 1000 }).allow, true);
+  assert.equal(bash('swarm merge 5', { now: () => T0 + 2000 }).allow, false);
   recordChatMerge(root, 5, { now: () => T0 });
-  const blocked = bash('gh pr merge 5 -R o/r', { now: () => T0 + 1000 });
-  assert.equal(blocked.allow, false);
+  assert.equal(bash('gh pr merge 5', { now: () => T0 + 1000 }).allow, false);
+  assert.match(bash('gh pr merge 5', { now: () => T0 + 1000 }).reason, /use swarm merge/i);
+  assert.equal(bash('gh pr merge 5 -R o/r', { now: () => T0 + 1000 }).allow, false);
 });
