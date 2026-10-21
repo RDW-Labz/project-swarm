@@ -17,6 +17,7 @@ Out of scope: building the 8 managers as separate long-running agents (S6 define
 - S6: Managers, first versions
 - S7: Swarm v2 stage 1 (internal, about one month)
 - S8: Swarm v2 later stages
+- S9: Cluster (N devices, one ledger, autonomous node-to-node work)
 
 ## S1 Unblock autonomy
 ### R-001 The policy engine auto-decides routine requests.
@@ -295,3 +296,101 @@ Acceptance:
 - A registered cloud CPU runner runs a ticket's own test command and the full e2e suite and writes pass or fail plus duration to the event store.
 - It is the first burst feature built, before any GPU work, because test waiting is the likely larger win: the benchmark scorecard must show ticket ready-to-merged time and idle slot percent before and after, and the runner stays off unless that scorecard improves.
 - Same defaults as R-049: burst off by default, no sensitive code, local queue takes the ticket back after 120 seconds without a heartbeat, spend counted in the daily limit.
+
+## S9 Cluster
+### R-052 One shared ledger with ticket leases replaces hand-off branches and ticket ID ranges.
+Acceptance:
+- With cluster ledger enabled, R-048 shared queue behavior still holds; claims write a lease record with holder node id, monotonic fencing token, and expiry in the ledger owner store instead of hand-off branches or per-node ticket id ranges.
+- A worker heartbeat every 30 seconds extends the lease only when the fencing token matches; after automatic expiry without heartbeat the ticket returns to ready with exit 0 on `swarm queue release --expired`, and a dead node's late heartbeats are rejected.
+- Two simulated workers racing to claim the same ticket produce exactly one holder and one exit non-zero with message `claim rejected`; release benchmark harness records 0 double-claims.
+- An expired lease returns the ticket to the pool for any node with a free slot without owner action.
+
+### R-053 Coordination events are typed swarm-to-swarm messages that use no model turns and no orchestrator tokens.
+Acceptance:
+- `ticket-done`, `release-shipped`, `lease-claim`, `lease-release`, `request`, `question`, `handoff`, and `ack` each validate against schema and are handled without invoking an LLM or spending orchestrator tokens.
+- In the harness, a `ticket-done` from node B reaches node A and updates the shared ledger with 0 model calls recorded on either node.
+- The wake event fires only for message kinds that require an orchestrator decision; routine coordination messages do not start an orchestrator session.
+- Lease and ticket state transitions from these messages complete without owner relay.
+
+### R-054 Reliable delivery uses acks, bounded retries with backoff, a durable outbox on disk, de-duplication, and catch-up after reconnect.
+Acceptance:
+- Every delivered message receives an `ack` with correlation id; senders retry with bounded backoff until acked or max attempts, reading from a durable on-disk outbox that survives process crash.
+- Receivers de-duplicate by sender id and monotonic sequence; duplicate frames are dropped with no side effect on ticket state.
+- After a node sleeps or reconnects, catch-up delivers queued messages in order; 1000 messages queued while offline are delivered exactly once after return.
+- A crash of the sender or receiver does not lose a message accepted into the outbox or inbox; recovery replays unacked work.
+
+### R-055 Any machine joins with `swarm join` using tailnet auth and registers in the node registry with capabilities and live capacity.
+Acceptance:
+- `swarm join` with valid tailnet credentials exits 0, writes a node id under `~/.project-swarm/nodes/self`, and appears in `swarm node list` within 5 seconds with cores, RAM GiB, worker limit, lane list, and GPU flag.
+- The registry row includes live capacity: real memory pressure and swap, free slots, and lane health; free memory uses the real free-memory reading, not Node `os.freemem`, which undercounts on macOS by about 30 times.
+- A node missing tailnet auth exits non-zero and does not appear on any peer registry.
+- Heartbeats refresh capacity fields so placement sees current headroom.
+
+### R-056 Typed signed messages use per-node keys, schema validation, and never carry executable content.
+Acceptance:
+- Every cluster frame is signed with the sender node's key and validates against JSON Schema before send; oversize payloads above 64 KiB exit non-zero.
+- Secret scan runs on send and on receive; messages with key-like material are dropped, logged, and never applied.
+- Forged signatures, replays, and sequence gaps inside the nonce window fail closed with exit non-zero; traffic is accepted only over the tailnet.
+- Message bodies contain no shell commands, scripts, or other executable fields.
+
+### R-057 Autonomous node flows never perform owner-only actions.
+Acceptance:
+- Approve, merge to live, deploy, caps, spend, and keys remain owner-only on every node; cluster workers and peers cannot invoke them.
+- A message that implies any owner-only action is dropped, logged locally, and raised to the owner with no side effect on ticket or deploy state.
+- A simulated approve-attempt leaves ticket state unchanged and increments the owner alert counter by 1.
+- `ticket-done`, `release-shipped`, `handoff`, `request`, `question`, and `ack` flows complete without owner relay in the harness.
+
+### R-058 A release-ready event makes peer nodes run `swarm update` between waves, never mid-wave.
+Acceptance:
+- A `release-shipped` coordination event schedules `swarm update` on followers only when no wave jobs are running on that node (when-idle rule).
+- Pinned projects skip update until unpinned; an in-flight wave is not interrupted by version sync.
+- After update between waves, all nodes report the same swarm release version on `swarm node list` before the next wave starts.
+- Harness verifies zero mid-wave update invocations while jobs are active.
+
+### R-059 One repo-wide merge queue across nodes merges PRs in one order through `swarm merge`.
+Acceptance:
+- PRs opened from any node enqueue to a single merge queue; only one merge runs at a time via `swarm merge` with the green-check requirement.
+- A node cannot merge around the queue; a second merge attempt while one is in flight exits non-zero.
+- Merge order is FIFO by queue position regardless of which node opened the PR.
+- Harness with two nodes submitting PRs proves one ordered merge history in the event store.
+
+### R-060 Placement and work stealing use real capacity across nodes.
+Acceptance:
+- Each node reports free slots, memory pressure, and lane health; a node with free slots pulls ready tickets honoring file ownership, lane fit, ticket target worktree, and fair share across projects.
+- Heavy jobs prefer the node with the most headroom when multiple nodes can run the lane.
+- A ticket bound to a worktree on node B is not started on node C when B alone owns the ticket's files.
+- When two projects both have ready work, slot share across nodes stays within 1 ticket of the fair-share target for 10 consecutive steal cycles in the harness.
+
+### R-061 Messaging and nodes are visible on the CLI and board.
+Acceptance:
+- `swarm msg send`, `swarm msg list`, and `swarm msg tail` exit 0 and show typed messages with sender node id and sequence.
+- `swarm node list` shows every joined machine with last heartbeat age under 120 seconds when healthy.
+- Swarm Watch message log and node view list the same message ids as `swarm msg list` within 1 message.
+
+### R-062 Release benchmarks per version run against a fixed baseline stored under `bench/cluster/`.
+Acceptance:
+- `swarm bench cluster` runs the deterministic harness and writes `bench/cluster/<version>.json` with message latency p50 and p95, ticket ready-to-started time, slot utilization, idle node-minutes while ready work exists, owner relays, double-claims, and tickets per hour per node.
+- Re-running with the same seed produces identical JSON aside from `recordedAt`.
+- Swarm Watch charts the trend for the last five release benchmark points.
+- Optional `swarm bench cluster --tailnet` is documented for the owner and is not required for CI exit 0.
+
+### R-063 CI fails on benchmark regression past threshold and chaos tests pass.
+Acceptance:
+- CI compares new results to `bench/cluster/baseline.json`: throughput more than 10 percent worse, latency p95 more than 25 percent worse, utilization more than 5 points worse, any double-claim above 0, or any owner relay above 0 fails the job with exit non-zero.
+- Chaos tests pass: kill a node mid-ticket, drop the network, clock skew, and two nodes claiming at once (1000 races, 0 double-claims).
+- A deliberate regression injection in the harness test fails CI in under 2 minutes.
+- All four chaos scenarios are required for release gate exit 0.
+
+### R-064 The MacBook and the Mac mini are the first two nodes; relayed hand-off flow is retired once both run on the ledger.
+Acceptance:
+- With both machines on cluster ledger, relayed hand-off branches and owner-forwarded messages count 0 for 24 hours in the board log.
+- Ticket ready-to-started time p95 is under 30 seconds when any node has a free slot (harness with ready queue).
+- Slot utilization across all nodes is above 80 percent whenever ready tickets exist in a 1-hour harness run.
+- Cutover checklist documents disabling legacy hand-off paths after both nodes heartbeats are healthy.
+
+### R-065 A third node joins and leaves without breaking leases, the queue, or the board.
+Acceptance:
+- A third simulated node joins via `swarm join`, steals work, then leaves cleanly; `swarm node list` drops it within 30 seconds and no ticket stays leased to the departed node id.
+- Idle node-minutes while ready tickets exist stay under 1 percent of total node-minutes in the three-node harness.
+- Owner relays and double-claims remain 0 for the three-node scenario.
+- Shared merge queue and board views stay consistent while the third node joins and departs.
