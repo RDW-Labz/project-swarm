@@ -191,7 +191,7 @@ test('project panels expose split quality and benchmark scorecards', async t => 
     headline: '1 green, 0 amber, 0 red',
   });
   await fs.writeFile(path.join(directory, 'previous.json'), JSON.stringify(scorecard('2026-W41', '2026-10-11T15:00:00Z', 10)));
-  await fs.writeFile(path.join(directory, 'latest.json'), JSON.stringify(scorecard('2026-W42', '2026-10-18T15:00:00Z', 8, { trend: 'up', previous: 10 })));
+  await fs.writeFile(path.join(directory, 'latest.json'), JSON.stringify(scorecard('2026-W42', '2026-10-18T15:00:00Z', 8, { trend: 'down', previous: 10 })));
   const detail = await projectDetail(A, { now: NOW });
   assert.equal(detail.benchmarks.files, 2);
   assert.equal(detail.benchmarks.projects[0].metrics.find(metric => metric.name === 'billed_usd').verdict, 'better');
