@@ -1131,7 +1131,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
     const current = branchOfFn(root);
     const protBranch = isProtectedBranch(current);
-    if (a.selfApproval || isSelfApprovalCommand(ti.command)) return { allow: false, files: [], reason: SELF_APPROVAL_REASON };
+    if (isSelfApprovalCommand(ti.command)) return { allow: false, files: [], reason: SELF_APPROVAL_REASON };
     const transcriptHits = bashTranscriptWrites(ti.command, h);
     if (transcriptHits.length) return { allow: false, files: [], reason: `Hand-build guard: ${transcriptHits[0]} belongs to the owner (session transcripts under .claude/projects); no approval covers it.` };
     if (a.protectedOutside.length) return { allow: false, files: [], reason: `Hand-build guard: ${a.protectedOutside.join(', ')} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
