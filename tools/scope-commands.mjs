@@ -8,7 +8,7 @@ import path from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 import { appTypes, runInterview, scopeFromAnswers } from './scope-interview.mjs';
 import readline from 'node:readline';
-import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText, isSensitiveText } from './scope.mjs';
+import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText } from './scope.mjs';
 import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, validateSetTransition, validateDeliveredTicket, verifyMergedPullRequests, applyDelivered, deliveredNote, ticketActor, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS } from './tickets.mjs';
 import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
 import { missingToolConfigs, toolConfigLines, projectFileList, existsIn, e2eSpecWarnings } from './tool-config.mjs';
@@ -41,6 +41,10 @@ import { execFile } from 'node:child_process';
 import { existsSync, statSync, lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { acceptanceLines, coverage, evaluate, reviewManifest as acceptanceManifest, parseAcceptanceVerdicts, readAcceptanceRecords, writeAcceptanceRecords } from './acceptance.mjs';
+import { allowedPathsForAcceptance, filterProvableAcceptance, ownersOfPath, pathsInAcceptanceText, provabilityOfAcceptanceLine } from './acceptance-provable.mjs';
+import { isSensitiveTicket } from './sensitive-ticket.mjs';
+import { syncCheckForTicket } from './ticket-sync-checks.mjs';
+import { runManagersScopeGate } from './manager-commands.mjs';
 import { securityReviewReason, securityReviewManifest, parseReviewVerdicts, filesHash, readReviewRecords, writeReviewRecords } from './security-review.mjs';
 import { validateTicketPaths, formatTicketPathRefusal } from './ticket-paths.mjs';
 import { simulateBeforeIngest } from './split-wave-sim.mjs';
@@ -662,16 +666,20 @@ async function changeContext(root, tickets) {
 const ARRAY_FIELDS = ['scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'tests', 'screens', 'dependsOn', 'steps', 'deletes', 'dependencies'];
 const isStrings = v => Array.isArray(v) && v.every(x => typeof x === 'string');
 const strings = v => (isStrings(v) ? v : []);
+const publicRoutePath = file => /(?:^|\/)app\/api\/.+\/route\.[cm]?[jt]sx?$|(?:^|\/)src\/routes\/public(?:\/|$)/i.test(String(file ?? ''));
+const writesPublicApiRoute = ticket => (ticket?.files ?? []).some(publicRoutePath);
 
 export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManager = null, ledger = null } = {}) {
   const keyToId = new Map();
   const tickets = [];
   const errors = [];
   const notes = [];
+  const copiedAcceptanceIds = new Set();
   const ledgerTickets = ledger?.tickets ?? [];
   const existingOpenIds = new Set(ledgerTickets.filter(isOpenFileOwner).map(t => t.id));
   const existingDoneIds = new Set(ledgerTickets.filter(t => t.status === 'done').map(t => t.id));
   const existingIds = new Set(ledgerTickets.filter(t => t.status !== 'cancelled').map(t => t.id));
+  const reqLookup = new Map((scope?.requirements ?? []).map((requirement) => [requirement.id, requirement]));
   let n = startAt;
   for (const { stage, items } of lists) for (const raw of items) {
     const id = `T-${String(n).padStart(4, '0')}`;
@@ -688,8 +696,6 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { errors.push(`${stage}: ticket ${id} is not an object`); continue; }
     const wrong = [...ARRAY_FIELDS.filter(f => raw[f] !== undefined && !isStrings(raw[f])), ...['title', 'epic'].filter(f => raw[f] !== undefined && typeof raw[f] !== 'string')];
     if (wrong.length) { errors.push(`${id}: ${wrong.join(', ')} must be ${wrong.every(f => ARRAY_FIELDS.includes(f)) ? 'arrays of strings' : 'strings (and lists of strings)'}`); continue; }
-    const refs = strings(raw.scopeRefs).map(r => requirementText(scope, r)).filter(Boolean).flatMap(r => [r.text, ...r.acceptance]);
-    const text = [raw.title, raw.epic, ...strings(raw.acceptance), ...strings(raw.files), ...refs].filter(x => typeof x === 'string').join('\n');
     const deps = [];
     const droppedKeys = [];
     const unknownIds = [];
@@ -712,15 +718,20 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
     // and a module cannot meet them before it is wired): it is refused as before. With none to copy, the test ticket is refused too.
     if (raw.type === 'test' && !strings(raw.acceptance).some(a => a.trim())) {
       const copied = strings(raw.scopeRefs).flatMap(r => requirementText(scope, r)?.acceptance ?? []).slice(0, 5);
-      if (copied.length) { raw = { ...raw, acceptance: copied }; notes.push(`${id}: no acceptance lines from the worker; copied ${copied.length} from ${strings(raw.scopeRefs).join(', ')}`); }
+      if (copied.length) {
+        raw = { ...raw, acceptance: copied };
+        copiedAcceptanceIds.add(id);
+        notes.push(`${id}: no acceptance lines from the worker; copied ${copied.length} from ${strings(raw.scopeRefs).join(', ')}`);
+      }
     }
     const t = {
       id, title: String(raw.title ?? ''), type: raw.type, stage, epic: String(raw.epic ?? 'E-00'),
       scopeRefs: strings(raw.scopeRefs), acceptance: strings(raw.acceptance), files: strings(raw.files),
       context: strings(raw.context), contracts: strings(raw.contracts), tests: strings(raw.tests), ...(strings(raw.screens).length ? { screens: strings(raw.screens) } : {}), dependsOn: deps,
-      size: raw.size, risk: raw.risk, sensitive: raw.sensitive === true || isSensitiveText(scope, text),
+      size: raw.size, risk: raw.risk, sensitive: raw.sensitive === true,
       status: 'todo',
     };
+    if (raw.sensitive !== true) t.sensitive = isSensitiveTicket(t, scope, reqLookup) || writesPublicApiRoute(t);
     if (raw.type === 'human') t.steps = strings(raw.steps);
     if (raw.hard === true) t.hard = true;
     if (raw.skeleton === true) t.skeleton = true;
@@ -740,7 +751,7 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
     if (other) errors.push(`${id}: ${other.file} is a ${other.manager} lockfile but the project uses ${packageManager}`);
     tickets.push(t);
   }
-  return { tickets, errors, notes };
+  return { tickets, errors, notes, copiedAcceptanceIds };
 }
 
 async function readStageFiles(root, runId) {
@@ -779,6 +790,51 @@ function treeReport(scope, tickets) {
   for (const e of tree.errors.slice(0, 12)) lines.push(`  error ${e.code}: ${e.message}`);
   if (tree.errors.length > 12) lines.push(`  ...and ${tree.errors.length - 12} more`);
   return { tree, lines };
+}
+
+function ingestAcceptanceChecks(root, scope, profile, existingTickets, builtTickets, copiedAcceptanceIds) {
+  const allTickets = [...existingTickets, ...builtTickets].filter(ticket => ticket?.status !== 'cancelled');
+  const env = contextEnvFor(root, profile);
+  const integrationByRequirement = new Set(
+    allTickets.filter(ticket => ticket.integration === true).flatMap(ticket => ticket.scopeRefs ?? []),
+  );
+  const reqLookup = new Map((scope.requirements ?? []).map(requirement => [requirement.id, requirement]));
+  const refusals = [];
+  const notes = [];
+
+  for (const ticket of builtTickets) {
+    const copied = copiedAcceptanceIds.has(ticket.id);
+    const deferred = copied && (ticket.scopeRefs ?? []).some(id => !integrationByRequirement.has(id));
+    if (deferred) {
+      ticket.acceptanceDeferred = true;
+      notes.push(`${ticket.id}: copied requirement acceptance deferred until its integration ticket exists`);
+      continue;
+    }
+    if (ticket.type !== 'build' || !acceptanceLines(ticket).length) continue;
+    const requirements = (ticket.scopeRefs ?? [])
+      .map(id => reqLookup.get(id))
+      .filter(Boolean)
+      .flatMap(requirement => [requirement.text, ...(requirement.acceptance ?? [])])
+      .join('\n');
+    const allowed = allowedPathsForAcceptance({
+      ticket,
+      scope,
+      exists: env.exists,
+      sizes: env.sizes,
+      profileContext: env.profileContext,
+      listFiles: env.listFiles,
+      allTickets,
+      requirements,
+    });
+    const filtered = filterProvableAcceptance({ ticket, allowed, allTickets });
+    for (const dropped of filtered.dropped) {
+      const offending = pathsInAcceptanceText(dropped.line).find(ref => !provabilityOfAcceptanceLine({ line: ref, ticket, allowed, allTickets }).provable);
+      const named = offending ?? pathsInAcceptanceText(dropped.line)[0] ?? 'unknown path';
+      const owners = ownersOfPath(named, allTickets);
+      refusals.push(`${ticket.id}: acceptance line ${dropped.n} names ${named}, owned by ${owners.join(', ') || 'nobody'}`);
+    }
+  }
+  return { refusals, notes };
 }
 
 // Warnings for acceptance checks that run a tool nobody configured (lesson 16).
@@ -910,6 +966,11 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
   const all = [...errors, ...built.errors];
   if (startAt + built.tickets.length > 9000) all.push('too many tickets: ids T-9000 and up are reserved for day 0 tickets');
   if (all.length) return out(`split refused; fix and rerun the failed stages:\n${all.slice(0, 15).map(e => `  ${e}`).join('\n')}`, 1);
+  const acceptanceCheck = ingestAcceptanceChecks(root, scope, profile, existing?.tickets ?? [], built.tickets, built.copiedAcceptanceIds);
+  if (acceptanceCheck.refusals.length) {
+    return out(`split refused; acceptance is not provable from this ticket's outputs:\n${acceptanceCheck.refusals.slice(0, 15).map(e => `  ${e}`).join('\n')}`, 1);
+  }
+  notes.push(...acceptanceCheck.notes);
   // Integration tickets wait for the module tickets of their requirements; a requirement with modules and no integration ticket is refused.
   if (flags.wire && built.tickets.some(t => t.integration !== true)) return out(`split refused: --wire takes integration tickets only; these are not: ${built.tickets.filter(t => t.integration !== true).map(t => t.title).slice(0, 5).join('; ')}`, 1);
   // A merge adds tickets for the requirements that have none. A worker that rewrites a requirement that is already built is refused whole.
@@ -977,6 +1038,15 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
   return out([`ledger written: ${tickets.length} tickets added (not approved)`, ...laneNotes.map(n => `lane: ${n}`), ...notes.map(n => `note: ${n}`), ...[...built.notes, ...orderNotes].slice(0, 12).map(n => `note: ${n}`), ...(built.notes.length + orderNotes.length > 12 ? [`note: ...and ${built.notes.length + orderNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`] : []), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, ...wireLines, tree.ok && !wireLines.length ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
 }
 
+function managerGateOutcome(result) {
+  const run = result?.run ?? result;
+  const status = result?.status ?? run?.status;
+  const reason = result?.reason ?? result?.blockingReason ?? run?.reason ?? run?.blockingReason ?? run?.error;
+  if (result?.blocked === true || status === 'blocked') return { kind: 'blocked', reason: String(reason ?? 'the ticket manager scope gate blocked approval') };
+  if (status === 'error' || result?.error) return { kind: 'warning', reason: String(reason ?? result.error ?? 'the ticket manager scope gate failed') };
+  return { kind: 'ok', reason: '' };
+}
+
 async function cmdApprove(root, { rest, flags }, deps = {}) {
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
@@ -999,7 +1069,7 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   const laneWarnings = ledger.tickets
     .filter(t => t.status !== 'cancelled' && t.type !== 'human')
     .map(ticket => {
-      const lane = typeof ticket.lane === 'string' && ticket.lane.trim() ? ticket.lane : 'hermes';
+      const lane = typeof ticket.lane === 'string' && ticket.lane.trim() ? ticket.lane : CHEAP_LANE_ORDER[0];
       const cap = capBytesForLane(lane);
       const bytes = ticketByteTotal(ticket, sizes);
       return cap !== null && bytes > cap
@@ -1014,8 +1084,22 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   if (waveGateFails(waveSimulation) && flags['accept-waves'] !== true) return out(`${waveLine}\n${waveRefusal(waveSimulation, ledger.tickets).split('\n').slice(1).join('\n')}`, 1);
   const policy = await readApprovalPolicy(root);
   if (needsHuman(policy, { kind: 'scope' }) && flags.yes !== true) return out(`${waveLine}\n${summary}\n\nThis needs your approval. Review it, then: swarm scope approve --yes`);
+  const now = typeof deps.now === 'function' ? deps.now : typeof deps.now === 'number' ? () => deps.now : Date.now;
+  const managerWarnings = [];
+  const managerGate = deps.runManagersScopeGate ?? runManagersScopeGate;
+  try {
+    const outcome = managerGateOutcome(await managerGate(root, { now }));
+    if (outcome.kind === 'blocked') return out(`${waveLine}\n${summary}\n\nnot approvable: manager scope gate: ${outcome.reason}`, 1);
+    if (outcome.kind === 'warning') managerWarnings.push(`warning: manager scope gate failed: ${outcome.reason}`);
+  } catch (error) {
+    const reason = String(error?.message ?? error);
+    managerWarnings.push(`warning: manager scope gate failed: ${reason}`);
+  }
+  for (const warning of managerWarnings) {
+    await appendLog(root, { event: 'manager-scope-gate-warning', warning, at: new Date(now()).toISOString() });
+  }
   const by = flags.yes === true ? 'owner' : 'policy';
-  const next = approveLedger(ledger, { by });
+  const next = approveLedger(ledger, { by, now: now() });
   next.scope = { ...next.scope, hash, file };
   await writeLedger(root, next);
   await writeFileSafe(root, '.swarm/project/scope.snapshot.md', text);
@@ -1034,7 +1118,7 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   if (waveGateFails(waveSimulation)) await logAcceptedWaveSimulation(root, waveSimulation, ledger.tickets, 'scope approve');
   // A snapshot of swarm's own state at every approval (best effort; never blocks the approval).
   try { await (await import('./state-backup.mjs')).createBackup(root, { reason: 'scope approve' }); } catch { /* a failed backup must not undo an approval */ }
-  return out([waveLine, summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...await toolConfigWarnings(root, next.tickets), ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), ...laneWarnings, `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
+  return out([waveLine, summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...managerWarnings, ...await toolConfigWarnings(root, next.tickets), ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), ...laneWarnings, `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
 }
 
 // A failed run or check sends the ticket back to ready one level higher (bigger output, then Codex, then Claude); only after the last level does it block. One locked ledger write.
@@ -1475,6 +1559,12 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
     }
     const done = [], unverified = [], retried = [], blocked = [], notIntegrated = [];
     const inTree = new Set();
+    const syncExists = deps.syncExists ?? deps.exists ?? (file => {
+      try { lstatSync(path.join(root, file)); return true; }
+      catch (error) { if (error?.code === 'ENOENT') return false; throw error; }
+    });
+    const syncReadFile = deps.syncReadFile ?? deps.readFile ?? (file => fs.readFile(path.join(root, file)));
+    const runSyncCheck = deps.syncCheckForTicket ?? syncCheckForTicket;
     // A failure whose errors name only files that other tickets own is theirs, not this ticket's (T-0091's lint failed on the file T-0090 wrote):
     // no escalation and no attempt for this ticket. It goes to the owner when the owner is in this run; otherwise this ticket is blocked with a clear note.
     const routed = new Set();
@@ -1527,6 +1617,30 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
         continue;
       }
       if (integrated && !integrated.has(t.id)) { notIntegrated.push(t.id); continue; }
+      let syncCheck;
+      try {
+        syncCheck = await runSyncCheck(t, { exists: syncExists, readFile: syncReadFile });
+      } catch (error) {
+        const note = `sync check: could not inspect declared files: ${String(error?.message ?? error)}`;
+        await setTicketField(root, t.id, 'retryNote', note.slice(0, 600));
+        await appendLog(root, { event: 'sync-check-refused', id: t.id, kind: 'filesystem', note });
+        unverified.push(`${t.id} (${note})`);
+        continue;
+      }
+      if (!syncCheck.ok) {
+        const problem = syncCheck.problems?.join('; ') || 'declared file state is not ready';
+        const note = `sync check: ${problem}`;
+        await setTicketField(root, t.id, 'retryNote', note.slice(0, 600));
+        await appendLog(root, { event: 'sync-check-refused', id: t.id, kind: syncCheck.kind, note });
+        const legacyEvidence = syncCheck.kind === 'delete-only' ? 'job files are not in the integrated files; ' : '';
+        unverified.push(`${t.id} (${legacyEvidence}${note})`);
+        continue;
+      }
+      if (syncCheck.kind === 'delete-only') {
+        await lockedTransition(root, t.id, 'done', { by: 'sync', note: 'delete-only: files gone' });
+        done.push(t.id);
+        continue;
+      }
       // The test files a ticket names must exist in the tree: a ticket whose tests were never written is not done, whatever the suite says.
       const namedTests = ['build', 'test', 'migration'].includes(t.type) ? [...new Set([...(t.tests ?? []), ...ticketTests(t)])].filter(f => looksLikeTestFile(f) && !/[*?]|\/$/.test(f) && !(t.deletes ?? []).includes(f)) : [];
       // A ticket that comes after this one (it depends on it, directly or through others) can never be waited for: its files are written later, so they are not this ticket's to find.
