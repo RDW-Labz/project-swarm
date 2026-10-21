@@ -121,3 +121,47 @@ test('sensitiveTopicsInText is empty for non-string input', () => {
   assert.equal(sensitiveTopicsInText(null).size, 0);
   assert.equal(sensitiveTopicsInText('').size, 0);
 });
+
+test('AC1: ticket topics are detected without a scope across all ticket context', () => {
+  const cases = [
+    { title: 'Add authentication' },
+    { acceptance: ['Validate payments'] },
+    { files: ['src/database.mjs'] },
+    { epic: 'Rotate secrets' },
+    { title: 'Expose public routes' },
+    { scopeRefs: ['R-001'] },
+  ];
+  const reqs = new Map([['R-001', { text: 'Authentication', acceptance: [] }]]);
+  for (const ticket of cases) {
+    for (const scope of [undefined, null, {}]) {
+      assert.equal(isSensitiveTicket(ticket, scope, reqs), true, JSON.stringify(ticket));
+    }
+  }
+  assert.equal(isSensitiveTicket({ title: 'Adjust list spacing' }), false);
+});
+
+test('AC1: environment files are secrets at filename boundaries', () => {
+  for (const file of ['.env', '.env.local', '.env.production', 'config/.env', '.env.example']) {
+    assert.deepEqual([...sensitiveTopicsInText(file)], ['secrets'], file);
+    assert.equal(isSensitiveTicket({ files: [file] }), true, file);
+  }
+  for (const text of ['environment', 'config.env', '.envelope']) {
+    assert.equal(isSensitiveTicketText(null, text), false, text);
+  }
+});
+
+test('AC2: sensitive scope phrases do not spread risk through unrelated words', () => {
+  const scope = { sensitive: ['atlas store-wrapper payments', 'database list items', 'auth branding'] };
+  for (const title of ['Atlas store-wrapper', 'List items', 'Refresh branding']) {
+    assert.equal(isSensitiveTicket({ title }, scope), false, title);
+  }
+  for (const title of ['Atlas payments', 'List database items', 'Auth branding']) {
+    assert.equal(isSensitiveTicket({ title }, scope), true, title);
+  }
+});
+
+test('AC1: public routes topic supports category labels and endpoint plurals', () => {
+  for (const title of ['public-routes', 'Public endpoints', 'Anonymous routes']) {
+    assert.deepEqual([...sensitiveTopicsInText(title)], ['public-routes'], title);
+  }
+});

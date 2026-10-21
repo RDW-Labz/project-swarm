@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-import { isSensitiveText } from './scope.mjs';
 
 /** Topics that may auto-tag a ticket sensitive (R-010). */
 export const SENSITIVE_TICKET_TOPICS = Object.freeze(['auth', 'database', 'payments', 'secrets', 'public-routes']);
@@ -10,8 +9,8 @@ const TOPIC_PATTERNS = Object.freeze({
   database:
     /\b(?:database|postgres(?:ql)?|sql|migration|supabase|pgtap|neon|drizzle|prisma|sqlite|mysql|lakebase|rls|row[- ]level security|(?:rls|row[- ]level security)\s+polic(?:y|ies))\b/iu,
   payments: /\b(?:payments?|stripe|billing|checkout|invoice|paywall|merchant|card(?:holder)?)\b/iu,
-  secrets: /\b(?:secrets?|credentials?|api[- ]?keys?|private[- ]?keys?|keychain|\.env\b)\b/iu,
-  'public-routes': /\b(?:public routes?|unauthenticated routes?|anonymous (?:access|route)|public api|public endpoint)\b/iu,
+  secrets: /\b(?:secrets?|credentials?|api[- ]?keys?|private[- ]?keys?|keychain)\b|(?<![\p{L}\p{N}_])\.env\b/iu,
+  'public-routes': /\b(?:public[- ]routes?|unauthenticated[- ]routes?|anonymous (?:access|routes?)|public[- ]api|public[- ]endpoints?)\b/iu,
 });
 
 export function sensitiveTopicsInText(text) {
@@ -45,15 +44,12 @@ export function sensitiveTicketText(ticket, reqLookup) {
 }
 
 export function isSensitiveTicketText(scope, text) {
-  if (typeof text !== 'string') return false;
-  if (sensitiveTopicsInText(text).size > 0) return true;
-  const entries = filteredSensitiveScope(scope);
-  if (!entries.length) return false;
-  return isSensitiveText({ sensitive: entries }, text);
+  // Scope phrases may include unrelated product words alongside a sensitive
+  // topic. Only the topic itself should trigger automatic tagging.
+  return sensitiveTopicsInText(text).size > 0;
 }
 
 export function isSensitiveTicket(ticket, scope, reqLookup) {
   if (ticket?.sensitive === true) return true;
-  if (!scope) return false;
   return isSensitiveTicketText(scope, sensitiveTicketText(ticket, reqLookup));
 }
