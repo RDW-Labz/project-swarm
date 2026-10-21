@@ -10,6 +10,7 @@
   function meter(pct) { var m = el('div', 'meter'); var i = el('i'); i.style.width = Math.max(0, Math.min(100, typeof pct === 'number' ? pct : 0)) + '%'; m.appendChild(i); m.setAttribute('role', 'img'); m.setAttribute('aria-label', (typeof pct === 'number' ? Math.round(pct) : 0) + ' percent'); return m; }
   function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
   function when(iso) { return iso ? String(iso).slice(0, 16).replace('T', ' ') : '-'; }
+  function runHref(runId) { return '/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(runId) + '&t=' + T; }
   $('back').href = '/?t=' + T;
   $('crumbBack').href = '/?t=' + T;
   $('crumbAll').href = '/?t=' + T;
@@ -37,17 +38,40 @@
     var overall = progress.percent && progress.percent.overall;
     var tickets = progress.percent && progress.percent.tickets || { done: 0, total: 0 };
     var requirements = progress.percent && progress.percent.requirements;
+    var headlineText = progress.headline || ('build ' + tickets.done + '/' + tickets.total);
     var headline = el('div', 'livebar'); headline.appendChild(meter(overall));
     headline.appendChild(el('strong', 'big num', overall === null || overall === undefined ? 'Unknown' : String(overall) + '%'));
-    headline.appendChild(el('span', 'sub', 'tickets ' + tickets.done + '/' + tickets.total + ' · requirements ' + (requirements && typeof requirements.pct === 'number' ? requirements.pct + '%' : '—')));
+    headline.appendChild(el('span', 'sub', headlineText));
     host.appendChild(headline);
 
     var milestones = el('ol', 'milestones');
     (progress.milestones || []).forEach(function (item) {
       var classes = item.state + (item.state === 'current' && item.currentDone ? ' done' : '');
-      var li = el('li', classes, item.label); var title = [item.evidence, item.at].filter(Boolean).join(' · '); if (title) { li.setAttribute('title', title); } if (item.state === 'current') { li.setAttribute('aria-current', 'step'); } milestones.appendChild(li);
+      var label = item.label + (item.evidence === 'not tracked' ? ' · not tracked' : '');
+      var li = el('li', classes, label); var title = [item.evidence, item.at].filter(Boolean).join(' · '); if (title) { li.setAttribute('title', title); } if (item.state === 'current') { li.setAttribute('aria-current', 'step'); } milestones.appendChild(li);
     });
     host.appendChild(milestones);
+
+    if (progress.scopes && progress.scopes.length) {
+      host.appendChild(el('div', 'label', 'Scopes'));
+      var scopeList = el('div', 'board-list');
+      progress.scopes.forEach(function (scope) {
+        var label = scope.name + ' · build ' + scope.build.done + '/' + scope.build.total + ' · human ' + scope.human.done + '/' + scope.human.total;
+        if (scope.done) {
+          var details = el('details', 'board-entry');
+          details.appendChild(el('summary', '', label + ' · done'));
+          details.appendChild(el('div', 'sub', scope.current || 'Finished'));
+          scopeList.appendChild(details);
+        } else {
+          var row = el('div', 'board-entry');
+          row.appendChild(el('span', 'name', scope.name));
+          row.appendChild(meter(scope.build.total ? scope.build.done * 100 / scope.build.total : 0));
+          row.appendChild(el('span', 'mono sub', 'build ' + scope.build.done + '/' + scope.build.total + ' · human ' + scope.human.done + '/' + scope.human.total + ' · ' + (scope.current || 'Unknown')));
+          scopeList.appendChild(row);
+        }
+      });
+      host.appendChild(scopeList);
+    }
 
     var stages = el('div', 'board-list');
     (progress.stages || []).forEach(function (stage) {
@@ -66,6 +90,27 @@
     host.appendChild(progressList('Human tickets', humans));
     host.appendChild(progressList('Blockers', blockers));
     host.appendChild(progressList('Approvals', approvals));
+
+    var untracked = progress.untracked || progress.offLedger;
+    if (untracked && (untracked.count || untracked.jobs)) {
+      var untrackedHead = el('div', 'label');
+      untrackedHead.appendChild(el('span', '', 'Untracked work · '));
+      var untrackedCount = el('a', '');
+      untrackedCount.setAttribute('href', untracked.countHref || ('#' + (untracked.listAnchorId || 'untracked')));
+      untrackedCount.textContent = String(untracked.count || 0) + ' run' + (untracked.count === 1 ? '' : 's');
+      untrackedHead.appendChild(untrackedCount);
+      host.appendChild(untrackedHead);
+      host.appendChild(el('div', 'board-note', untracked.warning || 'untracked work: no ledger ticket'));
+      (untracked.runs || untracked.newest || []).forEach(function (run) {
+        var row = el('div', 'board-entry');
+        var runLink = el('a', 'mono', run.runId);
+        runLink.setAttribute('href', run.href || runHref(run.runId));
+        runLink.setAttribute('title', 'Open the run inspector');
+        row.appendChild(runLink);
+        row.appendChild(el('span', 'sub', ' · ' + (run.name || run.runId) + ' · ' + run.status + ' · ' + when(run.startedAt)));
+        host.appendChild(row);
+      });
+    }
 
     host.appendChild(el('div', 'board-note', progress.eta ? 'ETA ~' + progress.eta.days + ' days (' + progress.eta.basis + ')' : 'ETA: not enough history'));
     if (progress.spend) {
@@ -196,12 +241,18 @@
       a.appendChild(el('span', 'num mono', usd(run.costUsd))); a.appendChild(el('span', 'mono', when(run.startedAt)));
       r.appendChild(a);
     });
-    var off = p.offLedger;
+    var off = p.offLedger || (p.progress && (p.progress.offLedger || p.progress.untracked));
     if (off && off.count) {
-      r.appendChild(el('div', 'label', 'Off-ledger work'));
+      var listAnchor = off.listAnchorId || 'untracked';
+      var offTitle = el('div', 'label', 'Off-ledger work'); offTitle.id = listAnchor; r.appendChild(offTitle);
       off.runs.forEach(function (run) {
-        var prs = run.prs && run.prs.length ? ' · ' + run.prs.join(', ') : '';
-        r.appendChild(el('div', 'board-entry', run.runId + ' · ' + run.status + ' · ' + run.done + '/' + run.jobs + ' jobs' + prs));
+        var row = el('div', 'board-entry');
+        var runLink = el('a', 'mono', run.runId);
+        runLink.setAttribute('href', run.href || runHref(run.runId));
+        runLink.setAttribute('title', 'Open the run inspector');
+        row.appendChild(runLink);
+        row.appendChild(el('span', 'sub', ' · ' + when(run.startedAt) + ' · ' + run.status + ' · ' + run.jobs + ' jobs'));
+        r.appendChild(row);
       });
     }
   }

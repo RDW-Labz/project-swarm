@@ -26,7 +26,7 @@ import { randomBytes } from 'node:crypto';
 import { readHistory, historyCsv, historyFile } from './history.mjs';
 import { boardInbox, inboxText } from './board-inbox.mjs';
 import { runDetail, compareRuns } from './board-run.mjs';
-import { boardSnapshot, projectDetail, workersHeld, laneUsage, enrichRunEvents } from './board-data.mjs';
+import { boardSnapshot, projectDetail, workersHeld, laneUsage, enrichRunEvents, readRunStates, isTestOrTempProject } from './board-data.mjs';
 import { createPeerCache, listPeers, mergeMachines, publicPeers } from './board-peers.mjs';
 import { versionInfo } from './server-version.mjs';
 import { boardPools } from './pools-board.mjs';
@@ -45,6 +45,77 @@ export const WATCH_USAGE = 'Usage: swarm watch [RUN] [--all [--text|--json]] [--
 
 async function readJson(file) {
   try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch { return null; }
+}
+
+const openTicketStatus = new Set(['todo', 'ready', 'running', 'review', 'blocked']);
+const activeState = state => state?.status === 'running' || state?.status === 'paused';
+const timestampOfRun = run => Math.max(Date.parse(run.state?.startedAt ?? '') || 0, Date.parse(run.state?.finishedAt ?? '') || 0, run.mtimeMs ?? 0);
+const HISTORY_RECENT_KINDS = new Set(['run', 'pr', 'merge', 'spend']);
+const WEEK = 7 * 86400000;
+
+async function projectTestFacts(project, { now, liveRuns = [], env = process.env } = {}) {
+  const root = await fs.realpath(project.root).catch(() => path.resolve(project.root));
+  const pointer = await readJson(path.join(root, '.project-swarm.json'));
+  const ledger = await readLedger(root).catch(() => null);
+  const runs = await readRunStates(root);
+  const scopeFile = await Promise.any([
+    fs.stat(path.join(root, 'docs', 'scope', 'roadmap.md')),
+    fs.stat(path.join(root, 'docs', 'scope', 'scope.md')),
+  ]).then(() => true, () => false);
+  const marker = await fs.stat(path.join(root, '.swarm-scratch')).then(() => true, () => false);
+  const openTickets = (ledger?.tickets ?? []).some(ticket => openTicketStatus.has(ticket?.status));
+  const approvedLedger = Boolean(ledger?.approved === true || ledger?.approval === true || ledger?.scope);
+  const scratchBase = path.join(os.homedir(), '.project-swarm-scratch');
+  const parts = root.split(path.sep).filter(Boolean);
+  const pathScratch = isScratchRoot(root)
+    || root === scratchBase
+    || root.startsWith(`${scratchBase}${path.sep}`)
+    || parts.some(part => part.startsWith('.tmp-test'))
+    || parts.some(part => ['tmp', 'temp', 'test', 'tests', '__tests__'].includes(part));
+  const recentOnDisk = runs.some(run => now - timestampOfRun(run) <= WEEK && timestampOfRun(run) <= now);
+  const historyPage = await readHistory({
+    file: historyFile(env),
+    project: project.id,
+    from: new Date(now - WEEK).toISOString(),
+    to: new Date(now).toISOString(),
+    limit: 1000,
+  }).catch(() => ({ events: [] }));
+  const recentInHistory = (historyPage.events ?? []).some(event => HISTORY_RECENT_KINDS.has(event.kind));
+  const live = liveRuns.some(record => {
+    const recordRoot = path.resolve(String(record.root ?? ''));
+    return recordRoot === root && activeState(runs.find(run => run.id === record.runId)?.state);
+  });
+  const spend = await projectSummary(root, { env, ttlMs: 0 }).catch(() => ({}));
+  // History revives a real registered project, but never changes a path-based scratch
+  // classification. This keeps the scratch toggle/counts independent of old log entries.
+  const recentRun = recentOnDisk || (recentInHistory && !pathScratch);
+  const idleHidden = !pathScratch && !pointer?.scratch && !pointer?.profile?.scratch
+    && !marker && !scopeFile && !ledger?.scope && !approvedLedger && !openTickets
+    && !recentRun && !live && !project.pinned
+    && !(Number(spend.spendUsd ?? spend.billedUsd ?? spend.usd ?? 0) > 0);
+  return {
+    tmpdir: os.tmpdir(),
+    scratchBase: path.join(os.homedir(), '.project-swarm-scratch'),
+    isScratchRoot: isScratchRoot(root),
+    pointer,
+    pointerScratch: pointer?.scratch === true || pointer?.profile?.scratch === true,
+    marker,
+    scopeFile,
+    hasScope: Boolean(ledger?.scope),
+    approvedLedger,
+    openTickets,
+    recentRun,
+    idleHidden,
+    live,
+    spendUsd: Number(spend.spendUsd ?? spend.billedUsd ?? spend.usd ?? 0),
+  };
+}
+
+async function classifyProjects(projects, { now = Date.now(), liveRuns = [], env = process.env } = {}) {
+  return Promise.all(projects.map(async project => {
+    const facts = await projectTestFacts(project, { now, liveRuns, env });
+    return { ...project, testOrTemp: isTestOrTempProject(project, facts), idleHidden: Boolean(facts.idleHidden) };
+  }));
 }
 
 // Run ids start with a millisecond timestamp, so a name sort puts the newest last.
@@ -343,13 +414,12 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
   let boardUrl = null;
   const cachedBy = new Map();                // by whether test/temp projects and peers are shown
   const showsScratch = q => q?.scratch === '1' || q?.scratch === true;
-  const projectOpts = () => boardProjectOpts(env);
   const scratchIds = async () => {
-    const opts = projectOpts();
-    const all = await listProjects({ file: projectsFile(env), includeScratch: true, pruneGone: false, ...opts });
-    return new Set(all.filter(p => isBoardTempRoot(p.root, opts)).map(p => p.id));
+    const all = await listProjects({ file: projectsFile(env) });
+    const flagged = await classifyProjects(all, { now: now(), liveRuns: await live(), env });
+    return new Set(flagged.filter(project => project.testOrTemp).map(project => project.id));
   };
-  const find = async id => (await listProjects({ file: projectsFile(env), includeScratch: true, ...projectOpts() })).find(p => p.id === id) ?? null;
+  const find = async id => (await listProjects({ file: projectsFile(env) })).find(p => p.id === id) ?? null;
   const api = {
     // One snapshot at a time: requests that arrive while one is being built share it.
     snapshot(q = {}) {
@@ -361,10 +431,12 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       const promise = (async () => {
         let config = {}, max = null, invalid = false;
         try { config = loadLocalConfig({ env }) ?? {}; max = machineConcurrency(config); } catch { config = {}; invalid = true; /* the runs that read it refuse to start; the board says so */ }
-        const opts = projectOpts();
-        const all = await listProjects({ file: projectsFile(env), includeScratch: true, pruneGone: false, ...opts });
+        const all = await listProjects({ file: projectsFile(env) });
+        const snapshotNow = now();
+        const liveRuns = await live();
+        const flagged = await classifyProjects(all, { now: snapshotNow, liveRuns, env });
         // Test and temp projects are left out of everything (lanes, totals, the inbox) unless asked for, so the numbers still add up.
-        const projects = scratch ? all : all.filter(p => !isBoardTempRoot(p.root, opts));
+        const projects = flagged.filter(p => !p.idleHidden && (scratch || !p.testOrTemp));
         const caps = (() => { try { const lanes = resolveBudget({ config }).lanes ?? {}; return Object.fromEntries(Object.entries(lanes).map(([k, v]) => [k, v?.dailyUsd])); } catch { return {}; } })();
         const configured = (() => { try { return Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k]) => k); } catch { return []; } })();
         const configuredModels = (() => { try { return Object.fromEntries(Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k, v]) => [k, v.model])); } catch { return {}; } })();
@@ -378,9 +450,8 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
           }
           return { configured: configuredModels, pauses: store?.pauses && typeof store.pauses === 'object' ? store.pauses : {}, demand, caps };
         };
-        const snapshotNow = now();
         const workers = await workersHeld({ dir: lanesDir(env), max, invalid });
-        const snapshot = await boardSnapshot({ projects, liveRuns: await live(), now: snapshotNow, laneState, workers, lanes: (laneToday, jobsToday) => laneUsage({ laneToday, jobsToday, configured, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: snapshotNow }), deployStatus: root => isBoardTempRoot(root, opts) ? null : deployTracker.get(root) });
+        const snapshot = await boardSnapshot({ projects, liveRuns, now: snapshotNow, laneState, workers, lanes: (laneToday, jobsToday) => laneUsage({ laneToday, jobsToday, configured, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: snapshotNow }), deployStatus: root => isScratchRoot(root) ? null : deployTracker.get(root) });
         let peers = [];
         let remoteResults = [];
         if (!localOnly) {
@@ -411,7 +482,10 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
         }
         // What waits for the owner (read-only); a failure here never hides the rest of the board.
         snapshot.inbox = await boardInbox({ projects, now: now(), env, forOwner: true }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
-        snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : all.length - projects.length, total: all.filter(p => isBoardTempRoot(p.root, opts)).length };
+        const scratchProjects = flagged.filter(p => p.testOrTemp && !p.idleHidden);
+        snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : scratchProjects.length, total: scratchProjects.length };
+        const idleHidden = flagged.filter(p => p.idleHidden).length;
+        if (idleHidden) snapshot.scratch.idleHidden = idleHidden;
         return snapshot;
       })();
       cachedBy.set(cacheKey, { at: now(), promise });
@@ -424,7 +498,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       const liveRuns = (await live()).filter(r => r.root === project.root);
       let max = null;
       try { max = machineConcurrency(loadLocalConfig({ env })); } catch { /* invalid local config leaves split quality without a slot limit */ }
-      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), slots: max, deployStatus: root => isBoardTempRoot(root, projectOpts()) ? null : deployTracker.get(root) });
+      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), slots: max, deployStatus: root => isBoardTempRoot(root, boardProjectOpts(env)) ? null : deployTracker.get(root) });
     },
     // Every run alive in one project, combined (the Live tab of the project page).
     async live(id) {
