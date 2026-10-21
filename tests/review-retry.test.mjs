@@ -95,7 +95,7 @@ test('a second ask that fails to run, or whose job is not opus, also ends review
   await reviewRunFile(root, 'rv', BAD);
   const res = await runScopeCommand(root, 'scope', ['security-review', 'rv'], { runReview: async r => { await reviewRunFile(r, 'rv2', GOOD('T-0001'), { model: 'haiku' }); return { id: 'rv2' }; } });
   assert.equal(res.exitCode, 1);
-  assert.match(res.stdout, /second ask: the security review job ran on haiku, not opus/);
+  assert.match(res.stdout, /second ask: the security review job reviewer unknown agent\/haiku is not accepted; accepted reviewers: claude\/opus; anthropic\/claude-opus-<version>/);
   assert.equal((await readLedger(root)).tickets[0].securityReview.state, 'blocked');
 });
 
@@ -154,7 +154,7 @@ test('review findings: a tampered manifest is never paid for; a rerun reads the 
   const runReview = async r => { calls += 1; await reviewRunFile(r, 'rv2', GOOD('T-0001')); return { id: 'rv2' }; };
   const tampered = await runScopeCommand(root, 'scope', ['security-review', 'rv'], { runReview });
   assert.equal(calls, 0, 'nothing was paid for');
-  assert.match(tampered.stdout, /not the single read-only Opus review job/);
+  assert.match(tampered.stdout, /the review manifest is not the single read-only review job sync wrote; accepted reviewers: claude\/opus; anthropic\/claude-opus-<version>/);
   assert.equal((await readLedger(root)).tickets[0].securityReview.state, 'blocked');
   // A good manifest, an empty list as the first answer: asked again; the marker keeps the second run, so a rerun reads it and does not pay or block.
   await fs.writeFile(file, JSON.stringify(manifest));
