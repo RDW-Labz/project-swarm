@@ -2,7 +2,7 @@
 // Detect shell commands that try to record chat merge approvals or approve hand-build / guard state from an orchestrator session.
 
 import path from 'node:path';
-import { tokenize } from './shell-writes.mjs';
+import { analyzeShell, tokenize } from './shell-writes.mjs';
 
 export const SELF_APPROVAL_REASON = 'Hand-build guard: approving or denying a hand-build, or switching the guard off, is the owner\'s alone (swarm handbuild approve, or the phone). An orchestrator session cannot approve its own request.';
 
@@ -19,10 +19,13 @@ export function normalizeSelfApprovalCommandText(commandText) {
   return s;
 }
 
-const HAND_BUILD_ACTION = /\b(?:swarm\s+)?handbuild\s+(?:approve|deny|on|off|install|uninstall)\b/;
-const HAND_BUILD_ACTION_NODE = /\bnode\b(?:\s+\S+)*\bswarm\.mjs\b(?:\s+\S+)*\bhandbuild\s+(?:approve|deny|on|off|install|uninstall)\b/;
-const DECIDE_APPROVE = /\b(?:swarm\s+)?decide\b\S*\s+approve\b|\bdecide\b[\s\S]*\bapprove\b/;
+const HAND_BUILD_SELF_ACTIONS = new Set(['approve', 'deny', 'on', 'off', 'install', 'uninstall']);
+const DATA_VALUE_FLAGS = new Set([
+  '-m', '-F', '-C', '-c', '--message', '--reason', '--prompt', '--guard-text',
+  '--body', '--title', '--description', '--subject', '--file',
+]);
 const SWARM_INLINE = /\b(?:node|python3?)\b[\s\S]*\bswarm\b[\s\S]*\b(?:decide|handbuild)\b/;
+const HAND_BUILD_GUARD_SCRIPT = /^tools\/handbuild[^/]*\.mjs$/i;
 
 const SAFE_SWARM = [
   /\bhandbuild\s+request\b/,
@@ -203,8 +206,9 @@ function heredocBodiesRisky(commandText, depth = 0) {
     const b = body.trimEnd();
     if (!b) continue;
     if (rawHasRiskyClaudeInvocation(b, depth + 1)) return true;
-    const norm = normalizeSelfApprovalCommandText(b);
-    if (matchesNormalized(norm, b, { skipSafeSwarm: true })) return true;
+    for (const words of tokenize(b)) {
+      if (commandWordsSelfApprovalRisky(words, b)) return true;
+    }
     for (const inner of nestedCommandStrings(b)) {
       if (isSelfApprovalCommand(inner)) return true;
     }
@@ -670,17 +674,117 @@ function nestedCommandStrings(text) {
   return out;
 }
 
+/** Skip commit messages, manifest prompts, and other literal text (guard/safeguard words there are not commands). */
+function executablePlainWords(plain) {
+  const out = [];
+  let i = 0;
+  while (i < plain.length) {
+    const w = plain[i];
+    const low = w.toLowerCase();
+    if (low === 'ask' && i > 0 && plain[i - 1].toLowerCase() === 'swarm') {
+      i += 1;
+      while (i < plain.length && plain[i].startsWith('-')) {
+        const f = plain[i].toLowerCase();
+        if (DATA_VALUE_FLAGS.has(f) || f.startsWith('--reason=') || f.startsWith('--prompt=') || f.startsWith('--guard-text=')) {
+          i += f.includes('=') ? 1 : 2;
+        } else i += 1;
+      }
+      if (i < plain.length) { i += 1; continue; }
+      continue;
+    }
+    if (DATA_VALUE_FLAGS.has(low)) {
+      i += low.includes('=') ? 1 : 2;
+      continue;
+    }
+    if (low.startsWith('--message=') || low.startsWith('--reason=') || low.startsWith('--guard-text=') || low.startsWith('--prompt=')) {
+      i += 1;
+      continue;
+    }
+    out.push(w);
+    i += 1;
+  }
+  return out;
+}
+
+function plainHasHandbuildSelfAction(plain) {
+  const lower = executablePlainWords(plain).map(w => w.toLowerCase());
+  for (let i = 0; i < lower.length; i += 1) {
+    if (lower[i] === 'handbuild' && HAND_BUILD_SELF_ACTIONS.has(lower[i + 1] ?? '')) return true;
+    if (lower[i] === 'swarm' && lower[i + 1] === 'handbuild' && HAND_BUILD_SELF_ACTIONS.has(lower[i + 2] ?? '')) return true;
+  }
+  const swarmMi = lower.findIndex(w => w === 'swarm.mjs' || w.endsWith('/swarm.mjs') || w.endsWith('\\swarm.mjs'));
+  if (swarmMi !== -1) {
+    const rest = lower.slice(swarmMi + 1);
+    const hi = rest.indexOf('handbuild');
+    if (hi !== -1 && HAND_BUILD_SELF_ACTIONS.has(rest[hi + 1] ?? '')) return true;
+  }
+  return false;
+}
+
+function plainHasDecideHandbuildApprove(plain) {
+  const lower = executablePlainWords(plain).map(w => w.toLowerCase());
+  for (let i = 0; i < lower.length; i += 1) {
+    if (lower[i] === 'decide' && lower[i + 1]?.startsWith('handbuild-') && lower[i + 2] === 'approve') return true;
+    if (lower[i] === 'decide' && lower[i + 1]?.startsWith('handbuild-') && lower[i + 2] === 'deny') return true;
+    if (lower[i] === 'swarm' && lower[i + 1] === 'decide' && lower[i + 2]?.startsWith('handbuild-') && lower[i + 3] === 'approve') return true;
+  }
+  return false;
+}
+
+function plainHasSwarmInlineRisk(plain) {
+  const surface = executablePlainWords(plain).join(' ').toLowerCase();
+  return SWARM_INLINE.test(surface);
+}
+
+function plainHasStaticMarker(plain) {
+  const surface = executablePlainWords(plain).join(' ').toLowerCase();
+  if (!surface) return false;
+  if (SAFE_SWARM.some(re => re.test(surface))) return false;
+  return STATIC_MARKERS.some(re => re.test(surface));
+}
+
+function commandWordsSelfApprovalRisky(words, rawText = '') {
+  const plain = plainWords(words);
+  if (plainHasHandbuildSelfAction(plain)) return true;
+  if (plainHasDecideHandbuildApprove(plain)) return true;
+  if (plainHasSwarmInlineRisk(plain)) return true;
+  if (plainHasStaticMarker(plain)) return true;
+  if (rawText && tmuxOrchestratorMarker(rawText)) return true;
+  return false;
+}
+
+function commandTouchesGuardInstallScripts(commandText, root = '.') {
+  const a = analyzeShell(commandText, { root, cwd: root });
+  return a.writes.some(rel => HAND_BUILD_GUARD_SCRIPT.test(String(rel).replace(/\\/g, '/')));
+}
+
+function inlineCodeSelfApprovalRisky(code) {
+  const n = normalizeSelfApprovalCommandText(code);
+  if (!n) return false;
+  if (SWARM_INLINE.test(n)) return true;
+  if (/\bswarm\b/.test(n) && /\bdecide\b/.test(n) && /\bapprove\b/.test(n)) return true;
+  if (/\bhandbuild\s+(?:approve|deny|on|off|install|uninstall)\b/.test(n)) return true;
+  for (const words of tokenize(code)) {
+    if (commandWordsSelfApprovalRisky(words, code)) return true;
+  }
+  return false;
+}
+
+function commandWordsInlineInterpreterRisky(words) {
+  const plain = plainWords(words);
+  const { index } = skipToProgram(plain);
+  if (index >= plain.length) return false;
+  const cmd = path.basename(plain[index]);
+  const args = plain.slice(index + 1);
+  const codeAt = interpreterCodeFlagIndex(cmd, args);
+  if (codeAt === -1) return false;
+  return inlineCodeSelfApprovalRisky(codeArgValue(args, codeAt));
+}
+
 function matchesNormalized(normalized, rawText = '', { skipSafeSwarm = false } = {}) {
   if (!normalized) return false;
   if (!skipSafeSwarm && SAFE_SWARM.some(re => re.test(normalized))) return false;
   if (rawText && tmuxOrchestratorMarker(rawText)) return true;
-  if (STATIC_MARKERS.some(re => re.test(normalized))) return true;
-  if (HAND_BUILD_ACTION.test(normalized)) return true;
-  if (HAND_BUILD_ACTION_NODE.test(normalized)) return true;
-  if (DECIDE_APPROVE.test(normalized)) return true;
-  if (SWARM_INLINE.test(normalized)) return true;
-  if (/\bhandbuild-[^\s|;&]+[\s|;&]+(?:approve|deny)\b/.test(normalized)) return true;
-  if (/\b(?:approve|deny|off|on)\b[\s\S]*\bhandbuild-/.test(normalized)) return true;
   return false;
 }
 
@@ -690,8 +794,11 @@ export function isSelfApprovalCommand(commandText) {
   if (!text) return false;
   if (rawHasRiskyClaudeInvocation(text, 0)) return true;
   if (heredocBodiesRisky(text, 0)) return true;
-  const normalized = normalizeSelfApprovalCommandText(text);
-  if (matchesNormalized(normalized, text)) return true;
+  if (commandTouchesGuardInstallScripts(text)) return true;
+  for (const words of tokenize(text)) {
+    if (commandWordsSelfApprovalRisky(words, text)) return true;
+    if (commandWordsInlineInterpreterRisky(words)) return true;
+  }
   for (const inner of nestedCommandStrings(text)) {
     if (isSelfApprovalCommand(inner)) return true;
   }
