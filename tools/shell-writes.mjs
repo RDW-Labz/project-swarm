@@ -436,26 +436,65 @@ export function executablePlainWordsForHandbuild(plain) {
   return out;
 }
 
-/** handbuild subcommand after swarm or node … swarm.mjs, or null when not a handbuild invocation. */
-export function swarmHandbuildVerbFromPlain(plain) {
-  const lower = executablePlainWordsForHandbuild(plain).map(w => w.toLowerCase());
-  for (let i = 0; i < lower.length; i += 1) {
-    if (lower[i] === 'handbuild') return lower[i + 1] ?? '';
-    if (lower[i] === 'swarm' && lower[i + 1] === 'handbuild') return lower[i + 2] ?? '';
-  }
-  const swarmMi = lower.findIndex(w => w === 'swarm.mjs' || w.endsWith('/swarm.mjs') || w.endsWith('\\swarm.mjs'));
-  if (swarmMi !== -1) {
-    const rest = lower.slice(swarmMi + 1);
-    let ri = 0;
-    while (ri < rest.length && (rest[ri] === '--root' || rest[ri]?.startsWith('--root='))) {
-      if (rest[ri] === '--root') ri += 2;
-      else ri += 1;
+const HANDBUILD_PROGRAM_WRAPPERS = new Set(['env', 'command', 'exec', 'nice', 'nohup', 'time', 'timeout', 'stdbuf', 'caffeinate', 'sudo', 'xargs', 'builtin', 'setsid', 'chrt']);
+const HANDBUILD_WRAPPER_VALUE_OPTS = { sudo: ['-u', '-g', '-C', '-h', '-p', '-r', '-t', '-U'], env: ['-u', '-C'], nice: ['-n'], stdbuf: ['-i', '-o', '-e'], timeout: ['-s', '-k', '--signal', '--kill-after'], xargs: ['-n', '-I', '-L', '-P', '-s', '-d', '-E'] };
+
+function skipToHandbuildProgram(plain) {
+  let k = 0;
+  let wrapperName = null;
+  while (k < plain.length) {
+    if (SHELL_KEYWORDS.has(plain[k])) { k += 1; continue; }
+    if (!wrapperName && /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) { k += 1; continue; }
+    if (HANDBUILD_PROGRAM_WRAPPERS.has(plain[k])) { wrapperName = plain[k]; k += 1; continue; }
+    if (wrapperName === 'env') {
+      if (plain[k] === '-S' || plain[k] === '--split-string') return { index: k + 2, envSplit: plain[k + 1] };
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) { k += 1; continue; }
     }
-    const tail = rest.slice(ri);
-    if (tail[0] === 'handbuild') return tail[1] ?? '';
-    if (tail[0] === 'swarm' && tail[1] === 'handbuild') return tail[2] ?? '';
-    const hi = tail.indexOf('handbuild');
-    if (hi !== -1) return tail[hi + 1] ?? '';
+    if (wrapperName === 'nice' && /^-\d+$/.test(plain[k])) { k += 1; wrapperName = null; continue; }
+    if (wrapperName && plain[k].startsWith('-')) {
+      const takes = (HANDBUILD_WRAPPER_VALUE_OPTS[wrapperName] ?? []).includes(plain[k]);
+      k += takes ? 2 : 1;
+      continue;
+    }
+    if (wrapperName === 'timeout' && /^\d+(?:\.\d+)?[smhd]?$/.test(plain[k])) { k += 1; wrapperName = null; continue; }
+    if (wrapperName) wrapperName = null;
+    break;
+  }
+  return { index: k };
+}
+
+function handbuildVerbAfterSwarmArgs(args) {
+  const lower = args.map(w => w.toLowerCase());
+  let i = 0;
+  while (i < lower.length) {
+    const a = lower[i];
+    if (a === '--root' || a.startsWith('--root=')) {
+      if (a === '--root') i += 2;
+      else i += 1;
+      continue;
+    }
+    if (a.startsWith('-')) { i += 1; continue; }
+    break;
+  }
+  if (lower[i] === 'handbuild') return lower[i + 1] ?? '';
+  return null;
+}
+
+/** handbuild subcommand on a `swarm` or `node … swarm.mjs` invocation only, or null when not a handbuild command. */
+export function swarmHandbuildVerbFromPlain(plain) {
+  const words = executablePlainWordsForHandbuild(plain);
+  const { index, envSplit } = skipToHandbuildProgram(words);
+  if (envSplit !== undefined) return swarmHandbuildVerbFromPlain(envSplit.split(/\s+/).filter(Boolean));
+  if (index >= words.length) return null;
+  const cmd = path.basename(words[index]).toLowerCase();
+  const args = words.slice(index + 1);
+  if (cmd === 'swarm') return handbuildVerbAfterSwarmArgs(args);
+  if (cmd === 'node') {
+    const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));
+    if (scriptAt === -1) return null;
+    const base = path.basename(args[scriptAt]).toLowerCase();
+    if (base !== 'swarm.mjs' && !args[scriptAt].toLowerCase().endsWith('/swarm.mjs') && !args[scriptAt].toLowerCase().endsWith('\\swarm.mjs')) return null;
+    return handbuildVerbAfterSwarmArgs(args.slice(scriptAt + 1));
   }
   return null;
 }
@@ -467,18 +506,6 @@ export function plainSetsHandbuildSelfApproval(plain) {
   for (let i = 0; i < lower.length; i += 1) {
     if (lower[i] === 'decide' && lower[i + 1]?.startsWith('handbuild-') && (lower[i + 2] === 'approve' || lower[i + 2] === 'deny')) return true;
     if (lower[i] === 'swarm' && lower[i + 1] === 'decide' && lower[i + 2]?.startsWith('handbuild-') && (lower[i + 3] === 'approve' || lower[i + 3] === 'deny')) return true;
-  }
-  const swarmMi = lower.findIndex(w => w === 'swarm.mjs' || w.endsWith('/swarm.mjs') || w.endsWith('\\swarm.mjs'));
-  if (swarmMi !== -1) {
-    const rest = lower.slice(swarmMi + 1);
-    let ri = 0;
-    while (ri < rest.length && (rest[ri] === '--root' || rest[ri]?.startsWith('--root='))) {
-      if (rest[ri] === '--root') ri += 2;
-      else ri += 1;
-    }
-    const tail = rest.slice(ri);
-    const di = tail.indexOf('decide');
-    if (di !== -1 && !String(tail[di + 1] ?? '').startsWith('handbuild-') && (tail[di + 2] === 'approve' || tail[di + 2] === 'deny')) return true;
   }
   return false;
 }

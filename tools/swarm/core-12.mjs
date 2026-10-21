@@ -119,10 +119,12 @@ export async function updateProjects(root,{projects,yes=false}={}){
   for(const projectDir of list){
     let project;
     try{project=await fs.realpath(projectDir);}catch{reports.push({project:projectDir,found:[],action:'missing'});continue;}
+    try{const {refreshProjectInstallHooks}=await import('../install.mjs');await refreshProjectInstallHooks(project,root,{refreshOnly:true});}catch{/* best effort */}
     let pointer=null;
     try{const {readRunnerPointer}=await import('../runner-pointer.mjs');pointer=await readRunnerPointer(project);}catch{pointer=null;}
     if(pointer&&isPinned(pointer)){
       const at=pinOf(pointer);
+      try{const {refreshProjectInstallHooks}=await import('../install.mjs');await refreshProjectInstallHooks(project,root,{refreshOnly:true});}catch{/* best effort */}
       pinned.push({project,found:[],action:'pinned',pinnedAt:at});
       continue;
     }
@@ -176,10 +178,17 @@ export async function bumpPointers(root){
     let pointer;
     try{const {readRunnerPointer}=await import('../runner-pointer.mjs');pointer=await readRunnerPointer(project);}catch(error){if(error.code==='ENOENT'||String(error.message).includes('no .project-swarm.json'))continue;failed.push({project,error:'the pointer file is not valid JSON; not changed'});continue;}
     if(!pointer||typeof pointer!=='object')continue;
-    if(isPinned(pointer)){skipped.push({project,pinnedAt:pinOf(pointer)});continue;}
-    // The Orchestrator lane's hooks are put (back) in place for every linked project on each update, whatever the pointer says.
-    try{const {ensureOrchestratorHooks}=await import('../install.mjs');const hooks=await ensureOrchestratorHooks(project,root,{refreshOnly:true});if(hooks.status==='created'||hooks.status==='updated')hooksSet.push(project);else if(hooks.status==='skipped')failed.push({project,error:`orchestrator hooks not installed: ${hooks.reason}`});}catch(error){failed.push({project,error:`orchestrator hooks: ${String(error.message).slice(0,160)}`});}
-    try{const {ensureHandbuildGuard}=await import('../install.mjs');const g=await ensureHandbuildGuard(project,root,{refreshOnly:true});if(g.status==='skipped')failed.push({project,error:`hand-build guard not refreshed: ${g.reason}`});}catch(error){failed.push({project,error:`hand-build guard: ${String(error.message).slice(0,160)}`});}
+    const pinned=isPinned(pointer);
+    // The Orchestrator lane's hooks are put (back) in place for every linked project on each update, whatever the pointer says (including pinned projects).
+    try{
+      const {refreshProjectInstallHooks}=await import('../install.mjs');
+      const refreshed=await refreshProjectInstallHooks(project,root,{refreshOnly:true});
+      const hooks=refreshed.orchestrator;
+      if(hooks.status==='created'||hooks.status==='updated')hooksSet.push(project);
+      else if(hooks.status==='skipped')failed.push({project,error:`orchestrator hooks not installed: ${hooks.reason}`});
+      if(refreshed.handbuild?.status==='skipped')failed.push({project,error:`hand-build guard not refreshed: ${refreshed.handbuild.reason}`});
+    }catch(error){failed.push({project,error:`install hooks: ${String(error.message).slice(0,160)}`});}
+    if(pinned){skipped.push({project,pinnedAt:pinOf(pointer)});continue;}
     if(pointer.version===version)continue;
     try{const {writePointer}=await import('../install.mjs');const written=await writePointer(project,{install:root,version});if(written.changed)bumped.push({project,from:pointer.version??null,to:version});}
     catch(error){failed.push({project,error:String(error.message).slice(0,200)});}

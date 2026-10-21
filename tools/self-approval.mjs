@@ -23,8 +23,11 @@ const handbuildOwnerDenyReason = verb => `Hand-build guard [${HANDBUILD_OWNER_RU
 export function handbuildShellPolicy(commandText) {
   const text = String(commandText ?? '');
   if (!text) return { applies: false };
+  let verb = null;
+  let sawHandbuild = false;
   for (const words of tokenize(text)) {
-    if (plainHasDecideHandbuildApprove(plainWords(words))) {
+    const plain = plainWords(words);
+    if (plainHasDecideHandbuildApprove(plain)) {
       return {
         applies: true,
         allow: false,
@@ -33,11 +36,6 @@ export function handbuildShellPolicy(commandText) {
         reason: handbuildOwnerDenyReason('approve'),
       };
     }
-  }
-  let verb = null;
-  let sawHandbuild = false;
-  for (const words of tokenize(text)) {
-    const plain = plainWords(words);
     const hbVerb = swarmHandbuildVerbFromPlain(plain);
     if (hbVerb !== null && HANDBUILD_OWNER_VERBS.has(hbVerb)) {
       return {
