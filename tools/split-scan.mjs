@@ -639,8 +639,8 @@ function collectUses(text) {
   const lx = createLexer(text, 0);
   let afterDot = false;
   let objectKey = false;
-  let arrowParams = null;
-  let arrowDepth = 0;
+  let arrowParenStack = null;
+  let destrBracketStack = null;
   let prevTok = null;
   let classBodyDepth = 0;
   let blockDepth = 0;
@@ -670,24 +670,43 @@ function collectUses(text) {
         blockDepth = Math.max(0, blockDepth - 1);
         if (classBodyDepth > 0 && blockDepth < classBodyDepth) classBodyDepth = 0;
       } else if (tok.value === ',') objectKey = true;
-      else if (tok.value === '(') {
+      else if (tok.value === '[' && !objectKey && !(arrowParenStack && arrowParenStack.length > 0)) {
+        if (!destrBracketStack) destrBracketStack = [];
+        destrBracketStack.push({ names: [] });
+      } else if (tok.value === ']' && destrBracketStack && destrBracketStack.length > 0) {
+        const level = destrBracketStack.pop();
+        const st = lx.cloneState();
+        const n = lx.next();
+        if (n.type === 'punct' && n.value === '=') {
+          for (const p of level.names) declare(p);
+        } else {
+          for (const p of level.names) {
+            if (!isBound(p)) uses.add(p);
+          }
+          lx.restoreState(st);
+        }
+        if (destrBracketStack.length === 0) destrBracketStack = null;
+      } else if (tok.value === '(') {
         const noArrow = prevTok && prevTok.type === 'keyword'
           && ['if', 'for', 'while', 'switch', 'catch', 'function', 'with', 'return', 'typeof', 'void', 'delete', 'new'].includes(prevTok.value);
         if (!noArrow) {
-          arrowParams = [];
-          arrowDepth = 1;
+          if (!arrowParenStack) arrowParenStack = [];
+          arrowParenStack.push({ names: [] });
         }
-      } else if (tok.value === ')' && arrowParams) {
+      } else if (tok.value === ')' && arrowParenStack && arrowParenStack.length > 0) {
+        const level = arrowParenStack.pop();
         const st = lx.cloneState();
         const n = lx.next();
         if (n.type === 'punct' && n.value === '=>') {
-          for (const p of arrowParams) declare(p);
-        } else lx.restoreState(st);
-        arrowParams = null;
-        arrowDepth = 0;
-      } else if (arrowParams && tok.value === '(') arrowDepth++;
-      else if (arrowParams && tok.value === ')') arrowDepth = Math.max(0, arrowDepth - 1);
-      else objectKey = false;
+          for (const p of level.names) declare(p);
+        } else {
+          for (const p of level.names) {
+            if (!isBound(p)) uses.add(p);
+          }
+          lx.restoreState(st);
+        }
+        if (arrowParenStack.length === 0) arrowParenStack = null;
+      } else objectKey = false;
       prevTok = tok;
       continue;
     }
@@ -801,7 +820,11 @@ function collectUses(text) {
     }
 
     if (tok.type === 'identifier') {
-      if (arrowParams && arrowDepth === 1) arrowParams.push(tok.value);
+      if (destrBracketStack && destrBracketStack.length > 0) {
+        destrBracketStack[destrBracketStack.length - 1].names.push(tok.value);
+      } else if (arrowParenStack && arrowParenStack.length > 0) {
+        arrowParenStack[arrowParenStack.length - 1].names.push(tok.value);
+      }
       const n = lx.next();
       if (n.type === 'punct' && n.value === ':') {
         if (!objectKey && blockDepth === 0) {
@@ -824,8 +847,9 @@ function collectUses(text) {
           continue;
         }
       }
-      const inArrowList = arrowParams && arrowDepth === 1;
-      if (!inArrowList && !isBound(tok.value)) uses.add(tok.value);
+      const inArrowList = arrowParenStack && arrowParenStack.length > 0;
+      const inDestrBracket = destrBracketStack && destrBracketStack.length > 0;
+      if (!inArrowList && !inDestrBracket && !isBound(tok.value)) uses.add(tok.value);
       if (n.type !== 'eof') lx.restoreState({ pos: n.start, line: lineAt(text, n.start), prevSignificant: null });
       objectKey = false;
       prevTok = tok;

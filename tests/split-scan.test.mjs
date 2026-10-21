@@ -165,6 +165,65 @@ test('spread element uses binding after rest operator', () => {
   assert.ok(items[0].uses.has('EXTRA_CLI_AGENTS'));
 });
 
+test('spread inside call or freeze parens is a use not an arrow param', () => {
+  const cases = [
+    ['export const A = Object.freeze([...X, ...Y]);', ['X', 'Y']],
+    ['const D = f([...Y]);', ['Y', 'f']],
+    ['const E = Object.freeze([...Y]);', ['Y']],
+    ['const B = [...X, ...Y];', ['X', 'Y']],
+    ['function has(job) { return [...X, ...Y].includes(job); }\n', ['X', 'Y']],
+    ['const merged = f({ ...Y });', ['Y', 'f']],
+    ['const both = g([a, ...Y], [...Z]);', ['a', 'Y', 'Z', 'g']],
+    ['const nested = h(i([...W]));', ['W', 'h', 'i']],
+    ['const arrowInCall = k((x) => x + Y);', ['Y', 'k']],
+  ];
+  for (const [src, expected] of cases) {
+    const { items } = scanModule(`${src}\n`);
+    for (const name of expected) {
+      assert.ok(items[0].uses.has(name), `${src} missing use ${name}`);
+    }
+  }
+});
+
+test('parenthesized arrow params versus expression grouping', () => {
+  const src = 'const fn = ((...args) => args.length);\n';
+  const { items } = scanModule(src);
+  assert.ok(!items[0].uses.has('args'));
+});
+
+test('destructuring assignment uses rhs bindings', () => {
+  const src = 'let p, q;\n[p, q] = pair;\n';
+  const { items } = scanModule(src);
+  assert.ok(items[1].uses.has('pair'));
+  assert.ok(!items[1].uses.has('p'));
+  assert.ok(!items[1].uses.has('q'));
+});
+
+test('tools/swarm.mjs records spread-in-paren agent dependencies', () => {
+  const swarmPath = path.join(root, '..', 'tools', 'swarm.mjs');
+  const text = fs.readFileSync(swarmPath, 'utf8');
+  const { items } = scanModule(text);
+
+  const agentsItem = items.find((it) => it.names.includes('AGENTS') && it.exported);
+  assert.ok(agentsItem?.uses.has('API_AGENTS'), 'export AGENTS uses API_AGENTS');
+
+  const pickJobRoute = items.find((it) => it.names.includes('pickJobRoute'));
+  assert.ok(pickJobRoute?.uses.has('API_AGENTS'), 'pickJobRoute uses API_AGENTS');
+
+  const resolveAskRoute = items.find((it) => it.names.includes('resolveAskRoute'));
+  assert.ok(resolveAskRoute?.uses.has('API_AGENTS'), 'resolveAskRoute uses API_AGENTS');
+
+  const cliAgents = items.find(
+    (it) => it.kind === 'declaration' && it.names.length === 1 && it.names[0] === 'CLI_AGENTS',
+  );
+  assert.ok(cliAgents?.uses.has('EXTRA_CLI_AGENTS'), 'CLI_AGENTS uses EXTRA_CLI_AGENTS');
+
+  for (const it of items) {
+    if (!it.text.includes('...API_AGENTS')) continue;
+    assert.ok(it.uses.has('API_AGENTS'), `${it.names.join(',')} missing API_AGENTS use`);
+  }
+});
+
 test('rest parameter name is not an external use', () => {
   const src = 'function f(...args) { return args.length; }\n';
   const { items } = scanModule(src);
