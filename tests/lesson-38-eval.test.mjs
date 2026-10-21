@@ -21,7 +21,7 @@ const tk = (id, extra = {}) => ({ id, title: id, type: 'build', epic: 'E', scope
 const writeState = (root, state) => fs.mkdir(path.join(root, '.swarm/runs/r9'), { recursive: true }).then(() => fs.writeFile(path.join(root, '.swarm/runs/r9/state.json'), JSON.stringify(state)));
 async function project(t, tickets, { verify = false } = {}) {
   const root = await tmp(t, 'l38-');
-  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'app' }));
+  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'app', ...(verify ? { scripts: { test: 'node -e ""' } } : {}) }));
   await writeLedger(root, createLedger({ scope: { name: 'P', version: 1, hash: 'a'.repeat(64) }, tickets }));
   await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, acceptance: { enforce: false }, protectedPaths: [], budget: { maxUsd: 5 }, ...(verify ? { verify: { command: ['npm', 'test'] } } : {}), baseCheck: { status: 'none', ranAt: null, head: null, checks: [] } } }));
   return root;
