@@ -29,12 +29,64 @@ const SAFE_SWARM = [
   /\bswarm\s+tickets\b/,
 ];
 
+const CLAUDE_KNOWN_SUBCOMMANDS = new Set([
+  'mcp', 'config', 'doctor', 'update', 'install', 'plugin', 'remote-control', 'login',
+]);
+const PROGRAM_WRAPPERS = new Set(['env', 'command', 'exec', 'nice', 'nohup', 'time', 'sudo', 'xargs']);
+
+function claudeProgramBasename(token) {
+  const base = token.split('/').pop();
+  return base === 'claude';
+}
+
+function skipProgramWrappers(tokens, start) {
+  let i = start;
+  while (i < tokens.length && PROGRAM_WRAPPERS.has(tokens[i])) {
+    const wrapper = tokens[i];
+    i += 1;
+    if (wrapper === 'env') {
+      while (i < tokens.length && /^[a-z_][a-z0-9_]*=/i.test(tokens[i])) i += 1;
+    } else if (wrapper === 'sudo' || wrapper === 'xargs') {
+      while (i < tokens.length && tokens[i].startsWith('-')) i += 1;
+    }
+  }
+  return i;
+}
+
+function claudeHasHeadlessOrPromptArgs(tokens, claudeIndex) {
+  const rest = tokens.slice(claudeIndex + 1);
+  for (let i = 0; i < rest.length; i += 1) {
+    const t = rest[i];
+    if (t === '-p' || t === '--print') return true;
+    if (t.startsWith('-')) continue;
+    if (CLAUDE_KNOWN_SUBCOMMANDS.has(t)) return false;
+    return true;
+  }
+  return false;
+}
+
+/** Headless Claude Code: claude as the invoked program with -p, --print, or a positional prompt. */
+function normalizedHasHeadlessClaudeInvocation(normalized) {
+  const segments = normalized.split(/\s*(?:[|;&]|\&\&|\|\|)\s*/);
+  for (const seg of segments) {
+    let trimmed = seg.trim();
+    if (!trimmed) continue;
+    trimmed = trimmed.replace(/\s*&\s*$/, '').trim();
+    const tokens = trimmed.split(/\s+/).filter(Boolean);
+    if (!tokens.length) continue;
+    const prog = skipProgramWrappers(tokens, 0);
+    if (prog >= tokens.length) continue;
+    if (tokens[prog] !== 'claude' && !claudeProgramBasename(tokens[prog])) continue;
+    if (claudeHasHeadlessOrPromptArgs(tokens, prog)) return true;
+  }
+  return false;
+}
+
 const STATIC_MARKERS = [
   /\borchestrator-hook(?:\.mjs)?\b/,
   /\brecordchatmerge\b/,
   /\binbox-commands(?:\.mjs)?\b/,
   /\.swarm\/handbuild\b/,
-  /\bclaude\b(?:\s+(?:-p|--print)\b|\s+)/,
   /\btmux\s+(?:send-keys|new-session|split-window)\b[\s\S]*(?:\bswarm\b|\bnode\b)/,
   /\bscript\b/,
   /\bosascript\b/,
@@ -60,6 +112,7 @@ function matchesNormalized(normalized) {
   if (!normalized) return false;
   if (SAFE_SWARM.some(re => re.test(normalized))) return false;
   if (STATIC_MARKERS.some(re => re.test(normalized))) return true;
+  if (normalizedHasHeadlessClaudeInvocation(normalized)) return true;
   if (HAND_BUILD_ACTION.test(normalized)) return true;
   if (HAND_BUILD_ACTION_NODE.test(normalized)) return true;
   if (DECIDE_APPROVE.test(normalized)) return true;
