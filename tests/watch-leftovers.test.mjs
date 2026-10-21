@@ -81,18 +81,18 @@ test('the server serves /job/ID only with the token, 404 for an unknown job or w
   t.after(() => srv.close());
   const port = Number(new URL(srv.url).port);
   assert.equal((await get(port, '/job/a')).status, 403);
-  const ok = await get(port, `/job/a?t=${srv.token}`);
+  const ok = await get(port, '/job/a', { 'x-watch-token': srv.token });
   assert.equal(ok.status, 200);
   assert.equal(JSON.parse(ok.body).summary, 'did it');
-  assert.equal((await get(port, `/job/zzz?t=${srv.token}`)).status, 404);
-  assert.equal((await get(port, `/job/a/extra?t=${srv.token}`)).status, 404);
+  assert.equal((await get(port, '/job/zzz', { 'x-watch-token': srv.token })).status, 404);
+  assert.equal((await get(port, '/job/a/extra', { 'x-watch-token': srv.token })).status, 404);
   const drawer = fs.readFileSync(path.join(realAssets, 'run-drawer.js'), 'utf8');
   assert.match(drawer, /\/job\//);
   assert.doesNotMatch(drawer, /innerHTML/, 'worker text is only ever set as text');
   const plain = createWatchServer({ root: realAssets, assetDir: realAssets, deltaFile, idleMs: 60000, getRunSnapshot: () => null, getPlanSnapshot: () => ({ present: false }), getGallery: () => ({ schema: 1, screens: [] }), commandList: [], contextCommands: () => [] });
   await plain.listen();
   t.after(() => plain.close());
-  assert.equal((await get(Number(new URL(plain.url).port), `/job/a?t=${plain.token}`)).status, 404);
+  assert.equal((await get(Number(new URL(plain.url).port), '/job/a', { 'x-watch-token': plain.token })).status, 404);
 });
 
 test('swarm watch --all is a web board of every live run: token-protected, read-only, its own page; --all --json and --text still print', async t => {
@@ -102,7 +102,7 @@ test('swarm watch --all is a web board of every live run: token-protected, read-
   t.after(() => srv.close());
   const port = Number(new URL(srv.url).port);
   assert.equal((await get(port, '/board')).status, 403);
-  const board = JSON.parse((await get(port, `/board?t=${srv.token}`)).body);
+  const board = JSON.parse((await get(port, '/board', { 'x-watch-token': srv.token })).body);
   assert.equal(board.runs[0].runId, 'r-9');
   const page = await get(port, `/?t=${srv.token}`);
   assert.match(page.body, /Every project on this machine/);
