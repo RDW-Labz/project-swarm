@@ -1743,7 +1743,7 @@ async function editTicketFiles(root, ledger, rest, flags) {
       const v = validateTicket(next);
       if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
       const repoFiles = await listTrackedRepoFiles(root);
-      const pathCheck = validateTicketPaths(next, { repoFiles, root });
+      const pathCheck = validateTicketPaths(next, { repoFiles, root, priorTicket: ticket });
       if (!pathCheck.ok) return out(`refused:\n${pathCheck.errors.map(err => `  ${formatTicketPathRefusal(ticket.id, err)}`).join('\n')}`, 1);
       const problems = [];
       const moved = [];

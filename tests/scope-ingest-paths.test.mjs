@@ -123,3 +123,17 @@ test('ingest accepts a new output file in an existing folder', async () => {
   const ledger = JSON.parse(await fs.readFile(path.join(root, '.swarm/project/tickets.json'), 'utf8'));
   assert.ok(ledger.tickets.some((t) => (t.files ?? []).includes('src/new-feature.mjs')));
 });
+
+test('ingest accepts a new output file in a folder that does not exist yet', async () => {
+  const root = await project(['src/base.mjs']);
+  await fakeRun(root, 'r1', [okItem({ files: ['src/new-area/feature.mjs'] })]);
+  const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
+  assert.equal(result.exitCode, 0, result.stdout);
+});
+
+test('ingest accepts a missing delete path', async () => {
+  const root = await project(['src/base.mjs']);
+  await fakeRun(root, 'r1', [okItem({ files: ['src/base.mjs'], deletes: ['src/removed.mjs'] })]);
+  const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
+  assert.equal(result.exitCode, 0, result.stdout);
+});
