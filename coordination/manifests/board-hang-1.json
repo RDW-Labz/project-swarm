@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "board-nav-cleaned-event",
+      "agent": "auto",
+      "prompt": "Fix a hanging test properly, with a real event. tests/board-nav.test.mjs, in the test whose name starts with review fixes: only our own board is reused, waits for the board file entry to disappear after board.server.close() using fs.watch plus a probe. On macOS the watch event can be missed, so the test waited forever and hung CI (7 of 14 parallel local runs hung). The code under test is startBoardServer in tools/watch-cli.mjs: after listen it registers server.done.then(async () => { api.setBoardUrl(null); await api.close(); remove the board file entry if it is ours }) and returns {server, api, url}. Change startBoardServer so it also returns cleaned: the promise created by that server.done.then chain, made so it never rejects (catch everything inside) and resolves only after the api is closed and the file entry has been removed or found already gone. Make sure every code path that ends a board runs that same chain (the remote branch and the normal branch), and that returning the extra field changes nothing for existing callers. Then in tests/board-nav.test.mjs remove the fs.watch and probe wait entirely and replace it with await board.cleaned after await board.server.close(); keep the following assertions (the run page nav request is refused with ECONNREFUSED, and the file entry no longer points at board.url) unchanged. Add one test to tests/board-nav.test.mjs: cleaned resolves after close, the file entry is gone, and calling close twice does not throw or hang. No sleeps, no polling, no timers in the test. Write only tools/watch-cli.mjs and tests/board-nav.test.mjs.",
+      "context": [
+        "tools/watch-cli.mjs",
+        "tests/board-nav.test.mjs"
+      ],
+      "outputs": [
+        "tools/watch-cli.mjs",
+        "tests/board-nav.test.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/gallery-tickets.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}
