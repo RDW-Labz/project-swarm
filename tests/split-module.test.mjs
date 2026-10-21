@@ -7,14 +7,19 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import {
-  planSplit,
-  moveItems,
-  verifyMove,
-  checkUnresolvedImportsForMove,
-  smokeImportModules,
-} from '../tools/split-module.mjs';
-import { scanModule } from '../tools/split-scan.mjs';
+
+const acornInstalled = await import('acorn').then(() => true, () => false);
+if (!acornInstalled) {
+  test('split-module tests', { skip: 'acorn not installed: run npm ci' }, () => {});
+} else {
+  const {
+    planSplit,
+    moveItems,
+    verifyMove,
+    checkUnresolvedImportsForMove,
+    smokeImportModules,
+  } = await import('../tools/split-module.mjs');
+  const { scanModule } = await import('../tools/split-scan.mjs');
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const tmpBase = process.env.SWARM_TEST_TMP || os.tmpdir();
@@ -299,3 +304,5 @@ test('dry-run move of layer-0 function on swarm.mjs does not touch file', () => 
     // ignore
   }
 });
+
+}

@@ -5,7 +5,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { scanModule, dependencyGraph, topLevelNameIndex, offsetInScannerOpaque } from '../tools/split-scan.mjs';
+
+const acornInstalled = await import('acorn').then(() => true, () => false);
+if (!acornInstalled) {
+  test('split-scan tests', { skip: 'acorn not installed: run npm ci' }, () => {});
+} else {
+  const { scanModule, dependencyGraph, topLevelNameIndex, offsetInScannerOpaque } = await import('../tools/split-scan.mjs');
+  const { regexIdentifierTokens } = await import('../tools/split-module.mjs');
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -83,7 +89,8 @@ test('expression statement and trailing newline span', () => {
   assert.ok(items[1].uses.has('foo'));
 });
 
-test('tokenizer: regex versus division', () => {
+// Acorn parses regex literals vs division; no hand-rolled lexer quirks.
+test('regex versus division', () => {
   const src = 'const pattern = /a\\/b/g;\nconst ratio = 1 / 2;\n';
   const { items } = scanModule(src);
   assert.equal(items.length, 2);
@@ -393,6 +400,179 @@ test('regex character class may contain a slash', () => {
   assert.ok(!items[0].uses.has('includes'));
 });
 
+const DIFF_USES_ALLOWLIST = [];
+
+const JS_KEYWORDS = new Set([
+  'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete',
+  'do', 'else', 'export', 'extends', 'false', 'finally', 'for', 'function', 'if', 'import',
+  'in', 'instanceof', 'let', 'new', 'null', 'return', 'super', 'switch', 'this', 'throw',
+  'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield', 'await', 'async', 'of',
+  'static', 'get', 'set', 'from', 'as',
+]);
+
+function identifiersInTemplateExpressions(text) {
+  const names = new Set();
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '`') {
+      i++;
+      while (i < text.length) {
+        if (text[i] === '\\') {
+          i += 2;
+          continue;
+        }
+        if (text[i] === '$' && text[i + 1] === '{') {
+          i += 2;
+          let depth = 1;
+          const start = i;
+          while (i < text.length && depth > 0) {
+            if (text[i] === '{') depth++;
+            else if (text[i] === '}') depth--;
+            i++;
+          }
+          const expr = text.slice(start, i - 1);
+          for (const { name } of regexIdentifierTokens(expr)) {
+            if (!JS_KEYWORDS.has(name)) names.add(name);
+          }
+          for (const re of [/\.\.\.\s*([A-Za-z_$][\w$]*)/g, /\b([A-Za-z_$][\w$]*)\s*\./g, /\bnew\s+([A-Za-z_$][\w$]*)/g]) {
+            let m;
+            while ((m = re.exec(expr)) !== null) {
+              if (!JS_KEYWORDS.has(m[1])) names.add(m[1]);
+            }
+          }
+          continue;
+        }
+        if (text[i] === '`') {
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    i++;
+  }
+  return names;
+}
+
+function crudeIdentifierOverApprox(text) {
+  const names = new Set();
+  const addFromSlice = (slice) => {
+    for (const { name } of regexIdentifierTokens(slice)) {
+      if (!JS_KEYWORDS.has(name)) names.add(name);
+    }
+    for (const re of [
+      /\.\.\.\s*([A-Za-z_$][\w$]*)/g,
+      /\b([A-Za-z_$][\w$]*)\s*\./g,
+      /\bnew\s+([A-Za-z_$][\w$]*)/g,
+    ]) {
+      let m;
+      while ((m = re.exec(slice)) !== null) {
+        if (!JS_KEYWORDS.has(m[1])) names.add(m[1]);
+      }
+    }
+  };
+  addFromSlice(text);
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('*')) continue;
+    addFromSlice(line);
+  }
+  for (const name of identifiersInTemplateExpressions(text)) names.add(name);
+  let word;
+  const wordRe = /\b([A-Za-z_$][\w$]*)\b/g;
+  while ((word = wordRe.exec(text)) !== null) {
+    if (!JS_KEYWORDS.has(word[1])) names.add(word[1]);
+  }
+  return names;
+}
+
+test('parser uses are covered by crude regex over-approximation on swarm.mjs', () => {
+  const swarmPath = path.join(root, '..', 'tools', 'swarm.mjs');
+  const text = fs.readFileSync(swarmPath, 'utf8');
+  const { items } = scanModule(text);
+  const allow = new Set(DIFF_USES_ALLOWLIST);
+  for (const it of items) {
+    const approx = crudeIdentifierOverApprox(it.text);
+    for (const use of it.uses) {
+      if (allow.has(use)) continue;
+      assert.ok(approx.has(use), `item ${it.names.join(',') || it.index} use ${use} missing from regex approx`);
+    }
+  }
+});
+
+test('spread in call arguments', () => {
+  const src = 'foo(bar, ...items);\n';
+  const { items } = scanModule(src);
+  assert.ok(items[0].uses.has('foo'));
+  assert.ok(items[0].uses.has('bar'));
+  assert.ok(items[0].uses.has('items'));
+});
+
+test('call as non-first argument with object argument', () => {
+  const src = 'outer(middle, inner({ key: value }));\n';
+  const { items } = scanModule(src);
+  assert.ok(items[0].uses.has('outer'));
+  assert.ok(items[0].uses.has('middle'));
+  assert.ok(items[0].uses.has('inner'));
+  assert.ok(items[0].uses.has('value'));
+  assert.ok(!items[0].uses.has('key'));
+});
+
+test('destructuring defaults in parameters', () => {
+  const src = 'function f({ a = defaultA } = {}) { return a; }\n';
+  const { items } = scanModule(src);
+  assert.ok(items[0].uses.has('defaultA'));
+  assert.ok(!items[0].uses.has('a'));
+});
+
+test('computed object keys are uses', () => {
+  const src = 'const o = { [dynamic]: 1 };\n';
+  const { items } = scanModule(src);
+  assert.ok(items[0].uses.has('dynamic'));
+});
+
+test('class members and static blocks', () => {
+  const src = 'class C { static { helper(); } method() { return dep; } }\n';
+  const { items } = scanModule(src);
+  assert.ok(items[0].uses.has('helper'));
+  assert.ok(items[0].uses.has('dep'));
+  assert.ok(!items[0].uses.has('method'));
+});
+
+test('tagged template tag is a use', () => {
+  const src = 'const out = tag`hello ${name}`;\n';
+  const { items } = scanModule(src);
+  assert.ok(items[0].uses.has('tag'));
+  assert.ok(items[0].uses.has('name'));
+});
+
+test('hoisted function and var in item', () => {
+  const src = 'function outer() { function inner() {} var v = 1; return inner() + v; }\n';
+  const { items } = scanModule(src);
+  assert.ok(!items[0].uses.has('inner'));
+  assert.ok(!items[0].uses.has('v'));
+});
+
+test('import.meta is not an identifier use', () => {
+  const src = 'const u = import.meta.url;\n';
+  const { items } = scanModule(src);
+  assert.ok(!items[0].uses.has('import'));
+  assert.ok(!items[0].uses.has('meta'));
+});
+
+test('private class fields are not free uses', () => {
+  const src = 'class C { #secret = 1; read() { return this.#secret; } }\n';
+  const { items } = scanModule(src);
+  assert.ok(!items[0].uses.has('secret'));
+});
+
+test('top-level await expression', () => {
+  const src = 'const data = await loadRemote();\n';
+  const { items } = scanModule(src);
+  assert.ok(items[0].uses.has('loadRemote'));
+});
+
 test('tools/swarm.mjs items respect top-level structure invariants', () => {
   const swarmPath = path.join(root, '..', 'tools', 'swarm.mjs');
   const text = fs.readFileSync(swarmPath, 'utf8');
@@ -433,3 +613,5 @@ test('tools/swarm.mjs items respect top-level structure invariants', () => {
     }
   }
 });
+
+}

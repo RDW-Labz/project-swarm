@@ -1,22 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Scanner for splitting tools/swarm.mjs into top-level items (lossless spans).
 
-const KEYWORDS = new Set([
-  'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete',
-  'do', 'else', 'export', 'extends', 'false', 'finally', 'for', 'function', 'if', 'import',
-  'in', 'instanceof', 'let', 'new', 'null', 'return', 'super', 'switch', 'this', 'throw',
-  'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield', 'await', 'async', 'of',
-  'static', 'get', 'set', 'from', 'as',
-]);
-
-const REGEX_PREFIX = new Set([
-  '(', '[', '{', ',', ';', ':', '?', '!', '~', '+', '-', '*', '%', '^', '|', '&', '<', '>',
-  '=', '+=', '-=', '*=', '/=', '%=', '**', '**=', '<<', '>>', '>>>', '<<=', '>>=', '>>>=',
-  '&=', '|=', '^=',   '&&', '||', '??', '?.', '=>', ']', '++', '--',
-]);
-
-// Slow path (large modules): scanModule called lineAt() without a line index (O(file) per item)
-// and collectUsesFast re-tokenized every top-level slice (O(file) × item count).
+import { parse } from 'acorn';
 
 const lineIndexCache = new Map();
 
@@ -40,301 +25,6 @@ function lineAtFromIndex(lineIndex, index) {
     else hi = mid - 1;
   }
   return lo + 1;
-}
-
-function lineAt(text, index, lineIndex) {
-  if (lineIndex) return lineAtFromIndex(lineIndex, index);
-  let line = 1;
-  for (let i = 0; i < index && i < text.length; i++) {
-    if (text.charCodeAt(i) === 10) line++;
-  }
-  return line;
-}
-
-function isIdStart(ch) {
-  return ch === '$' || ch === '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
-}
-
-function isIdPart(ch) {
-  return isIdStart(ch) || (ch >= '0' && ch <= '9');
-}
-
-function isDigit(ch) {
-  return ch >= '0' && ch <= '9';
-}
-
-function canRegexAfter(prev) {
-  if (!prev) return true;
-  if (prev.type === 'keyword') {
-    return ['return', 'typeof', 'void', 'delete', 'case', 'in', 'instanceof', 'throw', 'new', 'yield', 'await', 'of'].includes(prev.value);
-  }
-  if (prev.type === 'punct') {
-    return REGEX_PREFIX.has(prev.value);
-  }
-  return false;
-}
-
-function createLexer(text, start = 0) {
-  const lineIndex = buildLineIndex(text);
-  let pos = start;
-  let line = lineAt(text, start, lineIndex);
-  let prevSignificant = null;
-
-  function peek(i = 0) {
-    return pos + i < text.length ? text[pos + i] : '';
-  }
-
-  function advance(n = 1) {
-    for (let k = 0; k < n; k++) {
-      if (pos < text.length && text.charCodeAt(pos) === 10) line++;
-      pos++;
-    }
-  }
-
-  function skipShebang() {
-    if (start === 0 && text.startsWith('#!', start)) {
-      while (pos < text.length && text.charCodeAt(pos) !== 10) pos++;
-    }
-  }
-
-  skipShebang();
-
-  function readIdentifier() {
-    const s = pos;
-    advance();
-    while (pos < text.length && isIdPart(peek())) advance();
-    const value = text.slice(s, pos);
-    const type = KEYWORDS.has(value) ? 'keyword' : 'identifier';
-    return { type, value, start: s, end: pos, line };
-  }
-
-  function readString(quote) {
-    const s = pos;
-    advance();
-    while (pos < text.length) {
-      const ch = peek();
-      if (ch === '\\') {
-        advance(2);
-        continue;
-      }
-      if (ch === quote) {
-        advance();
-        break;
-      }
-      if (ch === '\n' && quote !== '`') break;
-      advance();
-    }
-    return { type: 'string', value: text.slice(s, pos), start: s, end: pos, line };
-  }
-
-  function readTemplate() {
-    const s = pos;
-    advance();
-    let exprDepth = 0;
-    let nestedTpl = 0;
-    while (pos < text.length) {
-      const ch = peek();
-      if (ch === '\\') {
-        advance(2);
-        continue;
-      }
-      if (ch === '`') {
-        if (exprDepth > 0) {
-          if (nestedTpl === 0) {
-            advance();
-            nestedTpl = 1;
-            continue;
-          }
-          nestedTpl--;
-          advance();
-          continue;
-        }
-        advance();
-        break;
-      }
-      if (ch === '$' && peek(1) === '{' && nestedTpl === 0) {
-        advance(2);
-        exprDepth++;
-        continue;
-      }
-      if (ch === '{' && exprDepth > 0) {
-        exprDepth++;
-        advance();
-        continue;
-      }
-      if (ch === '}' && exprDepth > 0) {
-        exprDepth--;
-        advance();
-        continue;
-      }
-      advance();
-    }
-    return { type: 'template', value: text.slice(s, pos), start: s, end: pos, line };
-  }
-
-  function readRegex() {
-    const s = pos;
-    advance();
-    let inClass = false;
-    while (pos < text.length) {
-      const ch = peek();
-      if (ch === '\\') {
-        advance(2);
-        continue;
-      }
-      if (ch === '[' && !inClass) {
-        inClass = true;
-        advance();
-        continue;
-      }
-      if (ch === ']' && inClass) {
-        inClass = false;
-        advance();
-        continue;
-      }
-      if (ch === '/' && !inClass) {
-        advance();
-        while (pos < text.length && /[a-z]/i.test(peek())) advance();
-        break;
-      }
-      if (ch === '\n') break;
-      advance();
-    }
-    return { type: 'regex', value: text.slice(s, pos), start: s, end: pos, line };
-  }
-
-  function readNumber() {
-    const s = pos;
-    if (peek() === '0' && (peek(1) === 'x' || peek(1) === 'X')) {
-      advance(2);
-      while (pos < text.length && /[0-9a-fA-F]/.test(peek())) advance();
-    } else if (peek() === '0' && (peek(1) === 'o' || peek(1) === 'O')) {
-      advance(2);
-      while (pos < text.length && /[0-7]/.test(peek())) advance();
-    } else if (peek() === '0' && (peek(1) === 'b' || peek(1) === 'B')) {
-      advance(2);
-      while (pos < text.length && /[01]/.test(peek())) advance();
-    } else {
-      while (pos < text.length && isDigit(peek())) advance();
-      if (peek() === '.') {
-        if (isDigit(peek(1))) {
-          advance();
-          while (pos < text.length && isDigit(peek())) advance();
-        } else if (peek(1) === 'e' || peek(1) === 'E') {
-          advance();
-        }
-      }
-      if (peek() === 'e' || peek() === 'E') {
-        advance();
-        if (peek() === '+' || peek() === '-') advance();
-        while (pos < text.length && isDigit(peek())) advance();
-      }
-      if (peek() === 'n') advance();
-    }
-    return { type: 'number', value: text.slice(s, pos), start: s, end: pos, line };
-  }
-
-  function readPunct() {
-    const s = pos;
-    const two = text.slice(pos, pos + 3);
-    const pairs = [
-      '===', '!==', '>>>', '<<=', '>>=', '>>>=', '**=', '??=', '&&=', '||=',
-      '...', '**', '<<', '>>', '&&', '||', '??', '?.', '=>', '==', '!=', '<=', '>=',
-      '+=', '-=', '*=', '/=', '%=', '^=', '|=', '&=',
-    ];
-    for (const p of pairs) {
-      if (text.startsWith(p, pos)) {
-        advance(p.length);
-        const tok = { type: 'punct', value: p, start: s, end: pos, line };
-        prevSignificant = tok;
-        return tok;
-      }
-    }
-    const ch = peek();
-    advance();
-    const tok = { type: 'punct', value: ch, start: s, end: pos, line };
-    prevSignificant = tok;
-    return tok;
-  }
-
-  function nextToken(significantOnly = false) {
-    while (pos < text.length) {
-      const ch = peek();
-      if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n' || ch === '\f' || ch === '\v') {
-        advance();
-        continue;
-      }
-      if (ch === '/' && peek(1) === '/') {
-        while (pos < text.length && text.charCodeAt(pos) !== 10) advance();
-        if (!significantOnly) continue;
-        advance();
-        continue;
-      }
-      if (ch === '/' && peek(1) === '*') {
-        advance(2);
-        while (pos < text.length && !(text.charCodeAt(pos) === 42 && text.charCodeAt(pos + 1) === 47)) advance();
-        if (pos < text.length) advance(2);
-        if (!significantOnly) continue;
-        continue;
-      }
-      if (ch === '"' || ch === "'") {
-        const tok = readString(ch);
-        prevSignificant = tok;
-        return tok;
-      }
-      if (ch === '`') {
-        const tok = readTemplate();
-        prevSignificant = tok;
-        return tok;
-      }
-      if (ch === '/' && canRegexAfter(prevSignificant)) {
-        const tok = readRegex();
-        prevSignificant = tok;
-        return tok;
-      }
-      if (isIdStart(ch)) {
-        const tok = readIdentifier();
-        prevSignificant = tok;
-        return tok;
-      }
-      if (isDigit(ch) || (ch === '.' && isDigit(peek(1)))) {
-        const tok = readNumber();
-        prevSignificant = tok;
-        return tok;
-      }
-      return readPunct();
-    }
-    return { type: 'eof', value: '', start: pos, end: pos, line };
-  }
-
-  return {
-    get position() { return pos; },
-    set position(p) {
-      pos = p;
-      line = lineAt(text, p, lineIndex);
-      prevSignificant = null;
-    },
-    lineIndex,
-    next: nextToken,
-    cloneState() { return { pos, line, prevSignificant }; },
-    restoreState(st) {
-      pos = st.pos;
-      line = st.line;
-      prevSignificant = st.prevSignificant;
-    },
-  };
-}
-
-function skipGap(text, pos) {
-  while (pos < text.length) {
-    const lineStart = pos;
-    while (pos < text.length && text.charCodeAt(pos) !== 10) pos++;
-    const line = text.slice(lineStart, pos).trim();
-    if (line !== '') return lineStart;
-    if (pos < text.length) pos++;
-    else break;
-  }
-  return pos;
 }
 
 function extendStartWithComments(text, start, minPos) {
@@ -380,581 +70,723 @@ function extendEndNewline(text, end) {
   return end;
 }
 
-function asiForbidden(next) {
-  if (!next || next.type === 'eof') return true;
-  if (next.type === 'punct') return ['(', '[', '`', '++', '--', '.', '?.'].includes(next.value);
-  if (next.type === 'keyword') return ['else', 'catch', 'finally', 'while', 'in', 'of'].includes(next.value);
-  return false;
-}
-
-function findStatementEnd(lexer, text, start) {
-  lexer.position = start;
-  let depth = 0;
-  let paren = 0;
-  let bracket = 0;
-  let lastEnd = start;
-
-  const first = lexer.next();
-  if (first.type === 'eof') return { end: start, empty: true };
-  lastEnd = first.end;
-
-  let isDecl = first.type === 'keyword' && ['class', 'function'].includes(first.value);
-  if (first.type === 'keyword' && first.value === 'export') {
-    const st = lexer.cloneState();
-    const n = lexer.next();
-    if (n.type === 'keyword' && (n.value === 'function' || n.value === 'class')) {
-      isDecl = true;
-    } else if (n.type === 'keyword' && n.value === 'async') {
-      const n2 = lexer.next();
-      if (n2.type === 'keyword' && n2.value === 'function') isDecl = true;
-    } else if (n.type === 'punct' && (n.value === '{' || n.value === '*')) {
-      isDecl = false;
-    } else {
-      lexer.restoreState(st);
-    }
-  }
-  if (first.type === 'keyword' && first.value === 'async') {
-    const st = lexer.cloneState();
-    const n = lexer.next();
-    if (n.type === 'keyword' && n.value === 'function') isDecl = true;
-    else lexer.restoreState(st);
-  }
-
-  for (;;) {
-    const tok = lexer.next();
-    if (tok.type === 'eof') return { end: lastEnd };
-    lastEnd = tok.end;
-
-    if (tok.type === 'punct') {
-      if (tok.value === '{') depth++;
-      else if (tok.value === '}') {
-        depth = Math.max(0, depth - 1);
-        if (depth === 0 && paren === 0 && bracket === 0 && isDecl) {
-          const st = lexer.cloneState();
-          const n = lexer.next();
-          if (n.type === 'punct' && n.value === ';') return { end: n.end };
-          if (asiForbidden(n)) return { end: tok.end };
-          lexer.restoreState(st);
-          return { end: tok.end };
-        }
-      } else if (tok.value === '(') paren++;
-      else if (tok.value === ')') paren = Math.max(0, paren - 1);
-      else if (tok.value === '[') bracket++;
-      else if (tok.value === ']') bracket = Math.max(0, bracket - 1);
-      else if (tok.value === ';' && depth === 0 && paren === 0 && bracket === 0) return { end: tok.end };
-    }
-  }
-}
-
-function splitTopLevel(text) {
-  const spans = [];
-  const lexer = createLexer(text, 0);
-  let pos = 0;
-  if (text.startsWith('#!')) {
-    const nl = text.indexOf('\n');
-    pos = nl === -1 ? text.length : nl + 1;
-  }
-  let prevEnd = 0;
+function skipGap(text, pos) {
   while (pos < text.length) {
-    pos = skipGap(text, pos);
-    if (pos >= text.length) break;
+    const lineStart = pos;
+    while (pos < text.length && text.charCodeAt(pos) !== 10) pos++;
+    const line = text.slice(lineStart, pos).trim();
+    if (line !== '') return lineStart;
+    if (pos < text.length) pos++;
+    else break;
+  }
+  return pos;
+}
+
+function parseSource(text) {
+  const comments = [];
+  const base = {
+    ecmaVersion: 'latest',
+    allowHashBang: true,
+    allowAwaitOutsideFunction: true,
+    ranges: true,
+    onComment: comments,
+  };
+  try {
+    const ast = parse(text, { ...base, sourceType: 'module' });
+    return { ast, comments };
+  } catch (err) {
+    if (!/^Export '[^']+' is not defined/.test(String(err.message))) throw err;
+    comments.length = 0;
+    const ast = parse(text, {
+      ...base,
+      sourceType: 'script',
+      allowImportExportEverywhere: true,
+    });
+    return { ast, comments };
+  }
+}
+
+function topLevelSpans(text, body) {
+  const spans = [];
+  let prevEnd = 0;
+  for (let i = 0; i < body.length; i++) {
+    const node = body[i];
     const minStart = prevEnd;
-    let rawStart = pos;
-    rawStart = extendStartWithComments(text, rawStart, minStart);
+    const pos = skipGap(text, prevEnd);
+    let rawStart = extendStartWithComments(text, pos, minStart);
     if (spans.length === 0 && text.startsWith('#!') && rawStart > 0) rawStart = 0;
-    const { end: rawEnd, empty } = findStatementEnd(lexer, text, rawStart);
-    if (empty) break;
-    let end = extendEndNewline(text, rawEnd);
-    spans.push({ start: rawStart, end });
-    prevEnd = end;
-    pos = end;
+    const rawEnd = extendEndNewline(text, node.end);
+    spans.push({ start: rawStart, end: rawEnd, node });
+    prevEnd = rawEnd;
   }
   return spans;
 }
 
-function skipBalanced(lx, open, close) {
-  let depth = 1;
-  while (depth > 0) {
-    const t = lx.next();
-    if (t.type === 'eof') return;
-    if (t.type === 'punct') {
-      if (t.value === open) depth++;
-      else if (t.value === close) depth--;
-    }
-  }
-}
-
-function declarePattern(lx, text, declare) {
-  const t = lx.next();
-  if (t.type === 'identifier') {
-    const n = lx.next();
-    if (n.type === 'punct' && n.value === ':') declarePattern(lx, text, declare);
-    else declare(t.value);
-    if (n.type !== 'eof') lx.restoreState({ pos: n.start, line: lineAt(text, n.start), prevSignificant: null });
-    return;
-  }
-  if (t.type === 'punct' && (t.value === '{' || t.value === '[')) {
-    const open = t.value;
-    const close = open === '{' ? '}' : ']';
-    let depth = 1;
-    while (depth > 0) {
-      const inner = lx.next();
-      if (inner.type === 'eof') return;
-      if (inner.type === 'punct' && inner.value === open) depth++;
-      else if (inner.type === 'punct' && inner.value === close) depth--;
-      else if (depth === 1 && inner.type === 'punct' && inner.value === '...') {
-        const id = lx.next();
-        if (id.type === 'identifier') declare(id.value);
-      } else if (depth === 1 && inner.type === 'identifier') {
-        const n = lx.next();
-        if (n.type === 'punct' && n.value === ':') declarePattern(lx, text, declare);
-        else declare(inner.value);
-        if (n.type !== 'eof') lx.restoreState({ pos: n.start, line: lineAt(text, n.start), prevSignificant: null });
-      }
-    }
-  }
-}
-
-function skipDeclaratorValue(lx) {
-  let depth = 0;
-  let paren = 0;
-  let bracket = 0;
-  for (;;) {
-    const t = lx.next();
-    if (t.type === 'eof') return;
-    if (t.type === 'punct') {
-      if (t.value === '{') depth++;
-      else if (t.value === '}') depth--;
-      else if (t.value === '(') paren++;
-      else if (t.value === ')') paren--;
-      else if (t.value === '[') bracket++;
-      else if (t.value === ']') bracket--;
-      else if (t.value === ',' && depth === 0 && paren === 0 && bracket === 0) {
-        lx.restoreState({ pos: t.start, line: 1, prevSignificant: null });
-        return;
-      }
-      else if (t.value === ';' && depth === 0 && paren === 0 && bracket === 0) return;
-    }
-  }
-}
-
-function collectDeclNames(lexer, names, text) {
-  const t = lexer.next();
-  if (t.type === 'identifier') {
-    const n = lexer.next();
-    if (n.type === 'punct' && n.value === ':') {
-      const sub = new Set();
-      declarePattern(lexer, text, (nm) => sub.add(nm));
-      for (const nm of sub) names.add(nm);
-    } else {
-      names.add(t.value);
-      if (n.type !== 'eof') lexer.restoreState({ pos: n.start, line: lineAt(text, n.start), prevSignificant: null });
-    }
-    skipDeclaratorValue(lexer);
-    return;
-  }
-  if (t.type === 'punct' && (t.value === '{' || t.value === '[')) {
-    lexer.restoreState({ pos: t.start, line: lineAt(text, t.start), prevSignificant: null });
-    declarePattern(lexer, text, (nm) => names.add(nm));
-    skipDeclaratorValue(lexer);
-  }
-}
-
-function usesInTemplate(templateText) {
-  const extra = new Set();
-  let i = 0;
-  while (i < templateText.length) {
-    if (templateText[i] === '$' && templateText[i + 1] === '{') {
-      i += 2;
-      let depth = 1;
-      const start = i;
-      while (i < templateText.length && depth > 0) {
-        if (templateText[i] === '{') depth++;
-        else if (templateText[i] === '}') depth--;
-        i++;
-      }
-      const expr = templateText.slice(start, i - 1);
-      for (const u of collectUses(expr)) extra.add(u);
-      continue;
-    }
-    i++;
-  }
-  return extra;
-}
-
-function tokenBoundsForSpan(tokens, start, end) {
-  let lo = 0;
-  let hi = tokens.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (tokens[mid].end <= start) lo = mid + 1;
-    else hi = mid;
-  }
-  const i0 = lo;
-  lo = i0;
-  hi = tokens.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (tokens[mid].start < end) lo = mid + 1;
-    else hi = mid;
-  }
-  return [i0, lo];
-}
-
-function tokenizeAll(text) {
-  const tokens = [];
-  const lx = createLexer(text, 0);
-  for (;;) {
-    const t = lx.next();
-    tokens.push(t);
-    if (t.type === 'eof') break;
-  }
-  return tokens;
-}
-
-function collectUsesFastFromTokens(tokens, i0, i1, text) {
-  if (i0 >= i1) return new Set();
-  const sliceStart = tokens[i0].start;
-  const sliceEnd = tokens[i1 - 1]?.end ?? sliceStart;
-  return collectUses(text.slice(sliceStart, sliceEnd));
-}
-
-function collectUsesFast(text) {
-  const tokens = tokenizeAll(text);
-  const [i0, i1] = tokenBoundsForSpan(tokens, 0, text.length);
-  return collectUsesFastFromTokens(tokens, i0, i1, text);
-}
-
-function collectUses(text) {
-  const uses = new Set();
-  const scopes = [new Set()];
-  const declare = (name) => scopes[scopes.length - 1].add(name);
-  const isBound = (name) => {
-    for (let i = scopes.length - 1; i >= 0; i--) {
-      if (scopes[i].has(name)) return true;
-    }
-    return false;
-  };
-
-  const lx = createLexer(text, 0);
-  let afterDot = false;
-  let objectKey = false;
-  let arrowParenStack = null;
-  let destrBracketStack = null;
-  let prevTok = null;
-  let classBodyDepth = 0;
-  let blockDepth = 0;
-
-  for (;;) {
-    const tok = lx.next();
-    if (tok.type === 'eof') break;
-
-    if (afterDot) {
-      afterDot = false;
-      continue;
-    }
-
-    if (tok.type === 'punct') {
-      if (tok.value === '.' || tok.value === '?.') afterDot = true;
-      else if (tok.value === '{') {
-        scopes.push(new Set());
-        const blockBrace = prevTok && (
-          (prevTok.type === 'punct' && [')', '}', ';', '=>'].includes(prevTok.value))
-          || (prevTok.type === 'keyword' && ['else', 'try', 'catch', 'finally', 'do'].includes(prevTok.value))
-        );
-        objectKey = !blockBrace;
-        blockDepth++;
-      } else if (tok.value === '}') {
-        if (scopes.length > 1) scopes.pop();
-        objectKey = false;
-        blockDepth = Math.max(0, blockDepth - 1);
-        if (classBodyDepth > 0 && blockDepth < classBodyDepth) classBodyDepth = 0;
-      } else if (tok.value === ',') objectKey = true;
-      else if (tok.value === '[' && !objectKey && !(arrowParenStack && arrowParenStack.length > 0)) {
-        if (!destrBracketStack) destrBracketStack = [];
-        destrBracketStack.push({ names: [] });
-      } else if (tok.value === ']' && destrBracketStack && destrBracketStack.length > 0) {
-        const level = destrBracketStack.pop();
-        const st = lx.cloneState();
-        const n = lx.next();
-        if (n.type === 'punct' && n.value === '=') {
-          for (const p of level.names) declare(p);
-        } else {
-          for (const p of level.names) {
-            if (!isBound(p)) uses.add(p);
+function collectDeclarationNames(pattern, names) {
+  if (!pattern) return;
+  switch (pattern.type) {
+    case 'Identifier':
+      names.push(pattern.name);
+      break;
+    case 'ObjectPattern':
+      for (const prop of pattern.properties) {
+        if (prop.type === 'Property') {
+          if (prop.value.type === 'AssignmentPattern') {
+            collectDeclarationNames(prop.value.left, names);
+          } else {
+            collectDeclarationNames(prop.value, names);
           }
-          lx.restoreState(st);
-        }
-        if (destrBracketStack.length === 0) destrBracketStack = null;
-      } else if (tok.value === '(') {
-        const noArrow = prevTok && prevTok.type === 'keyword'
-          && ['if', 'for', 'while', 'switch', 'catch', 'function', 'with', 'return', 'typeof', 'void', 'delete', 'new'].includes(prevTok.value);
-        if (!noArrow) {
-          if (!arrowParenStack) arrowParenStack = [];
-          arrowParenStack.push({ names: [] });
-        }
-      } else if (tok.value === ')' && arrowParenStack && arrowParenStack.length > 0) {
-        const level = arrowParenStack.pop();
-        const st = lx.cloneState();
-        const n = lx.next();
-        if (n.type === 'punct' && n.value === '=>') {
-          for (const p of level.names) declare(p);
-        } else {
-          for (const p of level.names) {
-            if (!isBound(p)) uses.add(p);
-          }
-          lx.restoreState(st);
-        }
-        if (arrowParenStack.length === 0) arrowParenStack = null;
-      } else objectKey = false;
-      prevTok = tok;
-      continue;
-    }
-
-    if (tok.type === 'keyword') {
-      if (tok.value === 'function') {
-        const n = lx.next();
-        if (n.type === 'punct' && n.value === '*') {
-          const id = lx.next();
-          if (id.type === 'identifier') declare(id.value);
-        } else if (n.type === 'identifier') declare(n.value);
-        else if (n.type !== 'eof') lx.restoreState({ pos: n.start, line: lineAt(text, n.start), prevSignificant: null });
-        const open = lx.next();
-        if (open.type === 'punct' && open.value === '(') {
-          let depth = 1;
-          while (depth > 0) {
-            const p = lx.next();
-            if (p.type === 'eof') break;
-            if (p.type === 'punct' && p.value === '(') depth++;
-            else if (p.type === 'punct' && p.value === ')') depth--;
-            else if (depth === 1 && p.type === 'punct' && p.value === '...') {
-              const id = lx.next();
-              if (id.type === 'identifier') declare(id.value);
-            } else if (depth === 1 && p.type === 'identifier') {
-              const nxt = lx.next();
-              if (nxt.type === 'punct' && nxt.value === '=>') {
-                lx.restoreState({ pos: p.start, line: lineAt(text, p.start), prevSignificant: null });
-                break;
-              }
-              declare(p.value);
-              if (nxt.type !== 'eof') lx.restoreState({ pos: nxt.start, line: lineAt(text, nxt.start), prevSignificant: null });
-            } else if (depth === 1 && p.type === 'punct' && (p.value === '{' || p.value === '[')) {
-              lx.restoreState({ pos: p.start, line: lineAt(text, p.start), prevSignificant: null });
-              declarePattern(lx, text, declare);
-            }
-          }
-        }
-        const bodyOpen = lx.next();
-        if (bodyOpen.type === 'punct' && bodyOpen.value === '{') {
-          blockDepth++;
-          objectKey = false;
-          scopes.push(new Set());
-          prevTok = bodyOpen;
-        } else if (bodyOpen.type !== 'eof') {
-          lx.restoreState({ pos: bodyOpen.start, line: lineAt(text, bodyOpen.start), prevSignificant: null });
-        }
-        continue;
-      }
-      if (tok.value === 'class') {
-        const n = lx.next();
-        if (n.type === 'identifier') declare(n.value);
-        const open = lx.next();
-        if (open.type === 'punct' && open.value === '{') {
-          blockDepth++;
-          classBodyDepth = blockDepth;
-          scopes.push(new Set());
-          objectKey = false;
-        } else if (open.type !== 'eof') {
-          lx.restoreState({ pos: open.start, line: lineAt(text, open.start), prevSignificant: null });
-        }
-        continue;
-      }
-      if (tok.value === 'get' || tok.value === 'set') {
-        const n = lx.next();
-        if (n.type === 'identifier') declare(n.value);
-        continue;
-      }
-      if (tok.value === 'const' || tok.value === 'let' || tok.value === 'var') {
-        for (;;) {
-          const id = lx.next();
-          if (id.type === 'eof') break;
-          if (id.type === 'identifier') {
-            const n = lx.next();
-            if (n.type === 'punct' && n.value === ':') declarePattern(lx, text, declare);
-            else {
-              declare(id.value);
-              if (n.type !== 'eof') lx.restoreState({ pos: n.start, line: lineAt(text, n.start), prevSignificant: null });
-            }
-          } else if (id.type === 'punct' && (id.value === '{' || id.value === '[')) {
-            lx.restoreState({ pos: id.start, line: lineAt(text, id.start), prevSignificant: null });
-            declarePattern(lx, text, declare);
-          }
-          const sep = lx.next();
-          if (sep.type === 'punct' && sep.value === ',') continue;
-          if (sep.type !== 'eof') lx.restoreState({ pos: sep.start, line: lineAt(text, sep.start), prevSignificant: null });
-          break;
-        }
-      } else if (tok.value === 'catch') {
-        const n = lx.next();
-        if (n.type === 'punct' && n.value === '(') {
-          const id = lx.next();
-          if (id.type === 'identifier') declare(id.value);
-        }
-        prevTok = tok;
-        continue;
-      } else {
-        prevTok = tok;
-        continue;
-      }
-    }
-
-    if (tok.type === 'template') {
-      if (prevTok && prevTok.type === 'identifier' && !isBound(prevTok.value)) {
-        uses.add(prevTok.value);
-      }
-      for (const u of usesInTemplate(tok.value)) {
-        if (!isBound(u)) uses.add(u);
-      }
-      prevTok = tok;
-      continue;
-    }
-
-    if (tok.type === 'identifier') {
-      if (destrBracketStack && destrBracketStack.length > 0) {
-        destrBracketStack[destrBracketStack.length - 1].names.push(tok.value);
-      } else if (arrowParenStack && arrowParenStack.length > 0) {
-        arrowParenStack[arrowParenStack.length - 1].names.push(tok.value);
-      }
-      const n = lx.next();
-      if (n.type === 'punct' && n.value === ':') {
-        if (!objectKey && blockDepth === 0) {
-          declare(tok.value);
-          prevTok = tok;
-          continue;
-        }
-        if (objectKey) declare(tok.value);
-        continue;
-      }
-      if (n.type === 'punct' && n.value === '=>') {
-        declare(tok.value);
-        continue;
-      }
-      if (n.type === 'punct' && n.value === '(') {
-        if (objectKey || classBodyDepth > 0) {
-          declare(tok.value);
-          if (n.type !== 'eof') lx.restoreState({ pos: n.start, line: lineAt(text, n.start), prevSignificant: null });
-          prevTok = tok;
-          continue;
+        } else if (prop.type === 'RestElement') {
+          collectDeclarationNames(prop.argument, names);
         }
       }
-      const inArrowList = arrowParenStack && arrowParenStack.length > 0;
-      const inDestrBracket = destrBracketStack && destrBracketStack.length > 0;
-      if (!inArrowList && !inDestrBracket && !isBound(tok.value)) uses.add(tok.value);
-      if (n.type !== 'eof') lx.restoreState({ pos: n.start, line: lineAt(text, n.start), prevSignificant: null });
-      objectKey = false;
-      prevTok = tok;
-      continue;
-    }
-    prevTok = tok;
+      break;
+    case 'ArrayPattern':
+      for (const el of pattern.elements) {
+        if (!el) continue;
+        if (el.type === 'RestElement') collectDeclarationNames(el.argument, names);
+        else if (el.type === 'AssignmentPattern') collectDeclarationNames(el.left, names);
+        else collectDeclarationNames(el, names);
+      }
+      break;
+    case 'AssignmentPattern':
+      collectDeclarationNames(pattern.left, names);
+      break;
+    case 'RestElement':
+      collectDeclarationNames(pattern.argument, names);
+      break;
+    default:
+      break;
   }
-
-  return uses;
 }
 
-function parseItemMeta(slice) {
-  const lexer = createLexer(slice, 0);
+function parseItemMetaFromNode(node) {
   const names = [];
   let exported = false;
   let kind = 'expression';
+  let inner = node;
 
-  let tok = lexer.next();
-  if (tok.type === 'keyword' && tok.value === 'export') {
+  if (node.type === 'ExportDefaultDeclaration') {
     exported = true;
-    tok = lexer.next();
-    if (tok.type === 'keyword' && tok.value === 'default') {
+    kind = 'export';
+    if (node.declaration?.type === 'Identifier') return { kind, names, exported: true };
+    inner = node.declaration;
+  } else if (node.type === 'ExportNamedDeclaration') {
+    exported = true;
+    if (node.declaration) {
+      inner = node.declaration;
+    } else if (node.source) {
       kind = 'export';
+      for (const spec of node.specifiers) {
+        if (spec.exported.type === 'Identifier') names.push(spec.exported.name);
+        else if (spec.local.type === 'Identifier') names.push(spec.local.name);
+      }
       return { kind, names, exported: true };
-    }
-    if (tok.type === 'punct' && tok.value === '{') {
+    } else {
       kind = 'export';
-      for (;;) {
-        const t = lexer.next();
-        if (t.type === 'eof') break;
-        if (t.type === 'punct' && t.value === '}') break;
-        if (t.type === 'identifier') {
-          const n = lexer.next();
-          if (n.type === 'keyword' && n.value === 'as') {
-            const alias = lexer.next();
-            if (alias.type === 'identifier') names.push(alias.value);
-          } else {
-            names.push(t.value);
-            if (n.type !== 'eof') lexer.restoreState({ pos: n.start, line: lineAt(slice, n.start), prevSignificant: null });
-          }
-        }
+      for (const spec of node.specifiers) {
+        if (spec.exported.type === 'Identifier') names.push(spec.exported.name);
       }
       return { kind, names, exported: true };
     }
-    if (tok.type === 'punct' && tok.value === '*') {
-      kind = 'export';
-      return { kind, names, exported: true };
-    }
+  } else if (node.type === 'ExportAllDeclaration') {
+    return { kind: 'export', names, exported: true };
   }
 
-  if (tok.type === 'keyword' && tok.value === 'import') {
+  if (inner.type === 'ImportDeclaration') {
     kind = 'import';
-    for (;;) {
-      const t = lexer.next();
-      if (t.type === 'eof') break;
-      if (t.type === 'keyword' && t.value === 'from') break;
-      if (t.type === 'identifier') names.push(t.value);
-      if (t.type === 'punct' && t.value === ',') continue;
+    for (const spec of inner.specifiers) {
+      if (spec.local.type === 'Identifier') names.push(spec.local.name);
     }
     return { kind, names, exported: false };
   }
 
-  if (tok.type === 'keyword' && tok.value === 'async') {
-    const n = lexer.next();
-    if (n.type === 'keyword' && n.value === 'function') {
-      kind = 'function';
-      const id = lexer.next();
-      if (id.type === 'identifier') names.push(id.value);
-      return { kind, names, exported };
-    }
-  }
-
-  if (tok.type === 'keyword' && tok.value === 'function') {
+  if (inner.type === 'FunctionDeclaration') {
     kind = 'function';
-    const star = lexer.next();
-    if (star.type === 'punct' && star.value === '*') {
-      const id = lexer.next();
-      if (id.type === 'identifier') names.push(id.value);
-    } else if (star.type === 'identifier') {
-      names.push(star.value);
-    }
+    if (inner.id) names.push(inner.id.name);
     return { kind, names, exported };
   }
 
-  if (tok.type === 'keyword' && tok.value === 'class') {
+  if (inner.type === 'ClassDeclaration') {
     kind = 'class';
-    const id = lexer.next();
-    if (id.type === 'identifier') names.push(id.value);
+    if (inner.id) names.push(inner.id.name);
     return { kind, names, exported };
   }
 
-  if (tok.type === 'keyword' && ['const', 'let', 'var'].includes(tok.value)) {
+  if (inner.type === 'VariableDeclaration') {
     kind = 'declaration';
-    const nameSet = new Set();
-    for (;;) {
-      collectDeclNames(lexer, nameSet, slice);
-      const sep = lexer.next();
-      if (sep.type === 'punct' && sep.value === ',') continue;
-      break;
+    for (const decl of inner.declarations) {
+      collectDeclarationNames(decl.id, names);
     }
-    names.push(...nameSet);
     return { kind, names, exported };
   }
 
   return { kind, names, exported };
+}
+
+function createScope(parent) {
+  return {
+    parent,
+    lexical: new Set(),
+    var: new Set(),
+    hoistedFuncs: new Set(),
+  };
+}
+
+function scopeLookup(scope, name) {
+  for (let s = scope; s; s = s.parent) {
+    if (s.lexical.has(name) || s.var.has(name) || s.hoistedFuncs.has(name)) return true;
+  }
+  return false;
+}
+
+function bindLexical(scope, name) {
+  scope.lexical.add(name);
+}
+
+function bindVar(scope, name) {
+  let s = scope;
+  while (s) {
+    if (s.var) {
+      s.var.add(name);
+      return;
+    }
+    s = s.parent;
+  }
+}
+
+function collectPatternDefaultUses(pattern, uses, scope) {
+  if (!pattern) return;
+  switch (pattern.type) {
+    case 'AssignmentPattern':
+      collectUsesFromNode(pattern.right, uses, scope);
+      collectPatternDefaultUses(pattern.left, uses, scope);
+      break;
+    case 'ObjectPattern':
+      for (const prop of pattern.properties) {
+        if (prop.type === 'Property') {
+          if (prop.value.type === 'AssignmentPattern') {
+            collectUsesFromNode(prop.value.right, uses, scope);
+            collectPatternDefaultUses(prop.value.left, uses, scope);
+          } else {
+            collectPatternDefaultUses(prop.value, uses, scope);
+          }
+        } else if (prop.type === 'RestElement') {
+          collectPatternDefaultUses(prop.argument, uses, scope);
+        }
+      }
+      break;
+    case 'ArrayPattern':
+      for (const el of pattern.elements) {
+        if (!el) continue;
+        collectPatternDefaultUses(el, uses, scope);
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+function bindPattern(scope, pattern, kind) {
+  if (!pattern) return;
+  const bind = kind === 'var' ? (n) => bindVar(scope, n) : (n) => bindLexical(scope, n);
+  switch (pattern.type) {
+    case 'Identifier':
+      bind(pattern.name);
+      break;
+    case 'ObjectPattern':
+      for (const prop of pattern.properties) {
+        if (prop.type === 'Property') {
+          if (prop.value.type === 'AssignmentPattern') bindPattern(scope, prop.value.left, kind);
+          else bindPattern(scope, prop.value, kind);
+        } else if (prop.type === 'RestElement') {
+          bindPattern(scope, prop.argument, kind);
+        }
+      }
+      break;
+    case 'ArrayPattern':
+      for (const el of pattern.elements) {
+        if (!el) continue;
+        if (el.type === 'RestElement') bindPattern(scope, el.argument, kind);
+        else if (el.type === 'AssignmentPattern') bindPattern(scope, el.left, kind);
+        else bindPattern(scope, el, kind);
+      }
+      break;
+    case 'AssignmentPattern':
+      bindPattern(scope, pattern.left, kind);
+      break;
+    case 'RestElement':
+      bindPattern(scope, pattern.argument, kind);
+      break;
+    default:
+      break;
+  }
+}
+
+function hoistFunctionScopeBody(scope, body) {
+  if (!body) return;
+  if (body.type !== 'BlockStatement') return;
+  for (const stmt of body.body) {
+    if (stmt.type === 'FunctionDeclaration' && stmt.id) {
+      scope.hoistedFuncs.add(stmt.id.name);
+    } else if (stmt.type === 'VariableDeclaration' && stmt.kind === 'var') {
+      for (const decl of stmt.declarations) {
+        bindPattern(scope, decl.id, 'var');
+      }
+    }
+  }
+}
+
+function collectUsesFromNode(node, uses, scope) {
+  if (!node || typeof node !== 'object') return;
+
+  switch (node.type) {
+    case 'Program':
+      for (const stmt of node.body) collectUsesFromNode(stmt, uses, scope);
+      return;
+
+    case 'BlockStatement': {
+      const blockScope = createScope(scope);
+      hoistFunctionScopeBody(blockScope, node);
+      for (const stmt of node.body) collectUsesFromNode(stmt, uses, blockScope);
+      return;
+    }
+
+    case 'FunctionDeclaration': {
+      const fnScope = createScope(scope);
+      if (node.id) bindLexical(fnScope, node.id.name);
+      hoistFunctionScopeBody(fnScope, node.body);
+      for (const param of node.params) {
+        collectPatternDefaultUses(param, uses, fnScope);
+        bindPattern(fnScope, param, 'lexical');
+      }
+      collectUsesFromNode(node.body, uses, fnScope);
+      return;
+    }
+
+    case 'FunctionExpression':
+    case 'ArrowFunctionExpression': {
+      const fnScope = createScope(scope);
+      if (node.id) bindLexical(fnScope, node.id.name);
+      hoistFunctionScopeBody(fnScope, node.body);
+      for (const param of node.params) {
+        collectPatternDefaultUses(param, uses, fnScope);
+        bindPattern(fnScope, param, 'lexical');
+      }
+      if (node.body.type === 'BlockStatement') collectUsesFromNode(node.body, uses, fnScope);
+      else collectUsesFromNode(node.body, uses, fnScope);
+      return;
+    }
+
+    case 'ClassDeclaration': {
+      const classScope = createScope(scope);
+      if (node.id) bindLexical(classScope, node.id.name);
+      if (node.superClass) collectUsesFromNode(node.superClass, uses, classScope);
+      collectClassBody(node.body, uses, classScope);
+      return;
+    }
+
+    case 'ClassExpression': {
+      const classScope = createScope(scope);
+      if (node.id) bindLexical(classScope, node.id.name);
+      if (node.superClass) collectUsesFromNode(node.superClass, uses, classScope);
+      collectClassBody(node.body, uses, classScope);
+      return;
+    }
+
+    case 'VariableDeclaration': {
+      const kind = node.kind;
+      for (const decl of node.declarations) {
+        if (kind === 'var') bindPattern(scope, decl.id, 'var');
+        else bindPattern(scope, decl.id, 'lexical');
+        if (decl.init) collectUsesFromNode(decl.init, uses, scope);
+      }
+      return;
+    }
+
+    case 'ImportDeclaration':
+      for (const spec of node.specifiers) {
+        if (spec.local.type === 'Identifier') bindLexical(scope, spec.local.name);
+      }
+      return;
+
+    case 'ExportNamedDeclaration':
+      if (node.declaration) {
+        collectUsesFromNode(node.declaration, uses, scope);
+      } else {
+        for (const spec of node.specifiers) {
+          if (spec.local.type === 'Identifier' && !scopeLookup(scope, spec.local.name)) {
+            uses.add(spec.local.name);
+          }
+        }
+      }
+      return;
+
+    case 'ExportDefaultDeclaration':
+      collectUsesFromNode(node.declaration, uses, scope);
+      return;
+
+    case 'ExportAllDeclaration':
+      return;
+
+    case 'CatchClause': {
+      const catchScope = createScope(scope);
+      if (node.param) bindPattern(catchScope, node.param, 'lexical');
+      collectUsesFromNode(node.body, uses, catchScope);
+      return;
+    }
+
+    case 'ForStatement': {
+      const forScope = createScope(scope);
+      if (node.init) {
+        if (node.init.type === 'VariableDeclaration') {
+          const kind = node.init.kind;
+          for (const decl of node.init.declarations) {
+            if (kind === 'var') bindPattern(forScope, decl.id, 'var');
+            else bindPattern(forScope, decl.id, 'lexical');
+            if (decl.init) collectUsesFromNode(decl.init, uses, forScope);
+          }
+        } else {
+          collectUsesFromNode(node.init, uses, forScope);
+        }
+      }
+      if (node.test) collectUsesFromNode(node.test, uses, forScope);
+      if (node.update) collectUsesFromNode(node.update, uses, forScope);
+      collectUsesFromNode(node.body, uses, forScope);
+      return;
+    }
+
+    case 'ForInStatement':
+    case 'ForOfStatement': {
+      const forScope = createScope(scope);
+      if (node.left.type === 'VariableDeclaration') {
+        const kind = node.left.kind;
+        for (const decl of node.left.declarations) {
+          if (kind === 'var') bindPattern(forScope, decl.id, 'var');
+          else bindPattern(forScope, decl.id, 'lexical');
+          if (decl.init) collectUsesFromNode(decl.init, uses, forScope);
+        }
+      } else {
+        bindPattern(forScope, node.left, 'lexical');
+      }
+      collectUsesFromNode(node.right, uses, forScope);
+      collectUsesFromNode(node.body, uses, forScope);
+      return;
+    }
+
+    case 'LabeledStatement':
+      collectUsesFromNode(node.body, uses, scope);
+      return;
+
+    case 'Identifier':
+      if (node.name === 'undefined') return;
+      if (!scopeLookup(scope, node.name)) uses.add(node.name);
+      return;
+
+    case 'MemberExpression':
+      collectUsesFromNode(node.object, uses, scope);
+      if (node.computed) collectUsesFromNode(node.property, uses, scope);
+      return;
+
+    case 'ChainExpression':
+      collectUsesFromNode(node.expression, uses, scope);
+      return;
+
+    case 'Property': {
+      if (node.computed) collectUsesFromNode(node.key, uses, scope);
+      if (node.shorthand) {
+        if (node.key.type === 'Identifier' && !scopeLookup(scope, node.key.name)) {
+          uses.add(node.key.name);
+        }
+      } else {
+        collectUsesFromNode(node.value, uses, scope);
+      }
+      return;
+    }
+
+    case 'AssignmentExpression':
+      if (node.left.type === 'MemberExpression') {
+        collectUsesFromNode(node.left, uses, scope);
+      } else if (node.left.type === 'Identifier') {
+        if (!scopeLookup(scope, node.left.name)) uses.add(node.left.name);
+      } else if (node.left.type === 'ObjectPattern' || node.left.type === 'ArrayPattern') {
+        collectAssignmentPatternUses(node.left, uses, scope);
+      } else {
+        collectUsesFromNode(node.left, uses, scope);
+      }
+      collectUsesFromNode(node.right, uses, scope);
+      return;
+
+    case 'AssignmentPattern':
+      bindPattern(scope, node.left, 'lexical');
+      collectUsesFromNode(node.right, uses, scope);
+      return;
+
+    case 'RestElement':
+      bindPattern(scope, node.argument, 'lexical');
+      return;
+
+    case 'SpreadElement':
+      collectUsesFromNode(node.argument, uses, scope);
+      return;
+
+    case 'TaggedTemplateExpression':
+      collectUsesFromNode(node.tag, uses, scope);
+      collectUsesFromNode(node.quasi, uses, scope);
+      return;
+
+    case 'TemplateLiteral':
+      for (const expr of node.expressions) collectUsesFromNode(expr, uses, scope);
+      return;
+
+    case 'MetaProperty':
+      return;
+
+    case 'Super':
+    case 'ThisExpression':
+      return;
+
+    case 'PrivateIdentifier':
+      return;
+
+    case 'ClassBody':
+      collectClassBody(node, uses, scope);
+      return;
+
+    case 'MethodDefinition':
+    case 'PropertyDefinition': {
+      if (node.computed) collectUsesFromNode(node.key, uses, scope);
+      if (node.value) collectUsesFromNode(node.value, uses, scope);
+      return;
+    }
+
+    case 'UnaryExpression':
+    case 'UpdateExpression':
+    case 'AwaitExpression':
+    case 'YieldExpression':
+      collectUsesFromNode(node.argument, uses, scope);
+      return;
+
+    case 'BinaryExpression':
+    case 'LogicalExpression':
+      collectUsesFromNode(node.left, uses, scope);
+      collectUsesFromNode(node.right, uses, scope);
+      return;
+
+    case 'ConditionalExpression':
+      collectUsesFromNode(node.test, uses, scope);
+      collectUsesFromNode(node.consequent, uses, scope);
+      collectUsesFromNode(node.alternate, uses, scope);
+      return;
+
+    case 'SequenceExpression':
+      for (const expr of node.expressions) collectUsesFromNode(expr, uses, scope);
+      return;
+
+    case 'CallExpression':
+    case 'NewExpression':
+      collectUsesFromNode(node.callee, uses, scope);
+      for (const arg of node.arguments) {
+        if (arg?.type === 'SpreadElement') collectUsesFromNode(arg.argument, uses, scope);
+        else collectUsesFromNode(arg, uses, scope);
+      }
+      return;
+
+    case 'ArrayExpression':
+      for (const el of node.elements) {
+        if (!el) continue;
+        if (el.type === 'SpreadElement') collectUsesFromNode(el.argument, uses, scope);
+        else collectUsesFromNode(el, uses, scope);
+      }
+      return;
+
+    case 'ObjectExpression':
+      for (const prop of node.properties) {
+        if (prop.type === 'SpreadElement') collectUsesFromNode(prop.argument, uses, scope);
+        else collectUsesFromNode(prop, uses, scope);
+      }
+      return;
+
+    case 'ExpressionStatement':
+      collectUsesFromNode(node.expression, uses, scope);
+      return;
+
+    case 'ReturnStatement':
+    case 'ThrowStatement':
+      if (node.argument) collectUsesFromNode(node.argument, uses, scope);
+      return;
+
+    case 'IfStatement':
+      collectUsesFromNode(node.test, uses, scope);
+      collectUsesFromNode(node.consequent, uses, scope);
+      if (node.alternate) collectUsesFromNode(node.alternate, uses, scope);
+      return;
+
+    case 'SwitchStatement':
+      collectUsesFromNode(node.discriminant, uses, scope);
+      for (const cs of node.cases) {
+        for (const c of cs.consequent) collectUsesFromNode(c, uses, scope);
+      }
+      return;
+
+    case 'TryStatement':
+      collectUsesFromNode(node.block, uses, scope);
+      if (node.handler) collectUsesFromNode(node.handler, uses, scope);
+      if (node.finalizer) collectUsesFromNode(node.finalizer, uses, scope);
+      return;
+
+    case 'WhileStatement':
+    case 'DoWhileStatement':
+      collectUsesFromNode(node.test, uses, scope);
+      collectUsesFromNode(node.body, uses, scope);
+      return;
+
+    case 'BreakStatement':
+    case 'ContinueStatement':
+    case 'EmptyStatement':
+    case 'DebuggerStatement':
+      return;
+
+    case 'Literal':
+    case 'RegExpLiteral':
+      return;
+
+    default:
+      for (const key of Object.keys(node)) {
+        if (key === 'type' || key === 'start' || key === 'end' || key === 'loc' || key === 'range') continue;
+        const child = node[key];
+        if (Array.isArray(child)) {
+          for (const c of child) collectUsesFromNode(c, uses, scope);
+        } else if (child && typeof child.type === 'string') {
+          collectUsesFromNode(child, uses, scope);
+        }
+      }
+      return;
+  }
+}
+
+function collectAssignmentPatternUses(pattern, uses, scope) {
+  if (!pattern) return;
+  switch (pattern.type) {
+    case 'Identifier':
+      return;
+    case 'ObjectPattern':
+      for (const prop of pattern.properties) {
+        if (prop.type === 'Property') {
+          if (prop.value.type === 'AssignmentPattern') {
+            collectAssignmentPatternUses(prop.value.left, uses, scope);
+            collectUsesFromNode(prop.value.right, uses, scope);
+          } else {
+            collectAssignmentPatternUses(prop.value, uses, scope);
+          }
+        } else if (prop.type === 'RestElement') {
+          collectAssignmentPatternUses(prop.argument, uses, scope);
+        }
+      }
+      break;
+    case 'ArrayPattern':
+      for (const el of pattern.elements) {
+        if (!el) continue;
+        if (el.type === 'RestElement') collectAssignmentPatternUses(el.argument, uses, scope);
+        else if (el.type === 'AssignmentPattern') {
+          collectAssignmentPatternUses(el.left, uses, scope);
+          collectUsesFromNode(el.right, uses, scope);
+        } else collectAssignmentPatternUses(el, uses, scope);
+      }
+      break;
+    case 'AssignmentPattern':
+      collectAssignmentPatternUses(pattern.left, uses, scope);
+      collectUsesFromNode(pattern.right, uses, scope);
+      break;
+    case 'RestElement':
+      collectAssignmentPatternUses(pattern.argument, uses, scope);
+      break;
+    default:
+      collectUsesFromNode(pattern, uses, scope);
+      break;
+  }
+}
+
+function collectClassBody(body, uses, scope) {
+  const classScope = createScope(scope);
+  for (const el of body.body) {
+    if (el.type === 'MethodDefinition') {
+      if (el.computed) collectUsesFromNode(el.key, uses, classScope);
+      const methodScope = createScope(classScope);
+      for (const param of el.value.params) {
+        collectPatternDefaultUses(param, uses, methodScope);
+        bindPattern(methodScope, param, 'lexical');
+      }
+      collectUsesFromNode(el.value.body, uses, methodScope);
+    } else if (el.type === 'PropertyDefinition') {
+      if (el.computed) collectUsesFromNode(el.key, uses, classScope);
+      if (el.value) collectUsesFromNode(el.value, uses, classScope);
+    } else if (el.type === 'StaticBlock') {
+      const staticScope = createScope(classScope);
+      for (const stmt of el.body) collectUsesFromNode(stmt, uses, staticScope);
+    } else {
+      collectUsesFromNode(el, uses, classScope);
+    }
+  }
+}
+
+function collectUsesForStatement(node) {
+  const uses = new Set();
+  const scope = createScope(null);
+  collectUsesFromNode(node, uses, scope);
+  const meta = parseItemMetaFromNode(node);
+  for (const n of meta.names) uses.delete(n);
+  return uses;
+}
+
+const opaqueRangeCache = new Map();
+
+function buildOpaqueRanges(text) {
+  let cached = opaqueRangeCache.get(text);
+  if (cached) return cached;
+  const ranges = [];
+  try {
+    const { ast, comments } = parseSource(text);
+    for (const c of comments) {
+      ranges.push([c.start, c.end]);
+    }
+    function walk(node) {
+      if (!node || typeof node !== 'object') return;
+      if (node.type === 'Literal' && typeof node.value === 'string') {
+        ranges.push([node.start, node.end]);
+        return;
+      }
+      if (node.type === 'RegExpLiteral') {
+        ranges.push([node.start, node.end]);
+        return;
+      }
+      if (node.type === 'TemplateLiteral') {
+        ranges.push([node.start, node.end]);
+        return;
+      }
+      for (const key of Object.keys(node)) {
+        if (key === 'type' || key === 'start' || key === 'end' || key === 'loc' || key === 'range') continue;
+        const child = node[key];
+        if (Array.isArray(child)) {
+          for (const c of child) walk(c);
+        } else if (child && typeof child.type === 'string') walk(child);
+      }
+    }
+    walk(ast);
+  } catch {
+    // ignore
+  }
+  opaqueRangeCache.set(text, ranges);
+  return ranges;
+}
+
+/** True when offset sits in whitespace, a comment, string, template, or regex per the parser. */
+export function offsetInScannerOpaque(text, offset) {
+  const ranges = buildOpaqueRanges(text);
+  for (const [start, end] of ranges) {
+    if (start <= offset && offset < end) return true;
+  }
+  return false;
 }
 
 function moduleImportsExports(items) {
@@ -974,39 +806,16 @@ function moduleImportsExports(items) {
   return { imports, exports };
 }
 
-/** True when offset sits in whitespace, a comment, string, template, or regex per this lexer. */
-export function offsetInScannerOpaque(text, offset) {
-  const lx = createLexer(text, 0);
-  while (lx.position < text.length) {
-    const at = lx.position;
-    const tok = lx.next();
-    if (tok.type === 'eof') return false;
-    if (at <= offset && offset < tok.start) return true;
-    if (tok.start <= offset && offset < tok.end) {
-      return tok.type === 'string' || tok.type === 'template' || tok.type === 'regex';
-    }
-    if (tok.end > offset) return false;
-  }
-  return false;
-}
-
 export function scanModule(text) {
   const lineIndex = buildLineIndex(text);
-  const spans = splitTopLevel(text);
-  const fastUses = text.length > 10_000;
-  const allTokens = fastUses ? tokenizeAll(text) : null;
+  const { ast } = parseSource(text);
+  const spans = topLevelSpans(text, ast.body);
   const items = [];
   for (let index = 0; index < spans.length; index++) {
     const span = spans[index];
     const slice = text.slice(span.start, span.end);
-    const meta = parseItemMeta(slice);
-    let uses;
-    if (fastUses) {
-      const [i0, i1] = tokenBoundsForSpan(allTokens, span.start, span.end);
-      uses = collectUsesFastFromTokens(allTokens, i0, i1, text);
-    } else {
-      uses = collectUses(slice);
-    }
+    const meta = parseItemMetaFromNode(span.node);
+    const uses = collectUsesForStatement(span.node);
     items.push({
       index,
       kind: meta.kind,
