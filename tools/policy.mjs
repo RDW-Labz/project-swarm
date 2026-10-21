@@ -53,7 +53,7 @@ export const DEFAULT_RULES = Object.freeze([
     id: 'journal-restore',
     kind: 'journal-restore',
     description:
-      'Auto-approve journal-restore when every path is a generated or routing file (HANDOFF, TASK.md, build-plan.md, docs/state, coordination manifests, .swarm journal or ledger).',
+      'Auto-approve journal-restore when every path is one of the generated routing files: coordination/HANDOFF.md, docs/state/usage-ledger.md, coordination/TASK.md, or docs/scope/build-plan.md.',
   },
   {
     id: 'swarm-update-idle',
@@ -129,13 +129,25 @@ const SETUP_FILES = new Set([
 
 export const POLICY_INITIALIZED_MARKER = '.policy-initialized';
 
+export function normalizePolicyProject(project) {
+  if (typeof project !== 'string') return null;
+  const trimmed = project.trim();
+  if (!trimmed) return null;
+  return trimmed.toLowerCase();
+}
+
 export function normalizeBranchName(branch) {
   if (typeof branch !== 'string') return null;
   let b = branch.trim();
   if (!b) return null;
-  b = b.replace(/^HEAD:/i, '');
+  if (/^HEAD$/i.test(b) || /^HEAD:/i.test(b)) return 'HEAD';
+  b = b.replace(/^refs\/remotes\/[^/]+\//i, '');
   b = b.replace(/^refs\/heads\//i, '');
+  b = b.replace(/^refs\/remotes\//i, '');
+  b = b.replace(/^upstream\//i, '');
   b = b.replace(/^origin\//i, '');
+  const remoteMain = /^[a-zA-Z0-9._-]+\/(main|master|release(?:\/.*)?)$/i.exec(b);
+  if (remoteMain) b = remoteMain[1];
   return b;
 }
 
@@ -143,6 +155,7 @@ export function normalizeBranchName(branch) {
 export function protectedBranchState(branch) {
   const normalized = normalizeBranchName(branch);
   if (normalized === null) return 'unknown';
+  if (normalized === 'HEAD') return 'protected';
   const lower = normalized.toLowerCase();
   if (lower === 'main' || lower === 'master' || lower === 'release' || lower.startsWith('release/')) {
     return 'protected';
@@ -207,18 +220,20 @@ function isSwarmSensitivePath(lowerPath) {
   return tail.split('/').some(swarmSegmentSensitive);
 }
 
+const JOURNAL_RESTORE_EXACT = new Set([
+  'coordination/handoff.md',
+  'docs/state/usage-ledger.md',
+  'coordination/task.md',
+  'docs/scope/build-plan.md',
+]);
+
 function isJournalRestorePath(rel) {
   if (typeof rel !== 'string' || !rel) return false;
   const p = normPath(rel);
   if (pathHasDotDot(p)) return false;
   const lower = p.toLowerCase();
-  if (isSwarmSensitivePath(lower)) return false;
-  if (lower.startsWith('.swarm/')) return true;
-  if (lower === 'task.md' || lower === 'build-plan.md') return true;
-  if (lower === 'coordination/handoff.md' || /^coordination\/handoff\.[^/]+$/.test(lower)) return true;
-  if (lower.startsWith('docs/state/')) return true;
-  if (lower.startsWith('coordination/manifests/') && lower.endsWith('.json')) return true;
-  return false;
+  if (lower.startsWith('.swarm/')) return false;
+  return JOURNAL_RESTORE_EXACT.has(lower);
 }
 
 function ruleIdForKind(kind, facts = {}) {
@@ -346,7 +361,10 @@ export function loadPolicy(filePath, { fs }) {
       try {
         fs.accessSync(marker);
         return { rules: [], error: 'policy file missing after init' };
-      } catch {
+      } catch (markerErr) {
+        if (markerErr?.code && markerErr.code !== 'ENOENT') {
+          return { rules: [], error: String(markerErr.message ?? markerErr) };
+        }
         return { rules: baseEffectiveRules(), error: null };
       }
     }
@@ -365,7 +383,8 @@ export function loadPolicy(filePath, { fs }) {
 
 function ruleApplies(rule, request, facts) {
   if (!rule.enabled) return { ok: false, reason: 'rule disabled' };
-  if (rule.projects?.length) {
+  if (Array.isArray(rule.projects)) {
+    if (rule.projects.length === 0) return { ok: false, reason: 'project not in rule list' };
     const project = request.project ?? facts?.project;
     if (!project || !rule.projects.includes(project)) return { ok: false, reason: 'project not in rule list' };
   }
@@ -390,14 +409,8 @@ function factsForKind(kind, facts = {}, ruleId = null, request = {}) {
       if (!factIsTrue(facts, 'postDeployWatch')) return { ok: false, reason: 'post-deploy watch not configured' };
       if (!factIsTrue(facts, 'autoRollback')) return { ok: false, reason: 'auto-rollback not configured' };
       if (!factIsTrue(facts, 'inMergeOrder')) return { ok: false, reason: 'not in merge order' };
-      if (facts.irreversible === true) return { ok: false, reason: 'irreversible' };
-      if (facts.irreversible !== undefined && facts.irreversible !== false) {
-        return { ok: false, reason: 'irreversible' };
-      }
-      if (facts.pastDailyAutoLimit === true) return { ok: false, reason: 'past daily auto limit' };
-      if (facts.pastDailyAutoLimit !== undefined && facts.pastDailyAutoLimit !== false) {
-        return { ok: false, reason: 'past daily auto limit' };
-      }
+      if (!factIsFalse(facts, 'irreversible')) return { ok: false, reason: 'irreversible' };
+      if (!factIsFalse(facts, 'pastDailyAutoLimit')) return { ok: false, reason: 'past daily auto limit' };
       return { ok: true };
     }
     if (facts.repoClass !== 'swarm') return { ok: false, reason: 'not swarm repo' };
@@ -423,8 +436,7 @@ function factsForKind(kind, facts = {}, ruleId = null, request = {}) {
       return { ok: false, reason: 'invalid branch name' };
     }
     if (branchNeedsOwner(normalized)) return { ok: false, reason: 'protected branch' };
-    if (facts.force === true) return { ok: false, reason: 'force switch' };
-    if (facts.force !== undefined && facts.force !== false) return { ok: false, reason: 'force switch' };
+    if (!factIsFalse(facts, 'force')) return { ok: false, reason: 'force switch' };
     return { ok: true };
   }
   if (kind === 'journal-restore') {
@@ -472,10 +484,7 @@ function factsForKind(kind, facts = {}, ruleId = null, request = {}) {
   }
   if (kind === 'workflow-change') {
     if (!factIsTrue(facts, 'opusReviewPassed')) return { ok: false, reason: 'opus review not passed' };
-    if (facts.isNewWorkflow === true) return { ok: false, reason: 'new workflow' };
-    if (facts.isNewWorkflow !== undefined && facts.isNewWorkflow !== false) {
-      return { ok: false, reason: 'new workflow' };
-    }
+    if (!factIsFalse(facts, 'isNewWorkflow')) return { ok: false, reason: 'new workflow' };
     if (!factIsFalse(facts, 'addsSecrets')) return { ok: false, reason: 'adds secrets' };
     if (!factIsFalse(facts, 'addsDeploy')) return { ok: false, reason: 'adds deploy' };
     if (!factIsFalse(facts, 'addsPublish')) return { ok: false, reason: 'adds publish' };
@@ -486,9 +495,9 @@ function factsForKind(kind, facts = {}, ruleId = null, request = {}) {
     if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
       return { ok: false, reason: 'invalid amount' };
     }
-    const limit = facts.pastDailyAutoLimit;
-    if (limit === true) return { ok: false, reason: 'past daily auto limit' };
-    if (limit !== undefined && limit !== false) return { ok: false, reason: 'past daily auto limit' };
+    const project = normalizePolicyProject(request.project ?? facts.project);
+    if (!project) return { ok: false, reason: 'project missing' };
+    if (!factIsFalse(facts, 'pastDailyAutoLimit')) return { ok: false, reason: 'past daily auto limit' };
     const raised = Number(facts.raisedTodayUsd ?? 0);
     if (!Number.isFinite(raised) || raised < 0) return { ok: false, reason: 'raised today unknown' };
     if (raised + amount > 5) return { ok: false, reason: 'over daily cap' };

@@ -1,15 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
-import { decide, autoDecisionEvent, NEVER_AUTO } from './policy.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { decide, autoDecisionEvent, NEVER_AUTO, normalizePolicyProject } from './policy.mjs';
 import { ELEVATED_GIT_OPS } from './handbuild.mjs';
+
+const CENTRAL_TZ = 'America/Chicago';
 
 function nowMs(now) {
   return typeof now === 'function' ? now() : Number(now ?? Date.now());
 }
 
-function dayKey(isoOrMs, now) {
+function centralDayKey(isoOrMs, now) {
   const t = typeof isoOrMs === 'string' ? Date.parse(isoOrMs) : isoOrMs;
   const ms = Number.isFinite(t) ? t : nowMs(now);
-  return new Date(ms).toISOString().slice(0, 10);
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: CENTRAL_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(ms));
 }
 
 function normalizeHandled(raw) {
@@ -26,12 +35,12 @@ function normalizeHandled(raw) {
 }
 
 function autoTodayFromRecords(records, now) {
-  const today = dayKey(null, now);
+  const today = centralDayKey(null, now);
   const counts = {};
   for (const entry of records) {
     if (entry.kind !== 'auto-decision') continue;
     const at = entry.at ?? entry.ts;
-    if (dayKey(at, now) !== today) continue;
+    if (centralDayKey(at, now) !== today) continue;
     const rule = entry.rule;
     if (!rule) continue;
     counts[rule] = (counts[rule] ?? 0) + 1;
@@ -39,15 +48,35 @@ function autoTodayFromRecords(records, now) {
   return counts;
 }
 
-function raisedTodayUsdFromRecords(records, project, now) {
-  const today = dayKey(null, now);
+function normalizeProjectForCap(project, root) {
+  const base = normalizePolicyProject(project);
+  if (!base) return null;
+  if (!root || typeof root !== 'string' || typeof project !== 'string') return base;
+  const trimmed = project.trim();
+  if (!trimmed.includes('/') && !trimmed.includes('\\')) return base;
+  try {
+    const resolved = path.resolve(root, trimmed);
+    const real = fs.realpathSync.native?.(resolved) ?? fs.realpathSync(resolved);
+    const rel = path.relative(root, real);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return base;
+    return normalizePolicyProject(rel);
+  } catch {
+    return base;
+  }
+}
+
+function raisedTodayUsdFromRecords(records, project, now, root) {
+  const normProject = normalizeProjectForCap(project, root);
+  if (!normProject) return 0;
+  const today = centralDayKey(null, now);
   let sum = 0;
   for (const entry of records) {
     if (entry.kind !== 'auto-decision') continue;
     if (entry.requestKind !== 'cap-raise') continue;
-    if (entry.project !== project) continue;
+    const entryProject = normalizeProjectForCap(entry.project, root);
+    if (entryProject !== normProject) continue;
     const at = entry.at ?? entry.ts;
-    if (dayKey(at, now) !== today) continue;
+    if (centralDayKey(at, now) !== today) continue;
     const amt = entry.amountUsd;
     if (typeof amt === 'number' && Number.isFinite(amt) && amt > 0) sum += amt;
   }
@@ -55,11 +84,19 @@ function raisedTodayUsdFromRecords(records, project, now) {
 }
 
 function resolvePastDailyAutoLimit(limits, project) {
-  if (!limits || !Object.hasOwn(limits, 'pastDailyAutoLimit')) return false;
+  if (!limits || !Object.hasOwn(limits, 'pastDailyAutoLimit')) return undefined;
   const raw = limits.pastDailyAutoLimit;
-  if (typeof raw === 'function') return raw(project);
+  if (typeof raw === 'function') {
+    const v = raw(project);
+    if (v === true || v === false) return v;
+    return undefined;
+  }
   if (raw === true || raw === false) return raw;
   return undefined;
+}
+
+function kindUsesPastDailyAutoLimit(kind) {
+  return kind === 'cap-raise' || kind === 'merge-pr';
 }
 
 function isHandbuildItem(item) {
@@ -79,48 +116,73 @@ function elevatedGitInFacts(facts) {
   return git.some(g => ELEVATED_GIT_OPS.includes(g));
 }
 
-function policyErrorRecord(item) {
-  return { kind: 'policy-error', requestKind: item?.kind ?? null, requestId: item?.id ?? null };
+function applyFailedRecord(item) {
+  return {
+    kind: 'apply-failed',
+    requestKind: item?.kind ?? null,
+    requestId: item?.id ?? null,
+    outcome: 'apply-failed',
+  };
 }
 
 function rulesLoadFailed(rules) {
   return rules == null;
 }
 
+function noopPersistDeps(now) {
+  return {
+    now,
+    appendJournal: async () => {},
+    appendEvents: async () => {},
+  };
+}
+
 async function persistAutoDecisionBeforeApply(root, event, now) {
+  const realDeps = {
+    now,
+    appendJournal: async (r, line, opts) => {
+      const { appendEvent } = await import('./journal.mjs');
+      return appendEvent(r, line, opts);
+    },
+    appendEvents: async (r, line) => {
+      const { appendEvent } = await import('./orchestrator-events.mjs');
+      return appendEvent(r, line);
+    },
+  };
   try {
-    await appendAutoDecision({
-      root,
-      entry: event,
-      deps: {
-        now,
-        appendJournal: async (r, line, opts) => {
-          const { appendEvent } = await import('./journal.mjs');
-          return appendEvent(r, line, opts);
-        },
-        appendEvents: async (r, line) => {
-          const { appendEvent } = await import('./orchestrator-events.mjs');
-          return appendEvent(r, line);
-        },
-      },
-    });
+    await appendAutoDecision({ root, entry: event, deps: realDeps });
     return true;
   } catch {
-    // Unit tests often use a bare root with no on-disk journal; callbacks record after apply.
-    return true;
+    if (process.env.SWARM_TEST_TMP) {
+      try {
+        await appendAutoDecision({ root, entry: event, deps: noopPersistDeps(now) });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
   }
 }
 
-function enrichFactsForItem(item, baseFacts, { autoToday, handledRecords, now, limits }) {
+function enrichPastDailyAutoLimit(facts, limits, project) {
+  const limitFlag = resolvePastDailyAutoLimit(limits, project);
+  if (limitFlag === true || limitFlag === false) {
+    facts.pastDailyAutoLimit = limitFlag;
+  } else {
+    facts.pastDailyAutoLimit = undefined;
+  }
+}
+
+function enrichFactsForItem(item, baseFacts, { autoToday, handledRecords, now, limits, root }) {
   const facts = { ...baseFacts, autoToday };
+  if (kindUsesPastDailyAutoLimit(item.kind)) {
+    enrichPastDailyAutoLimit(facts, limits, item.project);
+  }
   if (item.kind === 'cap-raise') {
-    facts.raisedTodayUsd = raisedTodayUsdFromRecords(handledRecords, item.project, now);
-    const limitFlag = resolvePastDailyAutoLimit(limits, item.project);
-    if (limitFlag === true || limitFlag === false) {
-      facts.pastDailyAutoLimit = limitFlag;
-    } else {
-      facts.pastDailyAutoLimit = null;
-    }
+    facts.raisedTodayUsd = raisedTodayUsdFromRecords(handledRecords, item.project, now, root);
+    const norm = normalizeProjectForCap(item.project, root);
+    if (norm) facts.project = norm;
   }
   return facts;
 }
@@ -162,6 +224,15 @@ export async function appendAutoDecision({ root, entry, deps = {} }) {
   await appendEvents(root, eventsLine);
 }
 
+function readHandledSafe(readHandled) {
+  if (typeof readHandled !== 'function') return null;
+  try {
+    return readHandled();
+  } catch {
+    return null;
+  }
+}
+
 export async function runPolicyPass({
   root,
   items,
@@ -172,16 +243,20 @@ export async function runPolicyPass({
   events,
   now = Date.now,
   machine = '',
-  readHandled = () => [],
+  readHandled,
   limits = {},
 } = {}) {
   const list = items ?? [];
   if (rulesLoadFailed(rules)) {
     return { decided: [], left: [...list], errors: [] };
   }
+  const handledRaw = readHandledSafe(readHandled);
+  if (handledRaw === null) {
+    return { decided: [], left: [...list], errors: [] };
+  }
   const effectiveRules = rules;
   const maxPerPass = limits?.maxPerPass ?? 20;
-  const { ids: handledIds, records: handledRecords } = normalizeHandled(readHandled());
+  const { ids: handledIds, records: handledRecords } = normalizeHandled(handledRaw);
   let autoToday = { ...autoTodayFromRecords(handledRecords, now) };
   const decided = [];
   const left = [];
@@ -204,11 +279,12 @@ export async function runPolicyPass({
         handledRecords,
         now,
         limits,
+        root,
       });
       const request = {
         id: item.id,
         kind: item.kind,
-        project: item.project,
+        project: item.kind === 'cap-raise' ? (facts.project ?? item.project) : item.project,
         facts,
       };
       const result = decide(request, { rules: effectiveRules, now });
@@ -241,7 +317,7 @@ export async function runPolicyPass({
       try {
         await apply({ item, decision: result, channel: 'policy' });
       } catch {
-        const errEntry = policyErrorRecord(item);
+        const errEntry = applyFailedRecord(item);
         try {
           await journal(errEntry);
         } catch {

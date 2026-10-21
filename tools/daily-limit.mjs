@@ -143,6 +143,10 @@ export function resolveDailyLimit({ machine = null, project = null } = {}) {
   if (p?.mode !== undefined) { dailyLimitMode = p.mode; touchProject(); }
   if (p?.ceilingUsd !== undefined) { ceilingUsd = p.ceilingUsd; touchProject(); }
 
+  if (m?.ceilingUsd !== undefined && p?.usd !== undefined && m.ceilingUsd < p.usd) {
+    reports.push('machine.ceilingUsd is below the project daily limit; project spend may hit the hard ceiling before the project limit');
+  }
+
   if (!Number.isFinite(dailyLimitUsd) || dailyLimitUsd <= 0) {
     reports.push('resolved usd invalid, using default');
     dailyLimitUsd = DEFAULT_DAILY_LIMIT_USD;

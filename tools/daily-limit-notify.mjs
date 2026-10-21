@@ -6,6 +6,7 @@ import { dailyLimitNotice, centralDayKey } from './daily-limit.mjs';
 import { sanitizeText } from './journal.mjs';
 
 export const NOTIFIER_STATE_REL = '.swarm/project/daily-limit-notified.json';
+export const NOTIFIER_LOCK_REL = '.swarm/project/daily-limit-notified.lock';
 export const BOARD_BANNER_REL = '.swarm/project/board-banner.json';
 export const SUMMARY_LINES_REL = '.swarm/project/two-hour-summary.ndjson';
 export const NOTIFY_FAIL_LOG_REL = '.swarm/project/daily-limit-notify-failures.ndjson';
@@ -33,6 +34,7 @@ async function readJson(fsImpl, file, fallback) {
     return JSON.parse(await fsImpl.readFile(file, 'utf8'));
   } catch (error) {
     if (error?.code === 'ENOENT') return fallback;
+    if (error instanceof SyntaxError) return { __corrupt: true };
     throw error;
   }
 }
@@ -51,12 +53,36 @@ async function atomicWriteJson(fsImpl, file, data, { mode = 0o600 } = {}) {
   await fsImpl.chmod(file, mode);
 }
 
+async function withNotifierLock(root, fn, { fs: fsImpl = fs, timeoutMs = 10000 } = {}) {
+  const lockDir = path.join(root, NOTIFIER_LOCK_REL);
+  const started = Date.now();
+  await fsImpl.mkdir(path.dirname(lockDir), { recursive: true });
+  for (;;) {
+    try {
+      await fsImpl.mkdir(lockDir);
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (Date.now() - started >= timeoutMs) throw new Error('daily-limit-notify: timed out waiting for notifier lock');
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await fsImpl.rm(lockDir, { recursive: true, force: true });
+  }
+}
+
 async function defaultReadNotified(root, { fs: fsImpl = fs, now = Date.now } = {}) {
   const file = path.join(root, NOTIFIER_STATE_REL);
-  const state = await readJson(fsImpl, file, { day: centralDayKey(now), byProject: {} });
   const day = centralDayKey(now);
-  if (state.day !== day) return { day, byProject: {} };
-  return { day, byProject: state.byProject && typeof state.byProject === 'object' ? state.byProject : {} };
+  const raw = await readJson(fsImpl, file, { day, byProject: {} });
+  if (raw?.__corrupt) {
+    return { day, byProject: {}, replacedCorrupt: true };
+  }
+  if (raw.day !== day) return { day, byProject: {} };
+  return { day, byProject: raw.byProject && typeof raw.byProject === 'object' ? raw.byProject : {} };
 }
 
 async function defaultWriteNotified(root, state, { fs: fsImpl = fs } = {}) {
@@ -135,34 +161,50 @@ export async function notifyDailyLimit({ project, level, billedTodayUsd, setting
   const appendSummaryLine = deps.appendSummaryLine ?? ((r, n) => defaultAppendSummaryLine(r, n, { fs: fsImpl, now }));
   const logFailure = deps.logDeliveryFailure ?? ((r, p) => logDeliveryFailure(r, p, { fs: fsImpl }));
 
-  const state = await readNotified(root);
-  if (notifiedHas(state, project, level)) return { sent: false, reason: 'deduped', notice };
-
-  const key = levelKey(level);
   try {
-    await writeBoardBanner(root, notice);
-    await appendSummaryLine(root, notice);
-    if (isCeilingLevel(level)) {
-      await appendCeilingHuman(root, notice);
-    } else if (typeof deps.appendPhoneInbox === 'function') {
-      await deps.appendPhoneInbox(root, notice);
-    } else if (Number(level) >= 1 && Number(level) <= 3) {
-      await appendFyiNote(root, notice);
-    }
+    return await withNotifierLock(root, async () => {
+      const state = await readNotified(root);
+      if (notifiedHas(state, project, level)) return { sent: false, reason: 'deduped', notice };
+
+      const key = levelKey(level);
+      try {
+        await writeBoardBanner(root, notice);
+        await appendSummaryLine(root, notice);
+        if (isCeilingLevel(level)) {
+          await appendCeilingHuman(root, notice);
+        } else if (typeof deps.appendPhoneInbox === 'function') {
+          await deps.appendPhoneInbox(root, notice);
+        } else if (Number(level) >= 1 && Number(level) <= 3) {
+          await appendFyiNote(root, notice);
+        }
+      } catch (error) {
+        await logFailure(root, {
+          at: new Date(nowMs(now)).toISOString(),
+          project,
+          level: key,
+          error: String(error?.message ?? error).slice(0, 500),
+        });
+        return { sent: false, reason: 'delivery-failed', notice };
+      }
+
+      const byProject = { ...state.byProject };
+      const levels = [...(Array.isArray(byProject[project]) ? byProject[project] : []), key];
+      byProject[project] = levels;
+      await writeNotified(root, { day: state.day, byProject });
+
+      return { sent: true, notice };
+    }, { fs: fsImpl });
   } catch (error) {
-    await logFailure(root, {
-      at: new Date(nowMs(now)).toISOString(),
-      project,
-      level: key,
-      error: String(error?.message ?? error).slice(0, 500),
-    });
+    try {
+      await logFailure(root, {
+        at: new Date(nowMs(now)).toISOString(),
+        project,
+        level: levelKey(level),
+        error: String(error?.message ?? error).slice(0, 500),
+      });
+    } catch {
+      // Unwritable roots (e.g. admission test fixtures) skip failure logging.
+    }
     return { sent: false, reason: 'delivery-failed', notice };
   }
-
-  const byProject = { ...state.byProject };
-  const levels = [...(Array.isArray(byProject[project]) ? byProject[project] : []), key];
-  byProject[project] = levels;
-  await writeNotified(root, { day: state.day, byProject });
-
-  return { sent: true, notice };
 }

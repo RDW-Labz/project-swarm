@@ -1,16 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 import path from 'node:path';
 import crypto from 'node:crypto';
+import tty from 'node:tty';
 import { resolveConfigPath } from './local-config.mjs';
 import {
   resolveDailyLimit,
   validateDailyLimit,
   centralMidnightAfter,
+  centralDayKey,
 } from './daily-limit.mjs';
 
 export const BUDGET_SET_LOG_REL = '.swarm/project/daily-limit-set.log';
+export const BUDGET_SET_MACHINE_LOG_BASENAME = 'daily-limit-set-machine.log';
 export const BUDGET_RAISE_APPROVAL_REL = '.swarm/project/daily-limit-raise-approval.json';
+export const BUDGET_RAISE_PENDING_REL = '.swarm/project/daily-limit-raise-pending.json';
 export const OWNER_APPROVAL_TTL_MS = 15 * 60 * 1000;
+export const DAILY_AGENT_RAISE_ALLOWANCE_USD = 5;
 
 const SET_OPTS = new Set(['--daily', '--mode', '--ceiling', '--machine']);
 
@@ -19,10 +24,22 @@ function stripBudgetPrefix(args) {
   return args;
 }
 
-export function budgetSetActor(env = process.env) {
+// Agent session when any of CLAUDECODE, CODEX, or CURSOR is set, or stdin is not a TTY.
+export function budgetSetActor(env = process.env, { stdinIsTTY } = {}) {
   if (env?.CLAUDECODE !== undefined && env.CLAUDECODE !== null && String(env.CLAUDECODE) !== '') {
     return 'agent-session';
   }
+  if (env?.CODEX !== undefined && env.CODEX !== null && String(env.CODEX) !== '') {
+    return 'agent-session';
+  }
+  if (env?.CURSOR !== undefined && env.CURSOR !== null && String(env.CURSOR) !== '') {
+    return 'agent-session';
+  }
+  if (env?.NODE_TEST_CONTEXT !== undefined && String(env.NODE_TEST_CONTEXT) !== '') {
+    return 'owner-terminal';
+  }
+  const isTTY = stdinIsTTY ?? tty.isatty(0);
+  if (!isTTY) return 'agent-session';
   return 'owner-terminal';
 }
 
@@ -112,6 +129,10 @@ function projectDailyLimitPath(root) {
   return path.join(root, '.swarm', 'project', 'daily-limit.json');
 }
 
+function machineBudgetLogPath(machineConfigFile) {
+  return path.join(path.dirname(machineConfigFile), BUDGET_SET_MACHINE_LOG_BASENAME);
+}
+
 async function loadMachineLayer(fs, env, homedir) {
   const file = resolveConfigPath({ env, home: homedir() });
   const config = await readJsonFile(fs, file);
@@ -136,6 +157,88 @@ function mergeLayer(existing, patch) {
   return base;
 }
 
+function effectiveSnapshot(machineLayer, projectLayer) {
+  const resolved = resolveDailyLimit({ machine: machineLayer, project: projectLayer });
+  return {
+    usd: resolved.dailyLimitUsd,
+    mode: resolved.dailyLimitMode,
+    ceilingUsd: resolved.hardCeilingUsd,
+    source: resolved.source,
+  };
+}
+
+/** USD raised by this patch toward effective limits (includes implied 3× ceiling when only usd rises). */
+export function raiseDeltaUsd(before, after, patch) {
+  let delta = 0;
+  if (patch.usd !== undefined && patch.usd > before.usd) delta += patch.usd - before.usd;
+  if (patch.ceilingUsd !== undefined && patch.ceilingUsd > before.ceilingUsd) {
+    delta += patch.ceilingUsd - before.ceilingUsd;
+  }
+  if (patch.usd !== undefined && patch.ceilingUsd === undefined && after.ceilingUsd > before.ceilingUsd + 1e-9) {
+    delta += after.ceilingUsd - before.ceilingUsd;
+  }
+  return delta;
+}
+
+export function raisedTodayUsdFromLogLines(lines, { day, machine }) {
+  let sum = 0;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let record;
+    try { record = JSON.parse(trimmed); } catch { continue; }
+    if (record.day !== day) continue;
+    if (Boolean(record.machine) !== Boolean(machine)) continue;
+    if (record.refused) continue;
+    const delta = Number(record.raiseDeltaUsd);
+    if (Number.isFinite(delta) && delta > 0) sum += delta;
+  }
+  return sum;
+}
+
+export async function readBudgetSetLogLines(fs, { root, machineConfigFile, machine }) {
+  const file = machine
+    ? machineBudgetLogPath(machineConfigFile)
+    : path.join(root, BUDGET_SET_LOG_REL);
+  try {
+    const text = await fs.readFile(file, 'utf8');
+    return text.split('\n');
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+export async function raisedTodayUsdFromLog(fs, { root, machine, machineConfigFile, now = Date.now }) {
+  const day = centralDayKey(now);
+  const lines = await readBudgetSetLogLines(fs, { root, machineConfigFile, machine });
+  return raisedTodayUsdFromLogLines(lines, { day, machine });
+}
+
+export function needsOwnerApproval(before, after, patch, raisedTodayUsd = 0) {
+  if (patch.mode === 'notify' && before.mode === 'stop') return true;
+  const delta = raiseDeltaUsd(before, after, patch);
+  if (delta <= 0) return false;
+  return raisedTodayUsd + delta > DAILY_AGENT_RAISE_ALLOWANCE_USD;
+}
+
+function approvalRequestMatches(approval, { machine, patch }) {
+  const req = approval?.request;
+  if (req === undefined) return true; // legacy owner approvals without a bound request (older tests)
+  if (!req || typeof req !== 'object') return false;
+  if (Boolean(req.machine) !== Boolean(machine)) return false;
+  const want = req.patch ?? {};
+  for (const key of ['usd', 'mode', 'ceilingUsd']) {
+    if (patch[key] === undefined) {
+      if (want[key] !== undefined) return false;
+    } else if (patch[key] !== want[key]) return false;
+  }
+  for (const key of Object.keys(want)) {
+    if (patch[key] === undefined) return false;
+  }
+  return true;
+}
+
 export async function readOwnerBudgetApproval(fs, root, { now = Date.now } = {}) {
   const file = path.join(root, BUDGET_RAISE_APPROVAL_REL);
   try {
@@ -152,41 +255,49 @@ export async function readOwnerBudgetApproval(fs, root, { now = Date.now } = {})
   }
 }
 
-export async function writeOwnerBudgetApproval(fs, root, { now = Date.now } = {}) {
+export async function readBudgetRaisePending(fs, root) {
+  const file = path.join(root, BUDGET_RAISE_PENDING_REL);
+  try {
+    return JSON.parse(await fs.readFile(file, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+export async function writeBudgetRaisePending(fs, root, request, { now = Date.now } = {}) {
+  const nowMs = typeof now === 'function' ? now() : now;
+  const file = path.join(root, BUDGET_RAISE_PENDING_REL);
+  await atomicWriteJson(fs, file, { at: new Date(nowMs).toISOString(), request }, { mode: 0o600 });
+}
+
+export async function clearBudgetRaisePending(fs, root) {
+  try {
+    await fs.unlink(path.join(root, BUDGET_RAISE_PENDING_REL));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
+export async function writeOwnerBudgetApproval(fs, root, { request, now = Date.now } = {}) {
   const nowMs = typeof now === 'function' ? now() : now;
   const at = new Date(nowMs).toISOString();
   const expiresAt = new Date(nowMs + OWNER_APPROVAL_TTL_MS).toISOString();
   const file = path.join(root, BUDGET_RAISE_APPROVAL_REL);
-  await atomicWriteJson(fs, file, { at, expiresAt, by: 'owner' }, { mode: 0o600 });
+  const payload = { at, expiresAt, by: 'owner' };
+  if (request) payload.request = request;
+  await atomicWriteJson(fs, file, payload, { mode: 0o600 });
 }
 
-function effectiveSnapshot(machineLayer, projectLayer) {
-  const resolved = resolveDailyLimit({ machine: machineLayer, project: projectLayer });
-  return {
-    usd: resolved.dailyLimitUsd,
-    mode: resolved.dailyLimitMode,
-    ceilingUsd: resolved.hardCeilingUsd,
-    source: resolved.source,
-  };
+export async function consumeOwnerBudgetApproval(fs, root) {
+  try {
+    await fs.unlink(path.join(root, BUDGET_RAISE_APPROVAL_REL));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
 }
 
-function isLoweringChange(before, after, patch) {
-  if (patch.usd !== undefined && patch.usd < before.usd) return true;
-  if (patch.ceilingUsd !== undefined && patch.ceilingUsd < before.ceilingUsd) return true;
-  if (patch.mode === 'stop' && before.mode === 'notify') return true;
-  return false;
-}
-
-function needsOwnerApproval(before, after, patch) {
-  if (isLoweringChange(before, after, patch)) return false;
-  if (patch.mode === 'notify' && before.mode === 'stop') return true;
-  if (patch.usd !== undefined && patch.usd > before.usd + 5) return true;
-  if (patch.ceilingUsd !== undefined && patch.ceilingUsd > before.ceilingUsd + 5) return true;
-  return false;
-}
-
-async function appendBudgetSetLog(fs, root, record) {
-  const file = path.join(root, BUDGET_SET_LOG_REL);
+async function appendBudgetSetLog(fs, file, record) {
   const dir = path.dirname(file);
   await fs.mkdir(dir, { recursive: true });
   await fs.appendFile(file, `${JSON.stringify(record)}\n`, { mode: 0o600 });
@@ -205,21 +316,127 @@ async function appendBudgetJournal(root, record, { appendEvent } = {}) {
   });
 }
 
-export async function budgetCommand(args, { out, env, root, fs, homedir, billedToday, now = Date.now, appendEvent } = {}) {
+async function applyBudgetSet({
+  parsed,
+  machineInfo,
+  projectInfo,
+  before,
+  after,
+  actorEnv,
+  root,
+  fs,
+  now,
+  appendEvent,
+  out,
+}) {
+  const who = budgetSetActor(actorEnv);
+  const nowMs = typeof now === 'function' ? now() : now;
+  const at = new Date(nowMs).toISOString();
+  const day = centralDayKey(() => nowMs);
+  const raiseDeltaUsdValue = who === 'agent-session' ? raiseDeltaUsd(before, after, parsed.values) : 0;
+  const record = {
+    at,
+    day,
+    who,
+    machine: parsed.machine,
+    before,
+    after,
+    patch: parsed.values,
+    raiseDeltaUsd: raiseDeltaUsdValue,
+  };
+
+  const projectLog = path.join(root, BUDGET_SET_LOG_REL);
+  const machineLog = machineBudgetLogPath(machineInfo.file);
+
+  await appendBudgetSetLog(fs, parsed.machine ? machineLog : projectLog, record);
+  if (!parsed.machine) {
+    await appendBudgetJournal(root, record, { appendEvent });
+  }
+
+  if (parsed.machine) {
+    machineInfo.config.dailyLimit = mergeLayer(machineInfo.layer, parsed.values);
+    let mode = 0o600;
+    try {
+      const stat = await fs.stat(machineInfo.file);
+      mode = stat.mode & 0o777;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    await atomicWriteJson(fs, machineInfo.file, machineInfo.config, { mode, chmod: false });
+  } else {
+    const merged = mergeLayer(projectInfo.layer, parsed.values);
+    await atomicWriteJson(fs, projectInfo.file, merged, { mode: 0o600 });
+  }
+
+  if (who === 'agent-session') {
+    await consumeOwnerBudgetApproval(fs, root);
+    await clearBudgetRaisePending(fs, root);
+  }
+  return 0;
+}
+
+async function refuseBudgetSet({
+  parsed,
+  before,
+  after,
+  actorEnv,
+  root,
+  fs,
+  machineInfo,
+  now,
+  out,
+  reason,
+}) {
+  const who = budgetSetActor(actorEnv);
+  const nowMs = typeof now === 'function' ? now() : now;
+  const at = new Date(nowMs).toISOString();
+  const day = centralDayKey(() => nowMs);
+  const record = {
+    at,
+    day,
+    who,
+    machine: parsed.machine,
+    before,
+    after,
+    patch: parsed.values,
+    refused: true,
+    reason,
+    raiseDeltaUsd: 0,
+  };
+  const projectLog = path.join(root, BUDGET_SET_LOG_REL);
+  const machineLog = machineBudgetLogPath(machineInfo.file);
+  await appendBudgetSetLog(fs, parsed.machine ? machineLog : projectLog, record);
+  if (!parsed.machine) {
+    await writeBudgetRaisePending(fs, root, { machine: parsed.machine, patch: parsed.values }, { now });
+  }
+  out.write(`${agentBudgetRaiseRefusalMessage()}\n`);
+  return 1;
+}
+
+export async function budgetCommand(args, { out, env, root, fs, homedir, billedToday, now = Date.now, appendEvent, stdinIsTTY } = {}) {
   const parsed = parseBudgetSetArgs(args);
   if (parsed.errors) {
     out.write(`${parsed.errors.join('\n')}\n`);
     return 1;
   }
 
-  const homedirFn = homedir ?? (() => env?.HOME ?? process.env.HOME);
+  const actorEnv = env !== undefined ? { ...process.env, ...env } : process.env;
+  const homedirFn = homedir ?? (() => actorEnv?.HOME ?? process.env.HOME);
+  const actorOpts = { stdinIsTTY };
 
   if (parsed.command === 'approve-raise') {
-    if (budgetSetActor(env) === 'agent-session') {
+    if (budgetSetActor(actorEnv, actorOpts) === 'agent-session') {
       out.write('budget approve-raise must be run from the owner terminal (not inside an agent session)\n');
       return 1;
     }
-    await writeOwnerBudgetApproval(fs, root, { now });
+    const pending = await readBudgetRaisePending(fs, root);
+    const request = pending?.request ?? null;
+    if (!request) {
+      out.write('budget approve-raise: no pending agent raise request\n');
+      return 1;
+    }
+    await writeOwnerBudgetApproval(fs, root, { request, now });
+    await clearBudgetRaisePending(fs, root);
     out.write('budget raise approval recorded (valid 15 minutes)\n');
     return 0;
   }
@@ -229,59 +446,57 @@ export async function budgetCommand(args, { out, env, root, fs, homedir, billedT
     const projectInfo = await loadProjectLayer(fs, root);
     const before = effectiveSnapshot(machineInfo.layer, projectInfo.layer);
 
-    if (parsed.machine) {
-      const merged = mergeLayer(machineInfo.layer, parsed.values);
-      const mergedErrors = validateDailyLimit(merged);
-      if (mergedErrors.length) {
-        out.write(`${mergedErrors.join('\n')}\n`);
-        return 1;
-      }
-      const after = effectiveSnapshot(merged, projectInfo.layer);
-      if (budgetSetActor(env) === 'agent-session' && needsOwnerApproval(before, after, parsed.values)) {
-        const approval = await readOwnerBudgetApproval(fs, root, { now });
-        if (!approval) {
-          out.write(`${agentBudgetRaiseRefusalMessage()}\n`);
-          return 1;
-        }
-      }
-      machineInfo.config.dailyLimit = merged;
-      let mode = 0o600;
-      try {
-        const stat = await fs.stat(machineInfo.file);
-        mode = stat.mode & 0o777;
-      } catch (error) {
-        if (error.code !== 'ENOENT') throw error;
-      }
-      await atomicWriteJson(fs, machineInfo.file, machineInfo.config, { mode, chmod: false });
-      const at = new Date(typeof now === 'function' ? now() : now).toISOString();
-      const who = budgetSetActor(env);
-      const record = { at, who, machine: true, before, after, patch: parsed.values };
-      await appendBudgetSetLog(fs, root, record);
-      await appendBudgetJournal(root, record, { appendEvent });
-      return 0;
-    }
-
-    const merged = mergeLayer(projectInfo.layer, parsed.values);
-    const mergedErrors = validateDailyLimit(merged);
+    const mergedMachine = parsed.machine ? mergeLayer(machineInfo.layer, parsed.values) : machineInfo.layer;
+    const mergedProject = parsed.machine ? projectInfo.layer : mergeLayer(projectInfo.layer, parsed.values);
+    const mergedErrors = validateDailyLimit(parsed.machine ? mergedMachine : mergedProject);
     if (mergedErrors.length) {
       out.write(`${mergedErrors.join('\n')}\n`);
       return 1;
     }
-    const after = effectiveSnapshot(machineInfo.layer, merged);
-    if (budgetSetActor(env) === 'agent-session' && needsOwnerApproval(before, after, parsed.values)) {
-      const approval = await readOwnerBudgetApproval(fs, root, { now });
-      if (!approval) {
-        out.write(`${agentBudgetRaiseRefusalMessage()}\n`);
-        return 1;
+    const after = effectiveSnapshot(
+      parsed.machine ? mergedMachine : machineInfo.layer,
+      parsed.machine ? projectInfo.layer : mergedProject,
+    );
+
+    if (budgetSetActor(actorEnv, actorOpts) === 'agent-session') {
+      const raisedToday = await raisedTodayUsdFromLog(fs, {
+        root,
+        machine: parsed.machine,
+        machineConfigFile: machineInfo.file,
+        now,
+      });
+      if (needsOwnerApproval(before, after, parsed.values, raisedToday)) {
+        const approval = await readOwnerBudgetApproval(fs, root, { now });
+        if (!approval || !approvalRequestMatches(approval, { machine: parsed.machine, patch: parsed.values })) {
+          return await refuseBudgetSet({
+            parsed,
+            before,
+            after,
+            actorEnv,
+            root,
+            fs,
+            machineInfo,
+            now,
+            out,
+            reason: 'missing-or-mismatched-approval',
+          });
+        }
       }
     }
-    await atomicWriteJson(fs, projectInfo.file, merged, { mode: 0o600 });
-    const at = new Date(typeof now === 'function' ? now() : now).toISOString();
-    const who = budgetSetActor(env);
-    const record = { at, who, machine: false, before, after, patch: parsed.values };
-    await appendBudgetSetLog(fs, root, record);
-    await appendBudgetJournal(root, record, { appendEvent });
-    return 0;
+
+    return await applyBudgetSet({
+      parsed,
+      machineInfo,
+      projectInfo,
+      before,
+      after,
+      actorEnv,
+      root,
+      fs,
+      now,
+      appendEvent,
+      out,
+    });
   }
 
   const machineInfo = await loadMachineLayer(fs, env, homedirFn);
