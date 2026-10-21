@@ -63,21 +63,22 @@ async function listFiles(dir,base=dir,out=[]){
 // keeps importing through current/ never sees files change under it. hash8 is the first 8 hex
 // chars of a sha256 over every copied file's relative path and contents, so re-installing
 // identical files resolves to the same dir instead of growing versions/ on every run.
-async function snapshotVersion(source,version){
+export async function snapshotVersion(source,version,{versionsParent=source}={}){
  const files=[...(await listFiles(path.join(source,'tools'))).map(file=>[path.join('tools',file),path.join('tools',file)]),['package.json','package.json'],...(await skillFilePairs(source)).map(([from,to])=>[from,`skills/project-swarm/${to}`])].sort(([a],[b])=>a.localeCompare(b));
  const hash=createHash('sha256');
  for(const [relative] of files){hash.update(relative);hash.update(await fs.readFile(path.join(source,relative)));}
- const versionDir=path.join(source,'versions',`${version}-${hash.digest('hex').slice(0,8)}`);
+ const versionDir=path.join(versionsParent,'versions',`${version}-${hash.digest('hex').slice(0,8)}`);
  let exists=false;
  try{exists=(await fs.stat(versionDir)).isDirectory();}catch(error){if(error.code!=='ENOENT')throw error;}
  if(!exists){
   const tmpDir=`${versionDir}.tmp-${process.pid}`;
+  const runner=path.join(versionsParent,'current/tools/swarm.mjs');
   for(const [relative,target] of files){
    const destination=path.join(tmpDir,target);
    await fs.mkdir(path.dirname(destination),{recursive:true});
    if(target.startsWith('skills/')){
     let content=await fs.readFile(path.join(source,relative),'utf8');
-    content=content.split('{{SWARM_RUNNER}}').join(path.join(source,'current/tools/swarm.mjs'));
+    content=content.split('{{SWARM_RUNNER}}').join(runner);
     if(target.includes('/references/'))content=content.replace(/\]\(\.\.\/(SECURITY|CONTRIBUTING)\.md\)/g,']($1.md)').replace(/\]\(docs\//g,'](');
     await fs.writeFile(destination,content);
    }else await fs.copyFile(path.join(source,relative),destination);
@@ -85,6 +86,15 @@ async function snapshotVersion(source,version){
   await fs.rename(tmpDir,versionDir);
  }
  return versionDir;
+}
+
+export async function versionDirFor(versionsParent,version){
+ const versionsDir=path.join(versionsParent,'versions');
+ let entries;
+ try{entries=await fs.readdir(versionsDir);}catch(error){if(error.code==='ENOENT')return null;throw error;}
+ const prefix=`${version}-`;
+ const name=entries.find(entry=>entry.startsWith(prefix));
+ return name?path.join(versionsDir,name):null;
 }
 
 // Atomically repoints <source>/current at versionDir: a symlink created under a pid-unique
@@ -102,16 +112,23 @@ async function repointCurrent(source,versionDir){
 
 // Keeps the `keep` newest version dirs (by mtime) plus whichever one `current` points to,
 // deleting the rest so versions/ doesn't grow forever.
-export async function pruneVersions(source,{keep=5}={}){
+const versionPartOf=name=>{const match=String(name).match(/^(\d+\.\d+\.\d+)-/);return match?match[1]:null;};
+
+export async function pruneVersions(source,{keep=5,protect=new Set()}={}){
  const versionsDir=path.join(source,'versions');
  let entries;
  try{entries=await fs.readdir(versionsDir,{withFileTypes:true});}catch(error){if(error.code==='ENOENT')return [];throw error;}
  const dirs=entries.filter(entry=>entry.isDirectory()).map(entry=>path.join(versionsDir,entry.name));
  let currentTarget=null;
  try{currentTarget=await fs.realpath(path.join(source,'current'));}catch{currentTarget=null;}
- const stats=await Promise.all(dirs.map(async dir=>({dir,mtimeMs:(await fs.stat(dir)).mtimeMs})));
+ const stats=await Promise.all(dirs.map(async dir=>({dir,mtimeMs:(await fs.stat(dir)).mtimeMs,name:path.basename(dir)})));
  stats.sort((a,b)=>b.mtimeMs-a.mtimeMs);
- const keepSet=new Set(stats.slice(0,keep).map(entry=>entry.dir));
+ const keepSet=new Set();
+ for(const entry of stats){
+  const part=versionPartOf(entry.name);
+  if(part&&protect.has(part))keepSet.add(entry.dir);
+ }
+ for(const entry of stats.slice(0,keep))keepSet.add(entry.dir);
  if(currentTarget)keepSet.add(currentTarget);
  const removed=[];
  for(const entry of stats){
@@ -128,7 +145,10 @@ export async function installUser({source=packageRoot,home=os.homedir(),dev=fals
  const pkg=JSON.parse(await fs.readFile(path.join(source,'package.json'),'utf8'));
  const versionDir=await snapshotVersion(source,pkg.version);
  const currentPath=await repointCurrent(source,versionDir);
- await pruneVersions(source);
+ const {pinnedVersions,readPins}=await import('./pins.mjs');
+ const protect=new Set([...(await pinnedVersions(source)).keys()]);
+ const pinRead=await readPins(source);
+ await pruneVersions(source,{protect});
  const runner=path.join(currentPath,'tools/swarm.mjs');
  const pairs=await skillFilePairs(source);
  const skipped=[],written=[];
@@ -157,7 +177,7 @@ export async function installUser({source=packageRoot,home=os.homedir(),dev=fals
  const record={version:pkg.version,dev,installedAt:new Date().toISOString(),skillTargets:written,versionDir,runner,swarmCommand:swarmCommand.path,completion:completionFile};
  const recordPath=path.join(source,'.swarm-install.json');
  await fs.writeFile(recordPath,`${JSON.stringify(record,null,2)}\n`);
- return {status:'installed',version:pkg.version,source,skillTargets:written,skipped,installRecord:recordPath,versionDir,runner,swarmCommand,completionFile};
+ return {status:'installed',version:pkg.version,source,skillTargets:written,skipped,installRecord:recordPath,versionDir,runner,swarmCommand,completionFile,pinUnreadable:pinRead.unreadable};
 }
 
 const AGENT_START='<!-- project-swarm:start -->';
@@ -326,6 +346,25 @@ async function ensureLocalSettingsIgnored(root){
 // The pointer file `.project-swarm.json` also holds the project's own profile (budget, UI, verify, migrations rule): it is never rewritten from scratch. The old file is copied to
 // `.project-swarm.json.bak-<time>` first, only `install` and `version` change, the new file is written beside it and renamed over it, and a file that is not a JSON object is refused
 // (nothing is written) instead of being replaced by a bare pointer.
+export async function patchPointer(root,patch){
+ const destination=await safeTarget(root,'.project-swarm.json');
+ let before=null,existing={};
+ try{before=await fs.readFile(destination,'utf8');}catch(error){if(error.code!=='ENOENT')throw error;}
+ if(before!==null){
+  try{existing=JSON.parse(before);}catch{throw Error(`.project-swarm.json in ${root} is not valid JSON; fix it by hand (a backup was not needed, nothing was changed)`);}
+  if(!existing||typeof existing!=='object'||Array.isArray(existing))throw Error(`.project-swarm.json in ${root} is not a JSON object; fix it by hand (nothing was changed)`);
+  const next={...existing,...patch};
+  if(JSON.stringify(existing)===JSON.stringify(next))return {changed:false,backup:null};
+  const backup=`${destination}.bak-${Date.now()}-${nodeCrypto.randomBytes(3).toString('hex')}`;
+  await fs.writeFile(backup,before,{flag:'wx',mode:0o600});
+  const temp=`${destination}.tmp-${process.pid}-${Date.now()}`;
+  await fs.writeFile(temp,`${JSON.stringify(next,null,2)}\n`);
+  await fs.rename(temp,destination);
+  return {changed:true,backup};
+ }
+ throw Error(`no .project-swarm.json in ${root}`);
+}
+
 export async function writePointer(root,{install,version}){
  const destination=await safeTarget(root,'.project-swarm.json');
  let before=null,existing={};

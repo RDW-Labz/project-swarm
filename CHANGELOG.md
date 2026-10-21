@@ -1,19 +1,11 @@
 # Changelog
 
-## 1.161.0
+## 1.162.0
 
-Roadmap modules (unwired): the Ticket Manager and manager modules the roadmap waves built, plus eval fixture groups.
-- **Managers:** tools/managers (budget, lane health, version, merge queue, unblocker, visual QA, lessons and the replay framework) and their tests, not yet called from the CLI.
-- **Ticket Manager v2 modules:** ticket path validation, wave simulation before ingest, replan, human progress, wave quarantine and retry context; no callers yet, wiring follows in scope-commands.
-- **Evals:** a folder under evals with a .eval-group marker is a fixture group, not an eval (evals/managers).
-
-## 1.160.0
-
-Board batch 2: split quality and benchmark panels, both Macs on one board, progress from the newest approved ledger, billed-only cap on the board.
-- **Panels:** Split quality panel (R-027) and Benchmark scorecard panel on Swarm Watch.
-- **One board:** both Macs on one board (R-028), a Handled for you list, Open chat (R-029) and capacity pool cards.
-- **Build progress:** a project card follows the newest approved ledger among its linked worktrees, ticket percent comes from the main ledger, per-scope milestones, ETA and requirements covered fixes.
-- **Billed caps on the board:** the cap bar, its label and the forecast follow the billed-only project cap.
+Hotfix: guard regressions from 1.159 and version pinning.
+- **Guard:** orchestrators can file hand-build requests in every invocation form (node PATH/swarm.mjs, --root, env and cd prefixes); only approve, deny, on, off, install, uninstall and decide stay owner-only. The inline-code detector no longer fires on direct script calls.
+- **Read-only forms allowed:** git rev-parse, branch --show-current and listing, remote -v, config --get, ls-files, ls-remote, describe, for-each-ref, merge-base, cat-file, blame, tag -l, stash list, worktree list and more; gh pr, issue, run, release, workflow and repo views and lists, gh auth status, gh api in GET form; vercel git ls. Every write form stays blocked.
+- **Pinning:** a project with pinned true or pinnedVersion x.y.z in .project-swarm.json is skipped by swarm update (printed as skipped, pinned at x.y.z), its hooks and guard are not refreshed, its version is never pruned, update --projects lists pinned projects separately, swarm pin PROJECT VERSION installs the version from its git tag if needed and swarm unpin PROJECT releases it; the board card shows a pinned at x.y.z badge.
 
 ## 1.159.0
 

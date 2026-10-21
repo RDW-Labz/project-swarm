@@ -30,6 +30,8 @@ const HAND_BUILD_GUARD_SCRIPT = /^tools\/handbuild[^/]*\.mjs$/i;
 const SAFE_SWARM = [
   /\bhandbuild\s+request\b/,
   /\bhandbuild\s+status\b/,
+  /\bhandbuild\s+show\b/,
+  /\bhandbuild\s+list\b/,
   /\bswarm\s+go\b/,
   /\bswarm\s+run\b/,
   /\bswarm\s+tickets\b/,
@@ -715,8 +717,17 @@ function plainHasHandbuildSelfAction(plain) {
   const swarmMi = lower.findIndex(w => w === 'swarm.mjs' || w.endsWith('/swarm.mjs') || w.endsWith('\\swarm.mjs'));
   if (swarmMi !== -1) {
     const rest = lower.slice(swarmMi + 1);
-    const hi = rest.indexOf('handbuild');
-    if (hi !== -1 && HAND_BUILD_SELF_ACTIONS.has(rest[hi + 1] ?? '')) return true;
+    let ri = 0;
+    while (ri < rest.length && (rest[ri] === '--root' || rest[ri]?.startsWith('--root='))) {
+      if (rest[ri] === '--root') ri += 2;
+      else ri += 1;
+    }
+    const tail = rest.slice(ri);
+    const hi = tail.indexOf('handbuild');
+    if (hi !== -1 && HAND_BUILD_SELF_ACTIONS.has(tail[hi + 1] ?? '')) return true;
+    const di = tail.indexOf('decide');
+    if (di !== -1 && (tail[di + 2] === 'approve' || tail[di + 2] === 'deny')) return true;
+    if (tail[0] === 'swarm' && tail[1] === 'handbuild' && HAND_BUILD_SELF_ACTIONS.has(tail[2] ?? '')) return true;
   }
   return false;
 }
@@ -731,7 +742,18 @@ function plainHasDecideHandbuildApprove(plain) {
   return false;
 }
 
+function interpreterRunsInlineCode(cmd, args) {
+  return interpreterCodeFlagIndex(cmd, args) !== -1;
+}
+
+/** SWARM_INLINE applies only to inline interpreter code (-e, -c, …), not direct script invocations. */
 function plainHasSwarmInlineRisk(plain) {
+  const { index } = skipToProgram(plain);
+  if (index >= plain.length) return false;
+  const cmd = path.basename(plain[index]);
+  if (!/^(?:node|python3?)$/.test(cmd)) return false;
+  const args = plain.slice(index + 1);
+  if (!interpreterRunsInlineCode(cmd, args)) return false;
   const surface = executablePlainWords(plain).join(' ').toLowerCase();
   return SWARM_INLINE.test(surface);
 }
