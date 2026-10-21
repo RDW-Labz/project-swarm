@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.161.0
+
+Roadmap modules (unwired): the Ticket Manager and manager modules the roadmap waves built, plus eval fixture groups.
+- **Managers:** tools/managers (budget, lane health, version, merge queue, unblocker, visual QA, lessons and the replay framework) and their tests, not yet called from the CLI.
+- **Ticket Manager v2 modules:** ticket path validation, wave simulation before ingest, replan, human progress, wave quarantine and retry context; no callers yet, wiring follows in scope-commands.
+- **Evals:** a folder under evals with a .eval-group marker is a fixture group, not an eval (evals/managers).
+
 ## 1.160.0
 
 Board batch 2: split quality and benchmark panels, both Macs on one board, progress from the newest approved ledger, billed-only cap on the board.
