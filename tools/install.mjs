@@ -10,9 +10,45 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { installSwarmCommand } from './swarm-bin.mjs';
-import { zshCompletion } from './completion.mjs';
 const packageRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const FOLDER_VERSION=/^(\d+\.\d+\.\d+)-/;
+
+async function writeRunnerPackageJson(runnerRoot,version){
+ const pkgPath=path.join(runnerRoot,'package.json');
+ await fs.writeFile(pkgPath,`${JSON.stringify({name:'project-swarm',version},null,2)}\n`);
+}
+
+async function repairRunnerPackageJson(runnerRoot){
+ runnerRoot=await fs.realpath(runnerRoot);
+ if(path.basename(path.dirname(runnerRoot))!=='versions')return {repaired:false};
+ const match=FOLDER_VERSION.exec(path.basename(runnerRoot));
+ const folderVersion=match?match[1]:null;
+ if(!folderVersion)return {repaired:false};
+ const pkgPath=path.join(runnerRoot,'package.json');
+ let stat;
+ try{stat=await fs.lstat(pkgPath);}catch(error){
+  if(error.code==='ENOENT'){await writeRunnerPackageJson(runnerRoot,folderVersion);return {repaired:true};}
+  throw error;
+ }
+ if(stat.isSymbolicLink()){await fs.unlink(pkgPath);await writeRunnerPackageJson(runnerRoot,folderVersion);return {repaired:true};}
+ if(stat.isFile())return {repaired:false};
+ return {repaired:false};
+}
+
+async function migrateVersionPackageJson(installRoot){
+ installRoot=await fs.realpath(installRoot);
+ const versionsDir=path.join(installRoot,'versions');
+ let entries;
+ try{entries=await fs.readdir(versionsDir,{withFileTypes:true});}catch(error){if(error.code==='ENOENT')return [];throw error;}
+ const repaired=[];
+ for(const entry of entries){
+  if(!entry.isDirectory())continue;
+  const runnerRoot=path.join(versionsDir,entry.name);
+  const result=await repairRunnerPackageJson(runnerRoot);
+  if(result.repaired)repaired.push(runnerRoot);
+ }
+ return repaired;
+}
 const execFileAsync=promisify(execFile);
 const AGENT_HOMES=['.claude','.codex'];
 
@@ -144,7 +180,6 @@ export async function installUser({source=packageRoot,home=os.homedir(),dev=fals
  if(!dev&&await gitDirty(source,['tools','skills']))throw Error('Refusing to install from a checkout with uncommitted changes to tools/ or skills/; commit or stash them, or pass --dev for a development checkout');
  const pkg=JSON.parse(await fs.readFile(path.join(source,'package.json'),'utf8'));
  const versionDir=await snapshotVersion(source,pkg.version);
- const {migrateVersionPackageJson}=await import('./runner-version.mjs');
  await migrateVersionPackageJson(source);
  const currentPath=await repointCurrent(source,versionDir);
  const {pinnedVersions,readPins}=await import('./pins.mjs');
@@ -172,6 +207,8 @@ export async function installUser({source=packageRoot,home=os.homedir(),dev=fals
  }
  // A real `swarm` executable for agents and scripts (non-interactive shells never load aliases),
  // and the zsh completion file. Neither edits a shell profile; doctor says what is left to do.
+ const {installSwarmCommand}=await import('./swarm-bin.mjs');
+ const {zshCompletion}=await import('./completion.mjs');
  const swarmCommand=await installSwarmCommand({home,runner});
  const completionFile=path.join(home,'.project-swarm','completions','_swarm');
  await fs.mkdir(path.dirname(completionFile),{recursive:true});

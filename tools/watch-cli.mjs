@@ -111,10 +111,27 @@ async function projectTestFacts(project, { now, liveRuns = [], env = process.env
   };
 }
 
+function projectHiddenFromBoard(project, { scratch, env }) {
+  if (!scratch) {
+    if (project.idleHidden) return true;
+    if (project.testOrTemp) return true;
+    if (project.live) return false;
+    return isBoardTempRoot(project.root, boardProjectOpts(env));
+  }
+  if (project.idleHidden && !project.testOrTemp && !project.live
+    && !isBoardTempRoot(project.root, boardProjectOpts(env))) return true;
+  return false;
+}
+
 async function classifyProjects(projects, { now = Date.now(), liveRuns = [], env = process.env } = {}) {
   return Promise.all(projects.map(async project => {
     const facts = await projectTestFacts(project, { now, liveRuns, env });
-    return { ...project, testOrTemp: isTestOrTempProject(project, facts), idleHidden: Boolean(facts.idleHidden) };
+    return {
+      ...project,
+      testOrTemp: isTestOrTempProject(project, facts),
+      idleHidden: Boolean(facts.idleHidden),
+      live: Boolean(facts.live),
+    };
   }));
 }
 
@@ -417,7 +434,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
   const scratchIds = async () => {
     const all = await listProjects({ file: projectsFile(env) });
     const flagged = await classifyProjects(all, { now: now(), liveRuns: await live(), env });
-    return new Set(flagged.filter(project => project.testOrTemp || isBoardTempRoot(project.root, boardProjectOpts(env))).map(project => project.id));
+    return new Set(flagged.filter(project => project.testOrTemp || (isBoardTempRoot(project.root, boardProjectOpts(env)) && !project.live)).map(project => project.id));
   };
   const find = async id => (await listProjects({ file: projectsFile(env) })).find(p => p.id === id) ?? null;
   const api = {
@@ -436,7 +453,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
         const liveRuns = await live();
         const flagged = await classifyProjects(all, { now: snapshotNow, liveRuns, env });
         // Test and temp projects are left out of everything (lanes, totals, the inbox) unless asked for, so the numbers still add up.
-        const projects = flagged.filter(p => !p.idleHidden && (scratch || !(p.testOrTemp || isBoardTempRoot(p.root, boardProjectOpts(env)))));
+        const projects = flagged.filter(p => !projectHiddenFromBoard(p, { scratch, env }));
         const caps = (() => { try { const lanes = resolveBudget({ config }).lanes ?? {}; return Object.fromEntries(Object.entries(lanes).map(([k, v]) => [k, v?.dailyUsd])); } catch { return {}; } })();
         const configured = (() => { try { return Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k]) => k); } catch { return []; } })();
         const configuredModels = (() => { try { return Object.fromEntries(Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k, v]) => [k, v.model])); } catch { return {}; } })();
@@ -481,7 +498,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
           snapshot.pools = { source: 'stub', pools: [], at: new Date(snapshotNow).toISOString() };
         }
         // What waits for the owner (read-only); a failure here never hides the rest of the board.
-        snapshot.inbox = await boardInbox({ projects, now: now(), env, forOwner: true }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
+        snapshot.inbox = await boardInbox({ projects, now: now(), env, forOwner: !scratch }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
         const scratchProjects = flagged.filter(p => p.testOrTemp && !p.idleHidden);
         snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : scratchProjects.length, total: scratchProjects.length };
         const idleHidden = flagged.filter(p => p.idleHidden).length;

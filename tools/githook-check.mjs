@@ -336,7 +336,7 @@ function defaultReadStagedBlob(root, rel) {
 
 function stagedPathsForCommitMsg(root) {
   try {
-    const zbuf = execFileSync('git', ['ls-files', '-z', '--cached'], {
+    const zbuf = execFileSync('git', ['diff', '--cached', '--name-only', '-z', '--no-renames'], {
       cwd: root,
       encoding: 'buffer',
       timeout: 5000,

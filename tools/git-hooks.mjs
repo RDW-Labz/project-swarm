@@ -39,21 +39,9 @@ if [ -z "$NODE" ] || [ ! -f "$CHECK" ]; then
   exit 0
 fi`;
 
-  const swarmCheckCommitMsg = `
+  const swarmCheck = `
 "$NODE" "$CHECK" ${kind} "$@"
-CODE=$?
-if [ "$CODE" -eq 3 ]; then exit 1; fi
-if [ "$CODE" -ne 0 ]; then echo "swarm git hook: manifest check skipped (infrastructure)" >&2; fi
-exit 0`;
-
-  const swarmCheckOther = `
-"$NODE" "$CHECK" ${kind} "$@"
-CODE=$?
-if [ "$CODE" -ne 0 ]; then
-  echo "swarm git hook: hand-build check skipped (infrastructure)" >&2
-  exit 0
-fi
-exit 0`;
+exit $?`;
 
   if (kind === 'pre-push') {
     return `#!/bin/sh
@@ -73,16 +61,9 @@ if [ -n "$PREV" ] && [ -f "$PREV" ]; then
 fi
 ${infraSkip}
 "$NODE" "$CHECK" ${kind} "$@" < "$STDIN_FILE"
-CODE=$?
-if [ "$CODE" -ne 0 ]; then
-  echo "swarm git hook: hand-build check skipped (infrastructure)" >&2
-  exit 0
-fi
-exit 0
+exit $?
 `;
   }
-
-  const swarmCheck = kind === 'commit-msg' ? swarmCheckCommitMsg : swarmCheckOther;
 
   return `#!/bin/sh
 ${HOOK_MARKER}
