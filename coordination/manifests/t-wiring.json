@@ -64,7 +64,8 @@
         "tests/cap-reroute.test.mjs",
         "tests/ticket-manifest.test.mjs",
         "tests/lessons116.test.mjs",
-        "tests/acceptance-sync.test.mjs"
+        "tests/acceptance-sync.test.mjs",
+        "tests/lesson-39-integrate.test.mjs"
       ],
       "outputs": [
         "tools/swarm.mjs",
@@ -72,7 +73,7 @@
       ],
       "agent": "auto",
       "ignoreTests": [
-        "tests/lesson-39-integrate.test.mjs",
+        "tests/autopilot-ledger-only.test.mjs",
         "tests/watch-leftovers.test.mjs",
         "tests/handbuild-allowlist.test.mjs",
         "tests/cursor-claims.test.mjs",
@@ -104,11 +105,11 @@
         "tests/merge-queue.test.mjs",
         "tests/openrouter.test.mjs",
         "tests/field-lessons-batch-y.test.mjs",
-        "tests/phase10c.test.mjs",
         "tests/rented-run.test.mjs",
         "tests/batch-a-eval.test.mjs",
         "tests/leads-run.test.mjs",
         "tests/batch-run.test.mjs",
+        "tests/phase10c.test.mjs",
         "tests/phase10b-cli.test.mjs",
         "tests/t86-worktree-relocation.test.mjs",
         "tests/field-lessons-batch-m2.test.mjs",
@@ -123,8 +124,8 @@
         "tests/field-lessons-batch-d.test.mjs",
         "tests/security-queue.test.mjs",
         "tests/field-lessons-batch-f.test.mjs",
-        "tests/project-spend.test.mjs",
         "tests/machine-share.test.mjs",
+        "tests/project-spend.test.mjs",
         "tests/field-lessons-batch-r.test.mjs",
         "tests/scheduling.test.mjs",
         "tests/lessons120-mutants.test.mjs",
@@ -164,11 +165,11 @@
         "tests/field-lesson-t81-cli.test.mjs",
         "tests/field-lessons-batch-ah-runtime.test.mjs",
         "tests/codex-adapter.test.mjs",
-        "tests/board-page.test.mjs",
         "tests/field-lessons-batch-e.test.mjs",
         "tests/dogfood-fixes.test.mjs",
         "tests/lessons.test.mjs",
         "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/board-page.test.mjs",
         "tests/claude-shell.test.mjs",
         "tests/field-lessons-batch-w.test.mjs",
         "tests/swarm.test.mjs"
@@ -191,15 +192,17 @@
       "agent": "auto",
       "ignoreTests": [
         "tests/api-short-report.test.mjs",
-        "tests/batch-run.test.mjs",
+        "tests/crash-guards.test.mjs",
         "tests/flat-rate-reserve.test.mjs",
-        "tests/hard-cap.test.mjs",
-        "tests/lanes-run.test.mjs",
-        "tests/phase10c.test.mjs",
-        "tests/phase12-cli.test.mjs",
         "tests/phase14.test.mjs",
-        "tests/project-spend.test.mjs",
+        "tests/dead-run.test.mjs",
+        "tests/hard-cap.test.mjs",
         "tests/rented-run.test.mjs",
+        "tests/batch-run.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/phase12-cli.test.mjs",
         "tests/spend-run.test.mjs",
         "tests/spend.test.mjs"
       ]
@@ -227,13 +230,15 @@
       "ignoreTests": [
         "tests/autopilot-busy.test.mjs",
         "tests/autopilot-lock.test.mjs",
+        "tests/autopilot-no-outputs.test.mjs",
+        "tests/autopilot-ledger-only.test.mjs",
+        "tests/safety-commands.test.mjs",
         "tests/autopilot-start-ready.test.mjs",
-        "tests/autopilot.test.mjs",
+        "tests/phase10c.test.mjs",
         "tests/brain-commands.test.mjs",
         "tests/lessons-28-32-eval.test.mjs",
-        "tests/phase10c.test.mjs",
-        "tests/safety-commands.test.mjs",
-        "tests/scope-loop.test.mjs"
+        "tests/scope-loop.test.mjs",
+        "tests/autopilot.test.mjs"
       ]
     }
   ]
