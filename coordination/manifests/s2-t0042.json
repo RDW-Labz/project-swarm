@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0042",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "timeoutMs": 2700000,
+      "outputs": [
+        "tools/scope-commands.mjs",
+        "tests/scope-ingest-owns-tests.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/wiring.mjs",
+        "tools/ticket-manifest.mjs",
+        "tests/scope-ingest-acceptance.test.mjs",
+        "tests/scope-ingest-paths.test.mjs",
+        "tests/scope-ingest-waves.test.mjs",
+        "tests/scope-root-files.test.mjs"
+      ],
+      "prompt": "Ticket T-0042: wire the build-owns-tests rules into scope split ingest (tools/scope-commands.mjs, the --ingest path around ticketsFromStageLists and the orderTestsAfterBuild call). T-0040 (tools/ticket-manifest.mjs: build tickets own listed tests; criticalPathLength) and T-0041 (tools/wiring.mjs: orderTestsAfterBuild leaves build tickets that own tests unchained, with notes) are already on this branch. Acceptance: (1) scope split --ingest accepts a build ticket that lists tests in its tests field without a separate test ticket: no refusal or wiring gap is raised only because a build ticket's acceptance is proved by its own listed test file (check the acceptance-provable and wiring-gap checks in the ingest), and the T-0041 notes are printed in the ingest report. (2) The ingest report shows a shorter dependency chain than test-first splits: print 'critical path: N tickets' using criticalPathLength from tools/ticket-manifest.mjs, and when any build ticket owns its tests also 'test-first would be M' (computed by counting the chain as if each owned test were a separate test ticket after its build). Tests in tests/scope-ingest-owns-tests.test.mjs drive the ingest with temp fixtures the way tests/scope-ingest-*.test.mjs do. Keep every existing scope-ingest test passing. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Run `node --import ./tests/_isolate-config.mjs --test tests/scope-ingest-owns-tests.test.mjs tests/scope-ingest-acceptance.test.mjs tests/scope-ingest-paths.test.mjs tests/scope-ingest-waves.test.mjs tests/scope-root-files.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/review-recorder-lanes.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-approve-managers.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/scope-delete-tickets.test.mjs",
+        "tests/scope-ingest-sensitive.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scope-ownership.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/scope-spec-gate.test.mjs",
+        "tests/scope-spec-no-runner.test.mjs",
+        "tests/scope-split-lane-size.test.mjs",
+        "tests/scope-sync-delete.test.mjs",
+        "tests/scope-sync-replan.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/ticket-paths-regression.test.mjs",
+        "tests/tickets-delivered.test.mjs",
+        "tests/ui-check.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import tools/scope-commands.mjs for unrelated commands; the coordinator runs the full suite after integration."
+    }
+  ]
+}
