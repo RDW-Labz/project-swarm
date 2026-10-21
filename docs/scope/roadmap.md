@@ -1,0 +1,220 @@
+# Scope: Project Swarm roadmap (audit 2026-10-20)
+Version: 1
+
+## Overview
+Project Swarm builds software with many cheap AI workers, planned and checked by an orchestrator. The audit of 2026-10-20 (parts-request-app, atlas-seafloor, marketing agency, project-swarm) found that the main bottlenecks are bad ticket splitting, owner approvals, workers seeing only committed files, one giant swarm.mjs, idle slots, and serial version bumps. This scope is the checklist to fix them. It is also the first real test of the Swarm Watch "Build progress" view: every requirement below should show up there as progress toward a finished build.
+
+Already merged before this scope (mark their tickets done with the PR as evidence): guard D+E (#208), autopilot P (#209), board hang fix (#212), CI timeouts + push-only-main (#213), executors flake fix (#217), flat-rate $0 reserve E9 (#204), base-check placeholders (#205).
+
+Out of scope: building the 8 managers as separate long-running agents (S6 defines their first version only), GPU lane rental, any project's app features.
+
+## Stages
+- S1: Unblock autonomy
+- S2: Ticket Manager v2
+- S3: Throughput and reliability
+- S4: Visibility on Swarm Watch
+- S5: Operations
+- S6: Managers, first versions
+
+## S1 Unblock autonomy
+### R-001 The policy engine auto-decides routine requests.
+Acceptance:
+- swarm policy init writes the owner's standing approvals as the default rules file.
+- Requests matching a rule are decided without the owner and logged in the journal and Events with the rule id.
+- Merges that deploy a live site, hosted DB migrations, new paid services or keys, and spend past the daily limit are never auto-decided.
+
+### R-002 Autopilot runs for every active project.
+Acceptance:
+- Each project's orchestrator can start swarm autopilot, and it starts go --scope when ready tickets exist, nothing is running, and the cap has room.
+- Autopilot pauses while the orchestrator integrates or runs e2e, and resumes after.
+- swarm orchestrator up (#206) keeps autopilot and the orchestrator running across restarts.
+
+### R-003 Workers see integrated but uncommitted output.
+Acceptance:
+- A job that depends on an earlier integrated run receives a snapshot of the integrated tree automatically.
+- No orchestrator needs a local wip branch or a hand test run to pass state to a worker.
+
+### R-004 tools/swarm.mjs is split into modules.
+Acceptance:
+- swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change.
+- The full suite passes, and two queue items touching different modules can build in the same wave.
+
+### R-005 The guard stops flagging harmless commands.
+Acceptance:
+- The word "claude" in --agent claude, commit trailers, paths and model names is not treated as self-approval.
+- Backticks, $VARS and > inside quoted strings are not treated as writes.
+- Manifests, ledger files and moves to the scratchpad are not counted as hand-built edits.
+
+## S2 Ticket Manager v2
+### R-006 Ticket paths are validated against the repo.
+Acceptance:
+- Every file a ticket writes or reads as context is checked against the real file tree before ingest.
+- A ticket naming a missing file is rejected with the closest real path suggested.
+
+### R-007 Tickets are sized for their lane.
+Acceptance:
+- The splitter sizes tickets by file bytes per lane (for example the Hermes 15 KB limit), not only file count.
+- A ticket too large for every cheap lane is split or routed to a lane that edits in place.
+
+### R-008 A build ticket owns its own tests.
+Acceptance:
+- A build ticket writes or owns the test file that proves it, so there is no build → test → fix chain.
+- The critical path of a typical scope is shorter than before on the same input.
+
+### R-009 Acceptance lines are provable by the ticket itself.
+Acceptance:
+- Every acceptance line can be checked from the ticket's own files plus context the splitter attaches automatically.
+- No acceptance line depends on a later ticket's files.
+
+### R-010 Risk tags are precise.
+Acceptance:
+- Tickets are tagged sensitive only for auth, database, payments, secrets and public routes.
+- A scope like atlas store-wrapper no longer tags every ticket sensitive.
+
+### R-011 The splitter sees existing tickets.
+Acceptance:
+- Done tickets release their files, and only open or running tickets block a file in a wave.
+- New tickets can list existing open tickets as dependsOn.
+
+### R-012 Waves are simulated before ingest.
+Acceptance:
+- Before ingest the swarm simulates waves for the current slot count.
+- If the critical path is over 25% of tickets or average fill is under 50% of slots, it re-splits or asks.
+
+### R-013 A blocked ticket is re-planned automatically.
+Acceptance:
+- A ticket that blocks, or fails twice, is re-split or rerouted without the orchestrator writing a manifest.
+- The re-plan is logged with its reason.
+
+### R-014 Delete, rename and migration tickets work.
+Acceptance:
+- A delete-only ticket passes sync once its files are gone.
+- Rename and migration tickets have their own type with matching checks.
+
+### R-015 Human tickets are a separate owner checklist.
+Acceptance:
+- Human tickets do not count toward build progress or block wave planning.
+- They appear to the owner as a checklist with steps.
+
+## S3 Throughput and reliability
+### R-016 Releases ship as a train.
+Acceptance:
+- Runner changes merge without their own version bump, and one release bump batches them on a schedule or on demand.
+- swarm update still sees a clean version per release.
+
+### R-017 One bad ticket can't hold a wave.
+Acceptance:
+- Failed ticket outputs move to a quarantine folder automatically, and the retry gets them as read-only context.
+- Passing tickets in a wave integrate through the merge queue while the failing one is bisected out.
+
+### R-018 Tests don't flake under load.
+Acceptance:
+- Load-timing tests wait on events, not wall-clock time, and pass 5 runs in a row under artificial load.
+- A flaky test is quarantined and reported, never silently retried to green.
+
+### R-019 Base checks are honest.
+Acceptance:
+- A cached red base is always re-run, and green stays cached.
+- Base checks take a per-checkout lock, and a red base reports which check failed, its exit code and its last lines.
+
+### R-020 Reviews match risk and batch small work.
+Acceptance:
+- Review tier follows risk: Opus for sensitive paths, Sonnet for normal code, Haiku for tests and docs.
+- Small low-risk tickets share one review job.
+- Manifest runs get the same review gate as ledger tickets.
+
+### R-021 Verify runs without a model.
+Acceptance:
+- verify mode "local" runs the ticket's tests itself with no agent and no tokens.
+- Tested tickets can then be built on any lane, including Cursor and Hermes.
+
+### R-022 The machine limit tunes itself.
+Acceptance:
+- The worker limit defaults from cores and free RAM, raises while CPU and RAM allow, and backs off on pressure or lane rate limits.
+- Learned per-lane caps are kept per machine.
+
+## S4 Visibility on Swarm Watch
+### R-023 Build progress shows how close each project is to done.
+Acceptance:
+- Each project card shows % done, the current milestone and an ETA.
+- The project page shows stages, what's left, the milestone strip and spend vs cap.
+- This scope itself is shown correctly as the first test.
+
+### R-024 Deploys are tracked.
+Acceptance:
+- "Deployed" lights up from the repo's Production deploys and shows "not tracked" when there is no data.
+
+### R-025 The board shows only real sessions and real money.
+Acceptance:
+- Exited orchestrator sessions drop off within 5 minutes.
+- Every dollar figure says billed or list value, and caps count billed spend only.
+- Worktrees group under their parent project and share its cap.
+
+### R-026 Idle lanes say why.
+Acceptance:
+- Each idle lane shows its reason: no ready jobs, rate limit, not routed or not set up.
+- A project idle with ready tickets is flagged red.
+
+### R-027 Split quality is graded.
+Acceptance:
+- A Split quality panel per project shows overhead ratio, first-try pass rate, critical path, wave fill, collisions, review $ per ticket and ticket sizes, each green, amber or red.
+
+### R-028 One board covers every machine.
+Acceptance:
+- Projects and orchestrators from the MacBook and the Mac mini appear on one board.
+- Each card shows its machine and swarm version, and version drift is flagged.
+
+### R-029 The owner can act from the board.
+Acceptance:
+- Approve and Deny buttons appear for requests the policy leaves to the owner, tailnet only, with sign-in, a confirm step and an audit log.
+- Merge, deploy and cap actions are refused from the phone or board server-side.
+- Each orchestrator card has an "Open chat" link to its Remote Control session.
+
+## S5 Operations
+### R-030 Orchestrators hand off before their context gets expensive.
+Acceptance:
+- When an orchestrator's context passes a set size, it saves state to memory and a fresh session continues with no lost work.
+
+### R-031 Deploys are watched by the swarm.
+Acceptance:
+- After a merge that deploys, the swarm checks the deploy, health and error logs for 15 minutes and offers rollback on failure.
+
+### R-032 Slots are shared fairly across projects.
+Acceptance:
+- Machine slots are split across active projects by priority, so one project can't starve the others.
+
+### R-033 Licences are enforced as a check.
+Acceptance:
+- Data sources carry their licence, and non-commercial sources are blocked from paid products by a swarm check.
+- Required attribution is checked to be present where the data is shown.
+
+### R-034 Test environments stay clean.
+Acceptance:
+- E2e runs clean up their own local test data, and a local-only cleanup tool refuses non-localhost databases.
+- CI caches or mirrors images so Docker Hub rate limits don't fail runs.
+
+### R-035 Field data from every project improves the swarm.
+Acceptance:
+- swarm field export, push and report work across both machines with metadata only and secret and PII scanning.
+- Each new failure cause becomes a regression test, and lane pass rates feed routing.
+
+## S6 Managers, first versions
+### R-036 Ticket Manager and Unblocker.
+Acceptance:
+- The Ticket Manager keeps at least 5 ready tickets per active project.
+- The Unblocker re-plans blocked tickets (R-013) and reports what it changed.
+
+### R-037 Budget and Lane health managers.
+Acceptance:
+- The Budget manager watches billed spend per project and day and warns before a cap.
+- The Lane health manager detects a lane that is down or rate limited and reroutes.
+
+### R-038 Version and Merge queue managers.
+Acceptance:
+- The Version manager flags machines and projects behind the current release.
+- The Merge queue manager merges green PRs in order under the standing approvals.
+
+### R-039 Visual QA and Lessons keeper.
+Acceptance:
+- Visual QA takes screenshots of changed pages at phone and desktop size and attaches them to the PR.
+- The Lessons keeper turns each logged lesson into a test or a rule and closes it.
