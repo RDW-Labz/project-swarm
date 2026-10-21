@@ -144,3 +144,174 @@ export function removeProject(id, { file = projectsFile() } = {}) {
     return true;
   });
 }
+
+export const FORGET_REGISTRY_ONLY = 'registry only: no project files were touched';
+
+async function normalizeMatchPath(input) {
+  const raw = String(input ?? '');
+  if (!raw) return null;
+  try {
+    return await fs.realpath(raw);
+  } catch {
+    return path.resolve(raw);
+  }
+}
+
+async function projectMatchesInput(project, input) {
+  const raw = String(input);
+  if (project.id === raw) return true;
+  const normInput = await normalizeMatchPath(raw);
+  if (!normInput) return false;
+  let normRoot;
+  try {
+    normRoot = await fs.realpath(project.root);
+  } catch {
+    normRoot = path.resolve(project.root);
+  }
+  return normRoot === normInput || project.root === raw || path.resolve(project.root) === normInput;
+}
+
+async function installRootReal(installRoot) {
+  if (!installRoot) return null;
+  try {
+    return await fs.realpath(installRoot);
+  } catch {
+    return path.resolve(installRoot);
+  }
+}
+
+async function isInstallRootProject(project, installRoot) {
+  const install = await installRootReal(installRoot);
+  if (!install) return false;
+  let root;
+  try {
+    root = await fs.realpath(project.root);
+  } catch {
+    root = path.resolve(project.root);
+  }
+  return root === install;
+}
+
+function forgetFooter() {
+  return `${FORGET_REGISTRY_ONLY}\n`;
+}
+
+/** Drop projects from the machine registry only (never touches project folders). */
+export async function forgetProjects({
+  paths = [],
+  missing = false,
+  scratch = false,
+  dryRun = false,
+  yes = false,
+  file = projectsFile(),
+  env = process.env,
+  home = os.homedir(),
+  installRoot,
+} = {}) {
+  const scratchOpts = { env, home, installRoot };
+  const install = await installRootReal(installRoot);
+
+  const pickFromRegistry = async projects => {
+    const ids = new Set();
+    if (missing) {
+      for (const project of projects) {
+        if (!(await rootExists(project.root))) ids.add(project.id);
+      }
+    }
+    if (scratch) {
+      for (const project of projects) {
+        if (isScratchRoot(project.root, scratchOpts)) ids.add(project.id);
+      }
+    }
+    for (const arg of paths) {
+      const matches = [];
+      for (const project of projects) {
+        if (await projectMatchesInput(project, arg)) matches.push(project);
+      }
+      if (!matches.length) return { error: `not registered: ${arg}`, exitCode: 1 };
+      for (const project of matches) {
+        if (install && (await isInstallRootProject(project, installRoot))) {
+          return { error: 'refusing to forget the swarm install root itself', exitCode: 1 };
+        }
+        ids.add(project.id);
+      }
+      if (install) {
+        const normArg = await normalizeMatchPath(arg);
+        if (normArg && normArg === install) {
+          return { error: 'refusing to forget the swarm install root itself', exitCode: 1 };
+        }
+      }
+    }
+    for (const id of ids) {
+      const project = projects.find(p => p.id === id);
+      if (project && install && (await isInstallRootProject(project, installRoot))) {
+        return { error: 'refusing to forget the swarm install root itself', exitCode: 1 };
+      }
+    }
+    const bulk = missing || scratch;
+    if (bulk && ids.size > 3 && !yes) {
+      return { error: `refusing to forget ${ids.size} projects without --yes (bulk limit is 3)`, exitCode: 1 };
+    }
+    const forgotten = projects.filter(p => ids.has(p.id));
+    const left = projects.filter(p => !ids.has(p.id));
+    return { forgotten, left, ids };
+  };
+
+  if (dryRun) {
+    const projects = await listForWrite(file).catch(() => []);
+    const picked = await pickFromRegistry(projects);
+    if (picked.error) return { stdout: `${picked.error}\n${forgetFooter()}`, exitCode: picked.exitCode };
+    const lines = picked.forgotten.length
+      ? [...picked.forgotten.map(p => `would forget: ${p.id}  ${p.root}`), 'dry run: registry unchanged', 'forgotten projects are listed again the next time swarm runs inside them', forgetFooter().trimEnd()]
+      : ['nothing to forget', forgetFooter().trimEnd()];
+    return { stdout: `${lines.join('\n')}\n`, exitCode: 0 };
+  }
+
+  return serial(async () => {
+    const projects = await listForWrite(file);
+    const picked = await pickFromRegistry(projects);
+    if (picked.error) return { stdout: `${picked.error}\n${forgetFooter()}`, exitCode: picked.exitCode };
+    if (!picked.forgotten.length) {
+      return { stdout: `nothing to forget\n${forgetFooter()}`, exitCode: 0 };
+    }
+    await write(file, picked.left);
+    const lines = [
+      ...picked.forgotten.map(p => `forgot: ${p.id}  ${p.root}`),
+      'forgotten projects are listed again the next time swarm runs inside them',
+      forgetFooter().trimEnd(),
+    ];
+    return { stdout: `${lines.join('\n')}\n`, exitCode: 0 };
+  });
+}
+
+export async function runForgetCommand(args, { env = process.env, home = os.homedir(), installRoot } = {}) {
+  const paths = [];
+  let missing = false;
+  let scratch = false;
+  let dryRun = false;
+  let yes = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const flag = args[i];
+    if (flag === '--dry-run') dryRun = true;
+    else if (flag === '--missing') missing = true;
+    else if (flag === '--scratch') scratch = true;
+    else if (flag === '--yes') yes = true;
+    else if (flag.startsWith('-')) {
+      return { stdout: `unknown flag: ${flag}\n`, exitCode: 2 };
+    } else paths.push(flag);
+  }
+  if (!paths.length && !missing && !scratch) {
+    return { stdout: 'Usage: swarm forget PATH... [--dry-run] [--missing] [--scratch] [--yes]\n', exitCode: 2 };
+  }
+  return forgetProjects({
+    paths,
+    missing,
+    scratch,
+    dryRun,
+    yes,
+    file: projectsFile(env, home),
+    env,
+    home,
+    installRoot,
+  });
+}

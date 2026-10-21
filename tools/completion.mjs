@@ -58,6 +58,7 @@ export const COMMANDS = [
   command('backup', 'Snapshot swarm state (no secrets): backup, backup list, backup verify ID.', 'none', '--reason --json'),
   command('restore', 'Restore swarm state from a backup (shows the plan until --yes).', 'none', '--yes'),
   command('projects', 'The projects on this machine (listed on the Swarm Watch board): list, add, remove.', 'none', ''),
+  command('forget', 'Drop projects from the machine registry (does not touch project files).', 'none', '--dry-run --missing --scratch --yes'),
   command('history', 'The machine-wide history of projects, stages, runs, PRs, merges, lessons and spend: filter, search, CSV.', 'none', '--project --kind --q --from --to --limit --csv --backfill'),
   command('models', 'Model watch: new open coding models that fit our GPUs and new API versions, into the inbox; compare models from eval runs.', 'none', '--force --json'),
   command('with-concurrency', 'Run one swarm command with machineConcurrency set to N, and put the old value back when it ends (Ctrl-C, crash or kill included).', 'none', ''),
