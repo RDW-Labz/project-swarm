@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Git pre-commit and pre-push hooks: enforce hand-build rules on what git actually commits and pushes (agent sessions only).
+// Git pre-commit, pre-push, and commit-msg hooks: hand-build rules (agent sessions) and manifest-only commits (all actors).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -61,7 +61,61 @@ const filesDenyMessage = rels => {
   return `Hand-build guard: ${listed} are not routing files and their staged content is not a recorded swarm integrate hash. Ask the owner: swarm handbuild request --kind <swarm-cannot|emergency|secret|tiny> --reason "why the swarm cannot do it" --files "${filesArg}" --minutes 30`;
 };
 
+const MANIFEST_DIR_PREFIX = 'coordination/manifests/';
+
 const commitDenyMain = `${DENY_ADVICE} (blocked: git commit on a protected branch)`;
+
+const manifestCommitRefused = rels => {
+  const list = [...new Set(rels.filter(Boolean))].join(', ');
+  return `manifest commit refused: these staged files are not manifests: ${list}; run git status, unstage them with git restore --staged FILE (or git reset), commit them separately with their own message, then commit the manifest again.`;
+};
+
+export function pathsFromCachedNameStatus(text) {
+  const paths = [];
+  for (const line of String(text ?? '').split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    const tab = t.indexOf('\t');
+    const parts = tab >= 0 ? [t.slice(0, tab), ...t.slice(tab + 1).split('\t')] : t.split(/\s+/);
+    const status = parts[0] ?? '';
+    if (/^[RC]/i.test(status)) {
+      if (parts[1]) paths.push(parts[1]);
+      if (parts[2]) paths.push(parts[2]);
+    } else if (parts[1]) {
+      paths.push(parts[1]);
+    }
+  }
+  return paths;
+}
+
+function readCommitSubjectFromFile(messagePath) {
+  const text = fs.readFileSync(messagePath, 'utf8');
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    return t;
+  }
+  return '';
+}
+
+export function isManifestCommitSubject(subject) {
+  return /^manifest\b/i.test(String(subject ?? '').trim());
+}
+
+function pathUnderManifests(rel) {
+  const n = String(rel ?? '').replace(/\\/g, '/');
+  return n === 'coordination/manifests' || n.startsWith(MANIFEST_DIR_PREFIX);
+}
+
+/** @returns {{ ok: true } | { ok: false, message: string }} */
+export function checkCommitMsg({ messagePath, subject, nameStatusText, stagedPaths }) {
+  const subj = subject ?? (messagePath ? readCommitSubjectFromFile(messagePath) : '');
+  if (!isManifestCommitSubject(subj)) return { ok: true };
+  const paths = stagedPaths ?? pathsFromCachedNameStatus(nameStatusText ?? '');
+  const denied = [...new Set(paths.filter(p => !pathUnderManifests(p)))];
+  if (denied.length) return { ok: false, message: manifestCommitRefused(denied) };
+  return { ok: true };
+}
 
 const pushDenyMain = reason =>
   `${DENY_ADVICE} (blocked: ${reason})`;
@@ -222,6 +276,23 @@ function runCli(kind) {
     process.exit(agentSession(process.env) ? 1 : 0);
   }
   const env = process.env;
+
+  try {
+    if (kind === 'commit-msg') {
+      const messagePath = process.argv[3];
+      const nameStatus = execFileSync('git', ['diff', '--cached', '--name-status'], { cwd: root, encoding: 'utf8', timeout: 10_000 });
+      const result = checkCommitMsg({ messagePath, nameStatusText: nameStatus });
+      if (!result.ok) {
+        process.stderr.write(`${result.message}\n`);
+        process.exit(1);
+      }
+      process.exit(0);
+    }
+  } catch {
+    process.stderr.write('manifest commit check failed; refusing the commit.\n');
+    process.exit(1);
+  }
+
   if (!agentSession(env) || guardOff(root)) process.exit(0);
 
   try {
@@ -255,5 +326,5 @@ function runCli(kind) {
 const entry = process.argv[1] && path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1]);
 if (entry) {
   const kind = process.argv[2];
-  if (kind === 'pre-commit' || kind === 'pre-push') runCli(kind);
+  if (kind === 'pre-commit' || kind === 'pre-push' || kind === 'commit-msg') runCli(kind);
 }

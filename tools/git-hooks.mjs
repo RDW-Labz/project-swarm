@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Install and remove swarm git hooks (pre-commit, pre-push) in the repository hooks directory.
+// Install and remove swarm git hooks (pre-commit, pre-push, commit-msg) in the repository hooks directory.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -49,7 +49,7 @@ export function installGitHooks(root, { fs: fsMod = fs, exec, checkScript } = {}
   if (!checkScript) throw Error('installGitHooks: checkScript is required');
   const dir = hooksDir(root, exec);
   fsMod.mkdirSync(dir, { recursive: true });
-  for (const kind of ['pre-commit', 'pre-push']) {
+  for (const kind of ['pre-commit', 'pre-push', 'commit-msg']) {
     const hookPath = path.join(dir, kind);
     const backupPath = `${hookPath}.before-swarm`;
     const existing = readHook(fsMod, hookPath);
@@ -63,7 +63,7 @@ export function installGitHooks(root, { fs: fsMod = fs, exec, checkScript } = {}
 /** @param {string} root @param {{ fs?: typeof fs, exec?: Function }} opts */
 export function removeGitHooks(root, { fs: fsMod = fs, exec } = {}) {
   const dir = hooksDir(root, exec);
-  for (const kind of ['pre-commit', 'pre-push']) {
+  for (const kind of ['pre-commit', 'pre-push', 'commit-msg']) {
     const hookPath = path.join(dir, kind);
     const backupPath = `${hookPath}.before-swarm`;
     const existing = readHook(fsMod, hookPath);
