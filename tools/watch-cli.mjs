@@ -417,7 +417,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
   const scratchIds = async () => {
     const all = await listProjects({ file: projectsFile(env) });
     const flagged = await classifyProjects(all, { now: now(), liveRuns: await live(), env });
-    return new Set(flagged.filter(project => project.testOrTemp).map(project => project.id));
+    return new Set(flagged.filter(project => project.testOrTemp || isBoardTempRoot(project.root, boardProjectOpts(env))).map(project => project.id));
   };
   const find = async id => (await listProjects({ file: projectsFile(env) })).find(p => p.id === id) ?? null;
   const api = {
@@ -436,7 +436,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
         const liveRuns = await live();
         const flagged = await classifyProjects(all, { now: snapshotNow, liveRuns, env });
         // Test and temp projects are left out of everything (lanes, totals, the inbox) unless asked for, so the numbers still add up.
-        const projects = flagged.filter(p => !p.idleHidden && (scratch || !p.testOrTemp));
+        const projects = flagged.filter(p => !p.idleHidden && (scratch || !(p.testOrTemp || isBoardTempRoot(p.root, boardProjectOpts(env)))));
         const caps = (() => { try { const lanes = resolveBudget({ config }).lanes ?? {}; return Object.fromEntries(Object.entries(lanes).map(([k, v]) => [k, v?.dailyUsd])); } catch { return {}; } })();
         const configured = (() => { try { return Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k]) => k); } catch { return []; } })();
         const configuredModels = (() => { try { return Object.fromEntries(Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k, v]) => [k, v.model])); } catch { return {}; } })();
