@@ -478,7 +478,13 @@ export async function runAutopilot(root, deps, { intervalMs = 30000, once = fals
   while (!signal?.aborted && results.length < maxSteps) {
     // The panic button (swarm stop --all): a loop that is still alive stops at the next step instead of starting more work.
     if (await stopGuard(root).catch(() => null)) { results.push({ action: 'stopped', note: 'stopped: swarm stop --all marker present' }); break; }
-    const step = await autopilotStep(root, deps, { now, memory });
+    let step;
+    try {
+      try { await deps.busy?.begin?.(); } catch { /* marker must never stop the loop */ }
+      step = await autopilotStep(root, deps, { now, memory });
+    } finally {
+      try { await deps.busy?.end?.(); } catch { /* marker must never stop the loop */ }
+    }
     results.push(step);
     // A broken journal ends the loop: nothing it does could be remembered across steps by anyone else.
     if (step.error) break;

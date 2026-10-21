@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
-import { writeBusyMarker, liveBusyMarkers } from '../tools/busy-marker.mjs';
+import { BUSY_MARKER_VERBS, writeBusyMarker, liveBusyMarkers } from '../tools/busy-marker.mjs';
 
 function spawnExitedPid() {
   return new Promise((resolve, reject) => {
@@ -79,4 +79,10 @@ test('liveBusyMarkers removes markers with pid 0 or negative and does not return
 test('missing busy directory returns no markers', async t => {
   const dir = path.join(await tempDir(t), 'no-such-busy');
   assert.deepEqual(await liveBusyMarkers({ dir }), []);
+});
+
+test('BUSY_MARKER_VERBS omits autopilot (sleeping loops are idle; steps write markers via runAutopilot)', () => {
+  assert.equal(BUSY_MARKER_VERBS.has('autopilot'), false);
+  assert.ok(BUSY_MARKER_VERBS.has('go'));
+  assert.ok(BUSY_MARKER_VERBS.has('resume'));
 });

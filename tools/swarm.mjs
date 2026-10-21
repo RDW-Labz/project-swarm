@@ -7517,6 +7517,7 @@ function autopilotCaps(...budgets) {
 }
 
 function autopilotDeps(root) {
+  let removeAutopilotBusyMarker = null;
   const readPlan = async root => { try { return JSON.parse(await fs.readFile(path.join(root, '.swarm', 'project', 'plan.json'), 'utf8')); } catch { return null; } };
   const readyInject = {
     env: process.env,
@@ -7627,6 +7628,20 @@ function autopilotDeps(root) {
       if (out.messages.length) { const temp = `${file}.${process.pid}.${Date.now()}.tmp`; await fs.writeFile(temp, `${JSON.stringify(out.notified)}\n`, { flag: 'wx', mode: 0o600 }); await fs.rename(temp, file); }
     },
     ...readyAutopilotDeps(root, readyInject),
+    busy: {
+      begin: async () => {
+        try {
+          removeAutopilotBusyMarker = await writeBusyMarker({ command: 'swarm autopilot', root });
+        } catch {
+          removeAutopilotBusyMarker = null;
+        }
+      },
+      end: async () => {
+        if (!removeAutopilotBusyMarker) return;
+        try { await removeAutopilotBusyMarker(); } catch { /* idempotent */ }
+        removeAutopilotBusyMarker = null;
+      },
+    },
   };
 }
 
