@@ -165,8 +165,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | - | y2-git-hooks: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-20 | - | w8-docs: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-21 | - | s8-burst-gates: Added S8 requirements R-050 (GPU burst gates) and R-051 (cloud CPU test/e2e runners) | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-21 | - | t-fix7-policy: gitFactsOk/commit-push require a plain non-empty branch; empty git still blocks prote | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-21 | - | t-fix7-limit: Machine --machine set compares raise/approval against machine-only snapshot; project s | cursor | composer-2.5 | pass | - | subscription |
 
 ## Daily summary
 
@@ -183,5 +181,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-19 | claude | 9 | 9 | 0 | 2,436,156 | $6.73 |
 | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
 | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
-| 2026-10-21 | cursor | 3 | 3 | 0 | 0 | subscription |
-| **total** | all | 163 | 148 | 15 | 14,711,375 | $26.67 (incl. estimates) |
+| 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
+| **total** | all | 161 | 146 | 15 | 14,711,375 | $26.67 (incl. estimates) |
