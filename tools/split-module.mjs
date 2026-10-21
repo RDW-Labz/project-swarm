@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
-import { tokenizer, tokTypes } from 'acorn';
+import { tokenizer, tokTypes, parse } from 'acorn';
 import { scanModule, topLevelNameIndex } from './split-scan.mjs';
 
 const ACORN_TOKENIZE_OPTS = {
@@ -640,6 +640,36 @@ function isIdentifierChar(ch, first) {
   return (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57);
 }
 
+/** Top-level import and export-from spans: identifier tokens inside these are not uses. */
+function importExportDeclarationRanges(text) {
+  const ranges = [];
+  try {
+    const ast = parse(text, {
+      ...ACORN_TOKENIZE_OPTS,
+      ranges: true,
+    });
+    for (const node of ast.body) {
+      if (node.type === 'ImportDeclaration') {
+        ranges.push([node.start, node.end]);
+      } else if (node.type === 'ExportNamedDeclaration' && node.source != null) {
+        ranges.push([node.start, node.end]);
+      } else if (node.type === 'ExportAllDeclaration') {
+        ranges.push([node.start, node.end]);
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return ranges;
+}
+
+function offsetInsideRanges(offset, ranges) {
+  for (const [start, end] of ranges) {
+    if (offset >= start && offset < end) return true;
+  }
+  return false;
+}
+
 /** Acorn tokenizer pass: name tokens not after `.`/`?.` and not object-literal keys (`name:` inside braces). */
 export function acornIdentifierTokens(text) {
   const all = [];
@@ -653,6 +683,7 @@ export function acornIdentifierTokens(text) {
     return [];
   }
 
+  const skipRanges = importExportDeclarationRanges(text);
   const out = [];
   let braceDepth = 0;
   for (let i = 0; i < all.length; i++) {
@@ -661,6 +692,7 @@ export function acornIdentifierTokens(text) {
     else if (cur.type === tokTypes.braceR) braceDepth--;
 
     if (cur.type !== tokTypes.name) continue;
+    if (offsetInsideRanges(cur.start, skipRanges)) continue;
 
     const prev = i > 0 ? all[i - 1] : null;
     if (prev && (prev.type === tokTypes.dot || prev.type === tokTypes.questionDot)) continue;
