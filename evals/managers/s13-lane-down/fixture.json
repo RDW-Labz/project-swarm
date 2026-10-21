@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "id": "s13-lane-down",
+  "managerId": "lane-health",
+  "kind": "seeded",
+  "source": "parts-app-s13",
+  "firstWave": {
+    "index": 1,
+    "startsAt": "2026-09-18T14:00:00.000Z"
+  },
+  "lanesDownBeforeFirstWave": [
+    {
+      "lane": "codex",
+      "state": "down",
+      "reason": "Codex sandbox cannot start",
+      "markedAt": "2026-09-18T13:55:00.000Z"
+    },
+    {
+      "lane": "cursor",
+      "state": "down",
+      "reason": "Cursor API key missing",
+      "markedAt": "2026-09-18T13:56:00.000Z"
+    }
+  ],
+  "snapshots": {
+    "tickets": {
+      "version": 1,
+      "scope": {
+        "name": "parts-app-s13-scrubbed",
+        "version": 1,
+        "hash": "seeded-s13-lane-down"
+      },
+      "approved": {
+        "at": "2026-09-18T12:00:00.000Z",
+        "ticketsHash": "seeded"
+      },
+      "changeOrders": [],
+      "tickets": [
+        {
+          "id": "T-0301",
+          "title": "Seeded S13 lane-down replay slice",
+          "type": "build",
+          "stage": "S13",
+          "epic": "E-seeded",
+          "scopeRefs": ["R-037"],
+          "acceptance": ["Lane health catches down lanes before wave 1"],
+          "files": ["src/seed.mjs"],
+          "context": [],
+          "contracts": [],
+          "dependsOn": [],
+          "size": "S",
+          "risk": "low",
+          "sensitive": false,
+          "status": "ready"
+        }
+      ]
+    },
+    "laneStore": {
+      "version": 1,
+      "slots": {},
+      "pauses": {
+        "codex": {
+          "state": "down",
+          "reason": "Codex sandbox cannot start",
+          "until": 0
+        },
+        "cursor": {
+          "state": "down",
+          "reason": "Cursor API key missing",
+          "until": 0
+        }
+      }
+    },
+    "spendLedger": {
+      "version": 1,
+      "day": "2026-09-18",
+      "entries": {}
+    },
+    "journal": [
+      {
+        "ts": "2026-09-18T13:55:00.000Z",
+        "kind": "note",
+        "text": "Pre-wave-1 lane probe: codex down (sandbox cannot start); cursor down (API key missing)"
+      }
+    ],
+    "runStates": {}
+  },
+  "steps": [
+    {
+      "at": "2026-09-18T13:55:00.000Z",
+      "trigger": "idle",
+      "phase": "pre-wave-1"
+    },
+    {
+      "at": "2026-09-18T14:00:00.000Z",
+      "trigger": "wave",
+      "wave": 1
+    }
+  ]
+}
