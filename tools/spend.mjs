@@ -268,6 +268,26 @@ function laneReserveDefault(lane) {
   const key = typeof lane === 'string' && Object.hasOwn(LANE_RESERVE_DEFAULTS, lane) ? lane : 'anthropic';
   return coerceReserve(LANE_RESERVE_DEFAULTS[key]);
 }
+function isReservationPlaceholderCost(record) {
+  if (!object(record) || spendNumber(record.costUsd) !== 0) return false;
+  if (record.costSource === 'reservation') return true;
+  if (record.flagged === true && (record.costSource === 'reservation' || record.kind === 'reserved-as-cost')) return true;
+  return false;
+}
+function jobStoredReservationUsd(record) {
+  if (!object(record)) return null;
+  for (const value of [record.finalCost, record.reservedUsd, record.reservation?.usd]) {
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+  }
+  return null;
+}
+function unknownJobReserve(record, lane, state) {
+  const laneDefault = lane === 'rented' ? coerceReserve(rentedUnknownReserve(state)) : laneReserveDefault(lane);
+  const stored = jobStoredReservationUsd(record);
+  if (stored !== null) return Math.max(stored, laneDefault);
+  // No per-job reservation amount on the record; use the lane default reserve.
+  return laneDefault;
+}
 function rentedUnknownReserve(state) {
   const lane = state.budget?.lanes?.rented;
   for (const key of ['dailyUsd', 'hourlyUsd', 'reserveUsd']) {
@@ -290,29 +310,33 @@ export function runTotals(state) {
   const invalidRental = rentalUsdRaw !== undefined && rentalUsdRaw !== null && rentalUsdValid === null;
   let rentalBilled = rentalUsdValid ?? 0;
   let rentedUnknownJobs = 0;
+  let rentedUnknownUsd = 0;
   const totals = { usd: rentalBilled, tokens: 0, unknownUsd: [], billedUsd: 0, billedUnknown: 0, billedUnknownUsd: 0, billedUnknownRented: 0, hasPaidLaneJob: rentalBilled > 0 };
   for (const record of state.jobs ?? []) {
     const lane = record.agent;
     const metered = isMeteredLane(lane);
     const { usd, tokens } = jobSpend(record);
+    const billedUnknownCost = metered && (usd === null || isReservationPlaceholderCost(record));
     totals.usd += usd ?? 0;
     totals.tokens += tokens ?? 0;
     if (tokens !== null && usd === null) totals.unknownUsd.push(record.id);
     if (lane === 'rented') {
-      if (usd !== null) rentalBilled = Math.max(rentalBilled, usd);
+      if (!billedUnknownCost && usd !== null) rentalBilled = Math.max(rentalBilled, usd);
       if (metered) {
         totals.hasPaidLaneJob = true;
-        if (usd === null) rentedUnknownJobs += 1;
+        if (billedUnknownCost) {
+          rentedUnknownJobs += 1;
+          rentedUnknownUsd += unknownJobReserve(record, lane, state);
+        }
       }
       continue;
     }
     if (metered) {
       totals.hasPaidLaneJob = true;
-      if (usd !== null) totals.billedUsd += usd;
-      else {
+      if (billedUnknownCost) {
         totals.billedUnknown += 1;
-        totals.billedUnknownUsd += laneReserveDefault(lane);
-      }
+        totals.billedUnknownUsd += unknownJobReserve(record, lane, state);
+      } else if (usd !== null) totals.billedUsd += usd;
     }
   }
   totals.billedUsd += rentalBilled;
@@ -326,7 +350,7 @@ export function runTotals(state) {
     }
     if (rentedUnknownJobs > 0) {
       totals.billedUnknown += rentedUnknownJobs;
-      totals.billedUnknownUsd += rentedUnknownJobs * coerceReserve(rentedReserve);
+      totals.billedUnknownUsd += rentedUnknownUsd;
       totals.billedUnknownRented += rentedUnknownJobs;
       totals.hasPaidLaneJob = true;
     }

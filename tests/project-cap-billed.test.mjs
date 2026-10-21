@@ -190,6 +190,41 @@ test('invalid rental.usd is counted at the rented reserve, not as free', () => {
   assert.match(decision.message, /rented/);
 });
 
+test('rented job with costUsd 0 and costSource reservation counts at the reserve', () => {
+  const totals = runTotals({
+    jobs: [{ id: 'r', agent: 'rented', costUsd: 0, costSource: 'reservation', usage: { total_tokens: 1 } }],
+  });
+  assert.equal(totals.billedUsd, 0);
+  assert.equal(totals.billedUnknown, 1);
+  assert.equal(totals.billedUnknownUsd, RENTED_RESERVE);
+  assert.equal(totals.billedUnknownRented, 1);
+});
+
+test('flat-rate lane job with costUsd 0 stays free for the billed cap', () => {
+  const totals = runTotals({
+    jobs: [
+      { id: 'c', agent: 'claude', costUsd: 0, costSource: 'reservation', usage: { total_tokens: 100 } },
+      { id: 'x', agent: 'codex', costUsd: 0, costSource: 'reservation', usage: { total_tokens: 10 } },
+    ],
+  });
+  assert.equal(totals.billedUsd, 0);
+  assert.equal(totals.billedUnknown, 0);
+  assert.equal(totals.billedUnknownUsd, 0);
+});
+
+test('stored reservation larger than the lane default is used for billedUnknownUsd', () => {
+  const laneDefault = LANE_RESERVE_DEFAULTS.anthropic;
+  const stored = laneDefault + 1.25;
+  const totals = runTotals({
+    jobs: [
+      { id: 'u', agent: 'anthropic', costUsd: 0, costSource: 'reservation', reservedUsd: stored, usage: { total_tokens: 1 } },
+    ],
+  });
+  assert.equal(totals.billedUnknown, 1);
+  assert.equal(totals.billedUnknownUsd, stored);
+  assert.ok(stored > laneDefault);
+});
+
 test('treeSpend cache misses when inode changes but mtime and size stay the same', async t => {
   const { root } = await repo(t);
   const id = 'cache-ino';
