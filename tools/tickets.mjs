@@ -18,7 +18,7 @@ export const PROPOSAL_ORIGINS = ['comment', 'error', 'handoff'];
 export const unapprovedProposal = t => PROPOSAL_ORIGINS.includes(t?.origin) && t.approvedBy !== 'owner';
 export const STATUSES = ['proposed', 'todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled'];
 export const DELIVERABLE_STATUSES = ['todo', 'ready', 'blocked', 'running'];
-export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'contract', 'human'];
+export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'rename', 'design', 'contract', 'human'];
 const RISKS = ['low', 'medium', 'high'];
 const SIZES = ['S', 'M'];
 // A ticket may pin its lane (agent, or agent:model). 'auto' is the default and is stored as no lane at all.
@@ -158,6 +158,18 @@ export function validateTicket(t) {
   if (t.origin !== undefined && !['ci', ...PROPOSAL_ORIGINS].includes(t.origin)) errors.push('origin must be ci, comment, error or handoff when set');
   if (PROPOSAL_ORIGINS.includes(t.origin) && t.status !== 'proposed' && t.status !== 'cancelled' && !(t.approvedBy === 'owner')) errors.push('a ticket made from a comment, an error or a handoff check needs the owner approval record (approvedBy)');
   if (t.type === 'human' && !(isStrArr(t.steps) && t.steps.length >= 1 && t.steps.length <= 30)) errors.push('human tickets need 1 to 30 steps');
+  if (t.type === 'rename') {
+    const fileCount = isStrArr(t.files) ? t.files.length : 0;
+    const delCount = isStrArr(t.deletes) ? t.deletes.length : 0;
+    if (fileCount !== 1 || delCount !== 1) errors.push('rename tickets need exactly one new file in files and exactly one path in deletes');
+  }
+  if (t.type === 'migration' && isStrArr(t.files)) {
+    for (const p of t.files) {
+      if (p.toLowerCase().startsWith('supabase/migrations/') && !/\.sql$/i.test(p)) {
+        errors.push(`migration path not allowed: ${p} (files under supabase/migrations must be .sql migrations)`);
+      }
+    }
+  }
   return { ok: errors.length === 0, errors };
 }
 

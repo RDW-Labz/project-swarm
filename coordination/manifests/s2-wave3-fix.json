@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "replan-timing",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "The scope sync replan just wired into tools/scope-commands.mjs (persistSyncReplans -> tools/ticket-replan.mjs persistReplans, T-0052) revives tickets in the SAME sync pass that blocked them, breaking four existing evals that expect 'blocked' right after sync and get 'ready': tests/dogfood-fixes.test.mjs:177 'a ticket with tests goes back to ready once with the failure, then blocks (the verify lane does not change with a level)'; tests/lesson-38-eval.test.mjs:197 'eval 38.6 (S6 T-0090/T-0091): a failure in another ticket's file goes to its owner, or blocks with a note; no attempt, no escalation for the ticket that did not cause it'; tests/lessons-28-32-eval.test.mjs:81 'eval 29: truncation and repeated failure escalate instead of waiting for a person; split sizes tickets'; tests/lessons-28-32-eval.test.mjs:114 'eval 30: a ticket blocked only by dependencies unlocks when they are done (go --scope and autopilot)'. Fix the TIMING and ELIGIBILITY, keeping T-0052's acceptance ('swarm scope sync logs a replan event with the ticket id and reason. A replanned ticket returns to ready with smaller files or a different lane.'): (1) sync snapshots which tickets were already 'blocked' when it STARTED; only those can be replanned in this pass \u2014 never a ticket this same sync blocked or escalated; (2) never replan a ticket blocked only by its dependencies (dependsOn not done; they unlock on their own), a ticket whose failure was routed to another owner or carries an owner note (eval 38.6), a human/sensitive/review ticket, or a ticket whose block came from the escalation path that already sent it a level higher this sync (eval 29); (3) at most ONE replan per ticket (read tickets.log for a prior 'replan' event for that id); (4) a replan must actually change something (smaller files via a split, or a different lane); otherwise leave it blocked and log nothing. Update tests/scope-sync-replan.test.mjs accordingly: the replan case starts with the ticket ALREADY blocked (e.g. failed twice in a previous sync) and a later sync replans it; a ticket blocked in the current pass stays blocked; a deps-only block is untouched; a second replan of the same ticket does not happen. Do NOT edit tools/swarm.mjs or the tools/swarm folder. Run `node --import ./tests/_isolate-config.mjs --test tests/scope-sync-replan.test.mjs tests/dogfood-fixes.test.mjs tests/lesson-38-eval.test.mjs tests/lessons-28-32-eval.test.mjs tests/ticket-replan.test.mjs tests/scope-commands.test.mjs tests/scope-split-lane-size.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests use these files for unrelated behavior; the coordinator runs the FULL suite.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/ticket-replan.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/scope-split-lane-size.test.mjs",
+        "tools/tickets.mjs"
+      ],
+      "outputs": [
+        "tools/scope-commands.mjs",
+        "tools/ticket-replan.mjs",
+        "tests/scope-sync-replan.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-delete-tickets.test.mjs",
+        "tests/scope-ingest-paths.test.mjs",
+        "tests/scope-ingest-waves.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scope-ownership.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/scope-spec-gate.test.mjs",
+        "tests/scope-spec-no-runner.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/ticket-paths-regression.test.mjs",
+        "tests/tickets-delivered.test.mjs",
+        "tests/ui-check.test.mjs"
+      ]
+    }
+  ]
+}
