@@ -109,6 +109,17 @@ It does **not** catch:
 
 These are **accepted limits** under the honest-but-fallible orchestrator threat model. Real enforcement for commits and pushes is **git hooks** and **GitHub branch protection**; a deliberately hidden headless session is out of scope.
 
+### Limits of the vercel, merge, switch and restore rules
+
+A final review of these rules (Opus, owner's threat model: an honest but fallible orchestrator) found **no plausible honest-agent bypass**. Remaining gaps are **accepted limits**:
+
+1. **`gh pr merge` parsing:** `gh pr -R owner/repo merge N` with a flag between `pr` and `merge` is not recognized as a merge, so an approval that names `gh` would allow it. `gh api` with a write HTTP method and `gh` aliases are likewise covered when an approval names `gh`, because `gh` is not treated as an elevated operation on its own. The sanctioned merge path is `swarm merge N`, which checks CI. A standing merge approval needs the **machine policy file** to enable the `merge-swarm-pr` rule (`enabled: true`, not disabled); **`gh pr merge` is always blocked** regardless.
+2. **Checkout restore without `--`:** `git checkout` with `--pathspec-from-file` or `-p` can restore files without a double dash and is classified as a branch switch, not a path restore.
+3. **Conflict style:** `git checkout --conflict=diff3` behaves like the blocked `-m` merge option for analyzer purposes.
+4. **Restore path roots:** restore paths are checked against the **project root**, not the shell working directory, so a restore run from a subfolder can touch a different path than the one checked; paths starting with `-` after the double dash are not checked.
+5. **One free op in the allow step:** in the final allow step, one free `switch`, `checkout`, or `restore` operation exempts the other `switch`, `checkout`, and `restore` operations the analyzer saw on the same command line, backstopped by the earlier per-operation check.
+6. **Policy env and multiple merges:** the policy file path comes from the guard process environment (`SWARM_POLICY_FILE` or `SWARM_CONFIG`), so setting them inline in a command does not reach the guard; several standing `swarm merge` commands on one line are each checked separately.
+
 ## What the hook analyzes (summary)
 
 It inspects redirects, `tee`, `sed -i`, `mv`, `cp`, `rm`, downloads, git and `gh` / `vercel` / `swarm` subcommands, `bash -c`, `eval`, `$(...)`, backticks, and common wrappers (`sudo`, `timeout`, `nice`, …). Read-only git is the short list above plus add, checkout, switch, and branch create when not destructive. Claude Code permissions cannot express "deny edits except under `.swarm/`"; the hook is the enforcement layer.
