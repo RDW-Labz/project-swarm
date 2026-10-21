@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "scenario": "s13-ticket-context",
+  "manager": "ticket",
+  "kind": "seeded",
+  "source": "parts-app-s13",
+  "description": "Seeded Ticket Manager scope-time failures: tickets missing DB context and build tickets listing test files a later ticket owns.",
+  "ledger": {
+    "version": 1,
+    "scope": {
+      "name": "Seeded S13 ticket-context",
+      "version": 1,
+      "hash": "c3d4e5f60718293a4b5c6d7e8f901234567890abcdef0123456789abcdef012345",
+      "stages": [
+        {
+          "id": "S1",
+          "title": "Requests"
+        }
+      ],
+      "requirements": [
+        {
+          "id": "R-901",
+          "stage": "S1",
+          "title": "Staff can submit a parts request backed by submit_request",
+          "acceptance": [
+            "The API calls the submit_request database function with shop_id and quantity."
+          ]
+        },
+        {
+          "id": "R-902",
+          "stage": "S1",
+          "title": "submit_request is covered by an automated test",
+          "acceptance": [
+            "tests/submit-request.test.ts passes against the migration and route."
+          ]
+        }
+      ],
+      "context": [
+        {
+          "path": "docs/scope/context/data-model.md",
+          "kinds": ["db"]
+        }
+      ],
+      "sections": [],
+      "external": [],
+      "sensitive": [],
+      "protected": []
+    },
+    "tickets": [
+      {
+        "id": "T-9001",
+        "title": "Route submit_request through the requests API",
+        "type": "build",
+        "stage": "S1",
+        "scopeRefs": ["R-901"],
+        "acceptance": [
+          "The handler calls submit_request with shop_id and quantity from the request body."
+        ],
+        "files": ["src/app/api/requests/route.ts"],
+        "context": ["src/lib/supabase-server.ts"],
+        "contracts": [],
+        "tests": [],
+        "dependsOn": [],
+        "size": "S",
+        "risk": "low",
+        "status": "todo"
+      },
+      {
+        "id": "T-9002",
+        "title": "Implement requests API handler",
+        "type": "build",
+        "stage": "S1",
+        "scopeRefs": ["R-901"],
+        "acceptance": [
+          "POST /api/requests persists a row via submit_request."
+        ],
+        "files": ["src/lib/requests.ts"],
+        "context": [],
+        "contracts": [],
+        "tests": ["tests/submit-request.test.ts"],
+        "dependsOn": ["T-9001"],
+        "size": "S",
+        "risk": "low",
+        "status": "todo"
+      },
+      {
+        "id": "T-9003",
+        "title": "Prove submit_request with pgTAP-style integration test",
+        "type": "test",
+        "stage": "S1",
+        "scopeRefs": ["R-902"],
+        "acceptance": [
+          "tests/submit-request.test.ts exercises submit_request against seeded data."
+        ],
+        "files": ["tests/submit-request.test.ts"],
+        "context": [],
+        "contracts": [],
+        "tests": ["tests/submit-request.test.ts"],
+        "dependsOn": ["T-9002"],
+        "size": "S",
+        "risk": "low",
+        "status": "todo"
+      }
+    ],
+    "changeOrders": [],
+    "approved": null,
+    "createdAt": "2026-10-20T12:00:00.000Z",
+    "updatedAt": "2026-10-20T12:00:00.000Z"
+  },
+  "repo": {
+    "files": [
+      "docs/scope/context/overview.md",
+      "docs/scope/context/data-model.md",
+      "package.json",
+      "tsconfig.json",
+      "vitest.config.ts",
+      "supabase/config.toml",
+      "supabase/seed.sql",
+      "supabase/migrations/0001_submit_request.sql",
+      "src/lib/supabase-server.ts",
+      "src/lib/requests.ts",
+      "src/app/api/requests/route.ts",
+      "tests/submit-request.test.ts"
+    ]
+  },
+  "ticketsWithMissingContext": [
+    {
+      "ticket": "T-9001",
+      "paths": [
+        "supabase/migrations/0001_submit_request.sql",
+        "supabase/seed.sql"
+      ],
+      "reason": "DB ticket writes an API route that calls submit_request but does not list the migration or seed the worker must read."
+    }
+  ],
+  "ticketsWithLaterOwnedTests": [
+    {
+      "ticket": "T-9002",
+      "file": "tests/submit-request.test.ts",
+      "owner": "T-9003",
+      "reason": "Build ticket lists the test file before the test ticket that owns it runs."
+    }
+  ]
+}
