@@ -329,6 +329,13 @@ export function createWatchServer(opts) {
     }
     const u = new URL(req.url || '/', 'http://127.0.0.1');
     const pathname = u.pathname;
+    if (pathname === '/api/health') {
+      if (remote || !local) return sendText(res, method, 421, 'misdirected request');
+      const hostName = String(host ?? '').split(':')[0];
+      if (hostName !== '127.0.0.1' && hostName !== 'localhost') return sendText(res, method, 421, 'misdirected request');
+      const info = await versionInfo();
+      return sendJson(res, method, { ok: true, version: info.version, pid: process.pid });
+    }
     if (pathname.startsWith('/assets/')) {
       lastActivity = now();
       return sendAsset(res, method, pathname.slice('/assets/'.length));
@@ -343,8 +350,7 @@ export function createWatchServer(opts) {
     // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
     const isNav = Boolean(nav) && !remote && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
     const isShot = parts.length === 4 && parts[1] === 'shot' && (parts[3] === 'mockup' || parts[3] === 'page');
-    const isHealth = pathname === '/api/health';
-    if (pathname !== '/' && !isHealth && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav) return sendText(res, method, 404, 'not found');
+    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav) return sendText(res, method, 404, 'not found');
     const isHtmlPage = pathname === '/' || (isBoardRoute && (pathname === '/project' || pathname === '/run'));
     const queryToken = u.searchParams.get('t');
     const headerToken = req.headers['x-watch-token'];
@@ -360,13 +366,6 @@ export function createWatchServer(opts) {
     const pageHeaders = queryOk ? {
       'Set-Cookie': `swarm_watch=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
     } : {};
-    if (isHealth) {
-      if (remote || !local) return sendText(res, method, 421, 'misdirected request');
-      const hostName = String(host ?? '').split(':')[0];
-      if (hostName !== '127.0.0.1' && hostName !== 'localhost') return sendText(res, method, 421, 'misdirected request');
-      const info = await versionInfo();
-      return sendJson(res, method, { ok: true, version: info.version, pid: process.pid });
-    }
     if (pathname === '/') return sendAsset(res, method, indexName, pageHeaders);
     if (pathname === '/api/snapshot') return sendJson(res, method, await payload());
     if (pathname === '/events') return openEvents(res, method);

@@ -73,7 +73,6 @@ async function startServer(t) {
 test('non-page routes ignore query tokens and accept the header or strict cookie', async (t) => {
   const { server, port, token } = await startServer(t);
   const routes = [
-    '/api/health',
     '/api/snapshot',
     '/api/board',
     '/api/project?id=p1',
@@ -112,6 +111,14 @@ test('non-page routes ignore query tokens and accept the header or strict cookie
   assert.equal((await request(port, '/api/snapshot', { Cookie: `swarm_watch=${token}; malformed` })).status, 403);
   assert.equal((await request(port, '/api/snapshot', { Cookie: `swarm_watch=${token}; other=value` })).status, 200);
   assert.equal(server.token, token);
+});
+
+test('/api/health is token-free on loopback only', async (t) => {
+  const { port } = await startServer(t);
+  const health = await request(port, '/api/health');
+  assert.equal(health.status, 200);
+  assert.deepEqual(Object.keys(JSON.parse(health.body)).sort(), ['ok', 'pid', 'version']);
+  assert.equal((await request(port, '/api/health', { Host: `example.test:${port}` })).status, 421);
 });
 
 test('HTML page query tokens are exchanged for a protected cookie and privacy headers', async (t) => {
