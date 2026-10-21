@@ -300,6 +300,16 @@ function machineLine(p) {
   if (p.versionDrift) { var newest = state.data && state.data.drift ? state.data.drift.newest : null; var drift = pill('version drift', 'warn'); drift.title = 'this machine runs v' + (p.version || '-') + '; newest is v' + (newest || '-'); line.appendChild(el('span', '', ' ')); line.appendChild(drift); }
   return line;
 }
+function pinnedBadge(p) {
+  if (!p.pinnedVersion) { return null; }
+  return pill('pinned at ' + p.pinnedVersion, 'info');
+}
+function appendPinnedBadge(parent, p) {
+  var badge = pinnedBadge(p);
+  if (!badge) { return; }
+  parent.appendChild(el('span', '', ' '));
+  parent.appendChild(badge);
+}
 function renderProjects(projects) {
   var psig = L.signature({ projects: projects, machines: state.data && state.data.machines, peers: state.data && state.data.peers, drift: state.data && state.data.drift }, Math.floor(Date.now() / 60000));
   if (psig === state.projSig) { return; }
@@ -326,7 +336,7 @@ function renderProjects(projects) {
   sorted.forEach(function (entry) {
     var p = entry.project, isWorktree = entry.worktree;
     var tr = el('tr'); if (isWorktree) { tr.className = 'wt'; }
-    var name = el('div'); name.appendChild(projectName(p, (isWorktree ? '↳ ' : '') + p.name)); name.appendChild(el('span', '', ' ')); name.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); name.appendChild(machineLine(p));
+    var name = el('div'); name.appendChild(projectName(p, (isWorktree ? '↳ ' : '') + p.name)); name.appendChild(el('span', '', ' ')); name.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); appendPinnedBadge(name, p); name.appendChild(machineLine(p));
     var tableProgress = progressLine(p); if (tableProgress) { name.appendChild(tableProgress); }
     var tableSplit = splitLine(p); if (tableSplit) { name.appendChild(tableSplit); }
     var tableHandled = handledLine(p); if (tableHandled) { name.appendChild(tableHandled); }
@@ -338,7 +348,7 @@ function renderProjects(projects) {
     tr.appendChild(td(capCell(p))); tr.appendChild(td(laneDots(p))); tr.appendChild(td(ago(p.lastActivityAt), 'mono'));
     body.appendChild(tr);
     var c = el('div', 'pcard');
-    var head = el('div', 'row'); head.appendChild(projectName(p, (isWorktree ? '↳ ' : '') + p.name)); head.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); c.appendChild(head); c.appendChild(machineLine(p));
+    var head = el('div', 'row'); head.appendChild(projectName(p, (isWorktree ? '↳ ' : '') + p.name)); head.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); appendPinnedBadge(head, p); c.appendChild(head); c.appendChild(machineLine(p));
     var cardProgress = progressLine(p); if (cardProgress) { c.appendChild(cardProgress); }
     var cardSplit = splitLine(p); if (cardSplit) { c.appendChild(cardSplit); }
     var cardHandled = handledLine(p); if (cardHandled) { c.appendChild(cardHandled); }
