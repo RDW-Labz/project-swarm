@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "cap-billed-fix-4",
+      "agent": "auto",
+      "prompt": "Last review finding on the billed-only project cap (tools/spend.mjs runTotals area). A job on a metered lane (including rented) whose saved record has costUsd 0 together with costSource reservation, or is a flagged reserved-as-cost record, is not a known $0: treat it as unknown cost (billedUnknown, counted at the lane reserve) unless the lane is flat-rate. Also, when a job record stores its own reservation amount (look for the field finalCost or the reservation code writes, for example reservedUsd or reservation.usd), use max(that amount, the lane default) as the unknown reserve instead of the flat default. If no such field is stored, keep the lane default and say so in a code comment. Add tests to tests/project-cap-billed.test.mjs: rented job with costUsd 0 and costSource reservation counts at the reserve; a flat-rate lane job with costUsd 0 stays free; a stored reservation larger than the lane default is used. Keep every existing test passing. Do not edit tools/swarm.mjs. ignoreTests reason: only spend files change.",
+      "context": [
+        "tools/spend.mjs",
+        "tools/project-spend.mjs",
+        "tests/project-cap-billed.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/spend.mjs",
+        "tests/project-cap-billed.test.mjs"
+      ],
+      "timeoutMs": 900000,
+      "ignoreTests": [
+        "tests/api-short-report.test.mjs",
+        "tests/crash-guards.test.mjs",
+        "tests/flat-rate-reserve.test.mjs",
+        "tests/phase14.test.mjs",
+        "tests/dead-run.test.mjs",
+        "tests/hard-cap.test.mjs",
+        "tests/rented-run.test.mjs",
+        "tests/batch-run.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/phase12-cli.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tests/spend.test.mjs"
+      ]
+    }
+  ]
+}

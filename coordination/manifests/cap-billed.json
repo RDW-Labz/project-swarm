@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "cap-billed",
+      "agent": "auto",
+      "prompt": "X (owner): project spend caps must count BILLED spend only. Found on parts-request-app: the board showed billed $0.00 but the project cap counted $57.23 over 457 runs and blocked work: claude lane (subscription, list value from reported cost) was $54.85, anthropic API (the only billed spend) $2.37, codex and cursor $0, plus $2.04 exposure of 2 running runs and 43 failed runs with unknown cost. Fix in tools/project-spend.mjs only (and tools/spend.mjs if a small helper is needed); do not edit tools/swarm.mjs. (1) projectSpend returns billedUsd (sum of job costs on PAID_LANES from tools/spend.mjs; a paid-lane job with an unknown cost is counted in billedUnknown, not as 0) and listUsd (every lane, as usd is today); keep usd as the list value for compatibility. (2) exposureUsd counts only running runs that have at least one job on a paid lane. (3) projectCapDecision compares billedUsd + exposureUsd to the cap and its message says: project-cap: this project has been billed $X (list value $Y across N runs); only metered lanes (name them) count toward the cap. (4) projectSummary returns billedUsd and listUsd next to the existing fields, spendUsd stays the list value. (5) A daily limit or cap never counts claude subscription, Cursor, Codex or Hermes. Tests in tests/project-cap-billed.test.mjs with fixture run states: the parts-app mix (claude 54.85 list, anthropic 2.37, cap 5: not reached; anthropic 6 against cap 5: reached), unknown paid cost reported, exposure only for paid-lane running runs, summary fields. Existing tests that assert the old list-value cap must be updated to the billed meaning without weakening other assertions. ignoreTests reason: only project-spend files change.",
+      "context": [
+        "tools/project-spend.mjs",
+        "tools/spend.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/project-spend.mjs",
+        "tools/spend.mjs",
+        "tests/project-cap-billed.test.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/api-short-report.test.mjs",
+        "tests/crash-guards.test.mjs",
+        "tests/flat-rate-reserve.test.mjs",
+        "tests/phase14.test.mjs",
+        "tests/dead-run.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/hard-cap.test.mjs",
+        "tests/rented-run.test.mjs",
+        "tests/batch-run.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/phase12-cli.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tests/spend.test.mjs",
+        "tests/board-page.test.mjs"
+      ]
+    }
+  ]
+}
