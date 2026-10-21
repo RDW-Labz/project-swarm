@@ -92,8 +92,8 @@ import { classifyCheckEnvironment, swarmCheckWarnings } from './ship.mjs';
 import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary, listLiveRuns, liveDir, repoKey, repoPaths } from './board.mjs';
 import { BUSY_MARKER_VERBS, writeBusyMarker, liveBusyMarkers, busyDir } from './busy-marker.mjs';
 import { DEFAULT_WHEN_IDLE_TIMEOUT_MINUTES, machineBusySnapshot, resolveInstallRootForPending, runWhenIdleUpdate, waitBeforeLaunchingWork } from './update-pending.mjs';
-import { acquireIntegrationLock } from './integration-lock.mjs';
-export { acquireIntegrationLock } from './integration-lock.mjs';
+import { acquireIntegrationLock, withSharedWriteLock } from './integration-lock.mjs';
+export { acquireIntegrationLock, withSharedWriteLock } from './integration-lock.mjs';
 import { writeSessionMetric } from './session-metrics.mjs';
 import { resolveSkillsDir, listSkills, skillSizeWarnings, refuseOversizeSkills, attachSkillsForJob, skillsPromptBlock, skillRecordEntries, skillCheckFailures, copySkillsInto, assertNoSkillSymlinks, anyPathMatchesGlobs, SKILLS_DIR_NAME } from './skills.mjs';
 import { estimateCostFromTranscript } from './rates.mjs';
@@ -1285,7 +1285,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
   await scheduler.close();
   state.finishedAt = new Date(now()).toISOString();
   updateRunPause(state, now);
-  await appendRunLedger(root, state, manifest, { persist: false });
+  await withSharedWriteLock(root, manifest.ledger?.path ?? '.swarm/usage-ledger.md', () => appendRunLedger(root, state, manifest, { persist: false }), { liveDir: liveDir });
   await queueSave();
   return state;
 }
@@ -1459,7 +1459,7 @@ export async function integrateRun(root, id, options = {}) {
   if (options.queue) validateQueueOptions({ ...options, batchSize: options.batchSize ?? 10 });
   root = await fs.realpath(root);
   if ((await readState(root, id)).status === 'paused') fail(`run-paused: resume ${id} first`, 'run-paused');
-  const lock = await acquireIntegrationLock(root, { runId: id, liveDir: options.liveDir, isAlive: options.isAlive });
+  const lock = await acquireIntegrationLock(root, { runId: id, branch: options.branch, liveDir: options.liveDir, isAlive: options.isAlive });
   try {
     const recoveredJournal = await recoverIntegrationJournal(root);
     const result = await integrateRunLocked(root, id, { ...options, releaseIntegrationLock: lock.release });
@@ -2402,7 +2402,7 @@ function autopilotDeps(root) {
       const items = await collectInbox([root], inboxDeps());
       const out = pendingNotifications(items, notified, { now: Date.now() });
       for (const message of out.messages) await macNotify(message);
-      if (out.messages.length) { const temp = `${file}.${process.pid}.${Date.now()}.tmp`; await fs.writeFile(temp, `${JSON.stringify(out.notified)}\n`, { flag: 'wx', mode: 0o600 }); await fs.rename(temp, file); }
+      if (out.messages.length) await withSharedWriteLock(root, 'notified.json', async () => { const temp = `${file}.${process.pid}.${Date.now()}.tmp`; await fs.writeFile(temp, `${JSON.stringify(out.notified)}\n`, { flag: 'wx', mode: 0o600 }); await fs.rename(temp, file); });
     },
     ...readyAutopilotDeps(root, readyInject),
     policyPass: autopilotPolicyPass(root),
@@ -3218,7 +3218,7 @@ async function mainInner() {
           backup:{create:createBackup,verify:verifyBackup},
           ledger:{write:async(root,count)=>{
             const tickets=Array.from({length:count},(_,i)=>({id:`T-${String(i+1).padStart(4,'0')}`,title:`Stub ticket ${i+1}`,type:'build',epic:'E',scopeRefs:['R-001'],acceptance:['ok'],files:[`out/${i}.txt`],context:[],contracts:[],dependsOn:[],size:'S',risk:'low',sensitive:false,status:'done',stage:'S1'}));
-            await writeLedger(root,createLedger({scope:{name:'scale',version:1,hash:'a'.repeat(64)},tickets}));
+            await withSharedWriteLock(root, 'tickets.json', () => writeLedger(root, createLedger({ scope: { name: 'scale', version: 1, hash: 'a'.repeat(64) }, tickets })));
             await fs.mkdir(path.join(root,'coordination'),{recursive:true});
             await fs.writeFile(path.join(root,'coordination','journal.ndjson'),Array.from({length:count},(_,i)=>JSON.stringify({kind:'note',text:`line ${i}`,at:new Date().toISOString()})).join('\n')+'\n');
           }}});

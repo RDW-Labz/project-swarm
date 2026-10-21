@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-import { decide, autoDecisionEvent, NEVER_AUTO, normalizePolicyProjectPath } from './policy.mjs';
+import {
+  decide,
+  autoDecisionEvent,
+  NEVER_AUTO,
+  normalizePolicyProjectPath,
+  enrichHandBuildFactsForPolicy,
+  effectiveCommitWindowMinutes,
+} from './policy.mjs';
 import { centralDayKey } from './daily-limit.mjs';
 import { ELEVATED_GIT_OPS } from './handbuild.mjs';
 
@@ -161,7 +168,10 @@ function resolveCapProject(item, baseFacts, root) {
 }
 
 function enrichFactsForItem(item, baseFacts, { autoToday, handledRecords, now, limits, root }) {
-  const facts = { ...baseFacts, autoToday };
+  let facts = { ...baseFacts, autoToday };
+  if (item.kind === 'hand-build-request') {
+    facts = enrichHandBuildFactsForPolicy(facts, item, root);
+  }
   if (kindUsesPastDailyAutoLimit(item.kind)) {
     enrichPastDailyAutoLimit(facts, limits, item.project);
   }
@@ -236,6 +246,7 @@ export async function runPolicyPass({
   machine = '',
   readHandled,
   limits = {},
+  persistAutoDecision,
 } = {}) {
   const list = items ?? [];
   if (rulesLoadFailed(rules)) {
@@ -305,13 +316,26 @@ export async function runPolicyPass({
       }
 
       const event = autoDecisionEvent(request, result, { now, machine });
-      if (!await persistAutoDecisionBeforeApply(root, event, now)) {
+      const persist = typeof persistAutoDecision === 'function'
+        ? persistAutoDecision
+        : (r, ev, n) => persistAutoDecisionBeforeApply(r, ev, n);
+      if (!await persist(root, event, now)) {
         left.push(item);
         continue;
       }
 
       try {
-        await apply({ item, decision: result, channel: 'policy' });
+        const applyCtx = {
+          item,
+          decision: result,
+          channel: 'policy',
+          policyRule: result.rule,
+          policyFacts: facts,
+          approvalMinutes: result.rule === 'commit-window-generated'
+            ? effectiveCommitWindowMinutes(facts)
+            : undefined,
+        };
+        await apply(applyCtx);
       } catch {
         const errEntry = applyFailedRecord(item);
         try {

@@ -1108,7 +1108,7 @@ export function createScratchDeniedHandbuildRequest(root, fields, { now = Date.n
 }
 
 /** approve | deny a pending request. An approval runs for `minutes` from now and covers only the files (and git operations) it names. */
-export function decideRequest(root, id, choice, { now = Date.now, by = 'owner', channel } = {}) {
+export function decideRequest(root, id, choice, { now = Date.now, by = 'owner', channel, policyRule, approvalMinutes } = {}) {
   return withStateLock(root, () => {
   const state = readState(root);
   const r = state.requests[id];
@@ -1122,10 +1122,32 @@ export function decideRequest(root, id, choice, { now = Date.now, by = 'owner', 
   r.status = choice === 'approve' ? 'approved' : 'denied';
   r.decidedAt = new Date(now()).toISOString();
   r.decidedBy = cleanText(by, 40);
-  if (choice === 'approve') r.expiresAt = new Date(now() + r.minutes * 60000).toISOString();
+  if (choice === 'approve') {
+    const mins = Number.isInteger(approvalMinutes) && approvalMinutes >= 1 && approvalMinutes <= MAX_MINUTES
+      ? approvalMinutes
+      : r.minutes;
+    r.expiresAt = new Date(now() + mins * 60000).toISOString();
+  }
   writeState(root, state);
-  logAction(root, { event: choice === 'approve' ? 'approve' : 'deny', id, by, files: r.files, reason: choice === 'approve' ? `until ${r.expiresAt}` : '' }, { now });
+  const ruleNote = typeof policyRule === 'string' && policyRule ? `policy ${policyRule}` : '';
+  const approveReason = choice === 'approve'
+    ? [ruleNote, `until ${r.expiresAt}`].filter(Boolean).join(' ')
+    : '';
+  logAction(root, { event: choice === 'approve' ? 'approve' : 'deny', id, by, files: r.files, reason: approveReason }, { now });
   return r;
+  });
+}
+
+/** Policy pass apply helper: same approval record as owner approve, with optional capped minutes and rule id in the log. */
+export function applyHandbuildPolicyApproval(root, item, { now = Date.now, policyRule, policyFacts, approvalMinutes } = {}) {
+  const ref = String(item?.id ?? '');
+  const hbId = ref.startsWith('handbuild-') ? ref.slice('handbuild-'.length) : ref;
+  return decideRequest(root, hbId, 'approve', {
+    now,
+    by: 'policy',
+    channel: 'policy',
+    policyRule,
+    approvalMinutes,
   });
 }
 
