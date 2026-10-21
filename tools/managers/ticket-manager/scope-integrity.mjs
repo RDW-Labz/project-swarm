@@ -4,6 +4,7 @@
 import { checkTicketTree } from '../../scope-integrity.mjs';
 import { buildTicketContext } from '../../ticket-context.mjs';
 import { requirementText } from '../../scope.mjs';
+import { READY_POOL_MIN, checkReadyPool } from './ready-pool.mjs';
 
 const activeOf = (tickets) => tickets.filter((t) => t && t.status !== 'cancelled' && t.status !== 'proposed');
 const norm = (p) => String(p).split('\\').join('/').replace(/^\.\//, '');
@@ -162,7 +163,7 @@ function duplicateFileOwners(active) {
 }
 
 /**
- * Scope-time gate for the Ticket Manager: ownership, context on the ledger, and gating chains.
+ * Scope-time gate for the Ticket Manager: ready pool (R-036 AC1), ownership, context on the ledger, and gating chains.
  *
  * @param {{
  *   scope?: object,
@@ -173,7 +174,7 @@ function duplicateFileOwners(active) {
  *   profileContext?: Record<string, string[]>,
  *   sizeBudget?: object,
  * }} [params]
- * @returns {{ ok: boolean, findings: object[], tree: ReturnType<typeof checkTicketTree> }}
+ * @returns {{ ok: boolean, findings: object[], tree: ReturnType<typeof checkTicketTree>, readyPool: ReturnType<typeof checkReadyPool> }}
  */
 export function checkTicketManagerScopeIntegrity({
   scope,
@@ -186,6 +187,7 @@ export function checkTicketManagerScopeIntegrity({
 } = {}) {
   const findings = [];
   const tree = checkTicketTree({ scope, tickets, sizeBudget });
+  const readyPool = checkReadyPool({ tickets });
 
   for (const err of tree.errors) findings.push(treeItemToFinding(err, 'error'));
   for (const warn of tree.warnings) {
@@ -216,6 +218,21 @@ export function checkTicketManagerScopeIntegrity({
     });
   }
 
-  const ok = tree.ok && findings.length === 0;
-  return { ok, findings, tree };
+  if (readyPool.active && !readyPool.ok) {
+    const need = readyPool.shortfall;
+    findings.push({
+      code: 'ready-pool-shortfall',
+      severity: 'warn',
+      action: 'move-to-checklist',
+      reason:
+        `Active project has ${readyPool.readyCount} ready ticket(s) (Ticket Manager keeps at least ${READY_POOL_MIN}); ` +
+        `${need} more needed and ${readyPool.promotable} can move to ready by unlocking dependencies or releasing todo tickets.`,
+      recommendation:
+        'Promote todo and dependency-unblocked tickets to ready until the pool reaches five, or split scope so more work can run in parallel.',
+    });
+  }
+
+  const blocking = findings.some((f) => f.severity === 'needs_you');
+  const ok = tree.ok && readyPool.ok && !blocking;
+  return { ok, findings, tree, readyPool };
 }

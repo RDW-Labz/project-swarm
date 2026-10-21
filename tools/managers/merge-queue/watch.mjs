@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Merge queue manager: watch integration runs for batch, conflict and check-failure signals (T-0211).
 
-import { assertMergeable } from '../../merge-guard.mjs';
+import { assertMergeable, runMerge as defaultRunMerge } from '../../merge-guard.mjs';
 import { mergeSwarmPrStandingEnabled } from '../../handbuild.mjs';
+import {
+  getManagerActionMode,
+  managerActionModeAppliesChanges,
+  managerActionModeRunsManager,
+} from '../modes.mjs';
 
 /** @typedef {import('../types.mjs').ManagerFinding} ManagerFinding */
 
@@ -46,6 +51,16 @@ import { mergeSwarmPrStandingEnabled } from '../../handbuild.mjs';
  * @property {boolean} queueActive
  * @property {readonly MergeQueueWatchItem[]} items
  * @property {readonly MergeQueueGreenMergeCandidate[]} greenMerges
+ * @property {readonly MergeQueueAppliedMerge[]} mergesApplied
+ */
+
+/**
+ * @typedef {object} MergeQueueAppliedMerge
+ * @property {string} job
+ * @property {number} pr
+ * @property {'merged'|'refused'|'merge-failed'} status
+ * @property {string} [followUp]
+ * @property {readonly string[]} [reasons]
  */
 
 const FAILED_CHECK_STATUSES = new Set(['failed', 'error', 'timeout', 'cancelled', 'crashed']);
@@ -373,6 +388,101 @@ function watchFlagged(state, runId) {
 }
 
 /**
+ * @param {readonly MergeQueueGreenMergeCandidate[]} greenMerges
+ * @returns {readonly MergeQueueGreenMergeCandidate[]}
+ */
+function greenMergesInOrder(greenMerges) {
+  return greenMerges.slice().sort((a, b) => a.order - b.order);
+}
+
+/**
+ * Merge green PRs in queue order under standing approvals (one failure stops the rest).
+ *
+ * @param {{
+ *   root: string,
+ *   greenMerges: readonly MergeQueueGreenMergeCandidate[],
+ *   prViews?: Record<string, unknown>,
+ *   defaultBranch?: string|null,
+ *   alreadyMergedPrs?: readonly number[],
+ *   runMerge?: typeof defaultRunMerge,
+ * }} input
+ * @returns {Promise<{ applied: MergeQueueAppliedMerge[], items: MergeQueueWatchItem[] }>}
+ */
+export async function mergeGreenPullRequestsInOrder(input) {
+  const root = input?.root;
+  if (typeof root !== 'string' || root.length < 1) {
+    throw new Error('merge-queue-root-invalid');
+  }
+  const runMerge = input.runMerge ?? defaultRunMerge;
+  const already = new Set(
+    Array.isArray(input.alreadyMergedPrs)
+      ? input.alreadyMergedPrs.filter((n) => typeof n === 'number' && Number.isFinite(n))
+      : [],
+  );
+  const prViews = input?.prViews && typeof input.prViews === 'object' ? input.prViews : {};
+  const defaultBranch = input?.defaultBranch ?? null;
+
+  /** @type {MergeQueueAppliedMerge[]} */
+  const applied = [];
+  /** @type {MergeQueueWatchItem[]} */
+  const items = [];
+
+  for (const candidate of greenMergesInOrder(input.greenMerges ?? [])) {
+    if (!candidate.prChecksGreen || !candidate.standingMergeApproval) continue;
+    if (already.has(candidate.pr)) continue;
+
+    const view = prViews[String(candidate.pr)] ?? prViews[candidate.pr];
+    const result = await runMerge(root, [String(candidate.pr)]);
+    if (result.status === 'merged') {
+      const followUp = formatPostMergeFollowUp({
+        pr: candidate.pr,
+        repo: result.repo ?? null,
+        baseRefName: view && typeof view === 'object' ? view.baseRefName : null,
+        headRefOid: result.sha ?? (view && typeof view === 'object' ? view.headRefOid : null),
+        defaultBranch,
+      });
+      applied.push({ job: candidate.job, pr: candidate.pr, status: 'merged', followUp });
+      already.add(candidate.pr);
+      items.push({
+        kind: 'merge-ready',
+        code: 'green-merge-merged',
+        severity: 'info',
+        action: 'merge-pr',
+        reason: clipReason(`merged PR #${candidate.pr} for job ${candidate.job} (standing approval merge-swarm-pr)`, 2000),
+        job: candidate.job,
+        ticket: candidate.ticket,
+        pr: candidate.pr,
+        followUp,
+        recommendation: followUp,
+      });
+      continue;
+    }
+
+    const reasons = Array.isArray(result.reasons)
+      ? result.reasons.map(String)
+      : result.reason
+        ? [String(result.reason)]
+        : ['merge failed'];
+    const status = result.status === 'refused' ? 'refused' : 'merge-failed';
+    applied.push({ job: candidate.job, pr: candidate.pr, status, reasons });
+    items.push({
+      kind: 'merge-ready',
+      code: status === 'refused' ? 'green-merge-refused' : 'green-merge-failed',
+      severity: 'warn',
+      action: 'merge-pr',
+      reason: clipReason(`PR #${candidate.pr} for job ${candidate.job} was not merged: ${reasons.join('; ')}`, 2000),
+      job: candidate.job,
+      ticket: candidate.ticket,
+      pr: candidate.pr,
+      recommendation: 'Fix CI or conflicts before retrying; never merge past a failing check.',
+    });
+    break;
+  }
+
+  return { applied, items };
+}
+
+/**
  * @param {{
  *   runId?: string|null,
  *   state: unknown,
@@ -381,10 +491,15 @@ function watchFlagged(state, runId) {
  *   defaultBranch?: string|null,
  *   standingMergeApproval?: boolean|null,
  *   home?: string,
+ *   root?: string|null,
+ *   modeSettings?: import('../modes.mjs').ManagerActionModeSettings,
+ *   mergePrMode?: import('../modes.mjs').ManagerActionMode,
+ *   alreadyMergedPrs?: readonly number[],
+ *   runMerge?: typeof defaultRunMerge,
  * }} input
- * @returns {MergeQueueWatchResult}
+ * @returns {Promise<MergeQueueWatchResult>}
  */
-export function watchMergeQueue(input) {
+export async function watchMergeQueue(input) {
   const state = input?.state;
   const runId = input?.runId != null ? String(input.runId) : typeof state?.id === 'string' ? state.id : null;
   const mq = state?.mergeQueue;
@@ -398,6 +513,13 @@ export function watchMergeQueue(input) {
     input?.standingMergeApproval === null || input?.standingMergeApproval === undefined
       ? mergeSwarmPrStandingEnabled(input?.home)
       : Boolean(input.standingMergeApproval);
+
+  const mergePrMode =
+    input?.modeSettings != null
+      ? getManagerActionMode(input.modeSettings, 'merge-queue', 'merge-pr')
+      : input?.mergePrMode ?? 'shadow';
+  const mergePrRuns = managerActionModeRunsManager(mergePrMode);
+  const mergePrApplies = managerActionModeAppliesChanges(mergePrMode);
 
   const checkFailedJobs = jobsWithCheckFailures(state);
   const conflictJobs = jobsWithConflicts(state);
@@ -450,6 +572,12 @@ export function watchMergeQueue(input) {
         ...(blockedReasons.length ? { blockedReasons } : {}),
       };
       greenMerges.push(candidate);
+      if (mergePrApplies) {
+        continue;
+      }
+      if (!mergePrRuns) {
+        continue;
+      }
       if (prChecksGreen && standing) {
         items.push({
           kind: 'merge-ready',
@@ -512,32 +640,50 @@ export function watchMergeQueue(input) {
     }
   }
 
+  /** @type {MergeQueueAppliedMerge[]} */
+  let mergesApplied = [];
+  if (mergePrApplies && typeof input?.root === 'string' && input.root.length > 0 && greenMerges.length > 0) {
+    const mergeOutcome = await mergeGreenPullRequestsInOrder({
+      root: input.root,
+      greenMerges,
+      prViews,
+      defaultBranch,
+      alreadyMergedPrs: input.alreadyMergedPrs,
+      runMerge: input.runMerge,
+    });
+    mergesApplied = mergeOutcome.applied;
+    items.push(...mergeOutcome.items);
+  }
+
   return {
     runId,
     queueState,
     queueActive,
     items,
     greenMerges,
+    mergesApplied,
   };
 }
 
 /**
  * @param {readonly { runId: string, state: unknown }[]} runs
  * @param {Omit<Parameters<typeof watchMergeQueue>[0], 'runId'|'state'>} [options]
- * @returns {MergeQueueWatchResult}
+ * @returns {Promise<MergeQueueWatchResult>}
  */
-export function watchMergeQueueRuns(runs, options = {}) {
+export async function watchMergeQueueRuns(runs, options = {}) {
   const list = Array.isArray(runs) ? runs : [];
   /** @type {MergeQueueWatchItem[]} */
   const items = [];
   /** @type {MergeQueueGreenMergeCandidate[]} */
   const greenMerges = [];
+  /** @type {MergeQueueAppliedMerge[]} */
+  const mergesApplied = [];
   let queueState = null;
   let queueActive = false;
   let runId = null;
   for (const row of list) {
     if (!row || typeof row !== 'object') continue;
-    const result = watchMergeQueue({ ...options, runId: row.runId, state: row.state });
+    const result = await watchMergeQueue({ ...options, runId: row.runId, state: row.state });
     if (result.queueActive) {
       queueActive = true;
       queueState = result.queueState;
@@ -545,9 +691,10 @@ export function watchMergeQueueRuns(runs, options = {}) {
     }
     items.push(...result.items);
     greenMerges.push(...result.greenMerges);
+    mergesApplied.push(...result.mergesApplied);
   }
   greenMerges.sort((a, b) => a.order - b.order);
-  return { runId, queueState, queueActive, items, greenMerges };
+  return { runId, queueState, queueActive, items, greenMerges, mergesApplied };
 }
 
 /**
