@@ -1,0 +1,971 @@
+{
+ "version": 1,
+ "scope": {
+  "name": "Project Swarm roadmap (audit 2026-10-20)",
+  "version": 1,
+  "hash": "9f7a4d502a540b227b88f796b0fa49b0337d8e0ab3fa34305e85c4237ad6e57e",
+  "file": "docs/scope/roadmap.md"
+ },
+ "handedOffTo": "mac-mini",
+ "handedOffAt": "2026-10-21",
+ "slice": "S2 Ticket Manager v2",
+ "tickets": [
+  {
+   "id": "T-0036",
+   "title": "Add ticket-paths helper to validate files and suggest closest repo paths",
+   "type": "build",
+   "stage": "S2",
+   "epic": "path-validation",
+   "scopeRefs": [
+    "R-006"
+   ],
+   "acceptance": [
+    "Every file a ticket writes or reads as context is checked against the real file tree before ingest.",
+    "A ticket naming a missing file is rejected with the closest real path suggested."
+   ],
+   "files": [
+    "tools/ticket-paths.mjs"
+   ],
+   "context": [
+    "tools/scope-commands.mjs",
+    "tools/swarm.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/ticket-paths.test.mjs"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "blocked",
+   "waveAt": "2026-10-21T05:02:55.672Z",
+   "runId": "1792558986023-2eab439b",
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0037",
+   "title": "Wire ticket path validation into scope split --ingest",
+   "type": "build",
+   "stage": "S2",
+   "epic": "path-validation",
+   "scopeRefs": [
+    "R-006"
+   ],
+   "acceptance": [
+    "scope split --ingest refuses a ticket whose files or context name a path missing from the repo.",
+    "The refusal message names the closest real path for each missing path."
+   ],
+   "files": [
+    "tools/scope-commands.mjs"
+   ],
+   "context": [
+    "tools/ticket-paths.mjs",
+    "docs/scope/roadmap.md"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/scope-ingest-paths.test.mjs"
+   ],
+   "dependsOn": [
+    "T-0036"
+   ],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": false,
+   "status": "blocked",
+   "integration": true,
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0038",
+   "title": "Add lane-size module for per-lane byte budgets on split tickets",
+   "type": "build",
+   "stage": "S2",
+   "epic": "lane-sizing",
+   "scopeRefs": [
+    "R-007"
+   ],
+   "acceptance": [
+    "The splitter sizes tickets by file bytes per lane (for example the Hermes 15 KB limit), not only file count.",
+    "A ticket too large for every cheap lane is split or routed to a lane that edits in place."
+   ],
+   "files": [
+    "tools/lane-size.mjs"
+   ],
+   "context": [
+    "tools/escalation.mjs",
+    "tools/brief.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/lane-size.test.mjs"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "blocked",
+   "waveAt": "2026-10-21T05:02:55.672Z",
+   "runId": "1792558986023-2eab439b",
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0039",
+   "title": "Apply lane byte sizing during split ingest and scope approve warnings",
+   "type": "build",
+   "stage": "S2",
+   "epic": "lane-sizing",
+   "scopeRefs": [
+    "R-007"
+   ],
+   "acceptance": [
+    "scope split --ingest routes an oversize ticket to an in-place lane or refuses with a split hint.",
+    "swarm scope approve warns when a ticket exceeds the active lane byte budget."
+   ],
+   "files": [
+    "tools/scope-commands.mjs"
+   ],
+   "context": [
+    "tools/lane-size.mjs",
+    "tools/escalation.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/scope-split-lane-size.test.mjs"
+   ],
+   "dependsOn": [
+    "T-0038",
+    "T-0037"
+   ],
+   "size": "M",
+   "risk": "medium",
+   "sensitive": false,
+   "status": "blocked",
+   "integration": true,
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0040",
+   "title": "Make build tickets own their test files in ticket-manifest prompts",
+   "type": "build",
+   "stage": "S2",
+   "epic": "build-owns-tests",
+   "scopeRefs": [
+    "R-008"
+   ],
+   "acceptance": [
+    "A build ticket writes or owns the test file that proves it, so there is no build → test → fix chain.",
+    "The critical path of a typical scope is shorter than before on the same input."
+   ],
+   "files": [
+    "tools/ticket-manifest.mjs"
+   ],
+   "context": [
+    "tools/wiring.mjs",
+    "tools/tickets.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/ticket-manifest-owns.test.mjs"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "blocked",
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0041",
+   "title": "Keep test tickets after build modules in wiring order",
+   "type": "build",
+   "stage": "S2",
+   "epic": "build-owns-tests",
+   "scopeRefs": [
+    "R-008"
+   ],
+   "acceptance": [
+    "orderTestsAfterBuild leaves build tickets that list tests without waiting on separate test tickets.",
+    "A split ingest note is emitted when test ordering is flipped."
+   ],
+   "files": [
+    "tools/wiring.mjs"
+   ],
+   "context": [
+    "tests/splitter-lesson-55.test.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/wiring-build-owns.test.mjs"
+   ],
+   "dependsOn": [
+    "T-0040"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "blocked",
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0042",
+   "title": "Wire build-owns-tests rules into scope split ingest",
+   "type": "build",
+   "stage": "S2",
+   "epic": "build-owns-tests",
+   "scopeRefs": [
+    "R-008"
+   ],
+   "acceptance": [
+    "scope split --ingest accepts a build ticket that lists tests in its tests field without a separate test ticket.",
+    "The ingest report shows a shorter dependency chain than test-first splits."
+   ],
+   "files": [
+    "tools/scope-commands.mjs"
+   ],
+   "context": [
+    "tools/wiring.mjs",
+    "tools/ticket-manifest.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/scope-ingest-owns-tests.test.mjs"
+   ],
+   "dependsOn": [
+    "T-0041",
+    "T-0039",
+    "T-0040"
+   ],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": false,
+   "status": "blocked",
+   "integration": true,
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0043",
+   "title": "Filter acceptance lines to those provable from ticket files and auto context",
+   "type": "build",
+   "stage": "S2",
+   "epic": "acceptance-lines",
+   "scopeRefs": [
+    "R-009"
+   ],
+   "acceptance": [
+    "Every acceptance line can be checked from the ticket's own files plus context the splitter attaches automatically.",
+    "No acceptance line depends on a later ticket's files."
+   ],
+   "files": [
+    "tools/acceptance-provable.mjs"
+   ],
+   "context": [
+    "tools/acceptance.mjs",
+    "tools/ticket-context.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/acceptance-provable.test.mjs"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "done",
+   "waveAt": "2026-10-21T05:02:55.672Z",
+   "runId": "1792558986023-2eab439b",
+   "acceptanceResults": [
+    {
+     "n": 1,
+     "line": "Every acceptance line can be checked from the ticket's own files plus context the splitter attaches automatically.",
+     "by": "review",
+     "verdict": "pass",
+     "evidence": "tools/acceptance-provable.mjs:71-102 and 131-168 allow only the ticket's own files, its context and contracts, auto context from buildTicketContext, and its dependencies' files. Any other path is dropped as outside-context."
+    },
+    {
+     "n": 2,
+     "line": "No acceptance line depends on a later ticket's files.",
+     "by": "review",
+     "verdict": "pass",
+     "evidence": "tools/acceptance-provable.mjs:143-150 drops a line that names a file owned by a transitive dependent ticket, with code later-ticket-file."
+    }
+   ]
+  },
+  {
+   "id": "T-0044",
+   "title": "Reject or trim unprovable acceptance lines at split ingest",
+   "type": "build",
+   "stage": "S2",
+   "epic": "acceptance-lines",
+   "scopeRefs": [
+    "R-009"
+   ],
+   "acceptance": [
+    "scope split --ingest refuses a build ticket whose acceptance names files it does not write or own.",
+    "Copied requirement acceptance lines skip route-level checks until the integration ticket exists."
+   ],
+   "files": [
+    "tools/scope-commands.mjs"
+   ],
+   "context": [
+    "tools/acceptance-provable.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/scope-ingest-acceptance.test.mjs"
+   ],
+   "dependsOn": [
+    "T-0043",
+    "T-0042"
+   ],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": false,
+   "status": "blocked",
+   "integration": true,
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0045",
+   "title": "Tag sensitive only for auth, database, payments, secrets and public routes",
+   "type": "build",
+   "stage": "S2",
+   "epic": "sensitive-tags",
+   "scopeRefs": [
+    "R-010"
+   ],
+   "acceptance": [
+    "Tickets are tagged sensitive only for auth, database, payments, secrets and public routes.",
+    "A scope like atlas store-wrapper no longer tags every ticket sensitive."
+   ],
+   "files": [
+    "tools/sensitive-ticket.mjs"
+   ],
+   "context": [
+    "tools/scope.mjs",
+    "tools/sensitive-paths.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/sensitive-ticket.test.mjs"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "done",
+   "waveAt": "2026-10-21T05:28:25.090Z",
+   "attempts": 2,
+   "escalation": 2,
+   "retryNote": "failed checks: security review; medium tools/sensitive-ticket.mjs:57 isSensitiveTicket returns false whenever scope is missing, before the built-in topic patterns run, so auth/payments/database tickets go untagged and skip security review. (fix: Always run sensitiveTopicsInText on the ticket text; only skip the scope-entry part when there is no scope.); medium tools/sensitive-ticket.mjs:13 '\\.env\\b' sits inside an outer \\b, which needs a word character before '.', so '.env', '.env.local' etc. never match; tickets touching env/",
+   "retryHistory": [
+    {
+     "run": "1792558986023-2eab439b",
+     "note": "failed checks: security review; medium tools/sensitive-ticket.mjs:8 The auth, database and secrets patterns have no entries for token(s), refresh/access token, cookie, csrf, rls/row-level security, po",
+     "level": 1
+    },
+    {
+     "run": "1792559916524-68e3062a",
+     "note": "failed checks: security review; medium tools/sensitive-ticket.mjs:57 isSensitiveTicket returns false whenever scope is missing, before the built-in topic patterns run, so auth/payments/database ticket",
+     "level": 2
+    }
+   ],
+   "runId": "1792560508576-4b57c927",
+   "acceptanceResults": [
+    {
+     "n": 1,
+     "line": "Tickets are tagged sensitive only for auth, database, payments, secrets and public routes.",
+     "by": "review",
+     "verdict": "pass",
+     "evidence": "tools/sensitive-ticket.mjs:4-14 limits auto-tagging to five topics (auth, database, payments, secrets, public-routes). Each has its own regex, and isSensitiveTicketText (line 46-50) tags only when one of them matches. Tests/sensitive-ticket.test.mjs:37-52 and :125-167 cover this. Some keywords are b"
+    },
+    {
+     "n": 2,
+     "line": "A scope like atlas store-wrapper no longer tags every ticket sensitive.",
+     "by": "review",
+     "verdict": "pass",
+     "evidence": "isSensitiveTicketText ignores the scope argument (tools/sensitive-ticket.mjs:46-50). Scope entries like 'atlas store-wrapper' therefore never tag a ticket, and filteredSensitiveScope (lines 29-34) drops entries with no topic. Tests/sensitive-ticket.test.mjs:54-83 and :153-161 confirm that atlas-only"
+    }
+   ]
+  },
+  {
+   "id": "T-0046",
+   "title": "Use precise sensitive tagging during split ingest instead of scope phrase match",
+   "type": "build",
+   "stage": "S2",
+   "epic": "sensitive-tags",
+   "scopeRefs": [
+    "R-010"
+   ],
+   "acceptance": [
+    "scope split --ingest leaves sensitive false on a store-wrapper ticket that does not touch auth or customer data.",
+    "A ticket that writes a public API route is marked sensitive."
+   ],
+   "files": [
+    "tools/scope-commands.mjs"
+   ],
+   "context": [
+    "tools/sensitive-ticket.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/scope-ingest-sensitive.test.mjs"
+   ],
+   "dependsOn": [
+    "T-0045",
+    "T-0044"
+   ],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": false,
+   "status": "blocked",
+   "integration": true,
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0047",
+   "title": "Compute file owners from open tickets and release done ticket files",
+   "type": "build",
+   "stage": "S2",
+   "epic": "existing-tickets",
+   "scopeRefs": [
+    "R-011"
+   ],
+   "acceptance": [
+    "Done tickets release their files, and only open or running tickets block a file in a wave.",
+    "New tickets can list existing open tickets as dependsOn."
+   ],
+   "files": [
+    "tools/ticket-file-owners.mjs"
+   ],
+   "context": [
+    "tools/tickets.mjs",
+    "tools/autopilot-ready-deps.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/ticket-file-owners.test.mjs"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "done"
+  },
+  {
+   "id": "T-0048",
+   "title": "Expose existing ticket file locks to split workers and merge ingest",
+   "type": "build",
+   "stage": "S2",
+   "epic": "existing-tickets",
+   "scopeRefs": [
+    "R-011"
+   ],
+   "acceptance": [
+    "scope split for a change order lists open tickets whose files would block new tickets.",
+    "scope split --ingest accepts dependsOn keys that reference existing ledger ticket ids."
+   ],
+   "files": [
+    "tools/scope-commands.mjs"
+   ],
+   "context": [
+    "tools/ticket-file-owners.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/scope-split-existing.test.mjs"
+   ],
+   "dependsOn": [
+    "T-0047",
+    "T-0046"
+   ],
+   "size": "M",
+   "risk": "medium",
+   "sensitive": false,
+   "status": "done",
+   "integration": true
+  },
+  {
+   "id": "T-0049",
+   "title": "Simulate ingest waves for slot count, fill and critical path length",
+   "type": "build",
+   "stage": "S2",
+   "epic": "wave-simulation",
+   "scopeRefs": [
+    "R-012"
+   ],
+   "acceptance": [
+    "Before ingest the swarm simulates waves for the current slot count.",
+    "If the critical path is over 25% of tickets or average fill is under 50% of slots, it re-splits or asks."
+   ],
+   "files": [
+    "tools/split-wave-sim.mjs"
+   ],
+   "context": [
+    "tools/scope-integrity.mjs",
+    "tools/tickets.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/split-wave-sim.test.mjs"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "blocked",
+   "waveAt": "2026-10-21T05:02:55.672Z",
+   "runId": "1792558986023-2eab439b",
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0050",
+   "title": "Run wave simulation before scope split --ingest writes the ledger",
+   "type": "build",
+   "stage": "S2",
+   "epic": "wave-simulation",
+   "scopeRefs": [
+    "R-012"
+   ],
+   "acceptance": [
+    "scope split --ingest refuses when simulated critical path exceeds 25% of tickets.",
+    "scope split --ingest asks the owner when average wave fill is under half the slot count."
+   ],
+   "files": [
+    "tools/scope-commands.mjs"
+   ],
+   "context": [
+    "tools/split-wave-sim.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/scope-ingest-waves.test.mjs"
+   ],
+   "dependsOn": [
+    "T-0049",
+    "T-0048"
+   ],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": false,
+   "status": "blocked",
+   "integration": true,
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0051",
+   "title": "Re-split or reroute blocked tickets after two failures without a manifest",
+   "type": "build",
+   "stage": "S2",
+   "epic": "auto-replan",
+   "scopeRefs": [
+    "R-013"
+   ],
+   "acceptance": [
+    "A ticket that blocks, or fails twice, is re-split or rerouted without the orchestrator writing a manifest.",
+    "The re-plan is logged with its reason."
+   ],
+   "files": [
+    "tools/ticket-replan.mjs"
+   ],
+   "context": [
+    "tools/escalation.mjs",
+    "tools/tickets.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/ticket-replan.test.mjs"
+   ],
+   "dependsOn": [],
+   "size": "M",
+   "risk": "medium",
+   "sensitive": false,
+   "status": "blocked",
+   "waveAt": "2026-10-21T05:02:55.672Z",
+   "runId": "1792558986023-2eab439b",
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0052",
+   "title": "Invoke ticket replan from scope sync when a ticket blocks or fails twice",
+   "type": "build",
+   "stage": "S2",
+   "epic": "auto-replan",
+   "scopeRefs": [
+    "R-013"
+   ],
+   "acceptance": [
+    "swarm scope sync logs a replan event with the ticket id and reason.",
+    "A replanned ticket returns to ready with smaller files or a different lane."
+   ],
+   "files": [
+    "tools/scope-commands.mjs"
+   ],
+   "context": [
+    "tools/ticket-replan.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/scope-sync-replan.test.mjs"
+   ],
+   "dependsOn": [
+    "T-0051",
+    "T-0050",
+    "T-0202",
+    "T-0203",
+    "T-0205"
+   ],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": false,
+   "status": "blocked",
+   "integration": true,
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0053",
+   "title": "Validate delete-only tickets and migration ticket DDL rules",
+   "type": "build",
+   "stage": "S2",
+   "epic": "delete-rename-migration",
+   "scopeRefs": [
+    "R-014"
+   ],
+   "acceptance": [
+    "A delete-only ticket passes sync once its files are gone.",
+    "Rename and migration tickets have their own type with matching checks."
+   ],
+   "files": [
+    "tools/ticket-sync-checks.mjs"
+   ],
+   "context": [
+    "tools/tickets.mjs",
+    "tests/lesson-39-integrate.test.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/ticket-sync-checks.test.mjs"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "blocked",
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0054",
+   "title": "Add rename ticket type validation alongside migration checks",
+   "type": "build",
+   "stage": "S2",
+   "epic": "delete-rename-migration",
+   "scopeRefs": [
+    "R-014"
+   ],
+   "acceptance": [
+    "validateTicket accepts a rename ticket with exactly one new file and one deletes entry.",
+    "A migration ticket still requires DDL-only files under supabase/migrations."
+   ],
+   "files": [
+    "tools/tickets.mjs"
+   ],
+   "context": [
+    "tools/ticket-sync-checks.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/ticket-rename-type.test.mjs"
+   ],
+   "dependsOn": [
+    "T-0053"
+   ],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": false,
+   "status": "blocked",
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0055",
+   "title": "Wire delete and rename ticket sync checks into scope sync integrated path",
+   "type": "build",
+   "stage": "S2",
+   "epic": "delete-rename-migration",
+   "scopeRefs": [
+    "R-014"
+   ],
+   "acceptance": [
+    "swarm scope sync --integrated marks a delete-only ticket done when declared files are absent.",
+    "A rename ticket is refused until the old path is gone and the new path exists."
+   ],
+   "files": [
+    "tools/scope-commands.mjs"
+   ],
+   "context": [
+    "tools/ticket-sync-checks.mjs",
+    "tools/tickets.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/scope-sync-delete.test.mjs"
+   ],
+   "dependsOn": [
+    "T-0054",
+    "T-0052",
+    "T-0053"
+   ],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": false,
+   "status": "blocked",
+   "integration": true,
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0056",
+   "title": "Exclude human tickets from build progress and wave blocking counts",
+   "type": "build",
+   "stage": "S2",
+   "epic": "human-checklist",
+   "scopeRefs": [
+    "R-015"
+   ],
+   "acceptance": [
+    "Human tickets do not count toward build progress or block wave planning.",
+    "They appear to the owner as a checklist with steps."
+   ],
+   "files": [
+    "tools/human-progress.mjs"
+   ],
+   "context": [
+    "tools/scope-loop.mjs",
+    "tools/scope-integrity.mjs"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/human-progress.test.mjs"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "blocked",
+   "waveAt": "2026-10-21T05:02:55.672Z",
+   "runId": "1792558986023-2eab439b",
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0057",
+   "title": "Show human ticket checklists on Swarm Watch plan tab without build progress",
+   "type": "build",
+   "stage": "S2",
+   "epic": "human-checklist",
+   "scopeRefs": [
+    "R-015"
+   ],
+   "acceptance": [
+    "Swarm Watch plan tab lists human tickets with their steps as a checklist.",
+    "Build progress percent ignores human tickets."
+   ],
+   "files": [
+    "tools/watch-plan.mjs"
+   ],
+   "context": [
+    "tools/human-progress.mjs",
+    "tools/watch-assets/plan-views.js"
+   ],
+   "contracts": [],
+   "tests": [
+    "tests/watch-human-progress.test.mjs"
+   ],
+   "dependsOn": [
+    "T-0056",
+    "T-0055"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "blocked",
+   "integration": true,
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0058",
+   "title": "Owner validates human ticket checklist UX on Swarm Watch",
+   "type": "human",
+   "stage": "S2",
+   "epic": "human-checklist",
+   "scopeRefs": [
+    "R-015"
+   ],
+   "acceptance": [
+    "Human tickets do not count toward build progress or block wave planning.",
+    "They appear to the owner as a checklist with steps."
+   ],
+   "files": [],
+   "context": [],
+   "contracts": [],
+   "tests": [],
+   "dependsOn": [
+    "T-0057"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "blocked",
+   "steps": [
+    "Open Swarm Watch for a project with at least one human ticket in todo.",
+    "Confirm the plan tab shows the human ticket title and numbered steps.",
+    "Confirm build progress percent does not change when only human tickets are open.",
+    "Mark one human ticket done from the owner checklist flow.",
+    "Confirm wave planning still starts build tickets while human items remain open."
+   ],
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0059",
+   "title": "Document Ticket Manager v2 ingest and replan behavior in dogfood fixes design",
+   "type": "docs",
+   "stage": "S2",
+   "epic": "documentation",
+   "scopeRefs": [
+    "R-006",
+    "R-007",
+    "R-008",
+    "R-009",
+    "R-010",
+    "R-011",
+    "R-012",
+    "R-013",
+    "R-014",
+    "R-015"
+   ],
+   "acceptance": [
+    "docs/plans/dogfood-fixes-design.md describes path validation, lane sizing, and wave simulation at ingest.",
+    "The doc names how human tickets are excluded from build progress."
+   ],
+   "files": [
+    "docs/plans/dogfood-fixes-design.md"
+   ],
+   "context": [
+    "docs/scope/roadmap.md",
+    "tools/scope-commands.mjs"
+   ],
+   "contracts": [],
+   "tests": [],
+   "dependsOn": [
+    "T-0057"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "done"
+  },
+  {
+   "id": "T-0060",
+   "title": "Regression tests for ticket path validation at ingest",
+   "type": "test",
+   "stage": "S2",
+   "epic": "path-validation",
+   "scopeRefs": [
+    "R-006"
+   ],
+   "acceptance": [
+    "Every file a ticket writes or reads as context is checked against the real file tree before ingest.",
+    "A ticket naming a missing file is rejected with the closest real path suggested."
+   ],
+   "files": [
+    "tests/ticket-paths-regression.test.mjs"
+   ],
+   "context": [
+    "tools/ticket-paths.mjs",
+    "tools/scope-commands.mjs"
+   ],
+   "contracts": [],
+   "tests": [],
+   "dependsOn": [
+    "T-0037",
+    "T-0036"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "blocked",
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0061",
+   "title": "Regression tests for split wave simulation thresholds",
+   "type": "test",
+   "stage": "S2",
+   "epic": "wave-simulation",
+   "scopeRefs": [
+    "R-012"
+   ],
+   "acceptance": [
+    "Before ingest the swarm simulates waves for the current slot count.",
+    "If the critical path is over 25% of tickets or average fill is under 50% of slots, it re-splits or asks."
+   ],
+   "files": [
+    "tests/split-wave-sim-regression.test.mjs"
+   ],
+   "context": [
+    "tools/split-wave-sim.mjs",
+    "tools/scope-commands.mjs"
+   ],
+   "contracts": [],
+   "tests": [],
+   "dependsOn": [
+    "T-0050",
+    "T-0049"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "blocked",
+   "blockReason": "manual"
+  },
+  {
+   "id": "T-0062",
+   "title": "Regression tests for delete-only and rename ticket sync",
+   "type": "test",
+   "stage": "S2",
+   "epic": "delete-rename-migration",
+   "scopeRefs": [
+    "R-014"
+   ],
+   "acceptance": [
+    "A delete-only ticket passes sync once its files are gone.",
+    "Rename and migration tickets have their own type with matching checks."
+   ],
+   "files": [
+    "tests/ticket-delete-rename-regression.test.mjs"
+   ],
+   "context": [
+    "tools/ticket-sync-checks.mjs",
+    "tools/tickets.mjs"
+   ],
+   "contracts": [],
+   "tests": [],
+   "dependsOn": [
+    "T-0055",
+    "T-0053",
+    "T-0054"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "blocked",
+   "blockReason": "manual"
+  }
+ ],
+ "approved": {
+  "at": "2026-10-21T06:55:35.358Z",
+  "by": "owner",
+  "scopeHash": "9f7a4d502a540b227b88f796b0fa49b0337d8e0ab3fa34305e85c4237ad6e57e",
+  "ticketsHash": "cf5b2418b0fcfa046eba0be8647467f93d4fb6c54f60af63aa0317dc1153e55f"
+ },
+ "createdAt": "2026-10-21T02:11:51.470Z",
+ "updatedAt": "2026-10-21T18:38:16.371Z"
+}
