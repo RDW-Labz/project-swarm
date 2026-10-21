@@ -47,17 +47,17 @@ export function validateOrchestratorConfig(raw) {
   return errors.length ? { ok: false, config: null, errors } : { ok: true, config: Object.keys(config).length ? config : null, errors: [] };
 }
 
-/** Resolved handoff threshold in bytes: explicit option, then env, then profile orchestrator block, then default. */
+/** Resolved handoff threshold in bytes: explicit option, then profile orchestrator block, then env, then default. */
 export function handoffTranscriptBytes({ threshold, orchestrator, config, env = process.env } = {}) {
   const explicit = parseThresholdInt(threshold);
   if (explicit !== null) return explicit;
-  const fromEnv = parseEnvThreshold(env[HANDOFF_TRANSCRIPT_BYTES_ENV]);
-  if (fromEnv !== null) return fromEnv;
   const block = orchestrator ?? config?.orchestrator;
   if (isObj(block) && block.handoffTranscriptBytes !== undefined) {
     const fromProfile = parseThresholdInt(block.handoffTranscriptBytes);
     if (fromProfile !== null) return fromProfile;
   }
+  const fromEnv = parseEnvThreshold(env[HANDOFF_TRANSCRIPT_BYTES_ENV]);
+  if (fromEnv !== null) return fromEnv;
   return DEFAULT_HANDOFF_TRANSCRIPT_BYTES;
 }
 

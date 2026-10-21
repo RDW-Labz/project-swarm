@@ -1,0 +1,699 @@
+{
+  "openapi": "3.1.0",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "Swarm Watch S4 operations API",
+    "version": "1.0.0",
+    "description": "Contract for the local Swarm Watch board and its tailnet-only owner actions. Read routes accept the board token in x-watch-token or the t query parameter. Owner routes additionally require the Tailscale identity header and are never reachable with agent-session markers or through a remote board request carrying local=1."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "The loopback board server, optionally published through Tailscale Serve"
+    }
+  ],
+  "tags": [
+    {
+      "name": "board-read",
+      "description": "Read-only board data"
+    },
+    {
+      "name": "owner-actions",
+      "description": "Tailnet-only, signed-in owner decisions"
+    }
+  ],
+  "x-tickets": {
+    "GET /api/board": ["T-0123"],
+    "GET /api/project": ["T-0123"],
+    "GET /api/live": ["T-0123"],
+    "GET /api/history": ["T-0123"],
+    "POST /api/owner/actions/{itemId}/prepare": ["T-0111"],
+    "POST /api/owner/actions/{itemId}/decision": ["T-0112"],
+    "GET /api/owner/audit": ["T-0114"]
+  },
+  "x-owner-route-policy": {
+    "tailnetOnly": true,
+    "requiresBoardToken": true,
+    "requiresTailnetSignIn": true,
+    "rejectsAgentSessionMarkers": true,
+    "rejectsRemoteBoardLocalQuery": true,
+    "description": "The owner action endpoints must refuse requests carrying agent-session markers and must not be exposed through a remote board fetched with local=1. Merge, deploy, cap-raise, spend, key, and migration actions are always refused server-side."
+  },
+  "paths": {
+    "/api/board": {
+      "get": {
+        "tags": ["board-read"],
+        "operationId": "getBoard",
+        "summary": "Get the board snapshot",
+        "description": "Returns machine totals and project overviews. local=1 limits federation data to this machine and never enables owner actions.",
+        "security": [
+          {"boardTokenHeader": []},
+          {"boardTokenQuery": []}
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/LocalOnly"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BoardSnapshot"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/project": {
+      "get": {
+        "tags": ["board-read"],
+        "operationId": "getProject",
+        "summary": "Get one project detail",
+        "security": [
+          {"boardTokenHeader": []},
+          {"boardTokenQuery": []}
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ProjectDetail"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/live": {
+      "get": {
+        "tags": ["board-read"],
+        "operationId": "getLiveProject",
+        "summary": "Get live runs for one project",
+        "security": [
+          {"boardTokenHeader": []},
+          {"boardTokenQuery": []}
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/LiveProject"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/history": {
+      "get": {
+        "tags": ["board-read"],
+        "operationId": "getHistory",
+        "summary": "Get board history",
+        "security": [
+          {"boardTokenHeader": []},
+          {"boardTokenQuery": []}
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectIdOptional"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/History"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/owner/actions/{itemId}/prepare": {
+      "post": {
+        "tags": ["owner-actions"],
+        "operationId": "prepareOwnerAction",
+        "summary": "Prepare an owner decision",
+        "description": "Step 1 of the confirmation flow. The returned confirmToken is short-lived, single-use, and bound to itemId. This route is unavailable to agent sessions and to remote-board requests with local=1.",
+        "security": [
+          {"boardTokenHeader": [], "tailnetSignIn": []},
+          {"boardTokenQuery": [], "tailnetSignIn": []}
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ItemId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/PrepareOwnerAction"
+          },
+          "401": {
+            "$ref": "#/components/responses/NotSignedIn"
+          },
+          "403": {
+            "$ref": "#/components/responses/OwnerForbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/ConfirmConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/NotOwnerDecidable"
+          }
+        }
+      }
+    },
+    "/api/owner/actions/{itemId}/decision": {
+      "post": {
+        "tags": ["owner-actions"],
+        "operationId": "submitOwnerDecision",
+        "summary": "Approve or deny an owner-decidable request",
+        "description": "Step 2 of the confirmation flow. The server refuses merge, deploy, cap-raise, spend, key, and migration actions regardless of client input. Agent-session markers and remote-board local=1 requests are always refused.",
+        "security": [
+          {"boardTokenHeader": [], "tailnetSignIn": []},
+          {"boardTokenQuery": [], "tailnetSignIn": []}
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ItemId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerDecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OwnerDecision"
+          },
+          "401": {
+            "$ref": "#/components/responses/NotSignedIn"
+          },
+          "403": {
+            "$ref": "#/components/responses/OwnerForbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/ConfirmConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/NotOwnerDecidable"
+          }
+        }
+      }
+    },
+    "/api/owner/audit": {
+      "get": {
+        "tags": ["owner-actions"],
+        "operationId": "getOwnerAudit",
+        "summary": "Get owner action audit entries",
+        "description": "Returns owner action audit entries without board tokens or other secret material. This endpoint is unavailable to agent sessions and to remote-board requests with local=1.",
+        "security": [
+          {"boardTokenHeader": [], "tailnetSignIn": []},
+          {"boardTokenQuery": [], "tailnetSignIn": []}
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OwnerAudit"
+          },
+          "401": {
+            "$ref": "#/components/responses/NotSignedIn"
+          },
+          "403": {
+            "$ref": "#/components/responses/OwnerForbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/ConfirmConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/NotOwnerDecidable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "boardTokenHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-watch-token",
+        "description": "The board token sent as a request header. Read routes may use this or the t query parameter."
+      },
+      "boardTokenQuery": {
+        "type": "apiKey",
+        "in": "query",
+        "name": "t",
+        "description": "The board token sent as the existing t query parameter. Read routes may use this or x-watch-token."
+      },
+      "tailnetSignIn": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Tailscale-User-Login",
+        "description": "The identity header inserted by Tailscale Serve for the signed-in tailnet owner. Client-supplied or Funnel requests do not satisfy this requirement."
+      }
+    },
+    "parameters": {
+      "ProjectId": {
+        "name": "id",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "ProjectIdOptional": {
+        "name": "id",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "LocalOnly": {
+        "name": "local",
+        "in": "query",
+        "required": false,
+        "description": "Use local=1 to request only this machine's board data. It never makes owner routes reachable.",
+        "schema": {
+          "type": "string",
+          "enum": ["1"]
+        }
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      },
+      "ItemId": {
+        "name": "itemId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    },
+    "schemas": {
+      "Money": {
+        "type": "object",
+        "description": "Money values used by board spend and cap reporting. billedUsd is actual billed spend; listUsd is subscription/list value; capUsedUsd is the value applied to the capBasis.",
+        "properties": {
+          "billedUsd": {"type": ["number", "null"], "minimum": 0},
+          "listUsd": {"type": ["number", "null"], "minimum": 0},
+          "capBasis": {"type": ["string", "null"], "enum": ["billed", "billed+list", null]},
+          "capUsedUsd": {"type": ["number", "null"], "minimum": 0},
+          "usd": {"type": ["number", "null"], "minimum": 0},
+          "capUsd": {"type": ["number", "null"], "minimum": 0},
+          "reached": {"type": "boolean"},
+          "todayUsd": {"type": "number", "minimum": 0},
+          "weekUsd": {"type": "number", "minimum": 0},
+          "allUsd": {"type": "number", "minimum": 0},
+          "paidUsd": {"type": "number", "minimum": 0},
+          "flatRateListUsd": {"type": "number", "minimum": 0}
+        },
+        "additionalProperties": true
+      },
+      "IdleLaneReason": {
+        "type": "object",
+        "required": ["reason", "text"],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": ["rate-limited", "paused", "daily-cap", "not-set-up", "waiting-slot", "queued", "routing", "not-routed"]
+          },
+          "text": {"type": "string"},
+          "until": {"type": ["string", "null"], "format": "date-time"}
+        },
+        "additionalProperties": true
+      },
+      "SplitQuality": {
+        "type": "object",
+        "description": "The split-quality result shown by project detail. Metrics may include overhead ratio, first-try pass rate, critical path, wave fill, collisions, review dollars per ticket, and ticket sizes.",
+        "properties": {
+          "grade": {"type": "string", "enum": ["green", "amber", "red", "unknown"]},
+          "overheadRatio": {"type": ["number", "null"], "minimum": 0},
+          "firstTryPassRate": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+          "criticalPath": {"type": ["number", "null"], "minimum": 0},
+          "waveFill": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+          "collisions": {"type": ["integer", "null"], "minimum": 0},
+          "reviewUsdPerTicket": {"type": ["number", "null"], "minimum": 0},
+          "ticketSizes": {"type": ["array", "null"], "items": {"type": "number", "minimum": 0}},
+          "metrics": {"type": "array", "items": {"$ref": "#/components/schemas/SplitMetric"}}
+        },
+        "additionalProperties": true
+      },
+      "SplitMetric": {
+        "type": "object",
+        "required": ["label", "grade"],
+        "properties": {
+          "label": {"type": "string"},
+          "grade": {"type": "string", "enum": ["green", "amber", "red", "unknown"]},
+          "value": {},
+          "text": {"type": ["string", "null"]}
+        },
+        "additionalProperties": true
+      },
+      "Spend": {
+        "allOf": [
+          {"$ref": "#/components/schemas/Money"}
+        ],
+        "description": "Project spend fields, including the billed/list/cap values required by S4."
+      },
+      "Machine": {
+        "type": "object",
+        "required": ["agents", "cost", "liveRuns"],
+        "properties": {
+          "name": {"type": ["string", "null"]},
+          "host": {"type": ["string", "null"]},
+          "version": {"type": ["string", "null"]},
+          "agents": {"type": "object", "additionalProperties": true},
+          "cost": {"$ref": "#/components/schemas/Money"},
+          "liveRuns": {"type": "integer", "minimum": 0},
+          "laneIdle": {
+            "type": "object",
+            "description": "Idle-lane reasons keyed by display lane, such as Codex, Cursor, or GPU.",
+            "additionalProperties": {"$ref": "#/components/schemas/IdleLaneReason"}
+          },
+          "workers": {"type": ["object", "null"], "additionalProperties": true},
+          "lanes": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+        },
+        "additionalProperties": true
+      },
+      "ProjectOverview": {
+        "type": "object",
+        "required": ["id", "name", "spend"],
+        "properties": {
+          "id": {"type": "string"},
+          "name": {"type": ["string", "null"]},
+          "root": {"type": "string"},
+          "spend": {"$ref": "#/components/schemas/Spend"},
+          "split": {"$ref": "#/components/schemas/SplitQuality"},
+          "idle": {"type": "boolean"},
+          "idleWithReady": {"type": "boolean"},
+          "liveCount": {"type": "integer", "minimum": 0},
+          "tickets": {"type": "object", "additionalProperties": true},
+          "progress": {"type": ["object", "null"], "additionalProperties": true}
+        },
+        "additionalProperties": true
+      },
+      "FederatedMachine": {
+        "type": "object",
+        "required": ["id", "name", "version", "online"],
+        "properties": {
+          "id": {"type": "string"},
+          "name": {"type": "string"},
+          "version": {"type": ["string", "null"]},
+          "online": {"type": "boolean"},
+          "lastSeenAt": {"type": ["string", "null"], "format": "date-time"},
+          "projects": {"type": "array", "items": {"$ref": "#/components/schemas/ProjectOverview"}},
+          "drift": {"$ref": "#/components/schemas/Drift"}
+        },
+        "additionalProperties": true
+      },
+      "Drift": {
+        "type": "object",
+        "required": ["present"],
+        "properties": {
+          "present": {"type": "boolean"},
+          "current": {"type": ["string", "null"]},
+          "expected": {"type": ["string", "null"]},
+          "fields": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": true
+      },
+      "FederatedPeer": {
+        "type": "object",
+        "description": "A discovered peer. Peer records deliberately contain no board token or token-like credential.",
+        "required": ["id", "name", "online"],
+        "properties": {
+          "id": {"type": "string"},
+          "name": {"type": "string"},
+          "host": {"type": ["string", "null"]},
+          "online": {"type": "boolean"},
+          "lastSeenAt": {"type": ["string", "null"], "format": "date-time"},
+          "machineId": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      },
+      "Federation": {
+        "type": "object",
+        "description": "Federated board view. A local=1 request returns only the local machine and does not provide remote peer credentials.",
+        "required": ["machines", "drift", "peers"],
+        "properties": {
+          "machines": {"type": "array", "items": {"$ref": "#/components/schemas/FederatedMachine"}},
+          "drift": {"type": "array", "items": {"$ref": "#/components/schemas/Drift"}},
+          "peers": {"type": "array", "items": {"$ref": "#/components/schemas/FederatedPeer"}}
+        },
+        "additionalProperties": false
+      },
+      "BoardSnapshot": {
+        "type": "object",
+        "required": ["at", "machine", "projects"],
+        "properties": {
+          "at": {"type": "string", "format": "date-time"},
+          "machine": {"$ref": "#/components/schemas/Machine"},
+          "projects": {"type": "array", "items": {"$ref": "#/components/schemas/ProjectOverview"}},
+          "machines": {"type": "array", "items": {"$ref": "#/components/schemas/FederatedMachine"}},
+          "drift": {"type": "array", "items": {"$ref": "#/components/schemas/Drift"}},
+          "peers": {"type": "array", "items": {"$ref": "#/components/schemas/FederatedPeer"}},
+          "federation": {"$ref": "#/components/schemas/Federation"},
+          "openRun": {"type": "boolean"},
+          "server": {"type": "object", "additionalProperties": true}
+        },
+        "additionalProperties": true
+      },
+      "ProjectDetail": {
+        "type": "object",
+        "required": ["id", "name", "spend", "splitQuality"],
+        "properties": {
+          "id": {"type": "string"},
+          "name": {"type": ["string", "null"]},
+          "root": {"type": "string"},
+          "spend": {"$ref": "#/components/schemas/Spend"},
+          "splitQuality": {"$ref": "#/components/schemas/SplitQuality"},
+          "tickets": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+          "runs": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+          "lessons": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+        },
+        "additionalProperties": true
+      },
+      "LiveProject": {
+        "type": "object",
+        "description": "The live project payload returned by board.live(id); its run/job fields are kept extensible as the live view evolves.",
+        "properties": {
+          "id": {"type": "string"},
+          "projectId": {"type": ["string", "null"]},
+          "runs": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+          "at": {"type": ["string", "null"], "format": "date-time"}
+        },
+        "additionalProperties": true
+      },
+      "HistoryEntry": {
+        "type": "object",
+        "properties": {
+          "at": {"type": ["string", "null"], "format": "date-time"},
+          "kind": {"type": ["string", "null"]},
+          "project": {"type": ["string", "null"]},
+          "projectId": {"type": ["string", "null"]},
+          "title": {"type": ["string", "null"]}
+        },
+        "additionalProperties": true
+      },
+      "History": {
+        "oneOf": [
+          {"type": "array", "items": {"$ref": "#/components/schemas/HistoryEntry"}},
+          {"type": "object", "additionalProperties": true}
+        ]
+      },
+      "OwnerDecisionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["decision", "confirm"],
+        "properties": {
+          "decision": {"type": "string", "enum": ["approve", "deny"]},
+          "confirm": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 2000}
+        }
+      },
+      "PrepareOwnerAction": {
+        "type": "object",
+        "required": ["confirmToken", "expiresAt", "summary"],
+        "properties": {
+          "confirmToken": {"type": "string", "minLength": 1},
+          "expiresAt": {"type": "string", "format": "date-time"},
+          "summary": {"type": "string"}
+        },
+        "additionalProperties": false
+      },
+      "OwnerDecision": {
+        "type": "object",
+        "required": ["itemId", "decision", "result"],
+        "properties": {
+          "itemId": {"type": "string"},
+          "decision": {"type": "string", "enum": ["approve", "deny"]},
+          "result": {"type": "string"},
+          "audit": {"$ref": "#/components/schemas/AuditEntry"}
+        },
+        "additionalProperties": true
+      },
+      "AuditEntry": {
+        "type": "object",
+        "required": ["at", "actor", "itemId", "kind", "decision", "result", "machine"],
+        "properties": {
+          "at": {"type": "string", "format": "date-time"},
+          "actor": {"type": "string"},
+          "itemId": {"type": "string"},
+          "kind": {"type": "string"},
+          "decision": {"type": "string", "enum": ["approve", "deny"]},
+          "result": {"type": "string"},
+          "machine": {"type": "string"}
+        },
+        "additionalProperties": true
+      },
+      "OwnerAudit": {
+        "type": "array",
+        "items": {"$ref": "#/components/schemas/AuditEntry"}
+      },
+      "refusedKinds": {
+        "type": "string",
+        "description": "Action kinds that are always refused server-side, regardless of client input.",
+        "enum": ["merge", "deploy", "cap-raise", "spend", "key", "migration"]
+      },
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {"type": "string"},
+          "message": {"type": ["string", "null"]}
+        },
+        "additionalProperties": true
+      }
+    },
+    "responses": {
+      "BoardSnapshot": {
+        "description": "Board snapshot",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/BoardSnapshot"}
+          }
+        }
+      },
+      "ProjectDetail": {
+        "description": "Project detail",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/ProjectDetail"}
+          }
+        }
+      },
+      "LiveProject": {
+        "description": "Live project data",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/LiveProject"}
+          }
+        }
+      },
+      "History": {
+        "description": "Board history",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/History"}
+          }
+        }
+      },
+      "PrepareOwnerAction": {
+        "description": "Confirmation material for the owner action",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/PrepareOwnerAction"}
+          }
+        }
+      },
+      "OwnerDecision": {
+        "description": "Applied owner decision and audit result",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/OwnerDecision"}
+          }
+        }
+      },
+      "OwnerAudit": {
+        "description": "Owner action audit entries",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/OwnerAudit"}
+          }
+        }
+      },
+      "NotSignedIn": {
+        "description": "The request is not signed in through the accepted Tailscale identity.",
+        "content": {
+          "application/json": {"schema": {"$ref": "#/components/schemas/Error"}}
+        }
+      },
+      "Forbidden": {
+        "description": "The board token is missing or invalid.",
+        "content": {
+          "application/json": {"schema": {"$ref": "#/components/schemas/Error"}}
+        }
+      },
+      "OwnerForbidden": {
+        "description": "The request is not from the allowed tailnet owner, carries an agent-session marker, uses remote local=1, or names an action kind that is refused server-side.",
+        "content": {
+          "application/json": {"schema": {"$ref": "#/components/schemas/Error"}}
+        }
+      },
+      "ConfirmConflict": {
+        "description": "The confirmation token is expired or has already been used.",
+        "content": {
+          "application/json": {"schema": {"$ref": "#/components/schemas/Error"}}
+        }
+      },
+      "NotOwnerDecidable": {
+        "description": "The item is not currently decidable by the owner.",
+        "content": {
+          "application/json": {"schema": {"$ref": "#/components/schemas/Error"}}
+        }
+      },
+      "NotFound": {
+        "description": "The requested project or item was not found.",
+        "content": {
+          "application/json": {"schema": {"$ref": "#/components/schemas/Error"}}
+        }
+      }
+    }
+  }
+}

@@ -343,7 +343,7 @@ export function ticketsOf(ledger, scope = null) {
 }
 
 // One project's lane on the board. `liveRuns` are the alive runs of THIS project only.
-export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
+export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null, worktree = false } = {}) {
   const runs = await readRunStates(project.root);
   const liveStateRuns = [];
   const liveStateByRecord = new Map();
@@ -368,14 +368,14 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   });
   const liveIds = new Set(activeLiveRuns.map(r => r.runId));
   let selected;
-  try { selected = await ledgerRoot(project.root); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
+  try { selected = await ledgerRoot(project.root, { ownOnly: worktree }); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
   const ledger = selected.ledger;
   const scope = await scopeFor(selected.root, ledger);
   const spend = await summary(project.root).catch(error => ({ spendUsd: null, capUsd: null, capError: String(error.message).slice(0, 120) }));
   const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
   const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
   const overviewSpend = { usd: capUsedUsd ?? spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
-  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null }).then(progressSummary, () => null);
+  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly: worktree }).then(progressSummary, () => null);
   const cost = costOf(runs, now);
   const agents = agentsOf(liveRunsForAgents, liveIds, now);
   const lastRun = runs.length ? runs[runs.length - 1].state : null;
@@ -474,7 +474,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
       : live.filter(r => family.has(r.root));
     const activeMine = candidates.filter(record => activeRunState(record.state));
     const mine = activeMine.length ? activeMine : candidates;
-    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null }));
+    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null, worktree: Boolean(parentIds[i]) }));
   }
   for (const overview of overviews) {
     overview.parentId = null;
@@ -493,6 +493,11 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   }
   for (const overview of overviews) {
     overview.worktreeIds.sort((a, b) => String(overviews.find(o => o.id === a)?.name ?? '').localeCompare(String(overviews.find(o => o.id === b)?.name ?? '')) || String(a).localeCompare(String(b)));
+  }
+  for (const overview of overviews) {
+    if (!overview.worktreeIds.length || !overview.progress?.headline) continue;
+    const count = overview.worktreeIds.length;
+    overview.progress.headline += ` (incl. ${count} worktree${count === 1 ? '' : 's'})`;
   }
   for (const o of overviews) { const warn = underfilledWaves(o.recentJobCounts, workers?.max); o.warnings = warn ? [{ code: 'waves-underfilled', text: warn }] : []; }
   const blocked = overview => Boolean(
@@ -574,8 +579,9 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
 // One project's page: its tickets by status, its run history, its spend by lane and its lessons. Reads only under project.root.
 export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
   const runs = await readRunStates(project.root, { limit: 200 });
+  const worktree = Boolean(await mainWorktreeRoot(project.root));
   let selected;
-  try { selected = await ledgerRoot(project.root); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
+  try { selected = await ledgerRoot(project.root, { ownOnly: worktree }); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
   const ledger = selected.ledger;
   const scope = await scopeFor(selected.root, ledger);
   const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 1000).map(t => { const stageId = effectiveStage(scope, t); return { id: txt(t.id, 20), title: txt(t.title, 140), status: txt(t.status, 20), stage: stageDisplay(scope, stageId), stageId, risk: txt(t.risk, 10) }; });
@@ -587,7 +593,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
   const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
   const detailSpend = { usd: capUsedUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
-  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null }).catch(() => null);
+  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly: worktree }).catch(() => null);
   const split = await splitQuality({ root: project.root, now, slots }).catch(() => null);
   const benchmarks = await readScorecards(project.root).then(input => scorecardHistory(input)).catch(() => null);
   const handled = await handledForProject(project.root, { now, limit: 20 }).catch(() => null);
@@ -602,6 +608,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
     }),
     spend: { ...detailCost, byLane: plain(byLane), billedUsd: detailCost.paidUsd, listUsd: detailCost.flatRateListUsd, capBasis },
     progress,
+    offLedger: progress?.offLedger ?? progress?.untracked ?? { runs: [], count: 0, jobs: 0, newest: [], warning: 'untracked work: no ledger ticket' },
     splitQuality: split,
     benchmarks,
     handled,
