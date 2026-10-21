@@ -4,17 +4,26 @@
 // Text is always set with textContent. Read-only: everything comes from the board data.
 import { mountRobotHead } from './robot-head.js';
 
-var HEAD = { working: 'working', thinking: 'thinking', waiting: 'idle', idle: 'sleeping' };
+var HEAD = { working: 'working', thinking: 'thinking', waiting: 'idle', idle: 'sleeping', ended: 'sleeping' };
 var COLOR = '#c084fc';
 function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined && text !== null) { n.textContent = text; } return n; }
 function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
 function tokens(n) { return typeof n !== 'number' ? '-' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n); }
 function span(ms) { var s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm ' + (s % 60) + 's' : Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm'; }
 
-export var STATE_TEXT = { working: 'working', thinking: 'thinking', waiting: 'waiting on you', idle: 'idle' };
+export var STATE_TEXT = { working: 'working', thinking: 'thinking', waiting: 'waiting on you', idle: 'idle', ended: 'ended' };
+
+function stateText(s, now) {
+  if (s.state === 'ended') {
+    var at = Date.parse(s.endedAt || s.since);
+    return 'ended' + (isFinite(at) ? ' ' + span(now - at) + ' ago' : '');
+  }
+  return STATE_TEXT[s.state] || s.state;
+}
 
 /** What the session is doing now, short: "Edit src/a.ts, 12s", "Bash npm test, 4s", "thinking, 8s", "waiting on you, 4m". */
 export function doingText(s, now) {
+  if (s.state === 'ended') { return stateText(s, now); }
   var since = s.since ? now - Date.parse(s.since) : null;
   var tail = since === null ? '' : ', ' + span(since);
   if (s.state === 'working' && s.doing) { return s.doing.tool + ' ' + (s.doing.file || s.doing.command || '') + tail; }
@@ -43,7 +52,7 @@ export function renderOrchestrator(host, sessions, opts) {
     var hit = map.get(key);
     if (!hit) {
       var card = el('div', 'orch-card'); var holder = el('div', 'orch-head');
-      var handle = mountRobotHead(holder, { state: HEAD[s.state] || 'idle', size: size, color: COLOR, screenColor: '#efe4ff', id: 'orch|' + key, label: 'orchestrator session in ' + s.project + ', ' + (STATE_TEXT[s.state] || s.state) });
+      var handle = mountRobotHead(holder, { state: HEAD[s.state] || 'idle', size: size, color: COLOR, screenColor: '#efe4ff', id: 'orch|' + key, label: 'orchestrator session in ' + s.project + ', ' + stateText(s, now) });
       var text = el('div', 'orch-text');
       hit = { card: card, handle: handle, name: el('div', 'orch-name'), doing: el('div', 'orch-doing mono'), cost: el('div', 'orch-cost sub'), hand: el('div', 'orch-hand') };
       card.appendChild(holder); text.appendChild(hit.name); text.appendChild(hit.doing); text.appendChild(hit.cost); text.appendChild(hit.hand); card.appendChild(text);

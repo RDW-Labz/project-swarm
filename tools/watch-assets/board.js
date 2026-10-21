@@ -166,7 +166,7 @@ function renderKpis(m) {
 }
 function renderOrch(m) {
   var o = m.orchestrator || { sessions: [] };
-  $('orchCount').textContent = String(o.sessions.filter(function (x) { return x.state !== 'idle'; }).length);
+  $('orchCount').textContent = String(o.sessions.filter(function (x) { return x.state !== 'idle' && x.state !== 'ended'; }).length);
   renderOrchestrator($('orchBay'), o.sessions, { now: Date.now() });
   var mix = o.swarmPct === null || o.swarmPct === undefined ? '' : 'All projects: swarm-built ' + o.swarmPct + '%, hand-built ' + o.handPct + '% (' + o.handBuiltFiles + ' file' + (o.handBuiltFiles === 1 ? '' : 's') + ' edited by hand).';
   $('orchNote').textContent = mix;

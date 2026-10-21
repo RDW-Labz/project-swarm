@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 
-export const EVENT_KINDS = Object.freeze(['pre', 'post', 'stop', 'prompt', 'blocked']);
+export const EVENT_KINDS = Object.freeze(['pre', 'post', 'stop', 'prompt', 'end', 'blocked']);
 export const WRITE_TOOLS = Object.freeze(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 // Paths an orchestrator may write without the swarm having built them: tickets and plans.
 export const ORCHESTRATOR_OWN = Object.freeze(['.swarm/', 'docs/plans/']);
@@ -20,6 +20,7 @@ export const WORKING_STALE_MS = 10 * 60 * 1000;
 export const THINKING_STALE_MS = 3 * 60 * 1000;
 export const WAITING_SHOWN_MS = 30 * 60 * 1000;
 export const SESSION_SHOWN_MS = 60 * 60 * 1000;
+export const ENDED_SHOWN_MS = 5 * 60 * 1000;
 
 // A shell command can carry a token or a key: anything key-like, any NAME=value assignment and any long opaque string is replaced before the command is stored at all.
 export function maskCommand(command, max = 80) {
@@ -126,8 +127,8 @@ export function projectRootOf(cwd, exists = file => fs.existsSync(file)) {
   return null;
 }
 
-/** One log line for a hook input, or null when the input is not a session event of an orchestrator. `kind` is pre | post | stop | prompt. */
-export function buildEvent(kind, input, { root, now = Date.now, analyze } = {}) {
+/** One log line for a hook input, or null when the input is not a session event of an orchestrator. `kind` is pre | post | stop | prompt | end. */
+export function buildEvent(kind, input, { root, now = Date.now, analyze, proc } = {}) {
   if (!EVENT_KINDS.includes(kind) || !input || typeof input !== 'object' || typeof input.session_id !== 'string' || !input.session_id) return null;
   if (isWorkerCwd(input.cwd)) return null;
   const event = { at: new Date(now()).toISOString(), s: input.session_id.slice(0, 80), e: kind };
@@ -158,6 +159,11 @@ export function buildEvent(kind, input, { root, now = Date.now, analyze } = {}) 
   // Only the transcript's file name (the session's own id) is kept; the folder it lives in is found again at read time.
   if ((kind === 'prompt' || kind === 'stop') && typeof input.transcript_path === 'string') { const base = path.basename(input.transcript_path); if (/^[A-Za-z0-9._-]{1,120}\.jsonl$/.test(base)) event.tp = base; }
   if ((kind === 'pre' || kind === 'post') && typeof input.tool_use_id === 'string' && /^[A-Za-z0-9_-]{1,60}$/.test(input.tool_use_id)) event.u = input.tool_use_id;
+  if (kind === 'end' && typeof input.reason === 'string') { const why = input.reason.trim().slice(0, 40); if (why) event.why = why; }
+  if ((kind === 'prompt' || kind === 'stop' || kind === 'end') && proc && typeof proc === 'object') {
+    if (Number.isInteger(proc.pid) && proc.pid > 0) event.pid = proc.pid;
+    if (typeof proc.host === 'string' && proc.host) event.h = proc.host.slice(0, 64);
+  }
   return event;
 }
 
@@ -214,13 +220,17 @@ export function readEvents(root, { limit = 6000 } = {}) {
 
 /** Sessions seen in the events: state now, what it is doing, since when, edits by hand. Events are folded in time order; `now` decides staleness. Tools that run at once are tracked
  *  by their tool_use id (a tool without one by name), so one finishing does not hide the others. */
-export function sessionsOf(events, now = Date.now()) {
+export function sessionsOf(events, now = Date.now(), { isAlive, host } = {}) {
   const ordered = events.map((e, i) => [e, i]).sort((x, y) => (Date.parse(x[0].at) - Date.parse(y[0].at)) || (x[1] - y[1])).map(x => x[0]);
   const bySession = new Map();
   for (const e of ordered) {
     let s = bySession.get(e.s);
-    if (!s) { s = { id: e.s, firstAt: e.at, lastAt: e.at, last: e, transcript: null, handBuilt: 0, edits: 0, blocked: 0, turnStartedAt: null, running: new Map() }; bySession.set(e.s, s); }
+    if (!s) { s = { id: e.s, firstAt: e.at, lastAt: e.at, last: e, transcript: null, handBuilt: 0, edits: 0, blocked: 0, turnStartedAt: null, running: new Map(), pid: null, h: null, endedAt: null }; bySession.set(e.s, s); }
     s.lastAt = e.at; if (e.e !== 'blocked') s.last = e;
+    if (Number.isInteger(e.pid) && e.pid > 0) s.pid = e.pid;
+    if (typeof e.h === 'string' && e.h) s.h = e.h;
+    if (e.e === 'end') s.endedAt = e.at;
+    else if (e.e === 'prompt' || e.e === 'pre' || e.e === 'post') s.endedAt = null;
     if (e.tp) s.transcript = e.tp;
     if (e.e === 'prompt') { s.turnStartedAt = e.at; s.running.clear(); }
     if (e.e === 'pre') s.running.set(e.u ?? `n:${e.t}:${e.at}`, { name: e.t, file: e.f ?? null, command: e.c ?? null, startedAt: e.at, byName: !e.u });
@@ -238,14 +248,18 @@ export function sessionsOf(events, now = Date.now()) {
     const age = now - Date.parse(s.lastAt);
     const tools = [...s.running.values()].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
     let state;
-    if (tools.length) state = age <= WORKING_STALE_MS ? 'working' : 'idle';
+    let endedAt = s.endedAt;
+    if (!endedAt && typeof isAlive === 'function' && s.pid !== null && ((s.h === host) || (s.h === null && host === undefined)) && isAlive(s.pid) === false) endedAt = s.lastAt;
+    if (endedAt) state = 'ended';
+    else if (tools.length) state = age <= WORKING_STALE_MS ? 'working' : 'idle';
     else if (s.last.e === 'post' || s.last.e === 'prompt' || s.last.e === 'pre') state = age <= (s.last.e === 'prompt' ? WORKING_STALE_MS : THINKING_STALE_MS) ? 'thinking' : 'idle';
     else state = age <= WAITING_SHOWN_MS ? 'waiting' : 'idle';
     const doing = state === 'working' ? tools[0] : null;
+    const shown = endedAt ? now - Date.parse(endedAt) <= ENDED_SHOWN_MS : age <= SESSION_SHOWN_MS;
     out.push({
-      id: s.id, state, lastAt: s.lastAt, since: state === 'working' ? doing.startedAt : state === 'thinking' ? (s.turnStartedAt ?? s.lastAt) : s.lastAt,
+      id: s.id, state, lastAt: s.lastAt, since: endedAt ?? (state === 'working' ? doing.startedAt : state === 'thinking' ? (s.turnStartedAt ?? s.lastAt) : s.lastAt),
       doing: doing ? { tool: doing.name, file: doing.file, command: doing.command, startedAt: doing.startedAt, parallel: tools.length } : null,
-      transcript: s.transcript, edits: s.edits, handBuilt: s.handBuilt, blocked: s.blocked, shown: age <= SESSION_SHOWN_MS,
+      transcript: s.transcript, edits: s.edits, handBuilt: s.handBuilt, blocked: s.blocked, shown, endedAt: endedAt ?? null,
     });
   }
   return out.sort((a, b) => Date.parse(b.lastAt) - Date.parse(a.lastAt));
