@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "T-0163",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tests/test-env-clean.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/e2e-data-cleanup.mjs",
+        "tools/test-db-cleanup.mjs",
+        "tools/ci-image-cache.mjs",
+        "templates/coordination/ci-docker-hub-mirror.yml",
+        "tests/e2e-data-cleanup.test.mjs",
+        "tests/test-db-cleanup.test.mjs",
+        "tests/ci-image-cache.test.mjs"
+      ],
+      "prompt": "Ticket T-0163 (type test): regression tests for e2e cleanup, the localhost guard and the CI image cache. Write ONE file, tests/test-env-clean.test.mjs, an end-to-end regression suite across the three tools (the per-tool unit tests already exist; do not duplicate them line for line). Acceptance: (1) E2e runs clean up their own local test data, including when the run throws, and the local-only cleanup tool refuses non-localhost databases (cover localhost, 127.0.0.1, ::1 allowed; a remote host, a host that only starts with 'localhost' such as localhost.evil.example, and a URL with credentials pointing elsewhere refused). (2) CI caches or mirrors images so Docker Hub rate limits do not fail runs: the template declares a cache step and a mirror pull with retry, and image references are rewritten to the mirror. Each test must fail if the behavior it names were removed. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test, injected deps (no wall clock, env, TTY or network); never write token-shaped literals (use obviously fake short values like 'tok-test'). Run `node --import ./tests/_isolate-config.mjs --test <your tests>` and `node tools/check-package.mjs`. If a rule cannot be met inside your outputs, return blocked."
+    },
+    {
+      "id": "T-0169",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tools/lane-pass-routing.mjs",
+        "tests/lane-pass-routing.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/router.mjs",
+        "tools/failure-regression.mjs",
+        "tools/session-metrics.mjs",
+        "tests/failure-regression-stubs.test.mjs"
+      ],
+      "prompt": "Ticket T-0169: feed lane pass rates into ticket routing. Acceptance: 'Lane pass rates from field data adjust which lane is chosen for new tickets.' (This also completes T-0168's shared line 'lane pass rates feed routing'.) Write tools/lane-pass-routing.mjs (ESM, pure, no I/O except one optional async reader) exporting: (a) lanePassRates(runStates) -> { [agent]: { passed, failed, total, rate } } from finished run states (use the same run-state shape tools/failure-regression.mjs failureCausesFromRuns reads: each job's agent and status; complete counts as pass; failed, timed-out and blocked count as fail; cancelled and held are ignored); (b) routingFailures(rates, { minSamples = 5, failBelow = 0.5 } = {}) -> a failures map in exactly the shape tools/router.mjs routeJob takes as its failures option (agent -> count), giving a lane whose rate is below failBelow with at least minSamples runs a count of 2 so routeJob skips it, and every other lane 0; (c) routeWithPassRates(job, routeOptions, runStates, thresholds) that merges routingFailures into routeOptions.failures (taking the max per agent) and calls routeJob; (d) async readRunStates(root, { readdir, readFile }) with injected fs that reads .swarm/runs/*/state.json, skipping unreadable files. Do not edit router.mjs; wiring into the CLI is a later swarm.mjs change owned elsewhere: say so in a header comment. Tests in tests/lane-pass-routing.test.mjs: rates computed; a lane under the threshold with enough samples is skipped and routeJob picks the next cheapest lane; too few samples changes nothing; existing failures are kept (max). Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test, injected deps (no wall clock, env, TTY or network); never write token-shaped literals (use obviously fake short values like 'tok-test'). Run `node --import ./tests/_isolate-config.mjs --test <your tests>` and `node tools/check-package.mjs`. If a rule cannot be met inside your outputs, return blocked."
+    }
+  ]
+}
