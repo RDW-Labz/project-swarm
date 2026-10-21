@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "init-base-detail",
+      "agent": "auto",
+      "prompt": "Item E12 (init part): the pre-start base check reports red with no detail. The stored result already has, per check, name, ok, exitCode and a redacted tail of the last 300 characters of output (see runOne and runBaseChecks in tools/init-profile.mjs), but formatBaseCheck in tools/init-profile.mjs and the base-red warning in tools/init.mjs print only the failing check names. Change both so a red base says which check failed and why: for each failing check print its name, its exit code (or the words did not start when the exit code is null), and the last 3 non-empty lines of its tail, indented under the name, each line cut to 160 characters; show at most 5 failing checks and then and N more; keep the first line of the message exactly in the old shape so existing callers and tests that match on it keep working (formatBaseCheck still starts with Base checks: RED, already failing before any change: and the check names, init still emits a warning that starts with base-red: checks already fail before any change: followed by the names), then add the detail lines after it. The tails are already redacted by the existing sanitizer; do not add raw output from anywhere else. Also show the same detail in the doctor or status line that prints formatBaseCheck if that caller exists (search tools for formatBaseCheck). Tests in tests/init-base-detail.test.mjs (node:test, strict assert): a red base with two failing checks (exit codes 1 and null) prints both names, the exit codes, the did not start wording and up to 3 tail lines each; a long tail is cut; more than 5 failing checks prints and N more; a green base, none and skipped keep their one-line outputs unchanged; the init warning keeps its old first line and carries the detail; no raw secret-looking text from an unsanitized source appears (feed a tail through the existing sanitizer path and assert the masked form). Write only tools/init-profile.mjs, tools/init.mjs and tests/init-base-detail.test.mjs (update an existing test only if its expectation about the exact old message must change, and say so).",
+      "context": [
+        "tools/init-profile.mjs",
+        "tools/init.mjs"
+      ],
+      "outputs": [
+        "tools/init-profile.mjs",
+        "tools/init.mjs",
+        "tests/init-base-detail.test.mjs"
+      ],
+      "timeoutMs": 1500000,
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/budgets.test.mjs",
+        "tests/ci-queue.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/env-example-context.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/handoff.test.mjs",
+        "tests/init-profile.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/lessons-commands.test.mjs",
+        "tests/migration-down-dir.test.mjs",
+        "tests/phase12-cli.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ui-check.test.mjs"
+      ]
+    }
+  ]
+}
