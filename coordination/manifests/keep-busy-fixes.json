@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "fix-lanes-rule",
+      "agent": "auto",
+      "prompt": "Fix review findings in tools/lanes-rule.mjs (the keep-the-lanes-busy rule writer). (1) DATA LOSS: if CLAUDE.md or AGENTS.md has the start marker but no end marker, applyRule appends a second block and a later run then replaces everything between the user's orphan start marker and the new end marker, deleting the user's text. Treat START without END, END before START, and more than one START or more than one END as malformed: applyRule and writeRuleFiles must refuse (return or throw a clear error naming the file and the problem, write nothing to that file, and still process the other file) and never delete or rewrite text outside one well-formed marked block. Only a file with exactly one START followed by exactly one END is replaced in place. (2) Symlinks: refuse a target whose real path leaves the project root (a symlinked parent directory) as well as a symlinked final component; write atomically (write to a temporary file in the same folder with the exclusive flag, then rename over the target) and re-check with lstat immediately before the rename; document in a comment that when neither file exists only CLAUDE.md is created and when only one exists only that one is updated (that is the intended behavior). Add tests to tests/lanes-rule.test.mjs: orphan START with user text after it is refused and the file is byte for byte unchanged; END before START refused; two STARTs refused; a well-formed block is still replaced; a symlinked parent folder is refused; the atomic write leaves no temp file; the other file is still processed when one is malformed. Update tests/rule-wiring.test.mjs only where the new refusal changes an expectation, and add a case there that init and update --projects report the refusal in their result (ruleFilesError or the per-file error) without failing. Write only tools/lanes-rule.mjs, tests/lanes-rule.test.mjs and tests/rule-wiring.test.mjs.",
+      "context": [
+        "tools/lanes-rule.mjs",
+        "tests/lanes-rule.test.mjs",
+        "tests/rule-wiring.test.mjs"
+      ],
+      "outputs": [
+        "tools/lanes-rule.mjs",
+        "tests/lanes-rule.test.mjs",
+        "tests/rule-wiring.test.mjs"
+      ],
+      "timeoutMs": 2400000
+    },
+    {
+      "id": "fix-autopilot-start-ready",
+      "agent": "auto",
+      "prompt": "Fix review findings in the autopilot start-ready action. Files: tools/autopilot.mjs, tools/autopilot-ready-deps.mjs and the tests tests/autopilot-start-ready.test.mjs, tests/autopilot-ready-deps.test.mjs. (1) The in-process memory key start-ready is never cleared, so start-ready fires at most once per autopilot process and lanes stay idle afterwards. Replace it with a cooldown: remember the time (injectable now) of the last start and do not start again until at least 120 seconds have passed AND (a live run or live busy marker has been seen for the project since, or the cooldown is 10 minutes old), so a go --scope that exits at once cannot loop faster than every 120 seconds, but a project that ran and went idle again is restarted. Keep the rule that a single pass never starts it twice. (2) In a pass, start-ready must not run when any other action was taken in the same pass (the live state is stale then) and must respect MAX_ACTIONS_PER_RUN. (3) Fail closed: if liveRuns, busyMarkers, capRoom, readyTickets or pendingApprovals throws, do NOT start (treat the project as busy and log one skipped record with the reason dependency-error, never the error text of paths); today safe() returns open defaults. (4) sameRoot in tools/autopilot-ready-deps.mjs must be null-safe (return false for a non-string root) and compare realpaths (cached, falling back to path.resolve when the path does not exist) so /tmp versus /private/tmp and different casing on macOS still match. (5) startScope: attach child.once error before unref and report {ok:false, result:message} for an asynchronous spawn failure; pass cwd as the resolved project root; add a comment stating deliberately that the child may outlive autopilot and is guarded by its own busy marker. (6) Held-back matching must test overlap in both directions (the approval's patterns against the ticket's files, and the ticket's glob or directory against the approval's named files); remove the unreachable todo-with-done-dependencies branch from pickReadyTickets or make production readyTickets agree with it (prefer removing it). Add tests for each: cooldown (second start blocked inside 120 seconds, allowed after a live run was seen and the cooldown passed, allowed after 10 minutes), start-wave and start-ready both eligible in one pass starts only the wave, each dependency throwing means no start, sameRoot with a symlinked root and a missing root, an async spawn error, the cwd passed, glob versus concrete file overlap in both directions; use realistic busy marker objects ({pid, command, root}) instead of strings. Write only tools/autopilot.mjs, tools/autopilot-ready-deps.mjs, tests/autopilot-start-ready.test.mjs, tests/autopilot-ready-deps.test.mjs and, only if an existing expectation must change, tests/autopilot.test.mjs.",
+      "context": [
+        "tools/autopilot.mjs",
+        "tools/autopilot-ready-deps.mjs",
+        "tests/autopilot-start-ready.test.mjs",
+        "tests/autopilot-ready-deps.test.mjs",
+        "tests/autopilot.test.mjs"
+      ],
+      "outputs": [
+        "tools/autopilot.mjs",
+        "tools/autopilot-ready-deps.mjs",
+        "tests/autopilot-start-ready.test.mjs",
+        "tests/autopilot-ready-deps.test.mjs",
+        "tests/autopilot.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/autopilot-lock.test.mjs",
+        "tests/brain-commands.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scope-loop.test.mjs"
+      ]
+    }
+  ]
+}

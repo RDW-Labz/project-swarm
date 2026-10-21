@@ -40,6 +40,10 @@ Starting from the kit instead: `swarm init --kit web-portal --kit-source PATH_OR
 
 `swarm init` writes `.project-swarm.json` (the pointer **and** the profile), `coordination/checks.json`, the agent pointers (`AGENTS.md`, `CLAUDE.md`), adds `.swarm/` to `.gitignore` and builds the repo map. Answer the one question: is the project sensitive (real customer data, auth, payments)? When in doubt, yes. See [init](init.md).
 
+## Keep the lanes busy
+
+`swarm init` and `swarm update --projects --yes` write the swarm “keep lanes busy” rule into `CLAUDE.md` and `AGENTS.md` between `<!-- swarm:keep-lanes-busy:start -->` and `<!-- swarm:keep-lanes-busy:end -->` markers (your text outside those markers is left alone). Autopilot starts ready tickets when nothing is running on the project. The board shows a red flag when a project is idle while ready tickets still exist.
+
 ## 2. Make the checks real (`coordination/checks.json`)
 
 This is the file that decides whether work is done. A ticket with tests is only done when a check saw them pass.

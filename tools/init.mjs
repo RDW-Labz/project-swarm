@@ -15,6 +15,7 @@ import { detectMigrationsDir } from './migration-gate.mjs';
 import { DEFAULT_PROFILE_BUDGET, detectProtectedPaths, normalizeProtectedPath, validateProfile, runBaseChecks, checkSetup } from './init-profile.mjs';
 import { buildRepoMap, readRepoMap, writeRepoMap, summarizeMap } from './repo-map.mjs';
 import { trackedFiles } from './goal.mjs';
+import { writeRuleFiles } from './lanes-rule.mjs';
 
 const execFileP = promisify(execFile);
 const FLAT_ESLINT = ['eslint.config.js', 'eslint.config.mjs', 'eslint.config.cjs', 'eslint.config.ts'];
@@ -269,7 +270,24 @@ export async function initProject(root, { source = installSource(), install = in
   if (!runBase && baseCheck !== false && checksToRun.length) warnings.push('base-check-skipped: pass --base-check to run the project\'s own checks and record whether they already fail');
   let repoMap = null;
   if (map) { try { repoMap = summarizeMap(await refreshRepoMap(root, { now })); } catch (error) { warnings.push(`repo-map-failed: ${String(error.message).slice(0, 120)}`); } }
-  return { ...linked, stack, profile: valid, checks: checksFile, ignores: ignores.changed, repoMap, warnings };
+  let ruleFiles;
+  let ruleFilesError;
+  try {
+    ruleFiles = await writeRuleFiles(root);
+  } catch (error) {
+    ruleFilesError = String(error.message);
+  }
+  return {
+    ...linked,
+    stack,
+    profile: valid,
+    checks: checksFile,
+    ignores: ignores.changed,
+    repoMap,
+    warnings,
+    ...(ruleFiles !== undefined ? {ruleFiles} : {}),
+    ...(ruleFilesError !== undefined ? {ruleFilesError} : {}),
+  };
 }
 
 // Read-only health check of the setup (swarm init --check).

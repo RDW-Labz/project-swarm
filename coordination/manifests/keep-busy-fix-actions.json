@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "autopilot-actions-test",
+      "agent": "auto",
+      "prompt": "tools/autopilot.mjs now lists a new action start-ready at the end of ACTIONS. Update the test named 'ACTIONS lists the autopilot actions' in tests/autopilot.test.mjs so it expects the new list (the old actions in the same order followed by start-ready). Change nothing else in that file. Write only tests/autopilot.test.mjs.",
+      "context": ["tests/autopilot.test.mjs", "tools/autopilot.mjs"],
+      "outputs": ["tests/autopilot.test.mjs"],
+      "timeoutMs": 300000
+    }
+  ]
+}

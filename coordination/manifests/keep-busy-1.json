@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "jobs": [
+    {
+      "id": "lanes-rule-module",
+      "agent": "auto",
+      "prompt": "Create tools/lanes-rule.mjs (SPDX header, ES module) and tests/lanes-rule.test.mjs (node:test, strict assert). The module holds the keep-lanes-busy rule that swarm init and swarm update write into a project's agent instructions. Exports: RULE_START = '<!-- swarm:keep-lanes-busy:start -->', RULE_END = '<!-- swarm:keep-lanes-busy:end -->', RULE_TEXT (a short markdown section, about 8 lines, starting with the heading '## Keep the lanes busy (swarm rule)': never leave swarm lanes idle while ready tickets exist; when a run or wave finishes start the next ready tickets with swarm go --scope (or let swarm autopilot do it); queue work through swarm jobs, not by hand; a pending approval blocks only the tickets whose files it names, so keep every other ready ticket running; never wait for the owner on work that is already approved; never merge, deploy, raise a cap or override without the owner), applyRule(existingText) returning the new text: if the file text already has the marker block replace exactly the text between and including the markers, otherwise append the block (with a blank line before it) to the end; text outside the markers is never changed; applying twice gives the same text. Also async writeRuleFiles(root) which, for CLAUDE.md and AGENTS.md in root: updates each that exists via applyRule, and when neither exists creates CLAUDE.md containing just the block; returns {written: [names], unchanged: [names]} (a file whose text would not change is unchanged and not rewritten); uses fs.promises, never throws on a missing file, refuses a symlink target. Tests: append to a file without markers keeps the old text byte for byte at the start; replace an old block with changed text between markers and keep the text before and after; idempotent; creates CLAUDE.md when neither exists; leaves both unchanged on a second call; updates an existing AGENTS.md only when CLAUDE.md is absent but AGENTS.md exists (no CLAUDE.md is created then); a symlinked CLAUDE.md is refused. Write only those two files.",
+      "context": [
+        "tools/live-processes.mjs",
+        "tests/update.test.mjs"
+      ],
+      "outputs": [
+        "tools/lanes-rule.mjs",
+        "tests/lanes-rule.test.mjs"
+      ],
+      "timeoutMs": 600000
+    },
+    {
+      "id": "autopilot-start-ready",
+      "agent": "auto",
+      "prompt": "Extend tools/autopilot.mjs with a new action start-ready (add it to ACTIONS) and write tests in a new file tests/autopilot-start-ready.test.mjs (node:test, strict assert; follow how tests/autopilot.test.mjs injects dependencies and a fake journal). Behavior, no model calls, the loop only decides and calls an injected function: each pass, if the project has ready tickets, no live run, no live busy marker and room under the project cap, it starts go --scope by calling the injected deps.startScope({root}) once (returning {ok, result}), writes a journal action event {kind:'action', action:'start-ready', reason, result} like the other actions, and remembers it so one pass never starts it twice. Add and export a pure helper pickReadyTickets({tickets, approvals}) returning {startable, held}: tickets with status ready (or todo with all dependencies done, as the existing unlock step treats them); a pending (not decided) hand-build or ticket approval holds back ONLY the tickets whose files overlap the files the approval names (glob-aware like matchesFile in tools/handbuild.mjs, import it); every other ready ticket is startable. The action runs only when startable is non-empty. New injected deps with safe defaults that do nothing: deps.readyTickets(root), deps.pendingApprovals(root), deps.liveRuns(root), deps.busyMarkers(), deps.capRoom(root) (true when the project cap has room). Autopilot never approves, merges, deploys, raises a cap or overrides: assert in a test that start-ready is the only new action and that when capRoom is false or a run is live or a busy marker is live nothing starts. Tests: starts once when ready tickets exist and nothing runs; does not start with a live run; does not start with a live busy marker; does not start when capRoom is false; does not start when all ready tickets are held by an approval touching their files; starts when only some are held; an approval naming other files holds nothing; second pass in the same process does not start again. Do not touch tools/swarm.mjs (another job wires the real functions later). Write only tools/autopilot.mjs and tests/autopilot-start-ready.test.mjs.",
+      "context": [
+        "tools/autopilot.mjs",
+        "tests/autopilot.test.mjs",
+        "tools/handbuild.mjs",
+        "tools/scope-loop.mjs",
+        "tools/go.mjs"
+      ],
+      "outputs": [
+        "tools/autopilot.mjs",
+        "tests/autopilot-start-ready.test.mjs"
+      ],
+      "timeoutMs": 900000,
+      "ignoreTests": [
+        "tests/autopilot-lock.test.mjs",
+        "tests/brain-commands.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scope-loop.test.mjs"
+      ]
+    },
+    {
+      "id": "board-idle-ready",
+      "agent": "auto",
+      "prompt": "Add the 'idle with ready tickets' flag to Swarm Watch. In tools/board-data.mjs, where each project's summary is built (it already computes an idle field from liveRuns and the open tickets), add readyTickets (count of tickets with status ready) and idleWithReady (true when the project has no live run and readyTickets > 0); keep every existing field. In tools/watch-assets/board.js show, on the project's card, a red badge reading 'Idle with N ready tickets' (N from readyTickets) when idleWithReady is true; the badge must use the board's existing red/danger color token or class, be text (not color alone) and be readable in the existing dark and light themes; no badge otherwise. Do not add any new request or action: it is display only. Write tests in a new file tests/board-idle-ready.test.mjs (node:test, strict assert; follow how existing board data tests build a fixture project with tickets): idle with 3 ready tickets gives idleWithReady true and readyTickets 3; a live run gives false; zero ready tickets gives false; and a source check that tools/watch-assets/board.js contains the badge text template and the danger class. Write only tools/board-data.mjs, tools/watch-assets/board.js and tests/board-idle-ready.test.mjs.",
+      "context": [
+        "tools/board-data.mjs",
+        "tools/watch-assets/board.js"
+      ],
+      "outputs": [
+        "tools/board-data.mjs",
+        "tools/watch-assets/board.js",
+        "tests/board-idle-ready.test.mjs"
+      ],
+      "timeoutMs": 900000,
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}
