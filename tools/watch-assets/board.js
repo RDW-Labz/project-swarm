@@ -652,7 +652,7 @@ function renderBoard(data) {
   // The chip and title stay current on every tab; the panels render where they are visible.
   renderNeeds(data.inbox);
   var banner = $('staleBanner');
-  if (data.server && data.server.stale) { banner.hidden = false; banner.textContent = 'This board is running swarm ' + data.server.version + ' but ' + data.server.installedVersion + ' is installed. It started before the last swarm update, so it may show old behaviour. Stop it and start it again (Ctrl-C then swarm watch --all, or swarm remote off then swarm remote on).'; } else { banner.hidden = true; banner.textContent = ''; }
+  if (data.server && data.server.stale) { banner.hidden = false; banner.textContent = 'restart needed: installed ' + data.server.installedVersion + ' (this board is still swarm ' + data.server.version + '). Stop it and start it again (Ctrl-C then swarm watch --all, or swarm remote off then swarm remote on).'; } else { banner.hidden = true; banner.textContent = ''; }
   renderTab();
   state.firstRender = false;
   if (state.tab === 'events' && !state.eventsLoaded) { state.eventsLoaded = true; loadHistory(); }

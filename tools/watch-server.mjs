@@ -191,6 +191,10 @@ export function createWatchServer(opts) {
     }
     const u = new URL(req.url || '/', 'http://127.0.0.1');
     const pathname = u.pathname;
+    if (pathname === '/api/health') {
+      const info = await versionInfo();
+      return sendJson(res, method, { ok: true, version: info.version, pid: process.pid });
+    }
     if (pathname.startsWith('/assets/')) {
       lastActivity = now();
       return sendAsset(res, method, pathname.slice('/assets/'.length));

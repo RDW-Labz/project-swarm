@@ -211,6 +211,23 @@ export function makeRunServer(root, runId, extra = {}) {
 // Finding the board from anywhere. A running board writes its address (it holds the board's own token) to a file only the user can read; a run page that wants to
 // go back to it reads that file, checks the board still answers, and otherwise starts one in its own process.
 export const boardFile = (env = process.env, home = os.homedir()) => env.SWARM_BOARD_FILE || path.join(home, '.project-swarm', 'board.json');
+
+export function safeEnvSubset(env = process.env) {
+  const out = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (key === 'HOME' || key === 'PATH') out[key] = String(value);
+    else if (key.startsWith('SWARM') && typeof value === 'string') out[key] = value;
+  }
+  return out;
+}
+
+export function serverMode({ stdin = process.stdin, stdout = process.stdout } = {}) {
+  return stdin.isTTY && stdout.isTTY ? 'terminal' : 'background';
+}
+
+async function readPackageVersion(root = here) {
+  try { return JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version ?? null; } catch { return null; }
+}
 // A board of ours belongs to this user: a process that exists but is not ours (EPERM) is not one.
 const pidAlive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
 
@@ -226,11 +243,17 @@ async function boardAnswers(url, fetchImpl = fetch) {
   } catch { return false; }
 }
 
-export async function writeBoardFile(url, { env = process.env } = {}) {
+export async function writeBoardFile(url, { env = process.env, registry = {} } = {}) {
   const file = boardFile(env);
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-  await fs.writeFile(tmp, `${JSON.stringify({ pid: process.pid, url, startedAt: new Date().toISOString() })}\n`, { mode: 0o600, flag: 'wx' });
+  const body = {
+    pid: process.pid,
+    url,
+    startedAt: new Date().toISOString(),
+    ...registry,
+  };
+  await fs.writeFile(tmp, `${JSON.stringify(body)}\n`, { mode: 0o600, flag: 'wx' });
   await fs.rename(tmp, file);
 }
 
@@ -424,7 +447,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
 // Starts the board server in this process and records its address for run pages that want to go back to it.
 // `remote` ({ port, token, hosts, login }): the board `swarm remote` keeps up behind tailscale serve. It is not the board run pages go back to, so it records no address,
 // and it does not stop when idle.
-export async function startBoardServer({ env = process.env, root, remote }) {
+export async function startBoardServer({ env = process.env, root, remote, registry = null }) {
   const api = createBoardApi({ env });
   backfillHistory({ env }).catch(() => {});
   const server = createWatchServer({
@@ -441,9 +464,23 @@ export async function startBoardServer({ env = process.env, root, remote }) {
     deltaFile: path.join(here, 'watch-delta.mjs'),
     ...(remote ? { port: remote.port, token: remote.token, remote: { hosts: remote.hosts, login: remote.login }, idleMs: Infinity } : {}),
   });
-  const { url } = await server.listen();
+  const { url, port } = await server.listen();
   api.setBoardUrl(remote ? null : url);
-  if (!remote) await writeBoardFile(url, { env }).catch(() => {});
+  const version = await readPackageVersion();
+  const baseRegistry = {
+    version,
+    argv: remote ? ['remote', 'serve'] : ['watch', '--all'],
+    cwd: process.cwd(),
+    port,
+    env: safeEnvSubset(env),
+    mode: remote ? 'background' : serverMode(),
+    ...(registry && typeof registry === 'object' ? registry : {}),
+  };
+  if (!remote) await writeBoardFile(url, { env, registry: baseRegistry }).catch(() => {});
+  else {
+    const { writeRegistryRecord, remoteServerFile } = await import('./server-restart.mjs');
+    await writeRegistryRecord(remoteServerFile(env), { pid: process.pid, url, startedAt: new Date().toISOString(), ...baseRegistry }).catch(() => {});
+  }
   const cleaned = server.done.then(async () => {
     try {
       // The run pages this board opened must not point back at a board that is gone, and they close with it.
@@ -453,6 +490,13 @@ export async function startBoardServer({ env = process.env, root, remote }) {
         try {
           const data = JSON.parse(await fs.readFile(boardFile(env), 'utf8'));
           if (data.pid === process.pid && data.url === url) await fs.rm(boardFile(env), { force: true });
+        } catch { /* already gone */ }
+      } else {
+        try {
+          const { remoteServerFile } = await import('./server-restart.mjs');
+          const file = remoteServerFile(env);
+          const data = JSON.parse(await fs.readFile(file, 'utf8'));
+          if (data.pid === process.pid && data.url === url) await fs.rm(file, { force: true });
         } catch { /* already gone */ }
       }
     } catch { /* cleaned must never reject */ }
@@ -467,7 +511,12 @@ export async function runWatchCommand(root, args, { write = text => process.stdo
   if (opts.all && (opts.text || opts.tui)) return { stdout: await boardText(), exitCode: 0 };
   if (opts.all) {
     // The web board: a lane per project on this machine, the machine's agents and spend on top, the history, and a click-through to any run's own page.
-    const board = await startBoardServer({ env: process.env, root });
+    const watchArgv = ['watch', '--all', ...(opts.open ? ['--open'] : []), ...(opts.tui ? ['--tui'] : []), ...(opts.text ? ['--text'] : [])];
+    const board = await startBoardServer({
+      env: process.env,
+      root,
+      registry: { argv: watchArgv, mode: serverMode(), cwd: process.cwd(), env: safeEnvSubset(process.env) },
+    });
     write(`Swarm Watch board (every project on this machine)\n${board.url}\nRead-only, on this machine only. Opening a run starts that run's own page. Stops after 30 minutes idle. Ctrl-C stops it now. (swarm watch --all --text prints the live runs instead.)\n`);
     if (opts.open) openUrl(board.url);
     const stop = () => { board.server.close(); board.api.close(); };

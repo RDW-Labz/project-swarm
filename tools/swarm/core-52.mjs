@@ -21,8 +21,10 @@ import { MAX_FILE } from './patterns.mjs';
 import { costNotReported, costPer1kOutputTokens, jobTokens, tokensTotal } from './run-state.mjs';
 import { designOnlyBlockedOnTestWarning, runWarnings } from './warnings.mjs';
 import { isWorktreeWriter, resolveWorktree, usesWorktree } from './workspace.mjs';
+import { noRestartFromArgv, restartRegisteredServers } from '../server-restart.mjs';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -194,7 +196,23 @@ export async function inspectResults(root, id) {
   return { runId: id, status: state.status, tokens: tokensTotal(jobs.map(job => job.tokens)), costNotReported: costNotReported(jobs), warnings, jobs };
 }
 
-export async function updateInstall(root,{home,doctorAllImpl=doctorAll}={}){
+async function attachServerRestart(result, root, { home, env = process.env, noRestart, write } = {}) {
+  if (result.tagPending) return result;
+  const targetVersion = result.to ?? result.from;
+  if (!targetVersion) return result;
+  const restartHome = home ?? env.HOME ?? os.homedir();
+  const { servers } = await restartRegisteredServers({
+    installRoot: root,
+    targetVersion,
+    noRestart: noRestart ?? noRestartFromArgv(),
+    env,
+    home: restartHome,
+    write: write ?? (text => { try { process.stderr.write(text); } catch { /* tests */ } }),
+  });
+  return servers.length ? { ...result, servers } : result;
+}
+
+export async function updateInstall(root,{home,doctorAllImpl=doctorAll,env=process.env,noRestart,write}={}){
   root=await fs.realpath(root);
   const beforePkg=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));
   if(beforePkg.name!=='project-swarm')fail('Refusing to update: target is not a project-swarm install');
@@ -213,7 +231,7 @@ export async function updateInstall(root,{home,doctorAllImpl=doctorAll}={}){
   if(!latest)fail('No release tags (v*) found in this checkout');
   let currentTag=null;
   try{currentTag=(await execFileAsync('git',['-C',root,'describe','--tags','--exact-match'],{encoding:'utf8'})).stdout.trim();}catch{currentTag=null;}
-  if(currentTag===latest)return {from,to:latest.replace(/^v/,''),upToDate:true};
+  if(currentTag===latest)return await attachServerRestart({from,to:latest.replace(/^v/,''),upToDate:true},root,{home,env,noRestart,write});
   const releasePkg=JSON.parse((await execFileAsync('git',['-C',root,'show',`${latest}:package.json`],{encoding:'utf8'})).stdout);
   if(releasePkg.name!=='project-swarm'||releasePkg.version!==latest.slice(1))fail('Refusing to update: release tag is not a matching project-swarm install');
   await execFileAsync('git',['-C',root,'checkout','--detach',latest],{encoding:'utf8'});
@@ -222,7 +240,7 @@ export async function updateInstall(root,{home,doctorAllImpl=doctorAll}={}){
   await installNewRelease(root,home);
   await doctorAllImpl();
   const changelogText=await fs.readFile(path.join(root,'CHANGELOG.md'),'utf8').catch(()=>'');
-  return {from,to,changelog:extractChangelog(changelogText,from,to)};
+  return await attachServerRestart({from,to,changelog:extractChangelog(changelogText,from,to)},root,{home,env,noRestart,write});
 }
 
 // Plain Markdown for the agent to relay verbatim; no model calls, all facts come from doctor.
