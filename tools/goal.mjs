@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { firstJobOrError, waitResultCost } from './go.mjs';
+import { dirtyFiles, formatDirtyListing } from './generated-state.mjs';
 
 export { waitResultCost };
 
@@ -58,12 +59,19 @@ export async function topLevelFolders(root, run = exec) {
     .sort();
 }
 
-// swarm regenerates these after every command, so they never count as the operator's uncommitted work.
-const GENERATED = new Set(['coordination/HANDOFF.md', 'coordination/HANDOFF.previous.md']);
+async function gitExec(run, root, args) {
+  const { stdout } = await run('git', args, { encoding: 'utf8' });
+  return { stdout };
+}
+
+export async function worktreeDirtyPaths(root, run = exec) {
+  return dirtyFiles(root, {
+    exec: async (cmd, args, opts) => gitExec(run, root, args),
+  });
+}
+
 export async function worktreeDirty(root, run = exec) {
-  const { stdout } = await run('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' });
-  // .swarm/ is the runner's own scratch space (plans, journal, runs); it is never the operator's work.
-  return stdout.split('\n').filter(line => line.trim() && !GENERATED.has(line.slice(3).trim()) && !/^\?\? "?\.swarm\//.test(line)).length > 0;
+  return (await worktreeDirtyPaths(root, run)).length > 0;
 }
 
 // New branch only. The branch you were on keeps its current commit.
@@ -152,7 +160,8 @@ function failed(stage, base, reason) {
 export async function goGoal(root, goal, flags = {}, deps) {
   const base = { runId: null, branch: null, cost: null, warnings: [], integrate: null, rollup: null, reason: null, resume: null };
   if (flags.payloadPath) return failed('plan', base, 'a goal does not take --pr');
-  if (await deps.dirty(root)) return failed('plan', base, 'goal-dirty: commit or stash changes before swarm go');
+  const dirtyList = await worktreeDirtyPaths(root);
+  if (dirtyList.length) return failed('plan', base, `goal-dirty: commit or stash changes before swarm go${formatDirtyListing(dirtyList)}`);
   const maxUsd = flags.maxUsd ?? GOAL_BUDGET.maxUsd;
   const maxTokens = flags.maxTokens ?? GOAL_BUDGET.maxTokens;
   const planOptions = {

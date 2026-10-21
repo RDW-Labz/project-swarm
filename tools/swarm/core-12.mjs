@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { dirtyFiles, formatDirtyListing } from '../generated-state.mjs';
 
 async function gitDirty(dir,paths){
   try{const {stdout}=await execFileAsync('git',['-C',dir,'status','--porcelain','--',...paths],{encoding:'utf8'});return stdout.trim().length>0;}
@@ -41,7 +42,13 @@ export async function cleanBranch(root, { from, exclude = [] } = {}) {
   if (!Array.isArray(exclude) || exclude.some(glob => typeof glob !== 'string' || !glob || glob.includes('\0'))) fail('--exclude requires a glob');
   const git = args => execFileAsync('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: MAX_CONTEXT });
   const branch = (await git(['symbolic-ref', '--quiet', '--short', 'HEAD'])).stdout.trim();
-  if ((await git(['status', '--porcelain=v1', '--untracked-files=all'])).stdout.trim()) fail('clean-branch-dirty: commit or set aside destination edits first');
+  const dirty = await dirtyFiles(root, {
+    exec: async (cmd, args) => {
+      const { stdout } = await execFileAsync(cmd, args, { encoding: 'utf8', maxBuffer: MAX_CONTEXT });
+      return { stdout };
+    },
+  });
+  if (dirty.length) fail(`clean-branch-dirty: commit or set aside destination edits first${formatDirtyListing(dirty)}`);
   const source = (await git(['rev-parse', '--verify', '--end-of-options', `${from}^{commit}`])).stdout.trim();
   const paths = ['--', '.', ...exclude.map(glob => `:(exclude)${glob}`)];
   const records = (await git(['diff', '--name-status', '-z', '-M', 'HEAD', source, ...paths])).stdout.split('\0');

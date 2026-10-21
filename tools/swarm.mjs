@@ -52,7 +52,8 @@ import { runBrainCommand, createProjectBrain, triageRun, preflightManifest, brai
 import { readBacklog, nextStartable, markStarted as markBacklogStarted } from './backlog.mjs';
 import { pendingNotifications, macNotify } from './notify.mjs';
 import { resolveDefaultRoot, INSTALL_COMMANDS, runBriefCommand, runHandoffCommand, runCheckpointCommand, journalAfterCommand } from './project-commands.mjs';
-import { runAutopilot, integrableFromJobs, manifestWorkFingerprint, integrateCheckoutDirtyFromPorcelain } from './autopilot.mjs';
+import { runAutopilot, integrableFromJobs, manifestWorkFingerprint } from './autopilot.mjs';
+import { dirtyFiles } from './generated-state.mjs';
 import { readyAutopilotDeps } from './autopilot-ready-deps.mjs';
 import { acquireAutopilotLock } from './autopilot-lock.mjs';
 import { policyPath, loadPolicy, handledForYou } from './policy.mjs';
@@ -2357,8 +2358,12 @@ function autopilotDeps(root) {
       const linkedWorktree = (await git(['rev-parse', '--git-dir'])) !== (await git(['rev-parse', '--git-common-dir']));
       let dirty = true;
       try {
-        const { stdout } = await execFileAsync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' });
-        dirty = integrateCheckoutDirtyFromPorcelain(stdout);
+        dirty = (await dirtyFiles(root, {
+          exec: async (cmd, args) => {
+            const { stdout } = await execFileAsync(cmd, args, { encoding: 'utf8' });
+            return { stdout };
+          },
+        })).length > 0;
       } catch { dirty = true; }
       return { branch, linkedWorktree, dirty };
     },

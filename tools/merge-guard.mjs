@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirtyFiles, formatDirtyListing } from './generated-state.mjs';
 
 const execFileP = promisify(execFile);
 const USAGE = 'usage: merge PR [--repo OWNER/NAME]';
@@ -118,9 +119,15 @@ async function localUpdate(root, branch, repoName, exec) {
   if (remote.code !== 0 || !sameRepo(remote.stdout, repoName)) {
     return 'skipped: this folder is another repository';
   }
-  const st = await exec('git', ['status', '--porcelain'], opts);
-  if (st.code !== 0) return 'skipped: git status failed';
-  if (String(st.stdout ?? '').trim() !== '') return 'skipped: uncommitted changes';
+  let dirty;
+  try {
+    dirty = await dirtyFiles(root, {
+      exec: async (cmd, args) => exec(cmd, args, opts),
+    });
+  } catch {
+    return 'skipped: git status failed';
+  }
+  if (dirty.length) return `skipped: uncommitted changes${formatDirtyListing(dirty)}`;
   const steps = [
     [['fetch', 'origin'], 'fetch'],
     [['checkout', branch, '--'], 'checkout'],

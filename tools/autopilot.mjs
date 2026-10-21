@@ -4,6 +4,7 @@ import { stopGuard } from './stop-all.mjs';
 import { matchesFile, ELEVATED_GIT_OPS } from './handbuild.mjs';
 import { runPolicyPass, appendAutoDecision } from './policy-run.mjs';
 import { resolveDailyLimit } from './daily-limit.mjs';
+import { filterGeneratedStatus } from './generated-state.mjs';
 
 const POLICY_PASS_KINDS = new Set([
   'hand-build-request',
@@ -369,19 +370,8 @@ function noteStartReadyLive(memory, nowMs, { live, busy, runs }) {
   if (hasLiveRun || hasBusy) memory.startReadyLastLiveAt = nowMs;
 }
 
-// Generated routing files change on every swarm command; they alone must not block integrate/autopilot.
-const INTEGRATE_GENERATED_PATHS = new Set(['coordination/HANDOFF.md', 'coordination/TASK.md', 'docs/state/usage-ledger.md']);
-
 export function integrateCheckoutDirtyFromPorcelain(stdout) {
-  return stdout.split('\n').some(line => {
-    if (!line.trim()) return false;
-    const raw = line.slice(3).trim();
-    const file = raw.replace(/^"|"$/g, '');
-    if (INTEGRATE_GENERATED_PATHS.has(file)) return false;
-    if (file === '.swarm' || file.startsWith('.swarm/')) return false;
-    if (line.startsWith('?? ') && /^"?\.swarm\//.test(raw)) return false;
-    return true;
-  });
+  return filterGeneratedStatus(String(stdout ?? '').split('\n')).length > 0;
 }
 
 // Every once-only rule (one retry, one start per wave, no repeated integration) is read from the journal.
