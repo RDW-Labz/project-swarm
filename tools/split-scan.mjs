@@ -12,7 +12,7 @@ const KEYWORDS = new Set([
 const REGEX_PREFIX = new Set([
   '(', '[', '{', ',', ';', ':', '?', '!', '~', '+', '-', '*', '%', '^', '|', '&', '<', '>',
   '=', '+=', '-=', '*=', '/=', '%=', '**', '**=', '<<', '>>', '>>>', '<<=', '>>=', '>>>=',
-  '&=', '|=', '^=', '&&', '||', '??', '?.', '=>', ')', ']', '}', '++', '--',
+  '&=', '|=', '^=',   '&&', '||', '??', '?.', '=>', ']', '++', '--',
 ]);
 
 // Slow path (large modules): scanModule called lineAt() without a line index (O(file) per item)
@@ -175,13 +175,24 @@ function createLexer(text, start = 0) {
   function readRegex() {
     const s = pos;
     advance();
+    let inClass = false;
     while (pos < text.length) {
       const ch = peek();
       if (ch === '\\') {
         advance(2);
         continue;
       }
-      if (ch === '/') {
+      if (ch === '[' && !inClass) {
+        inClass = true;
+        advance();
+        continue;
+      }
+      if (ch === ']' && inClass) {
+        inClass = false;
+        advance();
+        continue;
+      }
+      if (ch === '/' && !inClass) {
         advance();
         while (pos < text.length && /[a-z]/i.test(peek())) advance();
         break;
@@ -901,6 +912,22 @@ function moduleImportsExports(items) {
     }
   }
   return { imports, exports };
+}
+
+/** True when offset sits in whitespace, a comment, string, template, or regex per this lexer. */
+export function offsetInScannerOpaque(text, offset) {
+  const lx = createLexer(text, 0);
+  while (lx.position < text.length) {
+    const at = lx.position;
+    const tok = lx.next();
+    if (tok.type === 'eof') return false;
+    if (at <= offset && offset < tok.start) return true;
+    if (tok.start <= offset && offset < tok.end) {
+      return tok.type === 'string' || tok.type === 'template' || tok.type === 'regex';
+    }
+    if (tok.end > offset) return false;
+  }
+  return false;
 }
 
 export function scanModule(text) {

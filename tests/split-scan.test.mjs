@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { scanModule, dependencyGraph, topLevelNameIndex } from '../tools/split-scan.mjs';
+import { scanModule, dependencyGraph, topLevelNameIndex, offsetInScannerOpaque } from '../tools/split-scan.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -254,4 +254,83 @@ test('scans real tools/swarm.mjs losslessly and quickly', () => {
     assert.ok(declared.has(name), `missing export name ${name}`);
   }
   assert.ok(items.length > 100);
+});
+
+const TOP_LEVEL_LINE =
+  /^(?:async\s+)?function\b|^(?:export\s+)?(?:async\s+)?function\b|^export\s+(?:async\s+)?function\b|^export\s+const\b|^const\b|^let\b|^class\b|^import\b/;
+
+function onlyLeadingNoiseBefore(lines, index) {
+  for (let j = 0; j < index; j++) {
+    const raw = lines[j];
+    const line = raw.trim();
+    if (line === '') continue;
+    if (j === 0 && raw.startsWith('#!')) continue;
+    if (line.startsWith('//')) continue;
+    if (line.startsWith('/*') || line.endsWith('*/')) continue;
+    return false;
+  }
+  return true;
+}
+
+function lineStartOffset(text, lineNumber) {
+  const lines = text.split('\n');
+  let offset = 0;
+  for (let i = 0; i < lineNumber - 1; i++) offset += lines[i].length + 1;
+  return offset;
+}
+
+test('division after closing paren is not a regex literal', () => {
+  const src = 'const band = Math.floor(Number(/(\\d+)%/.exec(msg)?.[1] ?? 0) / 10);\n';
+  const { items, rebuilt } = roundTrip(src);
+  assert.equal(rebuilt, src);
+  assert.equal(items.length, 1);
+});
+
+test('regex character class may contain a slash', () => {
+  const src = 'const parts = path.split(/[\\\\/]/);\n';
+  const { items, rebuilt } = roundTrip(src);
+  assert.equal(rebuilt, src);
+  assert.equal(items.length, 1);
+  assert.ok(!items[0].uses.has('includes'));
+});
+
+test('tools/swarm.mjs items respect top-level structure invariants', () => {
+  const swarmPath = path.join(root, '..', 'tools', 'swarm.mjs');
+  const text = fs.readFileSync(swarmPath, 'utf8');
+  const lines = text.split('\n');
+  const { items } = scanModule(text);
+
+  assert.ok(items.length > 200);
+  const largest = items.reduce(
+    (best, it) => (it.endLine - it.startLine > best.endLine - best.startLine ? it : best),
+    items[0],
+  );
+  assert.ok(largest.endLine - largest.startLine + 1 < 1500, `largest item ${largest.names} spans too many lines`);
+
+  const runManifest = items.find((it) => it.names.includes('runManifestBody'));
+  assert.ok(runManifest, 'runManifestBody item');
+  let expectedEnd = null;
+  for (let i = runManifest.startLine; i < lines.length; i++) {
+    if (lines[i] === '}') {
+      expectedEnd = i + 1;
+      break;
+    }
+  }
+  assert.equal(runManifest.endLine, expectedEnd);
+
+  const startsAt = new Set(items.map((it) => it.startLine));
+  for (const it of items) {
+    const sliceLines = it.text.split('\n');
+    for (let i = 1; i < sliceLines.length; i++) {
+      if (!TOP_LEVEL_LINE.test(sliceLines[i])) continue;
+      const fileLine = it.startLine + i;
+      const offset = lineStartOffset(text, fileLine);
+      if (offsetInScannerOpaque(text, offset)) continue;
+      if (onlyLeadingNoiseBefore(sliceLines, i)) continue;
+      if (startsAt.has(fileLine)) continue;
+      assert.fail(
+        `column-0 top-level line ${fileLine} sits inside item ${it.names} (${it.startLine}-${it.endLine})`,
+      );
+    }
+  }
 });
