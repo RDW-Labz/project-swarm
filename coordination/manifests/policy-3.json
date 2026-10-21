@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "policy-run-align",
+      "agent": "auto",
+      "prompt": "Three tests in tests/policy-run.test.mjs fail (auto-approves once and logs to journal and events without request free text; records policy-error and leaves item when apply throws; enforces maxPerPass): the item is not decided (decided count 0 where 1 or 2 is expected). The policy run module and its tests were written in parallel with the policy defaults, and the default rule kinds and facts changed (see tools/policy.mjs: for example ticket-retry, ticket-park, ticket-release, ticket-set-status, change-order-path-fix, change-order-split, merge-pr, hand-build-request, cap-raise, workflow-change, swarm-update, each needing particular facts). Align the tests (and tools/policy-run.mjs only if it contains a real bug) with the current tools/policy.mjs: use item kinds and facts from the current default rules that really auto-approve, keep every assertion's intent (apply once, journal and events both written, no free text from item.raw, policy-error on throw, maxPerPass), and add one test that runs a pass with a realistic mix: a merge-pr item with all conditions true is applied, the same item with deploysLiveSite true is left for the owner, a cap-raise of 3 dollars with 1 dollar already raised is applied and one that makes 6 dollars is left, a ticket-set-status to done on a sensitive ticket without a passed review is left. Write only tests/policy-run.test.mjs and tools/policy-run.mjs.",
+      "context": [
+        "tools/policy.mjs",
+        "tools/policy-run.mjs",
+        "tests/policy-run.test.mjs"
+      ],
+      "outputs": [
+        "tests/policy-run.test.mjs",
+        "tools/policy-run.mjs"
+      ],
+      "timeoutMs": 1200000
+    }
+  ]
+}
