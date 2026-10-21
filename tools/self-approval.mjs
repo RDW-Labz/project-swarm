@@ -364,6 +364,9 @@ function skipToProgram(plain) {
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) { k += 1; continue; }
     }
     if (wrapperName === 'nice' && /^-\d+$/.test(plain[k])) { k += 1; continue; }
+    if (wrapperName === 'command' && (plain[k] === '-v' || plain[k] === '-V')) {
+      return { index: plain.length };
+    }
     if (wrapperName && plain[k].startsWith('-')) {
       const takes = (WRAPPER_VALUE_OPTS[wrapperName] ?? []).includes(plain[k]);
       k += takes ? 2 : 1;

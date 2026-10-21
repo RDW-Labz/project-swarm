@@ -95,6 +95,20 @@ If the guard script errors, the hook is designed not to lock the owner out (the 
 - **Chat merge:** trusts the owner's prompt event, orchestrator hook installation, and that the merge command matches the recorded PR number once.
 - **Incomplete parsing:** the guard is a text reader of shell and git commands (wrappers, subshells, `cd &&`, here-doc bodies as data). Gaps remain; unknown writers or git ops default to needing approval or blocking.
 
+### Limits of the claude rule
+
+The self-approval hook’s **claude** rule blocks a headless Claude Code session started from the shell in forms an honest agent could plausibly type: `claude` as the program (after variable assignments and wrappers with their own options, in groups, loops, substitutions, `bash -c` / `eval` strings, tmux and screen, package runners, `node` scripts named `claude`, and in Python or Node code strings that spawn `claude` with `-p` or `--print`).
+
+It does **not** catch:
+
+- **(a)** Text piped into a shell or interpreter as a here-document or echo body (`cat <<EOF | bash`, `echo '…' | bash`, a script file written and run in the same command).
+- **(b)** Python or Node here-documents that spawn `claude` (they are read as shell text, not interpreter code).
+- **(c)** A here-document inside a command substitution that contains backticks (can over-block, as the old rule did).
+- **(d)** Interpreter code that passes a prompt without `-p`, and string literals that merely mention `claude -p` inside interpreter code.
+- **(e)** Anything invisible to a text rule: a variable or alias for the program, `node $(which claude)`, script files, `gtimeout`, decoded text.
+
+These are **accepted limits** under the honest-but-fallible orchestrator threat model. Real enforcement for commits and pushes is **git hooks** and **GitHub branch protection**; a deliberately hidden headless session is out of scope.
+
 ## What the hook analyzes (summary)
 
 It inspects redirects, `tee`, `sed -i`, `mv`, `cp`, `rm`, downloads, git and `gh` / `vercel` / `swarm` subcommands, `bash -c`, `eval`, `$(...)`, backticks, and common wrappers (`sudo`, `timeout`, `nice`, …). Read-only git is the short list above plus add, checkout, switch, and branch create when not destructive. Claude Code permissions cannot express "deny edits except under `.swarm/`"; the hook is the enforcement layer.

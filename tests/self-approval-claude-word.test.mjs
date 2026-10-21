@@ -35,6 +35,14 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 EOF`,
     'npx prettier --check claude.md',
     'npm exec -- prettier x',
+    'command -v claude',
+    'command -V claude',
+    'which claude',
+    'type claude',
+    'if command -v claude; then echo ok; fi',
+    'readlink -f "$(command -v claude)"',
+    'readlink -f $(command -v claude)',
+    '"$(command -v claude)" --version',
   ];
   for (const cmd of falseCases) {
     assert.equal(isSelfApprovalCommand(cmd), false, cmd);
