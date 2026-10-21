@@ -5,7 +5,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { liveDir } from './board.mjs';
 
-export const BUSY_MARKER_VERBS = new Set(['go', 'run', 'integrate', 'autopilot', 'ship', 'scale', 'with-concurrency', 'ticket', 'sweep', 'resume']);
+// Autopilot is omitted: a sleeping loop is idle; autopilot writes a marker only while a step runs (deps.busy in runAutopilot).
+export const BUSY_MARKER_VERBS = new Set(['go', 'run', 'integrate', 'ship', 'scale', 'with-concurrency', 'ticket', 'sweep', 'resume']);
 
 export function busyDir(env = process.env, home = os.homedir()) {
   if (env.SWARM_BUSY_DIR) return env.SWARM_BUSY_DIR;
@@ -22,7 +23,10 @@ function isPositiveIntegerPid(pid) {
 }
 
 export function reduceBusyCommand(command) {
-  const words = String(command).trim().split(/\s+/).filter(Boolean);
+  const text = String(command).trim();
+  // Autopilot step markers (runAutopilot deps.busy) are not in BUSY_MARKER_VERBS; still label them for update refusal.
+  if (/\bautopilot\b/.test(text) && /\bswarm(?:\.mjs)?\b/.test(text)) return 'swarm autopilot';
+  const words = text.split(/\s+/).filter(Boolean);
   let skipNext = false;
   for (const word of words) {
     if (skipNext) {

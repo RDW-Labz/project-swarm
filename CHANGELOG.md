@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.155.0
+
+A sleeping autopilot no longer blocks swarm update.
+- **Busy:** swarm autopilot counts as busy only while one of its steps is executing (a busy marker is written around each pass and removed after, also when the pass throws); a loop that is waiting for its next pass writes no marker and is not found by the process check. With an autopilot per project the machine can now be idle, so swarm update runs right after a release.
+- **Tests:** tests/autopilot-busy.test.mjs, tests/busy-marker.test.mjs, tests/update-busy-marker.test.mjs.
+
 ## 1.154.0
 
 The guard allows read-only vercel commands and says to use swarm merge.
