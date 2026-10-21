@@ -173,8 +173,8 @@ test('project detail keeps full progress and uses injected family spend while ov
   assert.equal(detail.progress.spend.why, null);
 
   const overview = await projectOverview(project, [], { now: NOW, historyFile: data.historyFile, summary });
-  assert.deepEqual(Object.keys(overview.progress).sort(), ['current', 'eta', 'finished', 'offLedger', 'overall', 'ticketsPct'].sort());
-  assert.deepEqual(overview.progress, { overall: 100, ticketsPct: 100, current: 'E2E green', eta: null, finished: false, offLedger: 0 });
+  assert.deepEqual(Object.keys(overview.progress).sort(), ['current', 'eta', 'finished', 'headline', 'offLedger', 'overall', 'ticketsPct', 'untracked'].sort());
+  assert.deepEqual(overview.progress, { overall: 100, ticketsPct: 100, current: 'E2E green', eta: null, finished: false, offLedger: 0, headline: 'build 1/1', untracked: { runs: 0, jobs: 0 } });
 });
 
 test('shared history cache filters projects and refreshes after an append', async t => {

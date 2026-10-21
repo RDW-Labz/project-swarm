@@ -49,6 +49,8 @@ async function readJson(file) {
 const openTicketStatus = new Set(['todo', 'ready', 'running', 'review', 'blocked']);
 const activeState = state => state?.status === 'running' || state?.status === 'paused';
 const timestampOfRun = run => Math.max(Date.parse(run.state?.startedAt ?? '') || 0, Date.parse(run.state?.finishedAt ?? '') || 0, run.mtimeMs ?? 0);
+const HISTORY_RECENT_KINDS = new Set(['run', 'pr', 'merge', 'spend']);
+const WEEK = 7 * 86400000;
 
 async function projectTestFacts(project, { now, liveRuns = [], env = process.env } = {}) {
   const root = await fs.realpath(project.root).catch(() => path.resolve(project.root));
@@ -62,12 +64,34 @@ async function projectTestFacts(project, { now, liveRuns = [], env = process.env
   const marker = await fs.stat(path.join(root, '.swarm-scratch')).then(() => true, () => false);
   const openTickets = (ledger?.tickets ?? []).some(ticket => openTicketStatus.has(ticket?.status));
   const approvedLedger = Boolean(ledger?.approved === true || ledger?.approval === true || ledger?.scope);
-  const recentRun = runs.some(run => now - timestampOfRun(run) <= 7 * 86400000 && timestampOfRun(run) <= now);
+  const scratchBase = path.join(os.homedir(), '.project-swarm-scratch');
+  const parts = root.split(path.sep).filter(Boolean);
+  const pathScratch = isScratchRoot(root)
+    || root === scratchBase
+    || root.startsWith(`${scratchBase}${path.sep}`)
+    || parts.some(part => part.startsWith('.tmp-test'))
+    || parts.some(part => ['tmp', 'temp', 'test', 'tests', '__tests__'].includes(part));
+  const recentOnDisk = runs.some(run => now - timestampOfRun(run) <= WEEK && timestampOfRun(run) <= now);
+  const historyPage = await readHistory({
+    file: historyFile(env),
+    project: project.id,
+    from: new Date(now - WEEK).toISOString(),
+    to: new Date(now).toISOString(),
+    limit: 1000,
+  }).catch(() => ({ events: [] }));
+  const recentInHistory = (historyPage.events ?? []).some(event => HISTORY_RECENT_KINDS.has(event.kind));
   const live = liveRuns.some(record => {
     const recordRoot = path.resolve(String(record.root ?? ''));
     return recordRoot === root && activeState(runs.find(run => run.id === record.runId)?.state);
   });
   const spend = await projectSummary(root, { env, ttlMs: 0 }).catch(() => ({}));
+  // History revives a real registered project, but never changes a path-based scratch
+  // classification. This keeps the scratch toggle/counts independent of old log entries.
+  const recentRun = recentOnDisk || (recentInHistory && !pathScratch);
+  const idleHidden = !pathScratch && !pointer?.scratch && !pointer?.profile?.scratch
+    && !marker && !scopeFile && !ledger?.scope && !approvedLedger && !openTickets
+    && !recentRun && !live && !project.pinned
+    && !(Number(spend.spendUsd ?? spend.billedUsd ?? spend.usd ?? 0) > 0);
   return {
     tmpdir: os.tmpdir(),
     scratchBase: path.join(os.homedir(), '.project-swarm-scratch'),
@@ -80,16 +104,17 @@ async function projectTestFacts(project, { now, liveRuns = [], env = process.env
     approvedLedger,
     openTickets,
     recentRun,
+    idleHidden,
     live,
     spendUsd: Number(spend.spendUsd ?? spend.billedUsd ?? spend.usd ?? 0),
   };
 }
 
 async function classifyProjects(projects, { now = Date.now(), liveRuns = [], env = process.env } = {}) {
-  return Promise.all(projects.map(async project => ({
-    ...project,
-    testOrTemp: isTestOrTempProject(project, await projectTestFacts(project, { now, liveRuns, env })),
-  })));
+  return Promise.all(projects.map(async project => {
+    const facts = await projectTestFacts(project, { now, liveRuns, env });
+    return { ...project, testOrTemp: isTestOrTempProject(project, facts), idleHidden: Boolean(facts.idleHidden) };
+  }));
 }
 
 // Run ids start with a millisecond timestamp, so a name sort puts the newest last.
@@ -356,7 +381,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
         const liveRuns = await live();
         const flagged = await classifyProjects(all, { now: snapshotNow, liveRuns, env });
         // Test and temp projects are left out of everything (lanes, totals, the inbox) unless asked for, so the numbers still add up.
-        const projects = scratch ? flagged : flagged.filter(p => !p.testOrTemp);
+        const projects = flagged.filter(p => !p.idleHidden && (scratch || !p.testOrTemp));
         const caps = (() => { try { const lanes = resolveBudget({ config }).lanes ?? {}; return Object.fromEntries(Object.entries(lanes).map(([k, v]) => [k, v?.dailyUsd])); } catch { return {}; } })();
         const configured = (() => { try { return Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k]) => k); } catch { return []; } })();
         const configuredModels = (() => { try { return Object.fromEntries(Object.entries(config.lanes ?? {}).filter(([, v]) => typeof v?.model === 'string' && v.model).map(([k, v]) => [k, v.model])); } catch { return {}; } })();
@@ -402,7 +427,10 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
         }
         // What waits for the owner (read-only); a failure here never hides the rest of the board.
         snapshot.inbox = await boardInbox({ projects, now: now(), env }).catch(error => ({ total: 0, items: [], problems: [{ project: '-', problem: String(error.message).slice(0, 120) }], phone: null }));
-        snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : all.length - projects.length, total: flagged.filter(p => p.testOrTemp).length };
+        const scratchProjects = flagged.filter(p => p.testOrTemp && !p.idleHidden);
+        snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : scratchProjects.length, total: scratchProjects.length };
+        const idleHidden = flagged.filter(p => p.idleHidden).length;
+        if (idleHidden) snapshot.scratch.idleHidden = idleHidden;
         return snapshot;
       })();
       cachedBy.set(cacheKey, { at: now(), promise });

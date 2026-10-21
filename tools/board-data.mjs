@@ -346,15 +346,26 @@ export function ticketsOf(ledger, scope = null) {
 export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
   const runs = await readRunStates(project.root);
   const liveStateRuns = [];
+  const liveStateByRecord = new Map();
   for (const record of liveRuns) {
     const root = await fs.realpath(record.root ?? project.root).catch(() => record.root ?? project.root);
     const stateRun = (root === await fs.realpath(project.root).catch(() => project.root) ? runs : await readRunStates(root)).find(run => run.id === record.runId);
-    if (stateRun) liveStateRuns.push({ ...stateRun, liveRoot: root });
+    if (stateRun) {
+      liveStateRuns.push({ ...stateRun, liveRoot: root });
+      liveStateByRecord.set(record, stateRun.state);
+    }
   }
   const visibleRuns = new Map(runs.map(run => [`${project.root}|${run.id}`, run]));
   for (const run of liveStateRuns) visibleRuns.set(`${run.liveRoot}|${run.id}`, run);
   const liveRunsForAgents = [...visibleRuns.values()];
-  const activeLiveRuns = liveRuns.filter(record => activeRunState(record.state));
+  // The caller's list is already a live snapshot. Registry-derived records carry their
+  // state on the record; direct callers may only provide runId/root, so use the state file
+  // we just read to keep those explicitly supplied live runs visible too.
+  const activeLiveRuns = liveRuns.filter(record => {
+    if (activeRunState(record.state)) return true;
+    if (record.state !== undefined) return false;
+    return activeRunState(liveStateByRecord.get(record));
+  });
   const liveIds = new Set(activeLiveRuns.map(r => r.runId));
   let selected;
   try { selected = await ledgerRoot(project.root); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
