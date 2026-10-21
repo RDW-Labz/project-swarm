@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "self-approval-claude-v4",
+      "agent": "auto",
+      "prompt": "A third Opus review of the claude rule in tools/self-approval.mjs found concrete regressions and gaps. Fix them, keep tests/self-approval-hardening.test.mjs passing, and restore anything the review says was dropped. (1) tmux aliases and global options: honor tmux subcommand aliases (new for new-session, neww for new-window, splitw for split-window, send for send-keys, respawnp for respawn-pane, run for run-shell) and tmux global options before the subcommand (-L SOCKET, -S PATH, -f FILE, -c SHELL, -u, -2, -v and similar), so tmux -L sock new-session 'claude -p x' and tmux new -d 'claude -p x' are caught; screen and tmux with claude as the command are risky as before. (2) Here-documents: the earlier version of this file read here-document bodies and checked them separately for the NON-claude patterns (swarm handbuild approve, decide, hook references and the others); a rewrite deleted that, so swarm tickets; bash <<'EOF' with swarm handbuild approve 1 inside the body is no longer caught. Restore it: a here-document body that is fed to a shell or interpreter (bash, sh, zsh, node, python and similar read the script from standard input) must be analyzed as commands for ALL patterns including the claude rule, while a here-document body fed to a non-shell command (cat, tee, a git commit message through a dollar-parenthesis substitution, an echo or a file write) is data and is not scanned for the claude rule; the SAFE_SWARM allowance must not exempt text that also has a shell reading a here-document. (3) Do not narrow the non-claude patterns: restore the new-session and split-window tmux patterns so they match swarm and node commands exactly as they did before this rewrite (the previous version allowed tmux new-session running node tools/orchestrator-up.mjs because that is the sanctioned seat launcher, so allow exactly that one program and its sub-arguments, orchestrator-up.mjs up, down, status, launchd install and uninstall, but still flag node followed by swarm.mjs and any other node command that mentions decide, handbuild or the hook). (4) Template literals: in node -e and similar code strings also scan backtick-quoted strings, so execSync with a backtick string containing claude -p x is caught. (5) Brace groups: add tests for { claude -p x; } 2>&1 and for the keyword forms; make sure the open brace counts as a command-start word. (6) node path/to/bin/claude -p x: a node program whose script path has basename claude (or cli.js under an anthropic-ai/claude-code package path) counts as the program claude. (7) Interactive claude started in tmux or screen: keep treating a claude program as risky when it is the command of tmux new-session, new-window, split-window, respawn-pane or screen, with or without -p; and tmux send-keys with any text aimed at a pane is risky when the same command line (or the immediately previous tmux command in the same line) started claude. Add tests for every item above both blocked and allowed variants (tmux new -d -s w node tools/orchestrator-up.mjs up allowed; tmux new -d 'node tools/swarm.mjs decide 3 approve' blocked; swarm tickets; bash <<'EOF' swarm handbuild approve 1 EOF blocked; git commit -m with a heredoc message containing a line starting with claude reviews allowed; cat <<'EOF' with the same text allowed). Write only tools/self-approval.mjs, tests/self-approval-claude-word.test.mjs and, if needed, tests/self-approval-hardening.test.mjs.",
+      "context": [
+        "tools/self-approval.mjs",
+        "tools/shell-writes.mjs",
+        "tests/self-approval-claude-word.test.mjs",
+        "tests/self-approval-hardening.test.mjs"
+      ],
+      "outputs": [
+        "tools/self-approval.mjs",
+        "tests/self-approval-claude-word.test.mjs",
+        "tests/self-approval-hardening.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-hardening2.test.mjs"
+      ]
+    }
+  ]
+}
