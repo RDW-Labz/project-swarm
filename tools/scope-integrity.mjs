@@ -7,6 +7,8 @@ const NEEDS_ACCEPTANCE = new Set(['build', 'test', 'migration']);
 const NO_REF_TYPES = new Set(['human', 'contract']);
 const isFolder = (f) => typeof f === 'string' && f.endsWith('/');
 const activeOf = (tickets) => tickets.filter((t) => t && t.status !== 'cancelled' && t.status !== 'proposed');
+// Done tickets stay in the tree for coverage and dependencies but no longer own files for collision checks.
+const fileOwnerOf = (tickets) => activeOf(tickets).filter((t) => ['todo', 'ready', 'running', 'review', 'blocked'].includes(t.status));
 const listOf = (ids, n = 10) => ids.slice(0, n).join(', ') + (ids.length > n ? ` and ${ids.length - n} more` : '');
 const countsOf = (items, key) => items.reduce((acc, t) => { const k = t[key] ?? 'none'; acc[k] = (acc[k] || 0) + 1; return acc; }, {});
 
@@ -151,9 +153,11 @@ export function checkTicketTree({ scope, tickets = [], sizeBudget } = {}) {
   }
 
   const cycles = findCycles(active, ids);
-  const waves = cycles.length ? null : computeWaves(active, ids);
+  const owners = fileOwnerOf(tickets);
+  const ownerIds = new Set(owners.map((t) => t.id));
+  const waves = cycles.length ? null : computeWaves(owners, ownerIds);
   if (!cycles.length && !waves) warnings.push({ code: 'waves-unavailable', message: 'could not compute waves; conflict check skipped' });
-  const conflicts = findConflicts(active, waves);
+  const conflicts = findConflicts(owners, waves);
 
   if (uncovered.length) errors.push({ code: 'uncovered', message: `${uncovered.length} requirement(s) not covered by any ticket: ${listOf(uncovered)}`, ids: uncovered });
   if (untraced.length) errors.push({ code: 'untraced', message: `${untraced.length} ticket(s) reference no real requirement: ${listOf(untraced)}`, ids: untraced });

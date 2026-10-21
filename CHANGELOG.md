@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.158.0
+
+Batch 2: billed-only caps, guard word fix, scope fixes, delivered tickets, busy marker start time.
+- **Billed caps:** the project spend cap counts billed spend only (metered lanes), fails closed on unknown paid cost, missing lanes and rented jobs, and reports list value separately; known limits: an unknown cost counts at the lane reserve, not the job's own reservation, and a running run with no paid job recorded yet adds no exposure.
+- **Guard:** the word guard in prompt text no longer blocks a command; only real risky forms do.
+- **Scope fixes:** delete-only tickets finish, done tickets release their files and the splitter sees open tickets, a ticket's own specs run before review, tickets --set done keeps the review gate.
+- **Delivered:** swarm tickets ID --delivered PR records work merged outside the ledger (merged PR required, sensitive tickets still need their review).
+- **Busy marker:** records the process start time so a reused pid no longer blocks swarm update.
+
 ## 1.157.0
 
 Board batch: worktrees, build progress, deploy milestone, ghost sessions, billed vs list value, idle lane reasons.

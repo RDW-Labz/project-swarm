@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "scope-tests-follow-c",
+      "agent": "auto",
+      "prompt": "Item C (done in the previous step) made swarm tickets ID --set STATUS require --force or --yes (a bare --set now prints a preview and refuses, writing nothing) and added a review gate for --set done. The existing test named 'split, approve, go --scope preparation, sync and change order work end to end' in tests/scope-commands.test.mjs fails at its --set calls (for example runScopeCommand(root, 'tickets', ['T-0003', '--set', 'blocked']) expected exit 0). Update only the tests, keeping their intent: add --yes to every --set call in the existing scope and ticket tests that is expected to succeed, and leave the calls that are expected to be refused (an illegal transition, set done without the required review) so they still exit 1 even with --yes. Search all tests for other uses of the --set option and fix those the same way. Do not change any tools file. Write only the test files that need it.",
+      "context": [
+        "tests/scope-commands.test.mjs",
+        "tools/scope-commands.mjs",
+        "tests/scope-set-guard.test.mjs"
+      ],
+      "outputs": [
+        "tests/scope-commands.test.mjs"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}

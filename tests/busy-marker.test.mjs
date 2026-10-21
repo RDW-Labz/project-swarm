@@ -86,3 +86,84 @@ test('BUSY_MARKER_VERBS omits autopilot (sleeping loops are idle; steps write ma
   assert.ok(BUSY_MARKER_VERBS.has('go'));
   assert.ok(BUSY_MARKER_VERBS.has('resume'));
 });
+
+test('liveBusyMarkers keeps marker alive when stored procStart matches current process start', async t => {
+  const dir = await tempDir(t);
+  const root = await tempDir(t);
+  const start = 'Mon Oct 20 10:00:00 2025';
+  const procStart = () => start;
+  const remove = await writeBusyMarker({
+    command: 'node tools/swarm.mjs go',
+    root,
+    dir,
+    procStart,
+  });
+  const live = await liveBusyMarkers({ dir, isAlive: () => true, procStart });
+  assert.equal(live.length, 1);
+  assert.equal(live[0].pid, process.pid);
+  await remove();
+});
+
+test('liveBusyMarkers removes marker when pid is reused (stored procStart differs from current)', async t => {
+  const dir = await tempDir(t);
+  const root = await tempDir(t);
+  const pid = 424242;
+  const oldStart = 'Mon Oct 20 09:00:00 2025';
+  const newStart = 'Mon Oct 20 11:00:00 2025';
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, `${pid}.json`),
+    `${JSON.stringify({ pid, command: 'swarm go', root, procStart: oldStart })}\n`,
+  );
+  const live = await liveBusyMarkers({
+    dir,
+    isAlive: () => true,
+    procStart: () => newStart,
+  });
+  assert.deepEqual(live, []);
+  await assert.rejects(fs.access(path.join(dir, `${pid}.json`)));
+});
+
+test('liveBusyMarkers treats marker without procStart as alive (legacy markers)', async t => {
+  const dir = await tempDir(t);
+  const root = await tempDir(t);
+  const pid = process.pid;
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, `${pid}.json`),
+    `${JSON.stringify({ pid, command: 'swarm run', root })}\n`,
+  );
+  const live = await liveBusyMarkers({ dir, isAlive: () => true, procStart: () => 'any' });
+  assert.equal(live.length, 1);
+  assert.equal(live[0].command, 'swarm run');
+  await fs.unlink(path.join(dir, `${pid}.json`));
+});
+
+test('liveBusyMarkers keeps marker alive when current procStart cannot be read', async t => {
+  const dir = await tempDir(t);
+  const root = await tempDir(t);
+  const pid = 515151;
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, `${pid}.json`),
+    `${JSON.stringify({ pid, command: 'swarm ship', root, procStart: 'Mon Oct 20 10:00:00 2025' })}\n`,
+  );
+  const live = await liveBusyMarkers({ dir, isAlive: () => true, procStart: () => null });
+  assert.equal(live.length, 1);
+  await fs.unlink(path.join(dir, `${pid}.json`));
+});
+
+test('writeBusyMarker stores procStart from injected reader', async t => {
+  const dir = await tempDir(t);
+  const root = await tempDir(t);
+  const injected = 'Tue Oct 21 12:34:56 2026';
+  const remove = await writeBusyMarker({
+    command: 'node tools/swarm.mjs integrate',
+    root,
+    dir,
+    procStart: () => injected,
+  });
+  const raw = JSON.parse(await fs.readFile(path.join(dir, `${process.pid}.json`), 'utf8'));
+  assert.equal(raw.procStart, injected);
+  await remove();
+});

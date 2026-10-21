@@ -41,7 +41,7 @@ async function addWorktree(t, root, branch) {
 async function writeRun(root, id, costUsd) {
   const dir = path.join(root, '.swarm', 'runs', id);
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, 'state.json'), JSON.stringify({ id, jobs: [{ id: `job-${id}`, costUsd, usage: { total_tokens: 100 } }] }));
+  await fs.writeFile(path.join(dir, 'state.json'), JSON.stringify({ id, jobs: [{ id: `job-${id}`, agent: 'anthropic', costUsd, usage: { total_tokens: 100 } }] }));
 }
 
 test('mainWorktreeRoot identifies linked worktrees and rejects the main checkout and non-git directories', async t => {
@@ -76,11 +76,12 @@ test('one project cap covers the main checkout and every linked worktree', async
   const worktreeDecision = await checkProjectCap(worktree, { env });
   for (const decision of [mainDecision, worktreeDecision]) {
     assert.equal(decision.reason, 'project-cap');
-    assert.match(decision.message, /and its 1 worktrees/);
-    assert.match(decision.message, /\$5\.00/);
+    assert.match(decision.message, /billed \$5\.00 of the \$4\.00 cap; list value \$5\.00 across 2 runs is not counted/);
+    assert.match(decision.message, /only metered lanes/);
   }
   const reached = await projectSummary(worktree, { env, ttlMs: 0 });
   assert.equal(reached.spendUsd, 5);
+  assert.equal(reached.billedUsd, 5);
   assert.equal(reached.treeUsd, 2);
   assert.equal(reached.sharedTrees, 2);
   assert.equal(reached.reached, true);

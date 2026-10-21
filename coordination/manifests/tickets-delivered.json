@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "tickets-delivered",
+      "agent": "auto",
+      "prompt": "Add an already-delivered path to the ticket ledger (Ticket Manager v2 item 6). Today a ticket whose work was merged outside the ledger cannot become done: blocked to done is illegal and todo to done is refused, so requirements covered stays 0. Add `swarm tickets ID [ID...] --delivered PR[,PR] [--repo OWNER/NAME] --yes`: for every named ticket (status todo, ready, blocked or running; never cancelled or done) verify each PR is MERGED through an injectable dependency whose real default runs `gh pr view N --json state,mergeCommit,url` (tests inject a fake; no network in tests), then move the ticket to done with a ledger event kind delivered recording by owner, the PR numbers, the merge commit sha and the note; the ticket keeps the note delivered by PR #N (sha). Rules: a ticket with sensitive true is refused unless a passed security review is recorded for it (name the missing review, same message style as the existing --set done review gate; --yes never bypasses it); a PR that is not merged refuses with the PR number and state; --dry-run prints what would change; all-or-nothing per call; the ledger seal is recomputed like other ticket edits; done tickets release their files; requirement coverage and Build progress count delivered tickets as done. Implement in tools/tickets.mjs (transition helper) and the tickets command in tools/scope-commands.mjs (the flag parsing near the --set and --release handling around line 1723); do not edit tools/swarm.mjs. Tests in tests/tickets-delivered.test.mjs: merged PR marks done with the event, open PR refused, sensitive without review refused, cancelled and done refused, dry-run changes nothing, multiple tickets all-or-nothing, coverage counts it. ignoreTests reason: only tickets.mjs, scope-commands.mjs and the new test change.",
+      "context": [
+        "tools/tickets.mjs",
+        "tools/scope-commands.mjs",
+        "tools/verify-config.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/tickets.mjs",
+        "tools/scope-commands.mjs",
+        "tests/tickets-delivered.test.mjs"
+      ],
+      "timeoutMs": 1500000,
+      "ignoreTests": [
+        "tests/mark-deps.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/wiring.test.mjs",
+        "tests/day0.test.mjs",
+        "tests/practice-tooling.test.mjs",
+        "tests/ci-queue.test.mjs",
+        "tests/scope-delete-tickets.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/_watch-fixture.mjs",
+        "tests/scope-spec-gate.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/scope-ownership.test.mjs",
+        "tests/state-backup.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/tickets.test.mjs",
+        "tests/gallery-tickets.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/quotes.test.mjs",
+        "tests/budgets.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/acceptance-sync.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/ui-check.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/handoff.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}

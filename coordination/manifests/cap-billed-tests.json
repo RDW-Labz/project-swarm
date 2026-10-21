@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "cap-billed-tests",
+      "agent": "auto",
+      "prompt": "The project cap now counts BILLED spend only (metered lanes in PAID_LANES; tools/project-spend.mjs returns billedUsd, listUsd and usd=list value; the cap decision compares billedUsd plus exposure of running runs that have a paid-lane job). Eight existing tests assumed the old meaning because their fixture jobs carry a cost but no paid lane, so nothing is billed: tests/project-spend.test.mjs (5 tests: projectCap lower of profile and config, a new run refused once all runs reached the cap, project summary for swarm watch, null or bad caps, runs still going count with their --max-usd, the real refusal carries the project-cap code), tests/board-worktrees.test.mjs (one project cap covers the main checkout and every linked worktree) and tests/scope-loop.test.mjs (CLI: go --scope with the project cap reached starts no wave). Update only the fixtures: put the costed jobs on lane anthropic (a paid lane) so the original assertions still hold, and where a test asserts a summary figure keep it checking spendUsd (list) and add the billedUsd assertion. Do not weaken or delete any assertion and do not change tools. Run those three files mentally against tools/project-spend.mjs in context. Write only those three test files. ignoreTests reason: only test files change.",
+      "context": [
+        "tools/project-spend.mjs",
+        "tools/spend.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/project-cap-billed.test.mjs"
+      ],
+      "outputs": [
+        "tests/project-spend.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/scope-loop.test.mjs"
+      ],
+      "timeoutMs": 900000
+    }
+  ]
+}

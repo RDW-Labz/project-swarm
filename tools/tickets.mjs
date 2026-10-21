@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 import { validDependencySpec } from './dep-install.mjs';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import { randomBytes, createHash } from 'node:crypto';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 import { safeWritableDir, assertRegularOrMissing, appendEvent } from './journal.mjs';
 import { wiringGaps } from './wiring.mjs';
 import { isExampleFile } from './init-profile.mjs';
@@ -10,8 +15,9 @@ import { isSensitivePath } from './sensitive-paths.mjs';
 
 // Tickets made from outside text (a gallery comment, a production error) are proposals: no worker runs one until the owner approves it.
 export const PROPOSAL_ORIGINS = ['comment', 'error', 'handoff'];
-const unapprovedProposal = t => PROPOSAL_ORIGINS.includes(t?.origin) && t.approvedBy !== 'owner';
+export const unapprovedProposal = t => PROPOSAL_ORIGINS.includes(t?.origin) && t.approvedBy !== 'owner';
 export const STATUSES = ['proposed', 'todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled'];
+export const DELIVERABLE_STATUSES = ['todo', 'ready', 'blocked', 'running'];
 export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'contract', 'human'];
 const RISKS = ['low', 'medium', 'high'];
 const SIZES = ['S', 'M'];
@@ -48,6 +54,27 @@ const MOVES = {
 // Day 0 and other human tickets are done by a person, at any time.
 const HUMAN_MOVES = { todo: ['done'], ready: ['done'], running: ['done'], blocked: ['done'] };
 const legalMoves = ticket => [...(MOVES[ticket.status] ?? []), ...(ticket.type === 'human' ? HUMAN_MOVES[ticket.status] ?? [] : [])];
+
+export function ticketActor() {
+  const fromEnv = process.env.SWARM_ACTOR;
+  if (typeof fromEnv === 'string' && fromEnv.trim()) return fromEnv.trim().slice(0, 120);
+  try { return os.userInfo().username || 'owner'; } catch { return 'owner'; }
+}
+
+// Legality checks for `swarm tickets ID --set` (no lock; does not judge security or acceptance reviews).
+export function validateSetTransition(ledger, id, to) {
+  if (!STATUSES.includes(to)) return { ok: false, message: `status must be one of: ${STATUSES.join(', ')}` };
+  const ticket = ledger?.tickets?.find(t => t.id === id);
+  if (!ticket) return { ok: false, message: `no ticket ${id}` };
+  if (ticket.status === 'proposed' && to !== 'cancelled') return { ok: false, message: `${id} is proposed: approve it with swarm tickets ${id} --approve (or cancel it with --set cancelled)` };
+  if (!legalMoves(ticket).includes(to)) return { ok: false, message: `${id}: ${ticket.status} -> ${to} is not allowed; legal next statuses: ${legalMoves(ticket).join(', ') || 'none'}` };
+  if (unapprovedProposal(ticket) && ['todo', 'ready', 'running'].includes(to)) return { ok: false, message: `${id} came from outside text (a gallery comment, a production error or a handoff check); the owner approves it with swarm tickets ${id} --approve` };
+  if (to === 'ready') {
+    const waiting = (ticket.dependsOn ?? []).filter(d => ledger.tickets.find(x => x.id === d)?.status !== 'done');
+    if (waiting.length) return { ok: false, message: `${id} waits on ${waiting.join(', ')}` };
+  }
+  return { ok: true, preview: { id: ticket.id, from: ticket.status, to } };
+}
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const isStrArr = v => Array.isArray(v) && v.every(s => typeof s === 'string');
@@ -188,7 +215,87 @@ export function createLedger({ scope, tickets = [], now = Date.now() } = {}) {
   return { version: 1, scope, tickets, changeOrders: [], approved: null, createdAt: at, updatedAt: at };
 }
 
-export async function transition(root, id, to, { by = 'system', note, now = Date.now(), reason } = {}) {
+let viewPullRequestOverride = null;
+export function setViewPullRequest(fn) { viewPullRequestOverride = fn; }
+export function resetViewPullRequest() { viewPullRequestOverride = null; }
+
+export async function defaultViewPullRequest(number, { repo } = {}) {
+  const args = ['pr', 'view', String(number), '--json', 'state,mergeCommit,url'];
+  if (repo) args.push('--repo', repo);
+  const { stdout } = await execFileAsync('gh', args);
+  const data = JSON.parse(stdout);
+  const sha = data.mergeCommit?.oid ?? (typeof data.mergeCommit === 'string' ? data.mergeCommit : null);
+  return { state: data.state, mergeCommit: sha, url: data.url ?? null };
+}
+
+async function viewPullRequest(number, options) {
+  if (viewPullRequestOverride) return viewPullRequestOverride(number, options);
+  return defaultViewPullRequest(number, options);
+}
+
+export function validateDeliveredTicket(ledger, id) {
+  const ticket = ledger?.tickets?.find(t => t.id === id);
+  if (!ticket) return { ok: false, message: `no ticket ${id}` };
+  if (ticket.status === 'cancelled' || ticket.status === 'done') {
+    return { ok: false, message: `${id} is ${ticket.status}: --delivered only applies to todo, ready, blocked or running tickets` };
+  }
+  if (!DELIVERABLE_STATUSES.includes(ticket.status)) {
+    return { ok: false, message: `${id} is ${ticket.status}: --delivered only applies to todo, ready, blocked or running tickets` };
+  }
+  return { ok: true, ticket, preview: { id: ticket.id, from: ticket.status, to: 'done' } };
+}
+
+export function deliveredNote(prInfos) {
+  return prInfos.map(p => `delivered by PR #${p.number} (${p.sha})`).join('; ');
+}
+
+export async function verifyMergedPullRequests(prNumbers, { repo } = {}) {
+  const prInfos = [];
+  for (const raw of prNumbers) {
+    const number = Number(raw);
+    if (!Number.isInteger(number) || number < 1) throw fail('pr-invalid', `bad PR number: ${raw}`);
+    const info = await viewPullRequest(number, { repo });
+    if (info.state !== 'MERGED' || !info.mergeCommit) throw fail('pr-not-merged', `PR #${number} is ${info.state}, not merged`);
+    prInfos.push({ number, sha: info.mergeCommit, url: info.url });
+  }
+  return prInfos;
+}
+
+const clearRunState = ticket => {
+  delete ticket.blockReason;
+  for (const key of ['attempts', 'escalation', 'retryNote', 'retryHistory', 'runId', 'infraRetries']) delete ticket[key];
+};
+
+export async function applyDelivered(root, { ids, prNumbers, repo, by = 'owner', note: noteOverride, now = Date.now() } = {}) {
+  const ledger = await readLedger(root);
+  if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
+  for (const id of ids) {
+    const check = validateDeliveredTicket(ledger, id);
+    if (!check.ok) throw fail('ticket-delivered', check.message);
+  }
+  const prInfos = await verifyMergedPullRequests(prNumbers, { repo });
+  const note = noteOverride ?? deliveredNote(prInfos);
+  const wasApproved = isApproved(ledger);
+  const updated = [];
+  for (const id of ids) {
+    const ticket = ledger.tickets.find(t => t.id === id);
+    const from = ticket.status;
+    ticket.status = 'done';
+    clearRunState(ticket);
+    updated.push({ id, from });
+  }
+  ledger.updatedAt = new Date(now).toISOString();
+  const saved = wasApproved ? approveLedger(ledger, { by: 'owner', now }) : ledger;
+  await writeLedger(root, saved);
+  const prs = prInfos.map(p => p.number);
+  const mergeCommits = prInfos.map(p => p.sha);
+  for (const { id, from } of updated) {
+    await appendLog(root, { event: 'delivered', id, from, to: 'done', by, prs, mergeCommits, note });
+  }
+  return { ledger: saved, note, prInfos, tickets: ids.map(id => saved.tickets.find(t => t.id === id)) };
+}
+
+export async function transition(root, id, to, { by = 'system', note, now = Date.now(), reason, actor, source, confirmation } = {}) {
   const ledger = await readLedger(root);
   if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
   const ticket = ledger.tickets.find(t => t.id === id);
@@ -207,7 +314,17 @@ export async function transition(root, id, to, { by = 'system', note, now = Date
   const pruned = to === 'cancelled' ? pruneCancelledDeps(ledger).pruned : [];
   ledger.updatedAt = new Date(now).toISOString();
   await writeLedger(root, ledger);
-  await appendLog(root, { event: 'transition', id, from, to, by, note: note ?? null });
+  await appendLog(root, {
+    event: 'transition',
+    id,
+    from,
+    to,
+    by,
+    note: note ?? null,
+    ...(actor ? { actor } : {}),
+    ...(source ? { source } : {}),
+    ...(confirmation ? { confirmation } : {}),
+  });
   await logPrune(root, pruned, { cancelled: id, by }, now);
   return ticket;
 }

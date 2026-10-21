@@ -32,7 +32,7 @@ async function repo(t, { profile, config = {} } = {}) {
 }
 async function oldRun(root, id, costs) {
   await fs.mkdir(path.join(root, '.swarm/runs', id), { recursive: true });
-  await fs.writeFile(path.join(root, '.swarm/runs', id, 'state.json'), JSON.stringify({ id, jobs: costs.map((costUsd, i) => ({ id: `j${i}`, costUsd, usage: { total_tokens: 100 } })) }));
+  await fs.writeFile(path.join(root, '.swarm/runs', id, 'state.json'), JSON.stringify({ id, jobs: costs.map((costUsd, i) => ({ id: `j${i}`, agent: 'anthropic', costUsd, usage: { total_tokens: 100 } })) }));
 }
 
 test('projectSpend adds every run of the project, including a rental and unreadable runs', async t => {
@@ -59,8 +59,8 @@ test('projectCap takes the lower of profile and config, and a malformed cap is a
   assert.equal(projectCap({ profile: { budget: { projectMaxUsd: 20 } } }), 20);
   assert.throws(() => projectCap({ profile: { budget: { projectMaxUsd: -1 } } }), /project-cap-invalid/);
   assert.throws(() => projectCap({ config: { spend: { projectMaxUsd: 'ten' } } }), /project-cap-invalid/);
-  assert.equal(projectCapDecision({ spent: { usd: 9.99, runs: 3 }, cap: 10 }), null);
-  assert.match(projectCapDecision({ spent: { usd: 10, runs: 3 }, cap: 10 }).message, /project-cap: this project has spent \$10\.00 across 3 runs/);
+  assert.equal(projectCapDecision({ spent: { usd: 9.99, listUsd: 9.99, billedUsd: 9.99, runs: 3 }, cap: 10 }), null);
+  assert.match(projectCapDecision({ spent: { usd: 10, listUsd: 10, billedUsd: 10, runs: 3 }, cap: 10 }).message, /project-cap: this project has been billed \$10\.00 of the \$10\.00 cap; list value \$10\.00 across 3 runs is not counted/);
 });
 
 test('the profile and the config accept projectMaxUsd and reject bad values', () => {
@@ -77,7 +77,7 @@ test('a new run is refused once all runs together reached the project cap (--max
   await oldRun(fx.root, 'old-2', [2]);
   let called = 0;
   const m = { version: 1, concurrency: 1, jobs: [{ id: 'job-1', agent: 'ollama', model: 'test-model', prompt: 'Write out/1.txt', context: ['input.txt'], outputs: ['out/1.txt'], timeoutMs: 5000 }] };
-  await assert.rejects(runManifest(fx.root, m, { env: fx.env, liveDir: fx.liveDir, maxUsd: 100, fetchImpl: async () => { called++; return reply({}); } }), /project-cap: this project has spent \$5\.00 across 2 runs/);
+  await assert.rejects(runManifest(fx.root, m, { env: fx.env, liveDir: fx.liveDir, maxUsd: 100, fetchImpl: async () => { called++; return reply({}); } }), /project-cap: this project has been billed \$5\.00 of the \$5\.00 cap; list value \$5\.00 across 2 runs is not counted/);
   assert.equal(called, 0, 'no worker was called');
 });
 
@@ -92,10 +92,11 @@ test('a project under its cap, or without one, still runs', async t => {
 test('project summary for swarm watch shows the total, the cap and whether it is reached', async t => {
   const fx = await repo(t, { profile: { budget: { projectMaxUsd: 4 } } });
   await oldRun(fx.root, 'old-1', [3]);
-  assert.deepEqual(await projectSummary(fx.root, { env: fx.env, ttlMs: 0 }), { spendUsd: 3, treeUsd: 3, sharedTrees: 1, runs: 1, capUsd: 4, noCap: false, reached: false, unknownUsd: 0, unreadable: 0, capSource: 'profile budget.projectMaxUsd', capInherited: false, inheritedFrom: null, why: null });
+  assert.deepEqual(await projectSummary(fx.root, { env: fx.env, ttlMs: 0 }), { spendUsd: 3, listUsd: 3, billedUsd: 3, treeUsd: 3, sharedTrees: 1, runs: 1, capUsd: 4, noCap: false, reached: false, unknownUsd: 0, billedUnknown: 0, unreadable: 0, capSource: 'profile budget.projectMaxUsd', capInherited: false, inheritedFrom: null, why: null });
   await oldRun(fx.root, 'old-2', [1.5]);
   const summary = await projectSummary(fx.root, { env: fx.env, ttlMs: 0 });
   assert.equal(summary.spendUsd, 4.5);
+  assert.equal(summary.billedUsd, 4.5);
   assert.equal(summary.reached, true);
   const frame = renderTui({ runId: 'r', status: 'running', kpi: {}, lanes: [], project: summary }, { width: 120, color: false });
   assert.match(frame, /project total \$4\.50 over 2 runs {2}cap \$4\.00 {2}CAP REACHED: no new runs/);
@@ -147,7 +148,7 @@ test('ledger: a row that cannot be read is reported, not silently dropped from t
 test('null or bad caps are errors, and the message names which source set the cap', () => {
   assert.throws(() => projectCap({ profile: { budget: { projectMaxUsd: null } } }), /project-cap-invalid/);
   assert.deepEqual(projectCapInfo({ profile: { budget: { projectMaxUsd: 20 } }, config: { spend: { projectMaxUsd: 10 } } }), { cap: 10, source: 'config spend.projectMaxUsd' });
-  assert.match(projectCapDecision({ spent: { usd: 10, runs: 1 }, cap: 10, source: 'config spend.projectMaxUsd' }).message, /\(config spend\.projectMaxUsd\)/);
+  assert.match(projectCapDecision({ spent: { usd: 10, listUsd: 10, billedUsd: 10, runs: 1 }, cap: 10, source: 'config spend.projectMaxUsd' }).message, /\(config spend\.projectMaxUsd\)/);
 });
 
 test('an unreadable pointer file or run state refuses new runs instead of dropping the cap or shrinking the total', async t => {
@@ -168,11 +169,12 @@ test('runs still going count with what their own --max-usd lets them spend, so r
   const fx = await repo(t, { profile: { budget: { projectMaxUsd: 10 } } });
   await oldRun(fx.root, 'live', [2]);
   const file = path.join(fx.root, '.swarm/runs/live/state.json');
-  await fs.writeFile(file, JSON.stringify({ id: 'live', status: 'running', budget: { maxUsd: 5 }, jobs: [{ id: 'j', costUsd: 2, usage: { total_tokens: 1 } }] }));
+  await fs.writeFile(file, JSON.stringify({ id: 'live', status: 'running', budget: { maxUsd: 5 }, jobs: [{ id: 'j', agent: 'anthropic', costUsd: 2, usage: { total_tokens: 1 } }] }));
   assert.equal(await checkProjectCap(fx.root, { env: fx.env }), null, '2 spent + 3 exposure < 10');
   await oldRun(fx.root, 'done', [5]);
   const decision = await checkProjectCap(fx.root, { env: fx.env });
-  assert.match(decision.message, /spent \$7\.00 across 2 runs and runs still going may spend \$3\.00 more >= the project cap \$10\.00/);
+  assert.match(decision.message, /been billed \$7\.00 \(plus \$3\.00 exposure\) of the \$10\.00 cap/);
+  assert.match(decision.message, /list value \$7\.00 across 2 runs is not counted/);
 });
 
 test('the real refusal carries the project-cap code, and resume is refused over the cap too (it would start paid jobs again)', async t => {
@@ -180,7 +182,7 @@ test('the real refusal carries the project-cap code, and resume is refused over 
   await oldRun(fx.root, 'old-1', [6]);
   const m = { version: 1, concurrency: 1, jobs: [{ id: 'job-1', agent: 'ollama', model: 'test-model', prompt: 'Write out/1.txt', context: ['input.txt'], outputs: ['out/1.txt'], timeoutMs: 5000 }] };
   await assert.rejects(runManifest(fx.root, m, { env: fx.env, liveDir: fx.liveDir }), { code: 'project-cap' });
-  await fs.writeFile(path.join(fx.root, '.swarm/runs/old-1/state.json'), JSON.stringify({ id: 'old-1', root: await fs.realpath(fx.root), status: 'paused', jobs: [{ id: 'j0', costUsd: 6, usage: { total_tokens: 1 } }], pause: { until: null } }));
+  await fs.writeFile(path.join(fx.root, '.swarm/runs/old-1/state.json'), JSON.stringify({ id: 'old-1', root: await fs.realpath(fx.root), status: 'paused', jobs: [{ id: 'j0', agent: 'anthropic', costUsd: 6, usage: { total_tokens: 1 } }], pause: { until: null } }));
   await assert.rejects(resumeRun(fx.root, 'old-1', { env: fx.env, raises: [{ key: 'maxUsd', value: 50 }], reason: 'try' }), { code: 'project-cap', message: /resume-over-cap: project-cap/ });
 });
 

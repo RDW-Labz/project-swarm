@@ -202,9 +202,17 @@ export function estimateReservation({ job, lane, model, inputChars, rates, laneD
   let usd, source;
   if (job.maxCredits != null && rates?.creditUsd != null) { usd = job.maxCredits * rates.creditUsd; source = 'max-credits'; }
   else if (rates?.inUsdPerToken != null && rates?.outUsdPerToken != null) { usd = inputChars * rates.inUsdPerToken + maxOut * rates.outUsdPerToken; source = 'rate'; }
-  else { usd = laneDefaults[lane]?.reserveUsd ?? laneDefaults[lane] ?? LANE_RESERVE_DEFAULTS[lane]; source = 'lane-default'; }
+  else {
+    const fromLane = object(laneDefaults) && Object.hasOwn(laneDefaults, lane) ? (laneDefaults[lane]?.reserveUsd ?? laneDefaults[lane]) : undefined;
+    usd = fromLane ?? (Object.hasOwn(LANE_RESERVE_DEFAULTS, lane) ? LANE_RESERVE_DEFAULTS[lane] : RESERVE_FALLBACK);
+    source = 'lane-default';
+  }
   // Free/empty pricing cannot make an unreported paid attempt disappear.
-  if (!(usd > 0)) { usd = laneDefaults[lane]?.reserveUsd ?? laneDefaults[lane] ?? LANE_RESERVE_DEFAULTS[lane]; source = 'lane-default'; }
+  if (!(usd > 0)) {
+    const fromLane = object(laneDefaults) && Object.hasOwn(laneDefaults, lane) ? (laneDefaults[lane]?.reserveUsd ?? laneDefaults[lane]) : undefined;
+    usd = fromLane ?? (Object.hasOwn(LANE_RESERVE_DEFAULTS, lane) ? LANE_RESERVE_DEFAULTS[lane] : RESERVE_FALLBACK);
+    source = 'lane-default';
+  }
   return { usd, tokens, source };
 }
 
@@ -247,17 +255,106 @@ export function finalCost({ lane, record, reservation, rates }) {
   return { usd: reservation.usd, kind: 'reserved-as-cost', flagged: true, costSource: 'reservation' };
 }
 
-const spendNumber = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+export const spendNumber = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+const UNBILLED_LANES = new Set(['claude', 'codex', 'cursor', 'hermes', 'qwen']);
+export function isMeteredLane(lane) {
+  return typeof lane !== 'string' || !UNBILLED_LANES.has(lane);
+}
+const RESERVE_FALLBACK = 0.5;
+function coerceReserve(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : RESERVE_FALLBACK;
+}
+function laneReserveDefault(lane) {
+  const key = typeof lane === 'string' && Object.hasOwn(LANE_RESERVE_DEFAULTS, lane) ? lane : 'anthropic';
+  return coerceReserve(LANE_RESERVE_DEFAULTS[key]);
+}
+function isReservationPlaceholderCost(record) {
+  if (!object(record) || spendNumber(record.costUsd) !== 0) return false;
+  if (record.costSource === 'reservation') return true;
+  if (record.flagged === true && (record.costSource === 'reservation' || record.kind === 'reserved-as-cost')) return true;
+  return false;
+}
+function jobStoredReservationUsd(record) {
+  if (!object(record)) return null;
+  for (const value of [record.finalCost, record.reservedUsd, record.reservation?.usd]) {
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+  }
+  return null;
+}
+function unknownJobReserve(record, lane, state) {
+  const laneDefault = lane === 'rented' ? coerceReserve(rentedUnknownReserve(state)) : laneReserveDefault(lane);
+  const stored = jobStoredReservationUsd(record);
+  if (stored !== null) return Math.max(stored, laneDefault);
+  // No per-job reservation amount on the record; use the lane default reserve.
+  return laneDefault;
+}
+function rentedUnknownReserve(state) {
+  const lane = state.budget?.lanes?.rented;
+  for (const key of ['dailyUsd', 'hourlyUsd', 'reserveUsd']) {
+    const value = lane?.[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+  }
+  const rental = state.rental;
+  for (const key of ['dailyUsd', 'hourlyUsd']) {
+    const value = rental?.[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+  }
+  return RESERVE_FALLBACK;
+}
 export function jobSpend(record) {
   return { usd: spendNumber(record?.costUsd), tokens: spendNumber(record?.usage?.total_tokens) };
 }
 export function runTotals(state) {
-  const totals = { usd: Number.isFinite(state.rental?.usd) ? state.rental.usd : 0, tokens: 0, unknownUsd: [] };
+  const rentalUsdRaw = state.rental?.usd;
+  const rentalUsdValid = spendNumber(rentalUsdRaw);
+  const invalidRental = rentalUsdRaw !== undefined && rentalUsdRaw !== null && rentalUsdValid === null;
+  let rentalBilled = rentalUsdValid ?? 0;
+  let rentedUnknownJobs = 0;
+  let rentedUnknownUsd = 0;
+  const totals = { usd: rentalBilled, tokens: 0, unknownUsd: [], billedUsd: 0, billedUnknown: 0, billedUnknownUsd: 0, billedUnknownRented: 0, hasPaidLaneJob: rentalBilled > 0 };
   for (const record of state.jobs ?? []) {
+    if (!object(record)) continue;
+    const lane = record.agent;
+    const metered = isMeteredLane(lane);
     const { usd, tokens } = jobSpend(record);
+    const billedUnknownCost = metered && (usd === null || isReservationPlaceholderCost(record));
     totals.usd += usd ?? 0;
     totals.tokens += tokens ?? 0;
     if (tokens !== null && usd === null) totals.unknownUsd.push(record.id);
+    if (lane === 'rented') {
+      if (!billedUnknownCost && usd !== null) rentalBilled = Math.max(rentalBilled, usd);
+      if (metered) {
+        totals.hasPaidLaneJob = true;
+        if (billedUnknownCost) {
+          rentedUnknownJobs += 1;
+          rentedUnknownUsd += unknownJobReserve(record, lane, state);
+        }
+      }
+      continue;
+    }
+    if (metered) {
+      totals.hasPaidLaneJob = true;
+      if (billedUnknownCost) {
+        totals.billedUnknown += 1;
+        totals.billedUnknownUsd += unknownJobReserve(record, lane, state);
+      } else if (usd !== null) totals.billedUsd += usd;
+    }
+  }
+  totals.billedUsd += rentalBilled;
+  const rentedReserve = rentedUnknownReserve(state);
+  if (rentalBilled === 0) {
+    if (invalidRental && rentedUnknownJobs === 0) {
+      totals.billedUnknown += 1;
+      totals.billedUnknownUsd += coerceReserve(rentedReserve);
+      totals.billedUnknownRented += 1;
+      totals.hasPaidLaneJob = true;
+    }
+    if (rentedUnknownJobs > 0) {
+      totals.billedUnknown += rentedUnknownJobs;
+      totals.billedUnknownUsd += rentedUnknownUsd;
+      totals.billedUnknownRented += rentedUnknownJobs;
+      totals.hasPaidLaneJob = true;
+    }
   }
   return totals;
 }
