@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "guard-vm-fixes-3",
+      "agent": "auto",
+      "prompt": "Fix three findings from the second Opus review of the guard change in tools/handbuild.mjs. (1) git checkout X and git switch X WITHOUT a double dash are free only when X really is a branch or commit and cannot be taken for a path: resolve X with git rev-parse --verify --quiet X^{commit} (3 second timeout, injectable in tests like branchOf) in the project root; refuse (not free) when it does not resolve, when a file or folder named X exists under the project root, when X is a dot, a dash, starts with a dot or contains two dots in a row, or when X is also the name of an existing path; git checkout tools/swarm.mjs, git checkout src, git checkout . and git checkout nosuchbranch are NOT free; git checkout feature/x for an existing branch, git checkout main and git switch main stay free; -b and -c creation forms stay free as before and need no resolution. (2) hasConfig: for git commands other than switch and checkout (where a dash c means create a branch) the check must again cover ALL argument words, not only the global options: any of the config style flags (--exec, -x, --upload-pack, --receive-pack, --ext-diff, --exec-path, --config-env, dash c with key=value, and their equals forms) anywhere in the command makes it not free, so git rebase -x CMD origin/main, git fetch --upload-pack=X . and git push --receive-pack=X are not free; keep the global-only check for switch and checkout. (3) gh commands that are not on the free list (everything except pr create, pr view, pr list, pr checks, pr diff, run list, run watch, run view, all without global options) currently push a config op that no approval can ever name; make them need a hand-build approval whose git list names the op gh (extend the accepted git operation names in createRequest so a request may name gh, treated as a normal non-elevated op, approvable from any channel like commit and push), keep gh pr merge always blocked with the use swarm merge message, keep gh api with a write method needing an approval naming gh, and keep swarm merge handling unchanged. Tests: extend tests/handbuild-switch.test.mjs (all the checkout and switch forms above with a real temporary git repository containing a branch, a file and a folder), tests/handbuild-vercel-merge.test.mjs (rebase -x, fetch --upload-pack, push --receive-pack not free; gh pr comment 5 not free without an approval and free with a live approval naming gh; gh pr merge 5 still blocked even with an approval naming gh and merge). Update existing guard tests only where behavior changed. Write only tools/handbuild.mjs, tests/handbuild-switch.test.mjs, tests/handbuild-vercel-merge.test.mjs and any existing guard test that pins the changed behavior.",
+      "context": [
+        "tools/handbuild.mjs",
+        "tests/handbuild-switch.test.mjs",
+        "tests/handbuild-vercel-merge.test.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-hardening.test.mjs",
+        "tests/handbuild-hardening2.test.mjs",
+        "tests/handbuild-accidents.test.mjs",
+        "tests/handbuild-channel.test.mjs"
+      ],
+      "outputs": [
+        "tools/handbuild.mjs",
+        "tests/handbuild-switch.test.mjs",
+        "tests/handbuild-vercel-merge.test.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-hardening.test.mjs",
+        "tests/handbuild-hardening2.test.mjs",
+        "tests/handbuild-accidents.test.mjs",
+        "tests/handbuild-channel.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/git-hooks.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/self-approval-hardening.test.mjs",
+        "tests/swarm-produced-hash.test.mjs"
+      ]
+    }
+  ]
+}
