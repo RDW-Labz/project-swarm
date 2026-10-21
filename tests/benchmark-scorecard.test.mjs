@@ -62,24 +62,29 @@ test('history keeps weekly points across the ISO year boundary', () => {
   assert.deepEqual(history.weeks, ['2026-W51', '2026-W52', '2027-W01']);
   assert.deepEqual(billed.weekly.map(point => point.week), ['2026-W51', '2026-W52', '2027-W01']);
   assert.deepEqual(billed.weekly.map(point => point.value), [3, 2, 1]);
-  assert.equal(billed.verdict, 'worse');
+  assert.equal(billed.verdict, 'better');
 });
 
 test('metric order follows SCORECARD_METRIC_NAMES and maps trends to verdicts', () => {
   const history = scorecardHistory([{
     ...card('2026-W43', '2026-10-20T15:00:00Z', 1),
     projects: [{ project: 'demo', metrics: [
-      metric('retries', 2, { trend: 'up' }),
       metric('billed_usd', 1, { trend: 'down' }),
       metric('list_usd', 1, { trend: 'flat' }),
-      metric('first_try_pass_rate', 1, { trend: 'new' }),
+      metric('first_try_pass_rate', 0.8, { trend: 'new' }),
     ] }],
   }]);
   const metrics = history.projects[0].metrics;
   assert.deepEqual(metrics.map(item => item.name), SCORECARD_METRIC_NAMES);
-  assert.equal(metrics.find(item => item.name === 'retries').verdict, 'better');
-  assert.equal(metrics.find(item => item.name === 'billed_usd').verdict, 'worse');
+  const verdict = (name, trend, value = 1, previous = null) => scorecardHistory([{
+    ...card('2026-W43', '2026-10-20T15:00:00Z', value, { trend, previous }),
+    projects: [{ project: 'demo', metrics: [metric(name, value, { trend, previous })] }],
+  }]).projects[0].metrics.find(item => item.name === name).verdict;
+  assert.equal(verdict('billed_usd', 'up'), 'worse');
+  assert.equal(verdict('billed_usd', 'down'), 'better');
   assert.equal(metrics.find(item => item.name === 'list_usd').verdict, 'flat');
+  assert.equal(verdict('first_try_pass_rate', 'up', 0.9, 0.8), 'better');
+  assert.equal(verdict('first_try_pass_rate', 'down', 0.7, 0.8), 'worse');
   assert.equal(metrics.find(item => item.name === 'first_try_pass_rate').verdict, 'unknown');
 });
 

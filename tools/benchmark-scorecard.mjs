@@ -2,7 +2,7 @@
 
 import { readdir, stat, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { SCORECARD_METRIC_NAMES } from './bench-scorecard.mjs';
+import { SCORECARD_METRIC_NAMES, THRESHOLDS } from './bench-scorecard.mjs';
 
 const MAX_FILES = 200;
 const MAX_FILE_BYTES = 512 * 1024;
@@ -112,11 +112,14 @@ function metricFor(project, name) {
   return (project?.metrics ?? []).find(metric => metric && metric.name === name) ?? null;
 }
 
-function verdictFor(trend) {
-  if (trend === 'up') return 'better';
-  if (trend === 'down') return 'worse';
+function verdictFor(name, trend) {
   if (trend === 'flat') return 'flat';
-  return 'unknown';
+  if (trend === 'new' || (trend !== 'up' && trend !== 'down')) return 'unknown';
+  const threshold = THRESHOLDS[name];
+  if (!threshold) return 'unknown';
+  const { direction } = threshold;
+  const better = (direction === 'higher' && trend === 'up') || (direction === 'lower' && trend === 'down');
+  return better ? 'better' : 'worse';
 }
 
 /** Build the board's scorecard history from parsed cards. */
@@ -146,7 +149,7 @@ export function scorecardHistory(input, { weeks = 12 } = {}) {
         previous: current?.previous ?? null,
         status: current?.status ?? 'missing',
         weekly,
-        verdict: verdictFor(trend),
+        verdict: verdictFor(name, trend),
       };
     }),
   }));
