@@ -387,13 +387,20 @@ export async function startBoardServer({ env = process.env, root, remote }) {
   const { url } = await server.listen();
   api.setBoardUrl(remote ? null : url);
   if (!remote) await writeBoardFile(url, { env }).catch(() => {});
-  server.done.then(async () => {
-    // The run pages this board opened must not point back at a board that is gone, and they close with it.
-    api.setBoardUrl(null);
-    await api.close().catch(() => {});
-    try { const data = JSON.parse(await fs.readFile(boardFile(env), 'utf8')); if (data.pid === process.pid && data.url === url) await fs.rm(boardFile(env), { force: true }); } catch { /* already gone */ }
-  });
-  return { server, api, url };
+  const cleaned = server.done.then(async () => {
+    try {
+      // The run pages this board opened must not point back at a board that is gone, and they close with it.
+      api.setBoardUrl(null);
+      await api.close().catch(() => {});
+      if (!remote) {
+        try {
+          const data = JSON.parse(await fs.readFile(boardFile(env), 'utf8'));
+          if (data.pid === process.pid && data.url === url) await fs.rm(boardFile(env), { force: true });
+        } catch { /* already gone */ }
+      }
+    } catch { /* cleaned must never reject */ }
+  }).catch(() => {});
+  return { server, api, url, cleaned };
 }
 
 export async function runWatchCommand(root, args, { write = text => process.stdout.write(text) } = {}) {
