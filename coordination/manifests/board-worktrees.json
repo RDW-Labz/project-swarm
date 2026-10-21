@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "board-worktrees",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "TASK: on the Swarm Watch board, git worktrees of a project show up today as separate top-level projects, each showing NO CAP even when the main checkout has a project cap, and a CAP REACHED pill never says why. Fix three things. Do NOT touch tools/swarm.mjs, package.json, CHANGELOG.md or README.md (another session owns them; no version bump).\n\n1) tools/project-spend.mjs. Export `mainWorktreeRoot(root)` (async, never throws, no child processes, fs only): read `<root>/.git` with lstat; if it is a regular file whose content is `gitdir: X` (trim; X resolved relative to root), read `X/commondir` if present (trim, resolved relative to X) to get the common git dir, else the common dir is path.dirname(path.dirname(X)) (X looks like <main>/.git/worktrees/<name>); if the common dir's basename is '.git' return fs.realpath(path.dirname(commonDir)), else null. A directory .git, a missing .git, a bare repo, or any read error returns null. Change readProjectCap(root): when root's own .project-swarm.json is missing (ENOENT) and mainWorktreeRoot(root) returns a different root, read the profile from that main root's .project-swarm.json instead (same error rules: unreadable/bad JSON there is a project-cap-invalid error naming that file), and mark the result inherited: projectCapInfo results gain `inheritedFrom: <main root>` and the source text becomes `<source> (inherited from <basename of main root>)`. A worktree with its own .project-swarm.json uses its own and never inherits. The local-config cap (spend.projectMaxUsd) is machine-wide and applies as today. Spend stays per tree (projectSpend(root) unchanged): a worktree's own runs are compared with the inherited cap value. Extend projectSummary's value with `capSource` (info.source or null), `capInherited` (boolean), `inheritedFrom` (main root or null) and `why`: a short plain line saying why new runs are refused, or null when they are not. why = decision.message when the cap is reached or unreadable; `cap invalid: <capError>` when capError is set; else null. Keep every existing field and behavior.\n\n2) tools/board-data.mjs. In boardSnapshot, after building overviews: for each project compute mainWorktreeRoot(project.root); when it returns a root that is a registered project's root (compare realpaths) and differs from its own, set on that overview `parentId` (the parent project's id) and `worktree: true`; every overview gets `parentId: null, worktree: false` otherwise, and each parent overview gets `worktreeIds` (array of child ids, sorted by name; [] when none). Keep the flat `projects` array and every machine total exactly as now (children still counted once, as themselves). Pass the new summary fields into overview.spend in projectOverview: `capSource`, `capInherited`, `inheritedFrom`, `why` (null-safe when summary threw). Accept an injectable `worktreeRoot` option in boardSnapshot (default mainWorktreeRoot) for tests.\n\n3) tools/watch-assets/board.js renderProjects: sort top-level rows (projects with no parentId, or whose parent is not in the list) as today; render each parent's worktree rows right after it, in the table with a 'wt' class on the tr and the name cell prefixed by '\u21b3 ' plus a small 'worktree' stage-style tag, and in the cards with the same prefix inside the parent's card group order. capCell: when s.capInherited, after the 'X of Y' text add a sub line 'cap inherited from ' + basename of s.inheritedFrom. When s.why is non-empty, add a sub line (class 'sub why') with the text 'Why capped: ' + s.why, built with el()/textContent only (never innerHTML). Add a CSS rule in tools/watch-assets/board.css: `tr.wt td:first-child{padding-left:22px}` and `.why{color:var(--bad, #c0392b)}` or the closest existing token in that file. No other UI changes.\n\nTests: write tests/board-worktrees.test.mjs (node:test, assert/strict; real temp git repos via execFile git like tests/board.test.mjs, temp dirs under os.tmpdir, cleaned up): mainWorktreeRoot returns the main root for a `git worktree add` tree, null for the main checkout and for a non-git dir; a worktree with no .project-swarm.json inherits the main root's profile budget.projectMaxUsd (projectSummary capUsd equals it, capInherited true, capSource mentions 'inherited from'), while a worktree with its own pointer keeps its own; projectSummary.why is null under the cap and starts with 'project-cap:' once the worktree's own runs reach the inherited cap (write .swarm/runs/<id>/state.json files with a job costUsd like tests/project-spend.test.mjs does; pass ttlMs: 0 and an env whose local config has no cap, using tests/_isolate-config.mjs conventions); boardSnapshot with both roots registered gives the worktree parentId = main id and worktree true, the main overview worktreeIds = [worktree id], and machine cost totals unchanged versus summing the two overviews. Update tests/project-spend.test.mjs only if an existing assertion breaks because of the new summary fields (prefer not to change it). Run `node --import ./tests/_isolate-config.mjs --test tests/board-worktrees.test.mjs tests/project-spend.test.mjs tests/board-page.test.mjs tests/board.test.mjs` and `node tools/check-package.mjs`. The tests in ignoreTests only import these modules for unrelated behavior; the coordinator runs the full suite after integration. Keep the board-nav, board-live and watch-assets tests (in context) green and run them too.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/board.test.mjs",
+        "tests/board-page.test.mjs",
+        "tools/projects.mjs",
+        "tools/local-config.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/board-live.test.mjs"
+      ],
+      "outputs": [
+        "tools/project-spend.mjs",
+        "tools/board-data.mjs",
+        "tools/watch-assets/board.js",
+        "tools/watch-assets/board.css",
+        "tests/board-worktrees.test.mjs",
+        "tests/project-spend.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}

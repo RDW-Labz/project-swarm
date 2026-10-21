@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runTotals, jobSpend, laneDayTotals } from './spend.mjs';
 import { readLedger } from './tickets.mjs';
-import { projectSummary } from './project-spend.mjs';
+import { mainWorktreeRoot, projectSummary } from './project-spend.mjs';
 import { listLessons } from './lesson-store.mjs';
 import { sanitizeWorkerText } from './worker-text.mjs';
 import os from 'node:os';
@@ -162,7 +162,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     live: liveRuns.map(r => { const hit = runs.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
     agents, cost,
     orchestrator: (() => { try { return projectOrchestrator(project, { runs, now }); } catch { return { sessions: [], handBuilt: { files: 0, edits: 0, list: [] }, swarmBuilt: { files: 0 }, swarmPct: null, handPct: null, cost: { todayListUsd: 0, allListUsd: 0, todayTokens: 0, allTokens: 0 } }; } })(),
-    spend: { usd: cost.allUsd, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached) },
+    spend: { usd: cost.allUsd, familyUsd: spend.spendUsd ?? null, sharedTrees: spend.sharedTrees ?? 1, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached), capSource: spend.capSource ?? null, capInherited: Boolean(spend.capInherited), inheritedFrom: spend.inheritedFrom ?? null, why: spend.why ?? null },
     recentJobCounts: runs.slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0)),
     lastRunAt: lastRun?.startedAt ?? null,
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
@@ -180,13 +180,38 @@ export function underfilledWaves(counts, slots) {
 }
 
 // The whole board: machine totals (sums of the project numbers) and one overview per registered project.
-export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, workers = null, lanes = null } = {}) {
+export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, workers = null, lanes = null, worktreeRoot = mainWorktreeRoot } = {}) {
   const overviews = [];
   // A live run belongs to the project whose real root it ran in, however the path was spelled.
   const live = await Promise.all(liveRuns.map(async r => ({ ...r, root: await fs.realpath(r.root).catch(() => r.root) })));
   for (const project of projects) {
     const mine = live.filter(r => r.root === project.root);
     overviews.push(await projectOverview(project, mine, { now, summary }));
+  }
+  const realRoot = async root => await fs.realpath(root).catch(() => path.resolve(root));
+  const registered = new Map();
+  for (const project of projects) registered.set(await realRoot(project.root), project);
+  for (const overview of overviews) {
+    overview.parentId = null;
+    overview.worktree = false;
+    overview.worktreeIds = [];
+  }
+  for (let i = 0; i < projects.length; i += 1) {
+    let parentRoot = null;
+    try { parentRoot = await worktreeRoot(projects[i].root); } catch { parentRoot = null; }
+    if (!parentRoot) continue;
+    const childReal = await realRoot(projects[i].root);
+    const parentReal = await realRoot(parentRoot);
+    const parent = registered.get(parentReal);
+    if (!parent || parentReal === childReal) continue;
+    const child = overviews[i];
+    child.parentId = parent.id;
+    child.worktree = true;
+    const parentOverview = overviews.find(o => o.id === parent.id);
+    if (parentOverview) parentOverview.worktreeIds.push(child.id);
+  }
+  for (const overview of overviews) {
+    overview.worktreeIds.sort((a, b) => String(overviews.find(o => o.id === a)?.name ?? '').localeCompare(String(overviews.find(o => o.id === b)?.name ?? '')) || String(a).localeCompare(String(b)));
   }
   for (const o of overviews) { const warn = underfilledWaves(o.recentJobCounts, workers?.max); o.warnings = warn ? [{ code: 'waves-underfilled', text: warn }] : []; }
   const transcripts = new Set();
