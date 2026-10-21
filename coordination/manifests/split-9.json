@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "split-dynamic-imports",
+      "agent": "auto",
+      "prompt": "A real run of the 24 split stages on tools/swarm.mjs produced modules that load but fail at call time: the full suite had 17 failures such as Cannot find module tools/swarm/policy-commands.mjs imported from tools/swarm/core-21.mjs (also install.mjs from core-12.mjs and budgets.mjs from core-52.mjs). Cause: moved code contains dynamic imports with relative literal specifiers, for example await import('./policy-commands.mjs') (80 such calls in tools/swarm.mjs: ./tickets.mjs, ./spend.mjs, ./install.mjs, ./scope-commands.mjs, ./history-hooks.mjs, ./watch-cli.mjs, ./stop-all.mjs, ./preflight.mjs and more), and the mover rewrites static import paths when a module moves into tools/swarm/ but leaves dynamic import specifiers untouched, so they resolve relative to the new folder. Fix in tools/split-module.mjs: (1) use the AST (acorn, ImportExpression nodes) to find every dynamic import in the moved items; a literal string specifier that starts with ./ or ../ is rewritten relative to the new module location (./x.mjs becomes ../x.mjs when the new module is in tools/swarm/, and an import of a sibling that was itself moved into the same folder becomes ./name.mjs only if the target is a moved module: map moved names to their new modules); a literal bare or node: specifier is left alone; (2) a NON-literal dynamic import (template literal with expressions, concatenation, variable) whose text starts with ./ or ../ or that uses a relative template is refused with the item name and line (the move fails, nothing is written); (3) other relative-path-by-location constructs inside moved text are refused: new URL(relative, import.meta.url), createRequire with relative paths, fs reads of path.join(__dirname,...), and any literal string argument to fs.readFile, readFileSync, existsSync or path.join starting with ./ or ../ combined with import.meta or __dirname (items using import.meta or __dirname are already pinned; keep that); (4) the byte-for-byte verify must account for the rewritten specifiers: compare the moved text after reversing exactly the recorded specifier rewrites, and report the list of rewritten specifiers in the move result; (5) the smoke import check stays, and ADD a call-path check: for every rewritten dynamic import specifier in the new module, resolve the specifier against the new module location and require that the target file exists (after the move for moved modules, on disk for others) else fail. Add fixtures to tests/split-module.test.mjs: a moved function with await import('./other.mjs') into a subfolder gets ../other.mjs and a test that actually calls the moved function and gets the imported value; a dynamic import of a moved sibling; a non-literal relative dynamic import is refused; new URL with import.meta.url is refused; a node: and a bare specifier untouched. Then fix the real-file tests that assume the pre-split layout of tools/swarm.mjs: tests/split-module.test.mjs real-file tests (stage-1 pattern constants move on swarm copy smoke-imports, swarm copy stages patterns warnings and mutants succeed, swarm copy split stages patterns through core-12 succeed, dry-run move of layer-0 function on swarm.mjs does not touch file) and the scanner real-file test tools/swarm.mjs records spread-in-paren agent dependencies in tests/split-scan.test.mjs, plus any other real-file assertion that hard-codes pre-split structure (runManifestBody end line, item counts, largest item): make each one skip with a clear reason when the real tools/swarm.mjs is already split (detect by the existence of the directory tools/swarm/ or by the file having fewer than 5000 lines) and otherwise run as today; keep fixture-based coverage of the same logic so nothing real is lost, and add a generic invariant test that runs on whatever shape tools/swarm.mjs has (lossless round trip, no item swallows a column-0 declaration, differential uses invariant, scan under 5 seconds). Do not edit tools/swarm.mjs or tools/split-scan.mjs. No token-shaped literals. ignoreTests reason: only the mover and the split tests change.",
+      "context": [
+        "tools/split-module.mjs",
+        "tools/split-scan.mjs",
+        "tests/split-module.test.mjs",
+        "tests/split-scan.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/split-module.mjs",
+        "tests/split-module.test.mjs",
+        "tests/split-scan.test.mjs"
+      ],
+      "timeoutMs": 3000000
+    }
+  ]
+}

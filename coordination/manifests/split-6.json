@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "split-acorn",
+      "agent": "auto",
+      "prompt": "Rewrite tools/split-scan.mjs on a real JavaScript parser instead of the hand-written tokenizer. The owner approved the dev-only dependencies acorn 8.18.0 and acorn-walk 8.3.5 (already pinned in package.json devDependencies and installed). Use import { parse } from acorn and, if useful, acorn-walk. Remove the custom tokenizer completely. Keep the exported API and the item shape exactly so tools/split-module.mjs and every existing test keep working: scanModule(text) returns { items, imports, exports, order }; each top-level item has { kind (function, class, declaration, import, export, export-from, expression as before), names, exported, start, end, startLine, endLine, text, uses } with the same span rules as today (an item includes the comment block attached directly above it and its trailing newline, never the blank line separating items; keep using the existing tests as the specification of spans, line numbers and kinds); dependencyGraph(items) and topLevelNameIndex(items) unchanged. Use parse with ecmaVersion latest, sourceType module, allowHashBang true, allowAwaitOutsideFunction true, ranges on, and onComment to collect comments for the attached-comment rule; compute line numbers from a precomputed array of line starts. uses must be exact and scope-aware, computed from the AST: walk each top-level node with your own recursive walker (or acorn-walk with a scope stack) tracking scopes: function parameters including destructuring, defaults, rest; var hoisted to the function scope; let, const, class and function declarations per block; function expression and class expression names in their own scope; catch parameters; for, for-in, for-of heads; labels are not uses; non-computed member properties, non-computed object keys, method and class member names are not uses while computed keys, shorthand property values, default values, spread arguments, tagged template tags, super, new.target, import.meta and every other expression position are; import specifiers declare names; export specifiers use names. A name is a use of the item when it is referenced and not bound by a scope inside the item (for exported declarations the item's own declared names are excluded as today). Be exact, not over-approximate, but when a construct is unknown report the identifier as used. Keep the differential invariant test (the crude regex over-approximation versus uses on the real tools/swarm.mjs with at most 5 allow-listed names) and the structural tests on the real file (no item swallows a column-0 declaration, runManifestBody ends at its column-0 closing brace, more than 200 items, largest under 1500 lines, lossless round trip, scan under 5 seconds); make the allow-list empty if the parser makes that possible. Keep every fixture test; where a fixture asserted a tokenizer-specific quirk, adapt it to the correct behavior and say why in a comment. Add fixtures for: spread in call arguments, call as non-first argument with object argument, rest parameters, destructuring defaults, computed keys, class members, tagged templates, labels, shadowed names, hoisted var and function, catch binding, optional chaining, import.meta, private class fields, getters and setters, top-level await. Dependency handling: the split tests and tools need acorn at runtime, so in tests/split-scan.test.mjs and tests/split-module.test.mjs (and any other test file importing the scanner) check once at the top whether import('acorn') works and, if not, skip the whole file with a clear reason (acorn not installed: run npm ci) so a checkout without devDependencies still passes. Add a step npm ci --ignore-scripts before the test step in .github/workflows/ci.yml (only that step, no other change to the workflow, no secrets, no deploy or publish steps). Add acorn and acorn-walk (version, MIT licence, dev-only, used by the split tooling, why) rows to docs/third-party.md in the style of the existing entries. Do not edit tools/swarm.mjs or tools/split-module.mjs. No other dependencies. No token-shaped literals. ignoreTests reason: only the scanner, its tests, the workflow and the third-party doc change.",
+      "context": [
+        "tools/split-scan.mjs",
+        "tests/split-scan.test.mjs",
+        "tests/split-module.test.mjs",
+        "tools/split-module.mjs",
+        ".github/workflows/ci.yml",
+        "docs/third-party.md",
+        "package.json",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/split-scan.mjs",
+        "tests/split-scan.test.mjs",
+        "tests/split-module.test.mjs",
+        ".github/workflows/ci.yml",
+        "docs/third-party.md"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/kickoff.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    }
+  ]
+}
