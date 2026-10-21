@@ -43,6 +43,8 @@ test('merge-live-site auto-approves when all deploying gates pass', () => {
     postDeployWatch: true,
     autoRollback: true,
     inMergeOrder: true,
+    irreversible: false,
+    pastDailyAutoLimit: false,
   };
   const result = decide({ kind: 'merge-pr', id: 'm', facts }, { rules: rules() });
   assert.equal(result.decision, 'auto-approve');
@@ -122,7 +124,13 @@ test('change-order rules require project', () => {
 });
 
 test('workflow-change standing approval cases', () => {
-  const ok = { opusReviewPassed: true, addsSecrets: false, addsDeploy: false, addsPublish: false };
+  const ok = {
+    opusReviewPassed: true,
+    isNewWorkflow: false,
+    addsSecrets: false,
+    addsDeploy: false,
+    addsPublish: false,
+  };
   const cases = [
     { facts: ok, expect: 'auto-approve' },
     { facts: { ...ok, opusReviewPassed: false }, expect: 'needs-owner' },
@@ -137,16 +145,26 @@ test('workflow-change standing approval cases', () => {
 
 test('cap-raise-small at five dollars passes and five oh one fails', () => {
   const r = rules();
+  const capBase = { pastDailyAutoLimit: false };
   assert.equal(
-    decide({ kind: 'cap-raise', id: 'c', facts: { amountUsd: 2, raisedTodayUsd: 3 } }, { rules: r }).decision,
+    decide(
+      { kind: 'cap-raise', id: 'c', project: 'my-app', facts: { amountUsd: 2, raisedTodayUsd: 3, ...capBase } },
+      { rules: r },
+    ).decision,
     'auto-approve',
   );
   assert.equal(
-    decide({ kind: 'cap-raise', id: 'c', facts: { amountUsd: 0.01, raisedTodayUsd: 5 } }, { rules: r }).decision,
+    decide(
+      { kind: 'cap-raise', id: 'c', project: 'my-app', facts: { amountUsd: 0.01, raisedTodayUsd: 5, ...capBase } },
+      { rules: r },
+    ).decision,
     'needs-owner',
   );
   assert.equal(
-    decide({ kind: 'cap-raise', id: 'c', facts: { amountUsd: 1, pastDailyAutoLimit: true } }, { rules: r }).decision,
+    decide(
+      { kind: 'cap-raise', id: 'c', project: 'my-app', facts: { amountUsd: 1, pastDailyAutoLimit: true, raisedTodayUsd: 0 } },
+      { rules: r },
+    ).decision,
     'needs-owner',
   );
 });

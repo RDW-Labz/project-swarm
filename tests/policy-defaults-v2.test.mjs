@@ -85,7 +85,7 @@ test('hosted-migration standing approval cases', () => {
 });
 
 test('branch-switch standing approval cases', () => {
-  const ok = { branch: 'feat/my-branch_1.2' };
+  const ok = { branch: 'feat/my-branch_1.2', force: false };
   const cases = [
     { facts: ok, expect: 'auto-approve' },
     { facts: { ...ok, force: true }, expect: 'needs-owner' },
@@ -100,10 +100,22 @@ test('branch-switch standing approval cases', () => {
 
 test('journal-restore standing approval cases', () => {
   const ok = {
-    files: ['TASK.md', 'docs/state/foo.json', 'coordination/manifests/wave.json', '.swarm/journal-1.json'],
+    files: [
+      'coordination/HANDOFF.md',
+      'docs/state/usage-ledger.md',
+      'coordination/TASK.md',
+      'docs/scope/build-plan.md',
+    ],
   };
   const cases = [
     { facts: ok, expect: 'auto-approve' },
+    // hardening round 2: paths outside the four generated routing files are not auto-approved
+    {
+      facts: {
+        files: ['TASK.md', 'docs/state/foo.json', 'coordination/manifests/wave.json', '.swarm/journal-1.json'],
+      },
+      expect: 'needs-owner',
+    },
     { facts: { files: ['coordination/HANDOFF.md'] }, expect: 'auto-approve' },
     { facts: { files: ['tools/swarm.mjs'] }, expect: 'needs-owner' },
     { facts: { files: ['TASK.md', 'tools/swarm.mjs'] }, expect: 'needs-owner' },

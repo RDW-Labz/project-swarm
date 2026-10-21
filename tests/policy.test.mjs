@@ -66,7 +66,10 @@ test('standing default rules auto-approve with the right facts', () => {
   );
 
   for (const kind of ['change-order-path-fix', 'change-order-split']) {
-    assert.equal(decide({ kind, id: 'x', facts: { project: 'proj' } }, { rules }).decision, 'auto-approve');
+    assert.equal(
+      decide({ kind, id: 'x', project: 'proj', facts: { project: 'proj' } }, { rules }).decision,
+      'auto-approve',
+    );
   }
 
   assert.equal(
@@ -74,7 +77,13 @@ test('standing default rules auto-approve with the right facts', () => {
       {
         kind: 'workflow-change',
         id: 'w',
-        facts: { opusReviewPassed: true, addsSecrets: false, addsDeploy: false, addsPublish: false },
+        facts: {
+          opusReviewPassed: true,
+          isNewWorkflow: false,
+          addsSecrets: false,
+          addsDeploy: false,
+          addsPublish: false,
+        },
       },
       { rules },
     ).decision,
@@ -82,7 +91,15 @@ test('standing default rules auto-approve with the right facts', () => {
   );
 
   assert.equal(
-    decide({ kind: 'cap-raise', id: 'c', facts: { amountUsd: 2, raisedTodayUsd: 3 } }, { rules }).decision,
+    decide(
+      {
+        kind: 'cap-raise',
+        id: 'c',
+        project: 'demo',
+        facts: { amountUsd: 2, raisedTodayUsd: 3, pastDailyAutoLimit: false },
+      },
+      { rules },
+    ).decision,
     'auto-approve',
   );
 

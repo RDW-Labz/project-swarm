@@ -30,7 +30,7 @@ describe('runPolicyPass', () => {
     const item = { id: 'req-1', kind: 'ticket-retry', project: 'p1', raw: CANARY };
     const rules = baseRules();
     const r1 = await runPolicyPass({
-      root: '/tmp/proj',
+      root: process.env.SWARM_TEST_TMP ?? '/tmp/proj',
       items: [item],
       rules,
       factsOf: () => ({}),
@@ -39,6 +39,7 @@ describe('runPolicyPass', () => {
       events: e => { evts.push(e); },
       machine: 'm1',
       readHandled: () => [],
+      limits: { pastDailyAutoLimit: false },
     });
     assert.equal(applyCount, 1);
     assert.equal(r1.decided.length, 1);
@@ -52,7 +53,7 @@ describe('runPolicyPass', () => {
     assert.ok(!blob.includes(CANARY));
 
     const r2 = await runPolicyPass({
-      root: '/tmp/proj',
+      root: process.env.SWARM_TEST_TMP ?? '/tmp/proj',
       items: [item],
       rules,
       factsOf: () => ({}),
@@ -119,7 +120,8 @@ describe('runPolicyPass', () => {
     assert.equal(r.decided.length, 0);
     assert.equal(r.left.length, 1);
     assert.equal(r.errors.length, 1);
-    assert.equal(journal[0].kind, 'policy-error');
+    // hardening round 3: apply failures log apply-failed, not policy-error
+    assert.equal(journal[0].kind, 'apply-failed');
     assert.equal(journal[0].requestId, 'req-3');
     assert.equal(journal[0].requestKind, 'ticket-retry');
     assert.equal(journal[0].raw, undefined);
@@ -214,14 +216,15 @@ describe('runPolicyPass', () => {
     const leftIds = [];
 
     const r = await runPolicyPass({
-      root: '/tmp',
+      root: process.env.SWARM_TEST_TMP ?? '/tmp',
       items: [mergeOk, mergeDeploy, capOk, capOver, ticketDone],
       rules: baseRules(),
+      limits: { pastDailyAutoLimit: false },
       factsOf: item => {
         if (item.id === 'merge-ok') return mergePrFacts();
         if (item.id === 'merge-deploy') return mergePrFacts({ deploysLiveSite: true });
-        if (item.id === 'cap-ok') return { amountUsd: 3, raisedTodayUsd: 1 };
-        if (item.id === 'cap-over') return { amountUsd: 5, raisedTodayUsd: 1 };
+        if (item.id === 'cap-ok') return { amountUsd: 3, raisedTodayUsd: 1, pastDailyAutoLimit: false };
+        if (item.id === 'cap-over') return { amountUsd: 5, raisedTodayUsd: 1, pastDailyAutoLimit: false };
         if (item.id === 'ticket-done') {
           return { status: 'done', requiresReview: true, reviewPassed: false };
         }
