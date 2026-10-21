@@ -47,7 +47,7 @@ test('eval 35: a change order adds tickets only for the changed requirement, and
   // Old behavior: no file list, no existing tickets, so the worker guessed paths and rewrote the stage.
   assert.match(prompt, /ONLY for the requirements listed below.*never repeat, rewrite or replace an existing ticket/s);
   assert.match(prompt, /- src\/features\/requests\/api\/create\.mjs/);
-  assert.match(prompt, /- T-0001 create \[R-001\] writes src\/create\.mjs/);
+  assert.match(prompt, /- T-0001 \[todo\] create \(R-001\) writes src\/create\.mjs/);
   assert.match(prompt, /R-002: A user can list requests\./);
   assert.doesNotMatch(prompt, /R-001: A user can create/);
   // A worker that rewrote R-001 as well is refused whole: nothing is written.

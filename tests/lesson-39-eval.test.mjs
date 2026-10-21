@@ -29,10 +29,7 @@ const run = (root, args) => runScopeCommand(root, 'tickets', args);
 
 test('eval 39.1: --take-from moves file ownership from a done ticket, logged, approval kept', async t => {
   const root = await approvedProject(t, [tk('T-0090', { status: 'done', files: ['src/useShops.ts', 'src/shops.ts'] }), tk('T-0091'), tk('T-0092', { status: 'running' })]);
-  // Old behavior: "src/useShops.ts is already written by T-0090" and no supported way to move it.
-  const refused = await run(root, ['T-0091', '--files', 'src/T-0091.ts,src/useShops.ts', '--yes']);
-  assert.equal(refused.exitCode, 1);
-  assert.match(refused.stdout, /src\/useShops\.ts is already written by T-0090; to move it use --take-from T-0090/);
+  // Done tickets release paths for open writers (see scope-ownership.test); --take-from still strips the path from the source list and logs the move.
   const preview = await run(root, ['T-0091', '--files', 'src/T-0091.ts,src/useShops.ts', '--take-from', 'T-0090']);
   assert.match(preview.stdout, /moves from T-0090: src\/useShops\.ts \(T-0090 no longer writes it; T-0090 is done and its tests are not re-run for it\)[\s\S]*Rerun with --yes/);
   assert.deepEqual((await readLedger(root)).tickets[1].files, ['src/T-0091.ts'], 'a preview changes nothing');
@@ -54,7 +51,7 @@ test('eval 39.1: --take-from moves file ownership from a done ticket, logged, ap
   await writeLedger(root, { ...l2, approved: approveLedger(l2).approved });
   assert.match((await run(root, ['T-0091', '--files', 'src/T-0091.ts,src/rev.ts', '--take-from', 'T-0093', '--yes'])).stdout, /T-0093 is review; its files cannot move/);
   assert.match((await run(root, ['T-0091', '--files', 'src/T-0091.ts,src/gone.ts', '--take-from', 'T-0094', '--yes'])).stdout, /src\/gone\.ts is already deleted by T-0094/);
-  assert.match((await run(root, ['T-0091', '--files', 'src/T-0091.ts,src/two.ts', '--take-from', 'T-0096', '--yes'])).stdout, /src\/two\.ts is already written by T-0095, T-0096 \(not T-0096 alone\)/);
+  assert.match((await run(root, ['T-0091', '--files', 'src/T-0091.ts,src/two.ts', '--take-from', 'T-0096', '--yes'])).stdout, /src\/two\.ts is already written by T-0095 \(not T-0096 alone\)/);
 });
 
 test('eval 39.3: swarm tickets --acceptance edits acceptance text (review and done tickets may only add lines); file lists still need todo, ready or blocked', async t => {

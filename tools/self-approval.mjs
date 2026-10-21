@@ -738,6 +738,20 @@ function plainHasSwarmInlineRisk(plain) {
 
 function plainHasStaticMarker(plain) {
   const surface = executablePlainWords(plain).join(' ').toLowerCase();
+  return surfaceHasStaticMarker(surface);
+}
+
+/** Pipeline segments are tokenized separately; markers like base64 -d | sh need the joined surface. */
+function fullCommandHasStaticMarker(commandText) {
+  const parts = [];
+  for (const words of tokenize(commandText)) {
+    parts.push(executablePlainWords(plainWords(words)).join(' '));
+  }
+  const surface = parts.join(' | ').toLowerCase();
+  return surfaceHasStaticMarker(surface);
+}
+
+function surfaceHasStaticMarker(surface) {
   if (!surface) return false;
   if (SAFE_SWARM.some(re => re.test(surface))) return false;
   return STATIC_MARKERS.some(re => re.test(surface));
@@ -802,5 +816,6 @@ export function isSelfApprovalCommand(commandText) {
   for (const inner of nestedCommandStrings(text)) {
     if (isSelfApprovalCommand(inner)) return true;
   }
+  if (fullCommandHasStaticMarker(text)) return true;
   return false;
 }
