@@ -78,8 +78,25 @@ async function exists(file) {
   try { await fs.stat(file); return true; } catch { return false; }
 }
 
+export const OFF_LEDGER_LIST_ANCHOR_ID = 'untracked';
+
+export function offLedgerRunHref(projectId, runId) {
+  const id = text(projectId);
+  const run = text(runId);
+  if (!id || !run) return null;
+  return `/run?id=${encodeURIComponent(id)}&run=${encodeURIComponent(run)}`;
+}
+
 function emptyProgress(notes = []) {
-  const untracked = { runs: [], count: 0, jobs: 0, newest: [], warning: UNTRACKED_WARNING };
+  const untracked = {
+    runs: [],
+    count: 0,
+    jobs: 0,
+    newest: [],
+    warning: UNTRACKED_WARNING,
+    listAnchorId: OFF_LEDGER_LIST_ANCHOR_ID,
+    countHref: `#${OFF_LEDGER_LIST_ANCHOR_ID}`,
+  };
   return {
     percent: { tickets: { done: 0, total: 0, pct: null }, requirements: null, overall: null },
     stages: [],
@@ -422,7 +439,7 @@ function runHasIgnoredName(state, jobs) {
   return jobs.some(job => typeof job?.id === 'string' && IGNORED_RUN_WORDS.test(job.id));
 }
 
-function offLedgerRuns(records, ledger, history, now, ticketIds = null) {
+function offLedgerRuns(records, ledger, history, now, ticketIds = null, projectId = null) {
   const ids = ticketIds ?? new Set((ledger?.tickets ?? []).map(ticket => ticket?.id).filter(Boolean));
   const prsByRun = new Map();
   for (const event of history ?? []) {
@@ -454,12 +471,21 @@ function offLedgerRuns(records, ledger, history, now, ticketIds = null) {
       costUsd: runCost(record.state),
       prs: prsByRun.get(record.runId) ?? [],
       name: text(record.state.name ?? record.state.title ?? record.state.label, record.runId),
+      href: offLedgerRunHref(projectId, record.runId),
     });
   }
   runs.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt) || a.runId.localeCompare(b.runId));
   const newest = runs.slice(0, 5).map(run => ({ runId: run.runId, name: run.name, startedAt: run.startedAt, status: run.status }));
   const jobs = runs.reduce((total, run) => total + run.untrackedJobs, 0);
-  return { runs, count: runs.length, jobs, newest, warning: UNTRACKED_WARNING };
+  return {
+    runs,
+    count: runs.length,
+    jobs,
+    newest,
+    warning: UNTRACKED_WARNING,
+    listAnchorId: OFF_LEDGER_LIST_ANCHOR_ID,
+    countHref: `#${OFF_LEDGER_LIST_ANCHOR_ID}`,
+  };
 }
 
 function buildMilestones({ ledger, tickets, history, historyKnown, runRecords = [], deploy = null, prStateProvided = false, prRecords = null }) {
@@ -696,7 +722,7 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
     const humanStats = scopes.length ? aggregate.human : ticketStats(allTickets).human;
     const allLedgerTicketIds = new Set();
     for (const candidate of selected.candidates) for (const ticket of candidate.ledger?.tickets ?? []) if (ticket?.id) allLedgerTicketIds.add(ticket.id);
-    const untracked = offLedgerRuns(runRecords, ledger, history, now, allLedgerTicketIds);
+    const untracked = offLedgerRuns(runRecords, ledger, history, now, allLedgerTicketIds, projectId);
     const headline = ledger ? headlineFor(buildStats, humanStats) : 'no ledger';
     const result = {
       percent: { tickets: { done: buildStats.done, total: buildStats.total, pct: pct(buildStats.done, buildStats.total) }, requirements, overall: pct(buildStats.done, buildStats.total) },

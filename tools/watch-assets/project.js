@@ -93,10 +93,22 @@
 
     var untracked = progress.untracked || progress.offLedger;
     if (untracked && (untracked.count || untracked.jobs)) {
-      host.appendChild(el('div', 'label', 'Untracked work'));
+      var untrackedHead = el('div', 'label');
+      untrackedHead.appendChild(el('span', '', 'Untracked work · '));
+      var untrackedCount = el('a', '');
+      untrackedCount.setAttribute('href', untracked.countHref || ('#' + (untracked.listAnchorId || 'untracked')));
+      untrackedCount.textContent = String(untracked.count || 0) + ' run' + (untracked.count === 1 ? '' : 's');
+      untrackedHead.appendChild(untrackedCount);
+      host.appendChild(untrackedHead);
       host.appendChild(el('div', 'board-note', untracked.warning || 'untracked work: no ledger ticket'));
-      (untracked.newest || []).forEach(function (run) {
-        host.appendChild(el('div', 'board-entry', run.runId + ' · ' + run.name + ' · ' + run.status + ' · ' + when(run.startedAt)));
+      (untracked.runs || untracked.newest || []).forEach(function (run) {
+        var row = el('div', 'board-entry');
+        var runLink = el('a', 'mono', run.runId);
+        runLink.setAttribute('href', run.href || runHref(run.runId));
+        runLink.setAttribute('title', 'Open the run inspector');
+        row.appendChild(runLink);
+        row.appendChild(el('span', 'sub', ' · ' + (run.name || run.runId) + ' · ' + run.status + ' · ' + when(run.startedAt)));
+        host.appendChild(row);
       });
     }
 
@@ -231,12 +243,15 @@
     });
     var off = p.offLedger || (p.progress && (p.progress.offLedger || p.progress.untracked));
     if (off && off.count) {
-      var offTitle = el('div', 'label', 'Off-ledger work'); offTitle.id = 'untracked'; r.appendChild(offTitle);
+      var listAnchor = off.listAnchorId || 'untracked';
+      var offTitle = el('div', 'label', 'Off-ledger work'); offTitle.id = listAnchor; r.appendChild(offTitle);
       off.runs.forEach(function (run) {
         var row = el('div', 'board-entry');
-        row.appendChild(el('span', 'mono', run.runId));
+        var runLink = el('a', 'mono', run.runId);
+        runLink.setAttribute('href', run.href || runHref(run.runId));
+        runLink.setAttribute('title', 'Open the run inspector');
+        row.appendChild(runLink);
         row.appendChild(el('span', 'sub', ' · ' + when(run.startedAt) + ' · ' + run.status + ' · ' + run.jobs + ' jobs'));
-        var open = el('a', 'board-link', ' Open'); open.href = runHref(run.runId); open.title = 'Open the run inspector'; row.appendChild(open);
         r.appendChild(row);
       });
     }

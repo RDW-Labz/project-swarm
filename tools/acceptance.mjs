@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { expandTicketRefs } from './ticket-refs.mjs';
-import { readLedger, resolveTargetWorktree } from './tickets.mjs';
+import { effectiveTargetWorktree, readLedger, resolveTargetWorktree } from './tickets.mjs';
 import { worktreeFamily } from './project-spend.mjs';
 
 const NL = String.fromCharCode(10);
@@ -322,7 +322,9 @@ const jobBuiltTicket = (state, ticketId) => Array.isArray(state?.jobs) && state.
 // Acceptance state follows the code under review. A ticket pin wins; otherwise locate the
 // worktree whose run state contains the ticket (and prefer that job's workspace when recorded).
 export async function resolveAcceptanceRoot(root, ticket, { runId = ticket?.runId ?? ticket?.run } = {}) {
-  if (ticket?.targetWorktree !== undefined) return resolveTargetWorktree(root, ticket.targetWorktree);
+  const ledger = await readLedger(root);
+  const target = effectiveTargetWorktree(ledger, ticket);
+  if (target !== undefined) return resolveTargetWorktree(root, target);
   const members = await worktreeFamily(root, { all: true });
   const wantedRun = runId ? String(runId) : null;
   for (const member of members) {
