@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Attach quarantined wave-failure outputs to retry manifests as read-only context (R-017, T-0071).
 
+import { ticketsToManifest } from './ticket-manifest.mjs';
 import {
   quarantineReadOnlyContext,
   readWaveFailureRecordFromProject,
   normalizeProjectRel,
+  WAVE_QUARANTINE_ROOT,
+  isWaveQuarantinePath,
 } from './wave-quarantine.mjs';
 
-/** Owner reason so retry jobs may read quarantined copies under `.swarm/project/wave-quarantine`. */
+export { WAVE_QUARANTINE_ROOT, quarantineReadOnlyContextForRetry } from './wave-quarantine.mjs';
+
+/** Owner reason so retry jobs may read quarantined copies under {@link WAVE_QUARANTINE_ROOT}. */
 export const WAVE_QUARANTINE_READ_ONLY_REASON =
   'Quarantined outputs from the failed scope wave (read-only context for this retry).';
 
@@ -26,6 +31,18 @@ function isMissingWaveFailureRecord(error) {
 }
 
 /**
+ * Keep only paths under the wave quarantine tree (metadata and mirrored outputs).
+ *
+ * @param {string[]} paths
+ * @returns {string[]}
+ */
+function quarantineContextPathsOnly(paths) {
+  return arr(paths)
+    .map((p) => normalizeProjectRel(p))
+    .filter((rel) => rel && isWaveQuarantinePath(rel));
+}
+
+/**
  * Merge sorted quarantine paths into a job's `context` without overlapping declared `outputs`.
  *
  * @param {object} job
@@ -33,7 +50,7 @@ function isMissingWaveFailureRecord(error) {
  * @returns {object}
  */
 export function applyQuarantineReadOnlyContextToJob(job, readOnlyPaths) {
-  const paths = arr(readOnlyPaths).map((p) => normalizeProjectRel(p)).filter(Boolean);
+  const paths = quarantineContextPathsOnly(readOnlyPaths);
   if (!paths.length) return job;
   const outputs = new Set(arr(job?.outputs).map((p) => normalizeProjectRel(p)));
   const context = [...arr(job?.context)];
@@ -41,10 +58,13 @@ export function applyQuarantineReadOnlyContextToJob(job, readOnlyPaths) {
     if (outputs.has(rel)) continue;
     if (!context.includes(rel)) context.push(rel);
   }
+  const allowProtectedContext = job?.allowProtectedContext
+    ? `${job.allowProtectedContext}; ${WAVE_QUARANTINE_READ_ONLY_REASON}`
+    : WAVE_QUARANTINE_READ_ONLY_REASON;
   return {
     ...job,
     context,
-    allowProtectedContext: WAVE_QUARANTINE_READ_ONLY_REASON,
+    allowProtectedContext,
   };
 }
 
@@ -60,10 +80,16 @@ export function attachQuarantineReadOnlyContextFromRecord(job, record, options =
   if (typeof exists === 'function') {
     const kept = [];
     for (const rel of readOnly) {
+      if (!isWaveQuarantinePath(rel)) {
+        warnings?.push(`${record.ticketId}: quarantine context path outside ${WAVE_QUARANTINE_ROOT}: ${rel}`);
+        continue;
+      }
       if (exists(rel)) kept.push(rel);
       else warnings?.push(`${record.ticketId}: quarantine context path not readable: ${rel}`);
     }
     readOnly = kept;
+  } else {
+    readOnly = quarantineContextPathsOnly(readOnly);
   }
   return applyQuarantineReadOnlyContextToJob(job, readOnly);
 }
@@ -125,4 +151,31 @@ export async function attachQuarantineReadOnlyContextToRetryManifest(manifest, o
     );
   }
   return { manifest: { ...manifest, jobs }, warnings };
+}
+
+/**
+ * Build a scope-wave retry manifest from ready tickets, then attach quarantined prior outputs
+ * (from {@link moveFailedTicketOutputsToQuarantine} / {@link quarantineScopeWaveFailures}) as
+ * read-only job context when `root` and `runId` are set.
+ *
+ * @param {object[]} tickets
+ * @param {object} opts `ticketsToManifest` options plus optional `root` and `runId` for quarantine context.
+ * @returns {Promise<{ manifest: object, warnings: string[], skipped: string[] }>}
+ */
+export async function ticketsToRetryManifest(tickets, opts = {}) {
+  const { root, runId, ...manifestOpts } = opts;
+  const built = ticketsToManifest(tickets, manifestOpts);
+  const warnings = [...built.warnings];
+  let manifest = built.manifest;
+  if (root && runId) {
+    const exists = manifestOpts.contextEnv?.exists;
+    const attached = await attachQuarantineReadOnlyContextToRetryManifest(manifest, {
+      root,
+      runId,
+      exists,
+    });
+    manifest = attached.manifest;
+    warnings.push(...attached.warnings);
+  }
+  return { manifest, warnings, skipped: built.skipped };
 }
