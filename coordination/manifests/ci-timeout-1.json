@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "ci-hung-test-timeout",
+      "agent": "auto",
+      "prompt": "A CI test job hung for 30 minutes (a test waited forever) because nothing bounds a test or the job. Add both bounds. In package.json change the test script from node --import ./tests/_isolate-config.mjs --test tests/*.test.mjs to the same command with --test-timeout=600000 added after --test (a single test or hook that runs longer than 10 minutes fails instead of hanging). In .github/workflows/ci.yml add timeout-minutes: 30 to the test job (the job that runs npm test). Change nothing else in those files. Add tests/ci-timeout.test.mjs (node:test, strict assert) that reads package.json and asserts the test script still contains --import ./tests/_isolate-config.mjs and contains --test-timeout= with a number between 60000 and 1800000, and reads .github/workflows/ci.yml and asserts the job that runs npm test has timeout-minutes set to a number between 10 and 60. Write only package.json, .github/workflows/ci.yml and tests/ci-timeout.test.mjs.",
+      "context": [
+        "package.json",
+        ".github/workflows/ci.yml"
+      ],
+      "outputs": [
+        "package.json",
+        ".github/workflows/ci.yml",
+        "tests/ci-timeout.test.mjs"
+      ],
+      "timeoutMs": 600000
+    }
+  ]
+}
