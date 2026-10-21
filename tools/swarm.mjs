@@ -50,7 +50,7 @@ import { runBrainCommand, createProjectBrain, triageRun, preflightManifest, brai
 import { readBacklog, nextStartable, markStarted as markBacklogStarted } from './backlog.mjs';
 import { pendingNotifications, macNotify } from './notify.mjs';
 import { resolveDefaultRoot, INSTALL_COMMANDS, runBriefCommand, runHandoffCommand, runCheckpointCommand, journalAfterCommand } from './project-commands.mjs';
-import { runAutopilot } from './autopilot.mjs';
+import { runAutopilot, integrableFromJobs } from './autopilot.mjs';
 import { readyAutopilotDeps } from './autopilot-ready-deps.mjs';
 import { acquireAutopilotLock } from './autopilot-lock.mjs';
 import { looseKillCommands, LOOSE_KILL_RULE } from './process-guard.mjs';
@@ -7545,7 +7545,23 @@ function autopilotDeps(root) {
     return JSON.parse(await fs.readFile(path.join(root, relative), 'utf8'));
   };
   return {
-    loadRuns: root => loadRuns(root),
+    loadRuns: async root => {
+      const runs = await loadRuns(root);
+      const runsDir = path.join(root, '.swarm', 'runs');
+      return Promise.all(runs.map(async run => {
+        let integrable;
+        try {
+          const state = JSON.parse(await fs.readFile(path.join(runsDir, run.id, 'state.json'), 'utf8'));
+          integrable = integrableFromJobs(state.jobs);
+        } catch {
+          try {
+            const manifest = JSON.parse(await fs.readFile(path.join(runsDir, run.id, 'manifest.json'), 'utf8'));
+            integrable = integrableFromJobs(manifest.jobs);
+          } catch { /* older runs without readable state keep today's behavior */ }
+        }
+        return integrable === undefined ? run : { ...run, integrable };
+      }));
+    },
     unlockTickets: async root => (await import('./scope-commands.mjs')).unlockLedger(root),
     readJournal: root => readJournal(root),
     appendEvent: (root, event) => appendEvent(root, event, { best: true }),
