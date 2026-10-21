@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { PAID_LANES, runTotals } from '../tools/spend.mjs';
+import { PAID_LANES, LANE_RESERVE_DEFAULTS, runTotals } from '../tools/spend.mjs';
 import { projectSpend, projectCapDecision, projectSummary } from '../tools/project-spend.mjs';
 
 const exec = promisify(execFile);
@@ -55,8 +55,8 @@ test('parts-app mix: list spend is high but only billed metered lanes count towa
   assert.ok(Math.abs(over.billedUsd - 14.37) < 0.01);
   const decision = projectCapDecision({ spent: over, cap: 5, source: 'profile budget.projectMaxUsd' });
   assert.ok(decision);
-  assert.match(decision.message, /been billed \$14\.37/);
-  assert.match(decision.message, /list value \$69\.22 across 3 runs/);
+  assert.match(decision.message, /been billed \$14\.37 of the \$5\.00 cap/);
+  assert.match(decision.message, /list value \$69\.22 across 3 runs is not counted/);
   assert.match(decision.message, /only metered lanes \(/);
   for (const lane of PAID_LANES) assert.match(decision.message, new RegExp(lane));
 });
@@ -70,7 +70,48 @@ test('unknown cost on a paid lane is billedUnknown, not zero billed', () => {
   });
   assert.equal(totals.billedUsd, 0);
   assert.equal(totals.billedUnknown, 1);
+  assert.equal(totals.billedUnknownUsd, LANE_RESERVE_DEFAULTS.anthropic);
   assert.equal(totals.usd, 1);
+});
+
+test('projectCapDecision counts unknown metered cost at lane reserve and names it', () => {
+  const reserve = LANE_RESERVE_DEFAULTS.anthropic;
+  const spent = { usd: 100, listUsd: 100, billedUsd: 0, billedUnknown: 2, billedUnknownUsd: reserve * 2, runs: 1, exposureUsd: 0 };
+  const decision = projectCapDecision({ spent, cap: reserve * 2, source: 'test' });
+  assert.ok(decision);
+  assert.match(decision.message, /2 jobs with unknown cost counted at the reserve/);
+  assert.match(decision.message, new RegExp(`been billed \\$${(reserve * 2).toFixed(2)}`));
+});
+
+test('missing or unrecognized lane is metered with reserve default', () => {
+  const totals = runTotals({
+    jobs: [
+      { id: 'no-agent', usage: { total_tokens: 10 } },
+      { id: 'weird', agent: 42, usage: { total_tokens: 10 } },
+      { id: 'ollama', agent: 'ollama', usage: { total_tokens: 10 } },
+    ],
+  });
+  assert.equal(totals.billedUnknown, 3);
+  assert.equal(totals.billedUnknownUsd, LANE_RESERVE_DEFAULTS.anthropic * 3);
+});
+
+test('negative rental is ignored and rented job cost is not doubled', () => {
+  const totals = runTotals({
+    rental: { usd: -5 },
+    jobs: [{ id: 'r', agent: 'rented', costUsd: 3, usage: { total_tokens: 1 } }],
+  });
+  assert.equal(totals.billedUsd, 3);
+  assert.equal(totals.usd, 3);
+  const doubled = runTotals({
+    rental: { usd: 10 },
+    jobs: [{ id: 'r', agent: 'rented', costUsd: 3, usage: { total_tokens: 1 } }],
+  });
+  assert.equal(doubled.billedUsd, 10);
+});
+
+test('projectCapDecision without billedUsd fails closed to list usd', () => {
+  assert.equal(projectCapDecision({ spent: { usd: 4, listUsd: 4, runs: 1, exposureUsd: 0 }, cap: 5 }), null);
+  assert.ok(projectCapDecision({ spent: { usd: 6, listUsd: 6, runs: 1, exposureUsd: 0 }, cap: 5 }));
 });
 
 test('exposure applies only to running runs with a paid-lane job', async t => {
@@ -89,7 +130,7 @@ test('exposure applies only to running runs with a paid-lane job', async t => {
   const spent = await projectSpend(root);
   assert.equal(spent.exposureUsd, 8);
   const decision = projectCapDecision({ spent, cap: 10, source: 'x' });
-  assert.match(decision.message, /may spend \$8\.00 more/);
+  assert.match(decision.message, /plus \$8\.00 exposure/);
   const summary = await projectSummary(root, { env, ttlMs: 0 });
   assert.equal(summary.spendUsd, summary.listUsd);
   assert.equal(summary.billedUsd, 2);

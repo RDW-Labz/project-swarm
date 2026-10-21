@@ -60,7 +60,7 @@ test('projectCap takes the lower of profile and config, and a malformed cap is a
   assert.throws(() => projectCap({ profile: { budget: { projectMaxUsd: -1 } } }), /project-cap-invalid/);
   assert.throws(() => projectCap({ config: { spend: { projectMaxUsd: 'ten' } } }), /project-cap-invalid/);
   assert.equal(projectCapDecision({ spent: { usd: 9.99, listUsd: 9.99, billedUsd: 9.99, runs: 3 }, cap: 10 }), null);
-  assert.match(projectCapDecision({ spent: { usd: 10, listUsd: 10, billedUsd: 10, runs: 3 }, cap: 10 }).message, /project-cap: this project has been billed \$10\.00 \(list value \$10\.00 across 3 runs\)/);
+  assert.match(projectCapDecision({ spent: { usd: 10, listUsd: 10, billedUsd: 10, runs: 3 }, cap: 10 }).message, /project-cap: this project has been billed \$10\.00 of the \$10\.00 cap; list value \$10\.00 across 3 runs is not counted/);
 });
 
 test('the profile and the config accept projectMaxUsd and reject bad values', () => {
@@ -77,7 +77,7 @@ test('a new run is refused once all runs together reached the project cap (--max
   await oldRun(fx.root, 'old-2', [2]);
   let called = 0;
   const m = { version: 1, concurrency: 1, jobs: [{ id: 'job-1', agent: 'ollama', model: 'test-model', prompt: 'Write out/1.txt', context: ['input.txt'], outputs: ['out/1.txt'], timeoutMs: 5000 }] };
-  await assert.rejects(runManifest(fx.root, m, { env: fx.env, liveDir: fx.liveDir, maxUsd: 100, fetchImpl: async () => { called++; return reply({}); } }), /project-cap: this project has been billed \$5\.00 \(list value \$5\.00 across 2 runs\)/);
+  await assert.rejects(runManifest(fx.root, m, { env: fx.env, liveDir: fx.liveDir, maxUsd: 100, fetchImpl: async () => { called++; return reply({}); } }), /project-cap: this project has been billed \$5\.00 of the \$5\.00 cap; list value \$5\.00 across 2 runs is not counted/);
   assert.equal(called, 0, 'no worker was called');
 });
 
@@ -173,8 +173,8 @@ test('runs still going count with what their own --max-usd lets them spend, so r
   assert.equal(await checkProjectCap(fx.root, { env: fx.env }), null, '2 spent + 3 exposure < 10');
   await oldRun(fx.root, 'done', [5]);
   const decision = await checkProjectCap(fx.root, { env: fx.env });
-  assert.match(decision.message, /been billed \$7\.00 \(list value \$7\.00 across 2 runs\) and runs still going may spend \$3\.00 more/);
-  assert.match(decision.message, />= the project cap \$10\.00/);
+  assert.match(decision.message, /been billed \$7\.00 \(plus \$3\.00 exposure\) of the \$10\.00 cap/);
+  assert.match(decision.message, /list value \$7\.00 across 2 runs is not counted/);
 });
 
 test('the real refusal carries the project-cap code, and resume is refused over the cap too (it would start paid jobs again)', async t => {

@@ -247,26 +247,49 @@ export function finalCost({ lane, record, reservation, rates }) {
   return { usd: reservation.usd, kind: 'reserved-as-cost', flagged: true, costSource: 'reservation' };
 }
 
-const spendNumber = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+export const spendNumber = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+const UNBILLED_LANES = new Set(['claude', 'codex', 'cursor', 'hermes', 'qwen']);
+export function isMeteredLane(lane) {
+  return typeof lane !== 'string' || !UNBILLED_LANES.has(lane);
+}
+function laneReserveDefault(lane) {
+  const key = typeof lane === 'string' && lane in LANE_RESERVE_DEFAULTS ? lane : 'anthropic';
+  return LANE_RESERVE_DEFAULTS[key];
+}
 export function jobSpend(record) {
   return { usd: spendNumber(record?.costUsd), tokens: spendNumber(record?.usage?.total_tokens) };
 }
 export function runTotals(state) {
-  const rentalUsd = Number.isFinite(state.rental?.usd) ? state.rental.usd : 0;
-  const totals = { usd: rentalUsd, tokens: 0, unknownUsd: [], billedUsd: rentalUsd, billedUnknown: 0, hasPaidLaneJob: rentalUsd > 0 };
+  let rentalBilled = spendNumber(state.rental?.usd) ?? 0;
+  const totals = { usd: rentalBilled, tokens: 0, unknownUsd: [], billedUsd: 0, billedUnknown: 0, billedUnknownUsd: 0, hasPaidLaneJob: rentalBilled > 0 };
   for (const record of state.jobs ?? []) {
     const lane = record.agent;
-    const paid = lane && PAID_LANES.includes(lane);
+    const metered = isMeteredLane(lane);
     const { usd, tokens } = jobSpend(record);
     totals.usd += usd ?? 0;
     totals.tokens += tokens ?? 0;
     if (tokens !== null && usd === null) totals.unknownUsd.push(record.id);
-    if (paid) {
+    if (lane === 'rented') {
+      if (usd !== null) rentalBilled = Math.max(rentalBilled, usd);
+      if (metered) {
+        totals.hasPaidLaneJob = true;
+        if (usd === null && rentalBilled === 0) {
+          totals.billedUnknown += 1;
+          totals.billedUnknownUsd += laneReserveDefault('rented');
+        }
+      }
+      continue;
+    }
+    if (metered) {
       totals.hasPaidLaneJob = true;
       if (usd !== null) totals.billedUsd += usd;
-      else totals.billedUnknown += 1;
+      else {
+        totals.billedUnknown += 1;
+        totals.billedUnknownUsd += laneReserveDefault(lane);
+      }
     }
   }
+  totals.billedUsd += rentalBilled;
   return totals;
 }
 export function laneDailyTotals(states, { now = () => new Date(), excludeRunId } = {}) {
