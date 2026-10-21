@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { runManifest } from '../tools/swarm.mjs';
 
 const exec = promisify(execFile);
-const env = { OPENAI_API_KEY: 'sk-secret-must-not-ship', SWARM_CONFIG: process.env.SWARM_CONFIG };
+const env = { OPENAI_API_KEY: 'test-not-a-secret', SWARM_CONFIG: process.env.SWARM_CONFIG };
 
 // Only the text-envelope CLIs (Hermes, Qwen) run on a remote host. These tests use Hermes jobs, a fake
 // local Hermes process, and a transport stub that answers like swarm-remote-exec does (stdout + exit code).
@@ -87,7 +87,7 @@ test('a Hermes job on an ssh host runs the named CLI there with the message on s
   assert.match(request.stdin, /original/);
   assert.deepEqual(request.files, []);
   assert.deepEqual(request.outputs, []);
-  assert.equal(JSON.stringify(request.env ?? {}).includes('sk-secret-must-not-ship'), false);
+  assert.equal(JSON.stringify(request.env ?? {}).includes('test-not-a-secret'), false);
 });
 
 test('a remote CLI that exits non-zero or answers badly fails that job only', async t => {
@@ -263,11 +263,21 @@ test('a remote command failure fails that job only and never the run', async t =
     env, spawnImpl: localHermes,
     hostTransport: { async ping() { return true; }, async run() { throw Object.assign(new Error('host-exit: 2'), { code: 'host-exit' }); } },
   });
-  // Whichever jobs landed on the failing host fail with its error; every other job completes.
-  assert.ok(state.jobs.every(job => ['complete', 'failed'].includes(job.status)));
-  assert.ok(state.jobs.filter(job => job.status === 'failed').every(job => /host-exit: 2/.test(job.error)));
-  assert.ok(state.jobs.filter(job => job.status === 'complete').length >= 2);
+  for (const job of state.jobs) {
+    const lastHost = job.hostUses?.at(-1);
+    if (lastHost === 'local') {
+      assert.equal(job.status, 'complete', job.error);
+    } else {
+      assert.equal(job.status, 'failed', job.error);
+      assert.match(job.error, /host-exit: 2/);
+    }
+  }
+  assert.equal(
+    state.jobs.filter(job => job.status === 'complete' || job.status === 'failed').length,
+    4,
+  );
   assert.equal(state.jobs.some(job => job.status === 'cancelled'), false);
+  assert.ok(!/Coordinator failed/.test(String(state.error ?? '')));
   assert.ok(!/Coordinator failed/.test(JSON.stringify(state.jobs.map(job => job.error))));
 });
 
