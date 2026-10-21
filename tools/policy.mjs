@@ -8,16 +8,16 @@ import { isRoutingPath } from './routing-paths.mjs';
 export const POLICY_FILE_NAME = 'policy.json';
 
 export const NEVER_AUTO = Object.freeze([
-  'merge-deploying-pr',
   'merge-other-repo',
-  'hosted-db-migration',
   'new-paid-service',
   'new-key',
+  'new-account',
+  'new-secret',
   'spend-past-daily-limit',
+  'irreversible-action',
   'deploy',
   'publish',
   'hand-edit-app-code',
-  'new-secret',
   'auth-change',
   'payments-change',
   'override',
@@ -30,6 +30,30 @@ export const DEFAULT_RULES = Object.freeze([
     kind: 'merge-pr',
     description:
       'Auto-approve merge-pr for the swarm repo when CI, reviews, and the full suite are green, merge order is satisfied, and the merge does not deploy a live site.',
+  },
+  {
+    id: 'merge-live-site',
+    kind: 'merge-pr',
+    description:
+      'Auto-approve merge-pr that deploys a live site when CI, full E2E, reviews, post-deploy watch, auto-rollback, and merge order are satisfied and the change is not irreversible or past the daily auto limit.',
+  },
+  {
+    id: 'hosted-migration',
+    kind: 'hosted-db-migration',
+    description:
+      'Auto-approve hosted-db-migration when backward compatible, backup taken, dry run passed, and main E2E proof are true and the migration is not destructive or irreversible.',
+  },
+  {
+    id: 'branch-switch',
+    kind: 'branch-switch',
+    description:
+      'Auto-approve branch-switch to a plain branch name (letters, digits, dot, underscore, slash, dash) when force is not requested.',
+  },
+  {
+    id: 'journal-restore',
+    kind: 'journal-restore',
+    description:
+      'Auto-approve journal-restore when every path is a generated or routing file (HANDOFF, TASK.md, build-plan.md, docs/state, coordination manifests, .swarm journal or ledger).',
   },
   {
     id: 'swarm-update-idle',
@@ -117,6 +141,31 @@ function isSetupFile(rel) {
 
 function handBuildFileOk(rel) {
   return isRoutingPath(rel) || isSetupFile(rel);
+}
+
+const PLAIN_BRANCH = /^[a-zA-Z0-9._/-]+$/;
+
+function isJournalRestorePath(rel) {
+  if (typeof rel !== 'string' || !rel) return false;
+  const p = normPath(rel);
+  const lower = p.toLowerCase();
+  if (lower === 'task.md' || lower === 'build-plan.md') return true;
+  if (lower === 'coordination/handoff.md' || /^coordination\/handoff\.[^/]+$/.test(lower)) return true;
+  if (lower.startsWith('docs/state/')) return true;
+  if (lower.startsWith('coordination/manifests/') && lower.endsWith('.json')) return true;
+  if (lower.startsWith('.swarm/')) {
+    const tail = lower.slice('.swarm/'.length);
+    if (tail.includes('journal') || tail.includes('ledger')) return true;
+  }
+  return false;
+}
+
+function ruleIdForKind(kind, facts = {}) {
+  if (kind === 'merge-pr') {
+    return facts.deploysLiveSite === true ? 'merge-live-site' : 'merge-swarm-pr';
+  }
+  const def = DEFAULT_BY_KIND.get(kind);
+  return def?.id ?? null;
 }
 
 function gitFactsOk(facts) {
@@ -254,14 +303,51 @@ function ruleApplies(rule, request, facts) {
   return { ok: true };
 }
 
-function factsForKind(kind, facts = {}) {
+function factsForKind(kind, facts = {}, ruleId = null) {
   if (kind === 'merge-pr') {
+    const rid = ruleId ?? ruleIdForKind(kind, facts);
+    if (rid === 'merge-live-site') {
+      if (facts.deploysLiveSite !== true) return { ok: false, reason: 'does not deploy live site' };
+      if (facts.repoClass !== 'swarm') return { ok: false, reason: 'not swarm repo' };
+      if (facts.ciGreen !== true) return { ok: false, reason: 'ci not green' };
+      if (facts.fullE2eGreen !== true) return { ok: false, reason: 'full e2e not green' };
+      if (facts.reviewsPass !== true) return { ok: false, reason: 'reviews not passing' };
+      if (facts.postDeployWatch !== true) return { ok: false, reason: 'post-deploy watch not configured' };
+      if (facts.autoRollback !== true) return { ok: false, reason: 'auto-rollback not configured' };
+      if (facts.inMergeOrder !== true) return { ok: false, reason: 'not in merge order' };
+      if (facts.irreversible === true) return { ok: false, reason: 'irreversible' };
+      if (facts.pastDailyAutoLimit === true) return { ok: false, reason: 'past daily auto limit' };
+      return { ok: true };
+    }
     if (facts.repoClass !== 'swarm') return { ok: false, reason: 'not swarm repo' };
     if (facts.ciGreen !== true) return { ok: false, reason: 'ci not green' };
     if (facts.reviewsPass !== true) return { ok: false, reason: 'reviews not passing' };
     if (facts.fullSuiteGreen !== true) return { ok: false, reason: 'full suite not green' };
     if (facts.inMergeOrder !== true) return { ok: false, reason: 'not in merge order' };
     if (facts.deploysLiveSite === true) return { ok: false, reason: 'deploys live site' };
+    return { ok: true };
+  }
+  if (kind === 'hosted-db-migration') {
+    if (facts.backwardCompatible !== true) return { ok: false, reason: 'not backward compatible' };
+    if (facts.backupTaken !== true) return { ok: false, reason: 'backup not taken' };
+    if (facts.dryRunPassed !== true) return { ok: false, reason: 'dry run not passed' };
+    if (facts.mainE2eProof !== true) return { ok: false, reason: 'main e2e proof missing' };
+    if (facts.destructive === true) return { ok: false, reason: 'destructive' };
+    if (facts.irreversible === true) return { ok: false, reason: 'irreversible' };
+    return { ok: true };
+  }
+  if (kind === 'branch-switch') {
+    const branch = facts.branch;
+    if (typeof branch !== 'string' || !branch || !PLAIN_BRANCH.test(branch) || branch.includes(':')) {
+      return { ok: false, reason: 'invalid branch name' };
+    }
+    if (facts.force === true) return { ok: false, reason: 'force switch' };
+    return { ok: true };
+  }
+  if (kind === 'journal-restore') {
+    const files = facts.files;
+    if (!Array.isArray(files) || files.length === 0) return { ok: false, reason: 'files missing' };
+    if (!files.every(isJournalRestorePath)) return { ok: false, reason: 'file outside generated or routing' };
     return { ok: true };
   }
   if (kind === 'swarm-update') {
@@ -329,15 +415,15 @@ export function decide(request, { rules, now = Date.now } = {}) {
   if (NEVER_AUTO.includes(kind)) {
     return { decision: 'needs-owner', rule: null, reason: 'owner-only' };
   }
-  const def = DEFAULT_BY_KIND.get(kind);
-  if (!def) return { decision: 'needs-owner', rule: null, reason: 'unknown request kind' };
-  const rule = (rules ?? []).find(r => r.id === def.id);
+  const ruleId = ruleIdForKind(kind, request.facts ?? {});
+  if (!ruleId) return { decision: 'needs-owner', rule: null, reason: 'unknown request kind' };
+  const rule = (rules ?? []).find(r => r.id === ruleId);
   if (!rule || !rule.enabled) {
     return { decision: 'needs-owner', rule: null, reason: 'rule disabled or missing' };
   }
   const scope = ruleApplies(rule, request, request.facts ?? {});
   if (!scope.ok) return { decision: 'needs-owner', rule: null, reason: scope.reason };
-  const factsOk = factsForKind(kind, request.facts ?? {});
+  const factsOk = factsForKind(kind, request.facts ?? {}, ruleId);
   if (!factsOk.ok) return { decision: 'needs-owner', rule: null, reason: factsOk.reason };
   return { decision: 'auto-approve', rule: rule.id, reason: 'policy match' };
 }

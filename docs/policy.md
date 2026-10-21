@@ -6,20 +6,22 @@ Per-machine `policy.json` beside swarm config lists which standing approvals may
 
 These request kinds are always `needs-owner`. No `policy.json` entry can auto-approve them:
 
-- `merge-deploying-pr`
 - `merge-other-repo`
-- `hosted-db-migration`
 - `new-paid-service`
 - `new-key`
+- `new-account`
+- `new-secret`
 - `spend-past-daily-limit`
+- `irreversible-action`
 - `deploy`
 - `publish`
 - `hand-edit-app-code`
-- `new-secret`
 - `auth-change`
 - `payments-change`
 - `override`
 - `accept-unmet-acceptance`
+
+New API keys, new accounts, new paid services, spend past the daily auto limit, and irreversible actions always need the owner.
 
 ## Default auto-approve rules
 
@@ -28,6 +30,10 @@ Each rule has an `id`, a one-line description, and is `enabled: true` in default
 | Rule id | Request kind(s) | Standing approval |
 | --- | --- | --- |
 | `merge-swarm-pr` | `merge-pr` | Swarm-repo merge when `repoClass` is `swarm`, `ciGreen`, `reviewsPass`, `fullSuiteGreen`, and `inMergeOrder` are true and `deploysLiveSite` is false. |
+| `merge-live-site` | `merge-pr` | Swarm-repo merge that deploys a live site when `deploysLiveSite` is true and `ciGreen`, `fullE2eGreen`, `reviewsPass`, `postDeployWatch`, `autoRollback`, and `inMergeOrder` are true, and `irreversible` and `pastDailyAutoLimit` are not true. |
+| `hosted-migration` | `hosted-db-migration` | Hosted DB migration when `backwardCompatible`, `backupTaken`, `dryRunPassed`, and `mainE2eProof` are true and `destructive` and `irreversible` are not true. |
+| `branch-switch` | `branch-switch` | Switch to `branch` when the name is a plain branch (letters, digits, `.`, `_`, `/`, `-`, no `:`) and `force` is not true. |
+| `journal-restore` | `journal-restore` | Restore when every path in `files` is generated or routing: `coordination/HANDOFF.md` and previous copies, `TASK.md`, `build-plan.md`, anything under `docs/state`, JSON under `coordination/manifests`, or `.swarm` journal and ledger files. |
 | `swarm-update-idle` | `swarm-update` | Swarm update when `machineIdle` and `afterReleaseMerge` are true. |
 | `commit-push-swarm-branch` | `commit-push-swarm-branch` | Commit or push swarm-produced files on a branch that is not `main` or `master` (`allSwarmProduced` true). |
 | `setup-and-routing-hand-build` | `hand-build-request` | Hand-build when every path in `files` is a routing path (see `tools/routing-paths.mjs`) or a setup file (`.gitignore`, `CLAUDE.md`, `AGENTS.md`, `.project-swarm.json`, `coordination/checks.json`), and `git` is empty or only `commit` / `push` on a non-main branch. |
