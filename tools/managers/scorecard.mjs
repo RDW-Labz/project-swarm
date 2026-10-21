@@ -2,6 +2,7 @@
 import { constants as fsc, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runManagerReplay } from './replay.mjs';
 
 /** @typedef {import('./types.mjs').ManagerId} ManagerId */
 /** @typedef {import('../../contracts/managers.json').components.schemas.ManagerJournalLine} ManagerJournalLine */
@@ -291,4 +292,20 @@ export async function writeManagerReplayScorecardForRun(replayOptions, replayRes
     timeToFix: replayOptions?.timeToFix,
     now: replayOptions?.now,
   });
+}
+
+/**
+ * Run one manager replay and write its scorecard under {@link MANAGER_SCORECARDS_REL_DIR} (AC1).
+ *
+ * @param {Parameters<typeof runManagerReplay>[0] & {
+ *   skipScorecard?: boolean,
+ *   swarmRoot?: string,
+ *   timeToFix?: number|null,
+ * }} options
+ * @returns {Promise<ManagerReplayResult & { scorecard: { scorecard: ManagerReplayScorecard, path: string }|null }>}
+ */
+export async function runManagerReplayWithScorecard(options) {
+  const replayResult = await runManagerReplay(options);
+  const scorecard = await writeManagerReplayScorecardForRun(options, replayResult);
+  return { ...replayResult, scorecard };
 }
