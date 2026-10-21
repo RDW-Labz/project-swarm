@@ -83,8 +83,13 @@ test('partial queue: manifest-blocked job retries; integrated job is not rewritt
   assert.equal(stateAfter1.jobIntegration['job-b'].status, 'blocked');
   assert.equal(stateAfter1.integrationPasses.length, 1);
 
-  const pass2 = await cliRun(root, 'integrate', id, '--queue', '--no-checks', '--approve-manifest', 'package-lock.json');
-  assert.equal(pass2.code, 0, pass2.out);
+  const pass2 = await integrateRun(root, id, {
+    queue: true,
+    noChecks: true,
+    securityGate: { approveManifests: [{ file: 'package-lock.json', sha256: 'deleted' }] },
+  });
+  assert.equal(pass2.status, 'integrated');
+  assert.equal(pass2.integrationStatus, 'complete');
   assert.equal(await read(root, 'src/a.ts'), aWritten, 'job-a file untouched on second pass');
   assert.equal(await exists(path.join(root, 'package-lock.json')), false);
 
