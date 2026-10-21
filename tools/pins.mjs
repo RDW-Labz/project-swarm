@@ -5,9 +5,13 @@ import nodeCrypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { projectId } from './projects.mjs';
-import { patchPointer, snapshotVersion, versionDirFor } from './install.mjs';
 
 const execFileAsync = promisify(execFile);
+
+async function installHelpers() {
+  const { patchPointer, snapshotVersion, versionDirFor } = await import('./install.mjs');
+  return { patchPointer, snapshotVersion, versionDirFor };
+}
 const SEMVER = /^\d+\.\d+\.\d+$/;
 
 export function isPinned(pointer) {
@@ -68,6 +72,7 @@ export async function pinnedVersions(source) {
 export async function resolveRegisteredProject(installRoot, token, { listProjectsImpl } = {}) {
   if (!token || typeof token !== 'string') throw Error('project name or path required');
   const needle = token.trim();
+  if (['--help', '-h', 'help'].includes(needle)) throw Error('Usage: swarm pin PROJECT VERSION | swarm unpin PROJECT');
   const registry = await readRegistry(installRoot);
   const entries = [];
   for (const dir of registry) {
@@ -107,6 +112,7 @@ async function gitAvailable(installRoot) {
 }
 
 export async function ensureVersionInstalled(installRoot, version, { execFile = execFileAsync } = {}) {
+  const { versionDirFor, snapshotVersion } = await installHelpers();
   const existing = await versionDirFor(installRoot, version);
   if (existing) return { installed: false, versionDir: existing };
   if (!await gitAvailable(installRoot)) throw Error('git is not available; cannot install a pinned release from a tag');
@@ -130,6 +136,7 @@ export async function ensureVersionInstalled(installRoot, version, { execFile = 
 export async function pinProject(installRoot, projectRoot, version, options) {
   validatePinVersion(version);
   const install = await ensureVersionInstalled(installRoot, version, options);
+  const { patchPointer } = await installHelpers();
   const written = await patchPointer(projectRoot, { pinned: true, pinnedVersion: version });
   return { project: projectRoot, version, ...install, ...written };
 }
