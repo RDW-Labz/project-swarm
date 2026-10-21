@@ -78,7 +78,139 @@ function isClaudePackageToken(token) {
 }
 
 const TMUX_EMBED_SUBS = new Set(['new-session', 'new-window', 'split-window', 'respawn-pane', 'send-keys', 'run-shell']);
-const TMUX_VALUE_OPTS = new Set(['-s', '-n', '-t', '-c', '-F', '-f', '-e', '-x', '-y', '-L', '-S', '-l']);
+const TMUX_SUB_ALIASES = {
+  new: 'new-session',
+  neww: 'new-window',
+  splitw: 'split-window',
+  send: 'send-keys',
+  respawnp: 'respawn-pane',
+  run: 'run-shell',
+};
+const TMUX_GLOBAL_VALUE_OPTS = new Set(['-L', '-S', '-f', '-c']);
+const TMUX_VALUE_OPTS = new Set(['-s', '-n', '-t', '-c', '-F', '-f', '-e', '-x', '-y', '-l']);
+
+const HEREDOC_STDIN_INTERPRETERS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'node', 'python', 'python3', 'perl', 'ruby', 'php']);
+
+function skipTmuxGlobalOptions(args, i) {
+  while (i < args.length) {
+    const a = args[i];
+    if (TMUX_GLOBAL_VALUE_OPTS.has(a)) { i += 2; continue; }
+    if (a === '-u' || a === '-2' || a === '-v') { i += 1; continue; }
+    break;
+  }
+  return i;
+}
+
+function resolveTmuxSubcommand(args) {
+  let i = skipTmuxGlobalOptions(args, 0);
+  if (i >= args.length) return null;
+  const raw = args[i];
+  const sub = TMUX_SUB_ALIASES[raw] ?? raw;
+  return { sub, subArgs: args.slice(i + 1) };
+}
+
+/** Sanctioned tmux seat launcher: node tools/orchestrator-up.mjs with allowed subcommands only. */
+function orchestratorUpSeatAllowed(normalized) {
+  if (!normalized || !/\bnode\b/.test(normalized) || !/\borchestrator-up\.mjs\b/.test(normalized)) return false;
+  if (/\bswarm\.mjs\b/.test(normalized)) return false;
+  if (/\b(?:decide|handbuild)\b/.test(normalized)) return false;
+  if (/\borchestrator-hook/.test(normalized)) return false;
+  return true;
+}
+
+function nodeScriptIsClaude(scriptToken) {
+  if (!scriptToken || scriptToken.startsWith('-')) return false;
+  const base = path.basename(scriptToken);
+  if (base === 'claude') return true;
+  if (base === 'cli.js' && /anthropic-ai\/claude-code/.test(scriptToken)) return true;
+  return false;
+}
+
+function heredocConsumerReadsScript(cmd, argsBeforeHeredoc) {
+  const base = path.basename(cmd);
+  if (HEREDOC_STDIN_INTERPRETERS.has(base) || /^python[\d.]*$/.test(base) || /^ruby[\d.]*$/.test(base) || /^php[\d.]*$/.test(base)) {
+    if (base === 'node' && argsBeforeHeredoc.some(a => ['-e', '--eval', '-p', '--print'].includes(a) || /^--eval=|^--print=/.test(a))) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+/** Extract here-document bodies and the command word that owns each redirect. */
+function extractHeredocs(commandText) {
+  const text = String(commandText ?? '');
+  const out = [];
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === '<' && text[i + 1] === '<' && text[i + 2] !== '<') {
+      let j = i + 2;
+      let strip = false;
+      if (text[j] === '-') { strip = true; j += 1; }
+      while (text[j] === ' ') j += 1;
+      let quote = null;
+      let delim = '';
+      for (; j < text.length; j += 1) {
+        const ch = text[j];
+        if (quote) {
+          if (ch === quote) quote = null;
+          else delim += ch;
+          continue;
+        }
+        if (ch === '"' || ch === "'") { quote = ch; continue; }
+        if (/[\s;&|()<>]/.test(ch)) break;
+        delim += ch;
+      }
+      const lineStart = text.lastIndexOf('\n', i) + 1;
+      const prefix = text.slice(lineStart, i).trim();
+      const bodyStart = text.indexOf('\n', j);
+      if (bodyStart === -1 || !delim) { i = j; continue; }
+      let k = bodyStart + 1;
+      let body = '';
+      for (;;) {
+        const end = text.indexOf('\n', k);
+        const line = text.slice(k, end === -1 ? text.length : end);
+        const cmp = strip ? line.replace(/^\t+/, '') : line;
+        if (cmp === delim) {
+          i = end === -1 ? text.length : end;
+          break;
+        }
+        body += `${line}\n`;
+        if (end === -1) { i = text.length; break; }
+        k = end + 1;
+      }
+      out.push({ prefix, body });
+      continue;
+    }
+  }
+  return out;
+}
+
+function heredocPrefixProgram(prefix) {
+  for (const words of tokenize(prefix)) {
+    const plain = plainWords(words);
+    const { index } = skipToProgram(plain);
+    if (index >= plain.length) continue;
+    return { cmd: path.basename(plain[index]), args: plain.slice(index + 1) };
+  }
+  return null;
+}
+
+function heredocBodiesRisky(commandText, depth = 0) {
+  if (depth > MAX_CLAUDE_DEPTH) return false;
+  for (const { prefix, body } of extractHeredocs(commandText)) {
+    const prog = heredocPrefixProgram(prefix);
+    if (!prog || !heredocConsumerReadsScript(prog.cmd, prog.args)) continue;
+    const b = body.trimEnd();
+    if (!b) continue;
+    if (rawHasRiskyClaudeInvocation(b, depth + 1)) return true;
+    const norm = normalizeSelfApprovalCommandText(b);
+    if (matchesNormalized(norm, b, { skipSafeSwarm: true })) return true;
+    for (const inner of nestedCommandStrings(b)) {
+      if (isSelfApprovalCommand(inner)) return true;
+    }
+  }
+  return false;
+}
 
 function skipTmuxFlags(args, i) {
   while (i < args.length) {
@@ -249,6 +381,7 @@ function skipToProgram(plain) {
 }
 
 function claudeInvocationIsRisky(args) {
+  if (args.length === 0) return true;
   let i = 0;
   while (i < args.length) {
     const t = args[i];
@@ -331,6 +464,20 @@ function interpreterCodeHasRiskyClaude(code) {
       from = j + 1;
     }
   }
+  let from = 0;
+  while (from < s.length) {
+    const start = s.indexOf('`', from);
+    if (start === -1) break;
+    let j = start + 1;
+    while (j < s.length) {
+      if (s[j] === '\\') j += 2;
+      else if (s[j] === '`') break;
+      else j += 1;
+    }
+    const inner = s.slice(start + 1, j);
+    if (/\bclaude\b/.test(inner) && /(?:\s|^)(?:-p|--print)\b/.test(inner)) return true;
+    from = j + 1;
+  }
   return false;
 }
 
@@ -377,10 +524,17 @@ function commandWordsRiskyClaude(words, depth) {
   const pkgClaudeArgs = packageRunnerClaudeArgs(plain, index);
   if (pkgClaudeArgs && claudeInvocationIsRisky(pkgClaudeArgs)) return true;
 
+  if (cmd === 'node') {
+    const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));
+    if (scriptAt !== -1 && nodeScriptIsClaude(args[scriptAt])) {
+      if (claudeInvocationIsRisky(args.slice(scriptAt + 1))) return true;
+    }
+  }
+
   if (cmd === 'tmux' && args.length > 0) {
-    const sub = args[0];
-    if (TMUX_EMBED_SUBS.has(sub)) {
-      for (const embedded of tmuxEmbeddedCommandStrings(sub, args.slice(1))) {
+    const inv = resolveTmuxSubcommand(args);
+    if (inv && TMUX_EMBED_SUBS.has(inv.sub)) {
+      for (const embedded of tmuxEmbeddedCommandStrings(inv.sub, inv.subArgs)) {
         if (rawHasRiskyClaudeInvocation(embedded, depth + 1)) return true;
       }
     }
@@ -438,21 +592,65 @@ const STATIC_MARKERS = [
   /base64\b[\s\S]*\|\s*(?:sh|bash|zsh|node)\b/,
 ];
 
+function tmuxEmbeddedSwarmNodeRisky(sub, embedded) {
+  const n = normalizeSelfApprovalCommandText(embedded);
+  if (!n) return false;
+  if (orchestratorUpSeatAllowed(n)) return false;
+  const embedSubs = new Set(['new-session', 'new-window', 'split-window', 'respawn-pane', 'send-keys', 'run-shell']);
+  if (!embedSubs.has(sub)) return false;
+  if (sub === 'send-keys' && (/\bswarm\b/.test(n) || /\bnode\b/.test(n))) return true;
+  if (['new-session', 'split-window', 'new-window', 'respawn-pane', 'run-shell'].includes(sub)) {
+    if (/\bswarm\b/.test(n)) return true;
+    if (/\bnode\b/.test(n) && (/\bswarm\.mjs\b/.test(n) || /\b(?:decide|handbuild)\b/.test(n) || /\borchestrator-hook/.test(n))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function tmuxSequentialClaudeSendKeysRisky(commandText) {
+  let prevTmuxStartedClaude = false;
+  for (const words of tokenize(commandText)) {
+    const plain = plainWords(words);
+    const { index } = skipToProgram(plain);
+    if (index >= plain.length) {
+      prevTmuxStartedClaude = false;
+      continue;
+    }
+    const cmd = path.basename(plain[index]);
+    if (cmd !== 'tmux') {
+      prevTmuxStartedClaude = false;
+      continue;
+    }
+    const inv = resolveTmuxSubcommand(plain.slice(index + 1));
+    if (!inv) {
+      prevTmuxStartedClaude = false;
+      continue;
+    }
+    const { sub, subArgs } = inv;
+    if (sub === 'send-keys' && prevTmuxStartedClaude) return true;
+    prevTmuxStartedClaude = false;
+    if (['new-session', 'new-window', 'split-window', 'respawn-pane', 'run-shell'].includes(sub)) {
+      for (const embedded of tmuxEmbeddedCommandStrings(sub, subArgs)) {
+        if (rawHasRiskyClaudeInvocation(embedded, 1)) prevTmuxStartedClaude = true;
+      }
+    }
+  }
+  return false;
+}
+
 function tmuxOrchestratorMarker(commandText) {
+  if (tmuxSequentialClaudeSendKeysRisky(commandText)) return true;
   for (const words of tokenize(commandText)) {
     const plain = plainWords(words);
     const { index } = skipToProgram(plain);
     if (index >= plain.length) continue;
     if (path.basename(plain[index]) !== 'tmux') continue;
-    const args = plain.slice(index + 1);
-    if (!args.length) continue;
-    const sub = args[0];
-    if (sub !== 'send-keys' && sub !== 'new-session' && sub !== 'split-window') continue;
-    for (const embedded of tmuxEmbeddedCommandStrings(sub, args.slice(1))) {
-      const n = normalizeSelfApprovalCommandText(embedded);
-      if (!n) continue;
-      if (sub === 'send-keys' && (/\bswarm\b/.test(n) || /\bnode\b/.test(n))) return true;
-      if ((sub === 'new-session' || sub === 'split-window') && /\bswarm\b/.test(n)) return true;
+    const inv = resolveTmuxSubcommand(plain.slice(index + 1));
+    if (!inv) continue;
+    const { sub, subArgs } = inv;
+    for (const embedded of tmuxEmbeddedCommandStrings(sub, subArgs)) {
+      if (tmuxEmbeddedSwarmNodeRisky(sub, embedded)) return true;
     }
   }
   return false;
@@ -469,9 +667,9 @@ function nestedCommandStrings(text) {
   return out;
 }
 
-function matchesNormalized(normalized, rawText = '') {
+function matchesNormalized(normalized, rawText = '', { skipSafeSwarm = false } = {}) {
   if (!normalized) return false;
-  if (SAFE_SWARM.some(re => re.test(normalized))) return false;
+  if (!skipSafeSwarm && SAFE_SWARM.some(re => re.test(normalized))) return false;
   if (rawText && tmuxOrchestratorMarker(rawText)) return true;
   if (STATIC_MARKERS.some(re => re.test(normalized))) return true;
   if (HAND_BUILD_ACTION.test(normalized)) return true;
@@ -488,6 +686,7 @@ export function isSelfApprovalCommand(commandText) {
   const text = String(commandText ?? '');
   if (!text) return false;
   if (rawHasRiskyClaudeInvocation(text, 0)) return true;
+  if (heredocBodiesRisky(text, 0)) return true;
   const normalized = normalizeSelfApprovalCommandText(text);
   if (matchesNormalized(normalized, text)) return true;
   for (const inner of nestedCommandStrings(text)) {
