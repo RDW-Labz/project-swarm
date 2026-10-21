@@ -79,7 +79,7 @@ const insidePath = (child, parent) => child === parent || child.startsWith(`${pa
 // The cap is shared by the main checkout and every linked worktree recorded by git. This reads
 // only the worktree metadata; it deliberately does not invoke git, and malformed entries are
 // ignored so a missing or half-written entry cannot make cap inspection throw.
-export async function worktreeFamily(root, { env = process.env, home = os.homedir() } = {}) {
+export async function worktreeFamily(root, { env = process.env, home = os.homedir(), all = false } = {}) {
   const requested = await realOrResolved(root);
   const mainCandidate = (await mainWorktreeRoot(root)) ?? root;
   const main = await realOrResolved(mainCandidate);
@@ -100,8 +100,8 @@ export async function worktreeFamily(root, { env = process.env, home = os.homedi
     const gitdir = path.isAbsolute(pointer) ? pointer : path.resolve(path.dirname(gitdirFile), pointer);
     let member;
     try { member = await fs.realpath(path.dirname(gitdir)); } catch { continue; }
-    if (hasSwarmSegment(member)) continue;
-    if (insidePath(member, scratchRoot)) continue;
+    if (!all && hasSwarmSegment(member)) continue;
+    if (!all && insidePath(member, scratchRoot)) continue;
     if (member !== main) discovered.add(member);
   }
   return [main, ...[...new Set([...discovered, requested])].filter(member => member !== main).sort()];
