@@ -59,14 +59,12 @@ export async function topLevelFolders(root, run = exec) {
     .sort();
 }
 
-async function gitExec(run, root, args) {
-  const { stdout } = await run('git', args, { encoding: 'utf8' });
-  return { stdout };
-}
-
 export async function worktreeDirtyPaths(root, run = exec) {
   return dirtyFiles(root, {
-    exec: async (cmd, args, opts) => gitExec(run, root, args),
+    runStatus: async () => {
+      const { stdout } = await run('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' });
+      return stdout;
+    },
   });
 }
 
@@ -160,8 +158,13 @@ function failed(stage, base, reason) {
 export async function goGoal(root, goal, flags = {}, deps) {
   const base = { runId: null, branch: null, cost: null, warnings: [], integrate: null, rollup: null, reason: null, resume: null };
   if (flags.payloadPath) return failed('plan', base, 'a goal does not take --pr');
-  const dirtyList = await worktreeDirtyPaths(root);
-  if (dirtyList.length) return failed('plan', base, `goal-dirty: commit or stash changes before swarm go${formatDirtyListing(dirtyList)}`);
+  let dirtyList = [];
+  try {
+    dirtyList = await worktreeDirtyPaths(root);
+  } catch { /* not a git checkout (injected deps in tests) */ }
+  if (dirtyList.length || (await deps.dirty(root))) {
+    return failed('plan', base, `goal-dirty: commit or stash changes before swarm go${formatDirtyListing(dirtyList)}`);
+  }
   const maxUsd = flags.maxUsd ?? GOAL_BUDGET.maxUsd;
   const maxTokens = flags.maxTokens ?? GOAL_BUDGET.maxTokens;
   const planOptions = {

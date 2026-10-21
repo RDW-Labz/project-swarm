@@ -43,10 +43,7 @@ export async function cleanBranch(root, { from, exclude = [] } = {}) {
   const git = args => execFileAsync('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: MAX_CONTEXT });
   const branch = (await git(['symbolic-ref', '--quiet', '--short', 'HEAD'])).stdout.trim();
   const dirty = await dirtyFiles(root, {
-    exec: async (cmd, args) => {
-      const { stdout } = await execFileAsync(cmd, args, { encoding: 'utf8', maxBuffer: MAX_CONTEXT });
-      return { stdout };
-    },
+    runStatus: async () => (await git(['status', '--porcelain=v1', '--untracked-files=all'])).stdout,
   });
   if (dirty.length) fail(`clean-branch-dirty: commit or set aside destination edits first${formatDirtyListing(dirty)}`);
   const source = (await git(['rev-parse', '--verify', '--end-of-options', `${from}^{commit}`])).stdout.trim();

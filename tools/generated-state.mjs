@@ -98,19 +98,47 @@ function parsePorcelainZ(stdout) {
   return entries;
 }
 
-export async function dirtyFiles(root, { exec, untracked = true } = {}) {
-  if (typeof root !== 'string' || !root || typeof exec !== 'function') return [];
-  const args = ['-C', root, 'status', '--porcelain=v1', '-z', untracked ? '--untracked-files=all' : '--untracked-files=no'];
+function parsePorcelainNewline(stdout) {
+  const entries = [];
+  for (const line of String(stdout ?? '').split('\n')) {
+    if (!line?.trim()) continue;
+    if (line.length >= 4 && line[2] === ' ') {
+      const code = line.slice(0, 2);
+      const paths = pathsFromPorcelainLine(line);
+      for (const file of paths) entries.push({ code, path: file });
+      continue;
+    }
+    const loose = /^(.{1,2})\s+(.+)$/.exec(line);
+    if (loose) entries.push({ code: loose[1].padEnd(2, ' '), path: stripQuotes(loose[2].trim()) });
+  }
+  return entries;
+}
+
+function parseStatusStdout(stdout) {
+  const text = String(stdout ?? '');
+  if (text.includes('\0')) return parsePorcelainZ(text);
+  return parsePorcelainNewline(text);
+}
+
+export async function dirtyFiles(root, { exec, runStatus, untracked = true } = {}) {
+  if (typeof root !== 'string' || !root) return [];
   let stdout;
   try {
-    const result = await exec('git', args, { encoding: 'utf8' });
-    stdout = result?.stdout ?? result ?? '';
+    if (typeof runStatus === 'function') {
+      stdout = await runStatus({ root, untracked });
+    } else if (typeof exec === 'function') {
+      const args = ['-C', root, 'status', '--porcelain=v1', '-z', untracked ? '--untracked-files=all' : '--untracked-files=no'];
+      const result = await exec('git', args, { encoding: 'utf8' });
+      stdout = result?.stdout ?? result ?? '';
+    } else {
+      return [];
+    }
   } catch {
     throw new Error('git status failed');
   }
   let entries;
   try {
-    entries = parsePorcelainZ(stdout);
+    entries = parseStatusStdout(stdout);
   } catch {
     throw new Error('invalid git status');
   }

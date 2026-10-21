@@ -488,6 +488,7 @@ export function swarmHandbuildVerbFromPlain(plain) {
   if (index >= words.length) return null;
   const cmd = path.basename(words[index]).toLowerCase();
   const args = words.slice(index + 1);
+  if (cmd === 'handbuild') return handbuildVerbAfterSwarmArgs(words.slice(index).map(w => w.toLowerCase()));
   if (cmd === 'swarm') return handbuildVerbAfterSwarmArgs(args);
   if (cmd === 'node') {
     const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));

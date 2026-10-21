@@ -462,7 +462,9 @@ export async function writePointer(root,{install,version}){
  let before=null;
  try{before=await fs.readFile(destination,'utf8');}catch(error){if(error.code!=='ENOENT')throw error;}
  if(before===null)return bootstrapProjectPointer(root,{install,version});
- try{JSON.parse(before);}catch{throw Error(`.project-swarm.json in ${root} is not valid JSON; fix it by hand (a backup was not needed, nothing was changed)`);}
+ let existing;
+ try{existing=JSON.parse(before);}catch{throw Error(`.project-swarm.json in ${root} is not valid JSON; fix it by hand (a backup was not needed, nothing was changed)`);}
+ if(!existing||typeof existing!=='object'||Array.isArray(existing))throw Error(`.project-swarm.json in ${root} is not a JSON object; fix it by hand (nothing was changed)`);
  const merged=await readRunnerPointer(root);
  if(merged.install===install&&merged.version===version)return {changed:false,backup:null};
  return writeReleasePointer(root,{install,version});

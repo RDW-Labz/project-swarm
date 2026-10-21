@@ -1066,11 +1066,17 @@ function positiveTargetedPass(output, file, runner) {
   return false;
 }
 
+async function shipStatusStdout(exec, root) {
+  const statusRes = await exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root });
+  if (!statusRes || statusRes.code !== 0) throw new Error('git status failed');
+  return String(statusRes.stdout ?? '');
+}
+
 async function cleanHeadAt(exec, root, expectedSha) {
   try {
     const dirty = await dirtyFiles(root, {
       untracked: false,
-      exec: async (cmd, args, opts) => exec(cmd, args, { ...opts, cwd: root }),
+      runStatus: () => shipStatusStdout(exec, root),
     });
     if (dirty.length) return false;
     const head = await exec('git', ['rev-parse', 'HEAD'], { cwd: root });
@@ -1670,7 +1676,7 @@ export async function ship(options) {
   try {
     dirtyBeforeShip = await dirtyFiles(root, {
       untracked: false,
-      exec: async (cmd, args, opts) => exec(cmd, args, { ...opts, cwd: root }),
+      runStatus: () => shipStatusStdout(exec, root),
     });
   } catch {
     return { ...base, status: 'refused', reason: 'git status failed' };

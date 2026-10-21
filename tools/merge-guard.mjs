@@ -122,7 +122,11 @@ async function localUpdate(root, branch, repoName, exec) {
   let dirty;
   try {
     dirty = await dirtyFiles(root, {
-      exec: async (cmd, args) => exec(cmd, args, opts),
+      runStatus: async () => {
+        const st = await exec('git', ['status', '--porcelain'], opts);
+        if (st.code !== 0) throw new Error('git status failed');
+        return String(st.stdout ?? '');
+      },
     });
   } catch {
     return 'skipped: git status failed';
