@@ -5,6 +5,7 @@ import {
   DEFAULT_POLICY_FILE,
   NEVER_AUTO,
   loadPolicy,
+  policyInitializedMarkerPath,
   policyPath,
   validatePolicy,
 } from './policy.mjs';
@@ -34,8 +35,11 @@ export function policyCommand(args, { out, env = process.env, home = env?.HOME, 
     } catch (error) {
       if (error?.code !== 'ENOENT') return writeln(write, String(error.message ?? error), 1);
     }
+    const initErrors = validatePolicy(DEFAULT_POLICY_FILE);
+    if (initErrors.length) return writeln(write, initErrors.join('\n'), 1);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, `${JSON.stringify(DEFAULT_POLICY_FILE, null, 2)}\n`);
+    fs.writeFileSync(file, `${JSON.stringify(DEFAULT_POLICY_FILE, null, 2)}\n`, { flag: 'wx' });
+    fs.writeFileSync(policyInitializedMarkerPath(file), `${new Date().toISOString()}\n`, { flag: 'wx' });
     return writeln(write, `Wrote default policy to ${file}`);
   }
   if (sub === 'show') {

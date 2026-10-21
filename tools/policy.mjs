@@ -127,10 +127,51 @@ const SETUP_FILES = new Set([
   'coordination/checks.json',
 ]);
 
-const protectedBranch = branch => {
-  const b = String(branch ?? '').toLowerCase();
-  return b === 'main' || b === 'master';
-};
+export const POLICY_INITIALIZED_MARKER = '.policy-initialized';
+
+export function normalizeBranchName(branch) {
+  if (typeof branch !== 'string') return null;
+  let b = branch.trim();
+  if (!b) return null;
+  b = b.replace(/^HEAD:/i, '');
+  b = b.replace(/^refs\/heads\//i, '');
+  b = b.replace(/^origin\//i, '');
+  return b;
+}
+
+/** @returns {'protected'|'unprotected'|'unknown'} */
+export function protectedBranchState(branch) {
+  const normalized = normalizeBranchName(branch);
+  if (normalized === null) return 'unknown';
+  const lower = normalized.toLowerCase();
+  if (lower === 'main' || lower === 'master' || lower === 'release' || lower.startsWith('release/')) {
+    return 'protected';
+  }
+  if (!PLAIN_BRANCH.test(normalized) || normalized.includes(':')) return 'unknown';
+  return 'unprotected';
+}
+
+function protectedBranch(branch) {
+  return protectedBranchState(branch) === 'protected';
+}
+
+function branchNeedsOwner(branch) {
+  const state = protectedBranchState(branch);
+  return state === 'protected' || state === 'unknown';
+}
+
+function factIsTrue(facts, key) {
+  return facts[key] === true;
+}
+
+function factIsFalse(facts, key) {
+  return facts[key] === false;
+}
+
+function deploysLiveSiteKnown(facts) {
+  const v = facts.deploysLiveSite;
+  return v === true || v === false;
+}
 
 const normPath = p => String(p).replace(/\\/g, '/');
 
@@ -145,23 +186,44 @@ function handBuildFileOk(rel) {
 
 const PLAIN_BRANCH = /^[a-zA-Z0-9._/-]+$/;
 
+function pathHasDotDot(rel) {
+  const p = normPath(rel);
+  if (p === '..' || p.startsWith('../') || p.endsWith('/..') || p.includes('/../')) return true;
+  return p.split('/').some(seg => seg === '..');
+}
+
+function swarmSegmentSensitive(seg) {
+  if (!seg) return false;
+  if (seg === 'ledger' || seg.startsWith('ledger.')) return true;
+  if (seg === 'counter' || seg.startsWith('counter.')) return true;
+  if (seg.includes('auto-decision')) return true;
+  if (seg === 'journal' || seg.startsWith('journal.')) return true;
+  return false;
+}
+
+function isSwarmSensitivePath(lowerPath) {
+  if (!lowerPath.startsWith('.swarm/')) return false;
+  const tail = lowerPath.slice('.swarm/'.length);
+  return tail.split('/').some(swarmSegmentSensitive);
+}
+
 function isJournalRestorePath(rel) {
   if (typeof rel !== 'string' || !rel) return false;
   const p = normPath(rel);
+  if (pathHasDotDot(p)) return false;
   const lower = p.toLowerCase();
+  if (isSwarmSensitivePath(lower)) return false;
+  if (lower.startsWith('.swarm/')) return true;
   if (lower === 'task.md' || lower === 'build-plan.md') return true;
   if (lower === 'coordination/handoff.md' || /^coordination\/handoff\.[^/]+$/.test(lower)) return true;
   if (lower.startsWith('docs/state/')) return true;
   if (lower.startsWith('coordination/manifests/') && lower.endsWith('.json')) return true;
-  if (lower.startsWith('.swarm/')) {
-    const tail = lower.slice('.swarm/'.length);
-    if (tail.includes('journal') || tail.includes('ledger')) return true;
-  }
   return false;
 }
 
 function ruleIdForKind(kind, facts = {}) {
   if (kind === 'merge-pr') {
+    if (!deploysLiveSiteKnown(facts)) return null;
     return facts.deploysLiveSite === true ? 'merge-live-site' : 'merge-swarm-pr';
   }
   const def = DEFAULT_BY_KIND.get(kind);
@@ -171,7 +233,7 @@ function ruleIdForKind(kind, facts = {}) {
 function gitFactsOk(facts) {
   const git = facts.git;
   if (git == null || git === '' || (Array.isArray(git) && git.length === 0)) {
-    if (facts.branch != null && protectedBranch(facts.branch)) return false;
+    if (facts.branch != null && branchNeedsOwner(facts.branch)) return false;
     return true;
   }
   const entries = Array.isArray(git) ? git : [git];
@@ -182,7 +244,7 @@ function gitFactsOk(facts) {
     const branch = typeof entry === 'object' && entry != null && !Array.isArray(entry)
       ? entry.branch ?? facts.branch
       : facts.branch;
-    if (branch != null && protectedBranch(branch)) return false;
+    if (branch != null && branchNeedsOwner(branch)) return false;
   }
   return true;
 }
@@ -254,8 +316,8 @@ export function validatePolicy(obj) {
       errors.push(`${where}: unknown rule id ${entry.id}`);
       continue;
     }
-    if (entry.enabled !== undefined && entry.enabled !== false) {
-      errors.push(`${where}: enabled may only be set to false`);
+    if (entry.enabled !== undefined && entry.enabled !== false && entry.enabled !== true) {
+      errors.push(`${where}: enabled must be true or false`);
     }
     if (entry.projects !== undefined) {
       if (!Array.isArray(entry.projects) || !entry.projects.every(p => typeof p === 'string' && p)) {
@@ -270,12 +332,24 @@ export function validatePolicy(obj) {
   return errors;
 }
 
+export function policyInitializedMarkerPath(policyFilePath) {
+  return path.join(path.dirname(policyFilePath), POLICY_INITIALIZED_MARKER);
+}
+
 export function loadPolicy(filePath, { fs }) {
   let text;
   try {
     text = fs.readFileSync(filePath, 'utf8');
   } catch (error) {
-    if (error?.code === 'ENOENT') return { rules: baseEffectiveRules(), error: null };
+    if (error?.code === 'ENOENT') {
+      const marker = policyInitializedMarkerPath(filePath);
+      try {
+        fs.accessSync(marker);
+        return { rules: [], error: 'policy file missing after init' };
+      } catch {
+        return { rules: baseEffectiveRules(), error: null };
+      }
+    }
     return { rules: [], error: String(error.message ?? error) };
   }
   let parsed;
@@ -303,45 +377,54 @@ function ruleApplies(rule, request, facts) {
   return { ok: true };
 }
 
-function factsForKind(kind, facts = {}, ruleId = null) {
+function factsForKind(kind, facts = {}, ruleId = null, request = {}) {
   if (kind === 'merge-pr') {
+    if (!deploysLiveSiteKnown(facts)) return { ok: false, reason: 'deploys live site unknown' };
     const rid = ruleId ?? ruleIdForKind(kind, facts);
     if (rid === 'merge-live-site') {
-      if (facts.deploysLiveSite !== true) return { ok: false, reason: 'does not deploy live site' };
+      if (!factIsTrue(facts, 'deploysLiveSite')) return { ok: false, reason: 'does not deploy live site' };
       if (facts.repoClass !== 'swarm') return { ok: false, reason: 'not swarm repo' };
-      if (facts.ciGreen !== true) return { ok: false, reason: 'ci not green' };
-      if (facts.fullE2eGreen !== true) return { ok: false, reason: 'full e2e not green' };
-      if (facts.reviewsPass !== true) return { ok: false, reason: 'reviews not passing' };
-      if (facts.postDeployWatch !== true) return { ok: false, reason: 'post-deploy watch not configured' };
-      if (facts.autoRollback !== true) return { ok: false, reason: 'auto-rollback not configured' };
-      if (facts.inMergeOrder !== true) return { ok: false, reason: 'not in merge order' };
+      if (!factIsTrue(facts, 'ciGreen')) return { ok: false, reason: 'ci not green' };
+      if (!factIsTrue(facts, 'fullE2eGreen')) return { ok: false, reason: 'full e2e not green' };
+      if (!factIsTrue(facts, 'reviewsPass')) return { ok: false, reason: 'reviews not passing' };
+      if (!factIsTrue(facts, 'postDeployWatch')) return { ok: false, reason: 'post-deploy watch not configured' };
+      if (!factIsTrue(facts, 'autoRollback')) return { ok: false, reason: 'auto-rollback not configured' };
+      if (!factIsTrue(facts, 'inMergeOrder')) return { ok: false, reason: 'not in merge order' };
       if (facts.irreversible === true) return { ok: false, reason: 'irreversible' };
+      if (facts.irreversible !== undefined && facts.irreversible !== false) {
+        return { ok: false, reason: 'irreversible' };
+      }
       if (facts.pastDailyAutoLimit === true) return { ok: false, reason: 'past daily auto limit' };
+      if (facts.pastDailyAutoLimit !== undefined && facts.pastDailyAutoLimit !== false) {
+        return { ok: false, reason: 'past daily auto limit' };
+      }
       return { ok: true };
     }
     if (facts.repoClass !== 'swarm') return { ok: false, reason: 'not swarm repo' };
-    if (facts.ciGreen !== true) return { ok: false, reason: 'ci not green' };
-    if (facts.reviewsPass !== true) return { ok: false, reason: 'reviews not passing' };
-    if (facts.fullSuiteGreen !== true) return { ok: false, reason: 'full suite not green' };
-    if (facts.inMergeOrder !== true) return { ok: false, reason: 'not in merge order' };
-    if (facts.deploysLiveSite === true) return { ok: false, reason: 'deploys live site' };
+    if (!factIsTrue(facts, 'ciGreen')) return { ok: false, reason: 'ci not green' };
+    if (!factIsTrue(facts, 'reviewsPass')) return { ok: false, reason: 'reviews not passing' };
+    if (!factIsTrue(facts, 'fullSuiteGreen')) return { ok: false, reason: 'full suite not green' };
+    if (!factIsTrue(facts, 'inMergeOrder')) return { ok: false, reason: 'not in merge order' };
+    if (!factIsFalse(facts, 'deploysLiveSite')) return { ok: false, reason: 'deploys live site' };
     return { ok: true };
   }
   if (kind === 'hosted-db-migration') {
-    if (facts.backwardCompatible !== true) return { ok: false, reason: 'not backward compatible' };
-    if (facts.backupTaken !== true) return { ok: false, reason: 'backup not taken' };
-    if (facts.dryRunPassed !== true) return { ok: false, reason: 'dry run not passed' };
-    if (facts.mainE2eProof !== true) return { ok: false, reason: 'main e2e proof missing' };
-    if (facts.destructive === true) return { ok: false, reason: 'destructive' };
-    if (facts.irreversible === true) return { ok: false, reason: 'irreversible' };
+    if (!factIsTrue(facts, 'backwardCompatible')) return { ok: false, reason: 'not backward compatible' };
+    if (!factIsTrue(facts, 'backupTaken')) return { ok: false, reason: 'backup not taken' };
+    if (!factIsTrue(facts, 'dryRunPassed')) return { ok: false, reason: 'dry run not passed' };
+    if (!factIsTrue(facts, 'mainE2eProof')) return { ok: false, reason: 'main e2e proof missing' };
+    if (!factIsFalse(facts, 'destructive')) return { ok: false, reason: 'destructive' };
+    if (!factIsFalse(facts, 'irreversible')) return { ok: false, reason: 'irreversible' };
     return { ok: true };
   }
   if (kind === 'branch-switch') {
-    const branch = facts.branch;
-    if (typeof branch !== 'string' || !branch || !PLAIN_BRANCH.test(branch) || branch.includes(':')) {
+    const normalized = normalizeBranchName(facts.branch);
+    if (normalized === null || !PLAIN_BRANCH.test(normalized) || normalized.includes(':')) {
       return { ok: false, reason: 'invalid branch name' };
     }
+    if (branchNeedsOwner(normalized)) return { ok: false, reason: 'protected branch' };
     if (facts.force === true) return { ok: false, reason: 'force switch' };
+    if (facts.force !== undefined && facts.force !== false) return { ok: false, reason: 'force switch' };
     return { ok: true };
   }
   if (kind === 'journal-restore') {
@@ -351,13 +434,13 @@ function factsForKind(kind, facts = {}, ruleId = null) {
     return { ok: true };
   }
   if (kind === 'swarm-update') {
-    if (facts.machineIdle !== true) return { ok: false, reason: 'machine not idle' };
-    if (facts.afterReleaseMerge !== true) return { ok: false, reason: 'not after release merge' };
+    if (!factIsTrue(facts, 'machineIdle')) return { ok: false, reason: 'machine not idle' };
+    if (!factIsTrue(facts, 'afterReleaseMerge')) return { ok: false, reason: 'not after release merge' };
     return { ok: true };
   }
   if (kind === 'commit-push-swarm-branch') {
-    if (protectedBranch(facts.branch)) return { ok: false, reason: 'protected branch' };
-    if (facts.allSwarmProduced !== true) return { ok: false, reason: 'not all swarm-produced' };
+    if (branchNeedsOwner(facts.branch)) return { ok: false, reason: 'protected branch' };
+    if (!factIsTrue(facts, 'allSwarmProduced')) return { ok: false, reason: 'not all swarm-produced' };
     return { ok: true };
   }
   if (kind === 'hand-build-request') {
@@ -368,8 +451,9 @@ function factsForKind(kind, facts = {}, ruleId = null) {
     return { ok: true };
   }
   if (kind === 'ticket-set-status') {
-    const toDone = facts.status === 'done' || facts.toStatus === 'done';
-    if (toDone && facts.requiresReview === true && facts.reviewPassed !== true) {
+    const rawStatus = facts.status ?? facts.toStatus;
+    const toDone = typeof rawStatus === 'string' && rawStatus.trim().toLowerCase() === 'done';
+    if (toDone && facts.requiresReview !== false && facts.reviewPassed !== true) {
       return { ok: false, reason: 'review gate' };
     }
     return { ok: true };
@@ -383,14 +467,18 @@ function factsForKind(kind, facts = {}, ruleId = null) {
     if (!Array.isArray(failing) || failing.length === 0) return { ok: false, reason: 'no failing checks listed' };
     if (!Array.isArray(newTests)) return { ok: false, reason: 'new test checks missing' };
     if (!failing.every(name => newTests.includes(name))) return { ok: false, reason: 'failing check outside new tests' };
-    if (facts.otherChecksPassing !== true) return { ok: false, reason: 'other checks not passing' };
+    if (!factIsTrue(facts, 'otherChecksPassing')) return { ok: false, reason: 'other checks not passing' };
     return { ok: true };
   }
   if (kind === 'workflow-change') {
-    if (facts.opusReviewPassed !== true) return { ok: false, reason: 'opus review not passed' };
-    if (facts.addsSecrets === true) return { ok: false, reason: 'adds secrets' };
-    if (facts.addsDeploy === true) return { ok: false, reason: 'adds deploy' };
-    if (facts.addsPublish === true) return { ok: false, reason: 'adds publish' };
+    if (!factIsTrue(facts, 'opusReviewPassed')) return { ok: false, reason: 'opus review not passed' };
+    if (facts.isNewWorkflow === true) return { ok: false, reason: 'new workflow' };
+    if (facts.isNewWorkflow !== undefined && facts.isNewWorkflow !== false) {
+      return { ok: false, reason: 'new workflow' };
+    }
+    if (!factIsFalse(facts, 'addsSecrets')) return { ok: false, reason: 'adds secrets' };
+    if (!factIsFalse(facts, 'addsDeploy')) return { ok: false, reason: 'adds deploy' };
+    if (!factIsFalse(facts, 'addsPublish')) return { ok: false, reason: 'adds publish' };
     return { ok: true };
   }
   if (kind === 'cap-raise') {
@@ -398,13 +486,20 @@ function factsForKind(kind, facts = {}, ruleId = null) {
     if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
       return { ok: false, reason: 'invalid amount' };
     }
-    if (facts.pastDailyAutoLimit === true) return { ok: false, reason: 'past daily auto limit' };
+    const limit = facts.pastDailyAutoLimit;
+    if (limit === true) return { ok: false, reason: 'past daily auto limit' };
+    if (limit !== undefined && limit !== false) return { ok: false, reason: 'past daily auto limit' };
     const raised = Number(facts.raisedTodayUsd ?? 0);
-    if (!Number.isFinite(raised) || raised + amount > 5) return { ok: false, reason: 'over daily cap' };
+    if (!Number.isFinite(raised) || raised < 0) return { ok: false, reason: 'raised today unknown' };
+    if (raised + amount > 5) return { ok: false, reason: 'over daily cap' };
     return { ok: true };
   }
   if (kind === 'change-order-path-fix' || kind === 'change-order-split') {
-    if (!facts.project) return { ok: false, reason: 'project missing' };
+    const p = facts.project;
+    const reqProject = request.project ?? request.facts?.project;
+    if (typeof p !== 'string' || !p.trim()) return { ok: false, reason: 'project missing' };
+    if (typeof reqProject !== 'string' || !reqProject.trim()) return { ok: false, reason: 'project missing' };
+    if (p !== reqProject) return { ok: false, reason: 'project mismatch' };
     return { ok: true };
   }
   return { ok: false, reason: 'no matching rule' };
@@ -423,13 +518,13 @@ export function decide(request, { rules, now = Date.now } = {}) {
   }
   const scope = ruleApplies(rule, request, request.facts ?? {});
   if (!scope.ok) return { decision: 'needs-owner', rule: null, reason: scope.reason };
-  const factsOk = factsForKind(kind, request.facts ?? {}, ruleId);
+  const factsOk = factsForKind(kind, request.facts ?? {}, ruleId, request);
   if (!factsOk.ok) return { decision: 'needs-owner', rule: null, reason: factsOk.reason };
   return { decision: 'auto-approve', rule: rule.id, reason: 'policy match' };
 }
 
 export function autoDecisionEvent(request, result, { now = Date.now, machine = '' } = {}) {
-  return {
+  const event = {
     kind: 'auto-decision',
     at: new Date(now()).toISOString(),
     rule: result?.rule ?? null,
@@ -439,6 +534,10 @@ export function autoDecisionEvent(request, result, { now = Date.now, machine = '
     machine: String(machine ?? ''),
     reason: result?.reason ?? null,
   };
+  if (request?.kind === 'cap-raise' && typeof request.facts?.amountUsd === 'number') {
+    event.amountUsd = request.facts.amountUsd;
+  }
+  return event;
 }
 
 export function handledForYou(events, { limit = 20 } = {}) {
