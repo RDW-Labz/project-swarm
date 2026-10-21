@@ -7,13 +7,14 @@ const identity = 'owner@example.test';
 const req = (overrides = {}) => ({
   tokenOk: true,
   headers: { 'Tailscale-User-Login': identity },
+  tailnetVerified: true,
   local: false,
   agentSession: false,
   tokenInQuery: false,
   ...overrides,
 });
 
-function fixture({ item = { id: 'item-1', kind: 'scope', title: 'Review scope' }, policy = { humanApprovals: ['scope'] }, guardResult = { allowed: true }, clock = 1000 } = {}) {
+function fixture({ item = { id: 'item-1', kind: 'scope', title: 'Review scope' }, policy = { humanApprovals: ['scope'] }, guardResult = { allowed: true }, clock = 1000, verifyIdentity = () => true } = {}) {
   let time = clock;
   const audit = [];
   let sequence = 0;
@@ -29,6 +30,7 @@ function fixture({ item = { id: 'item-1', kind: 'scope', title: 'Review scope' }
     randomId: () => `confirm-${++sequence}`,
     ownerIdentities: [identity, 'other@example.test'],
     confirmTtlMs: 100,
+    verifyIdentity,
   });
   return { actions, audit, setTime: value => { time = value; } };
 }
@@ -52,6 +54,24 @@ test('all owner-route authentication refusals use the contract status classes', 
   assert.equal((await actions.prepare('item-1', req({ local: true }))).status, 403);
 });
 
+test('requires strict boolean request markers', async () => {
+  const expectedStatus = { tokenOk: 403, tokenInQuery: 401, agentSession: 403, local: 403 };
+  for (const [field, status] of Object.entries(expectedStatus)) {
+    for (const value of [undefined, 'false', 0, 1]) {
+      const overrides = { [field]: value };
+      if (value === undefined) delete overrides[field];
+      const request = req(overrides);
+      if (value === undefined) delete request[field];
+      assert.equal((await fixture().actions.prepare('item-1', request)).status, status, `${field}=${String(value)}`);
+    }
+  }
+});
+
+test('requires a verified tailnet identity and an injected verifier', async () => {
+  assert.equal((await fixture().actions.prepare('item-1', req({ tailnetVerified: false }))).status, 401);
+  assert.equal((await fixture({ verifyIdentity: () => false }).actions.prepare('item-1', req())).status, 401);
+});
+
 test('invalid and non-owner-decidable items are refused', async () => {
   const { actions } = fixture();
   assert.equal((await actions.prepare('../item', req())).status, 404);
@@ -60,6 +80,16 @@ test('invalid and non-owner-decidable items are refused', async () => {
   assert.equal((await notHuman.actions.prepare('item-1', req())).status, 422);
   const guarded = fixture({ guardResult: { allowed: false, reason: 'refused-kind' } });
   assert.equal((await guarded.actions.prepare('item-1', req())).status, 403);
+});
+
+test('refuses mismatched action-kind aliases before approval or guard checks', async () => {
+  for (const field of ['actionKind', 'action', 'itemKind']) {
+    const { actions, audit } = fixture({ item: { id: 'item-1', kind: 'scope', [field]: ' DEPLOY ', title: 'Review scope' } });
+    assert.equal((await actions.prepare('item-1', req())).status, 409);
+    const refused = await actions.decide('item-1', { decision: 'approve', confirm: '' }, req());
+    assert.equal(refused.status, 409);
+    assert.equal(audit.at(-1).outcome, 'refused-kind-mismatch');
+  }
 });
 
 test('decision consumes confirmation, records approve and deny, and rejects replay', async () => {
@@ -102,5 +132,13 @@ test('every refused decision is audited and audit output is newest first without
   assert.equal(out.body[0].outcome, 'refused-authentication');
   assert.equal(JSON.stringify(out.body).includes('tok-test'), false);
   assert.equal((await actions.audit(req({ tokenInQuery: true }))).status, 401);
+});
+
+test('sanitizes crafted identities on refusal audit paths', async () => {
+  const { actions, audit } = fixture();
+  const crafted = 'owner@example.test/<script>';
+  assert.equal((await actions.decide('item-1', { decision: 'approve', confirm: '' }, req({ tokenOk: false, headers: { 'Tailscale-User-Login': crafted } }))).status, 403);
+  assert.equal(audit.at(-1).identity, 'invalid');
+  assert.equal((await actions.audit(req())).body.at(-1).identity, 'invalid');
 });
 

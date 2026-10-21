@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 import { needsHuman } from './approval-policy.mjs';
 
+// T-0114 must set req.tailnetVerified to true only after Tailscale Serve has
+// accepted the request on the loopback watch server; direct and Funnel requests
+// must leave it false, regardless of any client-supplied identity header.
+
 const ITEM_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,198}[A-Za-z0-9])?$/;
 const DECISIONS = new Set(['approve', 'deny']);
+const IDENTITY = /^[A-Za-z0-9@._+-]+$/;
+const KIND_FIELDS = ['actionKind', 'action', 'itemKind'];
 
 const response = (status, error, message) => ({
   status,
@@ -39,18 +45,26 @@ function itemFor(items, itemId) {
   return (Array.isArray(items) ? items : []).find(item => item && String(item.id) === itemId);
 }
 
-function approvalEvent(item) {
-  return item?.event && typeof item.event === 'object' ? item.event : item;
+function approvalEvent(item, kind) {
+  const event = item?.event && typeof item.event === 'object' ? item.event : item;
+  return { ...event, kind };
 }
 
 function approvalPolicy(item) {
   return item?.approvalPolicy ?? item?.policy ?? item?.approval ?? item?.project?.approvalPolicy;
 }
 
-function guardArgs(item) {
-  const kind = item?.actionKind ?? item?.action ?? item?.kind;
-  const itemKind = item?.itemKind ?? item?.kind;
-  return { kind, source: 'board', itemKind };
+function sameKind(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string') return left === right;
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
+function hasKindMismatch(item) {
+  return KIND_FIELDS.some(field => item?.[field] !== undefined && !sameKind(item[field], item?.kind));
+}
+
+function guardArgs(kind) {
+  return { kind, source: 'board', itemKind: kind };
 }
 
 function summaryOf(item) {
@@ -58,7 +72,10 @@ function summaryOf(item) {
 }
 
 function safeIdentity(identity) {
-  return identity || null;
+  if (identity === undefined || identity === null || identity === '') return null;
+  if (typeof identity !== 'string') return 'invalid';
+  const clipped = identity.slice(0, 254);
+  return IDENTITY.test(clipped) ? clipped : 'invalid';
 }
 
 function auditView(entries) {
@@ -66,7 +83,7 @@ function auditView(entries) {
     at: entry?.at ?? null,
     itemId: entry?.itemId ?? null,
     decision: entry?.decision ?? null,
-    identity: entry?.identity ?? null,
+    identity: safeIdentity(entry?.identity),
     outcome: entry?.outcome ?? null,
   }));
 }
@@ -80,6 +97,7 @@ export function createOwnerActions({
   randomId,
   ownerIdentities,
   confirmTtlMs = 120000,
+  verifyIdentity = () => false,
 } = {}) {
   if (typeof listItems !== 'function') throw new TypeError('listItems is required');
   if (typeof appendAudit !== 'function') throw new TypeError('appendAudit is required');
@@ -92,24 +110,41 @@ export function createOwnerActions({
   let confirmSuffix = 0;
 
   const auth = req => {
-    if (req?.tokenInQuery === true) return response(401, 'not-signed-in', 'owner routes require x-watch-token');
+    if (req?.tokenInQuery !== false) return response(401, 'not-signed-in', 'owner routes require x-watch-token');
     if (req?.tokenOk !== true) return response(403, 'owner-forbidden', 'the board token was not accepted');
     const identity = header(req?.headers, 'Tailscale-User-Login');
     if (!identity) return response(401, 'not-signed-in', 'a Tailscale owner identity is required');
+    if (req?.tailnetVerified !== true) return response(401, 'not-signed-in', 'the Tailscale owner identity was not verified');
+    let verified = false;
+    try {
+      verified = verifyIdentity(req, identity) === true;
+    } catch {
+      verified = false;
+    }
+    if (!verified) return response(401, 'not-signed-in', 'the Tailscale owner identity was not verified');
+    const sanitizedIdentity = safeIdentity(identity);
+    if (sanitizedIdentity === 'invalid') return response(401, 'not-signed-in', 'the Tailscale owner identity is invalid');
     if (!owners.has(identity)) return response(403, 'owner-forbidden', 'the identity is not an allowed owner');
-    if (req?.agentSession === true) return response(403, 'owner-forbidden', 'agent sessions cannot use owner routes');
-    if (req?.local === true) return response(403, 'owner-forbidden', 'remote board local requests cannot use owner routes');
-    return { identity };
+    if (req?.agentSession !== false) return response(403, 'owner-forbidden', 'agent sessions cannot use owner routes');
+    if (req?.local !== false) return response(403, 'owner-forbidden', 'remote board local requests cannot use owner routes');
+    return { identity: sanitizedIdentity };
   };
 
   const itemCheck = async itemId => {
     if (!validItemId(itemId)) return { error: response(404, 'not-found', 'the owner item was not found') };
     const item = itemFor(await listItems(), itemId);
     if (!item) return { error: response(404, 'not-found', 'the owner item was not found') };
-    if (!needsHuman(approvalPolicy(item), approvalEvent(item))) {
+    const kind = item.kind;
+    if (hasKindMismatch(item)) {
+      return {
+        error: response(409, 'kind-mismatch', 'the action kind fields do not match'),
+        outcome: 'refused-kind-mismatch',
+      };
+    }
+    if (!needsHuman(approvalPolicy(item), approvalEvent(item, kind))) {
       return { error: response(422, 'not-owner-decidable', 'the item is not currently decidable by the owner') };
     }
-    const guarded = await guard(guardArgs(item));
+    const guarded = await guard(guardArgs(kind));
     if (!guarded || guarded.allowed !== true) {
       return { error: response(403, 'owner-forbidden', guarded?.reason || 'the board action is refused') };
     }
@@ -159,7 +194,10 @@ export function createOwnerActions({
     }
     const checked = await itemCheck(itemId);
     if (checked.error) {
-      return refusal(time, itemId, body, authorized.identity, { response: checked.error, outcome: `refused-${checked.error.body.error}` });
+      return refusal(time, itemId, body, authorized.identity, {
+        response: checked.error,
+        outcome: checked.outcome || `refused-${checked.error.body.error}`,
+      });
     }
     if (!body || typeof body !== 'object' || Array.isArray(body) || !DECISIONS.has(body.decision) || typeof body.confirm !== 'string' || body.confirm.length === 0 || Object.keys(body).some(key => !['decision', 'confirm', 'reason'].includes(key)) || (body.reason !== undefined && (typeof body.reason !== 'string' || body.reason.length === 0 || body.reason.length > 2000))) {
       return refusal(time, itemId, body, authorized.identity, { response: response(422, 'not-owner-decidable', 'decision and confirm are required'), outcome: 'refused-invalid-request' });
