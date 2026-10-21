@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "rereview-b6-process",
+      "agent": "claude",
+      "model": "sonnet",
+      "tier": "mid",
+      "tierReason": "process control and update flow",
+      "type": "review",
+      "prompt": "RE-REVIEW after the fixes (commits f82188e and e6d92df; run git show f82188e --stat for the diff). Report first whether each earlier HIGH finding (reused pid signalled, registry rows dropped on stat errors, broad test-folder rule applied to the inbox and auto-deny, commit hook locking out commits without node) is really fixed, then look for regressions or new problems the fixes introduced. Review the process-control part of this batch: tools/server-restart.mjs (swarm update restarts the running board and swarm remote serve), tools/update-pending.mjs (swarm update --when-idle and the hold on new launches), their wiring in tools/swarm/core-52.mjs, tools/watch-cli.mjs and tools/watch-server.mjs (server record and /api/health). Intent: restart only OUR recorded servers gracefully (SIGTERM, wait, never SIGKILL), same port and flags, confirm the new version; a server in a terminal is not killed; --when-idle waits for a gap, holds only new launches, never kills a run, times out cleanly. Check: (1) pid identity: before signalling a recorded pid, is it verified to still be the same swarm server (command line and start time) so a reused pid can never get an unrelated process killed; (2) the record file: who can write it, is argv from it ever passed to a shell, is the spawn argv-array only, are cwd and env validated, can a corrupt or forged record start something else; (3) restart failure paths: can a server be left stopped without a report, can two updates race, is the port-free wait bounded; (4) update-pending: can a crashed update leave the machine unable to launch work forever (stale and expiry rules), can the hold deadlock an autopilot or go loop that the update itself waits on, can the hold be bypassed or leak into read-only commands, is the polling bounded; (5) /api/health: loopback only, leaks nothing; (6) the update result and exit codes (75 on timeout). Answer with a list of findings, each with file, line, concrete scenario and severity (high, medium, low), then one line PASS or FAIL. The threat model is an honest but fallible orchestrator and normal bugs, not an adversary: list adversarial-only issues separately as low. Do not write files.",
+      "context": [
+        "tools/server-restart.mjs",
+        "tools/update-pending.mjs",
+        "tools/swarm/core-52.mjs",
+        "tools/watch-cli.mjs",
+        "tools/watch-server.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/update-when-idle.test.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 1200000
+    },
+    {
+      "id": "rereview-b6-registry",
+      "agent": "claude",
+      "model": "sonnet",
+      "tier": "mid",
+      "tierReason": "registry deletion, auto-deny and a git hook",
+      "type": "review",
+      "prompt": "RE-REVIEW after the fixes (commits f82188e and e6d92df; run git show f82188e --stat for the diff). Report first whether each earlier HIGH finding (reused pid signalled, registry rows dropped on stat errors, broad test-folder rule applied to the inbox and auto-deny, commit hook locking out commits without node) is really fixed, then look for regressions or new problems the fixes introduced. Review the registry, scratch and hook part of this batch: tools/projects.mjs (swarm forget and the registry reader that drops missing folders and skips scratch roots), tools/scratch-roots.mjs (isScratchRoot), tools/handbuild.mjs and tools/handbuild-commands.mjs (auto-deny of requests from scratch roots), tools/board-inbox.mjs, tools/githook-check.mjs and tools/git-hooks.mjs (the commit-msg hook that refuses a Manifest commit with non-manifest files staged). Intent: forget removes registry entries only and never touches project files; scratch and test projects never reach the owner inbox, phone or swarm-inbox; the hook refuses swept-in files. Check: (1) forget: can any path or flag make it delete or write anything except the registry file (path traversal, symlinks, the bulk options), is the registry write atomic and lock-safe, is the install root really refused, does a mistyped path forget the wrong entry; (2) isScratchRoot: false positives that would hide a REAL project from the board and inbox (segment rule for tmp, temp, test, tests, __tests__, case folding, the home folder, a project that lives in a folder named test), and any way a real project can be auto-denied by accident (the auto-deny must only apply to scratch roots; what if the scratch base env var is set wrongly); (3) the registry reader dropping entries whose folder is gone: can a temporarily unmounted drive or a network share cause real projects to be dropped permanently; (4) the commit-msg hook: subject parsing (empty message, comment lines, fixup and squash and merge messages, amend, git commit with an editor), renames, quoting of the message file path in the shell script, preserving and chaining a user own commit-msg hook, idempotent install, uninstall removing only ours, and that it cannot lock someone out of committing in a non-swarm repo; (5) board-inbox filtering and the handbuild-commands auto-deny output. Answer with a list of findings, each with file, line, concrete scenario and severity (high, medium, low), then one line PASS or FAIL. The threat model is an honest but fallible orchestrator and normal bugs, not an adversary: list adversarial-only issues separately as low. Do not write files.",
+      "context": [
+        "tools/projects.mjs",
+        "tools/scratch-roots.mjs",
+        "tools/handbuild.mjs",
+        "tools/handbuild-commands.mjs",
+        "tools/board-inbox.mjs",
+        "tools/githook-check.mjs",
+        "tools/git-hooks.mjs",
+        "tests/forget.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/commit-msg-manifest.test.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}
