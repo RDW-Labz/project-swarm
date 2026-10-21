@@ -319,7 +319,9 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       const project = await find(id);
       if (!project) return null;
       const liveRuns = (await live()).filter(r => r.root === project.root);
-      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), deployStatus: root => isScratchRoot(root) ? null : deployTracker.get(root) });
+      let max = null;
+      try { max = machineConcurrency(loadLocalConfig({ env })); } catch { /* invalid local config leaves split quality without a slot limit */ }
+      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), slots: max, deployStatus: root => isScratchRoot(root) ? null : deployTracker.get(root) });
     },
     // Every run alive in one project, combined (the Live tab of the project page).
     async live(id) {

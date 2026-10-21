@@ -66,6 +66,69 @@
     }
   }
 
+  function renderSplit(split) {
+    var host = $('splitBody'); host.textContent = '';
+    if (!split) { host.appendChild(el('div', 'board-empty', 'Split quality unavailable.')); return; }
+    var grade = split.grade || 'unknown';
+    var header = el('div', 'row'); header.appendChild(el('span', 'label', 'Overall grade'));
+    header.appendChild(pill(grade, grade === 'green' ? 'good' : grade === 'amber' ? 'warn' : grade === 'red' ? 'bad' : 'quiet'));
+    host.appendChild(header);
+    (split.metrics || []).forEach(function (metric) {
+      var row = el('div', 'board-entry');
+      row.setAttribute('title', metric.note || '');
+      row.appendChild(el('span', 'dot grade-' + (metric.grade || 'unknown')));
+      var body = el('div', 'split-text');
+      var top = el('div', 'row'); top.appendChild(el('span', 'name', metric.label || metric.key || 'Metric')); top.appendChild(el('span', 'mono', metric.display || '—')); body.appendChild(top);
+      body.appendChild(el('div', 'sub', metric.grade === 'unknown' ? (metric.note || 'Unknown') : (metric.basis || metric.note || '')));
+      row.appendChild(body); host.appendChild(row);
+    });
+  }
+
+  function benchValue(value) { return typeof value === 'number' && isFinite(value) ? String(value) : '—'; }
+  function signed(value, suffix) {
+    if (typeof value !== 'number' || !isFinite(value)) { return '—'; }
+    return (value > 0 ? '+' : '') + benchValue(value) + (suffix || '');
+  }
+  function sparkline(weekly, label) {
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'spark'); svg.setAttribute('width', '120'); svg.setAttribute('height', '24'); svg.setAttribute('viewBox', '0 0 120 24');
+    svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'Weekly values for ' + label);
+    var values = (weekly || []).filter(function (point) { return point && typeof point.value === 'number' && isFinite(point.value); }).map(function (point) { return point.value; });
+    if (values.length) {
+      var min = Math.min.apply(null, values), max = Math.max.apply(null, values), span = max - min || 1;
+      var points = values.map(function (value, index) {
+        var x = values.length === 1 ? 60 : index * 120 / (values.length - 1);
+        var y = 21 - ((value - min) / span) * 18;
+        return x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      var line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+      line.setAttribute('fill', 'none'); line.setAttribute('stroke', 'currentColor'); line.setAttribute('stroke-width', '2'); line.setAttribute('points', points);
+      svg.appendChild(line);
+    }
+    return svg;
+  }
+  function renderBench(benchmarks) {
+    var host = $('benchBody'); host.textContent = '';
+    if (!benchmarks) { host.appendChild(el('div', 'board-empty', 'Benchmark scorecard unavailable.')); return; }
+    if (benchmarks.files === 0) {
+      host.appendChild(el('div', 'board-empty', 'No baseline yet. The MacBook writes docs/state/benchmarks/<date>-<label>.json (see docs/benchmarks-format.md).'));
+      return;
+    }
+    var metrics = benchmarks.metrics || [];
+    if (!metrics.length) { host.appendChild(el('div', 'board-empty', 'No benchmark metrics recorded.')); }
+    metrics.forEach(function (metric) {
+      var row = el('div', 'board-entry');
+      var body = el('div', 'split-text');
+      var top = el('div', 'row'); top.appendChild(el('span', 'name', metric.label || metric.key));
+      top.appendChild(el('span', 'sub', 'baseline ' + benchValue(metric.baseline && metric.baseline.value) + ' → latest ' + benchValue(metric.latest && metric.latest.value) + (metric.unit ? ' ' + metric.unit : ''))); body.appendChild(top);
+      body.appendChild(el('div', 'sub', 'change ' + signed(metric.change) + ' (' + signed(metric.changePct, '%') + ')'));
+      row.appendChild(body); row.appendChild(sparkline(metric.weekly, metric.label || metric.key));
+      row.appendChild(pill(metric.verdict || 'unknown', metric.verdict === 'better' ? 'good' : metric.verdict === 'worse' ? 'bad' : 'quiet'));
+      host.appendChild(row);
+    });
+    if (benchmarks.skipped && benchmarks.skipped.length) { host.appendChild(el('div', 'board-note', benchmarks.skipped.length + ' benchmark file' + (benchmarks.skipped.length === 1 ? '' : 's') + ' skipped.')); }
+  }
+
   function render(p) {
     $('title').textContent = p.name;
     $('crumbProject').textContent = p.name;
@@ -78,6 +141,8 @@
     var byLane = el('div', 'tile'); byLane.appendChild(el('div', 'label', 'By lane (billed + list value)')); byLane.appendChild(el('div', 'sub', lanes.length ? lanes.map(function (k) { return k + ' ' + usd(p.spend.byLane[k]); }).join(', ') : 'none')); s.appendChild(byLane);
 
     renderProgress(p.progress);
+    renderSplit(p.splitQuality);
+    renderBench(p.benchmarks);
 
     var t = $('tickets'); t.textContent = '';
     var counts = p.ticketCounts.byStatus; 

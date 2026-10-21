@@ -259,6 +259,11 @@ function progressLine(p) {
   line.appendChild(el('span', '', label + ' · ' + (progress.current || 'Unknown') + eta));
   return line;
 }
+function splitLine(p) {
+  if (!p.split || p.split.grade === 'unknown') { return null; }
+  var text = 'Split ' + p.split.grade + (p.split.reds ? ' · ' + p.split.reds + ' red' : '') + (p.split.worst ? ' · ' + p.split.worst : '');
+  return el('div', 'sub split-' + p.split.grade, text);
+}
 function renderProjects(projects) {
   var psig = L.signature(projects, Math.floor(Date.now() / 60000));
   if (psig === state.projSig) { return; }
@@ -282,6 +287,7 @@ function renderProjects(projects) {
     var tr = el('tr'); if (isWorktree) { tr.className = 'wt'; }
     var name = el('div'); name.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', (isWorktree ? '↳ ' : '') + p.name)])); name.appendChild(document.createTextNode(' ')); name.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage')));
     var tableProgress = progressLine(p); if (tableProgress) { name.appendChild(tableProgress); }
+    var tableSplit = splitLine(p); if (tableSplit) { name.appendChild(tableSplit); }
     (p.warnings || []).forEach(function (w) { name.appendChild(el('div', 'sub', '')); name.lastChild.appendChild(pill(w.text, 'warn')); });
     var mixText = buildMixText(p.orchestrator); if (mixText) { name.appendChild(el('div', 'sub', '')); name.lastChild.appendChild(pill(mixText, p.orchestrator.handPct > 0 ? 'warn' : 'good')); }
     tr.appendChild(td(name)); tr.appendChild(td(liveCell(p), 'wrap'));
@@ -292,6 +298,7 @@ function renderProjects(projects) {
     var c = el('div', 'pcard');
     var head = el('div', 'row'); head.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', (isWorktree ? '↳ ' : '') + p.name)])); head.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); c.appendChild(head);
     var cardProgress = progressLine(p); if (cardProgress) { c.appendChild(cardProgress); }
+    var cardSplit = splitLine(p); if (cardSplit) { c.appendChild(cardSplit); }
     (p.warnings || []).forEach(function (w) { var wl = el('div', 'sub'); wl.appendChild(pill(w.text, 'warn')); c.appendChild(wl); });
     var mixCard = buildMixText(p.orchestrator); if (mixCard) { var ml = el('div', 'sub'); ml.appendChild(pill(mixCard, p.orchestrator.handPct > 0 ? 'warn' : 'good')); c.appendChild(ml); }
     if (p.idleWithReady) { var idleReady = el('div', 'sub'); idleReady.appendChild(pill('Idle with ' + p.readyTickets + ' ready tickets', 'bad')); c.appendChild(idleReady); }

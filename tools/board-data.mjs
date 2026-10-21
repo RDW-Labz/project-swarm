@@ -14,6 +14,8 @@ import { projectOrchestrator } from './board-orchestrator.mjs';
 import { combinedUsage } from './orchestrator-usage.mjs';
 import { buildProgress, progressSummary } from './build-progress.mjs';
 import { ROUTE_ORDER } from './router.mjs';
+import { splitQuality } from './split-quality.mjs';
+import { readBenchmarks, scorecard } from './benchmark-scorecard.mjs';
 
 const DAY = 86400000;
 const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   // subscription lanes: not billed per use
@@ -273,7 +275,7 @@ export function ticketsOf(ledger) {
 }
 
 // One project's lane on the board. `liveRuns` are the alive runs of THIS project only.
-export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null } = {}) {
+export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
   const runs = await readRunStates(project.root);
   const liveIds = new Set(liveRuns.map(r => r.runId));
   const ledger = await readLedger(project.root).catch(() => null);
@@ -287,6 +289,12 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const tickets = ticketsOf(ledger);
   const readyTickets = tickets.byStatus.ready ?? 0;
   const idle = liveRuns.length === 0;
+  const split = await splitQuality({ root: project.root, now, slots }).then(result => {
+    const metrics = Array.isArray(result?.metrics) ? result.metrics : [];
+    const red = metrics.filter(metric => metric?.grade === 'red');
+    const amber = metrics.find(metric => metric?.grade === 'amber');
+    return { grade: result?.grade ?? 'unknown', reds: red.length, worst: red[0]?.label ?? amber?.label ?? null };
+  }).catch(() => null);
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
     stage: tickets.stage, tickets, readyTickets, idleWithReady: idle && readyTickets > 0,
@@ -295,6 +303,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     orchestrator: (() => { try { return projectOrchestrator(project, { runs, now }); } catch { return { sessions: [], handBuilt: { files: 0, edits: 0, list: [] }, swarmBuilt: { files: 0 }, swarmPct: null, handPct: null, cost: { todayListUsd: 0, allListUsd: 0, todayTokens: 0, allTokens: 0 } }; } })(),
     spend: { usd: cost.allUsd, familyUsd: spend.spendUsd ?? null, sharedTrees: spend.sharedTrees ?? 1, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached), capSource: spend.capSource ?? null, capInherited: Boolean(spend.capInherited), inheritedFrom: spend.inheritedFrom ?? null, why: spend.why ?? null, billedUsd: cost.paidUsd, listUsd: cost.flatRateListUsd, capBasis: spend.capBasis ?? 'billed+list' },
     progress,
+    split,
     recentJobCounts: runs.slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0)),
     lastRunAt: lastRun?.startedAt ?? null,
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
@@ -320,7 +329,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   for (const project of projects) {
     const projectRoot = await realRoot(project.root);
     const mine = live.filter(r => r.root === projectRoot);
-    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus }));
+    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null }));
   }
   const registered = new Map();
   for (const project of projects) registered.set(await realRoot(project.root), project);
@@ -403,7 +412,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
 }
 
 // One project's page: its tickets by status, its run history, its spend by lane and its lessons. Reads only under project.root.
-export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), summary = projectSummary, historyFile = undefined, deployStatus = null } = {}) {
+export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
   const runs = await readRunStates(project.root, { limit: 200 });
   const ledger = await readLedger(project.root).catch(() => null);
   const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 1000).map(t => ({ id: txt(t.id, 20), title: txt(t.title, 140), status: txt(t.status, 20), stage: txt(t.stage, 10), risk: txt(t.risk, 10) }));
@@ -414,6 +423,8 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const spend = (await summary(project.root).catch(() => ({}))) ?? {};
   const detailSpend = { usd: spend.spendUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis: spend.capBasis ?? 'billed+list' };
   const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null }).catch(() => null);
+  const split = await splitQuality({ root: project.root, now, slots }).catch(() => null);
+  const benchmarks = await readBenchmarks(project.root).then(input => scorecard(input, { now })).catch(() => null);
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
     tickets, ticketCounts: ticketsOf(ledger),
@@ -423,6 +434,8 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
     }),
     spend: { ...detailCost, byLane: plain(byLane), billedUsd: detailCost.paidUsd, listUsd: detailCost.flatRateListUsd, capBasis: spend.capBasis ?? 'billed+list' },
     progress,
+    splitQuality: split,
+    benchmarks,
     lessons,
   };
 }

@@ -175,6 +175,25 @@ test('cost splits billed and flat-rate list value by day and cap basis is surfac
   }
 });
 
+test('project panels expose split quality and benchmark scorecards', async t => {
+  const { A } = await twoProjects(t);
+  const empty = await projectDetail(A, { now: NOW });
+  assert.equal(empty.splitQuality.metrics.length, 7);
+  assert.equal(empty.benchmarks.files, 0);
+
+  const directory = path.join(A.root, 'docs/state/benchmarks');
+  await fs.mkdir(directory, { recursive: true });
+  const benchmark = (at, label, value) => ({ version: 1, at, label, source: 'tests/board-page', metrics: { latency: { value, unit: 'ms', better: 'lower', label: 'Latency' } } });
+  await fs.writeFile(path.join(directory, '2026-10-20-baseline.json'), JSON.stringify(benchmark('2026-10-20T15:00:00Z', 'baseline', 10)));
+  await fs.writeFile(path.join(directory, '2026-10-27-after.json'), JSON.stringify(benchmark('2026-10-27T15:00:00Z', 'after', 8)));
+  const detail = await projectDetail(A, { now: NOW });
+  assert.equal(detail.benchmarks.files, 2);
+  assert.equal(detail.benchmarks.metrics.find(metric => metric.key === 'latency').verdict, 'better');
+
+  const overview = await projectOverview(A, [], { now: NOW });
+  assert.ok(overview.split && 'grade' in overview.split);
+});
+
 test('stage, tickets, caps and last activity per project; a project is never mixed with another (same run id, same ticket ids)', async t => {
   const { A, B } = await twoProjects(t);
   const summaries = { [A.root]: { spendUsd: 7.6, capUsd: 10 }, [B.root]: { spendUsd: 0.1, capUsd: null } };
