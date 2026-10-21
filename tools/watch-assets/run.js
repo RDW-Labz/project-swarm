@@ -3,21 +3,20 @@
 import { renderOrchestrator } from './orchestrator-view.js';
 
 var L = self.BoardLib;
+var TOKEN = L.watchToken();
 var params = new URLSearchParams(location.search);
-var TOKEN = params.get('t') || '';
 var ID = params.get('id') || '';
 var RUN = params.get('run') || '';
-var T = encodeURIComponent(TOKEN);
 var $ = function (id) { return document.getElementById(id); };
 var NS = 'http://www.w3.org/2000/svg';
 function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined && text !== null) { n.textContent = text; } return n; }
 function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
 function when(iso) { return iso ? String(iso).slice(11, 19) : '-'; }
-function api(extra) { return fetch('/api/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(RUN) + (extra || '') + '&t=' + T, { headers: { 'x-watch-token': TOKEN } }).then(function (r) { return r.ok ? r.json() : null; }); }
+function api(extra) { return fetch('/api/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(RUN) + (extra || ''), { headers: { 'x-watch-token': TOKEN } }).then(function (r) { return r.ok ? r.json() : null; }); }
 
-$('backAll').href = '/?t=' + T;
-$('crumbProject').href = '/project?id=' + encodeURIComponent(ID) + '&t=' + T;
-$('watchLink').href = '/open/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(RUN) + '&t=' + T;
+$('backAll').href = '/';
+$('crumbProject').href = '/project?id=' + encodeURIComponent(ID);
+$('watchLink').href = '/open/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(RUN);
 $('crumbRun').textContent = RUN;
 
 var run = null, pos = 0, timer = null;
@@ -149,7 +148,7 @@ api().then(function (r) {
   $('scrub').max = String(r.journal.length);
   setPos(r.journal.length);
 });
-fetch('/api/project?id=' + encodeURIComponent(ID) + '&t=' + T, { headers: { 'x-watch-token': TOKEN } }).then(function (r) { return r.ok ? r.json() : null; }).then(function (p) {
+fetch('/api/project?id=' + encodeURIComponent(ID), { headers: { 'x-watch-token': TOKEN } }).then(function (r) { return r.ok ? r.json() : null; }).then(function (p) {
   if (!p) { return; }
   p.runs.filter(function (x) { return x.runId !== RUN; }).slice(0, 60).forEach(function (x) { var o = el('option', '', x.runId + '  ' + x.status + '  ' + x.done + '/' + x.jobs + ' jobs'); o.value = x.runId; $('other').appendChild(o); });
 }).catch(function () {});

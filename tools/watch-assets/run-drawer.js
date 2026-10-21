@@ -123,7 +123,7 @@
 
   function loadReport(id, body) {
     var token = SW.token || '';
-    fetch('/job/' + encodeURIComponent(id) + '?t=' + encodeURIComponent(token), { headers: { 'x-watch-token': token } })
+    fetch('/job/' + encodeURIComponent(id), { headers: { 'x-watch-token': token } })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {
         body.textContent = '';
