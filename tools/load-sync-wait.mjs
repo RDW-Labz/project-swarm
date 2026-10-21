@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { Worker } from 'node:worker_threads';
 
 function assertStableMarkerDir(markerDir) {
   const resolved = path.resolve(markerDir);
@@ -335,4 +336,153 @@ export function createManualGate({ trace, signal } = {}) {
       ]);
     },
   };
+}
+
+// CPU spinner for artificial load. Stops on a shared flag (Atomics), not a timer.
+const SPIN_WORKER_SOURCE = `
+const { workerData } = require('node:worker_threads');
+const flag = new Int32Array(workerData.flag);
+let sink = 0;
+while (Atomics.load(flag, 0) === 0) {
+  for (let i = 0; i < 100000; i += 1) sink += Math.sqrt(i);
+}
+`;
+
+/**
+ * Artificial load: CPU-spinning worker threads plus optional main-thread churn
+ * (setImmediate chunks sized by iteration count, so no clock is involved).
+ * Resolves once every worker reports `online`; {@link stop} resolves once every worker exits.
+ * @param {{ workers?: number, mainThreadIterations?: number, trace?: ReturnType<typeof createEventTrace> }} [options]
+ */
+export async function startArtificialLoad({
+  workers = Math.max(1, os.availableParallelism()),
+  mainThreadIterations = 20000,
+  trace,
+} = {}) {
+  if (!Number.isSafeInteger(workers) || workers < 0) {
+    throw new TypeError('workers must be a non-negative integer');
+  }
+  if (!Number.isSafeInteger(mainThreadIterations) || mainThreadIterations < 0) {
+    throw new TypeError('mainThreadIterations must be a non-negative integer');
+  }
+  const flagBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const flag = new Int32Array(flagBuffer);
+  const threads = [];
+  for (let index = 0; index < workers; index += 1) {
+    threads.push(new Worker(SPIN_WORKER_SOURCE, { eval: true, workerData: { flag: flagBuffer } }));
+  }
+  const exited = threads.map(worker => waitForEmitter(worker, 'exit'));
+  try {
+    await Promise.all(
+      threads.map(
+        worker =>
+          new Promise((resolve, reject) => {
+            worker.once('online', resolve);
+            worker.once('error', reject);
+          }),
+      ),
+    );
+  } catch (error) {
+    Atomics.store(flag, 0, 1);
+    await Promise.allSettled(threads.map(worker => worker.terminate()));
+    throw error;
+  }
+  trace?.record('load.start', { workers, mainThreadIterations });
+
+  let churning = mainThreadIterations > 0;
+  let churnStopped = Promise.resolve();
+  if (churning) {
+    const done = createDeferred();
+    churnStopped = done.promise;
+    let sink = 0;
+    const tick = () => {
+      if (!churning) {
+        done.resolve(sink);
+        return;
+      }
+      for (let i = 0; i < mainThreadIterations; i += 1) sink += Math.sqrt(i);
+      setImmediate(tick);
+    };
+    setImmediate(tick);
+  }
+
+  let stopped;
+  return {
+    workers,
+    stop() {
+      if (stopped) return stopped;
+      churning = false;
+      Atomics.store(flag, 0, 1);
+      stopped = Promise.all([churnStopped, ...exited]).then(() => {
+        trace?.record('load.stop', { workers });
+      });
+      return stopped;
+    },
+  };
+}
+
+/**
+ * Runs {@link check} {@code runs} times in a row under artificial load. Each run must pass; the
+ * first failure ends the series with no retry, flushes the trace and marks the check quarantined.
+ * @template T
+ * @param {string} name
+ * @param {(context: { run: number, runs: number, trace: ReturnType<typeof createEventTrace> }) => T | Promise<T>} check
+ * @param {{ runs?: number, workers?: number, mainThreadIterations?: number, trace?: ReturnType<typeof createEventTrace> }} [options]
+ */
+export async function runLoadTimingCheck(
+  name,
+  check,
+  { runs = LOAD_TIMING_RUNS, workers, mainThreadIterations, trace = createEventTrace({ label: name }) } = {},
+) {
+  if (!Number.isSafeInteger(runs) || runs < 1) {
+    throw new TypeError('runs must be a positive integer');
+  }
+  const load = await startArtificialLoad({ workers, mainThreadIterations, trace });
+  /** @type {{ name: string, runs: number, passed: number, ok: boolean, quarantined: boolean, failure?: { run: number, error: unknown } }} */
+  const report = { name, runs, passed: 0, ok: false, quarantined: false };
+  try {
+    for (let run = 1; run <= runs; run += 1) {
+      trace.record('run.start', { run, runs });
+      try {
+        await check({ run, runs, trace });
+      } catch (error) {
+        trace.record('run.fail', { run, message: /** @type {any} */ (error)?.message ?? String(error) });
+        report.quarantined = true;
+        report.failure = { run, error };
+        break;
+      }
+      report.passed = run;
+      trace.record('run.pass', { run });
+    }
+  } finally {
+    await load.stop();
+  }
+  report.ok = report.passed === runs;
+  if (report.quarantined) {
+    const error = /** @type {any} */ (report.failure?.error);
+    trace.flushOnFailure(
+      new Error(
+        `QUARANTINED ${name}: failed run ${report.failure?.run}/${runs} under artificial load (no retry): ${error?.message ?? String(error)}`,
+      ),
+    );
+  }
+  return report;
+}
+
+/**
+ * Same as {@link runLoadTimingCheck} but throws when any run fails, so a caller cannot read a
+ * quarantined check as green.
+ * @param {Parameters<typeof runLoadTimingCheck>} args
+ */
+export async function assertLoadTimingStable(...args) {
+  const report = await runLoadTimingCheck(...args);
+  if (!report.ok) {
+    const error = new Error(
+      `load-timing check "${report.name}" quarantined: ${report.passed}/${report.runs} runs passed before failure`,
+    );
+    error.cause = report.failure?.error;
+    /** @type {any} */ (error).report = report;
+    throw error;
+  }
+  return report;
 }
