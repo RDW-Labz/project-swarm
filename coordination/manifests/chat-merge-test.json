@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "chat-merge-test-swarm-merge",
+      "agent": "auto",
+      "prompt": "The owner decided: gh pr merge is blocked in EVERY case (there is no CI-less merge path), also when the owner has typed merge and a PR number in chat; only swarm merge N (which checks CI) may be used for a chat-approved merge. The test named chat merge: record, consume once, wrong PR and expiry in tests/handbuild-channel.test.mjs still asserts that gh pr merge 5 is allowed after recordChatMerge. Update that test (and any other test in tests/handbuild-channel.test.mjs, tests/handbuild-channels-hardening.test.mjs or tests/handbuild-hook-hardening.test.mjs with the same expectation) so the chat approval applies to swarm merge N: after recordChatMerge for 5, swarm merge 5 is allowed once and then blocked, swarm merge 6 is blocked, an expired entry blocks swarm merge 5, and gh pr merge 5 is blocked even while the approval is live (and does not consume it). Keep every other assertion. Do not change any tools file. Write only the test files you change.",
+      "context": [
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tools/handbuild.mjs"
+      ],
+      "outputs": [
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs"
+      ],
+      "timeoutMs": 900000
+    }
+  ]
+}
