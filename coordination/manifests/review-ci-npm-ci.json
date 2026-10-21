@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "review-ci-npm-ci",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "a CI workflow change that installs third-party packages",
+      "type": "review",
+      "prompt": "Review coordination/review/ci-npm-ci.diff (one added step in .github/workflows/ci.yml, full file in context as it is today) together with package.json and package-lock.json. Context: the repo had zero dependencies and now has two exact-pinned dev dependencies (acorn 8.18.0 and acorn-walk 8.3.5, used only by the swarm.mjs split tooling); the workflow gains npm ci --ignore-scripts before npm test. Standing owner rule: workflow changes are allowed only if they add no secrets, no deploy and no publish steps and the review passes. Check: (1) the workflow still has permissions contents read only and no new secrets, tokens, environment, deploy, publish, release, artifact upload or cache steps; (2) npm ci installs exactly from package-lock.json with integrity hashes (verify the lock has an integrity value for both packages, no resolved URL pointing outside the npm registry, no git or tarball URLs, no install scripts: hasInstallScript absent) and fails on any mismatch with package.json; (3) --ignore-scripts really prevents lifecycle scripts of these packages and of any transitive dependency (the lock has only these two packages); (4) any way the added step could expose repository secrets to third-party code in the pull_request event (forks): the workflow runs on pull_request with read-only permissions and no secrets, confirm; (5) supply chain risk of acorn and acorn-walk: widely used, MIT, acorn 8.18.0 published 2026-07-28, acorn-walk 8.3.5 published 2026-02-19; flag anything that argues for a different pin; (6) tests that import acorn skip with a clear reason when it is not installed (devDependencies absent) so a checkout without npm ci still passes: say if the diff context shows otherwise. Answer with findings (file, line, scenario, severity) and one line PASS or FAIL. Do not write files.",
+      "context": [
+        ".github/workflows/ci.yml",
+        "coordination/review/ci-npm-ci.diff",
+        "package.json",
+        "package-lock.json"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}
