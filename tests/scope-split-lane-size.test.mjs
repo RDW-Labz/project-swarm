@@ -89,3 +89,17 @@ test('scope approve warns when a pinned API lane exceeds its byte budget', async
   assert.equal(result.exitCode, 0, result.stdout);
   assert.match(result.stdout, /warning: T-0001 exceeds active lane hermes byte budget: 40000 bytes \(cap 15360\)/);
 });
+
+test('scope approve does not warn about an API cap when the lane is unset', async () => {
+  const root = await project([['contracts/api.json', 'x'.repeat(40_000)]]);
+  await fakeRun(root, 'r1', [item(['contracts/api.json'], { type: 'contract' })]);
+  const ingest = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
+  assert.equal(ingest.exitCode, 0, ingest.stdout);
+  const ledger = await readLedger(root);
+  delete ledger.tickets[0].lane;
+  await writeLedger(root, ledger);
+  const result = await runScopeCommand(root, 'scope', ['approve', '--yes']);
+  assert.equal(result.exitCode, 0, result.stdout);
+  assert.doesNotMatch(result.stdout, /exceeds active lane cursor byte budget/);
+  assert.doesNotMatch(result.stdout, /exceeds active lane hermes byte budget/);
+});
