@@ -61,7 +61,7 @@
 
     host.appendChild(el('div', 'board-note', progress.eta ? 'ETA ~' + progress.eta.days + ' days (' + progress.eta.basis + ')' : 'ETA: not enough history'));
     if (progress.spend) {
-      host.appendChild(el('div', 'board-note', usd(progress.spend.usd) + ' of ' + (progress.spend.capUsd === null ? 'no cap' : usd(progress.spend.capUsd))));
+      host.appendChild(el('div', 'board-note', usd(progress.spend.usd) + ' of ' + (progress.spend.capUsd === null ? 'no cap' : usd(progress.spend.capUsd)) + ' (cap counts: ' + (progress.spend.capBasis === 'billed' ? 'billed only' : 'billed + list value') + ')'));
       if (progress.spend.why) { host.appendChild(el('div', 'board-note', progress.spend.why)); }
     }
   }
@@ -71,11 +71,11 @@
     $('crumbProject').textContent = p.name;
     $('root').textContent = p.root;
     var s = $('spend'); s.textContent = '';
-    [['Today', usd(p.spend.todayUsd)], ['Last 7 days', usd(p.spend.weekUsd)], ['All time', usd(p.spend.allUsd)], ['Flat-rate lanes (list value, not billed)', usd(p.spend.flatRateListUsd)]].forEach(function (pair) {
+    [['Billed today', usd(p.spend.todayUsd)], ['Billed, 7 days', usd(p.spend.weekUsd)], ['Billed, all time', usd(p.spend.billedUsd ?? p.spend.paidUsd)], ['List value, all time (not billed)', usd(p.spend.listUsd ?? p.spend.flatRateListUsd)]].forEach(function (pair) {
       var tile = el('div', 'tile'); tile.appendChild(el('div', 'label', pair[0])); tile.appendChild(el('div', 'big num', pair[1])); s.appendChild(tile);
     });
     var lanes = Object.keys(p.spend.byLane).sort();
-    var byLane = el('div', 'tile'); byLane.appendChild(el('div', 'label', 'By lane')); byLane.appendChild(el('div', 'sub', lanes.length ? lanes.map(function (k) { return k + ' ' + usd(p.spend.byLane[k]); }).join(', ') : 'none')); s.appendChild(byLane);
+    var byLane = el('div', 'tile'); byLane.appendChild(el('div', 'label', 'By lane (billed + list value)')); byLane.appendChild(el('div', 'sub', lanes.length ? lanes.map(function (k) { return k + ' ' + usd(p.spend.byLane[k]); }).join(', ') : 'none')); s.appendChild(byLane);
 
     renderProgress(p.progress);
 

@@ -68,16 +68,17 @@ const stageNumber = stage => { const m = /^S(\d+)$/.exec(String(stage ?? '')); r
 // (Codex, Cursor, Claude subscription) show their list-price value only, they cost nothing extra.
 export function costOf(runs, now = Date.now()) {
   const startOfDay = new Date(now); startOfDay.setUTCHours(0, 0, 0, 0);
-  const out = { allUsd: 0, todayUsd: 0, weekUsd: 0, paidUsd: 0, paidEstimatedUsd: 0, flatRateListUsd: 0, flatRateJobs: 0 };
+  const out = { allUsd: 0, todayUsd: 0, weekUsd: 0, flatRateTodayUsd: 0, flatRateWeekUsd: 0, paidUsd: 0, paidEstimatedUsd: 0, flatRateListUsd: 0, flatRateJobs: 0 };
   const laneJobs = dict();    // by agent lane: how many jobs finished today, whatever they cost (a flat-rate lane may report no cost at all)
   const laneToday = dict();   // by agent lane: what jobs that finished today cost (billed lanes) or are worth at list price (flat-rate lanes)
   for (const { state } of runs) {
     out.allUsd += runTotals(state).usd;
     const rentalUsd = num(state.rental?.usd);
     const runDay = Date.parse(state.finishedAt ?? state.startedAt ?? '');
-    // Today and the last 7 days count what is BILLED (per-use lanes and rented GPUs); flat-rate lanes show only in the all-time list value.
-    const add = (usd, at) => { if (at >= startOfDay.getTime()) out.todayUsd += usd; if (at >= now - 7 * DAY) out.weekUsd += usd; };
-    if (rentalUsd) { out.paidUsd += rentalUsd; if (Number.isFinite(runDay)) add(rentalUsd, runDay); }
+    // Today and the last 7 days split BILLED (per-use lanes and rented GPUs) from flat-rate LIST VALUE.
+    const addBilled = (usd, at) => { if (at >= startOfDay.getTime()) out.todayUsd += usd; if (at >= now - 7 * DAY) out.weekUsd += usd; };
+    const addListValue = (usd, at) => { if (at >= startOfDay.getTime()) out.flatRateTodayUsd += usd; if (at >= now - 7 * DAY) out.flatRateWeekUsd += usd; };
+    if (rentalUsd) { out.paidUsd += rentalUsd; if (Number.isFinite(runDay)) addBilled(rentalUsd, runDay); }
     for (const job of state.jobs ?? []) {
       if (!job || typeof job !== 'object') continue;
       const usd = num(jobSpend(job).usd);
@@ -88,8 +89,8 @@ export function costOf(runs, now = Date.now()) {
       if (!usd) { if (FLAT_RATE.has(job.agent) && job.status === 'complete') out.flatRateJobs += 1; continue; }
       const at = Date.parse(job.finishedAt ?? '') || runDay;
       if (Number.isFinite(at) && at >= startOfDay.getTime() && job.agent) laneToday[job.agent] = (laneToday[job.agent] ?? 0) + usd;
-      if (FLAT_RATE.has(job.agent)) { out.flatRateListUsd += usd; out.flatRateJobs += 1; }
-      else { out.paidUsd += usd; if (ESTIMATED.has(job.costSource)) out.paidEstimatedUsd += usd; if (Number.isFinite(at)) add(usd, at); }
+      if (FLAT_RATE.has(job.agent)) { out.flatRateListUsd += usd; out.flatRateJobs += 1; if (Number.isFinite(at)) addListValue(usd, at); }
+      else { out.paidUsd += usd; if (ESTIMATED.has(job.costSource)) out.paidEstimatedUsd += usd; if (Number.isFinite(at)) addBilled(usd, at); }
     }
   }
   for (const key of Object.keys(out)) if (key.endsWith('Usd')) out[key] = Math.round(out[key] * 1e6) / 1e6;
@@ -150,7 +151,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const liveIds = new Set(liveRuns.map(r => r.runId));
   const ledger = await readLedger(project.root).catch(() => null);
   const spend = await summary(project.root).catch(error => ({ spendUsd: null, capUsd: null, capError: String(error.message).slice(0, 120) }));
-  const overviewSpend = { usd: spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null };
+  const overviewSpend = { usd: spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis: spend.capBasis ?? 'billed+list' };
   const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null }).then(progressSummary, () => null);
   const cost = costOf(runs, now);
   const agents = agentsOf(runs, liveIds, now);
@@ -165,7 +166,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     live: liveRuns.map(r => { const hit = runs.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
     agents, cost,
     orchestrator: (() => { try { return projectOrchestrator(project, { runs, now }); } catch { return { sessions: [], handBuilt: { files: 0, edits: 0, list: [] }, swarmBuilt: { files: 0 }, swarmPct: null, handPct: null, cost: { todayListUsd: 0, allListUsd: 0, todayTokens: 0, allTokens: 0 } }; } })(),
-    spend: { usd: cost.allUsd, familyUsd: spend.spendUsd ?? null, sharedTrees: spend.sharedTrees ?? 1, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached), capSource: spend.capSource ?? null, capInherited: Boolean(spend.capInherited), inheritedFrom: spend.inheritedFrom ?? null, why: spend.why ?? null },
+    spend: { usd: cost.allUsd, familyUsd: spend.spendUsd ?? null, sharedTrees: spend.sharedTrees ?? 1, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached), capSource: spend.capSource ?? null, capInherited: Boolean(spend.capInherited), inheritedFrom: spend.inheritedFrom ?? null, why: spend.why ?? null, billedUsd: cost.paidUsd, listUsd: cost.flatRateListUsd, capBasis: spend.capBasis ?? 'billed+list' },
     progress,
     recentJobCounts: runs.slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0)),
     lastRunAt: lastRun?.startedAt ?? null,
@@ -219,13 +220,13 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   }
   for (const o of overviews) { const warn = underfilledWaves(o.recentJobCounts, workers?.max); o.warnings = warn ? [{ code: 'waves-underfilled', text: warn }] : []; }
   const transcripts = new Set();
-  const machine = { agents: { total: 0, byLane: dict(), byProject: dict(), list: [] }, cost: { todayUsd: 0, weekUsd: 0, allUsd: 0, paidUsd: 0, paidEstimatedUsd: 0, flatRateListUsd: 0, byProject: {} }, liveRuns: 0, orchestrator: { sessions: [], todayListUsd: 0, allListUsd: 0, handBuiltFiles: 0, swarmBuiltFiles: 0 } };
+  const machine = { agents: { total: 0, byLane: dict(), byProject: dict(), list: [] }, cost: { todayUsd: 0, weekUsd: 0, allUsd: 0, flatRateTodayUsd: 0, flatRateWeekUsd: 0, paidUsd: 0, paidEstimatedUsd: 0, flatRateListUsd: 0, byProject: {} }, liveRuns: 0, orchestrator: { sessions: [], todayListUsd: 0, allListUsd: 0, handBuiltFiles: 0, swarmBuiltFiles: 0 } };
   for (const o of overviews) {
     machine.agents.total += o.agents.total;
     machine.agents.byProject[o.id] = o.agents.total;
     for (const a of o.agents.list ?? []) machine.agents.list.push({ ...a, projectId: o.id, project: o.name });
     for (const [lane, n] of Object.entries(o.agents.byLane)) machine.agents.byLane[lane] = (machine.agents.byLane[lane] ?? 0) + n;
-    for (const key of ['todayUsd', 'weekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] += o.cost[key];
+    for (const key of ['todayUsd', 'weekUsd', 'flatRateTodayUsd', 'flatRateWeekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] += o.cost[key];
     for (const [agent, usd] of Object.entries(o.cost.laneToday ?? {})) (machine.cost.laneToday ??= dict())[agent] = (machine.cost.laneToday[agent] ?? 0) + usd;
     for (const [agent, n] of Object.entries(o.cost.laneJobsToday ?? {})) (machine.cost.laneJobsToday ??= dict())[agent] = (machine.cost.laneJobsToday[agent] ?? 0) + n;
     machine.cost.byProject[o.id] = { name: o.name, ...o.cost };
@@ -234,7 +235,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
     for (const name of o.orchestrator?.transcripts ?? []) transcripts.add(name);
     machine.orchestrator.handBuiltFiles += o.orchestrator?.handBuilt.files ?? 0; machine.orchestrator.swarmBuiltFiles += o.orchestrator?.swarmBuilt.files ?? 0;
   }
-  for (const key of ['todayUsd', 'weekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] = Math.round(machine.cost[key] * 1e6) / 1e6;
+  for (const key of ['todayUsd', 'weekUsd', 'flatRateTodayUsd', 'flatRateWeekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] = Math.round(machine.cost[key] * 1e6) / 1e6;
   // One session can be in two projects' logs: the machine totals count each message once over all transcripts.
   { const c = transcripts.size ? combinedUsage([...transcripts], { now }) : { todayListUsd: 0, allListUsd: 0 }; machine.orchestrator.todayListUsd = c.todayListUsd; machine.orchestrator.allListUsd = c.allListUsd; }
   for (const o of overviews) if (o.orchestrator) delete o.orchestrator.transcripts;
@@ -259,7 +260,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const lessons = await listLessons(project.root).then(r => r.lessons.slice(0, 200).map(l => ({ id: txt(l.id, 40), what: txt(l.what ?? l.title ?? l.rule, 200), stage: txt(l.stage, 20), status: txt(l.guard?.status ?? l.status, 20) })), () => []);
   const detailCost = costOf(runs, now);
   const spend = (await summary(project.root).catch(() => ({}))) ?? {};
-  const detailSpend = { usd: spend.spendUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null };
+  const detailSpend = { usd: spend.spendUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis: spend.capBasis ?? 'billed+list' };
   const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null }).catch(() => null);
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
@@ -268,7 +269,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
       const jobs = state.jobs ?? [];
       return { runId: id, status: txt(state.status, 30), live: liveRunIds.has(id), startedAt: state.startedAt ?? null, finishedAt: state.finishedAt ?? null, jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length, failed: jobs.filter(j => ['failed', 'timeout'].includes(j.status)).length, costUsd: Math.round(runTotals(state).usd * 1e6) / 1e6 };
     }),
-    spend: { ...detailCost, byLane: plain(byLane) },
+    spend: { ...detailCost, byLane: plain(byLane), billedUsd: detailCost.paidUsd, listUsd: detailCost.flatRateListUsd, capBasis: spend.capBasis ?? 'billed+list' },
     progress,
     lessons,
   };
