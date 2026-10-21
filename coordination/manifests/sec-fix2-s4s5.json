@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0102-T-0165-fix2",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "outputs": [
+        "contracts/watch-s4-ops.json",
+        "tests/watch-s4-contract.test.mjs",
+        "tools/field-export.mjs",
+        "tests/field-export.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/watch-server.mjs",
+        "tools/security-scan.mjs"
+      ],
+      "prompt": "Opus security review findings to fix. (A) T-0102 FAIL, medium, contracts/watch-s4-ops.json ~line 341: the boardTokenQuery security scheme makes the long-lived board token a URL query parameter on all READ routes (tokens in URLs leak through history, logs and proxies; tools/watch-server.mjs also accepts it). In the CONTRACT: mark boardTokenQuery `deprecated: true` with a description that it is accepted only for the initial HTML page load and will be exchanged for an HttpOnly cookie or the x-watch-token header (ticket T-8006), list x-watch-token header as the primary scheme first on every read route, keep owner routes header-only + tailnetSignIn (already), and add an x-security-notes entry naming T-8006 as the server change. Do NOT change tools/watch-server.mjs (T-8006 does that). Update tests/watch-s4-contract.test.mjs: boardTokenQuery is deprecated; every read route lists boardTokenHeader first; owner routes never list the query scheme. (B) T-0165 low, tools/field-export.mjs ~line 75: lesson status, version and createdAt are exported unvalidated. Allow-list status (queued|built|shipped|dropped|open|closed, else 'other'), validate version as semver-like /^\\d+\\.\\d+\\.\\d+$/ else null, createdAt as an ISO date (Date.parse finite and string matches /^\\d{4}-\\d{2}-\\d{2}T/) else null. Tests in tests/field-export.test.mjs for each. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test, injected deps, no wall clock/env/TTY/network; never write token-shaped literals. Run `node --import ./tests/_isolate-config.mjs --test <your tests>` and `node tools/check-package.mjs`. Tests in ignoreTests use these files for unrelated behavior; the coordinator runs the FULL suite.",
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ]
+}
