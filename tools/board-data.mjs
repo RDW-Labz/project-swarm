@@ -16,22 +16,11 @@ import { buildProgress, ledgerRoot, progressSummary } from './build-progress.mjs
 import { effectiveStage, stageDisplay } from './build-progress.mjs';
 import { parseScope } from './scope.mjs';
 import { ROUTE_ORDER } from './router.mjs';
-<<<<<<< HEAD
-import { overviewPinnedVersion } from './pins.mjs';
-=======
 import { splitQuality } from './split-quality.mjs';
 import { readScorecards, scorecardHistory } from './benchmark-scorecard.mjs';
 import { handledForProject } from './handled.mjs';
->>>>>>> origin/main
 
 const DAY = 86400000;
-
-async function pinnedVersionOf(projectRoot) {
-  try {
-    const pointer = JSON.parse(await fs.readFile(path.join(projectRoot, '.project-swarm.json'), 'utf8'));
-    return overviewPinnedVersion(pointer);
-  } catch { return null; }
-}
 const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   // subscription lanes: not billed per use
 const ESTIMATED = new Set(['estimated-from-tokens', 'reservation']);
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -328,7 +317,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   }).catch(() => null);
   const handled = await handledForProject(project.root, { now }).catch(() => null);
   return {
-    id: project.id, name: txt(project.name, 80), root: project.root, pinnedVersion: await pinnedVersionOf(project.root),
+    id: project.id, name: txt(project.name, 80), root: project.root,
     stage: tickets.stage, tickets, readyTickets, idleWithReady: idle && readyTickets > 0,
     live: liveRuns.map(r => { const hit = runs.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
     agents, cost,
@@ -465,13 +454,8 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const benchmarks = await readScorecards(project.root).then(input => scorecardHistory(input)).catch(() => null);
   const handled = await handledForProject(project.root, { now, limit: 20 }).catch(() => null);
   return {
-<<<<<<< HEAD
-    id: project.id, name: txt(project.name, 80), root: project.root, pinnedVersion: await pinnedVersionOf(project.root),
-    tickets, ticketCounts: ticketsOf(ledger),
-=======
     id: project.id, name: txt(project.name, 80), root: project.root,
     tickets, ticketCounts: ticketsOf(ledger, scope),
->>>>>>> origin/main
     runs: runs.slice().reverse().map(({ id, state }) => {
       const jobs = state.jobs ?? [];
       return { runId: id, status: txt(state.status, 30), live: liveRunIds.has(id), startedAt: state.startedAt ?? null, finishedAt: state.finishedAt ?? null, jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length, failed: jobs.filter(j => ['failed', 'timeout'].includes(j.status)).length, costUsd: Math.round(runTotals(state).usd * 1e6) / 1e6 };

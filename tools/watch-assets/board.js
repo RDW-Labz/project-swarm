@@ -326,12 +326,7 @@ function renderProjects(projects) {
   sorted.forEach(function (entry) {
     var p = entry.project, isWorktree = entry.worktree;
     var tr = el('tr'); if (isWorktree) { tr.className = 'wt'; }
-<<<<<<< HEAD
-    var name = el('div'); name.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', (isWorktree ? '↳ ' : '') + p.name)])); name.appendChild(document.createTextNode(' ')); name.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage')));
-    if (p.pinnedVersion) { name.appendChild(document.createTextNode(' ')); name.appendChild(pill('pinned at ' + p.pinnedVersion, 'info')); }
-=======
     var name = el('div'); name.appendChild(projectName(p, (isWorktree ? '↳ ' : '') + p.name)); name.appendChild(el('span', '', ' ')); name.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); name.appendChild(machineLine(p));
->>>>>>> origin/main
     var tableProgress = progressLine(p); if (tableProgress) { name.appendChild(tableProgress); }
     var tableSplit = splitLine(p); if (tableSplit) { name.appendChild(tableSplit); }
     var tableHandled = handledLine(p); if (tableHandled) { name.appendChild(tableHandled); }
@@ -343,13 +338,7 @@ function renderProjects(projects) {
     tr.appendChild(td(capCell(p))); tr.appendChild(td(laneDots(p))); tr.appendChild(td(ago(p.lastActivityAt), 'mono'));
     body.appendChild(tr);
     var c = el('div', 'pcard');
-<<<<<<< HEAD
-    var head = el('div', 'row'); head.appendChild(link(projectHref(p.id), 'name board-link', [el('span', '', (isWorktree ? '↳ ' : '') + p.name)])); head.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage')));
-    if (p.pinnedVersion) { head.appendChild(pill('pinned at ' + p.pinnedVersion, 'info')); }
-    c.appendChild(head);
-=======
     var head = el('div', 'row'); head.appendChild(projectName(p, (isWorktree ? '↳ ' : '') + p.name)); head.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); c.appendChild(head); c.appendChild(machineLine(p));
->>>>>>> origin/main
     var cardProgress = progressLine(p); if (cardProgress) { c.appendChild(cardProgress); }
     var cardSplit = splitLine(p); if (cardSplit) { c.appendChild(cardSplit); }
     var cardHandled = handledLine(p); if (cardHandled) { c.appendChild(cardHandled); }
