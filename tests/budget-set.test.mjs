@@ -99,6 +99,46 @@ describe('budgetCommand', () => {
     assert.match(text, /\$7\.00/);
   });
 
+  it('injected env isolates actor detection from ambient process.env', async () => {
+    const prev = process.env.CLAUDE_FAKE_MARKER;
+    process.env.CLAUDE_FAKE_MARKER = '1';
+    try {
+      const root = await tempRoot();
+      const cleanEnv = { HOME: root, XDG_CONFIG_HOME: path.join(root, 'xdg') };
+      const out = { chunks: [], write(s) { this.chunks.push(s); } };
+
+      const ownerCode = await budgetCommand(['set', '--daily', '7', '--ceiling', '21'], {
+        out,
+        env: cleanEnv,
+        root,
+        fs,
+        homedir: () => root,
+        ...ownerTerminal,
+      });
+      assert.equal(ownerCode, 0);
+
+      const projectFile = path.join(root, '.swarm', 'project', 'daily-limit.json');
+      await fs.writeFile(projectFile, JSON.stringify({ usd: 5, mode: 'stop', ceilingUsd: 15 }) + '\n', { mode: 0o600 });
+
+      out.chunks = [];
+      const agentEnv = { ...cleanEnv, CLAUDE_FAKE_MARKER: '1' };
+      const agentCode = await budgetCommand(['set', '--daily', '20', '--ceiling', '60'], {
+        out,
+        env: agentEnv,
+        root,
+        fs,
+        homedir: () => root,
+        ...ownerTerminal,
+      });
+      assert.equal(agentCode, 1);
+      assert.match(out.chunks.join(''), /approve-raise/);
+      assert.equal(JSON.parse(await fs.readFile(projectFile, 'utf8')).usd, 5);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_FAKE_MARKER;
+      else process.env.CLAUDE_FAKE_MARKER = prev;
+    }
+  });
+
   it('project overrides machine on show', async () => {
     const root = await tempRoot();
     const configFile = path.join(root, 'machine.json');

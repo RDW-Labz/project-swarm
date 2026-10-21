@@ -451,7 +451,7 @@ export async function budgetCommand(args, { out, env, root, fs, homedir, billedT
     return 1;
   }
 
-  const actorEnv = env !== undefined ? { ...process.env, ...env } : process.env;
+  const actorEnv = env !== undefined ? env : process.env;
   const homedirFn = homedir ?? (() => actorEnv?.HOME ?? process.env.HOME);
   const actorOpts = { stdinIsTTY, stdoutIsTTY, overlay: env };
 
