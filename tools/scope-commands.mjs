@@ -18,7 +18,7 @@ import { readRuns } from './quotes.mjs';
 import { diffScopes, impactAnalysis, nextChangeOrderId, applyChangeOrder } from './change-orders.mjs';
 import { day0Checklist, checklistToTickets } from './day0.mjs';
 import { validateApprovalPolicy, needsHuman } from './approval-policy.mjs';
-import { ticketsToManifest, ticketOutcome } from './ticket-manifest.mjs';
+import { ticketsToManifest, ticketOutcome, criticalPathLength } from './ticket-manifest.mjs';
 import { safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 import { validateOpenApi, contractFiles } from './contracts.mjs';
 import { verifyContracts } from './contracts-verify.mjs';
@@ -115,6 +115,25 @@ function longestWaveChain(tickets) {
     const candidate = chain(ticket.id);
     return candidate.length > longest.length ? candidate : longest;
   }, []);
+}
+
+function testFirstTickets(tickets) {
+  const active = (tickets ?? []).filter(ticket => ticket && ticket.status !== 'cancelled' && ticket.status !== 'proposed');
+  const ownedTests = new Map();
+  const virtualTests = [];
+  for (const ticket of active) {
+    if (ticket.type !== 'build') continue;
+    const files = [...new Set((ticket.tests ?? []).filter(looksLikeTestFile))];
+    if (!files.length) continue;
+    const ids = files.map((file, index) => `${ticket.id}:test:${index + 1}`);
+    ownedTests.set(ticket.id, ids);
+    virtualTests.push(...ids.map(id => ({ id, type: 'test', status: 'todo', dependsOn: [ticket.id] })));
+  }
+  const expanded = active.map(ticket => ({
+    ...ticket,
+    dependsOn: [...new Set((ticket.dependsOn ?? []).flatMap(dep => ownedTests.get(dep) ?? [dep]))],
+  }));
+  return [...expanded, ...virtualTests];
 }
 
 function waveSummary(sim) {
@@ -1105,6 +1124,9 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
   // New tickets are written by a worker, so any earlier approval no longer covers the ticket set.
   const ledger = { ...createLedger({ scope: base.scope, tickets: [...base.tickets, ...tickets] }), wiring: existing ? existing.wiring === true : true, changeOrders: base.changeOrders ?? [], createdAt: base.createdAt, approved: null };
   const { tree, lines } = treeReport(scope, ledger.tickets);
+  const criticalPathLine = `critical path: ${criticalPathLength(ledger.tickets)} tickets`;
+  const ownsTests = ledger.tickets.some(ticket => ticket.type === 'build' && (ticket.tests ?? []).some(looksLikeTestFile));
+  const testFirstLine = ownsTests ? `test-first would be ${criticalPathLength(testFirstTickets(ledger.tickets))}` : null;
   const structural = tree.errors.filter(e => e.code !== 'uncovered');
   if (structural.length) return out(`split refused; the tickets are inconsistent:\n${lines.join('\n')}`, 1);
   const waveSimulation = simulateBeforeIngest(ledger.tickets, machineSlots(deps.machineConcurrency));
@@ -1125,7 +1147,7 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
     await writeLedger(root, ledger);
     wireLines = [`wiring: ${missing.length} requirement(s) have modules but no integration ticket (${missing.slice(0, 8).join(', ')}); the ledger cannot be approved until they do.`, `Next: swarm run ${SPLIT_DIR}/wire-manifest.json, then swarm scope split --ingest RUN --merge --wire`];
   }
-  return out([`ledger written: ${tickets.length} tickets added (not approved)`, rejectedLine, ...laneNotes.map(n => `lane: ${n}`), ...notes.map(n => `note: ${n}`), ...[...built.notes, ...orderNotes].slice(0, 12).map(n => `note: ${n}`), ...(built.notes.length + orderNotes.length > 12 ? [`note: ...and ${built.notes.length + orderNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`] : []), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, ...wireLines, tree.ok && !wireLines.length ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
+  return out([`ledger written: ${tickets.length} tickets added (not approved)`, rejectedLine, criticalPathLine, testFirstLine, ...laneNotes.map(n => `lane: ${n}`), ...notes.map(n => `note: ${n}`), ...[...built.notes, ...orderNotes].slice(0, 12).map(n => `note: ${n}`), ...(built.notes.length + orderNotes.length > 12 ? [`note: ...and ${built.notes.length + orderNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`] : []), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, ...wireLines, tree.ok && !wireLines.length ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
 }
 
 function managerGateOutcome(result) {
