@@ -5,7 +5,9 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "engines": {"node": ">=20.3.0"},
+  "engines": {
+    "node": ">=20.3.0"
+  },
   "scripts": {
     "test": "node --import ./tests/_isolate-config.mjs --test --test-timeout=600000 tests/*.test.mjs",
     "check:ci-like": "env -i PATH=/usr/bin:/bin node --test tests/*.test.mjs",
@@ -13,5 +15,12 @@
     "doctor": "node tools/swarm.mjs doctor",
     "smoke": "node tools/swarm.mjs run examples/smoke.json"
   },
-  "repository": {"type":"git","url":"https://github.com/RDW-Labz/project-swarm.git"}
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RDW-Labz/project-swarm.git"
+  },
+  "devDependencies": {
+    "acorn": "8.18.0",
+    "acorn-walk": "8.3.5"
+  }
 }
