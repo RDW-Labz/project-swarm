@@ -94,6 +94,51 @@ function openIds(events) {
   return open;
 }
 
+/** True when at least one job declares a non-empty `outputs` list (review-only / ask runs stay false). */
+export function integrableFromJobs(jobs) {
+  const list = Array.isArray(jobs) ? jobs : (jobs && typeof jobs === 'object' ? Object.values(jobs) : []);
+  return list.some(job => job && Array.isArray(job.outputs) && job.outputs.length > 0);
+}
+
+function numberOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Run summary for autopilot (`loadRuns` shape plus `integrable`) from a saved `state.json`. */
+export function autopilotRunFromState(state, directoryName) {
+  const jobList = state.jobs && typeof state.jobs === 'object'
+    ? (Array.isArray(state.jobs) ? state.jobs : Object.values(state.jobs))
+    : [];
+  const costs = jobList.map(job => numberOrNull(job?.costUsd)).filter(value => value !== null);
+  return {
+    id: state.id ?? directoryName,
+    status: state.status ?? null,
+    startedAt: state.startedAt ?? null,
+    finishedAt: state.finishedAt ?? null,
+    counts: state.summary?.counts ?? null,
+    costUsd: costs.length ? costs.reduce((sum, value) => sum + value, 0) : null,
+    pause: state.pause ?? null,
+    integrated: Boolean(state.integratedFiles?.length) || state.integrated === true,
+    integrable: integrableFromJobs(state.jobs),
+  };
+}
+
+function integrateBlockerRunId(blockerId) {
+  if (typeof blockerId !== 'string') return null;
+  if (blockerId.startsWith('integrate-checkout-')) return blockerId.slice('integrate-checkout-'.length);
+  if (blockerId.startsWith('integrate-')) return blockerId.slice('integrate-'.length);
+  return null;
+}
+
+function latestBlockerEvent(events, id) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e?.kind === 'blocker' && e.id === id) return e;
+  }
+  return null;
+}
+
 function waveDone(waveId, waves, events) {
   const wave = waves.find(w => w && w.id === waveId);
   if (!wave) return false;
@@ -123,6 +168,7 @@ export function decide(run, ctx) {
   const failedCount = Number(run.counts?.failed) || 0;
 
   if (run.status === 'complete' && !run.integrated) {
+    if (run.integrable === false) return null;
     const failures = actionEvents(events, 'integrate', id).filter(failedResult);
     if (failures.length) {
       const last = failures[failures.length - 1];
@@ -266,6 +312,18 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     const manifest = history.find(e => e.manifest)?.manifest;
     const retryOf = history.find(e => e.retryOf)?.retryOf;
     await write({ kind: 'run', id: run.id, status: run.status, ...(run.counts ? { counts: run.counts } : {}), ...(Number.isFinite(run.costUsd) ? { costUsd: run.costUsd } : {}), ...(manifest ? { manifest } : {}), ...(retryOf ? { retryOf } : {}) });
+  }
+
+  if (!journalBroken) {
+    const open = openIds(events);
+    for (const run of runs) {
+      if (run.integrable !== false) continue;
+      for (const id of open) {
+        if (integrateBlockerRunId(id) !== run.id) continue;
+        const prior = latestBlockerEvent(events, id);
+        await write({ kind: 'blocker', id, resolved: true, text: prior?.text ?? '' });
+      }
+    }
   }
 
   for (const run of runs) {
