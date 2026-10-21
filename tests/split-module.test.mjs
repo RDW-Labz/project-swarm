@@ -34,11 +34,18 @@ function swarmMonolithPreSplit() {
   return lineCount >= 5000;
 }
 
-function skipIfSwarmAlreadySplit(t, reason) {
-  if (!swarmMonolithPreSplit()) {
-    t.skip(reason || 'tools/swarm.mjs already split or not monolithic');
-  }
-}
+const SWARM_ALREADY_SPLIT =
+  fs.existsSync(swarmSplitDir) ||
+  !fs.existsSync(swarmPath) ||
+  fs.readFileSync(swarmPath, 'utf8').split('\n').length < 5000;
+
+const SKIP_SWARM_COPY_STAGES = SWARM_ALREADY_SPLIT
+  ? 'monolithic swarm copy stages require unsplit tools/swarm.mjs'
+  : false;
+
+const SKIP_SWARM_DRY_RUN = SWARM_ALREADY_SPLIT
+  ? 'dry-run on live swarm requires monolithic tools/swarm.mjs'
+  : false;
 
 function mkFixture(name, files) {
   const dir = fs.mkdtempSync(path.join(tmpBase, `split-mod-${name}-`));
@@ -591,8 +598,7 @@ test('tools/swarm.mjs generic scan invariants (any layout)', () => {
   for (const name of exports) assert.ok(declared.has(name), `missing export ${name}`);
 });
 
-test('stage-1 pattern constants move on swarm copy smoke-imports', (t) => {
-  skipIfSwarmAlreadySplit(t, 'monolithic swarm copy stages require unsplit tools/swarm.mjs');
+test('stage-1 pattern constants move on swarm copy smoke-imports', { skip: SKIP_SWARM_COPY_STAGES }, () => {
   const { dir, copy } = copyToolsDir('swarm-stage1');
   const plan = planSplit(copy);
   const names = stage1PatternNames(plan, copy);
@@ -605,8 +611,7 @@ test('stage-1 pattern constants move on swarm copy smoke-imports', (t) => {
   assert.equal(smoke.length, 0, smoke.join('; '));
 });
 
-test('swarm copy stages patterns warnings and mutants succeed', (t) => {
-  skipIfSwarmAlreadySplit(t, 'monolithic swarm copy stages require unsplit tools/swarm.mjs');
+test('swarm copy stages patterns warnings and mutants succeed', { skip: SKIP_SWARM_COPY_STAGES }, () => {
   const { dir, copy } = copyToolsDir('swarm-stages-3');
   const patternsMod = runPatternsStage(copy, dir);
   const warningsMod = runWarningsStage(copy, dir);
@@ -616,8 +621,7 @@ test('swarm copy stages patterns warnings and mutants succeed', (t) => {
   assert.equal(smoke.length, 0, smoke.join('; '));
 });
 
-test('swarm copy split stages patterns through core-12 succeed', (t) => {
-  skipIfSwarmAlreadySplit(t, 'monolithic swarm copy stages require unsplit tools/swarm.mjs');
+test('swarm copy split stages patterns through core-12 succeed', { skip: SKIP_SWARM_COPY_STAGES }, () => {
   const started = Date.now();
   const { dir, copy } = copyToolsDir('swarm-through-core-12');
   const modules = [
@@ -699,8 +703,7 @@ test('failed smoke move removes co-located split-verify temp files', () => {
   assert.deepEqual(splitVerifyTempPathsUnder(dir), []);
 });
 
-test('dry-run move of layer-0 function on swarm.mjs does not touch file', (t) => {
-  skipIfSwarmAlreadySplit(t, 'dry-run on live swarm requires monolithic tools/swarm.mjs');
+test('dry-run move of layer-0 function on swarm.mjs does not touch file', { skip: SKIP_SWARM_DRY_RUN }, () => {
   const plan = planSplit(swarmPath);
   let pick = null;
   for (const g of plan.layers[0] || []) {

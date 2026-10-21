@@ -24,11 +24,18 @@ function swarmMonolithPreSplit() {
   return lineCount >= 5000;
 }
 
-function skipIfSwarmAlreadySplit(t, reason) {
-  if (!swarmMonolithPreSplit()) {
-    t.skip(reason || 'tools/swarm.mjs already split or not monolithic');
-  }
-}
+const SWARM_ALREADY_SPLIT =
+  fs.existsSync(swarmSplitDir) ||
+  !fs.existsSync(swarmPath) ||
+  fs.readFileSync(swarmPath, 'utf8').split('\n').length < 5000;
+
+const SKIP_SWARM_SPREAD_DEPS = SWARM_ALREADY_SPLIT
+  ? 'spread-in-paren assertions target monolithic tools/swarm.mjs'
+  : false;
+
+const SKIP_SWARM_ITEM_INVARIANTS = SWARM_ALREADY_SPLIT
+  ? 'runManifestBody and item-count invariants target monolithic swarm.mjs'
+  : false;
 
 function roundTrip(src) {
   const { items } = scanModule(src);
@@ -227,8 +234,7 @@ test('spread-in-paren agent dependencies (fixture)', () => {
   assert.ok(items[0].uses.has('API_AGENTS'));
 });
 
-test('tools/swarm.mjs records spread-in-paren agent dependencies', (t) => {
-  skipIfSwarmAlreadySplit(t, 'spread-in-paren assertions target monolithic tools/swarm.mjs');
+test('tools/swarm.mjs records spread-in-paren agent dependencies', { skip: SKIP_SWARM_SPREAD_DEPS }, () => {
   const text = fs.readFileSync(swarmPath, 'utf8');
   const { items } = scanModule(text);
 
@@ -615,8 +621,7 @@ test('tools/swarm.mjs column-0 structure invariant (any layout)', () => {
   }
 });
 
-test('tools/swarm.mjs items respect top-level structure invariants', (t) => {
-  skipIfSwarmAlreadySplit(t, 'runManifestBody and item-count invariants target monolithic swarm.mjs');
+test('tools/swarm.mjs items respect top-level structure invariants', { skip: SKIP_SWARM_ITEM_INVARIANTS }, () => {
   const text = fs.readFileSync(swarmPath, 'utf8');
   const lines = text.split('\n');
   const { items } = scanModule(text);
