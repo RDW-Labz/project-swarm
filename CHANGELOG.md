@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.159.0
+
+T: the autonomy policy engine and the daily spend limit, wired and off by default for policy.
+- **Daily limit:** new per-project daily limit on BILLED spend (default 5 USD, stop mode; notify mode warns at 1x, 2x, 3x; hard ceiling default 3x always stops), enforced in the one place every paid launch passes (reserveSpend, and accrueSpend for rentals); free lanes never count; swarm budget set and show; changes are logged, raises beyond 5 USD per project per day need the owner when an agent session asks.
+- **Policy engine:** swarm policy init, show, validate, path, check, run; standing-approval default rules that fail closed on missing or loose facts, log before they apply, and stay inert until the owner runs swarm policy init; autopilot runs a policy pass only when a policy file exists.
+- **Known limits from the Opus reviews:** the limit is counted per project root; owner detection is by terminal and environment names; a few low findings (notifier lock cleanup on crash, reservation day at midnight) are documented in the PR.
+- **Tests:** policy, daily limit, budget set, hardening rounds 2 to 4.
+
 ## 1.158.0
 
 Batch 2: billed-only caps, guard word fix, scope fixes, delivered tickets, busy marker start time.
