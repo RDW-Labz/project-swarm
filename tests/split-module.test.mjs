@@ -7,7 +7,14 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { planSplit, moveItems, verifyMove } from '../tools/split-module.mjs';
+import {
+  planSplit,
+  moveItems,
+  verifyMove,
+  checkUnresolvedImportsForMove,
+  smokeImportModules,
+} from '../tools/split-module.mjs';
+import { scanModule } from '../tools/split-scan.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const tmpBase = process.env.SWARM_TEST_TMP || os.tmpdir();
@@ -172,6 +179,99 @@ test('plan on tools/swarm.mjs finishes quickly with layer-0 items', () => {
   assert.ok(layer0.length > 0);
   const hasLayer0Item = layer0.some((g) => g.items.length > 0);
   assert.ok(hasLayer0Item);
+});
+
+test('move spread array includes import for spread binding', () => {
+  const dir = mkFixture('spread-import', {
+    'dep.mjs': 'export const EXTRA_CLI_AGENTS = ["hermes"];\n',
+    'main.mjs': [
+      'import { EXTRA_CLI_AGENTS } from "./dep.mjs";',
+      "const CLI_AGENTS = ['claude', 'codex', ...EXTRA_CLI_AGENTS];",
+      'const keep = 1;',
+      '',
+    ].join('\n'),
+  });
+  const main = path.join(dir, 'main.mjs');
+  const mod = path.join(dir, 'cli-agents.mjs');
+  const result = moveItems(main, mod, ['CLI_AGENTS']);
+  assert.equal(result.ok, true, result.errors?.join('; '));
+  const modText = fs.readFileSync(mod, 'utf8');
+  assert.ok(modText.includes('EXTRA_CLI_AGENTS'));
+  assert.ok(modText.includes('./dep.mjs'));
+});
+
+test('move with rest parameter and object rest pattern', () => {
+  const dir = mkFixture('rest-move', {
+    'main.mjs': [
+      'function withRest(...args) { return args; }',
+      'function pick({ a, ...rest }) { return rest; }',
+      'const stay = 0;',
+      '',
+    ].join('\n'),
+  });
+  const main = path.join(dir, 'main.mjs');
+  const mod = path.join(dir, 'rest.mjs');
+  const r1 = moveItems(main, path.join(dir, 'a.mjs'), ['withRest']);
+  assert.equal(r1.ok, true, r1.errors?.join('; '));
+  const r2 = moveItems(main, mod, ['pick']);
+  assert.equal(r2.ok, true, r2.errors?.join('; '));
+});
+
+test('verify catches module missing import after deliberate drop', () => {
+  const originalText = [
+    'import { EXTRA } from "./dep.mjs";',
+    'const V = EXTRA + 1;',
+    '',
+  ].join('\n');
+  const dir = mkFixture('drop-import', {
+    'dep.mjs': 'export const EXTRA = 1;\n',
+    'main.mjs': originalText,
+  });
+  const main = path.join(dir, 'main.mjs');
+  const mod = path.join(dir, 'v.mjs');
+  moveItems(main, mod, ['V']);
+  const bad = fs.readFileSync(mod, 'utf8').replace(/import[^\n]+\n/, '');
+  fs.writeFileSync(mod, bad, 'utf8');
+  const { items } = scanModule(originalText);
+  const movedItem = items.find((it) => it.names.includes('V'));
+  const issues = checkUnresolvedImportsForMove(originalText, bad, [movedItem]);
+  assert.ok(issues.length > 0, issues.join('; '));
+});
+
+test('stage-1 pattern constants move on swarm copy smoke-imports', () => {
+  const toolsDir = path.join(root, '..', 'tools');
+  const swarmPath = path.join(toolsDir, 'swarm.mjs');
+  const dir = mkFixture('swarm-stage1', {});
+  for (const name of fs.readdirSync(toolsDir)) {
+    if (!name.endsWith('.mjs')) continue;
+    fs.copyFileSync(path.join(toolsDir, name), path.join(dir, name));
+  }
+  const copy = path.join(dir, 'swarm.mjs');
+  const plan = planSplit(copy);
+  const layer0 = plan.layers[0] || [];
+  const names = [];
+  for (const g of layer0) {
+    for (const it of g.items) {
+      if (it.cannotMoveAlone.length > 0) continue;
+      if (it.kind !== 'declaration') continue;
+      const text = fs.readFileSync(copy, 'utf8');
+      const { items } = scanModule(text);
+      const full = items.find((x) => x.names[0] === it.names[0]);
+      if (!full) continue;
+      const onlyImports = [...full.uses].every((u) => {
+        const imp = items.find((ii) => ii.kind === 'import' && ii.names.includes(u));
+        return imp || u === 'undefined';
+      });
+      if (onlyImports && it.names.length === 1) names.push(it.names[0]);
+    }
+  }
+  assert.ok(names.length > 0, 'no stage-1 names');
+  const batch = names.slice(0, Math.min(8, names.length));
+  const mod = path.join(dir, 'swarm-patterns.mjs');
+  const result = moveItems(copy, mod, batch);
+  assert.equal(result.ok, true, result.errors?.join('; '));
+  const smoke = smokeImportModules([mod, copy], { timeoutMs: 20_000 });
+  assert.equal(smoke.length, 0, smoke.join('; '));
 });
 
 test('dry-run move of layer-0 function on swarm.mjs does not touch file', () => {

@@ -216,9 +216,13 @@ function createLexer(text, start = 0) {
       while (pos < text.length && /[01]/.test(peek())) advance();
     } else {
       while (pos < text.length && isDigit(peek())) advance();
-      if (peek() === '.' && isDigit(peek(1))) {
-        advance();
-        while (pos < text.length && isDigit(peek())) advance();
+      if (peek() === '.') {
+        if (isDigit(peek(1))) {
+          advance();
+          while (pos < text.length && isDigit(peek())) advance();
+        } else if (peek(1) === 'e' || peek(1) === 'E') {
+          advance();
+        }
       }
       if (peek() === 'e' || peek() === 'E') {
         advance();
@@ -235,7 +239,7 @@ function createLexer(text, start = 0) {
     const two = text.slice(pos, pos + 3);
     const pairs = [
       '===', '!==', '>>>', '<<=', '>>=', '>>>=', '**=', '??=', '&&=', '||=',
-      '**', '<<', '>>', '&&', '||', '??', '?.', '=>', '==', '!=', '<=', '>=',
+      '...', '**', '<<', '>>', '&&', '||', '??', '?.', '=>', '==', '!=', '<=', '>=',
       '+=', '-=', '*=', '/=', '%=', '^=', '|=', '&=',
     ];
     for (const p of pairs) {
@@ -498,7 +502,10 @@ function declarePattern(lx, text, declare) {
       if (inner.type === 'eof') return;
       if (inner.type === 'punct' && inner.value === open) depth++;
       else if (inner.type === 'punct' && inner.value === close) depth--;
-      else if (depth === 1 && inner.type === 'identifier') {
+      else if (depth === 1 && inner.type === 'punct' && inner.value === '...') {
+        const id = lx.next();
+        if (id.type === 'identifier') declare(id.value);
+      } else if (depth === 1 && inner.type === 'identifier') {
         const n = lx.next();
         if (n.type === 'punct' && n.value === ':') declarePattern(lx, text, declare);
         else declare(inner.value);
@@ -605,34 +612,17 @@ function tokenizeAll(text) {
   return tokens;
 }
 
-function collectUsesFastFromTokens(tokens, i0, i1) {
-  const uses = new Set();
-  let afterDot = false;
-  for (let idx = i0; idx < i1; ) {
-    const tok = tokens[idx++];
-    if (tok.type === 'eof') break;
-    if (afterDot) {
-      afterDot = false;
-      continue;
-    }
-    if (tok.type === 'punct' && (tok.value === '.' || tok.value === '?.')) {
-      afterDot = true;
-      continue;
-    }
-    if (tok.type === 'identifier') {
-      const n = idx < i1 ? tokens[idx] : { type: 'eof' };
-      if (n.type === 'punct' && n.value === ':') continue;
-      uses.add(tok.value);
-      // idx already points at n; next iteration consumes n (matches lexer restoreState to n.start).
-    }
-  }
-  return uses;
+function collectUsesFastFromTokens(tokens, i0, i1, text) {
+  if (i0 >= i1) return new Set();
+  const sliceStart = tokens[i0].start;
+  const sliceEnd = tokens[i1 - 1]?.end ?? sliceStart;
+  return collectUses(text.slice(sliceStart, sliceEnd));
 }
 
 function collectUsesFast(text) {
   const tokens = tokenizeAll(text);
   const [i0, i1] = tokenBoundsForSpan(tokens, 0, text.length);
-  return collectUsesFastFromTokens(tokens, i0, i1);
+  return collectUsesFastFromTokens(tokens, i0, i1, text);
 }
 
 function collectUses(text) {
@@ -652,6 +642,8 @@ function collectUses(text) {
   let arrowParams = null;
   let arrowDepth = 0;
   let prevTok = null;
+  let classBodyDepth = 0;
+  let blockDepth = 0;
 
   for (;;) {
     const tok = lx.next();
@@ -666,10 +658,17 @@ function collectUses(text) {
       if (tok.value === '.' || tok.value === '?.') afterDot = true;
       else if (tok.value === '{') {
         scopes.push(new Set());
-        objectKey = true;
+        const blockBrace = prevTok && (
+          (prevTok.type === 'punct' && [')', '}', ';', '=>'].includes(prevTok.value))
+          || (prevTok.type === 'keyword' && ['else', 'try', 'catch', 'finally', 'do'].includes(prevTok.value))
+        );
+        objectKey = !blockBrace;
+        blockDepth++;
       } else if (tok.value === '}') {
         if (scopes.length > 1) scopes.pop();
         objectKey = false;
+        blockDepth = Math.max(0, blockDepth - 1);
+        if (classBodyDepth > 0 && blockDepth < classBodyDepth) classBodyDepth = 0;
       } else if (tok.value === ',') objectKey = true;
       else if (tok.value === '(') {
         const noArrow = prevTok && prevTok.type === 'keyword'
@@ -709,7 +708,10 @@ function collectUses(text) {
             if (p.type === 'eof') break;
             if (p.type === 'punct' && p.value === '(') depth++;
             else if (p.type === 'punct' && p.value === ')') depth--;
-            else if (depth === 1 && p.type === 'identifier') {
+            else if (depth === 1 && p.type === 'punct' && p.value === '...') {
+              const id = lx.next();
+              if (id.type === 'identifier') declare(id.value);
+            } else if (depth === 1 && p.type === 'identifier') {
               const nxt = lx.next();
               if (nxt.type === 'punct' && nxt.value === '=>') {
                 lx.restoreState({ pos: p.start, line: lineAt(text, p.start), prevSignificant: null });
@@ -723,11 +725,29 @@ function collectUses(text) {
             }
           }
         }
+        const bodyOpen = lx.next();
+        if (bodyOpen.type === 'punct' && bodyOpen.value === '{') {
+          blockDepth++;
+          objectKey = false;
+          scopes.push(new Set());
+          prevTok = bodyOpen;
+        } else if (bodyOpen.type !== 'eof') {
+          lx.restoreState({ pos: bodyOpen.start, line: lineAt(text, bodyOpen.start), prevSignificant: null });
+        }
         continue;
       }
       if (tok.value === 'class') {
         const n = lx.next();
         if (n.type === 'identifier') declare(n.value);
+        const open = lx.next();
+        if (open.type === 'punct' && open.value === '{') {
+          blockDepth++;
+          classBodyDepth = blockDepth;
+          scopes.push(new Set());
+          objectKey = false;
+        } else if (open.type !== 'eof') {
+          lx.restoreState({ pos: open.start, line: lineAt(text, open.start), prevSignificant: null });
+        }
         continue;
       }
       if (tok.value === 'get' || tok.value === 'set') {
@@ -770,6 +790,9 @@ function collectUses(text) {
     }
 
     if (tok.type === 'template') {
+      if (prevTok && prevTok.type === 'identifier' && !isBound(prevTok.value)) {
+        uses.add(prevTok.value);
+      }
       for (const u of usesInTemplate(tok.value)) {
         if (!isBound(u)) uses.add(u);
       }
@@ -781,12 +804,25 @@ function collectUses(text) {
       if (arrowParams && arrowDepth === 1) arrowParams.push(tok.value);
       const n = lx.next();
       if (n.type === 'punct' && n.value === ':') {
-        if (!objectKey) declare(tok.value);
+        if (!objectKey && blockDepth === 0) {
+          declare(tok.value);
+          prevTok = tok;
+          continue;
+        }
+        if (objectKey) declare(tok.value);
         continue;
       }
       if (n.type === 'punct' && n.value === '=>') {
         declare(tok.value);
         continue;
+      }
+      if (n.type === 'punct' && n.value === '(') {
+        if (objectKey || classBodyDepth > 0) {
+          declare(tok.value);
+          if (n.type !== 'eof') lx.restoreState({ pos: n.start, line: lineAt(text, n.start), prevSignificant: null });
+          prevTok = tok;
+          continue;
+        }
       }
       const inArrowList = arrowParams && arrowDepth === 1;
       if (!inArrowList && !isBound(tok.value)) uses.add(tok.value);
@@ -943,7 +979,7 @@ export function scanModule(text) {
     let uses;
     if (fastUses) {
       const [i0, i1] = tokenBoundsForSpan(allTokens, span.start, span.end);
-      uses = collectUsesFastFromTokens(allTokens, i0, i1);
+      uses = collectUsesFastFromTokens(allTokens, i0, i1, text);
     } else {
       uses = collectUses(slice);
     }

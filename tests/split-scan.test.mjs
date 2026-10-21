@@ -159,6 +159,46 @@ test('label statement does not count label as use', () => {
   assert.ok(!items[0].uses.has('loop'));
 });
 
+test('spread element uses binding after rest operator', () => {
+  const src = "const CLI_AGENTS = ['claude', 'codex', ...EXTRA_CLI_AGENTS];\n";
+  const { items } = scanModule(src);
+  assert.ok(items[0].uses.has('EXTRA_CLI_AGENTS'));
+});
+
+test('rest parameter name is not an external use', () => {
+  const src = 'function f(...args) { return args.length; }\n';
+  const { items } = scanModule(src);
+  assert.ok(!items[0].uses.has('args'));
+});
+
+test('object rest pattern in destructuring is not an external use', () => {
+  const src = 'const { a, ...rest } = source;\n';
+  const { items } = scanModule(src);
+  assert.ok(items[0].uses.has('source'));
+  assert.ok(!items[0].uses.has('rest'));
+  assert.ok(items[0].names.includes('rest'));
+});
+
+test('object spread expression uses the spread binding', () => {
+  const src = 'const merged = { ...others };\n';
+  const { items } = scanModule(src);
+  assert.ok(items[0].uses.has('others'));
+});
+
+test('keyword property access is not a reference', () => {
+  const src = 'const x = obj.default + obj.class;\n';
+  const { items } = scanModule(src);
+  assert.ok(items[0].uses.has('obj'));
+  assert.ok(!items[0].uses.has('default'));
+  assert.ok(!items[0].uses.has('class'));
+});
+
+test('numeric literal with exponent after dot does not treat e as member access', () => {
+  const src = 'const n = 1.e3;\n';
+  const { items } = scanModule(src);
+  assert.ok(!items[0].uses.has('e3'));
+});
+
 test('dependencyGraph links top-level symbols', () => {
   const src = 'const shared = 1;\nfunction useIt() { return shared; }\n';
   const { items } = scanModule(src);

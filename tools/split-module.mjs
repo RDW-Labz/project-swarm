@@ -3,7 +3,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { scanModule, topLevelNameIndex } from './split-scan.mjs';
+
+const JS_KEYWORDS = new Set([
+  'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete',
+  'do', 'else', 'export', 'extends', 'false', 'finally', 'for', 'function', 'if', 'import',
+  'in', 'instanceof', 'let', 'new', 'null', 'return', 'super', 'switch', 'this', 'throw',
+  'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield', 'await', 'async', 'of',
+  'static', 'get', 'set', 'from', 'as',
+]);
 
 const BUILTIN_GLOBALS = new Set([
   'undefined', 'NaN', 'Infinity', 'globalThis', 'global', 'self', 'window',
@@ -22,6 +31,14 @@ const BUILTIN_GLOBALS = new Set([
   'parseFloat', 'parseInt', 'decodeURI', 'decodeURIComponent', 'encodeURI', 'encodeURIComponent',
   'escape', 'unescape', 'Iterator', 'AsyncIterator', 'Reflect', 'Proxy',
 ]);
+
+try {
+  for (const n of Object.getOwnPropertyNames(globalThis)) {
+    BUILTIN_GLOBALS.add(n);
+  }
+} catch {
+  // ignore
+}
 
 function readText(filePath) {
   return fs.readFileSync(filePath, 'utf8');
@@ -550,7 +567,7 @@ function removeItemsPreservingGaps(text, items, removedIndices) {
     if (next) {
       out += gapTextSkippingRemoved(text, items, remove, kept[k].end, next.start);
     } else {
-      out += text.slice(kept[k].end);
+      out += gapTextSkippingRemoved(text, items, remove, kept[k].end, text.length);
     }
   }
   return out;
@@ -606,11 +623,256 @@ function nodeCheck(filePath) {
   return { ok: r.status === 0, stderr: r.stderr || r.stdout || '' };
 }
 
+function isIdentifierChar(ch, first) {
+  if (ch === '$' || ch === '_') return true;
+  const code = ch.charCodeAt(0);
+  if (first) {
+    return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+  }
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57);
+}
+
+/** Regex-style pass: identifier-like tokens not immediately preceded by `.` (outside comments/strings). */
+export function regexIdentifierTokens(text) {
+  const out = [];
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+      continue;
+    }
+    if (ch === '/' && text[i + 1] === '*') {
+      i += 2;
+      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      i += 2;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const q = ch;
+      i++;
+      while (i < text.length) {
+        if (text[i] === '\\') {
+          i += 2;
+          continue;
+        }
+        if (q === '`' && text[i] === '$' && text[i + 1] === '{') {
+          i += 2;
+          let depth = 1;
+          while (i < text.length && depth > 0) {
+            if (text[i] === '{') depth++;
+            else if (text[i] === '}') depth--;
+            i++;
+          }
+          continue;
+        }
+        if (text[i] === q) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (ch === '.' && text[i + 1] === '.' && text[i + 2] === '.') {
+      i += 3;
+      continue;
+    }
+    if (isIdentifierChar(ch, true)) {
+      const prev = i > 0 ? text[i - 1] : '';
+      if (prev === '.') {
+        i++;
+        while (i < text.length && isIdentifierChar(text[i], false)) i++;
+        continue;
+      }
+      const start = i;
+      i++;
+      while (i < text.length && isIdentifierChar(text[i], false)) i++;
+      out.push({ name: text.slice(start, i), index: start });
+      continue;
+    }
+    i++;
+  }
+  return out;
+}
+
+function declaredNamesRegex(text) {
+  const declared = new Set();
+  const declRe = /\b(?:const|let|var|function|class|catch|import)\b[^;]*?(?=[;\n]|$)/g;
+  let block;
+  while ((block = declRe.exec(text)) !== null) {
+    const chunk = block[0];
+    const importFrom = chunk.match(/\bimport\s+(?:[\w$*{}\s,]+)\s+from\b/);
+    if (importFrom) {
+      const brace = chunk.match(/\{([^}]+)\}/);
+      if (brace) {
+        for (const part of brace[1].split(',')) {
+          const as = part.trim().match(/^(\w+)\s+as\s+(\w+)$/);
+          if (as) declared.add(as[2]);
+          else {
+            const id = part.trim().match(/^(\w+)$/);
+            if (id) declared.add(id[1]);
+          }
+        }
+      }
+      const def = chunk.match(/\bimport\s+(\w+)\s*,/);
+      if (def) declared.add(def[1]);
+      const onlyDef = chunk.match(/\bimport\s+(\w+)\s+from\b/);
+      if (onlyDef && !chunk.includes('{')) declared.add(onlyDef[1]);
+      const ns = chunk.match(/\*\s+as\s+(\w+)/);
+      if (ns) declared.add(ns[1]);
+    }
+    const fn = chunk.match(/\bfunction\s*\*?\s*(\w+)/);
+    if (fn) declared.add(fn[1]);
+    const cl = chunk.match(/\bclass\s+(\w+)/);
+    if (cl) declared.add(cl[1]);
+    const catchP = chunk.match(/\bcatch\s*\(\s*(\w+)/);
+    if (catchP) declared.add(catchP[1]);
+    for (const m of chunk.matchAll(/\b(?:const|let|var)\s+([^;=]+)/g)) {
+      const lhs = m[1];
+      for (const part of lhs.split(',')) {
+        const bit = part.trim();
+        const simple = bit.match(/^(\w+)$/);
+        if (simple) declared.add(simple[1]);
+        const renamed = bit.match(/^\{[^}]+\}$|^\[[^\]]+\]$/);
+        if (renamed) {
+          for (const id of bit.matchAll(/(?<![:.])(\w+)(?=\s*[,}\]]|$)/g)) declared.add(id[1]);
+          for (const rest of bit.matchAll(/\.\.\.(\w+)/g)) declared.add(rest[1]);
+        }
+      }
+    }
+    for (const m of chunk.matchAll(/\(([^)]*)\)\s*=>/g)) {
+      for (const id of m[1].matchAll(/\b(\w+)\b/g)) declared.add(id[1]);
+      for (const rest of m[1].matchAll(/\.\.\.(\w+)/g)) declared.add(rest[1]);
+    }
+  }
+  for (const m of text.matchAll(/\bfunction\s+\w*\s*\(([^)]*)\)/g)) {
+    for (const id of m[1].matchAll(/\b(\w+)\b/g)) declared.add(id[1]);
+    for (const rest of m[1].matchAll(/\.\.\.(\w+)/g)) declared.add(rest[1]);
+  }
+  return declared;
+}
+
+function propertyKeyPositions(text) {
+  const keys = new Set();
+  for (const m of text.matchAll(/(\w+)\s*:(?!=)/g)) {
+    const name = m[1];
+    const idx = m.index ?? 0;
+    const before = text.slice(Math.max(0, idx - 3), idx);
+    if (before.endsWith('?.')) continue;
+    if (text[idx - 1] === '.') continue;
+    keys.add(name);
+  }
+  for (const m of text.matchAll(/['"](\w+)['"]\s*:/g)) keys.add(m[1]);
+  return keys;
+}
+
+/** Names that look free (second pass), not counting obvious declarations/keys. */
+export function possiblyUnresolvedNames(text) {
+  const declared = declaredNamesRegex(text);
+  const propKeys = propertyKeyPositions(text);
+  const unresolved = new Set();
+  for (const { name, index } of regexIdentifierTokens(text)) {
+    if (JS_KEYWORDS.has(name)) continue;
+    if (BUILTIN_GLOBALS.has(name)) continue;
+    if (declared.has(name)) continue;
+    if (propKeys.has(name)) {
+      const after = text.slice(index + name.length).trimStart();
+      if (after.startsWith(':')) continue;
+    }
+    const ctxBefore = text.slice(Math.max(0, index - 8), index);
+    if (/\.\.\.\s*$/.test(ctxBefore)) continue;
+    if (/\b(?:const|let|var|function|class|catch)\s+$/.test(ctxBefore)) continue;
+    unresolved.add(name);
+  }
+  return unresolved;
+}
+
+function importBindingNames(items) {
+  const map = new Map();
+  for (const it of items) {
+    if (it.kind !== 'import') continue;
+    const parsed = parseImportSpecifiers(it.text);
+    for (const b of parsed.bindings) map.set(b.local, parsed.source);
+  }
+  return map;
+}
+
+function moduleDeclaresOrImports(name, modText, modScan) {
+  for (const it of modScan.items) {
+    if (it.names.includes(name)) return true;
+  }
+  return declaredNamesRegex(modText).has(name);
+}
+
+export function checkUnresolvedImportsForMove(originalText, moduleText, movedItems) {
+  const issues = [];
+  const origScan = scanModule(originalText);
+  const modScan = scanModule(moduleText);
+  const origImports = importBindingNames(origScan.items);
+  const importNames = collectFileImportNames(origScan.items);
+
+  for (const it of movedItems) {
+    for (const use of it.uses) {
+      if (!importNames.has(use)) continue;
+      if (moduleDeclaresOrImports(use, moduleText, modScan)) continue;
+      issues.push(`moved item missing import for ${use} (used by ${it.names.join(',') || it.index})`);
+    }
+  }
+
+  for (const name of possiblyUnresolvedNames(moduleText)) {
+    if (!origImports.has(name)) continue;
+    if (moduleDeclaresOrImports(name, moduleText, modScan)) continue;
+    issues.push(`possibly unresolved import ${name} in new module`);
+  }
+
+  return issues;
+}
+
+export function smokeImportModules(paths, options = {}) {
+  const { timeoutMs = 20_000, allowProcessExit = false } = options;
+  const issues = [];
+  for (const absPath of paths) {
+    const url = pathToFileURL(path.resolve(absPath)).href;
+    const script = `
+const allowExit = ${allowProcessExit ? 'true' : 'false'};
+const deadline = Date.now() + ${timeoutMs};
+let exited = false;
+const origExit = process.exit;
+process.exit = (code) => {
+  exited = true;
+  if (!allowExit) origExit(code ?? 0);
+};
+const fail = (msg) => { console.error(msg); origExit(1); };
+const t = setTimeout(() => fail('smoke import timeout'), ${timeoutMs});
+try {
+  await import(${JSON.stringify(url)});
+} catch (e) {
+  if (e instanceof SyntaxError || e instanceof ReferenceError) fail(String(e));
+  else if (e?.name === 'SyntaxError' || e?.name === 'ReferenceError') fail(String(e));
+} finally {
+  clearTimeout(t);
+  process.exit = origExit;
+}
+if (!allowExit && exited) fail('process.exit during load');
+`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      encoding: 'utf8',
+      timeout: timeoutMs + 5000,
+      cwd: path.dirname(absPath),
+    });
+    if (r.status !== 0) {
+      issues.push(`smoke import failed for ${absPath}: ${(r.stderr || r.stdout || '').trim()}`);
+    }
+  }
+  return issues;
+}
+
 function exportNamesFromScan(scan) {
   return new Set(scan.exports);
 }
 
-export function verifyMove(filePath, modulePath, originalFilePath) {
+export function verifyMove(filePath, modulePath, originalFilePath, options = {}) {
   const issues = [];
   const originalText = readText(originalFilePath);
   const origScan = scanModule(originalText);
@@ -685,6 +947,23 @@ export function verifyMove(filePath, modulePath, originalFilePath) {
     }
   }
 
+  if (movedFromOrig.length) {
+    issues.push(...checkUnresolvedImportsForMove(originalText, modText, movedFromOrig));
+    const fileUnresolved = possiblyUnresolvedNames(fileText);
+    const origImports = importBindingNames(origScan.items);
+    for (const name of fileUnresolved) {
+      if (!origImports.has(name)) continue;
+      if (moduleDeclaresOrImports(name, fileText, fileScan)) continue;
+      issues.push(`possibly unresolved import ${name} in rewritten file`);
+    }
+  }
+
+  if (!options.noSmoke && fs.existsSync(filePath) && fs.existsSync(modulePath)) {
+    issues.push(...smokeImportModules([modulePath, filePath], {
+      allowProcessExit: options.noSmoke,
+    }));
+  }
+
   return {
     ok: issues.length === 0,
     issues,
@@ -692,7 +971,7 @@ export function verifyMove(filePath, modulePath, originalFilePath) {
 }
 
 export function moveItems(filePath, modulePath, names, options = {}) {
-  const { dryRun = false, allowBackReferences = false } = options;
+  const { dryRun = false, allowBackReferences = false, noSmoke = false } = options;
   const originalText = readText(filePath);
   const { items } = scanModule(originalText);
   const nameList = [...names].sort();
@@ -726,7 +1005,20 @@ export function moveItems(filePath, modulePath, names, options = {}) {
     fs.mkdirSync(verifyDir, { recursive: true });
     fs.writeFileSync(tmpMod, moduleContent, 'utf8');
     fs.writeFileSync(tmpFile, newFileContent, 'utf8');
-    const verify = verifyMove(tmpFile, tmpMod, filePath);
+
+    const unresolved = checkUnresolvedImportsForMove(originalText, moduleContent, movedItems);
+    if (unresolved.length) {
+      return { ok: false, errors: unresolved, wrote: false };
+    }
+
+    if (!noSmoke) {
+      const smoke = smokeImportModules([tmpMod, tmpFile], { allowProcessExit: false });
+      if (smoke.length) {
+        return { ok: false, errors: smoke, wrote: false };
+      }
+    }
+
+    const verify = verifyMove(tmpFile, tmpMod, filePath, { noSmoke });
     if (!verify.ok) {
       return { ok: false, errors: verify.issues, wrote: false };
     }
@@ -783,6 +1075,7 @@ function parseArgs(argv) {
   }
   if (cmd === 'move') {
     const dryRun = args.includes('--dry-run');
+    const noSmoke = args.includes('--no-smoke');
     const allowBack = args.includes('--allow-back-references');
     const toIdx = args.indexOf('--to');
     const namesIdx = args.indexOf('--names');
@@ -790,7 +1083,7 @@ function parseArgs(argv) {
     if (!file || toIdx < 0 || namesIdx < 0) return { error: 'usage: move FILE --to MODULE --names a,b' };
     const modulePath = args[toIdx + 1];
     const names = args[namesIdx + 1].split(',').map((s) => s.trim()).filter(Boolean);
-    return { cmd, file, modulePath, names, dryRun, allowBack };
+    return { cmd, file, modulePath, names, dryRun, allowBack, noSmoke };
   }
   if (cmd === 'verify') {
     const toIdx = args.indexOf('--to');
@@ -829,6 +1122,7 @@ if (isCliMain()) {
     const result = moveItems(parsed.file, parsed.modulePath, parsed.names, {
       dryRun: parsed.dryRun,
       allowBackReferences: parsed.allowBack,
+      noSmoke: parsed.noSmoke,
     });
     if (!result.ok) {
       console.error(result.errors.join('\n'));
