@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "ship-reason-field",
+      "agent": "auto",
+      "prompt": "The change that makes the ship clean-tree check ignore swarm-generated files also changed the refusal result so the reason text includes the blocking files; the existing test in tests/ship.test.mjs named 'ship: refuses with commit first when the tree is dirty, and never pushes' pins result.reason to exactly the text commit first and now fails. Fix tools/ship.mjs so result.reason stays exactly commit first and the blocking files go in a separate field result.blockers (array of project-relative path strings, at most 20) and, where the refusal is printed for the user, the message lists them. Do not change tests/ship.test.mjs expectations for reason; update tests/ship-clean-tree.test.mjs so it asserts reason equals commit first and blockers lists the blocking files. Write only tools/ship.mjs and tests/ship-clean-tree.test.mjs.",
+      "context": [
+        "tools/ship.mjs",
+        "tests/ship.test.mjs",
+        "tests/ship-clean-tree.test.mjs"
+      ],
+      "outputs": [
+        "tools/ship.mjs",
+        "tests/ship-clean-tree.test.mjs"
+      ],
+      "timeoutMs": 600000,
+      "ignoreTests": [
+        "tests/config-private-names.test.mjs",
+        "tests/field-lesson-t81-cli.test.mjs",
+        "tests/field-lesson-t81-pipeline.test.mjs",
+        "tests/field-lesson183.test.mjs",
+        "tests/field-lessons-batch-ab-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-ship.test.mjs",
+        "tests/field-lessons-batch-ah-process.test.mjs",
+        "tests/field-lessons-batch-ai-ship.test.mjs",
+        "tests/field-lessons-batch-b.test.mjs",
+        "tests/field-lessons-batch-d.test.mjs",
+        "tests/field-lessons-batch-e.test.mjs",
+        "tests/field-lessons-batch-g.test.mjs",
+        "tests/field-lessons-batch-h.test.mjs",
+        "tests/field-lessons-batch-j.test.mjs",
+        "tests/field-lessons-batch-k.test.mjs",
+        "tests/field-lessons-batch-m1.test.mjs",
+        "tests/field-lessons-batch-m2.test.mjs",
+        "tests/field-lessons-batch-m3.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-p.test.mjs",
+        "tests/field-lessons-batch-r.test.mjs",
+        "tests/field-lessons-batch-t1.test.mjs",
+        "tests/field-lessons-batch-u.test.mjs",
+        "tests/field-lessons-batch-v.test.mjs",
+        "tests/field-lessons-batch-w.test.mjs",
+        "tests/go.test.mjs",
+        "tests/lessons115.test.mjs",
+        "tests/lessons120-ship.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/private-names-125.test.mjs",
+        "tests/ship-125.test.mjs",
+        "tests/ship-preflight.test.mjs"
+      ]
+    }
+  ]
+}

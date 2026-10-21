@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "ship-ignore-generated",
+      "agent": "auto",
+      "prompt": "Item E7: swarm ship refuses forever on a project (atlas-seafloor) because every swarm command rewrites coordination/HANDOFF.md, so the working tree is never clean. In tools/ship.mjs find the clean-tree check (the place that reads git status porcelain or a dirty-tree helper and refuses). Make that check ignore swarm-generated files: coordination/HANDOFF.md, coordination/HANDOFF.previous.md, coordination/HANDOFF.previous-2.md, TASK.md, coordination/TASK.md, build-plan.md, coordination/build-plan.md and docs/state/usage-ledger.md (the same set the hand-build guard calls routing files, plus the ledger); any other dirty or untracked file still refuses, and the refusal message lists the files that blocked it. Keep behavior otherwise. Add tests in tests/ship-clean-tree.test.mjs (node:test, strict assert, temporary git repositories using the real clean-tree function or the smallest exported function that holds the check; export a small helper dirtyBlockers(porcelainLines) from tools/ship.mjs if needed): a tree dirty only with those files passes; one other modified file refuses and is named; an untracked source file refuses; a mix names only the blocking files; a rename involving a generated file is handled; empty status passes. Write only tools/ship.mjs and tests/ship-clean-tree.test.mjs.",
+      "context": [
+        "tools/ship.mjs"
+      ],
+      "outputs": [
+        "tools/ship.mjs",
+        "tests/ship-clean-tree.test.mjs"
+      ],
+      "timeoutMs": 1500000,
+      "ignoreTests": [
+        "tests/config-private-names.test.mjs",
+        "tests/field-lesson-t81-cli.test.mjs",
+        "tests/field-lesson-t81-pipeline.test.mjs",
+        "tests/field-lesson183.test.mjs",
+        "tests/field-lessons-batch-ab-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-ship.test.mjs",
+        "tests/field-lessons-batch-ah-process.test.mjs",
+        "tests/field-lessons-batch-ai-ship.test.mjs",
+        "tests/field-lessons-batch-b.test.mjs",
+        "tests/field-lessons-batch-d.test.mjs",
+        "tests/field-lessons-batch-e.test.mjs",
+        "tests/field-lessons-batch-g.test.mjs",
+        "tests/field-lessons-batch-h.test.mjs",
+        "tests/field-lessons-batch-j.test.mjs",
+        "tests/field-lessons-batch-k.test.mjs",
+        "tests/field-lessons-batch-m1.test.mjs",
+        "tests/field-lessons-batch-m2.test.mjs",
+        "tests/field-lessons-batch-m3.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-p.test.mjs",
+        "tests/field-lessons-batch-r.test.mjs",
+        "tests/field-lessons-batch-t1.test.mjs",
+        "tests/field-lessons-batch-u.test.mjs",
+        "tests/field-lessons-batch-v.test.mjs",
+        "tests/field-lessons-batch-w.test.mjs",
+        "tests/go.test.mjs",
+        "tests/lessons115.test.mjs",
+        "tests/lessons120-ship.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/private-names-125.test.mjs",
+        "tests/ship-125.test.mjs",
+        "tests/ship-preflight.test.mjs",
+        "tests/ship.test.mjs"
+      ]
+    }
+  ]
+}
