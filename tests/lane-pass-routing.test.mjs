@@ -26,6 +26,7 @@ test('lane pass rates count finished pass and fail statuses and ignore cancelled
         { agent: 'cursor', status: 'failed' },
         { agent: 'codex', status: 'blocked' },
         { agent: 'codex', status: 'timed-out' },
+        { agent: 'codex', status: 'timedout' },
         { agent: 'anthropic', status: 'cancelled' },
         { agent: 'anthropic', status: 'held' },
       ],
@@ -35,7 +36,7 @@ test('lane pass rates count finished pass and fail statuses and ignore cancelled
 
   assert.deepEqual(rates, {
     cursor: { passed: 1, failed: 1, total: 2, rate: 0.5 },
-    codex: { passed: 1, failed: 2, total: 3, rate: 1 / 3 },
+    codex: { passed: 1, failed: 3, total: 4, rate: 1 / 4 },
   });
 });
 

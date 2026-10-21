@@ -3,9 +3,9 @@
 
 import path from 'node:path';
 import { routeJob } from './router.mjs';
+import { FAILURE_STATUSES } from './failure-regression.mjs';
 
 const PASS_STATUS = 'complete';
-const FAIL_STATUSES = new Set(['failed', 'timed-out', 'timeout', 'blocked']);
 const IGNORED_STATUSES = new Set(['cancelled', 'held']);
 
 export function lanePassRates(runStates) {
@@ -18,7 +18,7 @@ export function lanePassRates(runStates) {
       const agent = typeof job?.agent === 'string' ? job.agent.trim() : '';
       const status = typeof job?.status === 'string' ? job.status.trim() : '';
       if (!agent || IGNORED_STATUSES.has(status)) continue;
-      if (status !== PASS_STATUS && !FAIL_STATUSES.has(status)) continue;
+      if (status !== PASS_STATUS && !FAILURE_STATUSES.has(status)) continue;
 
       const rate = rates[agent] ?? { passed: 0, failed: 0, total: 0, rate: 0 };
       if (status === PASS_STATUS) rate.passed += 1;
