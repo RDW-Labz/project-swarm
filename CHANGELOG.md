@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.156.0
+
+Autopilot starts only ledger tickets.
+- **Ledger only:** swarm autopilot starts go --scope only for tickets in the ledger and never from a stale manifest; runs without outputs no longer raise a blocker.
+- **Tests:** tests/autopilot-ledger-only.test.mjs, tests/autopilot-no-outputs.test.mjs.
+
 ## 1.155.0
 
 A sleeping autopilot no longer blocks swarm update.
