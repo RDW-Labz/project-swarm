@@ -1,0 +1,259 @@
+[
+  {
+    "id": "T-0102",
+    "title": "OpenAPI contract for board money, idle, quality, federation and owner-action endpoints",
+    "type": "contract",
+    "stage": "S4",
+    "epic": "Owner actions",
+    "scopeRefs": [
+      "R-025",
+      "R-026",
+      "R-027",
+      "R-028",
+      "R-029"
+    ],
+    "acceptance": [],
+    "files": [
+      "contracts/watch-s4-ops.json"
+    ],
+    "context": [
+      "tools/watch-server.mjs",
+      "tools/board-data.mjs",
+      "docs/scope/roadmap.md"
+    ],
+    "contracts": [],
+    "tests": [],
+    "dependsOn": [],
+    "size": "M",
+    "risk": "medium",
+    "sensitive": true,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0111",
+    "title": "Tailnet-only owner approve and deny handlers with confirm step and audit log entries",
+    "type": "build",
+    "stage": "S4",
+    "epic": "Owner actions",
+    "scopeRefs": [
+      "R-029"
+    ],
+    "acceptance": [
+      "Approve and Deny buttons appear for requests the policy leaves to the owner, tailnet only, with sign-in, a confirm step and an audit log."
+    ],
+    "files": [
+      "tools/board-owner-actions.mjs"
+    ],
+    "context": [
+      "tools/board-inbox.mjs",
+      "tools/inbox.mjs",
+      "tools/remote.mjs",
+      "tools/phone.mjs"
+    ],
+    "contracts": [
+      "contracts/watch-s4-ops.json"
+    ],
+    "tests": [
+      "tests/board-owner-actions.test.mjs"
+    ],
+    "dependsOn": [
+      "T-0102"
+    ],
+    "size": "M",
+    "risk": "high",
+    "sensitive": true,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0112",
+    "title": "Refuse merge, deploy and cap actions from phone or board API paths server-side",
+    "type": "build",
+    "stage": "S4",
+    "epic": "Owner actions",
+    "scopeRefs": [
+      "R-029"
+    ],
+    "acceptance": [
+      "Merge, deploy and cap actions are refused from the phone or board server-side."
+    ],
+    "files": [
+      "tools/board-action-guard.mjs"
+    ],
+    "context": [
+      "tools/phone.mjs",
+      "tools/inbox.mjs",
+      "tools/handbuild.mjs"
+    ],
+    "contracts": [
+      "contracts/watch-s4-ops.json"
+    ],
+    "tests": [
+      "tests/board-action-guard.test.mjs"
+    ],
+    "dependsOn": [
+      "T-0102"
+    ],
+    "size": "S",
+    "risk": "high",
+    "sensitive": true,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0114",
+    "title": "Expose federated board snapshot and owner-action routes on the watch server",
+    "type": "build",
+    "stage": "S4",
+    "epic": "Owner actions",
+    "scopeRefs": [
+      "R-028",
+      "R-029"
+    ],
+    "acceptance": [
+      "Owner-action routes require tailnet sign-in and honor the action guard."
+    ],
+    "files": [
+      "tools/watch-server.mjs"
+    ],
+    "context": [
+      "tools/board-federation.mjs",
+      "tools/board-owner-actions.mjs",
+      "tools/board-action-guard.mjs"
+    ],
+    "contracts": [
+      "contracts/watch-s4-ops.json"
+    ],
+    "tests": [],
+    "dependsOn": [
+      "T-0113",
+      "T-0111",
+      "T-0112"
+    ],
+    "size": "M",
+    "risk": "high",
+    "sensitive": true,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0123",
+    "title": "Approve and Deny controls with confirm step on the board Needs you panel",
+    "type": "build",
+    "stage": "S4",
+    "epic": "Owner actions",
+    "scopeRefs": [
+      "R-029"
+    ],
+    "acceptance": [
+      "Approve and Deny buttons appear for requests the policy leaves to the owner, tailnet only, with sign-in, a confirm step and an audit log."
+    ],
+    "files": [
+      "tools/watch-assets/board-owner-actions.js"
+    ],
+    "context": [
+      "tools/watch-assets/board.js",
+      "tools/board-inbox.mjs"
+    ],
+    "contracts": [
+      "contracts/watch-s4-ops.json"
+    ],
+    "tests": [],
+    "screens": [
+      "watch-board"
+    ],
+    "dependsOn": [
+      "T-0102"
+    ],
+    "size": "M",
+    "risk": "high",
+    "sensitive": true,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0131",
+    "title": "Tests for tailnet owner actions, server-side refusal, and orchestrator chat links",
+    "type": "test",
+    "stage": "S4",
+    "epic": "Owner actions",
+    "scopeRefs": [
+      "R-029"
+    ],
+    "acceptance": [
+      "Approve and Deny buttons appear for requests the policy leaves to the owner, tailnet only, with sign-in, a confirm step and an audit log.",
+      "Merge, deploy and cap actions are refused from the phone or board server-side.",
+      "Each orchestrator card has an \"Open chat\" link to its Remote Control session."
+    ],
+    "files": [
+      "tests/board-owner-actions.test.mjs",
+      "tests/board-action-guard.test.mjs"
+    ],
+    "context": [
+      "tools/board-owner-actions.mjs",
+      "tools/board-action-guard.mjs",
+      "tools/watch-server.mjs"
+    ],
+    "contracts": [
+      "contracts/watch-s4-ops.json"
+    ],
+    "tests": [],
+    "dependsOn": [
+      "T-0111",
+      "T-0112",
+      "T-0114",
+      "T-0123",
+      "T-0124"
+    ],
+    "size": "M",
+    "risk": "high",
+    "sensitive": true,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0138",
+    "title": "Mount owner Approve/Deny and orchestrator Open chat on the board",
+    "type": "build",
+    "stage": "S4",
+    "epic": "Owner actions",
+    "scopeRefs": [
+      "R-029"
+    ],
+    "acceptance": [
+      "The board at / shows Approve and Deny with confirm for owner-policy requests when signed in on the tailnet.",
+      "Each orchestrator card on / has an Open chat link."
+    ],
+    "files": [
+      "tools/watch-assets/board.js",
+      "tools/watch-assets/orchestrator-view.js"
+    ],
+    "context": [],
+    "contracts": [],
+    "tests": [
+      "tests/s4-r029-owner-route.test.mjs"
+    ],
+    "screens": [
+      "watch-board"
+    ],
+    "dependsOn": [
+      "T-0111",
+      "T-0112",
+      "T-0114",
+      "T-0123",
+      "T-0124",
+      "T-0132",
+      "T-0133",
+      "T-0134",
+      "T-0135",
+      "T-0137"
+    ],
+    "size": "M",
+    "risk": "high",
+    "sensitive": true,
+    "status": "blocked",
+    "integration": true,
+    "blockReason": "manual"
+  }
+]

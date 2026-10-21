@@ -1,0 +1,634 @@
+[
+  {
+    "id": "T-0141",
+    "title": "Measure orchestrator transcript size against a configurable handoff threshold",
+    "type": "build",
+    "stage": "S5",
+    "epic": "Orchestrator handoff",
+    "scopeRefs": [
+      "R-030"
+    ],
+    "acceptance": [
+      "When an orchestrator's context passes a set size, it saves state to memory and a fresh session continues with no lost work."
+    ],
+    "files": [
+      "tools/orchestrator-context.mjs"
+    ],
+    "context": [
+      "tools/orchestrator-usage.mjs",
+      "tools/orchestrator-events.mjs"
+    ],
+    "contracts": [],
+    "tests": [
+      "tests/orchestrator-handoff.test.mjs"
+    ],
+    "dependsOn": [],
+    "size": "S",
+    "risk": "medium",
+    "sensitive": false,
+    "status": "blocked",
+    "waveAt": "2026-10-21T06:01:20.430Z",
+    "attempts": 4,
+    "escalation": 4,
+    "retryNote": "failed checks: acceptance not met; line 1 \"When an orchestrator's context passes a set size, it saves state to memory and a\": tools/orchestrator-context.mjs:255 measures size against the threshold and saves memory, but it saves only the last user and assistant messages (:107-132, tail ",
+    "retryHistory": [
+      {
+        "run": "1792558986023-2eab439b",
+        "note": "failed checks: acceptance not met; line 1 \"When an orchestrator's context passes a set size, it saves state to memory and a\": tools/orchestrator-context.mjs:72 contextHandoffOf only measures transcrip",
+        "level": 1
+      },
+      {
+        "run": "1792559916524-68e3062a",
+        "note": "failed checks: security review; medium tools/orchestrator-context.mjs:180 The last user and assistant transcript text (up to 2400 chars each) is saved without removing secrets into .swarm/orchestrator",
+        "level": 2
+      },
+      {
+        "run": "1792562125189-3a219e65",
+        "note": "failed checks: security review; medium tools/orchestrator-context.mjs:172 new Date(now) with default now=Date.now (a function) yields Invalid Date; toISOString throws, so the handoff never persists an",
+        "level": 3
+      },
+      {
+        "run": "1792562480682-c9d2ba54",
+        "note": "failed checks: acceptance not met; line 1 \"When an orchestrator's context passes a set size, it saves state to memory and a\": tools/orchestrator-context.mjs:255 measures size against the threshold and",
+        "level": 4
+      }
+    ],
+    "blockReason": "failure"
+  },
+  {
+    "id": "T-0142",
+    "title": "Persist orchestrator handoff state to project memory and journal",
+    "type": "build",
+    "stage": "S5",
+    "epic": "Orchestrator handoff",
+    "scopeRefs": [
+      "R-030"
+    ],
+    "acceptance": [
+      "Handoff state is written under .swarm/project with enough context for a new session to continue the same work."
+    ],
+    "files": [
+      "tools/orchestrator-handoff.mjs"
+    ],
+    "context": [
+      "tools/orchestrator-context.mjs",
+      "tools/journal.mjs",
+      "tools/brief.mjs"
+    ],
+    "contracts": [],
+    "tests": [
+      "tests/orchestrator-handoff.test.mjs"
+    ],
+    "dependsOn": [
+      "T-0141"
+    ],
+    "size": "M",
+    "risk": "medium",
+    "sensitive": false,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0143",
+    "title": "Trigger orchestrator handoff from orchestrator hooks when context is over limit",
+    "type": "build",
+    "stage": "S5",
+    "epic": "Orchestrator handoff",
+    "scopeRefs": [
+      "R-030"
+    ],
+    "acceptance": [
+      "A running orchestrator session schedules handoff before context gets expensive, without dropping in-flight tool work."
+    ],
+    "files": [
+      "tools/orchestrator-handoff-hook.mjs"
+    ],
+    "context": [
+      "tools/orchestrator-handoff.mjs",
+      "tools/orchestrator-hook.mjs"
+    ],
+    "contracts": [],
+    "tests": [
+      "tests/orchestrator-handoff.test.mjs"
+    ],
+    "dependsOn": [
+      "T-0142"
+    ],
+    "size": "S",
+    "risk": "medium",
+    "sensitive": false,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0144",
+    "title": "Regression tests for orchestrator context handoff and resume",
+    "type": "test",
+    "stage": "S5",
+    "epic": "Orchestrator handoff",
+    "scopeRefs": [
+      "R-030"
+    ],
+    "acceptance": [
+      "When an orchestrator's context passes a set size, it saves state to memory and a fresh session continues with no lost work."
+    ],
+    "files": [
+      "tests/orchestrator-handoff.test.mjs"
+    ],
+    "context": [
+      "tools/orchestrator-context.mjs",
+      "tools/orchestrator-handoff.mjs",
+      "tools/orchestrator-handoff-hook.mjs"
+    ],
+    "contracts": [],
+    "tests": [],
+    "dependsOn": [
+      "T-0141",
+      "T-0142",
+      "T-0143"
+    ],
+    "size": "M",
+    "risk": "low",
+    "sensitive": false,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0148",
+    "title": "Offer rollback guidance when deploy watch detects failure",
+    "type": "build",
+    "stage": "S5",
+    "epic": "Deploy watch",
+    "scopeRefs": [
+      "R-031"
+    ],
+    "acceptance": [
+      "A failed deploy watch surfaces the profile rollback command and records the failure in the journal."
+    ],
+    "files": [
+      "tools/deploy-rollback.mjs"
+    ],
+    "context": [
+      "tools/deploy-watch.mjs",
+      "tools/handoff-docs.mjs"
+    ],
+    "contracts": [],
+    "tests": [
+      "tests/deploy-watch.test.mjs"
+    ],
+    "dependsOn": [
+      "T-0147"
+    ],
+    "size": "S",
+    "risk": "high",
+    "sensitive": false,
+    "status": "running",
+    "waveAt": "2026-10-21T05:55:24.440Z"
+  },
+  {
+    "id": "T-0149",
+    "title": "Regression tests for post-merge deploy watch and rollback offer",
+    "type": "test",
+    "stage": "S5",
+    "epic": "Deploy watch",
+    "scopeRefs": [
+      "R-031"
+    ],
+    "acceptance": [
+      "After a merge that deploys, the swarm checks the deploy, health and error logs for 15 minutes and offers rollback on failure."
+    ],
+    "files": [
+      "tests/deploy-watch.test.mjs"
+    ],
+    "context": [
+      "tools/deploy-watch.mjs",
+      "tools/deploy-health.mjs",
+      "tools/deploy-rollback.mjs"
+    ],
+    "contracts": [],
+    "tests": [],
+    "dependsOn": [
+      "T-0146",
+      "T-0147",
+      "T-0148"
+    ],
+    "size": "M",
+    "risk": "low",
+    "sensitive": false,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0152",
+    "title": "Apply project priority when granting machine-wide lane slots",
+    "type": "build",
+    "stage": "S5",
+    "epic": "Fair slots",
+    "scopeRefs": [
+      "R-032"
+    ],
+    "acceptance": [
+      "A lower-priority project cannot take slots reserved for higher-priority active projects."
+    ],
+    "files": [
+      "tools/lanes.mjs"
+    ],
+    "context": [
+      "tools/project-priority.mjs",
+      "tools/lanes.mjs"
+    ],
+    "contracts": [],
+    "tests": [
+      "tests/machine-priority.test.mjs"
+    ],
+    "dependsOn": [
+      "T-0151"
+    ],
+    "size": "M",
+    "risk": "medium",
+    "sensitive": false,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0153",
+    "title": "Regression tests for priority-weighted machine slot sharing",
+    "type": "test",
+    "stage": "S5",
+    "epic": "Fair slots",
+    "scopeRefs": [
+      "R-032"
+    ],
+    "acceptance": [
+      "Machine slots are split across active projects by priority, so one project can't starve the others."
+    ],
+    "files": [
+      "tests/machine-priority.test.mjs"
+    ],
+    "context": [
+      "tools/project-priority.mjs",
+      "tools/lanes.mjs",
+      "tests/machine-share.test.mjs"
+    ],
+    "contracts": [],
+    "tests": [],
+    "dependsOn": [
+      "T-0151",
+      "T-0152"
+    ],
+    "size": "M",
+    "risk": "low",
+    "sensitive": false,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0160",
+    "title": "E2e harness cleans up local test data after each run",
+    "type": "build",
+    "stage": "S5",
+    "epic": "Clean test env",
+    "scopeRefs": [
+      "R-034"
+    ],
+    "acceptance": [
+      "E2e runs clean up their own local test data, and a local-only cleanup tool refuses non-localhost databases."
+    ],
+    "files": [
+      "tools/e2e-data-cleanup.mjs"
+    ],
+    "context": [
+      "tools/verify-config.mjs",
+      "tools/ui-check.mjs"
+    ],
+    "contracts": [],
+    "tests": [
+      "tests/test-env-clean.test.mjs"
+    ],
+    "dependsOn": [],
+    "size": "S",
+    "risk": "low",
+    "sensitive": false,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0161",
+    "title": "Local-only test database cleanup refuses non-localhost targets",
+    "type": "build",
+    "stage": "S5",
+    "epic": "Clean test env",
+    "scopeRefs": [
+      "R-034"
+    ],
+    "acceptance": [
+      "A cleanup command exits with an error when the database URL host is not localhost."
+    ],
+    "files": [
+      "tools/test-db-cleanup.mjs"
+    ],
+    "context": [
+      "tools/verify-config.mjs"
+    ],
+    "contracts": [],
+    "tests": [
+      "tests/test-env-clean.test.mjs"
+    ],
+    "dependsOn": [],
+    "size": "S",
+    "risk": "medium",
+    "sensitive": false,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0162",
+    "title": "CI workflow template caches or mirrors Docker Hub images",
+    "type": "build",
+    "stage": "S5",
+    "epic": "Clean test env",
+    "scopeRefs": [
+      "R-034"
+    ],
+    "acceptance": [
+      "CI caches or mirrors images so Docker Hub rate limits don't fail runs."
+    ],
+    "files": [
+      "templates/coordination/ci-docker-hub-mirror.yml",
+      "tools/ci-image-cache.mjs"
+    ],
+    "context": [
+      "templates/coordination/ORCHESTRATOR.md"
+    ],
+    "contracts": [],
+    "tests": [
+      "tests/test-env-clean.test.mjs"
+    ],
+    "dependsOn": [],
+    "size": "S",
+    "risk": "low",
+    "sensitive": false,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0163",
+    "title": "Regression tests for e2e cleanup, localhost guard, and CI image cache",
+    "type": "test",
+    "stage": "S5",
+    "epic": "Clean test env",
+    "scopeRefs": [
+      "R-034"
+    ],
+    "acceptance": [
+      "E2e runs clean up their own local test data, and a local-only cleanup tool refuses non-localhost databases.",
+      "CI caches or mirrors images so Docker Hub rate limits don't fail runs."
+    ],
+    "files": [
+      "tests/test-env-clean.test.mjs"
+    ],
+    "context": [
+      "tools/e2e-data-cleanup.mjs",
+      "tools/test-db-cleanup.mjs",
+      "tools/ci-image-cache.mjs"
+    ],
+    "contracts": [],
+    "tests": [],
+    "dependsOn": [
+      "T-0160",
+      "T-0161",
+      "T-0162"
+    ],
+    "size": "M",
+    "risk": "low",
+    "sensitive": false,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0165",
+    "title": "Export field lessons metadata from a project without secrets or PII",
+    "type": "build",
+    "stage": "S5",
+    "epic": "Field learning",
+    "scopeRefs": [
+      "R-035"
+    ],
+    "acceptance": [
+      "swarm field export, push and report work across both machines with metadata only and secret and PII scanning."
+    ],
+    "files": [
+      "tools/field-export.mjs"
+    ],
+    "context": [
+      "tools/lessons.mjs",
+      "tools/security-scan.mjs"
+    ],
+    "contracts": [],
+    "tests": [
+      "tests/field-ops.test.mjs"
+    ],
+    "dependsOn": [],
+    "size": "M",
+    "risk": "medium",
+    "sensitive": true,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0166",
+    "title": "Push scanned field exports between swarm machines",
+    "type": "build",
+    "stage": "S5",
+    "epic": "Field learning",
+    "scopeRefs": [
+      "R-035"
+    ],
+    "acceptance": [
+      "Field push transfers only metadata bundles that passed secret and PII scanning."
+    ],
+    "files": [
+      "tools/field-push.mjs"
+    ],
+    "context": [
+      "tools/field-export.mjs",
+      "tools/remote.mjs"
+    ],
+    "contracts": [],
+    "tests": [
+      "tests/field-ops.test.mjs"
+    ],
+    "dependsOn": [
+      "T-0165"
+    ],
+    "size": "M",
+    "risk": "high",
+    "sensitive": true,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0167",
+    "title": "Summarize field exports into a cross-machine report",
+    "type": "build",
+    "stage": "S5",
+    "epic": "Field learning",
+    "scopeRefs": [
+      "R-035"
+    ],
+    "acceptance": [
+      "swarm field report aggregates pushed metadata without raw customer content."
+    ],
+    "files": [
+      "tools/field-report.mjs"
+    ],
+    "context": [
+      "tools/field-export.mjs",
+      "tools/field-push.mjs"
+    ],
+    "contracts": [],
+    "tests": [
+      "tests/field-ops.test.mjs"
+    ],
+    "dependsOn": [
+      "T-0166"
+    ],
+    "size": "S",
+    "risk": "medium",
+    "sensitive": true,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0168",
+    "title": "Turn each new failure cause into a regression test stub",
+    "type": "build",
+    "stage": "S5",
+    "epic": "Field learning",
+    "scopeRefs": [
+      "R-035"
+    ],
+    "acceptance": [
+      "Each new failure cause becomes a regression test, and lane pass rates feed routing."
+    ],
+    "files": [
+      "tools/failure-regression.mjs"
+    ],
+    "context": [
+      "tools/lesson-mine.mjs",
+      "tools/redcheck.mjs"
+    ],
+    "contracts": [],
+    "tests": [
+      "tests/failure-regression.test.mjs"
+    ],
+    "dependsOn": [],
+    "size": "S",
+    "risk": "low",
+    "sensitive": false,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0169",
+    "title": "Feed lane pass rates into ticket routing decisions",
+    "type": "build",
+    "stage": "S5",
+    "epic": "Field learning",
+    "scopeRefs": [
+      "R-035"
+    ],
+    "acceptance": [
+      "Lane pass rates from field data adjust which lane is chosen for new tickets."
+    ],
+    "files": [
+      "tools/lane-pass-routing.mjs"
+    ],
+    "context": [
+      "tools/lanes.mjs",
+      "tools/compare-lanes.mjs",
+      "tools/session-metrics.mjs"
+    ],
+    "contracts": [],
+    "tests": [
+      "tests/failure-regression.test.mjs"
+    ],
+    "dependsOn": [
+      "T-0168"
+    ],
+    "size": "S",
+    "risk": "medium",
+    "sensitive": false,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0170",
+    "title": "Regression tests for field export, push, report, and metadata scanning",
+    "type": "test",
+    "stage": "S5",
+    "epic": "Field learning",
+    "scopeRefs": [
+      "R-035"
+    ],
+    "acceptance": [
+      "swarm field export, push and report work across both machines with metadata only and secret and PII scanning."
+    ],
+    "files": [
+      "tests/field-ops.test.mjs"
+    ],
+    "context": [
+      "tools/field-export.mjs",
+      "tools/field-push.mjs",
+      "tools/field-report.mjs"
+    ],
+    "contracts": [],
+    "tests": [],
+    "dependsOn": [
+      "T-0165",
+      "T-0166",
+      "T-0167",
+      "T-0168",
+      "T-0169"
+    ],
+    "size": "M",
+    "risk": "medium",
+    "sensitive": true,
+    "status": "blocked",
+    "blockReason": "manual"
+  },
+  {
+    "id": "T-0171",
+    "title": "Regression tests for failure regression stubs and lane pass routing",
+    "type": "test",
+    "stage": "S5",
+    "epic": "Field learning",
+    "scopeRefs": [
+      "R-035"
+    ],
+    "acceptance": [
+      "Each new failure cause becomes a regression test, and lane pass rates feed routing."
+    ],
+    "files": [
+      "tests/failure-regression.test.mjs"
+    ],
+    "context": [
+      "tools/failure-regression.mjs",
+      "tools/lane-pass-routing.mjs"
+    ],
+    "contracts": [],
+    "tests": [],
+    "dependsOn": [
+      "T-0168",
+      "T-0169",
+      "T-0165",
+      "T-0166",
+      "T-0167"
+    ],
+    "size": "S",
+    "risk": "low",
+    "sensitive": false,
+    "status": "blocked",
+    "blockReason": "manual"
+  }
+]
