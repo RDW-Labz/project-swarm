@@ -7,7 +7,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  captureNewFailureCauses,
   failureCausesFromRuns,
+  materializeRegressionStubs,
   newFailureCauses,
   regressionStubFor,
 } from '../tools/failure-regression.mjs';
@@ -68,6 +70,14 @@ test('a known cause is not reported as new', () => {
   assert.deepEqual(none, []);
 });
 
+test('timed-out and timedout jobs count as failure causes', () => {
+  const causes = failureCausesFromRuns({
+    'run-timed-out': { jobs: [failJob({ status: 'timed-out', error: 'worker timed out' })] },
+    'run-timedout': { jobs: [failJob({ status: 'timedout', error: 'worker timed out again' })] },
+  });
+  assert.equal(causes.length, 2);
+});
+
 test('regression stub is valid JS with test.todo and includes the run id', async () => {
   const cause = failureCausesFromRuns({
     'run-stub-42': {
@@ -99,4 +109,45 @@ test('summaries are sanitized and omit absolute home paths', () => {
   assert.ok(causes[0].summary.length <= 120);
   assert.doesNotMatch(causes[0].summary, /\/Users\/fakeperson/);
   assert.match(causes[0].summary, /<home>/);
+});
+
+test('capture writes exactly one regression stub per new cause and is idempotent', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'failure-regression-capture-'));
+  const runStates = {
+    'run-a': { jobs: [failJob({ id: 'job-a', error: 'first distinct failure' })] },
+    'run-b': { jobs: [failJob({ id: 'job-b', error: 'second distinct failure' })] },
+  };
+
+  const first = await captureNewFailureCauses(root, runStates);
+  assert.equal(first.newCauses.length, 2);
+  assert.equal(first.written.length, 2);
+  assert.deepEqual(await fs.readdir(path.join(root, 'tests', 'regressions')), [
+    'first-distinct-failure.test.mjs',
+    'second-distinct-failure.test.mjs',
+  ]);
+
+  const second = await captureNewFailureCauses(root, runStates);
+  assert.deepEqual(second.newCauses, []);
+  assert.deepEqual(second.written, []);
+});
+
+test('an existing regression stub is skipped without being overwritten', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'failure-regression-existing-'));
+  const file = path.join(root, 'tests', 'regressions', 'already-exists.test.mjs');
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, 'sentinel\n', 'utf8');
+
+  const result = await materializeRegressionStubs(root, [{ key: 'already-exists', summary: 'new text' }]);
+  assert.deepEqual(result.written, []);
+  assert.deepEqual(result.skipped, [file]);
+  assert.equal(await fs.readFile(file, 'utf8'), 'sentinel\n');
+});
+
+test('a bad regression key is refused before writing', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'failure-regression-invalid-'));
+  await assert.rejects(
+    materializeRegressionStubs(root, [{ key: '../escape', summary: 'unsafe' }]),
+    /failure-regression-key-invalid/,
+  );
+  await assert.rejects(fs.stat(path.join(root, 'tests', 'regressions')), { code: 'ENOENT' });
 });

@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "T-0165-secfix",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "outputs": [
+        "tools/field-export.mjs",
+        "tests/field-export.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/security-scan.mjs",
+        "tools/lessons.mjs",
+        "tools/lesson-store.mjs"
+      ],
+      "prompt": "Security review (Opus) FAILED ticket T-0165 (tools/field-export.mjs, metadata-only field export). Fix every finding: (1) MEDIUM line ~46: the secret scan fails open \u2014 scanSecrets drops scanSecretsDetailed's skipped list, so content over 1,000,000 bytes is never scanned and the export still passes. Use scanSecretsDetailed (read tools/security-scan.mjs) and REFUSE the export (code 'field-export-unsafe', reason 'scan-skipped') when skipped is non-empty; also refuse when the serialized export is over a 512 KB cap before scanning. (2) LOW line ~159: projectId is joined into a path without a check, so '../' reads JSON outside root/lessons: validate projectId against /^[a-f0-9]{8,64}$/ (it is a hash) and confirm the resolved path stays under root/lessons (path.relative must not start with '..'), else throw 'field-export-bad-project'. (3) LOW lines ~64 and ~123: free-text lesson id, area, tags and run lane are exported as-is: allow-list them \u2014 lesson id must match /^[A-Za-z0-9._-]{1,64}$/ else hashed (sha256 first 12 hex), area and lane must be one of a small known set or [a-z0-9-]{1,32} else 'other', tags each [a-z0-9-]{1,32} (max 10, others dropped); never spread objects. Tests in tests/field-export.test.mjs: a >1 MB / skipped scan refuses with reason scan-skipped (inject a scanner returning skipped); projectId '../x' refused; odd ids are hashed, odd tags dropped, unknown area/lane become 'other'; keep the existing tests passing. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test, injected deps, no wall clock/env/TTY/network; never write token-shaped literals (build fakes at runtime). Run `node --import ./tests/_isolate-config.mjs --test <your tests>` and `node tools/check-package.mjs`; the coordinator runs the full suite and a fresh security review. Tests in ignoreTests use these files for unrelated behavior; the coordinator runs the FULL suite.",
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/split-module.test.mjs"
+      ]
+    },
+    {
+      "id": "T-0102-T-0141-secfix",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "outputs": [
+        "contracts/watch-s4-ops.json",
+        "tests/watch-s4-contract.test.mjs",
+        "tools/orchestrator-context.mjs",
+        "tests/orchestrator-context.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/watch-server.mjs"
+      ],
+      "prompt": "Security review (Opus) LOW findings to fix. (A) T-0102 contracts/watch-s4-ops.json lines ~157, ~191, ~235: the owner-action routes (/api/owner/actions/{itemId}/prepare, /api/owner/actions/{itemId}/decision, /api/owner/audit) accept the board token in the ?t= query string, which leaks into logs, history and Referer. Change their security requirement to ONLY the x-watch-token header scheme plus tailnetSignIn (both required); keep the query scheme on the existing read routes only; document in the route description that ?t= is refused on owner routes (401). Update tests/watch-s4-contract.test.mjs: every /api/owner/* operation's security lists exactly boardTokenHeader + tailnetSignIn and never boardTokenQuery. (B) T-0141 tools/orchestrator-context.mjs line ~188: sessionId is written unescaped into markdown memory the next session reads. Validate sessionId against /^[A-Za-z0-9-]{1,80}$/ before writing (invalid -> throw code 'orchestrator-bad-session-id', nothing written), and write it inside inline code backticks. Test in tests/orchestrator-context.test.mjs: a sessionId with newline/markdown/backtick is refused and nothing is written; a valid one is written. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test, injected deps, no wall clock/env/TTY/network; never write token-shaped literals (build fakes at runtime). Run `node --import ./tests/_isolate-config.mjs --test <your tests>` and `node tools/check-package.mjs`; the coordinator runs the full suite and a fresh security review. Tests in ignoreTests use these files for unrelated behavior; the coordinator runs the FULL suite.",
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ]
+}

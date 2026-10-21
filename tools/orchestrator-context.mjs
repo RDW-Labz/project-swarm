@@ -16,6 +16,7 @@ export const CLAUDE_HANDOFF_MEMORY = 'swarm-orchestrator-handoff.md';
 
 const MIN_HANDOFF_BYTES = 256 * 1024;
 const MAX_HANDOFF_BYTES = 64 * 1024 * 1024;
+const SESSION_ID_RE = /^[A-Za-z0-9-]{1,80}$/;
 const TAIL_READ = 96 * 1024;
 const SUMMARY_LIMIT = 2400;
 
@@ -47,17 +48,17 @@ export function validateOrchestratorConfig(raw) {
   return errors.length ? { ok: false, config: null, errors } : { ok: true, config: Object.keys(config).length ? config : null, errors: [] };
 }
 
-/** Resolved handoff threshold in bytes: explicit option, then env, then profile orchestrator block, then default. */
+/** Resolved handoff threshold in bytes: explicit option, then profile orchestrator block, then env, then default. */
 export function handoffTranscriptBytes({ threshold, orchestrator, config, env = process.env } = {}) {
   const explicit = parseThresholdInt(threshold);
   if (explicit !== null) return explicit;
-  const fromEnv = parseEnvThreshold(env[HANDOFF_TRANSCRIPT_BYTES_ENV]);
-  if (fromEnv !== null) return fromEnv;
   const block = orchestrator ?? config?.orchestrator;
   if (isObj(block) && block.handoffTranscriptBytes !== undefined) {
     const fromProfile = parseThresholdInt(block.handoffTranscriptBytes);
     if (fromProfile !== null) return fromProfile;
   }
+  const fromEnv = parseEnvThreshold(env[HANDOFF_TRANSCRIPT_BYTES_ENV]);
+  if (fromEnv !== null) return fromEnv;
   return DEFAULT_HANDOFF_TRANSCRIPT_BYTES;
 }
 
@@ -170,6 +171,11 @@ export async function persistOrchestratorHandoff({
 } = {}) {
   if (typeof root !== 'string' || !root) return { ok: false, resume: null, error: 'handoff-needs-root' };
   if (typeof sessionId !== 'string' || !sessionId) return { ok: false, resume: null, error: 'handoff-needs-session' };
+  if (!SESSION_ID_RE.test(sessionId)) {
+    const err = new Error('invalid orchestrator session id');
+    err.code = 'orchestrator-bad-session-id';
+    throw err;
+  }
   const name = typeof transcript === 'string' && transcript ? transcript : null;
   if (!name || bytes === null) return { ok: false, resume: null, error: 'handoff-needs-transcript' };
   const dir = safeOrchestratorDir(root);
@@ -185,7 +191,7 @@ export async function persistOrchestratorHandoff({
   const block = [
     '',
     `## Orchestrator context handoff ${at}`,
-    `Session \`${sessionId.slice(0, 80)}\` transcript \`${path.basename(name)}\` reached ${bytes} bytes (threshold ${threshold}).`,
+    `Session \`${sessionId}\` transcript \`${path.basename(name)}\` reached ${bytes} bytes (threshold ${threshold}).`,
     'Start a fresh Claude Code session; read coordination HANDOFF.md and TASK.md, then this file.',
     '',
     snap.lastUser ? `### Last user message\n${snap.lastUser}\n` : '### Last user message\n(none captured)\n',
@@ -201,7 +207,7 @@ export async function persistOrchestratorHandoff({
   const state = {
     version: 1,
     at,
-    sessionId: sessionId.slice(0, 80),
+    sessionId,
     transcript: path.basename(name),
     bytes,
     threshold,
