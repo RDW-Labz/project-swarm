@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "review-cap-billed-3",
+      "agent": "claude",
+      "model": "sonnet",
+      "tier": "mid",
+      "tierReason": "spend cap enforcement logic",
+      "type": "review",
+      "prompt": "THIRD AND FINAL REVIEW. Two earlier reviews failed; the last findings were: a rented job with unknown cost reserving $0, lane names like constructor producing a non-numeric reserve, invalid rental.usd silently 0, cache key without ctime or ino. All reportedly fixed. Report only real problems that let spend slip under the cap in ordinary use (an honest orchestrator, not an adversary); list adversarial-only issues separately and mark them low. Review coordination/review/cap-billed.diff (tools/project-spend.mjs and tools/spend.mjs). Intent: the project spend cap must count BILLED spend only (jobs on metered lanes in PAID_LANES) plus the exposure of running runs that have a paid-lane job; list value (claude subscription, Cursor, Codex, Hermes) is reported but never counted. Check: (1) a metered-lane job with unknown or missing cost can never silently count as 0 and let a run slip under the cap (it must be counted as unknown and surfaced); (2) exposure cannot be negative or double counted; (3) a run state with a missing lane field does not become free by accident (name the fallback); (4) the cap can still never be bypassed by cached entries (the cache keyed by mtime and size); (5) no change makes a billed lane count as unbilled (compare PAID_LANES membership with the lanes that really bill: openrouter, openai, gemini, lambda, anthropic, rented); (6) message text. Answer with a list of findings, each with file, line, scenario and severity, then one line PASS or FAIL. Do not write files.",
+      "context": [
+        "tools/project-spend.mjs",
+        "tools/spend.mjs",
+        "coordination/review/cap-billed.diff",
+        "tests/project-cap-billed.test.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}
