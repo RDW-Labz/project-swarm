@@ -354,8 +354,16 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
       writers.add(normalOutput);
     }
     // Tests a job knowingly leaves uncovered by context; same path rules as context/outputs.
+    if (job.ignoreTestsReason !== undefined) {
+      if (typeof job.ignoreTestsReason !== 'string') fail('ignoreTestsReason must be a string');
+      const trimmedReason = job.ignoreTestsReason.trim();
+      if (!trimmedReason || trimmedReason.length > 200 || /[\x00-\x1f\x7f]/.test(job.ignoreTestsReason) || /[\r\n]/.test(job.ignoreTestsReason)) fail('ignoreTestsReason must be a string of 1 to 200 characters (trimmed, no control characters, no newlines)');
+      if (job.ignoreTests === undefined) fail('ignoreTestsReason requires an ignoreTests array');
+    }
     if (job.ignoreTests !== undefined) {
-      if (!Array.isArray(job.ignoreTests) || job.ignoreTests.length > 100) fail('ignoreTests must be an array of at most 100 files');
+      const ignoreTestsCap = job.ignoreTestsReason !== undefined && typeof job.ignoreTestsReason === 'string' && job.ignoreTestsReason.trim() ? 1000 : 100;
+      const ignoreTestsCapMessage = ignoreTestsCap === 100 ? 'ignoreTests must be an array of at most 100 files' : 'ignoreTests must be an array of at most 1000 files';
+      if (!Array.isArray(job.ignoreTests) || job.ignoreTests.length > ignoreTestsCap) fail(ignoreTestsCapMessage);
       if (new Set(job.ignoreTests).size !== job.ignoreTests.length) fail('Duplicate file path');
       for (const file of job.ignoreTests) relative(file);
     }
@@ -401,7 +409,7 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     // Unknown command/provider fields cannot create an execution path.
     if (job.type === 'lead') validateLeadArea(job);
     else if (job.area !== undefined) fail(`lead-area-invalid: Job ${job.id}: area requires type lead`, 'lead-area-invalid');
-    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'dependencies', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext', 'batch', 'contract', 'acceptance', 'bestOf', 'hard'];
+    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'ignoreTestsReason', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'dependencies', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext', 'batch', 'contract', 'acceptance', 'bestOf', 'hard'];
     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
     if (job.batch !== undefined && typeof job.batch !== 'boolean') fail(`Job ${job.id}: batch must be true or false`, 'batch-invalid');
     if (job.hard !== undefined && typeof job.hard !== 'boolean') fail(`Job ${job.id}: hard must be true or false`, 'hard-invalid');
@@ -436,6 +444,37 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     }
   }
   return manifest;
+}
+
+const UNCOVERED_TEST_REFERENCES_HEADER = 'Uncovered test references (add the test to context, or list it in ignoreTests with a reason in the prompt): ';
+
+export function ignoreTestsPromptLineCoversTest(prompt, testPath) {
+  const normalized = String(testPath).replace(/\\/g, '/');
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`ignoreTests:\\s*${escaped}(?:\\s|$)`, 'm').test(String(prompt ?? ''));
+}
+
+export function ignoreTestsReasonCoversJob(job) {
+  return typeof job?.ignoreTestsReason === 'string' && job.ignoreTestsReason.trim().length > 0;
+}
+
+export function effectiveIgnoreTestsForCoverage(job) {
+  const list = job.ignoreTests ?? [];
+  if (!list.length) return list;
+  if (list.length <= 100 && job.ignoreTestsReason === undefined) return list;
+  if (ignoreTestsReasonCoversJob(job)) return list;
+  return list.filter(test => ignoreTestsPromptLineCoversTest(job.prompt, test));
+}
+
+export function formatUncoveredTestReferencesError(uncovered, manifestJobs = []) {
+  const byId = new Map((manifestJobs ?? []).map(job => [job.id, job]));
+  const parts = uncovered.map(item => {
+    const job = byId.get(item.job);
+    const reason = ignoreTestsReasonCoversJob(job) ? job.ignoreTestsReason.trim() : '';
+    const base = `${item.job}: ${item.output} <- ${item.test}`;
+    return reason ? `${base} (ignoreTestsReason: ${reason})` : base;
+  });
+  return UNCOVERED_TEST_REFERENCES_HEADER + parts.join('; ');
 }
 
 // The retained proposal workspace contains only declared outputs. The runnable checkout is
