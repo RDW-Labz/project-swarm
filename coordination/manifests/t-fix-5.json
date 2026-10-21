@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t-fix5-tests",
+      "agent": "auto",
+      "prompt": "After the second hardening round of the policy engine (tools/policy.mjs, tools/policy-run.mjs, tools/policy-commands.mjs, in context read-only), eight older tests fail because their fixtures give partial or loose facts that the hardened rules now refuse. Failing: tests/policy-defaults-v2.test.mjs (branch-switch standing approval cases; journal-restore standing approval cases; merge-live-site auto-approves when all deploying gates pass; workflow-change standing approval cases; cap-raise-small at five dollars passes and five oh one fails), tests/policy-run.test.mjs (runPolicyPass, 2 subtests), tests/policy.test.mjs (standing default rules auto-approve with the right facts), and possibly tests/policy-defaults.test.mjs. Update only the fixtures so each test keeps its original intent under the hardened rules: exact boolean facts (false for irreversible, destructive, force, pastDailyAutoLimit, addsSecrets, addsDeploy, addsPublish; true for the positive gates), a non-empty project string for cap-raise, isNewWorkflow false for workflow-change, journal-restore paths limited to the generated routing files (coordination/HANDOFF.md, docs/state/usage-ledger.md, coordination/TASK.md, docs/scope/build-plan.md), a plain branch string that is not main, master, HEAD or a remote prefix for commit-push, readHandled and the daily-limit dependency injected in runPolicyPass tests, and an auto-decision log that can be written. Where a test case asserts the OLD loose behavior (for example undefined facts passing, a .swarm path restored, HEAD pushed), flip the assertion to the hardened result and add a one-line comment naming the review finding. Do not edit tools. Keep tests/policy-hardening-round2.test.mjs and tests/policy-hardening-round3.test.mjs unchanged. ignoreTests reason: only test files change.",
+      "context": [
+        "tools/policy.mjs",
+        "tools/policy-run.mjs",
+        "tools/policy-commands.mjs",
+        "tests/policy-defaults-v2.test.mjs",
+        "tests/policy-run.test.mjs",
+        "tests/policy.test.mjs",
+        "tests/policy-defaults.test.mjs",
+        "tests/policy-hardening-round3.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/policy-defaults-v2.test.mjs",
+        "tests/policy-run.test.mjs",
+        "tests/policy.test.mjs",
+        "tests/policy-defaults.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ]
+}
