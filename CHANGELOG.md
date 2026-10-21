@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.152.0
+
+Orchestrator up: a project orchestrator seat that survives restarts.
+- **Orchestrator up:** node tools/orchestrator-up.mjs up, down and status run one tmux session per project (swarm-orch-REPO) with claude remote-control in the repo; up is a no-op when the session already runs; down kills only that session.
+- **launchd:** launchd install and uninstall add or remove a LaunchAgent that runs up at login, so the project orchestrator, and the autopilot it starts, come back after a restart; uninstall leaves tmux running; logs go to the Library Logs folder.
+- **Docs:** docs/orchestrator-up.md and a see-also line in docs/orchestrator-lane.md. Not wired into swarm.mjs yet.
+- **Tests:** tests/orchestrator-up.test.mjs.
+
 ## 1.151.0
 
 The board no longer hangs a test run.
