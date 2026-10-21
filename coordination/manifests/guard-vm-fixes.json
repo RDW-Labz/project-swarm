@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "guard-vm-fixes-switch",
+      "agent": "auto",
+      "prompt": "Fix five findings from an Opus review of the vercel and merge change in tools/handbuild.mjs, and add the owner's new free forms. FINDINGS. (1) isFreeVercel, the deploy-like branch (a vercel command with no subcommand and only option words): only the informational flags --help, -h, --version and -v may be free there; remove --scope, --scope=VALUE, --token and any other option from that free list (vercel --scope=team and vercel --token X deploy the current directory and must be NOT free). (2) mergeSwarmPrStandingEnabled: the standing rule is on only when a rule with id merge-swarm-pr has enabled strictly equal to true and no disabled field equal to true; a rule with a missing enabled field, enabled given as a string or number or null, or disabled true is OFF; if more than one rule has this id, any disabled or non-true one turns it off (all must be enabled true); a corrupt file, a non-array rules field, or a relative policy path is off (resolve SWARM_POLICY_FILE only when it is an absolute path). (3) isStandingSwarmMerge: under the standing rule swarm merge N is allowed only with exactly one numeric argument and NO flags at all (any word starting with a dash blocks). (4) gh with global options: a gh command whose tokens contain pr followed by merge anywhere (also gh -R owner/repo pr merge 12, gh --repo x pr merge) must be classified as gh pr merge and BLOCKED with the use swarm merge message before the globalOpts early exit, never downgraded to a plain merge op that a hand-build approval naming merge could allow; an unknown gh subcommand that is not on the free list stays not free but is not treated as an approvable merge. (5) MERGE_BLOCKED_REASON must not tell the agent to edit the policy file: say that a merge needs the owner (the owner types merge and the PR number in chat, or the owner's machine policy enables the standing approval), and that swarm merge N is the sanctioned command. NEW FREE FORMS (owner request: the guard blocks git switch and checkout that the orchestrator needs): (a) git switch BRANCH, git checkout BRANCH, git switch -c NEW and git checkout -b NEW, git switch --detach REF and git checkout --detach REF are free when there is no force or discard option (-f, --force, -B, -C, --discard-changes, --orphan, --merge, -m), no pathspec after --, no globalOpts or hasConfig, and BRANCH and REF are plain names matching ^[A-Za-z0-9._/-]+$ without a colon; switching onto main or master is free (commits and pushes on them stay guarded); (b) restoring generated journal files is free: git checkout -- PATHS, git checkout REF -- PATHS, git restore PATHS and git restore --source=REF -- PATHS are free only when EVERY path is a generated or routing file (coordination/HANDOFF.md and its previous copies, TASK.md, build-plan.md, docs/state/usage-ledger.md and other files under docs/state, coordination manifests json files: reuse isRoutingPath and add the docs/state folder); any other path, a dot, a directory or a glob is not free. TESTS: update tests/handbuild-vercel-merge.test.mjs (add: vercel --scope=team and vercel --token x not free, vercel --version still free; policy file variants: rule without enabled, enabled string, enabled 0, disabled true, duplicate ids with one disabled, relative SWARM_POLICY_FILE all keep swarm merge blocked; swarm merge 12 --auto, --yes, --force=true, -fy blocked even with the rule on; gh -R owner/repo pr merge 12 and gh --repo x pr merge 12 blocked with the swarm merge message even when a live hand-build approval names merge; the block message does not contain the words edit or policy file instructions) and add tests/handbuild-switch.test.mjs (every form in (a) and (b) free or not free as described, including git checkout -- tools/swarm.mjs not free, git checkout -f main not free, git checkout -- . not free, git switch -c feat/x free, git checkout --detach origin/main free, git restore --source=HEAD -- coordination/HANDOFF.md docs/state/usage-ledger.md free). Update existing guard tests only where a pinned message changed. Write only tools/handbuild.mjs, tests/handbuild-vercel-merge.test.mjs, tests/handbuild-switch.test.mjs and the existing guard test files that pin changed text.",
+      "context": [
+        "tools/handbuild.mjs",
+        "tools/routing-paths.mjs",
+        "tests/handbuild-vercel-merge.test.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-hardening.test.mjs",
+        "tests/handbuild-hardening2.test.mjs",
+        "tests/handbuild-accidents.test.mjs"
+      ],
+      "outputs": [
+        "tools/handbuild.mjs",
+        "tests/handbuild-vercel-merge.test.mjs",
+        "tests/handbuild-switch.test.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-hardening.test.mjs",
+        "tests/handbuild-hardening2.test.mjs",
+        "tests/handbuild-accidents.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/git-hooks.test.mjs",
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/self-approval-hardening.test.mjs",
+        "tests/swarm-produced-hash.test.mjs"
+      ]
+    }
+  ]
+}
