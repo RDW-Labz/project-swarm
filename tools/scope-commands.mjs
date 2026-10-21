@@ -40,6 +40,7 @@ import { existsSync, statSync, lstatSync, realpathSync, readdirSync, readFileSyn
 import { promisify } from 'node:util';
 import { acceptanceLines, coverage, evaluate, reviewManifest as acceptanceManifest, parseAcceptanceVerdicts, readAcceptanceRecords, writeAcceptanceRecords } from './acceptance.mjs';
 import { securityReviewReason, securityReviewManifest, parseReviewVerdicts, filesHash, readReviewRecords, writeReviewRecords } from './security-review.mjs';
+import { validateTicketPaths, formatTicketPathRefusal } from './ticket-paths.mjs';
 
 export const SCOPE_USAGE = [
   'Usage: swarm scope new [--type web-portal] [--out FILE] [--answers FILE]   (an interview that writes the scope: no model, no cost; --answers takes the same answers as JSON)',
@@ -76,6 +77,35 @@ const LOCK_STALE_MS = 10 * 60 * 1000;
 const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
+
+function walkRepoFiles(root, dir = '', out = []) {
+  const abs = dir ? path.join(root, dir) : root;
+  for (const entry of readdirSync(abs, { withFileTypes: true })) {
+    if (entry.name === '.git' || entry.name === '.swarm' || entry.name === 'node_modules') continue;
+    const rel = dir ? `${dir}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) walkRepoFiles(root, rel, out);
+    else if (entry.isFile()) out.push(rel);
+  }
+  return out;
+}
+
+async function listTrackedRepoFiles(root) {
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', root, 'ls-files'], { maxBuffer: 16 * 1024 * 1024 });
+    return stdout.split('\n').filter(Boolean);
+  } catch {
+    return walkRepoFiles(root);
+  }
+}
+
+function ticketPathRefusalLines(tickets, repoFiles, root) {
+  const lines = [];
+  for (const t of tickets) {
+    const check = validateTicketPaths(t, { repoFiles, root });
+    for (const err of check.errors) lines.push(formatTicketPathRefusal(t.id, err));
+  }
+  return lines;
+}
 const out = (text, exitCode = 0) => ({ stdout: text.endsWith('\n') ? text : `${text}\n`, exitCode });
 const bad = message => out(`${message}\n${SCOPE_USAGE}`, 1);
 
@@ -823,6 +853,9 @@ async function cmdSplit(root, { rest, flags }) {
   // A merge into an APPROVED ledger keeps the old refusal: it would drop the approval of a build that may be running, for tickets that cannot be built yet.
   const hardGaps = unwired.filter(g => !needsIntegration.has(g.req) || (existing && isApproved(existing)));
   if (hardGaps.length) return out(`split refused; the features are not wired (add an integration ticket per requirement, then split these stages again):\n${hardGaps.slice(0, 15).map(g => `  ${g.reason}`).join('\n')}`, 1);
+  const repoFiles = await listTrackedRepoFiles(root);
+  const pathRefusals = ticketPathRefusalLines(built.tickets, repoFiles, root);
+  if (pathRefusals.length) return out(`split refused; ticket paths are not in the repo:\n${pathRefusals.map(line => `  ${line}`).join('\n')}`, 1);
   let tickets = built.tickets;
   if (!existing) tickets = [...tickets, ...checklistToTickets(day0Checklist(scope))];
   const base = existing ?? createLedger({ scope: { name: scope.name, version: scope.version, hash, file }, tickets: [] });
@@ -1709,6 +1742,9 @@ async function editTicketFiles(root, ledger, rest, flags) {
       if (flags['add-acceptance'] !== undefined) next.acceptance = [...(next.acceptance ?? []), ...lines(flags['add-acceptance'])];
       const v = validateTicket(next);
       if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
+      const repoFiles = await listTrackedRepoFiles(root);
+      const pathCheck = validateTicketPaths(next, { repoFiles, root });
+      if (!pathCheck.ok) return out(`refused:\n${pathCheck.errors.map(err => `  ${formatTicketPathRefusal(ticket.id, err)}`).join('\n')}`, 1);
       const problems = [];
       const moved = [];
       const sources = [];

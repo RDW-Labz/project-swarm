@@ -1,4 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
+import {
+  buildProgressStats,
+  isHumanTicket,
+  isLiveTicket,
+  ledgerBuildSummary,
+  waveBlockingCount,
+  waveBlockingTicketIds,
+  wavePlanningTickets,
+} from './human-progress.mjs';
 // `swarm go --scope` as a loop: wave after wave until the ledger is finished or something needs the owner.
 // Each wave does what the owner used to do by hand: build the wave, run it, integrate and commit it (go), move the tickets (scope sync),
 // mark the integrated ones done (scope sync --integrated) and run the security / acceptance reviews that step asks for.
@@ -11,25 +20,47 @@ const REVIEW_FILE = /swarm run (\.swarm\/(security|acceptance)-reviews\/[A-Za-z0
 
 export const WAVE_STOPS = Object.freeze(['complete', 'waiting-human', 'stuck', 'paused', 'stopped', 'cap', 'failed', 'no-progress', 'max-waves']);
 
-const count = (tickets, status) => tickets.filter(t => t.status === status).length;
+export { waveBlockingCount };
+
+/** Live tickets for wave simulation (human tickets omitted; human deps stripped). */
+export function wavePlanningLedger(ledger) {
+  return wavePlanningTickets(ledger?.tickets ?? []);
+}
+
+/** Non-human tickets that block wave planning. */
+export function waveBlockingIds(ledger) {
+  return waveBlockingTicketIds(ledger?.tickets ?? []);
+}
+
 export function ledgerSummary(ledger) {
   const tickets = ledger?.tickets ?? [];
-  const live = tickets.filter(t => t.status !== 'cancelled' && t.status !== 'proposed');
-  return {
+  const live = tickets.filter(isLiveTicket);
+  const build = ledgerBuildSummary(ledger);
+  const humanLive = live.filter(isHumanTicket);
+  const humanDone = humanLive.filter((t) => t.status === 'done').length;
+  const humanReady = humanLive.filter((t) => t.status === 'ready' || t.status === 'todo').length;
+  const { percentDone } = buildProgressStats(tickets);
+  const human = { open: build.humans, done: humanDone, total: humanLive.length };
+  const summary = {
     total: live.length,
-    done: count(live, 'done'),
-    ready: count(live, 'ready') + count(live, 'todo'),
-    running: count(live, 'running'),
-    review: count(live, 'review'),
-    blocked: count(live, 'blocked'),
-    humans: live.filter(t => t.type === 'human' && t.status !== 'done').length,
-    proposed: tickets.filter(t => t.status === 'proposed').length,
+    done: build.done,
+    ready: build.ready + humanReady,
+    running: build.running,
+    review: build.review,
+    blocked: build.blocked,
+    humans: build.humans,
+    proposed: build.proposed,
   };
+  Object.defineProperty(summary, 'percentDone', { value: percentDone, enumerable: false });
+  Object.defineProperty(summary, 'human', { value: human, enumerable: false });
+  return summary;
 }
 
 // Why the loop cannot start another wave, read from the ledger and the error the wave builder gave.
 export function classifyIdle(summary, error) {
-  if (summary.total > 0 && summary.done === summary.total) return { status: 'complete', reason: `all ${summary.total} tickets are done${summary.proposed ? `; ${summary.proposed} proposed ticket(s) wait for your approval (swarm tickets --status proposed)` : ''}` };
+  const buildTotal = summary.total - (summary.human?.total ?? 0);
+  const buildDone = summary.done;
+  if (buildTotal > 0 && buildDone === buildTotal && !summary.humans) return { status: 'complete', reason: `all ${buildTotal} tickets are done${summary.proposed ? `; ${summary.proposed} proposed ticket(s) wait for your approval (swarm tickets --status proposed)` : ''}` };
   const code = error?.code;
   if (code === 'scope-skeleton') return { status: 'stuck', reason: error.message };
   if (summary.humans > 0 && summary.running === 0 && summary.review === 0) return { status: 'waiting-human', reason: `${summary.humans} human ticket(s) need you (swarm tickets ID --set done); everything else that can run is done` };

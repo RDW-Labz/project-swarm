@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Validate ticket file paths against the tracked repo tree and suggest close matches (R-006).
+import { lstatSync, statSync } from 'node:fs';
+import path from 'node:path';
 import { isTicketRef } from './ticket-refs.mjs';
 
 const READ_FIELDS = ['context', 'contracts'];
@@ -94,30 +96,101 @@ function isLikelyWriteTypo(wanted, closest, dist) {
   return false;
 }
 
-function pathExists(path, exists, repoSet) {
-  if (typeof exists === 'function') return exists(path);
-  return repoSet.has(path);
+function pathExists(p, exists, repoSet) {
+  if (typeof exists === 'function') return exists(p);
+  return repoSet.has(normTicketPath(p));
+}
+
+function trackedFiles(repoFiles) {
+  return (repoFiles ?? []).map(normTicketPath).filter(Boolean);
+}
+
+/** True when `wanted` names a folder, not a file in the tree (R-006 directory case). */
+export function pathIsDirectory(wanted, repoFiles, root = null) {
+  const want = normTicketPath(wanted);
+  if (!want || want.endsWith('/')) return true;
+  const files = trackedFiles(repoFiles);
+  if (files.includes(want)) return false;
+  if (files.some((f) => f.startsWith(`${want}/`))) return true;
+  if (root) {
+    try {
+      return lstatSync(path.join(root, want)).isDirectory();
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/** A build ticket may create a file when its parent directory exists in the repo or on disk. */
+export function writeTargetAllowed(wanted, repoFiles, root = null) {
+  const want = normTicketPath(wanted);
+  const files = trackedFiles(repoFiles);
+  const set = new Set(files);
+  if (set.has(want)) return true;
+  const parent = want.includes('/') ? want.slice(0, want.lastIndexOf('/')) : '';
+  if (!parent) return true;
+  if (set.has(parent)) return false;
+  if (files.some((f) => f.startsWith(`${parent}/`))) return true;
+  if (root) {
+    try {
+      return statSync(path.join(root, parent)).isDirectory();
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+export function formatTicketPathRefusal(ticketId, err) {
+  const reason = err.reason ?? (mustExist(err.field) ? 'missing file' : 'likely typo');
+  let line = `${ticketId}: ${err.path} ${reason}`;
+  if (err.suggestion) line += `; closest real path: ${err.suggestion}`;
+  return line;
 }
 
 /**
  * @param {object} ticket
- * @param {{ repoFiles?: string[], exists?: (path: string) => boolean }} options
- * @returns {{ ok: boolean, errors: { field: string, path: string, suggestion: string|null, message: string }[] }}
+ * @param {{ repoFiles?: string[], exists?: (path: string) => boolean, root?: string|null }} options
+ * @returns {{ ok: boolean, errors: { field: string, path: string, suggestion: string|null, reason?: string, message: string }[] }}
  */
-export function validateTicketPaths(ticket, { repoFiles = [], exists } = {}) {
-  const repoSet = new Set((repoFiles ?? []).map(normTicketPath));
-  const have = (p) => pathExists(p, exists, repoSet);
+export function validateTicketPaths(ticket, { repoFiles = [], exists, root = null } = {}) {
+  const repoSet = new Set(trackedFiles(repoFiles));
+  const have = (p, field) => {
+    if (pathIsDirectory(p, repoFiles, root)) return false;
+    if (pathExists(p, exists, repoSet)) return true;
+    if (typeof exists === 'function') return false;
+    if (WRITE_FIELDS.includes(field)) {
+      const suggestion = closestRepoPath(p, repoFiles);
+      const dist = suggestion ? levenshteinDistance(normTicketPath(p).toLowerCase(), normTicketPath(suggestion).toLowerCase()) : Infinity;
+      if (isLikelyWriteTypo(p, suggestion, dist)) return false;
+      if (writeTargetAllowed(p, repoFiles, root)) return true;
+    }
+    return repoSet.has(normTicketPath(p));
+  };
   const errors = [];
-  for (const { field, path } of listTicketPaths(ticket)) {
-    if (have(path)) continue;
-    const suggestion = closestRepoPath(path, repoFiles);
-    const dist = suggestion ? levenshteinDistance(path.toLowerCase(), normTicketPath(suggestion).toLowerCase()) : Infinity;
-    const reject = mustExist(field) || isLikelyWriteTypo(path, suggestion, dist);
+  for (const { field, path: ticketPath } of listTicketPaths(ticket)) {
+    if (pathIsDirectory(ticketPath, repoFiles, root)) {
+      const suggestion = closestRepoPath(ticketPath, repoFiles);
+      errors.push({
+        field,
+        path: ticketPath,
+        suggestion,
+        reason: 'is a directory',
+        message: `${field} path is a directory: ${ticketPath}`,
+      });
+      continue;
+    }
+    if (have(ticketPath, field)) continue;
+    const suggestion = closestRepoPath(ticketPath, repoFiles);
+    const dist = suggestion ? levenshteinDistance(ticketPath.toLowerCase(), normTicketPath(suggestion).toLowerCase()) : Infinity;
+    const reject = mustExist(field) || isLikelyWriteTypo(ticketPath, suggestion, dist);
     if (!reject) continue;
+    const reason = mustExist(field) ? 'missing file' : 'likely typo';
     const message = suggestion
-      ? `${field} path not in repo: ${path} (did you mean ${suggestion}?)`
-      : `${field} path not in repo: ${path}`;
-    errors.push({ field, path, suggestion, message });
+      ? `${field} path not in repo: ${ticketPath} (did you mean ${suggestion}?)`
+      : `${field} path not in repo: ${ticketPath}`;
+    errors.push({ field, path: ticketPath, suggestion, reason, message });
   }
   return { ok: errors.length === 0, errors };
 }

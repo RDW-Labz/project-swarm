@@ -102,8 +102,8 @@ function stageRows(scope, tickets) {
   return [...stages.values()].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id)).map(stage => {
     const mine = tickets.filter(ticket => effectiveStage(scope, ticket) === stage.id);
     const done = mine.filter(ticket => ticket.status === 'done').length;
-    const open = mine.filter(ticket => OPEN.has(ticket.status)).length;
     const blocked = mine.filter(ticket => ticket.status === 'blocked').length;
+    const open = mine.filter(ticket => OPEN.has(ticket.status) && ticket.status !== 'blocked').length;
     return { id: stage.id, stageId: stage.stageId, title: stage.title, total: mine.length, done, open, blocked, pct: pct(done, mine.length) };
   });
 }
@@ -453,8 +453,17 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
     };
     for (const [id, at] of times ?? []) setEarliest(id, at);
     const logDoneCount = completion.size;
+    let usedWaveAtFallback = false;
     let usedRunFallback = false;
     let usedMergeFallback = false;
+    for (const ticket of tickets) {
+      if (ticket.status !== 'done') continue;
+      const at = Date.parse(ticket.waveAt ?? '');
+      if (!Number.isFinite(at)) continue;
+      const before = completion.get(ticket.id);
+      setEarliest(ticket.id, at);
+      if (completion.has(ticket.id) && completion.get(ticket.id) !== before) usedWaveAtFallback = true;
+    }
     if (logDoneCount < 2) {
       for (const record of runRecords) {
         for (const job of record.state.jobs ?? []) {
@@ -486,7 +495,7 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
       const perDay = Number.isFinite(unroundedRate) && unroundedRate > 0 ? Math.round(unroundedRate * 100) / 100 : 0;
       const remaining = openTickets.length;
       const etaDays = remaining === 0 ? 0 : perDay > 0 ? Math.min(3650, Math.ceil(remaining / perDay)) : Number.isFinite(unroundedRate) && unroundedRate > 0 ? Math.min(3650, Math.ceil(remaining / unroundedRate)) : 3650;
-      const source = usedRunFallback ? ' (from run finish times)' : usedMergeFallback ? ' (from merge history)' : '';
+      const source = usedRunFallback ? ' (from run finish times)' : usedMergeFallback ? ' (from merge history)' : usedWaveAtFallback ? ' (from wave timestamps)' : '';
       return { remaining, perDay, days: etaDays, basis: `${basis}${source}` };
     };
     if (recent14.length >= 2) {

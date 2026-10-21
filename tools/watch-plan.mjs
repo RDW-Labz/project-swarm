@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { ledgerStats } from './tickets.mjs';
 import { sanitizeWorkerText } from './worker-text.mjs';
+import { buildProgressStats, ownerHumanChecklists, waveBlockingTicketIds } from './human-progress.mjs';
 
 const txt = (v, max = 200) => (v === undefined || v === null ? null : sanitizeWorkerText(v, max));
 const strs = v => (Array.isArray(v) ? v.filter(x => x !== undefined && x !== null).map(x => sanitizeWorkerText(x, 200)) : []);
@@ -30,13 +31,15 @@ export function buildPlanSnapshot(ledger, { now = Date.now() } = {}) {
   if (!ledger || tickets.length === 0) return { schema: 1, present: false };
 
   const stats = ledgerStats(ledger);
+  const buildStats = buildProgressStats(tickets, { now });
   const live = tickets.filter(isLive);
   const byIdMap = new Map(tickets.map(t => [t.id, t]));
 
   const header = {
     scopeName: txt(ledger.scope?.name),
     scopeVersion: pick(ledger.scope?.version),
-    percentDone: stats.percentDone,
+    percentDone: buildStats.percentDone,
+    buildTotal: buildStats.total,
     coveragePct: stats.coveragePct,
     total: stats.total,
     byStatus: stats.byStatus,
@@ -72,18 +75,7 @@ export function buildPlanSnapshot(ledger, { now = Date.now() } = {}) {
   const liveIds = new Set(live.map(t => t.id));
   const nodes = live.map(t => ({ id: t.id, status: t.status }));
   const edges = live.flatMap(t => strs(t.dependsOn).filter(d => liveIds.has(d)).map(d => ({ from: t.id, to: d })));
-  const reaches = (id, seen = new Set()) => {
-    if (seen.has(id)) return false;
-    seen.add(id);
-    for (const d of strs(byIdMap.get(id)?.dependsOn)) {
-      if (byIdMap.get(d)?.status === 'blocked' || reaches(d, seen)) return true;
-    }
-    return false;
-  };
-  const blocked = live
-    .filter(t => t.status === 'blocked' || (t.status !== 'done' && reaches(t.id)))
-    .map(t => t.id)
-    .sort(cmpId);
+  const blocked = waveBlockingTicketIds(tickets);
 
   const changeOrders = (Array.isArray(ledger.changeOrders) ? ledger.changeOrders : [])
     .map((c, i) => ({ c, i }))
@@ -130,6 +122,7 @@ export function buildPlanSnapshot(ledger, { now = Date.now() } = {}) {
     requirements,
     dependencies: { nodes, edges, blocked },
     changeOrders,
+    humanChecklists: ownerHumanChecklists(tickets, { now }),
     tickets: ticketObj,
   };
 }
