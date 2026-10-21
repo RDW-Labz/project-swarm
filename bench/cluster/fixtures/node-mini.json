@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "measuredAt": "2026-10-21T20:40:09.644Z",
+  "hw": {
+    "host": "Mac",
+    "model": "Mac16,10",
+    "cpu": "Apple M4",
+    "logicalCores": 10,
+    "perfCores": 4,
+    "effCores": 6,
+    "totalRamGb": 24,
+    "macos": "15.3.1",
+    "node": "v20.19.4",
+    "load": [
+      49.93,
+      28.9,
+      21.24
+    ]
+  },
+  "mem": {
+    "nodeFreemGb": 0.3,
+    "vmFreeGb": 0.07,
+    "vmAvailableGb": 4.45,
+    "memoryPressureFreePct": 37,
+    "memoryPressureFreeGb": 8.88,
+    "nodeUndercountX": 29.6,
+    "defaultLimitWithNodeFree": 4,
+    "defaultLimitWithRealFree": 9
+  },
+  "configuredLimit": 8,
+  "lanes": [
+    {
+      "lane": "codex",
+      "jobs": 221,
+      "passPct": 81,
+      "medianMin": 3.37,
+      "p95Min": 14.06,
+      "jobsPerHourPerSlot": 17.81
+    },
+    {
+      "lane": "claude",
+      "jobs": 118,
+      "passPct": 96.6,
+      "medianMin": 1.97,
+      "p95Min": 5.21,
+      "jobsPerHourPerSlot": 30.51
+    },
+    {
+      "lane": "cursor",
+      "jobs": 39,
+      "passPct": 92.3,
+      "medianMin": 1,
+      "p95Min": 5.32,
+      "jobsPerHourPerSlot": 59.96
+    },
+    {
+      "lane": "hermes",
+      "jobs": 32,
+      "passPct": 84.4,
+      "medianMin": 0.33,
+      "p95Min": 2.5,
+      "jobsPerHourPerSlot": 182.55
+    },
+    {
+      "lane": "anthropic",
+      "jobs": 11,
+      "passPct": 72.7,
+      "medianMin": 0.05,
+      "p95Min": 0.16,
+      "jobsPerHourPerSlot": 1116.97
+    }
+  ],
+  "slots": [
+    {
+      "project": "atlas-seafloor",
+      "runs": 100,
+      "jobs": 130,
+      "avgFillPct": 16,
+      "medianPeak": 1
+    },
+    {
+      "project": "project-swarm-1",
+      "runs": 39,
+      "jobs": 50,
+      "avgFillPct": 16,
+      "medianPeak": 1
+    },
+    {
+      "project": "atlas-seafloor-ops",
+      "runs": 14,
+      "jobs": 18,
+      "avgFillPct": 16,
+      "medianPeak": 1
+    },
+    {
+      "project": "Marketing agency",
+      "runs": 185,
+      "jobs": 223,
+      "avgFillPct": 15,
+      "medianPeak": 1
+    }
+  ],
+  "claimRace": [
+    {
+      "contenders": 2,
+      "trials": 20,
+      "exactlyOneWinner": true,
+      "medianClaimUs": 4156,
+      "p95ClaimUs": 10434
+    },
+    {
+      "contenders": 8,
+      "trials": 20,
+      "exactlyOneWinner": true,
+      "medianClaimUs": 5288,
+      "p95ClaimUs": 24860
+    },
+    {
+      "contenders": 32,
+      "trials": 20,
+      "exactlyOneWinner": true,
+      "medianClaimUs": 6281,
+      "p95ClaimUs": 66840
+    }
+  ],
+  "appendLatencyUs": {
+    "median": 116,
+    "p95": 443
+  }
+}

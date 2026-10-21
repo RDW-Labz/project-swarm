@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "draft": true,
+  "requirement": "R-048",
+  "cases": [
+    {
+      "id": "enqueue-visible-both",
+      "from": "macbook",
+      "to": "mac-mini",
+      "budgetMs": 3000,
+      "measure": "time from swarm queue add on one machine to the ticket in swarm queue list on the other"
+    },
+    {
+      "id": "enqueue-visible-both-reverse",
+      "from": "mac-mini",
+      "to": "macbook",
+      "budgetMs": 3000,
+      "measure": "same, reverse direction"
+    },
+    {
+      "id": "queue-depth-agree",
+      "budgetTickets": 1,
+      "measure": "Swarm Watch queue depth for one shared project differs by at most 1 ticket between machines"
+    },
+    {
+      "id": "local-append-floor",
+      "budgetMs": 5,
+      "baselineUs": 443,
+      "measure": "p95 local event append (write+rename) on this node; cross-machine budget must leave room above this"
+    }
+  ]
+}

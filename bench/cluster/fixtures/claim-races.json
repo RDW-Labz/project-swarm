@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "draft": true,
+  "requirement": "R-048",
+  "localBaseline": [
+    {
+      "contenders": 2,
+      "trials": 20,
+      "exactlyOneWinner": true,
+      "medianClaimUs": 4156,
+      "p95ClaimUs": 10434
+    },
+    {
+      "contenders": 8,
+      "trials": 20,
+      "exactlyOneWinner": true,
+      "medianClaimUs": 5288,
+      "p95ClaimUs": 24860
+    },
+    {
+      "contenders": 32,
+      "trials": 20,
+      "exactlyOneWinner": true,
+      "medianClaimUs": 6281,
+      "p95ClaimUs": 66840
+    }
+  ],
+  "cases": [
+    {
+      "id": "two-machines-one-ticket",
+      "contenders": [
+        {
+          "machine": "macbook",
+          "workers": 4
+        },
+        {
+          "machine": "mac-mini",
+          "workers": 4
+        }
+      ],
+      "expect": {
+        "leaseHolders": 1,
+        "loserExit": "non-zero",
+        "loserMessage": "leased elsewhere"
+      }
+    },
+    {
+      "id": "lease-expiry-reclaim",
+      "holder": "mac-mini",
+      "heartbeatMissSec": 120,
+      "expect": {
+        "returnsToQueue": true,
+        "newHolderAllowed": true
+      },
+      "requirement": "R-049"
+    },
+    {
+      "id": "burst-same-ticket",
+      "contenders": [
+        {
+          "machine": "macbook",
+          "workers": 8
+        },
+        {
+          "machine": "mac-mini",
+          "workers": 8
+        }
+      ],
+      "repeat": 50,
+      "expect": {
+        "leaseHoldersEveryTrial": 1
+      }
+    }
+  ]
+}

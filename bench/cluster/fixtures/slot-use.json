@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "draft": true,
+  "requirement": "R-046",
+  "measuredFill": [
+    {
+      "project": "atlas-seafloor",
+      "runs": 100,
+      "jobs": 130,
+      "avgFillPct": 16,
+      "medianPeak": 1
+    },
+    {
+      "project": "project-swarm-1",
+      "runs": 39,
+      "jobs": 50,
+      "avgFillPct": 16,
+      "medianPeak": 1
+    },
+    {
+      "project": "atlas-seafloor-ops",
+      "runs": 14,
+      "jobs": 18,
+      "avgFillPct": 16,
+      "medianPeak": 1
+    },
+    {
+      "project": "Marketing agency",
+      "runs": 185,
+      "jobs": 223,
+      "avgFillPct": 15,
+      "medianPeak": 1
+    }
+  ],
+  "cases": [
+    {
+      "id": "two-projects-cap4",
+      "machineCap": 4,
+      "ready": {
+        "A": 6,
+        "B": 6
+      },
+      "expect": {
+        "bothStartInSameWave": true,
+        "minPerProject": 1,
+        "totalStarted": 4
+      }
+    },
+    {
+      "id": "one-busy-one-idle",
+      "machineCap": 8,
+      "ready": {
+        "A": 20,
+        "B": 0
+      },
+      "expect": {
+        "totalStarted": 8,
+        "borrowIdleShare": true
+      }
+    },
+    {
+      "id": "three-projects-fair",
+      "machineCap": 8,
+      "ready": {
+        "A": 10,
+        "B": 10,
+        "C": 1
+      },
+      "expect": {
+        "guaranteedShare": 2,
+        "totalStarted": 8
+      }
+    },
+    {
+      "id": "underfilled-waves",
+      "machineCap": 8,
+      "recentRunJobs": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "expect": {
+        "warning": "waves under-filled"
+      }
+    }
+  ]
+}
