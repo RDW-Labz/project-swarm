@@ -321,7 +321,7 @@ test('T80 release docs describe the bounded loop and pin kickoff to 1.150.0', as
   const [pkgText, readme, changelog, skill] = await Promise.all(['package.json', 'README.md', 'CHANGELOG.md', 'skills/project-swarm/SKILL.md'].map(file => fs.readFile(path.join(installRoot, file), 'utf8')));
   const pkg = JSON.parse(pkgText);
   assert.equal(pkg.version, '1.150.0');
-  assert.equal(pkg.scripts.test, 'node --import ./tests/_isolate-config.mjs --test tests/*.test.mjs');
+  assert.equal(pkg.scripts.test, 'node --import ./tests/_isolate-config.mjs --test --test-timeout=600000 tests/*.test.mjs');
   assert.equal(pkg.scripts.check, 'node tools/check-package.mjs');
   assert.equal(pkg.scripts.build, undefined);
   assert.match(readme, /Use Project Swarm 1\.150\.0/);

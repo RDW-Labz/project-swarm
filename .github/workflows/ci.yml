@@ -1,11 +1,14 @@
 name: Local validation
 on:
   push:
+    branches:
+      - main
   pull_request:
 permissions:
   contents: read
 jobs:
   test:
+    timeout-minutes: 30
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
