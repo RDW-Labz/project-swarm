@@ -21,7 +21,8 @@ import { MAX_FILE } from './patterns.mjs';
 import { costNotReported, costPer1kOutputTokens, jobTokens, tokensTotal } from './run-state.mjs';
 import { designOnlyBlockedOnTestWarning, runWarnings } from './warnings.mjs';
 import { isWorktreeWriter, resolveWorktree, usesWorktree } from './workspace.mjs';
-import { noRestartFromArgv, restartRegisteredServers } from '../server-restart.mjs';
+import { noRestartFromArgv, restartRegisteredServers, resolveRunnerForRestart } from '../server-restart.mjs';
+import { resolveInstallRootForPending } from '../update-pending.mjs';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -201,13 +202,21 @@ async function attachServerRestart(result, root, { home, env = process.env, noRe
   const targetVersion = result.to ?? result.from;
   if (!targetVersion) return result;
   const restartHome = home ?? env.HOME ?? os.homedir();
+  const installRoot = await resolveInstallRootForPending({ env, ownRoot: root, home: restartHome });
+  const { runner } = await resolveRunnerForRestart(installRoot, targetVersion);
+  if (!runner) {
+    const warn = write ?? (text => { try { process.stderr.write(text); } catch { /* tests */ } });
+    warn(`server restart skipped: installed runner not found under ${installRoot}\n`);
+    return result;
+  }
   const { servers } = await restartRegisteredServers({
-    installRoot: root,
+    installRoot,
     targetVersion,
     noRestart: noRestart ?? noRestartFromArgv(),
     env,
     home: restartHome,
     write: write ?? (text => { try { process.stderr.write(text); } catch { /* tests */ } }),
+    strictPidCheck: true,
   });
   return servers.length ? { ...result, servers } : result;
 }

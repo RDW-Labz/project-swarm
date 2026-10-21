@@ -8,14 +8,14 @@ import { createRequest, createScratchDeniedHandbuildRequest, decideRequest, list
 import { isScratchRoot } from './scratch-roots.mjs';
 import { listProjects, projectsFile } from './projects.mjs';
 
-async function registeredScratchHandbuildRoot(root) {
-  if (!isScratchRoot(root)) return false;
+async function registeredScratchHandbuildRoot(root, installRoot) {
+  if (!isScratchRoot(root, { installRoot, strict: true })) return false;
   let real;
   try { real = await fsPromises.realpath(root); } catch { real = path.resolve(root); }
   const norm = async candidate => {
     try { return await fsPromises.realpath(candidate); } catch { return path.resolve(candidate); }
   };
-  const projects = await listProjects({ file: projectsFile(), forOwner: false, pruneGone: false });
+  const projects = await listProjects({ file: projectsFile(), forOwner: false, includeScratch: true, pruneGone: false });
   for (const project of projects) {
     if ((await norm(project.root)) === real) return true;
   }
@@ -49,11 +49,11 @@ export async function runHandbuildCommand(root, args, { installRoot, now = Date.
   try {
     if (sub === 'request') {
       const fields = { kind: flags.kind, reason: flags.reason, files: flags.files, minutes: flags.minutes, git: flags.git };
-      const r = (await registeredScratchHandbuildRoot(root))
+      const r = (await registeredScratchHandbuildRoot(root, installRoot))
         ? createScratchDeniedHandbuildRequest(root, fields, { now })
         : createRequest(root, fields, { now });
       if (r.status === 'denied' && r.denyReason === SCRATCH_DENY_REASON) {
-        return out('Hand-build request auto-denied: scratch project.');
+        return out(`Hand-build request auto-denied: ${r.id} (${SCRATCH_DENY_REASON}). Move the project out of the scratch base or remove .swarm-scratch to allow hand-build requests.`);
       }
       const id = `handbuild-${r.id}`;
       // It shows up in Needs you (the board and the phone) as a decision with approve and deny.

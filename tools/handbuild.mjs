@@ -1092,18 +1092,35 @@ export function createRequest(root, { kind, reason, files, minutes, git }, { now
 
 /** Owner-facing `swarm handbuild request` in a scratch project: stored denied, never queued for Needs you. */
 export function createScratchDeniedHandbuildRequest(root, fields, { now = Date.now, by = 'orchestrator' } = {}) {
-  const req = createRequest(root, fields, { now, by });
+  if (!KIND_LIST.includes(fields.kind)) throw Error(`handbuild-kind: --kind must be one of ${KIND_LIST.join(', ')}.`);
+  const why = cleanText(fields.reason, 400);
+  if (why.length < 10) throw Error('handbuild-reason: --reason must say why the swarm cannot do it (at least 10 characters)');
+  const list = (Array.isArray(fields.files) ? fields.files : String(fields.files ?? '').split(',')).map(f => cleanText(f, 200)).filter(Boolean);
+  if (!list.length) throw Error('handbuild-files: --files must name the files (comma separated)');
+  const mins = fields.minutes === undefined ? DEFAULT_MINUTES : Number(fields.minutes);
+  const ops = (Array.isArray(fields.git) ? fields.git : String(fields.git ?? '').split(',')).map(g => g.trim()).filter(Boolean);
   return withStateLock(root, () => {
     const state = readState(root);
-    const r = state.requests[req.id];
-    if (!r) return req;
+    const id = newId(now());
     const at = new Date(now()).toISOString();
-    r.status = 'denied';
-    r.denyReason = SCRATCH_DENY_REASON;
-    r.decidedAt = at;
-    r.decidedBy = 'scratch';
+    const row = {
+      id,
+      kind: fields.kind,
+      reason: why,
+      files: list,
+      git: ops,
+      minutes: mins,
+      status: 'denied',
+      denyReason: SCRATCH_DENY_REASON,
+      requestedAt: at,
+      requestedBy: cleanText(by, 40),
+      decidedAt: at,
+      decidedBy: 'scratch',
+    };
+    state.requests[id] = row;
     writeState(root, state);
-    return r;
+    logAction(root, { event: 'request', id, by, files: list, reason: `${fields.kind}: ${why}` }, { now });
+    return row;
   });
 }
 

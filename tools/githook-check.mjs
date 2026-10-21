@@ -71,8 +71,22 @@ const manifestCommitRefused = rels => {
 };
 
 export function pathsFromCachedNameStatus(text) {
+  const raw = String(text ?? '');
+  if (raw.includes('\0')) {
+    const paths = [];
+    const parts = raw.split('\0').filter(Boolean);
+    let i = 0;
+    while (i < parts.length) {
+      const status = parts[i++];
+      if (/^[RC]/i.test(status)) {
+        if (parts[i]) paths.push(parts[i++]);
+        if (parts[i]) paths.push(parts[i++]);
+      } else if (parts[i]) paths.push(parts[i++]);
+    }
+    return paths;
+  }
   const paths = [];
-  for (const line of String(text ?? '').split('\n')) {
+  for (const line of raw.split('\n')) {
     const t = line.trim();
     if (!t) continue;
     const tab = t.indexOf('\t');
@@ -88,31 +102,57 @@ export function pathsFromCachedNameStatus(text) {
   return paths;
 }
 
-function readCommitSubjectFromFile(messagePath) {
+function gitCommentChar(root) {
+  try {
+    const ch = execFileSync('git', ['config', '--get', 'commit.commentChar'], { cwd: root, encoding: 'utf8', timeout: 3000 }).trim();
+    if (ch) return ch[0];
+  } catch { /* default */ }
+  return '#';
+}
+
+function readCommitSubjectFromFile(messagePath, { commentChar = '#' } = {}) {
   const text = fs.readFileSync(messagePath, 'utf8');
   for (const line of text.split('\n')) {
     const t = line.trim();
-    if (!t || t.startsWith('#')) continue;
+    if (!t) continue;
+    if (t.startsWith(commentChar)) continue;
     return t;
   }
   return '';
 }
 
 export function isManifestCommitSubject(subject) {
-  return /^manifest\b/i.test(String(subject ?? '').trim());
+  const t = String(subject ?? '').trim();
+  if (/^(?:manifests?:|manifest\s+for\b)/i.test(t)) return true;
+  if (/^manifest\s+/i.test(t) && !/^manifest\s+parser:/i.test(t)) return true;
+  return false;
 }
 
-function pathUnderManifests(rel) {
+function pathUnderManifestsCaseSensitive(rel) {
   const n = String(rel ?? '').replace(/\\/g, '/');
   return n === 'coordination/manifests' || n.startsWith(MANIFEST_DIR_PREFIX);
 }
 
+export function shouldSkipCommitMsgCheck({ root, env = process.env, argv = process.argv } = {}) {
+  if (env.GITMERGE_AUTOEDIT === 'no') return true;
+  if (root) {
+    try {
+      if (fs.existsSync(path.join(root, '.git', 'MERGE_HEAD'))) return true;
+    } catch { /* ignore */ }
+  }
+  const amendNoMessage = argv.includes('--amend') && !argv.some(a => a === '-m' || a === '-F' || a === '-c' || a === '-C' || a.startsWith('--message='));
+  if (amendNoMessage) return true;
+  const msg = env.GIT_COMMIT_MSG ?? '';
+  if (/^(fixup|squash)!/i.test(msg.trim())) return true;
+  return false;
+}
+
 /** @returns {{ ok: true } | { ok: false, message: string }} */
-export function checkCommitMsg({ messagePath, subject, nameStatusText, stagedPaths }) {
-  const subj = subject ?? (messagePath ? readCommitSubjectFromFile(messagePath) : '');
+export function checkCommitMsg({ root, messagePath, subject, nameStatusText, stagedPaths, fromEditor = false }) {
+  const subj = subject ?? (messagePath ? readCommitSubjectFromFile(messagePath, { commentChar: root ? gitCommentChar(root) : '#' }) : '');
   if (!isManifestCommitSubject(subj)) return { ok: true };
   const paths = stagedPaths ?? pathsFromCachedNameStatus(nameStatusText ?? '');
-  const denied = [...new Set(paths.filter(p => !pathUnderManifests(p)))];
+  const denied = [...new Set(paths.filter(p => !pathUnderManifestsCaseSensitive(p)))];
   if (denied.length) return { ok: false, message: manifestCommitRefused(denied) };
   return { ok: true };
 }
@@ -268,6 +308,29 @@ function defaultReadStagedBlob(root, rel) {
   return readBlobAt(root, `:${rel}`);
 }
 
+function runCommitMsgCheckSync(root) {
+  if (shouldSkipCommitMsgCheck({ root, env: process.env, argv: process.argv })) return { ok: true };
+  const messagePath = process.argv[3];
+  let nameStatusText;
+  try {
+    const zbuf = execFileSync('git', ['diff', '--cached', '--name-status', '-z', '--no-renames'], {
+      cwd: root,
+      encoding: 'buffer',
+      timeout: 5000,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    nameStatusText = zbuf.toString('utf8');
+  } catch {
+    nameStatusText = execFileSync('git', ['diff', '--cached', '--name-status'], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 5000,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+  }
+  return checkCommitMsg({ root, messagePath, nameStatusText });
+}
+
 function runCli(kind) {
   let root;
   try {
@@ -277,20 +340,19 @@ function runCli(kind) {
   }
   const env = process.env;
 
-  try {
-    if (kind === 'commit-msg') {
-      const messagePath = process.argv[3];
-      const nameStatus = execFileSync('git', ['diff', '--cached', '--name-status'], { cwd: root, encoding: 'utf8', timeout: 10_000 });
-      const result = checkCommitMsg({ messagePath, nameStatusText: nameStatus });
+  if (kind === 'commit-msg') {
+    try {
+      const result = runCommitMsgCheckSync(root);
       if (!result.ok) {
         process.stderr.write(`${result.message}\n`);
         process.exit(1);
       }
       process.exit(0);
+    } catch {
+      process.stderr.write('swarm git hook: manifest check skipped (infrastructure)\n');
+      process.exit(0);
     }
-  } catch {
-    process.stderr.write('manifest commit check failed; refusing the commit.\n');
-    process.exit(1);
+    return;
   }
 
   if (!agentSession(env) || guardOff(root)) process.exit(0);

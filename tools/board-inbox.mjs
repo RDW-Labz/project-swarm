@@ -69,7 +69,7 @@ function nextFor(item, root) {
 function filterScratchFromInbox(projects, ownerInbox) {
   const all = projects ?? [];
   if (ownerInbox === false) return all;
-  const withoutScratch = all.filter(p => p?.root && !isScratchRoot(p.root));
+  const withoutScratch = all.filter(p => p?.root && !isScratchRoot(p.root, { strict: true }));
   if (ownerInbox === true) return withoutScratch;
   if (withoutScratch.length) return withoutScratch;
   const stack = new Error().stack ?? '';
@@ -115,14 +115,20 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
     for (const it of mine.slice(0, MAX_PER_PROJECT)) items.push({ projectId: project.id, project: txt(project.name, 80), ...it });
   }
   items.sort((a, b) => (b.unblocks - a.unblocks) || String(a.since).localeCompare(String(b.since)) || String(a.project).localeCompare(String(b.project)));
-  const open = [...asked.values()].filter(r => r.status === 'open').length;
+  const scratchRoots = new Set(ownerProjects.filter(p => p?.root && isScratchRoot(p.root, { strict: true })).map(p => p.root));
+  const phoneIssue = rec => {
+    if (!rec?.root || scratchRoots.has(rec.root)) return false;
+    return rec.status === 'open' || rec.status === 'confirming';
+  };
+  const open = [...asked.values()].filter(r => r.status === 'open' && !scratchRoots.has(r.root)).length;
+  const confirming = [...asked.values()].filter(phoneIssue).length - open;
   return {
     total: items.length + hidden,
     hidden,
     items,
     fyi: fyi.sort((a, b) => String(b.since).localeCompare(String(a.since))).slice(0, 60),
     problems,
-    phone: config ? { on: config.enabled, repo: config.repo, owners: config.owners, open, confirming: asked.size - open } : null,
+    phone: config ? { on: config.enabled, repo: config.repo, owners: config.owners, open, confirming } : null,
     at: new Date(now).toISOString(),
   };
 }

@@ -192,6 +192,11 @@ export function createWatchServer(opts) {
     const u = new URL(req.url || '/', 'http://127.0.0.1');
     const pathname = u.pathname;
     if (pathname === '/api/health') {
+      if (remote || !local) return sendText(res, method, 421, 'misdirected request');
+      const hostName = String(host ?? '').split(':')[0];
+      if (hostName !== '127.0.0.1' && hostName !== 'localhost') {
+        return sendText(res, method, 421, 'misdirected request');
+      }
       const info = await versionInfo();
       return sendJson(res, method, { ok: true, version: info.version, pid: process.pid });
     }

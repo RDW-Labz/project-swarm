@@ -221,8 +221,19 @@ export function safeEnvSubset(env = process.env) {
   return out;
 }
 
-export function serverMode({ stdin = process.stdin, stdout = process.stdout } = {}) {
-  return stdin.isTTY && stdout.isTTY ? 'terminal' : 'background';
+export function serverMode({ stdin = process.stdin, stdout = process.stdout, explicitBackground = false } = {}) {
+  if (stdin.isTTY && stdout.isTTY) return 'terminal';
+  if (explicitBackground && !stdin.isTTY && !stdout.isTTY) return 'background';
+  if (!explicitBackground) return stdin.isTTY && stdout.isTTY ? 'terminal' : 'background';
+  return 'terminal';
+}
+
+export function registryModeFields(mode, { stdin = process.stdin, stdout = process.stdout, explicitBackground = false } = {}) {
+  const fromTty = !stdin.isTTY && !stdout.isTTY;
+  return {
+    mode,
+    ...(mode === 'background' && explicitBackground ? { explicitBackground: true, modeFromTty: fromTty } : {}),
+  };
 }
 
 async function readPackageVersion(root = here) {
@@ -467,13 +478,14 @@ export async function startBoardServer({ env = process.env, root, remote, regist
   const { url, port } = await server.listen();
   api.setBoardUrl(remote ? null : url);
   const version = await readPackageVersion();
+  const boardMode = remote ? 'background' : serverMode({ explicitBackground: registry?.explicitBackground === true });
   const baseRegistry = {
     version,
     argv: remote ? ['remote', 'serve'] : ['watch', '--all'],
     cwd: process.cwd(),
     port,
     env: safeEnvSubset(env),
-    mode: remote ? 'background' : serverMode(),
+    ...registryModeFields(boardMode, { explicitBackground: remote || registry?.explicitBackground === true }),
     ...(registry && typeof registry === 'object' ? registry : {}),
   };
   if (!remote) await writeBoardFile(url, { env, registry: baseRegistry }).catch(() => {});
@@ -515,7 +527,13 @@ export async function runWatchCommand(root, args, { write = text => process.stdo
     const board = await startBoardServer({
       env: process.env,
       root,
-      registry: { argv: watchArgv, mode: serverMode(), cwd: process.cwd(), env: safeEnvSubset(process.env) },
+      registry: {
+        argv: watchArgv,
+        cwd: process.cwd(),
+        env: safeEnvSubset(process.env),
+        explicitBackground: true,
+        ...registryModeFields(serverMode({ explicitBackground: true }), { explicitBackground: true }),
+      },
     });
     write(`Swarm Watch board (every project on this machine)\n${board.url}\nRead-only, on this machine only. Opening a run starts that run's own page. Stops after 30 minutes idle. Ctrl-C stops it now. (swarm watch --all --text prints the live runs instead.)\n`);
     if (opts.open) openUrl(board.url);

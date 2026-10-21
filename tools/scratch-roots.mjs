@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// One definition of test/scratch project roots (board toggle, owner inbox, hand-build auto-deny).
-// Also scratch when any real path segment is exactly tmp, temp, test, tests, or __tests__ (case-insensitive),
-// except segment names that only appear as part of the install root or user home path prefix.
+// Scratch vs test-temp project roots (two classifiers — use the right one):
+//   isScratchRoot (STRICT): owner inbox, phone, swarm-inbox, handbuild auto-deny, swarm forget --scratch.
+//     ~/.project-swarm-scratch and worktrees, OS temp dirs, .tmp-test* segment names, .project-swarm.json scratch:true, .swarm-scratch marker.
+//   isTestTempRoot (BROAD): default board project listing only (hide from the board list, never for inbox or auto-deny).
+//     STRICT rules OR a path segment exactly tmp, temp, test, tests, or __tests__ (case-insensitive), except under home or installRoot prefix.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -41,30 +43,68 @@ function isUnder(candidate, base) {
   return r === b || r.startsWith(`${b}${path.sep}`);
 }
 
-/** Bases used for prefix comparison (realpath when possible; never throws). */
-export function scratchRootList({ env = process.env, home = os.homedir(), tmp } = {}) {
-  const scratchBase = env.SWARM_SCRATCH_BASE || path.join(home, '.project-swarm-scratch');
+function isAncestorOf(ancestor, candidate) {
+  const a = normalizedPath(ancestor);
+  const c = normalizedPath(candidate);
+  if (!a || !c) return false;
+  return a !== c && c.startsWith(`${a}${path.sep}`);
+}
+
+/** Validate SWARM_SCRATCH_BASE; returns the base path to use (default when invalid). */
+export function resolveScratchBase({ env = process.env, home = os.homedir(), registeredRoots = [], warn = msg => console.warn(msg) } = {}) {
+  const raw = env.SWARM_SCRATCH_BASE;
+  const defaultBase = path.join(home, '.project-swarm-scratch');
+  if (raw === undefined) return defaultBase;
+  if (raw === '') return defaultBase;
+  const candidate = String(raw);
+  if (!path.isAbsolute(candidate)) {
+    warn(`SWARM_SCRATCH_BASE ignored (not an absolute path): ${candidate}`);
+    return defaultBase;
+  }
+  const resolved = safeRealpath(candidate) ?? path.resolve(candidate);
+  const homeR = normalizedPath(home);
+  const rootR = path.parse(resolved).root;
+  if (resolved === rootR || resolved === homeR || (homeR && isAncestorOf(resolved, homeR))) {
+    warn('SWARM_SCRATCH_BASE ignored (root, home, or ancestor of home)');
+    return defaultBase;
+  }
+  for (const reg of registeredRoots) {
+    const rr = normalizedPath(reg);
+    if (rr && (resolved === rr || isUnder(resolved, rr))) {
+      warn('SWARM_SCRATCH_BASE ignored (inside a registered project)');
+      return defaultBase;
+    }
+  }
+  return resolved;
+}
+
+/** Bases used for STRICT prefix comparison (realpath when possible; never throws). */
+export function scratchRootList({ env = process.env, home = os.homedir(), tmp, registeredRoots } = {}) {
+  const scratchBase = resolveScratchBase({ env, home, registeredRoots });
   const bases = [path.join(scratchBase, 'worktrees'), scratchBase];
   const tmpResolved = tmp !== undefined ? (safeRealpath(tmp) ?? path.resolve(tmp)) : null;
-  if (env.SWARM_SCRATCH_BASE !== undefined) {
+  const custom = env.SWARM_SCRATCH_BASE !== undefined && env.SWARM_SCRATCH_BASE !== '';
+  if (custom) {
     if (tmpResolved) bases.push(tmpResolved);
-  } else {
+  } else if (!(env.SWARM_TEST_TMP ?? process.env.SWARM_TEST_TMP)) {
     const systemTmp = safeRealpath(os.tmpdir()) ?? path.resolve(os.tmpdir());
     bases.push(systemTmp, tmpResolved ?? systemTmp, '/tmp', '/private/tmp', '/var/folders', '/private/var/folders');
+  } else if (tmpResolved) {
+    bases.push(tmpResolved);
   }
   return [...new Set(bases.filter(Boolean))];
 }
 
-const SCRATCH_SEGMENTS = new Set(['tmp', 'temp', 'test', 'tests', '__tests__']);
+const BROAD_SEGMENTS = new Set(['tmp', 'temp', 'test', 'tests', '__tests__']);
 
 function prefixParts(root) {
   const r = normalizedPath(root);
   return r ? r.split(path.sep).filter(Boolean) : [];
 }
 
-function segmentIsScratch(parts, index, { home, installRoot } = {}) {
+function segmentIsBroadTest(parts, index, { home, installRoot } = {}) {
   const seg = parts[index];
-  if (!seg || !SCRATCH_SEGMENTS.has(seg.toLowerCase())) return false;
+  if (!seg || !BROAD_SEGMENTS.has(seg.toLowerCase())) return false;
   const homeParts = prefixParts(home);
   const installParts = installRoot ? prefixParts(installRoot) : [];
   const head = parts.slice(0, index + 1).join(path.sep);
@@ -73,9 +113,9 @@ function segmentIsScratch(parts, index, { home, installRoot } = {}) {
   return true;
 }
 
-function hasScratchPathSegment(parts, options = {}) {
+function hasBroadTestSegment(parts, options = {}) {
   for (let i = 0; i < parts.length; i += 1) {
-    if (segmentIsScratch(parts, i, options)) return true;
+    if (segmentIsBroadTest(parts, i, options)) return true;
   }
   return false;
 }
@@ -102,8 +142,7 @@ function hasScratchMarker(root) {
   }
 }
 
-/** True when the project's real root is a scratch/test tree (comparison never throws). */
-export function isScratchRoot(root, { env = process.env, home = os.homedir(), tmp, installRoot } = {}) {
+function strictScratchCore(root, options = {}) {
   const raw = String(root ?? '');
   if (!raw) return false;
   let resolved;
@@ -113,15 +152,33 @@ export function isScratchRoot(root, { env = process.env, home = os.homedir(), tm
     return false;
   }
   if (!resolved) return false;
-  for (const base of scratchRootList({ env, home, tmp })) {
+  for (const base of scratchRootList(options)) {
     if (isUnder(raw, base)) return true;
   }
   const parts = resolved.split(path.sep).filter(Boolean);
-  const homeResolved = normalizedPath(home);
+  const homeResolved = normalizedPath(options.home ?? os.homedir());
   if (homeResolved && resolved === homeResolved) return false;
   if (hasTmpTestSegment(parts)) return true;
-  if (hasScratchPathSegment(parts, { home, installRoot })) return true;
   if (pointerMarksScratch(resolved)) return true;
   if (hasScratchMarker(resolved)) return true;
   return false;
 }
+
+/** STRICT when options.strict is true; default (legacy callers) matches isTestTempRoot. */
+export function isScratchRoot(root, options = {}) {
+  if (options.strict) return strictScratchCore(root, options);
+  return isTestTempRoot(root, options);
+}
+
+/** BROAD test/temp tree (board listing hide only). */
+export function isTestTempRoot(root, options = {}) {
+  if (strictScratchCore(root, options)) return true;
+  const raw = String(root ?? '');
+  if (!raw) return false;
+  const resolved = normalizedPath(raw);
+  if (!resolved) return false;
+  const parts = resolved.split(path.sep).filter(Boolean);
+  return hasBroadTestSegment(parts, options);
+}
+
+export { isTestTempRoot as isScratchRootBroad };
