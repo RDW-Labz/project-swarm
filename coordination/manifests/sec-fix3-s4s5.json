@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0102-fix3",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "outputs": [
+        "contracts/watch-s4-ops.json",
+        "tests/watch-s4-contract.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/watch-server.mjs"
+      ],
+      "prompt": "Opus security re-review finding for T-0102 (medium), contracts/watch-s4-ops.json: the read API routes (/api/board, /api/project, /api/live, /api/history and every other /api/* read operation) still declare {\"boardTokenQuery\": []} as an accepted security alternative, so the machine-readable contract still authorizes query-string tokens on JSON APIs. Fix: remove boardTokenQuery from the security list of EVERY /api/* operation so they require boardTokenHeader only. Keep the deprecated boardTokenQuery scheme defined in components (it documents the legacy initial HTML page load, GET / only; if the contract has no GET / path, add one minimal operation for the HTML board page whose security is boardTokenHeader or boardTokenQuery and whose description says the t parameter is only accepted here and is exchanged for an HttpOnly SameSite=Strict cookie under T-8006). Update info.description and the boardTokenQuery description to say that /api/* routes refuse t with 401 once T-8006 lands and that the contract already forbids it. Update tests/watch-s4-contract.test.mjs: no /api/* operation lists boardTokenQuery; owner routes unchanged (header + tailnetSignIn only). Do NOT touch tools/watch-server.mjs, tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test, no network; never write token-shaped literals. Run `node --import ./tests/_isolate-config.mjs --test tests/watch-s4-contract.test.mjs` and `node tools/check-package.mjs`. tests/fixtures/ledgers/roadmap-ledger.json only names the contract path as ledger data; it is ignored here and the coordinator runs the full suite.",
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ]
+    }
+  ]
+}
