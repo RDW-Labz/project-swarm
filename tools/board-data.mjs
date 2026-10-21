@@ -145,13 +145,13 @@ export function ticketsOf(ledger) {
 }
 
 // One project's lane on the board. `liveRuns` are the alive runs of THIS project only.
-export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined } = {}) {
+export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null } = {}) {
   const runs = await readRunStates(project.root);
   const liveIds = new Set(liveRuns.map(r => r.runId));
   const ledger = await readLedger(project.root).catch(() => null);
   const spend = await summary(project.root).catch(error => ({ spendUsd: null, capUsd: null, capError: String(error.message).slice(0, 120) }));
   const overviewSpend = { usd: spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null };
-  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend }).then(progressSummary, () => null);
+  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null }).then(progressSummary, () => null);
   const cost = costOf(runs, now);
   const agents = agentsOf(runs, liveIds, now);
   const lastRun = runs.length ? runs[runs.length - 1].state : null;
@@ -184,13 +184,13 @@ export function underfilledWaves(counts, slots) {
 }
 
 // The whole board: machine totals (sums of the project numbers) and one overview per registered project.
-export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, worktreeRoot = mainWorktreeRoot } = {}) {
+export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, worktreeRoot = mainWorktreeRoot, deployStatus = null } = {}) {
   const overviews = [];
   // A live run belongs to the project whose real root it ran in, however the path was spelled.
   const live = await Promise.all(liveRuns.map(async r => ({ ...r, root: await fs.realpath(r.root).catch(() => r.root) })));
   for (const project of projects) {
     const mine = live.filter(r => r.root === project.root);
-    overviews.push(await projectOverview(project, mine, { now, summary, historyFile }));
+    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus }));
   }
   const realRoot = async root => await fs.realpath(root).catch(() => path.resolve(root));
   const registered = new Map();
@@ -250,7 +250,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
 }
 
 // One project's page: its tickets by status, its run history, its spend by lane and its lessons. Reads only under project.root.
-export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), summary = projectSummary, historyFile = undefined } = {}) {
+export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), summary = projectSummary, historyFile = undefined, deployStatus = null } = {}) {
   const runs = await readRunStates(project.root, { limit: 200 });
   const ledger = await readLedger(project.root).catch(() => null);
   const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 1000).map(t => ({ id: txt(t.id, 20), title: txt(t.title, 140), status: txt(t.status, 20), stage: txt(t.stage, 10), risk: txt(t.risk, 10) }));
@@ -260,7 +260,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const detailCost = costOf(runs, now);
   const spend = (await summary(project.root).catch(() => ({}))) ?? {};
   const detailSpend = { usd: spend.spendUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null };
-  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend }).catch(() => null);
+  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null }).catch(() => null);
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
     tickets, ticketCounts: ticketsOf(ledger),

@@ -37,7 +37,7 @@
 
     var milestones = el('ol', 'milestones');
     (progress.milestones || []).forEach(function (item) {
-      var li = el('li', item.state, item.label); if (item.state === 'current') { li.setAttribute('aria-current', 'step'); } milestones.appendChild(li);
+      var li = el('li', item.state, item.label); var title = [item.evidence, item.at].filter(Boolean).join(' · '); if (title) { li.setAttribute('title', title); } if (item.state === 'current') { li.setAttribute('aria-current', 'step'); } milestones.appendChild(li);
     });
     host.appendChild(milestones);
 
