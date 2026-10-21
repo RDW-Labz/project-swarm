@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "split-scan-bounds",
+      "agent": "auto",
+      "prompt": "tools/split-scan.mjs has a boundary bug that the lossless round-trip test cannot catch. Scanning the real tools/swarm.mjs, the item runManifestBody starts at line 2748 but the scanner never closes it: the real closing brace is the line that is exactly a single closing brace at line 3685 (just before the blank line and the line function validateRunIdle at 3687), yet the item extends to the end of the file and swallows 139 top-level functions (every line that starts at column 0 with function, async function or export function after line 2748). Some construct between lines 2748 and 3685 leaves the brace depth off by at least one: find it by bisecting (scan prefixes of the text ending at each column-0 closing brace line and compare the reported depth with the expected 0) and fix the tokenizer (likely candidates: a regular expression literal versus division decision, a regex character class holding a slash or a brace, a template literal with a nested template or a ${} that holds a brace or a string with a backtick, a division after a closing paren or bracket, a keyword followed by a regex such as return or typeof or else, a comment-like sequence inside a regex or string, optional catch binding, a label or a getter). Then add to tests/split-scan.test.mjs a structural invariant test on the real tools/swarm.mjs: no item may contain, after its first line, a line that starts at column 0 with function, async function, export function, export async function, export const, const, let, class or import unless that line is inside a template literal or block comment as the scanner itself determines; runManifestBody must end at the line numbered 3685 in the current file (compute the expectation as the line of the first column-0 closing brace after its start line); and the number of items must be above 200 and the largest item below 1500 lines. Add small fixture tests reproducing the construct you found. All existing tests keep passing, the scan stays under 5 seconds. Write only tools/split-scan.mjs and tests/split-scan.test.mjs. ignoreTests reason: only the scanner and its test change.",
+      "context": [
+        "tools/split-scan.mjs",
+        "tests/split-scan.test.mjs",
+        "tools/swarm.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/split-scan.mjs",
+        "tests/split-scan.test.mjs"
+      ],
+      "timeoutMs": 2400000
+    }
+  ]
+}
