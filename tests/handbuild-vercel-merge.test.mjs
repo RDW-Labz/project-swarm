@@ -10,6 +10,7 @@ import {
   createRequest,
   decideRequest,
   recordChatMerge,
+  mergeSwarmPrStandingEnabled,
   GH_PR_MERGE_BLOCKED,
   MERGE_BLOCKED_REASON,
 } from '../tools/handbuild.mjs';
@@ -106,6 +107,17 @@ test('vercel read-only commands are free', async t => {
   }
 });
 
+test('vercel scope and token flags are deploy-like, not free', async t => {
+  const { bash } = await project(t);
+  for (const cmd of ['vercel --scope=team', 'vercel --token x', 'vercel --scope team']) {
+    const d = bash(cmd);
+    assert.equal(d.allow, false, cmd);
+    assert.match(d.reason, /deploy|ticket/i, cmd);
+  }
+  assert.equal(bash('vercel --version').allow, true);
+  assert.equal(bash('vercel -v').allow, true);
+});
+
 test('vercel deploy and mutating commands stay blocked', async t => {
   const { bash } = await project(t);
   for (const cmd of [
@@ -121,6 +133,20 @@ test('vercel deploy and mutating commands stay blocked', async t => {
     const d = bash(cmd);
     assert.equal(d.allow, false, cmd);
     assert.match(d.reason, /deploy|ticket/i, cmd);
+  }
+});
+
+test('gh pr merge with repo flags is always blocked; use swarm merge', async t => {
+  const { bash, root, setPolicy } = await project(t, {
+    policy: { rules: [{ id: 'merge-swarm-pr', enabled: true }] },
+  });
+  const r = createRequest(root, { kind: 'tiny', reason: 'the swarm cannot merge from here today', files: 'src/x.mjs', git: 'merge', minutes: 30 }, { now: () => T0 });
+  decideRequest(root, r.id, 'approve', { now: () => T0, channel: 'computer' });
+  for (const cmd of ['gh -R owner/repo pr merge 12', 'gh --repo x pr merge 12']) {
+    const d = bash(cmd, { now: () => T0 + 5000 });
+    assert.equal(d.allow, false, cmd);
+    assert.equal(d.reason, GH_PR_MERGE_BLOCKED, cmd);
+    assert.match(d.reason, /use swarm merge/i);
   }
 });
 
@@ -147,12 +173,14 @@ test('gh pr merge is always blocked; use swarm merge', async t => {
 });
 
 test('swarm merge policy: blocked, standing, chat, and edge cases', async t => {
-  const { bash, root, setPolicy } = await project(t);
+  const { bash, root, setPolicy, policyPath } = await project(t);
 
   let d = bash('swarm merge 12');
   assert.equal(d.allow, false);
   assert.equal(d.reason, MERGE_BLOCKED_REASON);
   assert.doesNotMatch(d.reason, /write a ticket instead/);
+  assert.doesNotMatch(d.reason, /\bedit\b/i);
+  assert.doesNotMatch(d.reason, /policy file/i);
 
   await setPolicy({ rules: [{ id: 'merge-swarm-pr', enabled: true }] });
   const allowed = bash('swarm merge 12');
@@ -166,10 +194,35 @@ test('swarm merge policy: blocked, standing, chat, and edge cases', async t => {
   assert.equal(bash('swarm merge 12').allow, false);
 
   await setPolicy({ rules: [{ id: 'merge-swarm-pr', enabled: true }] });
-  assert.equal(bash('swarm merge 12 --force').allow, false);
-  assert.equal(bash('swarm merge 12 --admin').allow, false);
+  for (const cmd of ['swarm merge 12 --force', 'swarm merge 12 --admin', 'swarm merge 12 --auto', 'swarm merge 12 --yes', 'swarm merge 12 --force=true', 'swarm merge 12 -fy']) {
+    assert.equal(bash(cmd).allow, false, cmd);
+  }
   assert.equal(bash('swarm merge 12 13').allow, false);
   assert.equal(bash('swarm merge').allow, false);
+
+  await setPolicy({ rules: [{ id: 'merge-swarm-pr' }] });
+  assert.equal(bash('swarm merge 12').allow, false);
+  await setPolicy({ rules: [{ id: 'merge-swarm-pr', enabled: 'true' }] });
+  assert.equal(bash('swarm merge 12').allow, false);
+  await setPolicy({ rules: [{ id: 'merge-swarm-pr', enabled: 0 }] });
+  assert.equal(bash('swarm merge 12').allow, false);
+  await setPolicy({ rules: [{ id: 'merge-swarm-pr', enabled: true, disabled: true }] });
+  assert.equal(bash('swarm merge 12').allow, false);
+  await setPolicy({ rules: [{ id: 'merge-swarm-pr', enabled: true }, { id: 'merge-swarm-pr', disabled: true }] });
+  assert.equal(bash('swarm merge 12').allow, false);
+
+  const relPolicy = path.join(root, 'rel-policy.json');
+  await fs.writeFile(relPolicy, JSON.stringify({ rules: [{ id: 'merge-swarm-pr', enabled: true }] }));
+  const prev = process.env.SWARM_POLICY_FILE;
+  process.env.SWARM_POLICY_FILE = 'policy.json';
+  try {
+    assert.equal(mergeSwarmPrStandingEnabled(), false);
+    assert.equal(bash('swarm merge 12').allow, false);
+  } finally {
+    if (prev === undefined) delete process.env.SWARM_POLICY_FILE;
+    else process.env.SWARM_POLICY_FILE = prev;
+    process.env.SWARM_POLICY_FILE = policyPath;
+  }
 
   await setPolicy(null);
   recordChatMerge(root, 12, { now: () => T0 });

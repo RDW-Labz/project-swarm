@@ -22,7 +22,7 @@ const VERCEL_TOP_FREE = new Set(['ls', 'list', 'inspect', 'logs', 'whoami', '--v
 const VERCEL_LIST_PARENTS = new Set(['env', 'domains', 'projects', 'project', 'teams', 'team', 'dns', 'certs', 'certificates', 'alias', 'secrets', 'integration', 'redirects', 'rolling-release']);
 const VERCEL_INFO_FLAGS = new Set(['--help', '-h', '--version', '-v']);
 export const GH_PR_MERGE_BLOCKED = 'Hand-build guard: gh pr merge is blocked; use swarm merge N, which checks CI first.';
-export const MERGE_BLOCKED_REASON = 'Hand-build guard: merging a pull request needs the owner\'s approval. The owner can type merge and the PR number in chat; enable the merge-swarm-pr rule in the machine policy file for standing approval; or grant a hand-build approval that names merge (at the computer for merge).';
+export const MERGE_BLOCKED_REASON = 'Hand-build guard: merging a pull request needs the owner. The owner can type merge and the PR number in chat, or their machine policy can enable standing approval for swarm merge; use swarm merge N, which checks CI first.';
 const READ_GIT_SUBS = new Set(['status', 'log', 'diff', 'show']);
 const WRITE_HTTP = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const CONFIG_FLAGS = new Set(['-c', '--config', '--output', '--exec', '-x', '--exec-path', '--upload-pack', '--receive-pack', '--ext-diff']);
@@ -391,15 +391,20 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
   if (cmd === 'git') {
     let globalOpts = false;
     let i = 0;
-    while (i < args.length && args[i].startsWith('-')) {
+    const globalWords = [];
+    while (i < args.length && args[i].startsWith('-') && args[i] !== '--') {
       globalOpts = true;
-      if (args[i] === '-C' || args[i] === '-c' || args[i] === '--config-env' || ['--git-dir', '--work-tree', '--namespace'].includes(args[i])) i += 2;
-      else i += 1;
+      globalWords.push(args[i]);
+      if (args[i] === '-C' || args[i] === '-c' || args[i] === '--config-env' || ['--git-dir', '--work-tree', '--namespace'].includes(args[i])) {
+        if (args[i + 1] !== undefined) globalWords.push(args[i + 1]);
+        i += 2;
+      } else i += 1;
     }
     const sub = i < args.length && !args[i].startsWith('-') ? args[i] : null;
     const rest = sub ? args.slice(i + 1) : [];
     const gitEnv = plain.slice(0, k).some(w => /^GIT_[A-Z0-9_]+=/.test(w));
-    const meta = { globalOpts, hasConfig, gitEnv, target: null };
+    const gitHasConfig = hasConfigInWords(globalWords);
+    const meta = { globalOpts, hasConfig: gitHasConfig, gitEnv, target: null };
     if (sub === 'push') ops.push(gitPushPolicy(rest, meta));
     else if (sub === 'fetch') ops.push(gitFetchPolicy(rest, meta));
     else if (sub === 'branch') ops.push(gitBranchPolicy(rest, meta));
@@ -408,21 +413,25 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
       let branch = null;
       if (sub === 'rebase' && pos[0]) branch = pos[0];
       else if (sub === 'merge') branch = pos[0] ?? null;
-      ops.push({ tool: 'git', sub, args: pos, globalOpts, hasConfig, flags: rest.filter(a => a.startsWith('-')), branch, force: false, delete: null, target: null });
+      ops.push({ tool: 'git', sub, args: pos, rest, globalOpts, hasConfig: gitHasConfig, flags: rest.filter(a => a.startsWith('-')), branch, force: false, delete: null, target: null });
     }
   } else if (cmd === 'gh') {
       let globalOpts = false;
       let i = 0;
       while (i < args.length && args[i].startsWith('-')) {
         globalOpts = true;
-        if (GH_REPO_OPTS.has(args[i]) || args[i].startsWith('--repo=') || args[i].startsWith('--repository=')) i += 1;
-        else if (args[i] === '-R') i += 2;
-        else i += 1;
+        i = skipGhGlobalOpt(args, i);
       }
       const pos = args.slice(i).filter(a => !a.startsWith('-'));
-      const sub = pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null;
-      const ghTarget = sub === 'pr merge' && pos[2] !== undefined ? String(pos[2]) : null;
-      ops.push({ tool: 'gh', sub, args: pos.slice(2), globalOpts, hasConfig, flags: args.filter(a => a.startsWith('-')), branch: null, force: false, delete: null, target: ghTarget });
+      const prMerge = ghArgsImplyPrMerge(args);
+      const sub = prMerge ? 'pr merge' : (pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null);
+      let ghTarget = null;
+      if (prMerge) {
+        const pi = args.findIndex((a, idx) => a === 'pr' && args[idx + 1] === 'merge');
+        const after = args.slice(pi + 2).find(a => !a.startsWith('-'));
+        ghTarget = after !== undefined ? String(after) : null;
+      } else if (sub === 'pr merge' && pos[2] !== undefined) ghTarget = String(pos[2]);
+      ops.push({ tool: 'gh', sub, ghPrMerge: prMerge, args: pos.slice(2), globalOpts, hasConfig, flags: args.filter(a => a.startsWith('-')), branch: null, force: false, delete: null, target: ghTarget });
     } else if (cmd === 'vercel') {
       const globalOpts = args.some(a => a.startsWith('-'));
       const prod = args.includes('--prod');
@@ -542,7 +551,21 @@ const isFreeGitRebase = (op, protBranch) => {
 
 const isFreeReadGit = op => !op.globalOpts && !op.hasConfig && !op.gitEnv && !(op.flags ?? []).some(f => f === '--output' || f.startsWith('--output='));
 
-const vercelFlagIsInfoOnly = f => VERCEL_INFO_FLAGS.has(f) || f === '--token' || f === '-t' || f === '--scope' || f.startsWith('--scope=');
+const vercelFlagIsInfoOnly = f => VERCEL_INFO_FLAGS.has(f);
+
+const ghArgsImplyPrMerge = args => {
+  for (let i = 0; i < args.length - 1; i += 1) {
+    if (args[i] === 'pr' && args[i + 1] === 'merge') return true;
+  }
+  return false;
+};
+
+const skipGhGlobalOpt = (args, i) => {
+  const a = args[i];
+  if (a === '-R' || a === '--repo' || a === '--repository') return i + 2;
+  if (a.startsWith('--repo=') || a.startsWith('--repository=')) return i + 1;
+  return i + 1;
+};
 
 const isFreeVercel = op => {
   if (op.hasConfig) return false;
@@ -562,30 +585,125 @@ const isFreeVercel = op => {
 
 const swarmConfigDir = home => (process.env.SWARM_CONFIG ? path.dirname(process.env.SWARM_CONFIG) : path.join(home, '.config', 'project-swarm'));
 
-const policyFilePath = home => process.env.SWARM_POLICY_FILE || path.join(swarmConfigDir(home), 'policy.json');
+const policyFilePath = home => {
+  const envPath = process.env.SWARM_POLICY_FILE;
+  if (envPath) {
+    if (!path.isAbsolute(envPath)) return null;
+    return envPath;
+  }
+  return path.join(swarmConfigDir(home), 'policy.json');
+};
 
 /** True when policy.json enables standing approval for `swarm merge N`. */
 export const mergeSwarmPrStandingEnabled = (home = os.homedir()) => {
   try {
-    const policy = JSON.parse(fs.readFileSync(policyFilePath(home), 'utf8'));
+    const file = policyFilePath(home);
+    if (!file) return false;
+    const policy = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!policy || !Array.isArray(policy.rules)) return false;
-    const rule = policy.rules.find(r => r?.id === 'merge-swarm-pr');
-    if (!rule || rule.enabled === false) return false;
-    return true;
+    const rules = policy.rules.filter(r => r?.id === 'merge-swarm-pr');
+    if (!rules.length) return false;
+    return rules.every(r => r.enabled === true && r.disabled !== true);
   } catch { return false; }
 };
-
-const SWARM_MERGE_BYPASS_FLAGS = new Set(['--force', '-f', '--admin']);
 
 const isStandingSwarmMerge = (op, home) => {
   if (!mergeSwarmPrStandingEnabled(home)) return false;
   if (op.tool !== 'swarm' || op.sub !== 'merge') return false;
   if (op.globalOpts || op.hasConfig) return false;
   const flags = op.flags ?? [];
-  if (flags.some(f => SWARM_MERGE_BYPASS_FLAGS.has(f) || f.startsWith('--admin'))) return false;
+  if (flags.length > 0) return false;
   const args = op.args ?? [];
   if (args.length !== 1 || !/^\d+$/.test(String(args[0]))) return false;
   return true;
+};
+
+const SWITCH_BLOCK_FLAGS = new Set(['-f', '--force', '-B', '-C', '--discard-changes', '--orphan', '--merge', '-m']);
+const normRel = p => String(p).replace(/\\/g, '/');
+
+const isRestoreFreePath = (root, raw) => {
+  const n = normRel(raw);
+  if (!n || n.includes('..') || n === '.' || n.endsWith('/') || /[*?[{]/.test(n)) return false;
+  const lower = n.toLowerCase();
+  if (lower === 'docs/state' || lower.startsWith('docs/state/')) return true;
+  return isRoutingPath(n) || isRoutingPathResolved(root, n);
+};
+
+const switchCheckoutFlagBlocked = flags => {
+  for (const f of flags) {
+    if (f === '--') continue;
+    if (SWITCH_BLOCK_FLAGS.has(f) || SWITCH_BLOCK_FLAGS.has(f.split('=')[0])) return true;
+    if (!f.startsWith('--') && f.startsWith('-') && f.length > 1) {
+      for (const ch of f.slice(1)) {
+        if (ch === 'f' || ch === 'B' || ch === 'C' || ch === 'm') return true;
+      }
+    }
+  }
+  return false;
+};
+
+const isFreeGitSwitchCheckout = op => {
+  if (op.sub !== 'switch' && op.sub !== 'checkout') return false;
+  if (op.globalOpts || op.hasConfig || op.gitEnv) return false;
+  const rest = op.rest ?? [];
+  if (rest.includes('--')) return false;
+  const flags = rest.filter(a => a.startsWith('-') && a !== '--');
+  if (switchCheckoutFlagBlocked(flags)) return false;
+  const plainRefs = rest.filter(a => a && !a.startsWith('-'));
+  if (plainRefs.length !== 1) return false;
+  const ref = plainRefs[0];
+  if (!PLAIN_REF.test(ref) || ref.includes(':')) return false;
+  return true;
+};
+
+const RESTORE_BLOCK_FLAGS = new Set(['-f', '--force', '--staged', '-S', '--worktree', '-W', ...SWITCH_BLOCK_FLAGS]);
+
+const restoreFlagAllowed = (a, rest, i) => {
+  if (a === '--source' || a === '-s') return rest[i + 1] !== undefined;
+  if (a.startsWith('--source=')) return true;
+  return false;
+};
+
+const isFreeGitRestorePaths = (op, root) => {
+  if (op.globalOpts || op.hasConfig || op.gitEnv) return false;
+  const rest = op.rest ?? [];
+  let paths = [];
+  if (op.sub === 'restore') {
+    for (let i = 0; i < rest.length; i += 1) {
+      const a = rest[i];
+      if (a === '--' || !a.startsWith('-')) continue;
+      if (RESTORE_BLOCK_FLAGS.has(a) || RESTORE_BLOCK_FLAGS.has(a.split('=')[0])) return false;
+      if (restoreFlagAllowed(a, rest, i)) {
+        if (a === '--source' || a === '-s') i += 1;
+        continue;
+      }
+      return false;
+    }
+    const dd = rest.indexOf('--');
+    if (dd !== -1) paths = rest.slice(dd + 1).filter(a => a && !a.startsWith('-'));
+    else {
+      for (let i = 0; i < rest.length; i += 1) {
+        const a = rest[i];
+        if (a === '--source' || a === '-s') { i += 1; continue; }
+        if (a.startsWith('--source=')) continue;
+        if (!a.startsWith('-')) paths.push(a);
+      }
+    }
+  } else if (op.sub === 'checkout') {
+    const dd = rest.indexOf('--');
+    if (dd === -1) return false;
+    paths = rest.slice(dd + 1).filter(a => a && !a.startsWith('-'));
+    const before = rest.slice(0, dd);
+    const beforeFlags = before.filter(a => a.startsWith('-'));
+    if (switchCheckoutFlagBlocked(beforeFlags)) return false;
+    const beforePlain = before.filter(a => a && !a.startsWith('-'));
+    if (beforePlain.length > 1) return false;
+    for (const a of beforePlain) {
+      if (!PLAIN_REF.test(a) || a.includes(':')) return false;
+    }
+  } else return false;
+  if (!paths.length) return false;
+  return paths.every(p => isRestoreFreePath(root, p));
 };
 
 const GIT_SHOW_MAX = 16 * 1024 * 1024;
@@ -1034,16 +1152,22 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
           if (op.globalOpts || op.gitEnv) policyGitOps.push('add');
           continue;
         }
+        if (op.sub === 'switch' || op.sub === 'checkout') {
+          if (isFreeGitSwitchCheckout(op) || isFreeGitRestorePaths(op, root)) continue;
+        }
+        if (op.sub === 'restore') {
+          if (isFreeGitRestorePaths(op, root)) continue;
+        }
         if (op.sub) policyGitOps.push(op.sub);
       } else if (op.tool === 'gh') {
-        if (op.globalOpts) { policyGitOps.push('merge'); continue; }
-        if (ALLOWED_GH.has(op.sub)) continue;
-        if (op.sub === 'pr merge') {
+        if (op.sub === 'pr merge' || op.ghPrMerge) {
           policyGitOps.push('gh-pr-merge');
           continue;
         }
+        if (ALLOWED_GH.has(op.sub)) continue;
+        if (op.globalOpts) { policyGitOps.push('config'); continue; }
         if (String(op.sub ?? '').startsWith('api')) policyGitOps.push('gh-api-write');
-        else policyGitOps.push('merge');
+        else policyGitOps.push('config');
       } else if (op.tool === 'vercel') {
         if (isFreeVercel(op)) continue;
         policyGitOps.push('deploy');
@@ -1141,6 +1265,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       if (g === 'push' && policyOps.some(o => o.tool === 'git' && o.sub === 'push' && isFreeGitPush(o, current, root))) return false;
       if (g === 'branch' && policyOps.some(o => o.tool === 'git' && o.sub === 'branch' && o.delete === 'safe')) return false;
       if (g === 'commit' && commitStagedCheck === 'allowlist' && staged.length && staged.every(stagedCarryOk)) return false;
+      if (['switch', 'checkout', 'restore'].includes(g) && policyOps.some(o => o.tool === 'git' && (isFreeGitSwitchCheckout(o) || isFreeGitRestorePaths(o, root)))) return false;
       return true;
     });
     if (!fileRels.length && !residualGit.length) return finishAllow({ allow: true, files: [...a.writes, ...staged] });
