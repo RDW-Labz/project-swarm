@@ -21,6 +21,7 @@ import { inboxDeps } from '../tools/inbox-commands.mjs';
 import { runHandbuildCommand } from '../tools/handbuild-commands.mjs';
 import { readState, SCRATCH_DENY_REASON } from '../tools/handbuild.mjs';
 import { installGitHooks, HOOK_MARKER } from '../tools/git-hooks.mjs';
+import { COMMIT_MSG_VIOLATION_EXIT } from '../tools/githook-check.mjs';
 import { cleanupTestProject } from './_isolate-config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -490,6 +491,7 @@ test('regression high-4: the commit-msg hook exits 0 with a one-line warning whe
     encoding: 'utf8',
     env: gitAndNodePath(),
   });
-  assert.equal(violation.status, 1);
+  assert.notEqual(COMMIT_MSG_VIOLATION_EXIT, 0);
+  assert.equal(violation.status, COMMIT_MSG_VIOLATION_EXIT);
   assert.match(violation.stderr, /manifest commit refused/i);
 });
