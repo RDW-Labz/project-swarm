@@ -5,6 +5,8 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import {
   lanePassRates,
+  passRateFailuresFor,
+  readRunStatesSync,
   readRunStates,
   routeWithPassRates,
   routingFailures,
@@ -100,4 +102,52 @@ test('readRunStates uses injected filesystem calls and skips unreadable runs', a
   };
 
   assert.deepEqual(await readRunStates(root, { readdir, readFile }), { 'run-good': { jobs: [] } });
+});
+
+test('readRunStatesSync reads only the newest 200 folders and skips invalid files', () => {
+  const root = '/fixture-root-sync';
+  const runsDir = path.join(root, '.swarm', 'runs');
+  const entries = Array.from({ length: 201 }, (_, index) => ({
+    name: `run-${String(index).padStart(3, '0')}`,
+    isDirectory: () => true,
+  }));
+  entries.push({ name: 'run-invalid', isDirectory: () => true });
+  let reads = 0;
+  const states = readRunStatesSync(root, {
+    readdirSync: target => {
+      assert.equal(target, runsDir);
+      return entries;
+    },
+    readFileSync: file => {
+      reads += 1;
+      if (file.endsWith(`${path.sep}run-invalid${path.sep}state.json`)) return '{';
+      return JSON.stringify({ jobs: [] });
+    },
+  });
+
+  assert.equal(reads, 200);
+  assert.equal(Object.keys(states).length, 199);
+  assert.equal(states['run-200']?.jobs.length, 0);
+  assert.equal(states['run-000'], undefined);
+});
+
+test('passRateFailuresFor memoizes state reads per resolved root', () => {
+  const root = `/fixture-root-cache-${Date.now()}-${Math.random()}`;
+  let readdirCalls = 0;
+  let readFileCalls = 0;
+  const deps = {
+    readdirSync: () => {
+      readdirCalls += 1;
+      return [{ name: 'run-one', isDirectory: () => true }];
+    },
+    readFileSync: () => {
+      readFileCalls += 1;
+      return JSON.stringify({ jobs: [{ agent: 'cursor', status: 'failed' }] });
+    },
+  };
+
+  assert.deepEqual(passRateFailuresFor(root, deps), { cursor: 0 });
+  assert.deepEqual(passRateFailuresFor(path.join(root, '.'), deps), { cursor: 0 });
+  assert.equal(readdirCalls, 1);
+  assert.equal(readFileCalls, 1);
 });

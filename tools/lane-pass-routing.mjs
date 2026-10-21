@@ -2,6 +2,7 @@
 // CLI wiring belongs to a later tools/swarm.mjs change owned elsewhere.
 
 import path from 'node:path';
+import fs from 'node:fs';
 import { routeJob } from './router.mjs';
 import { FAILURE_STATUSES } from './failure-regression.mjs';
 
@@ -76,4 +77,55 @@ export async function readRunStates(root, { readdir, readFile }) {
     }
   }
   return runStates;
+}
+
+export function readRunStatesSync(root, { readdirSync, readFileSync } = fs) {
+  const runsDir = path.join(root, '.swarm', 'runs');
+  let entries;
+  try {
+    entries = readdirSync(runsDir, { withFileTypes: true });
+  } catch {
+    return {};
+  }
+
+  const folders = [];
+  for (const entry of entries ?? []) {
+    const name = typeof entry === 'string' ? entry : entry?.name;
+    if (!name || (typeof entry !== 'string' && entry?.isDirectory?.() === false)) continue;
+    folders.push(name);
+  }
+  folders.sort((a, b) => b < a ? -1 : b > a ? 1 : 0);
+
+  const runStates = {};
+  for (const name of folders.slice(0, 200)) {
+    try {
+      const state = JSON.parse(readFileSync(path.join(runsDir, name, 'state.json'), 'utf8'));
+      if (!state || typeof state !== 'object' || Array.isArray(state)) continue;
+      runStates[name] = state;
+    } catch {
+      // A run may be incomplete or concurrently unavailable; keep the readable runs.
+    }
+  }
+  return runStates;
+}
+
+const passRateFailuresCache = new Map();
+
+export function passRateFailuresFor(root, deps = {}) {
+  let resolved;
+  try {
+    resolved = path.resolve(root ?? process.cwd());
+    if (passRateFailuresCache.has(resolved)) return passRateFailuresCache.get(resolved);
+    const fsDeps = deps?.fs ?? deps;
+    const states = readRunStatesSync(resolved, {
+      readdirSync: fsDeps?.readdirSync ?? fs.readdirSync,
+      readFileSync: fsDeps?.readFileSync ?? fs.readFileSync,
+    });
+    const failures = routingFailures(lanePassRates(states));
+    passRateFailuresCache.set(resolved, failures);
+    return failures;
+  } catch {
+    if (resolved) passRateFailuresCache.set(resolved, {});
+    return {};
+  }
 }
