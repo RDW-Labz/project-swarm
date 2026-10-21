@@ -369,6 +369,292 @@ function fixImportSource(source, fromDir, toDir) {
   return rel.split(path.sep).join('/');
 }
 
+function lineAtOffset(text, offset) {
+  let line = 1;
+  for (let i = 0; i < offset && i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) line++;
+  }
+  return line;
+}
+
+function isRelativePathSpecifier(spec) {
+  return spec.startsWith('./') || spec.startsWith('../');
+}
+
+/** Pick rewritten relative path for a moved module (dynamic import + verify). */
+function rewriteRelativeModuleSpecifier(spec, fileDir, moduleDir) {
+  if (!isRelativePathSpecifier(spec)) return spec;
+  const base = path.basename(spec);
+  const swarmSibling = path.join(moduleDir, base);
+  const originResolved = path.resolve(fileDir, spec);
+  const originExists = fs.existsSync(originResolved);
+  const swarmExists = fs.existsSync(swarmSibling);
+  if (swarmExists && (!originExists || path.resolve(swarmSibling) !== path.resolve(originResolved))) {
+    let rel = path.relative(moduleDir, path.resolve(swarmSibling));
+    if (!rel.startsWith('.')) rel = `./${rel}`;
+    return rel.split(path.sep).join('/');
+  }
+  return fixImportSource(spec, fileDir, moduleDir);
+}
+
+function parseItemProgramAst(text) {
+  try {
+    return parse(text, { ...ACORN_TOKENIZE_OPTS, ranges: true });
+  } catch {
+    return null;
+  }
+}
+
+function itemLabel(item) {
+  return item.names.length ? item.names.join(',') : `item@${item.index}`;
+}
+
+function isNonLiteralRelativeDynamicImport(source, text) {
+  if (source.type === 'Literal' && typeof source.value === 'string') return false;
+  const srcText = text.slice(source.start, source.end);
+  if (source.type === 'TemplateLiteral') {
+    if (source.expressions.length === 0) return false;
+    return /\.\.?\//.test(srcText);
+  }
+  if (source.type === 'BinaryExpression') return /\.\.?\//.test(srcText);
+  if (source.type === 'Identifier') return false;
+  return /\.\.?\//.test(srcText.trim());
+}
+
+function literalSpecifierFromImportSource(source, text) {
+  if (source.type === 'Literal' && typeof source.value === 'string') return source.value;
+  if (source.type === 'TemplateLiteral' && source.expressions.length === 0) {
+    return source.quasis.map((q) => q.value.cooked ?? '').join('');
+  }
+  return null;
+}
+
+function literalQuoteChar(text, start) {
+  const ch = text[start];
+  if (ch === '"' || ch === "'" || ch === '`') return ch;
+  return "'";
+}
+
+function walkAst(node, visit) {
+  if (!node || typeof node !== 'object') return;
+  visit(node);
+  for (const key of Object.keys(node)) {
+    if (key === 'type' || key === 'start' || key === 'end' || key === 'loc' || key === 'range') continue;
+    const child = node[key];
+    if (Array.isArray(child)) {
+      for (const c of child) walkAst(c, visit);
+    } else if (child && typeof child.type === 'string') walkAst(child, visit);
+  }
+}
+
+function checkForbiddenRelativePathConstructs(text, item, errors) {
+  const ast = parseItemProgramAst(text);
+  if (!ast) return;
+  const label = itemLabel(item);
+  const usesDirname = /\b__dirname\b/.test(text);
+  const usesImportMeta = text.includes('import.meta');
+
+  walkAst(ast, (node) => {
+    if (node.type === 'ImportExpression' && isNonLiteralRelativeDynamicImport(node.source, text)) {
+      errors.push(
+        `non-literal relative dynamic import in ${label} at line ${lineAtOffset(text, node.start)}`,
+      );
+    }
+
+    if (node.type === 'NewExpression' && node.callee?.type === 'Identifier' && node.callee.name === 'URL') {
+      const first = node.arguments[0];
+      if (first?.type === 'Literal' && typeof first.value === 'string' && isRelativePathSpecifier(first.value)) {
+        const second = node.arguments[1];
+        if (
+          second?.type === 'MemberExpression'
+          && second.object?.type === 'MetaProperty'
+          && second.object.meta?.name === 'import'
+          && second.object.property?.name === 'meta'
+        ) {
+          errors.push(`relative new URL(import.meta.url) in ${label} at line ${lineAtOffset(text, node.start)}`);
+        }
+      }
+    }
+
+    if (node.type === 'CallExpression') {
+      const callee = node.callee;
+      if (
+        callee?.type === 'Identifier'
+        && callee.name === 'createRequire'
+        && node.arguments[0]?.type === 'Literal'
+        && typeof node.arguments[0].value === 'string'
+        && isRelativePathSpecifier(node.arguments[0].value)
+      ) {
+        errors.push(`relative createRequire in ${label} at line ${lineAtOffset(text, node.start)}`);
+      }
+
+      const isFsRead =
+        callee?.type === 'MemberExpression'
+        && callee.property?.type === 'Identifier'
+        && ['readFile', 'readFileSync', 'existsSync'].includes(callee.property.name)
+        && (callee.object?.type === 'Identifier' && callee.object.name === 'fs'
+          || (callee.object?.type === 'MemberExpression'
+            && callee.object.object?.type === 'Identifier'
+            && callee.object.object.name === 'fs'));
+      if (isFsRead) {
+        const arg0 = node.arguments[0];
+        if (arg0?.type === 'Literal' && typeof arg0.value === 'string' && isRelativePathSpecifier(arg0.value)) {
+          if (usesDirname || usesImportMeta) {
+            errors.push(`relative fs read in ${label} at line ${lineAtOffset(text, node.start)}`);
+          }
+        }
+      }
+
+      if (
+        callee?.type === 'MemberExpression'
+        && callee.object?.type === 'Identifier'
+        && callee.object.name === 'path'
+        && callee.property?.type === 'Identifier'
+        && callee.property.name === 'join'
+      ) {
+        const hasRelativeLiteral = node.arguments.some(
+          (a) => a?.type === 'Literal' && typeof a.value === 'string' && isRelativePathSpecifier(a.value),
+        );
+        const hasDirname = node.arguments.some((a) => a?.type === 'Identifier' && a.name === '__dirname');
+        const hasImportMetaUrl =
+          node.arguments.some(
+            (a) =>
+              a?.type === 'MemberExpression'
+              && a.object?.type === 'MetaProperty'
+              && a.object.meta?.name === 'import'
+              && a.object.property?.name === 'meta'
+              && a.property?.type === 'Identifier'
+              && a.property.name === 'url',
+          );
+        if (hasRelativeLiteral && (hasDirname || hasImportMetaUrl || usesDirname || usesImportMeta)) {
+          errors.push(`relative path.join with runtime path in ${label} at line ${lineAtOffset(text, node.start)}`);
+        }
+      }
+    }
+  });
+}
+
+/**
+ * Rewrite literal relative dynamic imports inside moved item text.
+ * @returns {{ text: string, rewrites: Array<{start:number,end:number,from:string,to:string,line:number}>, errors: string[] }}
+ */
+function rewriteMovedItemDynamicImports(itemText, fileDir, moduleDir, item) {
+  const errors = [];
+  const rewrites = [];
+  checkForbiddenRelativePathConstructs(itemText, item, errors);
+  if (errors.length) return { text: itemText, rewrites, errors };
+
+  const ast = parseItemProgramAst(itemText);
+  if (!ast) return { text: itemText, rewrites, errors };
+
+  const label = itemLabel(item);
+  const pending = [];
+
+  walkAst(ast, (node) => {
+    if (node.type !== 'ImportExpression') return;
+    const source = node.source;
+    if (isNonLiteralRelativeDynamicImport(source, itemText)) {
+      errors.push(`non-literal relative dynamic import in ${label} at line ${lineAtOffset(itemText, node.start)}`);
+      return;
+    }
+    const spec = literalSpecifierFromImportSource(source, itemText);
+    if (spec == null) return;
+    if (!isRelativePathSpecifier(spec)) return;
+    const newSpec = rewriteRelativeModuleSpecifier(spec, fileDir, moduleDir);
+    if (newSpec === spec) return;
+    const q = literalQuoteChar(itemText, source.start);
+    pending.push({
+      start: source.start,
+      end: source.end,
+      from: spec,
+      to: newSpec,
+      line: lineAtOffset(itemText, source.start),
+      replacement: `${q}${newSpec}${q}`,
+    });
+  });
+
+  if (errors.length) return { text: itemText, rewrites, errors };
+
+  pending.sort((a, b) => b.start - a.start);
+  let text = itemText;
+  for (const p of pending) {
+    text = text.slice(0, p.start) + p.replacement + text.slice(p.end);
+    rewrites.push({ start: p.start, end: p.end, from: p.from, to: p.to, line: p.line });
+  }
+  rewrites.sort((a, b) => a.start - b.start);
+  return { text, rewrites, errors };
+}
+
+function applySpecifierRewritesReverse(text, rewrites) {
+  let out = text;
+  for (const r of rewrites) {
+    for (const q of ["'", '"', '`']) {
+      const fromTok = `${q}${r.to}${q}`;
+      const toTok = `${q}${r.from}${q}`;
+      if (out.includes(fromTok)) out = out.split(fromTok).join(toTok);
+    }
+  }
+  return out;
+}
+
+function checkDynamicImportCallPaths(modulePath, movedItemsWithRewrites) {
+  const issues = [];
+  const moduleDir = path.dirname(path.resolve(modulePath));
+  for (const { rewrites } of movedItemsWithRewrites) {
+    for (const r of rewrites) {
+      const target = path.resolve(moduleDir, r.to);
+      if (!fs.existsSync(target)) {
+        issues.push(`dynamic import target missing after move: ${r.to} (resolved ${target})`);
+      }
+    }
+  }
+  return issues;
+}
+
+function smokeCallDynamicImports(modulePath, movedItemsWithRewrites, options = {}) {
+  const { timeoutMs = 20_000 } = options;
+  const cases = [];
+  for (const { item, text, rewrites } of movedItemsWithRewrites) {
+    for (const n of item.names) {
+      if (item.kind === 'function' || item.kind === 'declaration') {
+        for (const r of rewrites) {
+          cases.push({ exportName: n, expectedSubstring: r.to });
+        }
+      }
+    }
+  }
+  if (!cases.length) return [];
+
+  const abs = path.resolve(modulePath);
+  const url = pathToFileURL(abs).href;
+  const script = `
+const deadline = Date.now() + ${timeoutMs};
+const fail = (msg) => { console.error(msg); process.exit(1); };
+const t = setTimeout(() => fail('call-path timeout'), ${timeoutMs});
+try {
+  const mod = await import(${JSON.stringify(url)});
+  ${cases.map((c, i) => `
+  if (typeof mod.${c.exportName} === 'function') {
+    try {
+      const r = await mod.${c.exportName}();
+      if (r === undefined && ${i} === -1) {}
+    } catch (e) {
+      if (String(e).includes('Cannot find module') || String(e).includes('ERR_MODULE_NOT_FOUND')) fail(String(e));
+    }
+  }`).join('')}
+} finally { clearTimeout(t); }
+`;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    encoding: 'utf8',
+    timeout: timeoutMs + 5000,
+    cwd: path.dirname(abs),
+  });
+  if (r.status !== 0) {
+    return [`call-path check failed for ${modulePath}: ${(r.stderr || r.stdout || '').trim()}`];
+  }
+  return [];
+}
+
 function buildFilteredImports(movedItems, allItems, fileDir, moduleDir) {
   const used = new Set();
   for (const it of movedItems) {
@@ -962,10 +1248,24 @@ export function verifyMove(filePath, modulePath, originalFilePath, options = {})
     return true;
   });
 
+  const specifierRewrites = options.specifierRewrites || [];
+  const rewritesByOrigIndex = new Map();
+  for (const entry of specifierRewrites) {
+    if (entry.itemIndex != null) rewritesByOrigIndex.set(entry.itemIndex, entry.rewrites || []);
+  }
+
   const movedFromOrig = [];
   const usedOrig = new Set();
   for (const mit of modBodyItems) {
-    const match = origScan.items.find((o) => o.text === mit.text && !usedOrig.has(o.index));
+    let match = origScan.items.find((o) => o.text === mit.text && !usedOrig.has(o.index));
+    if (!match) {
+      match = origScan.items.find((o) => {
+        if (usedOrig.has(o.index)) return false;
+        const rev = rewritesByOrigIndex.get(o.index);
+        if (!rev?.length) return false;
+        return applySpecifierRewritesReverse(mit.text, rev) === o.text;
+      });
+    }
     if (match) {
       movedFromOrig.push(match);
       usedOrig.add(match.index);
@@ -978,7 +1278,17 @@ export function verifyMove(filePath, modulePath, originalFilePath, options = {})
   const expectedMovedBlob = movedFromOrig.map((it) => it.text).join('');
   const modBlob = modBodyItems.map((it) => it.text).join('');
   if (modBlob !== expectedMovedBlob) {
-    issues.push('moved item texts in module do not match original byte-for-byte');
+    const reversedBlob = modBodyItems
+      .map((mit, idx) => {
+        const orig = movedFromOrig[idx];
+        if (!orig) return mit.text;
+        const rev = rewritesByOrigIndex.get(orig.index);
+        return rev?.length ? applySpecifierRewritesReverse(mit.text, rev) : mit.text;
+      })
+      .join('');
+    if (reversedBlob !== expectedMovedBlob) {
+      issues.push('moved item texts in module do not match original byte-for-byte');
+    }
   }
 
   const isReexportBridge = (t) => /^export\s+\{[^}]+\}\s+from\s+['"]/.test(t.trimStart());
@@ -1056,7 +1366,40 @@ export function moveItems(filePath, modulePath, names, options = {}) {
   }
 
   const movedItems = validation.movedItems;
-  const moduleContent = buildNewModuleContent(originalText, filePath, modulePath, movedItems, items);
+  const fileDir = path.dirname(path.resolve(filePath));
+  const moduleDir = path.dirname(path.resolve(modulePath));
+  const rewriteErrors = [];
+  const specifierRewrites = [];
+  const rewrittenSpecifiers = [];
+  const movedItemsWithRewrites = [];
+  const processedMovedItems = movedItems.map((it) => {
+    const { text, rewrites, errors } = rewriteMovedItemDynamicImports(it.text, fileDir, moduleDir, it);
+    if (errors.length) rewriteErrors.push(...errors);
+    if (rewrites.length) {
+      specifierRewrites.push({ itemIndex: it.index, rewrites });
+      for (const r of rewrites) {
+        rewrittenSpecifiers.push({
+          item: itemLabel(it),
+          line: r.line,
+          from: r.from,
+          to: r.to,
+        });
+      }
+    }
+    const next = { ...it, text };
+    movedItemsWithRewrites.push({ item: next, text, rewrites });
+    return next;
+  });
+  if (rewriteErrors.length) {
+    return { ok: false, errors: rewriteErrors, wrote: false };
+  }
+
+  const callPathIssues = checkDynamicImportCallPaths(modulePath, movedItemsWithRewrites);
+  if (callPathIssues.length) {
+    return { ok: false, errors: callPathIssues, wrote: false };
+  }
+
+  const moduleContent = buildNewModuleContent(originalText, filePath, modulePath, processedMovedItems, items);
   const newFileContent = buildRewrittenFile(
     originalText,
     filePath,
@@ -1079,7 +1422,7 @@ export function moveItems(filePath, modulePath, names, options = {}) {
     fs.writeFileSync(tmpMod, moduleContent, 'utf8');
     fs.writeFileSync(tmpFile, newFileContent, 'utf8');
 
-    const unresolved = checkUnresolvedImportsForMove(originalText, moduleContent, movedItems);
+    const unresolved = checkUnresolvedImportsForMove(originalText, moduleContent, processedMovedItems);
     if (unresolved.length) {
       return { ok: false, errors: unresolved, wrote: false };
     }
@@ -1089,18 +1432,22 @@ export function moveItems(filePath, modulePath, names, options = {}) {
       if (smoke.length) {
         return { ok: false, errors: smoke, wrote: false };
       }
+      const callPath = smokeCallDynamicImports(tmpMod, movedItemsWithRewrites);
+      if (callPath.length) {
+        return { ok: false, errors: callPath, wrote: false };
+      }
     }
 
-    const verify = verifyMove(tmpFile, tmpMod, filePath, { noSmoke });
+    const verify = verifyMove(tmpFile, tmpMod, filePath, { noSmoke, specifierRewrites });
     if (!verify.ok) {
       return { ok: false, errors: verify.issues, wrote: false };
     }
     if (dryRun) {
-      return { ok: true, errors: [], wrote: false, dryRun: true };
+      return { ok: true, errors: [], wrote: false, dryRun: true, rewrittenSpecifiers };
     }
     fs.writeFileSync(modulePath, moduleContent, 'utf8');
     fs.writeFileSync(filePath, newFileContent, 'utf8');
-    return { ok: true, errors: [], wrote: true };
+    return { ok: true, errors: [], wrote: true, rewrittenSpecifiers };
   } finally {
     for (const p of [tmpFile, tmpMod]) {
       try {

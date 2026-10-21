@@ -14,6 +14,21 @@ if (!acornInstalled) {
   const { regexIdentifierTokens } = await import('../tools/split-module.mjs');
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const swarmPath = path.join(root, '..', 'tools', 'swarm.mjs');
+const swarmSplitDir = path.join(root, '..', 'tools', 'swarm');
+
+function swarmMonolithPreSplit() {
+  if (fs.existsSync(swarmSplitDir)) return false;
+  if (!fs.existsSync(swarmPath)) return false;
+  const lineCount = fs.readFileSync(swarmPath, 'utf8').split('\n').length;
+  return lineCount >= 5000;
+}
+
+function skipIfSwarmAlreadySplit(t, reason) {
+  if (!swarmMonolithPreSplit()) {
+    t.skip(reason || 'tools/swarm.mjs already split or not monolithic');
+  }
+}
 
 function roundTrip(src) {
   const { items } = scanModule(src);
@@ -206,8 +221,14 @@ test('destructuring assignment uses rhs bindings', () => {
   assert.ok(!items[1].uses.has('q'));
 });
 
-test('tools/swarm.mjs records spread-in-paren agent dependencies', () => {
-  const swarmPath = path.join(root, '..', 'tools', 'swarm.mjs');
+test('spread-in-paren agent dependencies (fixture)', () => {
+  const src = "export const AGENTS = Object.freeze([...API_AGENTS, 'local']);\n";
+  const { items } = scanModule(src);
+  assert.ok(items[0].uses.has('API_AGENTS'));
+});
+
+test('tools/swarm.mjs records spread-in-paren agent dependencies', (t) => {
+  skipIfSwarmAlreadySplit(t, 'spread-in-paren assertions target monolithic tools/swarm.mjs');
   const text = fs.readFileSync(swarmPath, 'utf8');
   const { items } = scanModule(text);
 
@@ -327,7 +348,7 @@ test('order array lists item indices deterministically', () => {
 });
 
 test('scans real tools/swarm.mjs losslessly and quickly', () => {
-  const swarmPath = path.join(root, '..', 'tools', 'swarm.mjs');
+  if (!fs.existsSync(swarmPath)) return;
   const text = fs.readFileSync(swarmPath, 'utf8');
   const started = Date.now();
   const { items, exports } = scanModule(text);
@@ -359,7 +380,7 @@ test('scans real tools/swarm.mjs losslessly and quickly', () => {
   for (const name of exports) {
     assert.ok(declared.has(name), `missing export name ${name}`);
   }
-  assert.ok(items.length > 100);
+  if (swarmMonolithPreSplit()) assert.ok(items.length > 100);
 });
 
 const TOP_LEVEL_LINE =
@@ -488,7 +509,7 @@ function crudeIdentifierOverApprox(text) {
 }
 
 test('parser uses are covered by crude regex over-approximation on swarm.mjs', () => {
-  const swarmPath = path.join(root, '..', 'tools', 'swarm.mjs');
+  if (!fs.existsSync(swarmPath)) return;
   const text = fs.readFileSync(swarmPath, 'utf8');
   const { items } = scanModule(text);
   const allow = new Set(DIFF_USES_ALLOWLIST);
@@ -573,8 +594,29 @@ test('top-level await expression', () => {
   assert.ok(items[0].uses.has('loadRemote'));
 });
 
-test('tools/swarm.mjs items respect top-level structure invariants', () => {
-  const swarmPath = path.join(root, '..', 'tools', 'swarm.mjs');
+test('tools/swarm.mjs column-0 structure invariant (any layout)', () => {
+  if (!fs.existsSync(swarmPath)) return;
+  const text = fs.readFileSync(swarmPath, 'utf8');
+  const { items } = scanModule(text);
+  const startsAt = new Set(items.map((it) => it.startLine));
+  for (const it of items) {
+    const sliceLines = it.text.split('\n');
+    for (let i = 1; i < sliceLines.length; i++) {
+      if (!TOP_LEVEL_LINE.test(sliceLines[i])) continue;
+      const fileLine = it.startLine + i;
+      const offset = lineStartOffset(text, fileLine);
+      if (offsetInScannerOpaque(text, offset)) continue;
+      if (onlyLeadingNoiseBefore(sliceLines, i)) continue;
+      if (startsAt.has(fileLine)) continue;
+      assert.fail(
+        `column-0 top-level line ${fileLine} sits inside item ${it.names} (${it.startLine}-${it.endLine})`,
+      );
+    }
+  }
+});
+
+test('tools/swarm.mjs items respect top-level structure invariants', (t) => {
+  skipIfSwarmAlreadySplit(t, 'runManifestBody and item-count invariants target monolithic swarm.mjs');
   const text = fs.readFileSync(swarmPath, 'utf8');
   const lines = text.split('\n');
   const { items } = scanModule(text);

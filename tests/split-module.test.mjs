@@ -24,6 +24,21 @@ if (!acornInstalled) {
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const tmpBase = process.env.SWARM_TEST_TMP || os.tmpdir();
+const swarmPath = path.join(root, '..', 'tools', 'swarm.mjs');
+const swarmSplitDir = path.join(root, '..', 'tools', 'swarm');
+
+function swarmMonolithPreSplit() {
+  if (fs.existsSync(swarmSplitDir)) return false;
+  if (!fs.existsSync(swarmPath)) return false;
+  const lineCount = fs.readFileSync(swarmPath, 'utf8').split('\n').length;
+  return lineCount >= 5000;
+}
+
+function skipIfSwarmAlreadySplit(t, reason) {
+  if (!swarmMonolithPreSplit()) {
+    t.skip(reason || 'tools/swarm.mjs already split or not monolithic');
+  }
+}
 
 function mkFixture(name, files) {
   const dir = fs.mkdtempSync(path.join(tmpBase, `split-mod-${name}-`));
@@ -175,8 +190,96 @@ test('plan layers a small cycle as one group', () => {
   assert.deepEqual(cycleNames, ['a', 'b']);
 });
 
+test('moved function rewrites literal dynamic import into subfolder', async () => {
+  const dir = mkFixture('dyn-import', {
+    'other.mjs': 'export const VALUE = 42;\n',
+    'main.mjs': [
+      'async function loadOther() {',
+      '  const m = await import("./other.mjs");',
+      '  return m.VALUE;',
+      '}',
+      'const stay = 0;',
+      '',
+    ].join('\n'),
+  });
+  const main = path.join(dir, 'main.mjs');
+  const mod = path.join(dir, 'sub', 'loader.mjs');
+  const result = moveItems(main, mod, ['loadOther']);
+  assert.equal(result.ok, true, result.errors?.join('; '));
+  assert.ok(result.rewrittenSpecifiers?.some((r) => r.from === './other.mjs' && r.to === '../other.mjs'));
+  const modText = fs.readFileSync(mod, 'utf8');
+  assert.ok(modText.includes('../other.mjs'));
+  const run = spawnSync(
+    process.execPath,
+    ['--input-type=module', '-e', `import { loadOther } from ${JSON.stringify(mod)}; const v = await loadOther(); if (v !== 42) process.exit(1);`],
+    { encoding: 'utf8', cwd: dir },
+  );
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+});
+
+test('dynamic import of moved sibling in swarm folder uses ./ basename', () => {
+  const dir = mkFixture('dyn-sibling', {
+    'sibling.mjs': 'export const ok = 1;\n',
+    'main.mjs': [
+      'async function loadSibling() {',
+      '  const m = await import("./sibling.mjs");',
+      '  return m.ok;',
+      '}',
+      'const stay = 0;',
+      '',
+    ].join('\n'),
+  });
+  const main = path.join(dir, 'main.mjs');
+  fs.mkdirSync(path.join(dir, 'pack'), { recursive: true });
+  fs.copyFileSync(path.join(dir, 'sibling.mjs'), path.join(dir, 'pack', 'sibling.mjs'));
+  const mod = path.join(dir, 'pack', 'loader.mjs');
+  const result = moveItems(main, mod, ['loadSibling']);
+  assert.equal(result.ok, true, result.errors?.join('; '));
+  const modText = fs.readFileSync(mod, 'utf8');
+  assert.ok(modText.includes('./sibling.mjs'));
+  assert.ok(!modText.includes('../sibling.mjs'));
+});
+
+test('non-literal relative dynamic import is refused', () => {
+  const dir = mkFixture('dyn-bad', {
+    'main.mjs': 'async function bad() { const n = "a"; return import(`./x-${n}.mjs`); }\nconst stay = 0;\n',
+  });
+  const result = moveItems(path.join(dir, 'main.mjs'), path.join(dir, 'bad.mjs'), ['bad']);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.includes('non-literal relative dynamic import')));
+});
+
+test('new URL with import.meta.url is refused', () => {
+  const dir = mkFixture('dyn-url', {
+    'main.mjs': 'function u() { return new URL("./data.json", import.meta.url); }\nconst x = 1;\n',
+  });
+  const result = moveItems(path.join(dir, 'main.mjs'), path.join(dir, 'u.mjs'), ['u']);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.errors.some((e) => e.includes('forbidden runtime') || e.includes('relative new URL')),
+  );
+});
+
+test('node: and bare dynamic import specifiers stay untouched', () => {
+  const dir = mkFixture('dyn-bare', {
+    'main.mjs': [
+      'async function loadNode() { return import("node:fs"); }',
+      'async function loadBare() { return import("zod"); }',
+      'const stay = 0;',
+      '',
+    ].join('\n'),
+  });
+  const main = path.join(dir, 'main.mjs');
+  const mod = path.join(dir, 'sub', 'loads.mjs');
+  const result = moveItems(main, mod, ['loadNode', 'loadBare']);
+  assert.equal(result.ok, true, result.errors?.join('; '));
+  const modText = fs.readFileSync(mod, 'utf8');
+  assert.ok(modText.includes('node:fs'));
+  assert.ok(modText.includes('"zod"'));
+  assert.equal(result.rewrittenSpecifiers?.length ?? 0, 0);
+});
+
 test('plan on tools/swarm.mjs finishes quickly with layer-0 items', () => {
-  const swarmPath = path.join(root, '..', 'tools', 'swarm.mjs');
   const started = Date.now();
   const plan = planSplit(swarmPath);
   const elapsed = Date.now() - started;
@@ -451,7 +554,31 @@ test('possiblyUnresolvedNames flags real go() when import missing from module', 
   assert.ok(issues.some((i) => i.includes('go')));
 });
 
-test('stage-1 pattern constants move on swarm copy smoke-imports', () => {
+test('tools/swarm.mjs generic scan invariants (any layout)', () => {
+  if (!fs.existsSync(swarmPath)) return;
+  const text = fs.readFileSync(swarmPath, 'utf8');
+  const started = Date.now();
+  const { items, exports } = scanModule(text);
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 5000, `scan took ${elapsed}ms`);
+  let rebuilt = '';
+  let pos = 0;
+  for (const it of items) {
+    rebuilt += text.slice(pos, it.start) + it.text;
+    pos = it.end;
+  }
+  rebuilt += text.slice(pos);
+  assert.equal(rebuilt, text);
+  const declared = new Set();
+  for (const it of items) {
+    for (const n of it.names) declared.add(n);
+    if (it.exported) for (const n of it.names) declared.add(n);
+  }
+  for (const name of exports) assert.ok(declared.has(name), `missing export ${name}`);
+});
+
+test('stage-1 pattern constants move on swarm copy smoke-imports', (t) => {
+  skipIfSwarmAlreadySplit(t, 'monolithic swarm copy stages require unsplit tools/swarm.mjs');
   const { dir, copy } = copyToolsDir('swarm-stage1');
   const plan = planSplit(copy);
   const names = stage1PatternNames(plan, copy);
@@ -464,7 +591,8 @@ test('stage-1 pattern constants move on swarm copy smoke-imports', () => {
   assert.equal(smoke.length, 0, smoke.join('; '));
 });
 
-test('swarm copy stages patterns warnings and mutants succeed', () => {
+test('swarm copy stages patterns warnings and mutants succeed', (t) => {
+  skipIfSwarmAlreadySplit(t, 'monolithic swarm copy stages require unsplit tools/swarm.mjs');
   const { dir, copy } = copyToolsDir('swarm-stages-3');
   const patternsMod = runPatternsStage(copy, dir);
   const warningsMod = runWarningsStage(copy, dir);
@@ -474,7 +602,8 @@ test('swarm copy stages patterns warnings and mutants succeed', () => {
   assert.equal(smoke.length, 0, smoke.join('; '));
 });
 
-test('swarm copy split stages patterns through core-12 succeed', () => {
+test('swarm copy split stages patterns through core-12 succeed', (t) => {
+  skipIfSwarmAlreadySplit(t, 'monolithic swarm copy stages require unsplit tools/swarm.mjs');
   const started = Date.now();
   const { dir, copy } = copyToolsDir('swarm-through-core-12');
   const modules = [
@@ -491,8 +620,8 @@ test('swarm copy split stages patterns through core-12 succeed', () => {
   assert.equal(smoke.length, 0, smoke.join('; '));
 });
 
-test('dry-run move of layer-0 function on swarm.mjs does not touch file', () => {
-  const swarmPath = path.join(root, '..', 'tools', 'swarm.mjs');
+test('dry-run move of layer-0 function on swarm.mjs does not touch file', (t) => {
+  skipIfSwarmAlreadySplit(t, 'dry-run on live swarm requires monolithic tools/swarm.mjs');
   const plan = planSplit(swarmPath);
   let pick = null;
   for (const g of plan.layers[0] || []) {
