@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "policy-defaults-v2",
+      "agent": "auto",
+      "prompt": "Item T defaults update (owner request). Read tools/policy.mjs, tools/policy-commands.mjs, tests/policy.test.mjs, tests/policy-defaults.test.mjs, docs/policy.md. Change the default rules and the never-auto list: NEVER_AUTO becomes exactly: merge-other-repo, new-paid-service, new-key, new-account, new-secret, spend-past-daily-limit, irreversible-action, deploy, publish, hand-edit-app-code, auth-change, payments-change, override, accept-unmet-acceptance (REMOVE merge-deploying-pr and hosted-db-migration from it; ADD new-account and irreversible-action). New conditional default rules: (1) merge-live-site: request kind merge-pr with facts.deploysLiveSite true is auto-approved only when facts.ciGreen, facts.fullE2eGreen, facts.reviewsPass, facts.postDeployWatch (a post-deploy watch step is configured), facts.autoRollback (an automatic rollback is configured) and facts.inMergeOrder are all true and facts.irreversible is not true and facts.pastDailyAutoLimit is not true; any missing or false condition is needs-owner; the existing merge-swarm-pr rule keeps its own conditions for non-deploying swarm-repo merges and must still be needs-owner when deploysLiveSite is true unless the merge-live-site conditions hold. (2) hosted-migration: kind hosted-db-migration is auto-approved only when facts.backwardCompatible, facts.backupTaken, facts.dryRunPassed and facts.mainE2eProof are all true and facts.destructive and facts.irreversible are not true; otherwise needs-owner. (3) branch-switch: kind branch-switch is auto-approved when facts.branch is a plain branch name (letters, digits, dot, underscore, slash, dash, no colon) and facts.force is not true. (4) journal-restore: kind journal-restore is auto-approved only when every path in facts.files is a generated or routing file (coordination/HANDOFF.md and its previous copies, TASK.md, build-plan.md, anything under docs/state, coordination/manifests json files, .swarm journal and ledger files); otherwise needs-owner. Keep cap-raise-small (the fact pastDailyAutoLimit already blocks it) and every other existing rule unchanged. Keep each rule's id, a one-sentence description, enabled flag and the owner-note field, update DEFAULT_POLICY_FILE, swarm policy show and docs/policy.md to describe the new rules and the new never-auto list (state plainly that new keys, accounts, paid services, spend past the daily limit and irreversible actions always need the owner). Tests: update tests/policy.test.mjs and tests/policy-defaults.test.mjs and add tests/policy-defaults-v2.test.mjs with a table per new rule (every condition removed or flipped gives needs-owner), the NEVER_AUTO list exactly as above, a deploying merge without a postDeployWatch or autoRollback is needs-owner, a destructive migration is needs-owner, a branch switch with force true or a colon in the name is needs-owner, a journal restore including tools/swarm.mjs is needs-owner. Write only tools/policy.mjs, tools/policy-commands.mjs, docs/policy.md, tests/policy.test.mjs, tests/policy-defaults.test.mjs and tests/policy-defaults-v2.test.mjs.",
+      "context": [
+        "tools/policy.mjs",
+        "tools/policy-commands.mjs",
+        "tests/policy.test.mjs",
+        "tests/policy-defaults.test.mjs",
+        "docs/policy.md"
+      ],
+      "outputs": [
+        "tools/policy.mjs",
+        "tools/policy-commands.mjs",
+        "docs/policy.md",
+        "tests/policy.test.mjs",
+        "tests/policy-defaults.test.mjs",
+        "tests/policy-defaults-v2.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/kickoff.test.mjs",
+        "tests/policy-run.test.mjs"
+      ]
+    },
+    {
+      "id": "daily-limit-core",
+      "agent": "auto",
+      "prompt": "Item: adjustable daily spend limit, per project with a machine default, as new modules plus tests (do not edit tools/swarm.mjs; a later job wires it in). Read tools/spend.mjs (PAID_LANES, how spend entries and today's totals are stored), tools/project-spend.mjs and tools/local-config.mjs. Create tools/daily-limit.mjs (SPDX header, ES module) exporting: DEFAULT_DAILY_LIMIT_USD = 5; resolveDailyLimit({machine, project}) returning {dailyLimitUsd, dailyLimitMode, hardCeilingUsd, source} where machine and project are the settings objects ({usd, mode, ceilingUsd} or null), the project overrides the machine, the machine overrides the defaults (limit 5, mode stop, ceiling 3 times the limit when not set); validateDailyLimit({usd, mode, ceilingUsd}) returning plain error strings (usd must be a positive finite number, mode must be stop or notify, ceilingUsd when given must be at least usd); centralDayKey(now) giving the date string YYYY-MM-DD of the America/Chicago calendar day, and centralMidnightAfter(now) giving the epoch milliseconds of the next midnight in America/Chicago (compute with Intl.DateTimeFormat, correct across daylight saving changes; no hard-coded offsets); isPaidLane(lane) using PAID_LANES from tools/spend.mjs (billed spend only: codex, cursor, hermes, qwen and the claude subscription lane are free and never count and never stop); evaluateDailyLimit({settings, billedTodayUsd, lane, now, notifiedLevels}) returning {allow, action, level, ceilingHit, reason, resetsAt, notify} where: a free lane is always allow true with action free; for a paid lane level is floor(billedTodayUsd divided by dailyLimitUsd); in mode stop the paid lane is refused (allow false, action stop) once billedTodayUsd is at or over dailyLimitUsd; in mode notify the paid lane keeps going (allow true, action notify when level is at least 1) until billedTodayUsd is at or over hardCeilingUsd, which always refuses (allow false, action ceiling) even in notify mode; reason is a plain sentence naming the limit, the billed amount and the reset time in Central time; notify is the list of levels (1, 2, 3 and so on, one per multiple of the limit) newly crossed that are not already in notifiedLevels so each notification goes out once (a notify entry for the ceiling is added as level ceiling when first hit); dailyLimitNotice({project, level, billedTodayUsd, settings, now}) returning a small record {kind: 'daily-limit', project, level, text, billedTodayUsd, limitUsd, mode, ceilingUsd, at} usable for the board banner, the phone inbox item and the 2-hour summary line (text under 200 characters, plain). Create tools/budget-set-commands.mjs (SPDX header, ES module) exporting parseBudgetSetArgs(args) for: swarm budget set --daily 10 --mode notify --ceiling 30 [--machine] (without --machine it applies to the current project), swarm budget show [--json], with validation errors for a bad number, a bad mode, a ceiling under the limit, an unknown option, and nothing to set; budgetCommand(args, {out, env, root, fs, homedir}) that reads and writes the machine setting under the key dailyLimit of the machine config file (path from tools/local-config.mjs, written atomically, keep every other key) and the project setting in the file .swarm/project/daily-limit.json under the project root (atomic write, mode 0600), and show prints the effective values with their source (default, machine or project), the billed amount passed in through an optional deps.billedToday function, and the reset time. Tests in tests/daily-limit.test.mjs and tests/budget-set.test.mjs (node:test, strict assert, temp directories, fake clock, no sleeps): both modes; the ceiling in stop mode and in notify mode (notify mode still stops at the ceiling; default ceiling is 3 times the limit, an explicit ceiling wins); free lanes never counted and never stopped even far over the limit and over the ceiling; levels 1, 2, 3 notified once each and not again; the Central midnight reset across the spring and autumn daylight saving changes and at 23:59 and 00:01 Central; a billed total of exactly the limit is stopped in stop mode; per-project setting beats machine beats default; validation errors; set and show round trip for machine and project with other config keys preserved; the project file mode is 0600. Write only tools/daily-limit.mjs, tools/budget-set-commands.mjs, tests/daily-limit.test.mjs and tests/budget-set.test.mjs.",
+      "context": [
+        "tools/spend.mjs",
+        "tools/project-spend.mjs",
+        "tools/local-config.mjs"
+      ],
+      "outputs": [
+        "tools/daily-limit.mjs",
+        "tools/budget-set-commands.mjs",
+        "tests/daily-limit.test.mjs",
+        "tests/budget-set.test.mjs"
+      ],
+      "timeoutMs": 2700000
+    }
+  ]
+}
