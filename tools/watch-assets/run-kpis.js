@@ -123,9 +123,10 @@
     var bar = $('kSpendBar');
     if (bar && bar.parentNode) bar.parentNode.hidden = true;
     var pj = run.project;
-    var capBasis = pj && pj.capBasis === 'billed' ? 'billed only' : 'billed + list value';
+    var billedForecast = pj && (pj.capBasis === 'billed' || typeof pj.billedUsd === 'number');
+    var capBasis = billedForecast ? 'billed only' : 'billed + list value';
     var capLabel = pj && pj.capUsd ? ' (cap counts ' + capBasis + ')' : '';
-    setText('kForecast', (pj ? 'project ' + fmt$(pj.spendUsd) + (pj.capUsd ? ' / ' + fmt$(pj.capUsd) + (pj.reached ? ' CAP REACHED' : '') + capLabel : (pj.capError ? ' CAP INVALID' : (pj.noCap ? ' NO CAP' : ''))) + ' · ' : '') + 'rate ' + fmt$(spendRate) + '/min');
+    setText('kForecast', (pj ? 'project ' + fmt$(billedForecast ? pj.billedUsd : pj.spendUsd) + (pj.capUsd ? ' / ' + fmt$(pj.capUsd) + (pj.reached ? ' CAP REACHED' : '') + capLabel : (pj.capError ? ' CAP INVALID' : (pj.noCap ? ' NO CAP' : ''))) + ' · ' : '') + 'rate ' + fmt$(spendRate) + '/min');
     setText('kEta', run.status === 'complete' ? 'done' : (k.etaMs == null ? '–' : fmtT(k.etaMs)));
     setText('kRate', (k.jobsPerSec || 0).toFixed(1) + ' jobs/s');
     var mq = run.mergeQueue;

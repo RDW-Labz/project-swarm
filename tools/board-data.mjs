@@ -298,7 +298,9 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const ledger = selected.ledger;
   const scope = await scopeFor(selected.root, ledger);
   const spend = await summary(project.root).catch(error => ({ spendUsd: null, capUsd: null, capError: String(error.message).slice(0, 120) }));
-  const overviewSpend = { usd: spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis: spend.capBasis ?? 'billed+list' };
+  const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
+  const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
+  const overviewSpend = { usd: capUsedUsd ?? spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
   const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null }).then(progressSummary, () => null);
   const cost = costOf(runs, now);
   const agents = agentsOf(runs, liveIds, now);
@@ -321,7 +323,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     agents, cost,
     handled,
     orchestrator: (() => { try { return projectOrchestrator(project, { runs, now }); } catch { return { sessions: [], handBuilt: { files: 0, edits: 0, list: [] }, swarmBuilt: { files: 0 }, swarmPct: null, handPct: null, cost: { todayListUsd: 0, allListUsd: 0, todayTokens: 0, allTokens: 0 } }; } })(),
-    spend: { usd: cost.allUsd, familyUsd: spend.spendUsd ?? null, sharedTrees: spend.sharedTrees ?? 1, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached), capSource: spend.capSource ?? null, capInherited: Boolean(spend.capInherited), inheritedFrom: spend.inheritedFrom ?? null, why: spend.why ?? null, billedUsd: cost.paidUsd, listUsd: cost.flatRateListUsd, capBasis: spend.capBasis ?? 'billed+list' },
+    spend: { usd: cost.allUsd, familyUsd: spend.spendUsd ?? null, familyBilledUsd: spend.billedUsd ?? null, capUsedUsd: capUsedUsd ?? null, sharedTrees: spend.sharedTrees ?? 1, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached), capSource: spend.capSource ?? null, capInherited: Boolean(spend.capInherited), inheritedFrom: spend.inheritedFrom ?? null, why: spend.why ?? null, billedUsd: cost.paidUsd, listUsd: cost.flatRateListUsd, capBasis },
     progress,
     split,
     recentJobCounts: runs.slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0)),
@@ -444,7 +446,9 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const lessons = await listLessons(project.root).then(r => r.lessons.slice(0, 200).map(l => ({ id: txt(l.id, 40), what: txt(l.what ?? l.title ?? l.rule, 200), stage: stageDisplay(scope, l.stage), stageId: txt(l.stage, 20) || 'none', status: txt(l.guard?.status ?? l.status, 20) })), () => []);
   const detailCost = costOf(runs, now);
   const spend = (await summary(project.root).catch(() => ({}))) ?? {};
-  const detailSpend = { usd: spend.spendUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis: spend.capBasis ?? 'billed+list' };
+  const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
+  const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
+  const detailSpend = { usd: capUsedUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
   const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null }).catch(() => null);
   const split = await splitQuality({ root: project.root, now, slots }).catch(() => null);
   const benchmarks = await readScorecards(project.root).then(input => scorecardHistory(input)).catch(() => null);
@@ -456,7 +460,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
       const jobs = state.jobs ?? [];
       return { runId: id, status: txt(state.status, 30), live: liveRunIds.has(id), startedAt: state.startedAt ?? null, finishedAt: state.finishedAt ?? null, jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length, failed: jobs.filter(j => ['failed', 'timeout'].includes(j.status)).length, costUsd: Math.round(runTotals(state).usd * 1e6) / 1e6 };
     }),
-    spend: { ...detailCost, byLane: plain(byLane), billedUsd: detailCost.paidUsd, listUsd: detailCost.flatRateListUsd, capBasis: spend.capBasis ?? 'billed+list' },
+    spend: { ...detailCost, byLane: plain(byLane), billedUsd: detailCost.paidUsd, listUsd: detailCost.flatRateListUsd, capBasis },
     progress,
     splitQuality: split,
     benchmarks,
