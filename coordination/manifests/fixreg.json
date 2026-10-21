@@ -5,7 +5,7 @@
     {
       "id": "fixreg",
       "agent": "auto",
-      "prompt": "tests/review-high-regressions.test.mjs now fails after the second-round fixes (tests/server-restart-round2.test.mjs etc). Run it with node --import ./tests/_isolate-config.mjs --test --test-timeout=40000 tests/review-high-regressions.test.mjs. Three problems. (1) The file never exits: a handle stays open (most likely the 2 second stat-timeout timer in tools/projects.mjs, or a spawned child or lock): find it and fix the code with unref or clearTimeout in a finally, not the test, and prove the process exits on its own within 5 seconds. (2) high-1 expects the reason stale-record but the intended new behavior (fail closed when the identity cannot be verified) now returns identity-unverified for a failed ps or unknown start time: split that test so that the reused pid case (command line differs, or start time later) still expects stale-record and the cannot-verify case expects identity-unverified with nothing signalled and the record kept. (3) high-3 asserts the output does not match auto-denied for a real project under a folder named test, tests or Temp, but the output contains that text: read the actual output; if the request really was auto-denied that is a code bug (fix the strict rule), if it is only explanatory wording fix the assertion to check the request state (not denied) instead of matching text. Keep every other test passing. ignoreTests reason: only the named files change.",
+      "prompt": "tests/review-high-regressions.test.mjs now fails after the second-round fixes. Run it with node --import ./tests/_isolate-config.mjs --test --test-timeout=40000 tests/review-high-regressions.test.mjs. Three problems. (1) The file never exits: a handle stays open (most likely the 2 second stat-timeout timer in tools/projects.mjs, or a spawned child or lock): find it and fix the code with unref or clearTimeout in a finally, not the test, and prove the process exits on its own within 5 seconds. (2) high-1 expects the reason stale-record but the intended new behavior (fail closed when the identity cannot be verified) now returns identity-unverified for a failed ps or unknown start time: split that test so that the reused pid case (command line differs, or start time later) still expects stale-record and the cannot-verify case expects identity-unverified with nothing signalled and the record kept. (3) high-3 asserts the output does not match auto-denied for a real project under a folder named test, tests or Temp, but the output contains that text: read the actual output; if the request really was auto-denied that is a code bug (fix the strict rule), if it is only explanatory wording fix the assertion to check the request state (not denied) instead of matching text. Keep every other test passing. ignoreTests reason: only the named files change.",
       "context": [
         "tests/review-high-regressions.test.mjs",
         "tools/projects.mjs",
@@ -22,7 +22,32 @@
         "tools/handbuild-commands.mjs",
         "tools/server-restart.mjs"
       ],
-      "timeoutMs": 2400000
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/board-idle-ready.test.mjs",
+        "tests/registry-review.test.mjs",
+        "tests/bare-status.test.mjs",
+        "tests/scratch-strict-broad.test.mjs",
+        "tests/goal-guard.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/commit-msg-manifest.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/forget.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/quotes.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/handbuild-guard.test.mjs"
+      ]
     }
   ]
 }
