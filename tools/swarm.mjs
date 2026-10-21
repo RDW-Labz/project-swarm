@@ -11,7 +11,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, parseExtraCli, extraCliDoctor, execViaFile, validateEnvelope, summarizeModels, claudeQuotaSignal } from './cli-adapters.mjs';
 export { detectClaudeQuotaLimit } from './cli-adapters.mjs';
 import { API_AGENTS, apiDoctor, probeLocalProvider, decodeContext, executeApi, applyEdit } from './api-adapters.mjs';
@@ -111,7 +111,8 @@ import { activityRecorder, applyLeadChildState, applyManifestJobTypes, asObject,
 import { agentReadiness, applyPolicyDecision, attachRuleFiles, autopilotCaps, batchPolicyFor, centralResetLabel, compareSemver, defaultRoot, deviationText, existingManifestFile, failureTail, invalidArgumentsMessage, isTestOutput, latestRunEnd, parseSemver, policyDayKey, projectProfile, readProjectsRegistry, readyAutoJobs, resolveLicensesFlag, resolvePathCwdThenRoot, securityFingerprintKey, shipExec, shipExitCode, ticketForBudgetFailure, withApprovedManifests, withProfileDefaults, withProfileRisks, withoutApiOnlyFields } from './swarm/core-2.mjs';
 import { applyEvidence, cheapTierNotConfiguredModelWarnings, checkPathMissingWarnings, cursorClaimConflicts, dispatchResultKeysRefusal, displayResult, eventReaderNoProducerWarnings, expectedWorkspaceFor, highestSemver, liveOutputConflicts, loadEvidenceFile, noJobRunningWarning, normalizeManifestMetadata, parseMutantCheckFlag, readMutantsSource, redundantWriterWarnings, relative, runCheck, runWithIdRetry, runtimeCheckNoShellWarning, securityExec, selectRunManifest, shellGrantedPathPrefixes, summarizeAgentFailure, tmpToolPathWarnings, toolchainInventory, tryObject, undeclaredPersistedFieldWarnings, unknownJobFieldMessage, validateQueueOptions, validateRunIdle, worktreesBaseFor } from './swarm/core-11.mjs';
 import { bumpPointers, cleanBranch, collectOpenPolicyRequests, enforceProtectedPaths, extractChangelog, gitDirty, installNewRelease, parseGoFlags, parseShipFlags, raisedTodayUsdFromAutoDecisions, refreshMapQuietly, squashBranch, updateProjects } from './swarm/core-12.mjs';
-import { autopilotPolicyPass, dispatchPolicyCli, lastTopLevelObject, loadMutantsFile, loadMutantsFileForIntegrate, originForCheck, parseContextGlob, safePath, shellSandboxDeniedCheckWarnings, swarmVersion, toolchainsReport, validateMutantsArray } from './swarm/core-21.mjs';
+import { autopilotPolicyPass, dispatchPolicyCli, lastTopLevelObject, loadMutantsFile, loadMutantsFileForIntegrate, originForCheck, parseContextGlob, safePath, shellSandboxDeniedCheckWarnings, toolchainsReport, validateMutantsArray } from './swarm/core-21.mjs';
+import { runnerVersion, swarmVersion } from './runner-version.mjs';
 import { bytesAt, expandContextGlobs, jobWorktreePath, jsonWrite, mutantReviewTexts, parseFinalJson, promptPathsNotInWorkspaceWarnings, runChecks, saveDroppedWrite, validateManifest, write } from './swarm/core-31.mjs';
 import { doctor, editInPlaceOnlyJobs, failedStderrTail, noteRun, snapshotHash, workerKeyGuard } from './swarm/core-32.mjs';
 import { anyOutputExists, claudeProviderLimitGuard, droppedBytesAt, execute, expandJobContext, expandOpenScopes, jobFinalJson, ledgerSettings, loadJobMutantsFile, loadJobResultData, missingDepsWarnings, missingLockPathSourceWarnings, outputsChanged, pendingBaseCheck, pickJobRoute, privateNamesDispatchGuard, readState, recordIntegratedHashes, recoverIntegrationJournal, repairArrayKeyValueJson, reportObject, resolveAskRoute, runJobSetup, runMutant, smokeCheckInSandbox } from './swarm/core-41.mjs';
@@ -2215,7 +2216,7 @@ async function warnProjectVersionMismatch(root){
   try{pointer=JSON.parse(await fs.readFile(path.join(root,'.project-swarm.json'),'utf8'));}catch{return;}
   if(!pointer?.version)return;
   let installedVersion;
-  try{installedVersion=JSON.parse(await fs.readFile(path.join(ownRoot,'package.json'),'utf8')).version;}catch{return;}
+  try{installedVersion=await runnerVersion(import.meta.url);}catch{return;}
   if(pointer.version!==installedVersion)process.stderr.write(`Warning: this project is linked to project-swarm ${pointer.version}, but the running install is ${installedVersion}; run \`swarm update\` in the install root to realign.\n`);
 }
 
@@ -2881,8 +2882,8 @@ async function mainInner() {
       return;
     }
     if(check){
-      const pkg=JSON.parse(await fs.readFile(path.join(ownRoot,'package.json'),'utf8'));
-      const report=await checkProject(root,{installVersion:pkg.version});
+      const installVersion=await runnerVersion(import.meta.url);
+      const report=await checkProject(root,{installVersion});
       process.stdout.write(json?`${JSON.stringify(report)}\n`:`${report.items.map(item=>`${item.level==='fail'?'FAIL':item.level} ${item.id}: ${item.message}`).join('\n')}\n`);
       if(!report.ok)process.exitCode=1;
       return;
@@ -3087,7 +3088,7 @@ async function mainInner() {
       if(args.length===1){
         const report=await listPinReport(installRoot);
         if(!report.pins.length)process.stdout.write('no pinned projects\n');
-        else for(const entry of report.pins)process.stdout.write(`${entry.name}: pinned at ${entry.pinnedAt}\n`);
+        else for(const entry of report.pins)process.stdout.write(`${entry.name}: pinned at ${entry.runnerVersion}\n`);
         return;
       }
       if(args.length!==3)fail('Usage: swarm pin [PROJECT VERSION] | swarm pin (list)');
@@ -3106,7 +3107,7 @@ async function mainInner() {
   if(args[0]==='version'){
     const flags=args.slice(1);
     if(flags.some(flag=>flag!=='--check'))fail('Invalid arguments; use --help');
-    const result=await swarmVersion(root,{check:flags.includes('--check')});
+    const result=await swarmVersion(root,{check:flags.includes('--check'),importMetaUrl:import.meta.url});
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }
@@ -3173,15 +3174,15 @@ async function mainInner() {
         if(result.to&&result.from&&result.to!==result.from)result.restart='A board (swarm watch --all) or swarm remote that is already running keeps the old version until you stop it and start it again.';
         try{result.pointers=await bumpPointers(target);for(const entry of result.pointers.skipped??[])process.stderr.write(`skipped (pinned at ${entry.pinnedAt})\n`);}catch(error){result.pointers={bumped:[],failed:[],skipped:[],error:String(error.message).slice(0,200)};}
         const after=await bin.readLauncher(os.homedir());
-        const runnerVersion=after?await fs.readFile(path.join(path.dirname(path.dirname(after.runner)),'package.json'),'utf8').then(t=>JSON.parse(t).version,()=>null):null;
+        const runnerVer=after?.runner?await runnerVersion(pathToFileURL(after.runner).href).catch(()=>null):null;
         result.target=target;
         if(note)result.note=note;
-        result.command={path:after?.path??null,runner:after?.runner??null,version:runnerVersion};
+        result.command={path:after?.path??null,runner:after?.runner??null,version:runnerVer};
         const commandRoot=after?.installRoot?await fs.realpath(after.installRoot).catch(()=>null):null;
         if(!after)result.warning='there is no swarm command of ours on this machine; run node tools/install.mjs --user in the install to create ~/.local/bin/swarm';
-        else if(runnerVersion===null)result.warning=`the swarm command (${after.path}) points at ${after.runner}, which is missing: run node tools/install.mjs --user in ${target}`;
+        else if(runnerVer===null)result.warning=`the swarm command (${after.path}) points at ${after.runner}, which is missing: run node tools/install.mjs --user in ${target}`;
         else if(commandRoot&&commandRoot!==target)result.warning=`the swarm command runs the install at ${commandRoot}, not ${target}: run node tools/install.mjs --user in ${target} to move it`;
-        else if(result.to&&runnerVersion!==result.to&&!result.tagPending)result.warning=`the swarm command still runs ${runnerVersion}, not ${result.to}: run node tools/install.mjs --user in ${target}`;
+        else if(result.to&&runnerVer!==result.to&&!result.tagPending)result.warning=`the swarm command still runs ${runnerVer}, not ${result.to}: run node tools/install.mjs --user in ${target}`;
       }
       return result;
     };
@@ -3717,7 +3718,7 @@ async function mainInner() {
       rest.push(flag);
     }
   }
-  if(rest.length||!['doctor','board','orphans','init','validate','preflight','run','status','monitor','wait','inspect','integrate','cancel','ship','go','resume','ledger','idle'].includes(command)||(command==='doctor'?(argument!==undefined&&!['claude','codex','cursor','shell',...EXTRA_CLI_AGENTS,...API_AGENTS,'all'].includes(argument)):(command==='board'||command==='orphans'||command==='init')?argument!==undefined:!argument))fail(await invalidArgumentsMessage(command,defaultRoot(ownRoot)));
+  if(rest.length||!['doctor','board','orphans','init','validate','preflight','run','status','monitor','wait','inspect','integrate','cancel','ship','go','resume','ledger','idle'].includes(command)||(command==='doctor'?(argument!==undefined&&!['claude','codex','cursor','shell',...EXTRA_CLI_AGENTS,...API_AGENTS,'all'].includes(argument)):(command==='board'||command==='orphans'||command==='init')?argument!==undefined:!argument))fail(await invalidArgumentsMessage(command,defaultRoot(ownRoot),{importMetaUrl:import.meta.url}));
   root=await fs.realpath(root);let result;
   // Field lesson #225: the effective claude-shell sandbox profile, one command instead of an
   // inference from a validate warning or `doctor openrouter`.
@@ -4080,7 +4081,7 @@ export { squashBranch } from './swarm/core-12.mjs';
 export { updateProjects } from './swarm/core-12.mjs';
 export { parseContextGlob } from './swarm/core-21.mjs';
 export { shellSandboxDeniedCheckWarnings } from './swarm/core-21.mjs';
-export { swarmVersion } from './swarm/core-21.mjs';
+export { swarmVersion } from './runner-version.mjs';
 export { toolchainsReport } from './swarm/core-21.mjs';
 export { parseFinalJson } from './swarm/core-31.mjs';
 export { promptPathsNotInWorkspaceWarnings } from './swarm/core-31.mjs';

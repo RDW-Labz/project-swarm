@@ -136,7 +136,8 @@ async function mutantReviewTexts(root, overlay = new Map()) {
 export function validateManifest(manifest, { outputJobIds = null } = {}) {
   normalizeManifestMetadata(manifest);
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.jobs) || !manifest.jobs.length || manifest.jobs.length > 5000) fail('Manifest requires version: 1 and 1–5000 jobs');
-  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract', 'preChecks', 'skillsDir', 'allowEmptyContext', 'resources', 'lanes', 'batch', 'report', 'budget', 'idle', 'ledger', 'hosts'].includes(key)) fail(`Unknown manifest field: ${key}`);
+  for (const key of Object.keys(manifest)) if (!['version', 'concurrency', 'jobs', 'checks', 'mutants', 'mutantCheck', 'contract', 'preChecks', 'skillsDir', 'allowEmptyContext', 'resources', 'lanes', 'batch', 'report', 'budget', 'idle', 'ledger', 'hosts', 'integrate'].includes(key)) fail(`Unknown manifest field: ${key}`);
+  if (manifest.integrate !== undefined && typeof manifest.integrate !== 'boolean') fail('integrate must be true or false', 'integrate-invalid');
   resolveBudget({ manifest });
   if (manifest.hosts !== undefined) resolveHosts(manifest.hosts);
   if (manifest.batch !== undefined && manifest.batch !== true && manifest.batch !== false) {

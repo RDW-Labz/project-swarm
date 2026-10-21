@@ -2,6 +2,7 @@
 // Integrate complete scope-wave jobs through the merge queue while failed jobs stay out (R-017, T-0072).
 
 import { integrateRun, readState } from './swarm.mjs';
+import { isNonIntegratingRun } from './run-kind.mjs';
 
 /**
  * Job ids for workers that finished successfully in a scope wave run.
@@ -72,6 +73,17 @@ export function mergeQueueIntegrationSucceeded(result) {
  */
 export async function integratePassingScopeWaveJobs(root, runId, options = {}) {
   const state = await readState(root, runId);
+  if (isNonIntegratingRun(state, options.manifest ?? null)) {
+    return {
+      integrated: false,
+      jobs: 0,
+      files: [],
+      checksPassed: true,
+      passingJobIds: [],
+      skippedJobIds: skippedScopeWaveJobIds(state),
+      skipped: 'non-integrating-run',
+    };
+  }
   const passingJobIds = passingScopeWaveJobIds(state);
   const skippedJobIds = skippedScopeWaveJobIds(state);
   if (!passingJobIds.length) {

@@ -144,6 +144,8 @@ export async function installUser({source=packageRoot,home=os.homedir(),dev=fals
  if(!dev&&await gitDirty(source,['tools','skills']))throw Error('Refusing to install from a checkout with uncommitted changes to tools/ or skills/; commit or stash them, or pass --dev for a development checkout');
  const pkg=JSON.parse(await fs.readFile(path.join(source,'package.json'),'utf8'));
  const versionDir=await snapshotVersion(source,pkg.version);
+ const {migrateVersionPackageJson}=await import('./runner-version.mjs');
+ await migrateVersionPackageJson(source);
  const currentPath=await repointCurrent(source,versionDir);
  const {pinnedVersions,readPins}=await import('./pins.mjs');
  const protect=new Set([...(await pinnedVersions(source)).keys()]);

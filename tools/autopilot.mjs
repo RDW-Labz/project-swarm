@@ -5,6 +5,19 @@ import { matchesFile, ELEVATED_GIT_OPS } from './handbuild.mjs';
 import { runPolicyPass, appendAutoDecision } from './policy-run.mjs';
 import { resolveDailyLimit } from './daily-limit.mjs';
 import { filterGeneratedStatus } from './generated-state.mjs';
+import { underfilledWaves } from './board-data.mjs';
+import { planWaveBatch } from './wave-batch.mjs';
+import { isNonIntegratingRun } from './run-kind.mjs';
+import {
+  appendIntegrateBlockerIfNeeded,
+  integrateBlockerFields,
+  integrateBlockerId,
+  integrateBlockerKindFromId,
+  integrateBlockerResolutionEvent,
+  integrateBlockerRunIdFromId,
+  integrateBlockerSuppressed,
+  openBlockerIds,
+} from './journal.mjs';
 
 const POLICY_PASS_KINDS = new Set([
   'hand-build-request',
@@ -210,10 +223,32 @@ export function autopilotRunFromState(state, directoryName) {
 }
 
 function integrateBlockerRunId(blockerId) {
-  if (typeof blockerId !== 'string') return null;
-  if (blockerId.startsWith('integrate-checkout-')) return blockerId.slice('integrate-checkout-'.length);
-  if (blockerId.startsWith('integrate-')) return blockerId.slice('integrate-'.length);
-  return null;
+  return integrateBlockerRunIdFromId(blockerId);
+}
+
+function runManifest(run, events) {
+  if (run?.manifest && typeof run.manifest === 'object') return run.manifest;
+  const history = Array.isArray(events) ? events.filter(e => e && e.kind === 'run' && e.id === run?.id) : [];
+  const hit = history.find(e => e.manifest && typeof e.manifest === 'object');
+  return hit?.manifest ?? null;
+}
+
+export function runSkipsIntegrateAttention(run, events) {
+  if (!run || typeof run !== 'object') return true;
+  if (run.integrated === true) return true;
+  if (['cancelled', 'abandoned'].includes(run.status)) return true;
+  return isNonIntegratingRun(run, runManifest(run, events));
+}
+
+function runJobCount(run) {
+  if (!run || typeof run !== 'object') return 0;
+  if (Number.isFinite(run.jobCount)) return run.jobCount;
+  const counts = run.counts;
+  if (counts && Number.isFinite(counts.total)) return counts.total;
+  if (counts && Number.isFinite(counts.complete) && Number.isFinite(counts.failed)) {
+    return counts.complete + counts.failed + (Number(counts.running) || 0);
+  }
+  return 1;
 }
 
 function latestBlockerEvent(events, id) {
@@ -307,11 +342,21 @@ export function decide(run, ctx) {
 
   if (run.status === 'complete' && !run.integrated) {
     if (run.integrable === false) return null;
+    if (runSkipsIntegrateAttention(run, events)) return null;
     const failures = actionEvents(events, 'integrate', id).filter(failedResult);
     if (failures.length) {
       const last = failures[failures.length - 1];
       const reason = typeof last.result === 'string' ? last.result : (last.result?.error ?? 'failed');
-      return { action: 'block', run: id, id: `integrate-${id}`, text: `Integration of run ${id} needs a decision: ${reason}` };
+      const integrateCause = reason;
+      const blockerId = integrateBlockerId('integrate', id, integrateCause, { events });
+      return {
+        action: 'block',
+        run: id,
+        id: blockerId,
+        text: `Integration of run ${id} needs a decision: ${reason}`,
+        integrateKind: 'integrate',
+        integrateCause,
+      };
     }
     return { action: 'integrate', run: id, reason: 'run complete, not integrated' };
   }
@@ -390,7 +435,8 @@ export function integrationBlocker(checkout) {
 }
 
 export async function autopilotStep(root, deps, { now = Date.now, memory = new Set(), legacyPlan = false } = {}) {
-  const nowMs = nowValue(now);
+  const nowFn = typeof now === 'function' ? now : () => nowValue(now);
+  const nowMs = nowFn();
   let loadedEvents;
   try { loadedEvents = await deps.readJournal(root); }
   catch (error) { return { actions: [], blocked: [], idle: true, error: `journal-unreadable: ${String(error?.message ?? error).slice(0, 200)}` }; }
@@ -418,6 +464,47 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     events.push({ ...event, ts: new Date(nowMs).toISOString() });
   }
 
+  async function resolveIntegrateBlockersForRun(runId, { resolvedBy, integrateCause = null } = {}) {
+    for (const integrateKind of ['integrate', 'integrate-checkout']) {
+      const candidates = events.filter(event => event?.kind === 'blocker' && event.resolved !== true
+        && (event.integrateRun === runId || integrateBlockerRunIdFromId(event.id) === runId)
+        && (integrateBlockerKindFromId(event.id) === integrateKind || event.integrateKind === integrateKind));
+      for (const prior of candidates) {
+        const kind = prior.integrateKind ?? integrateBlockerKindFromId(prior.id);
+        if (!kind) continue;
+        const cause = integrateCause ?? prior.integrateCause ?? prior.text ?? '';
+        await write(integrateBlockerResolutionEvent(prior, { integrateKind: kind, integrateRun: runId, integrateCause: cause, resolvedBy }));
+      }
+    }
+  }
+
+  async function raiseIntegrateBlocker(draft) {
+    const integrateKind = draft.integrateKind;
+    const integrateRun = draft.integrateRun ?? draft.run;
+    const integrateCause = draft.integrateCause ?? draft.text ?? '';
+    const id = draft.id ?? integrateBlockerId(integrateKind, integrateRun, integrateCause);
+    if (integrateBlockerSuppressed(events, { id, integrateKind, integrateRun, integrateCause })) return false;
+    if (openBlockerIds(events).has(id)) return false;
+    const payload = {
+      kind: 'blocker',
+      id,
+      text: draft.text,
+      ...integrateBlockerFields({ integrateKind, integrateRun, integrateCause }),
+    };
+    if (typeof deps.appendIntegrateBlockerIfNeeded === 'function') {
+      let out;
+      try { out = await deps.appendIntegrateBlockerIfNeeded(root, payload, { now: nowFn }); }
+      catch { return false; }
+      if (!out?.appended) return false;
+      events.push({ ...payload, ts: new Date(nowMs).toISOString() });
+      blocked.push(id);
+      return true;
+    }
+    await write(payload);
+    blocked.push(id);
+    return true;
+  }
+
   async function execute(decision) {
     const runId = decision.run;
     const key = `${decision.action}:${runId}`;
@@ -431,6 +518,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
       if (decision.action === 'integrate') {
         const out = await deps.integrate(root, runId);
         await write({ kind: 'integration', run: runId, status: 'complete', ...(Number.isFinite(out?.files) ? { files: out.files } : {}) });
+        await resolveIntegrateBlockersForRun(runId, { resolvedBy: 'integrate' });
       } else if (decision.action === 'resume') await deps.resume(root, runId);
       else if (decision.action === 'retry-failed') {
         const out = await deps.retryFailed(root, runId);
@@ -454,6 +542,9 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     const manifest = history.find(e => e.manifest)?.manifest;
     const retryOf = history.find(e => e.retryOf)?.retryOf;
     await write({ kind: 'run', id: run.id, status: run.status, ...(run.counts ? { counts: run.counts } : {}), ...(Number.isFinite(run.costUsd) ? { costUsd: run.costUsd } : {}), ...(manifest ? { manifest } : {}), ...(retryOf ? { retryOf } : {}) });
+    if (run.integrated === true || ['cancelled', 'abandoned'].includes(run.status)) {
+      await resolveIntegrateBlockersForRun(run.id, { resolvedBy: run.status === 'cancelled' ? 'cancel' : run.integrated ? 'integrate' : 'abandoned' });
+    }
   }
 
   if (!journalBroken) {
@@ -463,19 +554,34 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
       for (const id of open) {
         if (integrateBlockerRunId(id) !== run.id) continue;
         const prior = latestBlockerEvent(events, id);
-        await write({ kind: 'blocker', id, resolved: true, text: prior?.text ?? '' });
+        const kind = integrateBlockerKindFromId(id) ?? 'integrate';
+        await write(integrateBlockerResolutionEvent(prior ?? { id, text: '' }, {
+          integrateKind: kind,
+          integrateRun: run.id,
+          integrateCause: prior?.integrateCause ?? prior?.text ?? '',
+          resolvedBy: 'non-integrable',
+        }));
       }
     }
   }
 
   for (const run of runs) {
     if (journalBroken) break;
+    if (runSkipsIntegrateAttention(run, events)) continue;
     const count = perRun.get(run.id) ?? 0;
     if (count >= MAX_ACTIONS_PER_RUN) continue;
-    const decision = decide(run, { now: nowMs, events, plan });
+    const decision = decide(run, { now: nowMs, events, plan, manifest: runManifest(run, events) });
     if (!decision || decision.action === 'wait') continue;
     if (decision.action === 'block') {
-      if (!openIds(events).has(decision.id)) {
+      if (decision.integrateKind) {
+        await raiseIntegrateBlocker({
+          id: decision.id,
+          text: decision.text,
+          integrateKind: decision.integrateKind,
+          integrateRun: decision.run,
+          integrateCause: decision.integrateCause ?? decision.text,
+        });
+      } else if (!openIds(events).has(decision.id)) {
         await write({ kind: 'blocker', id: decision.id, text: decision.text });
         blocked.push(decision.id);
       }
@@ -486,11 +592,15 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
       try { checkout = await deps.checkout(root); } catch { checkout = null; }
       const why = integrationBlocker(checkout);
       if (why) {
-        const id = `integrate-checkout-${run.id}`;
-        if (!openIds(events).has(id)) {
-          await write({ kind: 'blocker', id, text: `Run ${run.id} is complete but not integrated: ${why}. Move to a swarm/* branch with a clean tree, then run: swarm integrate ${run.id}` });
-          blocked.push(id);
-        }
+        const integrateCause = why;
+        const text = `Run ${run.id} is complete but not integrated: ${why}. Move to a swarm/* branch with a clean tree, then run: swarm integrate ${run.id}`;
+        await raiseIntegrateBlocker({
+          id: `integrate-checkout-${run.id}`,
+          text,
+          integrateKind: 'integrate-checkout',
+          integrateRun: run.id,
+          integrateCause,
+        });
         continue;
       }
     }
@@ -618,7 +728,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     if (!depError && typeof deps.pendingApprovals === 'function') {
       try { approvalList = await deps.pendingApprovals(root); } catch { depError = true; approvalList = []; }
     }
-    const { startable } = pickReadyTickets({
+    const { startable, held } = pickReadyTickets({
       tickets: Array.isArray(ticketList) ? ticketList : [],
       approvals: Array.isArray(approvalList) ? approvalList : [],
     });
@@ -653,17 +763,36 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
         await write({ kind: 'action', action: 'start-ready', reason, result: 'dependency-error' });
         actions.push({ action: 'start-ready', ok: false, result: 'dependency-error', reason });
       } else if (cooldownOpen && !hasLiveRun && !hasBusy && capRoom !== false && typeof deps.startScope === 'function') {
-        const ids = startable.map(t => t.id).slice(0, 8);
+        let workerSlots = null;
+        if (typeof deps.workerSlots === 'function') {
+          try { workerSlots = await deps.workerSlots(root); } catch { workerSlots = null; }
+        }
+        const slots = Number.isInteger(workerSlots?.free) ? workerSlots.free
+          : (Number.isInteger(workerSlots?.max) ? workerSlots.max : null);
+        const recentCounts = typeof deps.recentJobCounts === 'function'
+          ? await safe(() => deps.recentJobCounts(root), null)
+          : runs.slice(-6).map(runJobCount);
+        const underfilled = slots !== null && underfilledWaves(Array.isArray(recentCounts) ? recentCounts : [], slots);
+        const doneTicketIds = new Set((Array.isArray(ticketList) ? ticketList : []).filter(t => t?.status === 'done').map(t => t.id));
+        const heldIds = new Set((held ?? []).map(t => t.id));
+        const batch = underfilled && slots > 1 && startable.length >= slots
+          ? planWaveBatch(startable, { slots, doneTicketIds, heldIds })
+          : startable.slice(0, 1);
+        const waveTickets = batch.length ? batch : startable.slice(0, 1);
+        const ids = waveTickets.map(t => t.id).slice(0, 8);
         const reason = `${startable.length} startable ticket(s)${ids.length ? `: ${ids.join(', ')}` : ''}`;
         let ok = true;
         let result = 'ok';
         try {
           if (typeof deps.waitBeforeLaunchingWork === 'function') await deps.waitBeforeLaunchingWork(root);
-          const out = await deps.startScope({ root });
+          const out = await deps.startScope({ root, ticketIds: waveTickets.map(t => t.id), batched: waveTickets.length > 1 });
           ok = out?.ok !== false;
           if (ok) {
             result = out?.result ?? 'ok';
             memory.startReadyLastAt = nowMs;
+            if (waveTickets.length > 1) {
+              await write({ kind: 'note', text: `batched ${waveTickets.length} tickets into one wave because waves were under-filled` });
+            }
           } else result = String(out?.result ?? 'failed').slice(0, RESULT_LIMIT);
         } catch (error) {
           ok = false;
