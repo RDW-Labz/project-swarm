@@ -64,12 +64,12 @@ test('percent, requirements, stages and left buckets exclude cancelled and propo
   const p = await buildProgress({ ...data, now: NOW });
   assert.deepEqual(p.percent.tickets, { done: 1, total: 3, pct: 33 });
   assert.deepEqual(p.percent.requirements, { covered: 0, total: 2, pct: 0 });
-  assert.equal(p.percent.overall, 0);
+  assert.equal(p.percent.overall, 33);
   assert.deepEqual(p.stages.map(stage => [stage.id, stage.total, stage.done, stage.open, stage.blocked]), [
-    ['S1', 1, 1, 0, 0], ['S2', 1, 0, 1, 0], ['S3', 1, 0, 1, 0],
+    ['S1', 2, 1, 1, 0], ['S2', 1, 0, 1, 0],
   ]);
   assert.deepEqual(p.left.openByType, { docs: 1, human: 1, test: 1 });
-  assert.deepEqual(p.left.human, [{ id: 'T-0003', title: 'Ticket T-0003', stage: 'S2' }]);
+  assert.deepEqual(p.left.human, [{ id: 'T-0003', title: 'Ticket T-0003', stage: 'Polish', stageId: 'S2' }]);
   assert.ok(p.left.blockers.some(item => item.id === 'T-0003' && item.reason === 'waiting on owner'));
   assert.ok(p.left.blockers.some(item => item.id === 'T-0002' && item.reason === 'needs a real device'));
   assert.deepEqual(p.left.approvals.map(item => item.kind), ['scope', 'proposal', 'decision']);
@@ -77,19 +77,19 @@ test('percent, requirements, stages and left buckets exclude cancelled and propo
 
 test('milestones have one current item and an older merge does not satisfy merged', async t => {
   const data = await fixture(t, {
-    tickets: [ticket('T-0001', 'done')],
+    tickets: [ticket('T-0001', 'done', { pr: '#8' })],
     history: [
       { kind: 'merge', projectId: 'project-fixture', at: iso(NOW - 2 * DAY), ref: '#8', title: 'Merged' },
       { kind: 'pr', projectId: 'project-fixture', at: iso(NOW - DAY), ref: '#8', title: 'PR opened' },
     ],
   });
   const p = await buildProgress({ ...data, now: NOW });
-  assert.equal(p.milestones.find(item => item.key === 'pr').state, 'done');
-  assert.equal(p.milestones.find(item => item.key === 'merged').state, 'current');
+  assert.equal(p.milestones.find(item => item.key === 'pr').state, 'current');
+  assert.equal(p.milestones.find(item => item.key === 'merged').state, 'todo');
   assert.equal(p.milestones.filter(item => item.state === 'current').length, 1);
-  assert.equal(p.milestones.find(item => item.state === 'current').key, 'merged');
+  assert.equal(p.milestones.find(item => item.state === 'current').key, 'pr');
   assert.equal(p.milestones.find(item => item.key === 'deployed').state, 'unknown');
-  assert.equal(progressSummary(p).current, 'Merged');
+  assert.equal(progressSummary(p).current, 'PR open');
 });
 
 test('deployment status lights the deployed milestone without changing finished', async t => {
@@ -99,7 +99,7 @@ test('deployment status lights the deployed milestone without changing finished'
   });
 
   const merged = await fixture(t, {
-    tickets: [ticket('T-0001', 'done')],
+    tickets: [ticket('T-0001', 'done', { pr: '#1' })],
     history: [
       { kind: 'pr', projectId: 'project-fixture', at: iso(NOW - 2 * DAY), ref: '#1' },
       { kind: 'merge', projectId: 'project-fixture', at: iso(NOW - DAY), ref: '#1' },
@@ -107,7 +107,8 @@ test('deployment status lights the deployed milestone without changing finished'
   });
   const deployed = await buildProgress({ ...merged, now: NOW, deploy: { latest: { state: 'success' }, lastSuccess: { state: 'success', environment: 'production', at: iso(NOW), url: null } } });
   const deployedMilestone = deployed.milestones.find(item => item.key === 'deployed');
-  assert.equal(deployedMilestone.state, 'done');
+  assert.equal(deployedMilestone.state, 'current');
+  assert.equal(deployedMilestone.currentDone, true);
   assert.match(deployedMilestone.evidence, /production/);
 
   const old = await buildProgress({ ...merged, now: NOW, deploy: { latest: { state: 'success', at: iso(NOW - 2 * DAY) }, lastSuccess: { state: 'success', environment: 'stale', at: iso(NOW - 2 * DAY), url: null } } });
@@ -133,7 +134,7 @@ test('eta needs two recent done times and calculates days from a fourteen-day ra
 
 test('finished requires covered requirements, e2e green and a current merge', async t => {
   const data = await fixture(t, {
-    tickets: [ticket('T-0001', 'done', { scopeRefs: ['R-001'] }), ticket('T-0002', 'done', { scopeRefs: ['R-002'], stage: 'S2' })],
+    tickets: [ticket('T-0001', 'done', { scopeRefs: ['R-001'], pr: '#9' }), ticket('T-0002', 'done', { scopeRefs: ['R-002'], stage: 'S2', pr: '#9' })],
     history: [{ kind: 'pr', projectId: 'project-fixture', at: iso(NOW - DAY), ref: '#9', title: 'PR' }, { kind: 'merge', projectId: 'project-fixture', at: iso(NOW), ref: '#9', title: 'Merge' }],
   });
   const p = await buildProgress({ ...data, now: NOW });
@@ -172,24 +173,24 @@ test('project detail keeps full progress and uses injected family spend while ov
   assert.equal(detail.progress.spend.why, null);
 
   const overview = await projectOverview(project, [], { now: NOW, historyFile: data.historyFile, summary });
-  assert.deepEqual(Object.keys(overview.progress).sort(), ['current', 'eta', 'finished', 'overall', 'ticketsPct'].sort());
-  assert.deepEqual(overview.progress, { overall: 50, ticketsPct: 100, current: 'PR open', eta: null, finished: false });
+  assert.deepEqual(Object.keys(overview.progress).sort(), ['current', 'eta', 'finished', 'offLedger', 'overall', 'ticketsPct'].sort());
+  assert.deepEqual(overview.progress, { overall: 100, ticketsPct: 100, current: 'E2E green', eta: null, finished: false, offLedger: 0 });
 });
 
 test('shared history cache filters projects and refreshes after an append', async t => {
-  const aData = await fixture(t, { tickets: [ticket('T-1001', 'todo')] });
-  const bData = await fixture(t, { tickets: [ticket('T-1002', 'todo')] });
+  const aData = await fixture(t, { tickets: [ticket('T-1001', 'todo', { pr: '#11' })] });
+  const bData = await fixture(t, { tickets: [ticket('T-1002', 'todo', { pr: '#12' })] });
   const historyFile = path.join(aData.root, 'shared-history.ndjson');
   await fs.writeFile(historyFile, [
-    { kind: 'pr', projectId: 'project-a', at: iso(NOW - DAY), ref: '#A1', title: 'A PR' },
-    { kind: 'pr', projectId: 'project-b', at: iso(NOW - DAY), ref: '#B1', title: 'B PR' },
+    { kind: 'pr', projectId: 'project-a', at: iso(NOW - DAY), ref: '#11', title: 'A PR' },
+    { kind: 'pr', projectId: 'project-b', at: iso(NOW - DAY), ref: '#12', title: 'B PR' },
   ].map(event => JSON.stringify(event)).join('\n') + '\n');
   const a = await buildProgress({ ...aData, projectId: 'project-a', now: NOW, historyFile });
   const b = await buildProgress({ ...bData, projectId: 'project-b', now: NOW, historyFile });
-  assert.equal(a.milestones.find(item => item.key === 'pr').evidence, '#A1');
-  assert.equal(b.milestones.find(item => item.key === 'pr').evidence, '#B1');
+  assert.equal(a.milestones.find(item => item.key === 'pr').evidence, '#11');
+  assert.equal(b.milestones.find(item => item.key === 'pr').evidence, '#12');
 
-  await fs.appendFile(historyFile, `${JSON.stringify({ kind: 'pr', projectId: 'project-a', at: iso(NOW + 1000), ref: '#A2', title: 'A PR 2' })}\n`);
+  await fs.appendFile(historyFile, `${JSON.stringify({ kind: 'pr', projectId: 'project-a', at: iso(NOW + 1000), ref: '#13', title: 'A PR 2' })}\n`);
   const refreshed = await buildProgress({ ...aData, projectId: 'project-a', now: NOW, historyFile });
-  assert.equal(refreshed.milestones.find(item => item.key === 'pr').evidence, '#A2');
+  assert.equal(refreshed.milestones.find(item => item.key === 'pr').evidence, '#11');
 });

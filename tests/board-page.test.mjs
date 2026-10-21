@@ -274,7 +274,7 @@ test('stage, tickets, caps and last activity per project; a project is never mix
   const summaries = { [A.root]: { spendUsd: 7.6, capUsd: 10 }, [B.root]: { spendUsd: 0.1, capUsd: null } };
   const snap = await boardSnapshot({ projects: [A, B], liveRuns: [{ runId: 'run-a1', root: A.root }], now: NOW, summary: async root => summaries[root] });
   const a = snap.projects.find(p => p.id === A.id), b = snap.projects.find(p => p.id === B.id);
-  assert.equal(a.stage, 'S2');
+  assert.equal(a.stage, 'Stage 2');
   assert.deepEqual([a.tickets.open, a.tickets.blocked, a.tickets.total], [3, 1, 4]);
   assert.equal(b.stage, 'done');
   assert.equal(a.spend.capUsd, 10);
