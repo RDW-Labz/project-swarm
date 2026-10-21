@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "A-paths-fix",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "prompt": "The ticket path validation just added (tools/ticket-paths.mjs validateTicketPaths + its use in tools/scope-commands.mjs at split --ingest and on ticket edits) is too strict and breaks two existing evals: tests/batch-a-eval.test.mjs 'eval 36.2: swarm tickets ID --files/--context edits the lists and keeps an approved ledger approved' (refused: 'T-0001: docs/x.md missing file; closest real path: package.json') and tests/lesson-40-eval.test.mjs 'eval 40.7: --take-from moves files with two owners, and writes plus deletes in one step' (refused: 'T-0003: src/old.ts missing file; closest real path: package.json'). Correct rules (R-006 intent: catch paths that cannot be right, e.g. a DIRECTORY like 'lessons/swarm' named as a file, a context/read file that does not exist, an obvious typo of a real file): (1) ticket `files` (outputs it will write) MAY be missing: a build ticket creates them, even in a folder that does not exist yet; refuse an output only when it is an existing directory or a likely typo of an existing file; (2) `deletes` are never refused for being missing (a delete-only ticket passes once its files are gone, R-014); refuse only when a delete names a directory; (3) `context` and `tests` that are read: missing -> refused (tests a build ticket owns, i.e. also listed in files or created by it, are outputs and follow rule 1); (4) 'likely typo' = the path is missing AND closestRepoPath finds a real file whose edit distance is at most max(2, 20% of the path length) and that shares the extension; only then show 'closest real path: X'; never suggest a far match like package.json; (5) on ticket EDITS check only paths ADDED by this edit, not paths already on the ticket. Keep the ingest refusal for the roadmap case ('lessons/swarm' directory) and the 'tools/scope-comands.mjs' typo case. Do NOT touch tools/swarm.mjs or tools/swarm/*. Update tests/scope-ingest-paths.test.mjs and tests/ticket-paths-regression.test.mjs for the rules above (new output in a new folder accepted; missing delete accepted; far-miss has no suggestion; added-only check on edits). Run `node --import ./tests/_isolate-config.mjs --test tests/scope-ingest-paths.test.mjs tests/ticket-paths-regression.test.mjs tests/ticket-paths.test.mjs tests/batch-a-eval.test.mjs tests/lesson-40-eval.test.mjs tests/scope-commands.test.mjs tests/scope-ownership.test.mjs tests/scope-delete-tickets.test.mjs tests/mark-deps.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests exercise scope-commands for unrelated behavior; the coordinator runs the FULL suite.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/scope-delete-tickets.test.mjs",
+        "tests/ticket-paths.test.mjs"
+      ],
+      "outputs": [
+        "tools/ticket-paths.mjs",
+        "tools/scope-commands.mjs",
+        "tests/scope-ingest-paths.test.mjs",
+        "tests/ticket-paths-regression.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scope-ownership.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/scope-spec-gate.test.mjs",
+        "tests/scope-spec-no-runner.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/tickets-delivered.test.mjs",
+        "tests/ui-check.test.mjs"
+      ]
+    }
+  ]
+}

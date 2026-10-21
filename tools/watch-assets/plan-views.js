@@ -275,6 +275,42 @@
     }
   }
 
+  function renderHumanChecklists(container, plan) {
+    container.textContent = '';
+    var lists = listOf(plan.humanChecklists);
+    var head = el('div', 'pl-checklist-head');
+    head.appendChild(el('h3', 'pl-checklist-title', 'Your checklist'));
+    var h = plan.header || {};
+    var note = el('div', 'label', 'Build progress ' + (h.percentDone != null ? Math.round(Number(h.percentDone)) + '%' : '–') + ' (excludes human tickets)');
+    head.appendChild(note);
+    container.appendChild(head);
+    if (!lists.length) {
+      container.appendChild(el('div', 'label', 'no human tickets'));
+      return;
+    }
+    lists.forEach(function (item) {
+      var card = el('div', 'pl-human-card');
+      var top = el('div', 'pl-human-top');
+      top.appendChild(el('span', 'mono lead-name', txt(item.id)));
+      top.appendChild(el('span', null, txt(item.title)));
+      top.appendChild(el('span', 'pill ' + (item.done ? 'good' : 'warn'), txt(item.status)));
+      card.appendChild(top);
+      var steps = el('ul', 'pl-human-steps');
+      listOf(item.steps).forEach(function (step, i) {
+        var row = el('li', 'pl-human-step');
+        var box = el('span', 'pl-human-check');
+        box.setAttribute('aria-hidden', 'true');
+        box.textContent = item.done ? '☑' : '☐';
+        row.appendChild(box);
+        row.appendChild(el('span', null, String(step)));
+        steps.appendChild(row);
+      });
+      if (!steps.childNodes.length) steps.appendChild(el('li', 'label', 'no steps'));
+      card.appendChild(steps);
+      container.appendChild(card);
+    });
+  }
+
   function renderChanges(container, plan) {
     container.textContent = '';
     if (newTickets.length && !reduceMotion) {
@@ -334,6 +370,20 @@
     var chBox = document.getElementById('pl-changes');
     if (chBox) {
       try { renderChanges(chBox, plan); } catch (e) { console.error('plan changes', e); }
+    }
+    var humanBox = document.getElementById('pl-human-checklist');
+    if (!humanBox) {
+      var pane = document.getElementById('pane-plan');
+      if (pane) {
+        humanBox = el('section', 'pl-section');
+        humanBox.id = 'pl-human-checklist';
+        var reqBox = document.getElementById('pl-requirements');
+        if (reqBox && reqBox.parentNode) reqBox.parentNode.insertBefore(humanBox, reqBox);
+        else pane.appendChild(humanBox);
+      }
+    }
+    if (humanBox) {
+      try { renderHumanChecklists(humanBox, plan); } catch (e) { console.error('plan human checklist', e); }
     }
     newTickets = [];
   }

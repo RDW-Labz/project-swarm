@@ -1,0 +1,1816 @@
+{
+ "version": 1,
+ "scope": {
+  "name": "Anonymized Project",
+  "version": 7,
+  "hash": "5492bf864b263ee21b897cdf06680704ff72c2859f18eeda9bca7bd1ab4734dd",
+  "file": "docs/scope/scope.md"
+ },
+ "tickets": [
+  {
+   "id": "T-0001",
+   "title": "build ticket T-0001",
+   "type": "build",
+   "stage": "S0",
+   "epic": "E1",
+   "scopeRefs": [
+    "R-001"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0001.",
+    "Acceptance line 2 of T-0001."
+   ],
+   "files": [
+    "de8987a/f470882.webmanifest",
+    "de8987a/d556414/f1007d0.png",
+    "de8987a/d556414/f47ee84.png"
+   ],
+   "context": [
+    "de8987a/f470882.webmanifest"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/f3320db.py"
+   ],
+   "dependsOn": [],
+   "size": "M",
+   "risk": "low",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0002",
+   "title": "build ticket T-0002",
+   "type": "build",
+   "stage": "S0",
+   "epic": "E1",
+   "scopeRefs": [
+    "R-002"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0002.",
+    "Acceptance line 2 of T-0002."
+   ],
+   "files": [
+    "de8987a/f470882.webmanifest",
+    "de8987a/d61ac2f/f189407.png",
+    "de8987a/d61ac2f/fa67c65.png"
+   ],
+   "context": [
+    "de8987a/f470882.webmanifest"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/fb55a37.py"
+   ],
+   "dependsOn": [],
+   "size": "M",
+   "risk": "low",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0003",
+   "title": "test ticket T-0003",
+   "type": "test",
+   "stage": "S0",
+   "epic": "E1",
+   "scopeRefs": [
+    "R-001"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0003."
+   ],
+   "files": [
+    "db54d0b/f3320db.py"
+   ],
+   "context": [
+    "de8987a/f470882.webmanifest",
+    "de8987a/d556414/f1007d0.png",
+    "de8987a/d556414/f47ee84.png"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/f3320db.py"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0004",
+   "title": "test ticket T-0004",
+   "type": "test",
+   "stage": "S0",
+   "epic": "E1",
+   "scopeRefs": [
+    "R-002"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0004."
+   ],
+   "files": [
+    "db54d0b/fb55a37.py"
+   ],
+   "context": [
+    "de8987a/f470882.webmanifest",
+    "de8987a/d61ac2f/f189407.png",
+    "de8987a/d61ac2f/fa67c65.png"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/fb55a37.py"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0005",
+   "title": "build ticket T-0005",
+   "type": "build",
+   "stage": "S0",
+   "epic": "E1",
+   "scopeRefs": [
+    "R-001",
+    "R-002"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0005."
+   ],
+   "files": [
+    "de8987a/fcdf5ec.html"
+   ],
+   "context": [
+    "de8987a/fcdf5ec.html",
+    "de8987a/f470882.webmanifest"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d29e091/f5695cc.py"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0006",
+   "title": "test ticket T-0006",
+   "type": "test",
+   "stage": "S0",
+   "epic": "E1",
+   "scopeRefs": [
+    "R-001",
+    "R-002"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0006."
+   ],
+   "files": [
+    "db54d0b/d29e091/f5695cc.py"
+   ],
+   "context": [
+    "de8987a/fcdf5ec.html",
+    "de8987a/f470882.webmanifest"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d29e091/f5695cc.py"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0007",
+   "title": "build ticket T-0007",
+   "type": "build",
+   "stage": "S0",
+   "epic": "E2",
+   "scopeRefs": [
+    "R-003"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0007.",
+    "Acceptance line 2 of T-0007."
+   ],
+   "files": [
+    "d7ba0c0/f069b18.py"
+   ],
+   "context": [
+    "d7ba0c0/f69b22d.py"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/faee6d4.py"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0008",
+   "title": "docs ticket T-0008",
+   "type": "docs",
+   "stage": "S0",
+   "epic": "E2",
+   "scopeRefs": [
+    "R-003"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0008."
+   ],
+   "files": [
+    "d42f465/f57f893.md"
+   ],
+   "context": [
+    "d42f465/f57f893.md"
+   ],
+   "contracts": [],
+   "tests": [],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0009",
+   "title": "build ticket T-0009",
+   "type": "build",
+   "stage": "S0",
+   "epic": "E2",
+   "scopeRefs": [
+    "R-003"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0009."
+   ],
+   "files": [
+    "d7ba0c0/app.py"
+   ],
+   "context": [
+    "d7ba0c0/app.py",
+    "d7ba0c0/f069b18.py"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/faee6d4.py"
+   ],
+   "dependsOn": [
+    "T-0007"
+   ],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0010",
+   "title": "test ticket T-0010",
+   "type": "test",
+   "stage": "S0",
+   "epic": "E2",
+   "scopeRefs": [
+    "R-003"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0010."
+   ],
+   "files": [
+    "db54d0b/faee6d4.py"
+   ],
+   "context": [
+    "d7ba0c0/app.py",
+    "d7ba0c0/f069b18.py",
+    "d42f465/f57f893.md"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/faee6d4.py"
+   ],
+   "dependsOn": [
+    "T-0007"
+   ],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0011",
+   "title": "build ticket T-0011",
+   "type": "build",
+   "stage": "S0",
+   "epic": "E3",
+   "scopeRefs": [
+    "R-004"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0011.",
+    "Acceptance line 2 of T-0011."
+   ],
+   "files": [
+    "de8987a/f4c7067.html",
+    "de8987a/f5465ae.html",
+    "de8987a/fed3956.html",
+    "de8987a/f24802b.js"
+   ],
+   "context": [
+    "de8987a/map.html",
+    "de8987a/f4c7067.html",
+    "de8987a/f5465ae.html",
+    "de8987a/fed3956.html"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d29e091/fe805bc.py"
+   ],
+   "dependsOn": [],
+   "size": "M",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0012",
+   "title": "build ticket T-0012",
+   "type": "build",
+   "stage": "S0",
+   "epic": "E3",
+   "scopeRefs": [
+    "R-004"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0012."
+   ],
+   "files": [
+    "de8987a/map.html"
+   ],
+   "context": [
+    "de8987a/map.html",
+    "de8987a/f4c7067.html",
+    "de8987a/f5465ae.html",
+    "de8987a/fed3956.html",
+    "de8987a/f24802b.js"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d29e091/fe805bc.py"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0013",
+   "title": "test ticket T-0013",
+   "type": "test",
+   "stage": "S0",
+   "epic": "E3",
+   "scopeRefs": [
+    "R-004"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0013."
+   ],
+   "files": [
+    "db54d0b/d29e091/fe805bc.py"
+   ],
+   "context": [
+    "de8987a/map.html",
+    "de8987a/f4c7067.html",
+    "de8987a/f5465ae.html",
+    "de8987a/fed3956.html",
+    "de8987a/f24802b.js"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d29e091/fe805bc.py"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0014",
+   "title": "build ticket T-0014",
+   "type": "build",
+   "stage": "S1",
+   "epic": "E4",
+   "scopeRefs": [
+    "R-005"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0014.",
+    "Acceptance line 2 of T-0014."
+   ],
+   "files": [
+    "d6ef973/f52f42e.json"
+   ],
+   "context": [
+    "de8987a/f470882.webmanifest"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/fdd912a.py"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0015",
+   "title": "build ticket T-0015",
+   "type": "build",
+   "stage": "S1",
+   "epic": "E4",
+   "scopeRefs": [
+    "R-005"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0015."
+   ],
+   "files": [
+    "fb5822d.gitignore"
+   ],
+   "context": [],
+   "contracts": [],
+   "tests": [
+    "db54d0b/fdd912a.py"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0016",
+   "title": "docs ticket T-0016",
+   "type": "docs",
+   "stage": "S1",
+   "epic": "E4",
+   "scopeRefs": [
+    "R-005"
+   ],
+   "acceptance": [],
+   "files": [
+    "d6ef973/fef35ea.md"
+   ],
+   "context": [
+    "d6ef973/f52f42e.json"
+   ],
+   "contracts": [],
+   "tests": [],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0017",
+   "title": "test ticket T-0017",
+   "type": "test",
+   "stage": "S1",
+   "epic": "E4",
+   "scopeRefs": [
+    "R-005"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0017.",
+    "Acceptance line 2 of T-0017."
+   ],
+   "files": [
+    "db54d0b/fdd912a.py"
+   ],
+   "context": [
+    "d6ef973/f52f42e.json",
+    "de8987a/f470882.webmanifest",
+    "fb5822d.gitignore"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/fdd912a.py"
+   ],
+   "dependsOn": [
+    "T-0015"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0018",
+   "title": "build ticket T-0018",
+   "type": "build",
+   "stage": "S1",
+   "epic": "E4",
+   "scopeRefs": [
+    "R-005"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0018."
+   ],
+   "files": [
+    "de8987a/fcdf5ec.html"
+   ],
+   "context": [
+    "d6ef973/f52f42e.json",
+    "de8987a/f470882.webmanifest"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d29e091/fda6ee0.py"
+   ],
+   "dependsOn": [
+    "T-0015"
+   ],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0019",
+   "title": "test ticket T-0019",
+   "type": "test",
+   "stage": "S1",
+   "epic": "E4",
+   "scopeRefs": [
+    "R-005"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0019."
+   ],
+   "files": [
+    "db54d0b/d29e091/fda6ee0.py"
+   ],
+   "context": [
+    "de8987a/fcdf5ec.html",
+    "de8987a/f470882.webmanifest",
+    "d6ef973/f52f42e.json"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d29e091/fda6ee0.py"
+   ],
+   "dependsOn": [
+    "T-0015"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-9001",
+   "title": "human ticket T-9001",
+   "type": "human",
+   "stage": "S2",
+   "epic": "E5",
+   "scopeRefs": [],
+   "acceptance": [],
+   "files": [],
+   "context": [],
+   "contracts": [],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "todo"
+  },
+  {
+   "id": "T-9002",
+   "title": "human ticket T-9002",
+   "type": "human",
+   "stage": "S2",
+   "epic": "E5",
+   "scopeRefs": [],
+   "acceptance": [],
+   "files": [],
+   "context": [],
+   "contracts": [],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "todo"
+  },
+  {
+   "id": "T-9003",
+   "title": "human ticket T-9003",
+   "type": "human",
+   "stage": "S2",
+   "epic": "E5",
+   "scopeRefs": [],
+   "acceptance": [],
+   "files": [],
+   "context": [],
+   "contracts": [],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "todo"
+  },
+  {
+   "id": "T-9004",
+   "title": "human ticket T-9004",
+   "type": "human",
+   "stage": "S2",
+   "epic": "E5",
+   "scopeRefs": [],
+   "acceptance": [],
+   "files": [],
+   "context": [],
+   "contracts": [],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "todo"
+  },
+  {
+   "id": "T-9005",
+   "title": "human ticket T-9005",
+   "type": "human",
+   "stage": "S2",
+   "epic": "E5",
+   "scopeRefs": [],
+   "acceptance": [],
+   "files": [],
+   "context": [],
+   "contracts": [],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "todo"
+  },
+  {
+   "id": "T-9006",
+   "title": "human ticket T-9006",
+   "type": "human",
+   "stage": "S2",
+   "epic": "E5",
+   "scopeRefs": [],
+   "acceptance": [],
+   "files": [],
+   "context": [],
+   "contracts": [],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "todo"
+  },
+  {
+   "id": "T-9007",
+   "title": "human ticket T-9007",
+   "type": "human",
+   "stage": "S2",
+   "epic": "E5",
+   "scopeRefs": [],
+   "acceptance": [],
+   "files": [],
+   "context": [],
+   "contracts": [],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "todo"
+  },
+  {
+   "id": "T-9008",
+   "title": "human ticket T-9008",
+   "type": "human",
+   "stage": "S2",
+   "epic": "E5",
+   "scopeRefs": [],
+   "acceptance": [],
+   "files": [],
+   "context": [],
+   "contracts": [],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "todo"
+  },
+  {
+   "id": "T-9009",
+   "title": "human ticket T-9009",
+   "type": "human",
+   "stage": "S2",
+   "epic": "E5",
+   "scopeRefs": [],
+   "acceptance": [],
+   "files": [],
+   "context": [],
+   "contracts": [],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": false,
+   "status": "todo"
+  },
+  {
+   "id": "T-0020",
+   "title": "build ticket T-0020",
+   "type": "build",
+   "stage": "S0",
+   "epic": "E6",
+   "scopeRefs": [
+    "R-001"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0020.",
+    "Acceptance line 2 of T-0020.",
+    "Acceptance line 3 of T-0020."
+   ],
+   "files": [
+    "db85e06/fabdae7.py",
+    "de8987a/f605d9d.png",
+    "de8987a/fe3ee1b.png"
+   ],
+   "context": [
+    "de8987a/f1ed738.png"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/f5694db.py"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0021",
+   "title": "build ticket T-0021",
+   "type": "build",
+   "stage": "S0",
+   "epic": "E6",
+   "scopeRefs": [
+    "R-001"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0021.",
+    "Acceptance line 2 of T-0021.",
+    "Acceptance line 3 of T-0021."
+   ],
+   "files": [
+    "de8987a/f470882.webmanifest"
+   ],
+   "context": [
+    "de8987a/f605d9d.png",
+    "de8987a/fe3ee1b.png",
+    "d58a567"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d29e091/f2baf4c.py"
+   ],
+   "dependsOn": [
+    "T-0020"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0022",
+   "title": "test ticket T-0022",
+   "type": "test",
+   "stage": "S0",
+   "epic": "E6",
+   "scopeRefs": [
+    "R-001"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0022.",
+    "Acceptance line 2 of T-0022.",
+    "Acceptance line 3 of T-0022."
+   ],
+   "files": [
+    "db54d0b/f5694db.py",
+    "db54d0b/d29e091/f2baf4c.py"
+   ],
+   "context": [
+    "db85e06/fabdae7.py",
+    "de8987a/f470882.webmanifest",
+    "de8987a/f1ed738.png",
+    "da09116"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/f5694db.py",
+    "db54d0b/d29e091/f2baf4c.py"
+   ],
+   "dependsOn": [
+    "T-0020",
+    "T-0021"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0023",
+   "title": "build ticket T-0023",
+   "type": "build",
+   "stage": "S0",
+   "epic": "E6",
+   "scopeRefs": [
+    "R-002"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0023.",
+    "Acceptance line 2 of T-0023.",
+    "Acceptance line 3 of T-0023.",
+    "Acceptance line 4 of T-0023."
+   ],
+   "files": [
+    "db85e06/f305267.py",
+    "de8987a/d61ac2f/f189407.png",
+    "de8987a/d61ac2f/fa67c65.png"
+   ],
+   "context": [
+    "de8987a/fcdf5ec.html",
+    "de8987a/f470882.webmanifest",
+    "db54d0b/d10938f/d34dcd9/f0d4297.tif",
+    "db54d0b/d10938f/d34dcd9/fc7a518.json",
+    "d7ba0c0/f69b22d.py"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/f869bac.py"
+   ],
+   "dependsOn": [],
+   "size": "M",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0024",
+   "title": "build ticket T-0024",
+   "type": "build",
+   "stage": "S0",
+   "epic": "E6",
+   "scopeRefs": [
+    "R-002"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0024.",
+    "Acceptance line 2 of T-0024.",
+    "Acceptance line 3 of T-0024."
+   ],
+   "files": [
+    "de8987a/f470882.webmanifest"
+   ],
+   "context": [
+    "de8987a/d61ac2f/f189407.png",
+    "de8987a/d61ac2f/fa67c65.png",
+    "d143785"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d29e091/f95d9b6.py"
+   ],
+   "dependsOn": [
+    "T-0023",
+    "T-0021"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "cancelled"
+  },
+  {
+   "id": "T-0025",
+   "title": "test ticket T-0025",
+   "type": "test",
+   "stage": "S0",
+   "epic": "E6",
+   "scopeRefs": [
+    "R-002"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0025.",
+    "Acceptance line 2 of T-0025.",
+    "Acceptance line 3 of T-0025.",
+    "Acceptance line 4 of T-0025."
+   ],
+   "files": [
+    "db54d0b/f869bac.py",
+    "db54d0b/d29e091/f95d9b6.py"
+   ],
+   "context": [
+    "db85e06/f305267.py",
+    "de8987a/f470882.webmanifest",
+    "de8987a/d61ac2f/f189407.png",
+    "de8987a/d61ac2f/fa67c65.png",
+    "db54d0b/d10938f/d34dcd9/fc7a518.json",
+    "db54d0b/d10938f/d34dcd9/f0d4297.tif"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/f869bac.py",
+    "db54d0b/d29e091/f95d9b6.py"
+   ],
+   "dependsOn": [
+    "T-0023"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0026",
+   "title": "test ticket T-0026",
+   "type": "test",
+   "stage": "S0",
+   "epic": "E7",
+   "scopeRefs": [
+    "R-004"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0026."
+   ],
+   "files": [
+    "db54d0b/d29e091/fd0da89.py"
+   ],
+   "context": [
+    "de8987a/fcdf5ec.html",
+    "de8987a/f470882.webmanifest"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d29e091/fd0da89.py"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0027",
+   "title": "test ticket T-0027",
+   "type": "test",
+   "stage": "S0",
+   "epic": "E7",
+   "scopeRefs": [
+    "R-006"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0027.",
+    "Acceptance line 2 of T-0027."
+   ],
+   "files": [
+    "db54d0b/d29e091/faa6f33.py"
+   ],
+   "context": [
+    "de8987a/fcdf5ec.html",
+    "de8987a/f4c7067.html",
+    "de8987a/f5465ae.html",
+    "de8987a/f470882.webmanifest"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d29e091/faa6f33.py"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0028",
+   "title": "test ticket T-0028",
+   "type": "test",
+   "stage": "S0",
+   "epic": "E7",
+   "scopeRefs": [
+    "R-007"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0028.",
+    "Acceptance line 2 of T-0028."
+   ],
+   "files": [
+    "db54d0b/d29e091/fde1cf5.py"
+   ],
+   "context": [
+    "de8987a/fed3956.html",
+    "de8987a/f6a2a38.js",
+    "de8987a/f470882.webmanifest"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d29e091/fde1cf5.py"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0029",
+   "title": "build ticket T-0029",
+   "type": "build",
+   "stage": "S0",
+   "epic": "E8",
+   "scopeRefs": [
+    "R-003",
+    "R-008"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0029.",
+    "Acceptance line 2 of T-0029.",
+    "Acceptance line 3 of T-0029."
+   ],
+   "files": [
+    "d7ba0c0/f69b22d.py"
+   ],
+   "context": [
+    "d7ba0c0/f069b18.py",
+    "d0a936f"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/faee6d4.py"
+   ],
+   "dependsOn": [
+    "T-0007"
+   ],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0030",
+   "title": "test ticket T-0030",
+   "type": "test",
+   "stage": "S0",
+   "epic": "E8",
+   "scopeRefs": [
+    "R-008"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0030.",
+    "Acceptance line 2 of T-0030.",
+    "Acceptance line 3 of T-0030."
+   ],
+   "files": [
+    "db54d0b/faee6d4.py"
+   ],
+   "context": [
+    "d7ba0c0/f69b22d.py",
+    "d7ba0c0/f069b18.py",
+    "d0a936f",
+    "de85e4b"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/faee6d4.py"
+   ],
+   "dependsOn": [
+    "T-0029"
+   ],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0031",
+   "title": "build ticket T-0031",
+   "type": "build",
+   "stage": "S1",
+   "epic": "E9",
+   "scopeRefs": [
+    "R-009"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0031.",
+    "Acceptance line 2 of T-0031.",
+    "Acceptance line 3 of T-0031."
+   ],
+   "files": [
+    "d6ef973/f52f42e.json"
+   ],
+   "context": [
+    "de8987a/f470882.webmanifest",
+    "d42f465/f57f893.md"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/fdd912a.py"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0032",
+   "title": "docs ticket T-0032",
+   "type": "docs",
+   "stage": "S1",
+   "epic": "E9",
+   "scopeRefs": [
+    "R-009"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0032.",
+    "Acceptance line 2 of T-0032.",
+    "Acceptance line 3 of T-0032."
+   ],
+   "files": [
+    "d6ef973/fef35ea.md"
+   ],
+   "context": [
+    "d6ef973/f52f42e.json",
+    "d42f465/f57f893.md",
+    "dd12e3c"
+   ],
+   "contracts": [],
+   "tests": [],
+   "dependsOn": [
+    "T-0031"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0033",
+   "title": "docs ticket T-0033",
+   "type": "docs",
+   "stage": "S1",
+   "epic": "E9",
+   "scopeRefs": [
+    "R-009"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0033.",
+    "Acceptance line 2 of T-0033.",
+    "Acceptance line 3 of T-0033."
+   ],
+   "files": [
+    "d42f465/d9c3efc/fc41ab4.md"
+   ],
+   "context": [
+    "d42f465/fe81174.md",
+    "d42f465/fc70511.md"
+   ],
+   "contracts": [],
+   "tests": [],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0034",
+   "title": "test ticket T-0034",
+   "type": "test",
+   "stage": "S1",
+   "epic": "E9",
+   "scopeRefs": [
+    "R-009"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0034.",
+    "Acceptance line 2 of T-0034.",
+    "Acceptance line 3 of T-0034."
+   ],
+   "files": [
+    "db54d0b/fdd912a.py"
+   ],
+   "context": [
+    "d6ef973/f52f42e.json",
+    "de8987a/f470882.webmanifest"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/fdd912a.py"
+   ],
+   "dependsOn": [
+    "T-0031"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0035",
+   "title": "docs ticket T-0035",
+   "type": "docs",
+   "stage": "S3",
+   "epic": "E10",
+   "scopeRefs": [
+    "R-020"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0035.",
+    "Acceptance line 2 of T-0035."
+   ],
+   "files": [
+    "d42f465/faa4506.md"
+   ],
+   "context": [],
+   "contracts": [],
+   "tests": [],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0036",
+   "title": "build ticket T-0036",
+   "type": "build",
+   "stage": "S3",
+   "epic": "E10",
+   "scopeRefs": [
+    "R-021"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0036.",
+    "Acceptance line 2 of T-0036.",
+    "Acceptance line 3 of T-0036."
+   ],
+   "files": [
+    "db85e06/f9be415.py",
+    "db54d0b/fd421a5.py"
+   ],
+   "context": [
+    "db85e06/f0b6d1f.py"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/fd421a5.py"
+   ],
+   "dependsOn": [],
+   "size": "M",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0037",
+   "title": "build ticket T-0037",
+   "type": "build",
+   "stage": "S3",
+   "epic": "E10",
+   "scopeRefs": [
+    "R-021"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0037.",
+    "Acceptance line 2 of T-0037.",
+    "Acceptance line 3 of T-0037."
+   ],
+   "files": [
+    "db85e06/f9be415.py",
+    "db54d0b/fd421a5.py"
+   ],
+   "context": [],
+   "contracts": [],
+   "tests": [
+    "db54d0b/fd421a5.py"
+   ],
+   "dependsOn": [
+    "T-0036"
+   ],
+   "size": "S",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0038",
+   "title": "build ticket T-0038",
+   "type": "build",
+   "stage": "S3",
+   "epic": "E10",
+   "scopeRefs": [
+    "R-022"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0038.",
+    "Acceptance line 2 of T-0038.",
+    "Acceptance line 3 of T-0038."
+   ],
+   "files": [
+    "d49dbf6/dabd7bf/fcc2b47.json",
+    "d49dbf6/dabd7bf/f3db485.json",
+    "d42f465/d961b02/f7b40f1.jsonl"
+   ],
+   "context": [
+    "db85e06/f9be415.py"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/fd421a5.py"
+   ],
+   "dependsOn": [
+    "T-0037"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "review"
+  },
+  {
+   "id": "T-0039",
+   "title": "build ticket T-0039",
+   "type": "build",
+   "stage": "S3",
+   "epic": "E10",
+   "scopeRefs": [
+    "R-023"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0039.",
+    "Acceptance line 2 of T-0039.",
+    "Acceptance line 3 of T-0039.",
+    "Acceptance line 4 of T-0039."
+   ],
+   "files": [
+    "db54d0b/fcc43d8.py",
+    "d7ba0c0/ffbd477.py"
+   ],
+   "context": [
+    "d7ba0c0/f6a56cc.py",
+    "de8987a/fb36717.js",
+    "db54d0b/fd40d75.py"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/fcc43d8.py"
+   ],
+   "dependsOn": [],
+   "size": "M",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0040",
+   "title": "build ticket T-0040",
+   "type": "build",
+   "stage": "S3",
+   "epic": "E10",
+   "scopeRefs": [
+    "R-024"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0040.",
+    "Acceptance line 2 of T-0040.",
+    "Acceptance line 3 of T-0040."
+   ],
+   "files": [
+    "db85e06/f9ec730.py",
+    "db54d0b/f26fb10.py",
+    "d49dbf6/dabd7bf/f7b4f1b.json",
+    "d49dbf6/dabd7bf/f5c0354.json"
+   ],
+   "context": [
+    "db85e06/f9fa7c0.py",
+    "d7ba0c0/f2a65a8.py"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/f26fb10.py"
+   ],
+   "dependsOn": [
+    "T-0038"
+   ],
+   "size": "M",
+   "risk": "low",
+   "sensitive": true,
+   "status": "todo"
+  },
+  {
+   "id": "T-0041",
+   "title": "docs ticket T-0041",
+   "type": "docs",
+   "stage": "S3",
+   "epic": "E10",
+   "scopeRefs": [
+    "R-025"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0041."
+   ],
+   "files": [
+    "d42f465/de1df0c/f7f5071.md"
+   ],
+   "context": [
+    "d7ba0c0/f6a56cc.py"
+   ],
+   "contracts": [],
+   "tests": [],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "done"
+  },
+  {
+   "id": "T-0042",
+   "title": "build ticket T-0042",
+   "type": "build",
+   "stage": "S3",
+   "epic": "E10",
+   "scopeRefs": [
+    "R-025"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0042.",
+    "Acceptance line 2 of T-0042."
+   ],
+   "files": [
+    "d7ba0c0/f6a56cc.py",
+    "d7ba0c0/f2a65a8.py",
+    "db85e06/f9ec730.py",
+    "d49dbf6/dabd7bf/f7b4f1b.json",
+    "d49dbf6/dabd7bf/f5c0354.json",
+    "db54d0b/faca9ad.py"
+   ],
+   "context": [
+    "d42f465/de1df0c/f7f5071.md"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/faca9ad.py"
+   ],
+   "dependsOn": [
+    "T-0039",
+    "T-0040",
+    "T-0041"
+   ],
+   "size": "M",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "todo"
+  },
+  {
+   "id": "T-0043",
+   "title": "human ticket T-0043",
+   "type": "human",
+   "stage": "S3",
+   "epic": "E10",
+   "scopeRefs": [
+    "R-026"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0043."
+   ],
+   "files": [],
+   "context": [],
+   "contracts": [],
+   "tests": [],
+   "dependsOn": [
+    "T-0042"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "todo"
+  },
+  {
+   "id": "T-0044",
+   "title": "human ticket T-0044",
+   "type": "human",
+   "stage": "S3",
+   "epic": "E10",
+   "scopeRefs": [
+    "R-026"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0044.",
+    "Acceptance line 2 of T-0044."
+   ],
+   "files": [],
+   "context": [
+    "db85e06/fa8023e.py"
+   ],
+   "contracts": [],
+   "tests": [],
+   "dependsOn": [
+    "T-0042"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "todo"
+  },
+  {
+   "id": "T-0045",
+   "title": "build ticket T-0045",
+   "type": "build",
+   "stage": "S4",
+   "epic": "E11",
+   "scopeRefs": [
+    "R-030"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0045.",
+    "Acceptance line 2 of T-0045."
+   ],
+   "files": [
+    "de8987a/f5b1571.js",
+    "db54d0b/d54b53f/f5b0880.test.cjs"
+   ],
+   "context": [
+    "d42f465/de1df0c/fc26a09.md",
+    "de8987a/fe65363.js"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d54b53f/f5b0880.test.cjs"
+   ],
+   "dependsOn": [],
+   "size": "M",
+   "risk": "low",
+   "sensitive": true,
+   "status": "review"
+  },
+  {
+   "id": "T-0046",
+   "title": "build ticket T-0046",
+   "type": "build",
+   "stage": "S4",
+   "epic": "E11",
+   "scopeRefs": [
+    "R-031"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0046.",
+    "Acceptance line 2 of T-0046."
+   ],
+   "files": [
+    "de8987a/f619084.js",
+    "de8987a/f19b30a.css",
+    "db54d0b/d54b53f/f4c05e7.test.cjs"
+   ],
+   "context": [
+    "d42f465/de1df0c/fc26a09.md"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d54b53f/f4c05e7.test.cjs"
+   ],
+   "dependsOn": [],
+   "size": "M",
+   "risk": "low",
+   "sensitive": true,
+   "status": "review"
+  },
+  {
+   "id": "T-0047",
+   "title": "build ticket T-0047",
+   "type": "build",
+   "stage": "S4",
+   "epic": "E11",
+   "scopeRefs": [
+    "R-032"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0047.",
+    "Acceptance line 2 of T-0047."
+   ],
+   "files": [
+    "de8987a/f2e56b4.js",
+    "db54d0b/d54b53f/f98c2ea.test.cjs"
+   ],
+   "context": [
+    "d42f465/de1df0c/fc26a09.md",
+    "de8987a/fb36717.js"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d54b53f/f98c2ea.test.cjs"
+   ],
+   "dependsOn": [],
+   "size": "M",
+   "risk": "low",
+   "sensitive": true,
+   "status": "blocked"
+  },
+  {
+   "id": "T-0048",
+   "title": "build ticket T-0048",
+   "type": "build",
+   "stage": "S4",
+   "epic": "E11",
+   "scopeRefs": [
+    "R-033"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0048.",
+    "Acceptance line 2 of T-0048."
+   ],
+   "files": [
+    "de8987a/f0a1b4b.js",
+    "db54d0b/d54b53f/f0cd09b.test.cjs"
+   ],
+   "context": [
+    "d42f465/de1df0c/fc26a09.md",
+    "de8987a/fe65363.js"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d54b53f/f0cd09b.test.cjs"
+   ],
+   "dependsOn": [],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "review"
+  },
+  {
+   "id": "T-0049",
+   "title": "build ticket T-0049",
+   "type": "build",
+   "stage": "S4",
+   "epic": "E11",
+   "scopeRefs": [
+    "R-034"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0049.",
+    "Acceptance line 2 of T-0049."
+   ],
+   "files": [
+    "de8987a/f19b30a.js",
+    "de8987a/fcdf5ec.html",
+    "db54d0b/d29e091/f71b28b.py"
+   ],
+   "context": [
+    "d42f465/de1df0c/fc26a09.md",
+    "de8987a/f619084.js",
+    "de8987a/f2e56b4.js",
+    "de8987a/f0a1b4b.js",
+    "de8987a/f5b1571.js"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d29e091/f71b28b.py"
+   ],
+   "dependsOn": [
+    "T-0045",
+    "T-0046",
+    "T-0047",
+    "T-0048"
+   ],
+   "size": "M",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "blocked"
+  },
+  {
+   "id": "T-0050",
+   "title": "test ticket T-0050",
+   "type": "test",
+   "stage": "S4",
+   "epic": "E11",
+   "scopeRefs": [
+    "R-035"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0050.",
+    "Acceptance line 2 of T-0050."
+   ],
+   "files": [
+    "db54d0b/d29e091/fc1bfa5.py"
+   ],
+   "context": [
+    "db54d0b/d29e091/fb6566c.py",
+    "de8987a/f19b30a.js"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d29e091/fc1bfa5.py"
+   ],
+   "dependsOn": [
+    "T-0049"
+   ],
+   "size": "M",
+   "risk": "medium",
+   "sensitive": true,
+   "status": "blocked"
+  },
+  {
+   "id": "T-0051",
+   "title": "build ticket T-0051",
+   "type": "build",
+   "stage": "S4",
+   "epic": "E11",
+   "scopeRefs": [
+    "R-036"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0051."
+   ],
+   "files": [
+    "de8987a/f8b8a2c.js"
+   ],
+   "context": [
+    "de8987a/f19b30a.js"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/d29e091/fc1bfa5.py"
+   ],
+   "dependsOn": [
+    "T-0049"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "blocked"
+  },
+  {
+   "id": "T-0052",
+   "title": "build ticket T-0052",
+   "type": "build",
+   "stage": "S4",
+   "epic": "E11",
+   "scopeRefs": [
+    "R-037"
+   ],
+   "acceptance": [
+    "Acceptance line 1 of T-0052.",
+    "Acceptance line 2 of T-0052."
+   ],
+   "files": [
+    "db85e06/f305267.py",
+    "de8987a/d61ac2f/f189407.png",
+    "de8987a/d61ac2f/fa67c65.png"
+   ],
+   "context": [
+    "de8987a/f19b30a.js",
+    "db54d0b/d10938f/d34dcd9/fc7a518.json"
+   ],
+   "contracts": [],
+   "tests": [
+    "db54d0b/f869bac.py"
+   ],
+   "dependsOn": [
+    "T-0049",
+    "T-0051"
+   ],
+   "size": "S",
+   "risk": "low",
+   "sensitive": true,
+   "status": "blocked"
+  }
+ ],
+ "changeOrders": [],
+ "approved": {
+  "at": "2026-10-21T18:16:10.063Z",
+  "by": "owner",
+  "scopeHash": "9d23d8e4d9dbcdbde3b5ef32bd3af50dfa84d54d141f879f671bb53053b9540e",
+  "ticketsHash": "82d5876e4ee4d2a7082431aa71cd42b808ed5c2cdc4530e575954e5f31c3065e"
+ },
+ "createdAt": "2026-10-20T19:17:18.910Z",
+ "updatedAt": "2026-10-21T18:58:44.635Z"
+}

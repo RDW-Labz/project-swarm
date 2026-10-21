@@ -1,0 +1,180 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "jobs": [
+    {
+      "id": "B-wave-sim",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "Roadmap S2 tickets T-0049, T-0050, T-0061 (R-012: 'Before ingest the swarm simulates waves for the current slot count. If the critical path is over 25% of tickets or average fill is under 50% of slots, it re-splits or asks.'). tools/split-wave-sim.mjs exists on main (SPLIT_WAVE_LIMITS, simulateSplitWaves(tickets, slots), assessSplitWaveSimulation(sim), simulateBeforeIngest(tickets, slots)) with NO callers. Wire it in tools/scope-commands.mjs: (1) `scope split --ingest RUN [--merge]`: after the path checks and before the ledger is written, run simulateBeforeIngest(<the full ticket set the ledger would hold>, slots) where slots = the machine worker limit (machineConcurrency from the local config via the existing lanes/config helpers scope-commands already imports, else 8); when the assessment fails (critical path > 25% of tickets or average fill < 50% of slots) refuse the ingest with a message naming both numbers, the longest chain (ticket ids) and the advice to re-split (merge chains / split the long chain) \u2014 unless --accept-waves is given, which writes anyway and records a warning line in tickets.log (event 'wave-sim-accepted'); (2) `scope approve` prints the simulation summary line ('waves: N, critical path X of Y (Z%), average fill F% of S slots') and refuses approval on a failing assessment unless --accept-waves. Tests: tests/split-wave-sim-regression.test.mjs (T-0061) and extend/write tests/scope-ingest-waves.test.mjs (node:test, temp git repos, injected slot count; no wall clock/env): the real roadmap ledger fixture tests/fixtures/ledgers/roadmap-ledger.json passes (brief: critical path ~7%, fill ~59%; compute and assert pass), the anonymized parts-app fixture tests/fixtures/ledgers/parts-app-ledger.anon.json is assessed without crashing (assert whatever it yields, documented), a synthetic 10-ticket single chain is refused with the chain in the message, --accept-waves writes and logs. Do NOT touch tools/swarm.mjs or the tools/swarm folder. Never write token-shaped literals. Run `node --import ./tests/_isolate-config.mjs --test tests/split-wave-sim-regression.test.mjs tests/scope-ingest-waves.test.mjs tests/split-wave-sim.test.mjs tests/scope-ingest-paths.test.mjs tests/scope-commands.test.mjs tests/batch-a-eval.test.mjs tests/lesson-40-eval.test.mjs` (skip missing) and `node tools/check-package.mjs`. Tests in ignoreTests (and ledger fixture JSON that only mentions file names) use these files for unrelated behavior; the coordinator runs the FULL suite (env -u CLAUDECODE npm test) before any PR.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/split-wave-sim.mjs",
+        "tools/lanes.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/fixtures/ledgers/parts-app-ledger.anon.json",
+        "tests/scope-commands.test.mjs",
+        "tests/scope-ingest-paths.test.mjs"
+      ],
+      "outputs": [
+        "tools/scope-commands.mjs",
+        "tests/split-wave-sim-regression.test.mjs",
+        "tests/scope-ingest-waves.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-delete-tickets.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scope-ownership.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/scope-spec-gate.test.mjs",
+        "tests/scope-spec-no-runner.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/ticket-paths-regression.test.mjs",
+        "tests/tickets-delivered.test.mjs",
+        "tests/ui-check.test.mjs"
+      ]
+    },
+    {
+      "id": "F-review-stall",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "Work package F (S2, 'reviews never stall'), tools/scope-loop.mjs only (+ its tests). Real failure from the roadmap ledger history: wave 6 failed at review start on a bad path ('lessons/swarm', a directory), and the loop then reported 'stuck: skeleton not finished' with 10 tickets in review and no review ever running. Fix: (1) at loop start and on resume, every ticket with status 'review' that has no recorded review run (no entry in the loop's review record for that ticket/wave; read how scope-loop records reviews around deps.review and deps.record...) gets its acceptance review queued through the existing deps.review path; (2) a review that fails to START (deps.review throws before running) raises a NAMED blocker instead of a silent 'stuck': use the loop's existing blocker/journal mechanism (read how scope-loop raises blockers / writes journal events; reuse it) with id 'review-start-<ticket or wave id>' and text '<ticket id>: review could not start: <reason> (path <path> if the error names one)'; the loop status becomes 'stuck' with reason naming the blocker id, never 'skeleton not finished' when tickets are in review; (3) saved review manifests (.swarm/*-reviews/*.json) are regenerated from the CURRENT ticket context each time a review starts, never reused with old paths. Do NOT touch tools/swarm.mjs or the tools/swarm folder. Tests: tests/scope-loop-review-stall.test.mjs (node:test, injected deps: fake review/record/journal, fixed clock): 10 tickets in review without review runs get 10 (or one batched) review starts on resume; a review whose start throws with a path in the message yields a blocker with that id/text and status stuck with that reason; a stale saved manifest with an old path is rewritten from current ticket context before review. Keep tests/scope-loop.test.mjs, tests/review-retry.test.mjs and tests/human-progress.test.mjs green. Run `node --import ./tests/_isolate-config.mjs --test tests/scope-loop-review-stall.test.mjs tests/scope-loop.test.mjs tests/review-retry.test.mjs tests/human-progress.test.mjs tests/acceptance-sync.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests (and ledger fixture JSON that only mentions file names) use these files for unrelated behavior; the coordinator runs the FULL suite (env -u CLAUDECODE npm test) before any PR.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/human-progress.test.mjs",
+        "tests/acceptance-sync.test.mjs",
+        "tools/human-progress.mjs"
+      ],
+      "outputs": [
+        "tools/scope-loop.mjs",
+        "tests/scope-loop-review-stall.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/split-module.test.mjs"
+      ]
+    },
+    {
+      "id": "Board1-progress",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "Owner board requests 1-5 (atlas-seafloor), files tools/build-progress.mjs, tools/watch-assets/project.js and tests. Fixture: tests/fixtures/ledgers/atlas.anon.json (anonymized atlas ledger: 61 tickets; stages S0..S4 with anonymized ids; S2 holds 9 human tickets only; S3 has 6 build + 2 human; statuses cancelled 17, done 22, todo 13, review 4, blocked 5). Rules: injected deps only (no network, no wall clock, no env); read-only; do NOT touch tools/swarm.mjs, the tools/swarm folder, tools/board-data.mjs, tools/watch-assets/board.js (another job owns those).\n1) PR open / Merged milestones light from GitHub PR state for the scope's branch: buildProgress accepts `prState = null` (an async or sync function (branch) -> [{ number, state, mergedAt, headRefName }] or null when GitHub cannot be read). Scope branch = ledger.branch ?? ledger.buildPlan?.branch ?? the head branch named by the newest ticket with a pr or a 'swarm/...' branch field (else null). PR open = any PR for that head exists; Merged = one has mergedAt. When prState is null/throws/returns null -> both milestones state 'unknown' with evidence 'not tracked' (never a false green). Keep the existing history-based evidence as a fallback only when prState is not provided. Export `ghPrState({ run = execFile-based runner, repo })` that runs `gh pr list --head BRANCH --state all --json number,state,mergedAt,headRefName --limit 20` (argv array, no shell, GH tokens stripped from env like tools/deploy-status.mjs does, 10 s timeout) for the board server to inject later; tests use a fake.\n2) A stage containing only human tickets is not a stage row; human tickets appear only in left.human (the owner checklist); mixed stages count build (non-human) tickets only.\n3) Header: progressSummary and the page header read 'build D/T \u00b7 human d/t' (percent and build counts from non-human tickets; human separate, never in the percent); with no human tickets just 'build D/T'. Expose `headline` string on the summary for the card.\n4) Roll up every ACTIVE scope: buildProgress(root) also considers other approved ledgers / scope files found by the existing ledgerRoot candidate scan (all worktrees); a scope is active when it has open tickets or a live run; result gains scopes: [{ name, build: {done,total}, human: {done,total}, current milestone label, done: bool }], overall percent over build tickets of all active scopes; a finished scope with no open tickets shows as a collapsed done row, never the whole card. Test: two-scope fixture (scope A 17/17 done, scope B 3/12) -> two rows and overall 20/29 (~69%), not 100%.\n5) Untracked work: rename/extend offLedger to `untracked: { runs, jobs, newest: [{ runId, name, startedAt, status }] (max 5), warning: 'untracked work: no ledger ticket' }` counting runs AND live runs whose jobs name no ledger ticket; keep offLedger as an alias. progressSummary gains untracked counts.\nproject.js: render the scopes rows, the new header text, the untracked block with the warning text, PR milestones 'not tracked' label; textContent only.\nTests tests/build-progress-atlas.test.mjs: each bug with the atlas fixture (fake prState: #5 merged -> all through Merged; open-only -> PR open not Merged; unreadable -> unknown/not tracked); S2 human-only not a stage row, checklist lists 9; exact header string on atlas; the two-scope rollup; untracked run with warning vs a run mapping to tickets. Keep tests/build-progress*.test.mjs green. Run `node --import ./tests/_isolate-config.mjs --test tests/build-progress-atlas.test.mjs tests/build-progress.test.mjs tests/build-progress-roadmap.test.mjs tests/build-progress-ledgers.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests (and ledger fixture JSON that only mentions file names) use these files for unrelated behavior; the coordinator runs the FULL suite (env -u CLAUDECODE npm test) before any PR.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/fixtures/ledgers/atlas.anon.json",
+        "tools/deploy-status.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress-ledgers.test.mjs"
+      ],
+      "outputs": [
+        "tools/build-progress.mjs",
+        "tools/watch-assets/project.js",
+        "tests/build-progress-atlas.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/autopilot-lock.test.mjs",
+        "tests/bench-replay.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/completion.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/kit-and-interview.test.mjs",
+        "tests/phase10b-cli.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ]
+    },
+    {
+      "id": "Board2-cards",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "Owner board requests 6-8, files tools/board-data.mjs, tools/watch-assets/board.js, tools/watch-cli.mjs and tests. Do NOT touch tools/build-progress.mjs, tools/watch-assets/project.js (another job owns them), tools/projects.mjs, tools/swarm.mjs or the tools/swarm folder. Injected deps only in tests.\n6) Live must count every running run for a project on any branch or worktree: the board already groups worktrees under their project (overview.parentId / worktreeIds); a parent card's Live count and live list include its worktrees' live runs, and runs whose root is a scratch/job worktree of that repo (git worktree family, see worktreeFamily in tools/project-spend.mjs with { all: true }) count for that project. Count a run live when its state is 'running' or 'paused' with live workers (from the live registry), not by branch. Test: three live runs across the main checkout and two worktrees -> the parent card shows Live 3; a finished run is not counted; another project's run is not counted.\n7) Hide test/temp projects by default (the 'show test/temp' toggle stays and shows them with a 'test' badge). A project is test/temp when ANY: (a) isScratchRoot(root) \u2014 tools/scratch-roots.mjs is coming from the MacBook; until then implement the rules inline in ONE exported function `isTestOrTempProject(project, facts)` in board-data.mjs (scratch base ~/.project-swarm-scratch and its worktrees, OS temp folders, folders whose name starts with .tmp-test, pointer scratch true, marker file .swarm-scratch, plus the existing isScratchRoot from tools/projects.mjs) so it is a one-line swap later; (b) any path segment is exactly tmp, temp, test, tests or __tests__; (c) no scope (no approved ledger and no scope file) AND no run in the last 7 days AND no open ticket AND no spend. A project with a live or recent run, an approved ledger with open tickets, or a pin (projects.json entry pinned: true) is never auto-hidden. Wire it where watch-cli filters scratch projects today.\n8) Sort real projects: active runs first, then blocked (needs-you items, a failed recent run, cap reached), then idle; within a group newest activity first, then name (stable). Apply in the snapshot (projects order) and keep board.js rendering that order (remove its own resort, keeping worktree children under parents).\nTests tests/board-projects-filter.test.mjs: a 30-project fixture (5 real, 25 scratch/test/idle) -> default view lists 5, toggle lists 30 with badges, a scratch-path project with a live run stays visible; the group order and a stable tie order; the Live-3 case for item 6. Keep tests/board-page.test.mjs, tests/board.test.mjs, tests/watch-ui.test.mjs, tests/board-worktrees.test.mjs green. Run `node --import ./tests/_isolate-config.mjs --test tests/board-projects-filter.test.mjs tests/board-page.test.mjs tests/board.test.mjs tests/watch-ui.test.mjs tests/board-worktrees.test.mjs tests/board-nav.test.mjs` and `node tools/check-package.mjs`. Tests in ignoreTests (and ledger fixture JSON that only mentions file names) use these files for unrelated behavior; the coordinator runs the FULL suite (env -u CLAUDECODE npm test) before any PR.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/projects.mjs",
+        "tools/project-spend.mjs",
+        "tools/board.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/board-worktrees.test.mjs"
+      ],
+      "outputs": [
+        "tools/board-data.mjs",
+        "tools/watch-assets/board.js",
+        "tools/watch-cli.mjs",
+        "tests/board-projects-filter.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-peers.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/managers/r038-version-merge.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs"
+      ]
+    }
+  ]
+}

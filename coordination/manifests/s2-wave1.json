@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "jobs": [
+    {
+      "id": "A-ticket-paths",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "prompt": "Roadmap S2, tickets T-0036, T-0037, T-0060 (requirement R-006: 'Every file a ticket writes or reads as context is checked against the real file tree before ingest. A ticket naming a missing file is rejected with the closest real path suggested.'). tools/ticket-paths.mjs already exists on main with validateTicketPaths(ticket, { repoFiles, exists }), closestRepoPath, listTicketPaths, normTicketPath (read it; fix it only if a test below exposes a bug). It has NO callers. Wire it in tools/scope-commands.mjs: (1) `scope split --ingest RUN [--merge]`: before the ledger is written, list the repo files once (git ls-files via the existing helpers in scope-commands if any, else fs walk excluding .git, .swarm, node_modules) and run validateTicketPaths on every ingested ticket's files, context and tests; a path that is a DIRECTORY, a missing context/read path, or a likely typo refuses the ingest (nothing written) with one line per problem: '<ticket id>: <path> <reason>; closest real path: <suggestion>' (omit the suggestion when none). New files a build ticket will CREATE (files listed as outputs that do not exist yet) are allowed when their parent directory exists. (2) ticket edits that change files/context (if scope-commands has such a command path, e.g. tickets --set with files, or change orders adding files) run the same check. Keep every existing behavior otherwise. Tests: tests/scope-ingest-paths.test.mjs (T-0037) and tests/ticket-paths-regression.test.mjs (T-0060), node:test, temp git repos, injected deps (no reliance on the real clock, TTY or environment): a ticket naming `lessons/swarm` (a directory, the real case from the roadmap ledger: T-0220 and T-0223 killed a wave at review time) is refused at ingest with a clear message; a typo 'tools/scope-comands.mjs' suggests 'tools/scope-commands.mjs'; a missing context path is refused; a new output file in an existing folder is accepted; nothing is written to tickets.json on refusal. Do NOT touch tools/swarm.mjs (owned by the MacBook seat; if you need a hook there, say so in your final notes instead). Never write token-shaped literals. Run `node --import ./tests/_isolate-config.mjs --test tests/scope-ingest-paths.test.mjs tests/ticket-paths-regression.test.mjs tests/ticket-paths.test.mjs tests/scope-commands.test.mjs` (skip files that do not exist) and `node tools/check-package.mjs`. Tests in ignoreTests (and the ledger fixture JSON, which only mentions file names) exercise these modules for unrelated behavior; keep them passing \u2014 the coordinator runs the FULL suite (env -u CLAUDECODE npm test) before any PR.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/ticket-paths.mjs",
+        "tools/tickets.mjs",
+        "docs/scope/roadmap.md",
+        "tests/scope-commands.test.mjs",
+        "tests/ticket-paths.test.mjs",
+        "tests/scope-ownership.test.mjs"
+      ],
+      "outputs": [
+        "tools/scope-commands.mjs",
+        "tools/ticket-paths.mjs",
+        "tests/scope-ingest-paths.test.mjs",
+        "tests/ticket-paths-regression.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-delete-tickets.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/scope-spec-gate.test.mjs",
+        "tests/scope-spec-no-runner.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/tickets-delivered.test.mjs",
+        "tests/ui-check.test.mjs"
+      ]
+    },
+    {
+      "id": "G-ticket-manifest",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "prompt": "Roadmap S2, ticket T-0040 (R-008: 'A build ticket writes or owns the test file that proves it, so there is no build -> test -> fix chain. The critical path of a typical scope is shorter than before on the same input.') plus a real failure: tools/ticket-manifest.mjs turns a ledger ticket into a run manifest; when a ticket's output file is referenced by more than 100 project tests, the generated manifest fails validation with 'Uncovered test references' (T-0040's own ticket hit this). Fix both in tools/ticket-manifest.mjs only: (1) a build ticket's generated job lists its own test file(s) (ticket.tests) as OUTPUTS (it writes or owns them) and its prompt says it must create/update those tests with the code; (2) uncovered test references: rank the referencing tests by relevance (same basename stem as an output, then tests named in ticket.tests/context, then tests that import the output directly, then the rest), put at most 12 of the most relevant into context, and put every other referencing test into ignoreTests with a generated one-line reason in the prompt ('N other tests import <file> for unrelated behavior; the coordinator runs the full suite'). Use the same helper the validator uses to find referencing tests if one is exported (read tools/ticket-manifest.mjs and its imports), else a small local scan. Tests: tests/ticket-manifest-owns.test.mjs (node:test, temp dirs, injected deps; no real clock/env): a build ticket gets its test file as an output; a fixture repo where 150 tests import the output produces a manifest that validates (no uncovered-reference error), with <=12 tests in context and the rest in ignoreTests, the same-stem test ranked first. Do NOT touch tools/swarm.mjs. Run `node --import ./tests/_isolate-config.mjs --test tests/ticket-manifest-owns.test.mjs tests/ticket-manifest.test.mjs` (skip missing) and `node tools/check-package.mjs`. Tests in ignoreTests (and the ledger fixture JSON, which only mentions file names) exercise these modules for unrelated behavior; keep them passing \u2014 the coordinator runs the FULL suite (env -u CLAUDECODE npm test) before any PR.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/wiring.mjs",
+        "tools/tickets.mjs",
+        "tests/ticket-manifest.test.mjs"
+      ],
+      "outputs": [
+        "tools/ticket-manifest.mjs",
+        "tests/ticket-manifest-owns.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/batch-b-eval.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/escalation-routing.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/handoff.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-39-integrate.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/lessons-commands.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/ui-check.test.mjs"
+      ]
+    },
+    {
+      "id": "D-human-progress",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "prompt": "Roadmap S2, tickets T-0056 and T-0057 (R-015: 'Human tickets do not count toward build progress or block wave planning. They appear to the owner as a checklist with steps.' T-0057: 'Swarm Watch plan tab lists human tickets with their steps as a checklist. Build progress percent ignores human tickets.'). tools/human-progress.mjs exists on main (isHumanTicket, buildProgressTickets, buildProgressStats, ledgerBuildSummary, wavePlanningTickets, waveBlockingTicketIds, waveBlockingCount, ownerHumanChecklists) with NO callers. Wire it: (1) tools/scope-loop.mjs ledgerSummary(ledger): counts and percent come from ledgerBuildSummary / buildProgressStats (human tickets excluded) and the summary gains `human: { open, done, total }`; wave planning in scope-loop (where it picks ready tickets / counts blockers) uses wavePlanningTickets / waveBlockingTicketIds so an open human ticket never blocks a wave. (2) tools/watch-plan.mjs: the plan data gains `humanChecklists: ownerHumanChecklists(tickets)` and the build percent there uses buildProgressStats; tools/watch-assets/plan-views.js renders a 'Your checklist' section (each human ticket: title, its steps as a checkbox list (read-only display, textContent only), status) and the percent label says it excludes human tickets. Do NOT touch tools/swarm.mjs. Tests: tests/human-progress.test.mjs (extend if it exists) and tests/watch-human-progress.test.mjs (node:test, injected deps, no wall clock): ledgerSummary excludes 2 human tickets from total and percent and reports them under human; an open human ticket does not block wave planning; watch-plan returns humanChecklists with steps; the plan view code builds the checklist without innerHTML (string-scan the asset for innerHTML in the new code path). Run `node --import ./tests/_isolate-config.mjs --test tests/human-progress.test.mjs tests/watch-human-progress.test.mjs tests/scope-loop.test.mjs tests/watch-plan.test.mjs` (skip missing) and `node tools/check-package.mjs`. Tests in ignoreTests (and the ledger fixture JSON, which only mentions file names) exercise these modules for unrelated behavior; keep them passing \u2014 the coordinator runs the FULL suite (env -u CLAUDECODE npm test) before any PR.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/human-progress.mjs",
+        "tools/scope-integrity.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/watch-plan.test.mjs"
+      ],
+      "outputs": [
+        "tools/scope-loop.mjs",
+        "tools/watch-plan.mjs",
+        "tools/watch-assets/plan-views.js",
+        "tests/human-progress.test.mjs",
+        "tests/watch-human-progress.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/review-retry.test.mjs"
+      ]
+    },
+    {
+      "id": "H-progress-fixtures",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "Add real-ledger fixture tests for the board's Build progress (tools/build-progress.mjs, already on main). Fixtures (do not modify them): tests/fixtures/ledgers/roadmap-ledger.json (the live Project Swarm roadmap ledger: 225 tickets, ~117 done, requirements covered 5 of 39 at copy time, many done tickets with no tickets.log history so ETA was null, a stage with an empty title, tickets delivered by PR evidence = status done with a delivered note) and tests/fixtures/ledgers/parts-app-ledger.anon.json (anonymized parts-app ledger: 365 tickets, 339 done, 25 cancelled, 1 todo; paths hashed). Write tests/build-progress-ledgers.test.mjs (node:test, temp project dirs; copy a fixture into <tmp>/.swarm/project/tickets.json; for the roadmap one also write docs/scope/roadmap.md from the repo's real docs/scope/roadmap.md, and point ledger.scope.file at it in the copy; inject `now` fixed; no wall clock, no env): assert for each ledger that buildProgress returns: percent.tickets total = non-cancelled, non-proposed, non-human tickets and done count matches the fixture's own counts (compute expected from the fixture in the test); stage rows use display titles and never a raw empty title (an empty scope title shows 'Stage N'); every stage row's done+open+blocked <= total; eta is not null for the roadmap ledger when done-ticket evidence exists via delivered/run data, or, if the fixture truly has no completion times, eta is null AND notes contains 'no completion times recorded' (assert whichever the fixture supports, documenting why); requirements.covered/total are numbers with total equal to the scope's requirement count; the parts-app ledger (no scope file) gives requirements null and percent from tickets. If a fixture exposes a real bug in tools/build-progress.mjs (wrong count, crash, raw id shown), fix it minimally in tools/build-progress.mjs and say what in your notes. Do NOT touch tools/swarm.mjs. Run `node --import ./tests/_isolate-config.mjs --test tests/build-progress-ledgers.test.mjs tests/build-progress.test.mjs tests/build-progress-roadmap.test.mjs` and `node tools/check-package.mjs`.",
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/fixtures/ledgers/parts-app-ledger.anon.json",
+        "docs/scope/roadmap.md",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress.test.mjs"
+      ],
+      "outputs": [
+        "tests/build-progress-ledgers.test.mjs",
+        "tools/build-progress.mjs"
+      ],
+      "timeoutMs": 2400000
+    }
+  ]
+}
