@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "split-scan-perf",
+      "agent": "auto",
+      "prompt": "tools/split-scan.mjs is correct but scanning the real tools/swarm.mjs (about 9500 lines, about 450 KB) takes 28 seconds; the test requires under 5 seconds. Find and remove the quadratic or repeated work (typical causes: computing line numbers by slicing or counting from the start for every token or item, string concatenation or slice(0, i) in the tokenizer loop, re-scanning each item's text from scratch with a second tokenizer pass per scope, building arrays with spread in a loop, regex with lastIndex rescans, Set copies per token). Make line numbers come from a precomputed array of line starts with binary search; tokenize the whole file once and slice the token list per item; use indexed loops. The output of scanModule must stay byte-for-byte identical (all other tests in tests/split-scan.test.mjs must still pass unchanged). Keep the 5 second assertion in the real-file test unchanged. Add a comment naming what was slow. Write only tools/split-scan.mjs. ignoreTests reason: only the scanner changes.",
+      "context": [
+        "tools/split-scan.mjs",
+        "tests/split-scan.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/split-scan.mjs"
+      ],
+      "timeoutMs": 1500000
+    }
+  ]
+}
