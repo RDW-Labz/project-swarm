@@ -112,7 +112,7 @@ test('ingest refuses a bad ticket file and writes no ledger', async () => {
   await fakeRun(root, 'r1', [{ key: 'x', title: 'No refs', type: 'build', files: ['a.mjs'], size: 'L', risk: 'low' }]);
   const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
   assert.equal(result.exitCode, 1);
-  assert.match(result.stdout, /split refused/);
+  assert.match(result.stdout, /parked: 1 ticket\(s\)/);
   await assert.rejects(fs.access(path.join(root, '.swarm/project/tickets.json')));
 });
 

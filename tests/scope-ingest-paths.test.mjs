@@ -78,6 +78,22 @@ const okItem = (over) => ({
   ...over,
 });
 
+const wireItem = (over = {}) => ({
+  key: 'wire',
+  title: 'Wire',
+  type: 'build',
+  scopeRefs: ['R-001'],
+  integration: true,
+  acceptance: ['route ok'],
+  files: ['src/routes/feature.mjs'],
+  tests: ['tests/routes/feature.test.mjs'],
+  size: 'S',
+  risk: 'low',
+  ...over,
+});
+
+const okStage = (over) => [okItem(over), wireItem()];
+
 test('ingest refuses a directory path used as context (lessons/swarm)', async () => {
   const root = await project([
     'lessons/swarm/lesson.md',
@@ -89,6 +105,7 @@ test('ingest refuses a directory path used as context (lessons/swarm)', async ()
   const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
   assert.equal(result.exitCode, 1);
   assert.match(result.stdout, /lessons\/swarm is a directory/);
+  assert.match(result.stdout, /parked:/);
   await assert.rejects(fs.access(path.join(root, '.swarm/project/tickets.json')));
 });
 
@@ -117,7 +134,7 @@ test('ingest refuses a missing context path', async () => {
 
 test('ingest accepts a new output file in an existing folder', async () => {
   const root = await project(['src/base.mjs']);
-  await fakeRun(root, 'r1', [okItem({ files: ['src/new-feature.mjs'] })]);
+  await fakeRun(root, 'r1', okStage({ files: ['src/new-feature.mjs'] }));
   const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
   assert.equal(result.exitCode, 0, result.stdout);
   const ledger = JSON.parse(await fs.readFile(path.join(root, '.swarm/project/tickets.json'), 'utf8'));
@@ -126,14 +143,14 @@ test('ingest accepts a new output file in an existing folder', async () => {
 
 test('ingest accepts a new output file in a folder that does not exist yet', async () => {
   const root = await project(['src/base.mjs']);
-  await fakeRun(root, 'r1', [okItem({ files: ['src/new-area/feature.mjs'] })]);
+  await fakeRun(root, 'r1', okStage({ files: ['src/new-area/feature.mjs'] }));
   const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
   assert.equal(result.exitCode, 0, result.stdout);
 });
 
 test('ingest accepts a missing delete path', async () => {
   const root = await project(['src/base.mjs']);
-  await fakeRun(root, 'r1', [okItem({ files: ['src/base.mjs'], deletes: ['src/removed.mjs'] })]);
+  await fakeRun(root, 'r1', okStage({ files: ['src/base.mjs'], deletes: ['src/removed.mjs'] }));
   const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
   assert.equal(result.exitCode, 0, result.stdout);
 });
