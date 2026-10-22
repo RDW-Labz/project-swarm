@@ -182,6 +182,41 @@ test('owner routes refuse missing header token, query-only token, cookie-only PO
   assert.equal((await tailnet(port, `/api/owner/audit?t=${token}`)).status, 401);
 });
 
+test('prepare with invalid JSON body returns 400 invalid-body', async t => {
+  const { actions } = ownerActionsFixture();
+  const { port, token } = await startServer(t, { ownerActions: actions });
+  const rawBody = '{not json}';
+  const res = await new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port,
+      method: 'POST',
+      path: '/api/owner/actions/scope-1/prepare',
+      headers: {
+        Host: HOST,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(rawBody),
+        'Tailscale-User-Login': LOGIN,
+        'x-watch-token': token,
+      },
+    }, response => {
+      const chunks = [];
+      response.on('data', chunk => chunks.push(chunk));
+      response.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        let json = null;
+        try { json = text ? JSON.parse(text) : null; } catch { /* plain */ }
+        resolve({ status: response.statusCode, json });
+      });
+    });
+    req.on('error', reject);
+    req.write(rawBody);
+    req.end();
+  });
+  assert.equal(res.status, 400);
+  assert.equal(res.json?.error, 'invalid-body');
+});
+
 test('readOwnerAudit skips corrupt lines and returns valid entries', async t => {
   const env = { ...process.env };
   const auditFile = path.join(path.dirname(remoteFile(env, env.HOME)), '.swarm', 'owner', 'audit.ndjson');

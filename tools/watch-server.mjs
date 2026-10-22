@@ -422,15 +422,18 @@ export function createWatchServer(opts) {
     if (method !== 'POST') {
       return send(res, method, 405, { Allow: 'POST', 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify({ error: 'method-not-allowed' }));
     }
-    const bodyRead = ownerRoute.route === 'decision' ? await readJsonBody(req) : { value: {} };
+    const bodyRead = await readJsonBody(req);
     if (bodyRead.error === 'too-large') {
       return sendJsonStatus(res, method, 413, { error: 'payload-too-large', message: 'request body exceeds 8 KB' });
     }
     if (bodyRead.error === 'invalid') {
+      if (ownerRoute.route === 'prepare') {
+        return sendJsonStatus(res, method, 400, { error: 'invalid-body' });
+      }
       return sendJsonStatus(res, method, 422, { error: 'not-owner-decidable', message: 'decision and confirm are required' });
     }
     const out = ownerRoute.route === 'prepare'
-      ? await ownerActions.prepare(ownerRoute.itemId, ownerReq)
+      ? await ownerActions.prepare(ownerRoute.itemId, ownerReq, bodyRead.value)
       : await ownerActions.decide(ownerRoute.itemId, bodyRead.value, ownerReq);
     return sendJsonStatus(res, method, out.status, out.body);
   }
