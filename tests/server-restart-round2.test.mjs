@@ -297,11 +297,14 @@ test('(9) concurrent restarts serialize on install restart lock', async () => {
         env: { HOME: home, PATH: process.env.PATH },
         home,
         execFileImpl: async (cmd, args) => {
-          enterCritical();
-          if (callId === 1) {
-            firstHoldingLockBody = true;
-            await firstMayContinue;
-            firstHoldingLockBody = false;
+          const targetsFakeOldPid = args.some(arg => String(arg) === String(fakeOldPid));
+          if (targetsFakeOldPid) {
+            enterCritical();
+            if (callId === 1) {
+              firstHoldingLockBody = true;
+              await firstMayContinue;
+              firstHoldingLockBody = false;
+            }
           }
           return psMocks(cmd, args);
         },
