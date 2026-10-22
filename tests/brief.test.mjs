@@ -29,7 +29,8 @@ test('loadRuns returns an empty list without a runs directory', async () => {
 test('loadRuns skips corrupt state, sorts newest first, limits and summarizes', async () => {
   const root = await tempRoot();
   await writeRun(root, 'old', { id: 'old', status: 'complete', startedAt: '2025-01-01T00:00:00Z', jobs: { a: { costUsd: 1 } }, integratedFiles: ['x.js'] });
-  await writeRun(root, 'new', { id: 'new', status: 'paused', startedAt: '2025-01-02T00:00:00Z', jobs: { a: { costUsd: 0.5 }, b: { costUsd: 0.25 } }, summary: { counts: { done: 2 } }, pause: { reasons: ['quota'], until: null } });
+  // Jobs need declared outputs so the run is not treated as a no-output (already-integrated) review run.
+  await writeRun(root, 'new', { id: 'new', status: 'paused', startedAt: '2025-01-02T00:00:00Z', jobs: { a: { costUsd: 0.5, outputs: ['out/a.txt'] }, b: { costUsd: 0.25, outputs: ['out/b.txt'] } }, summary: { counts: { done: 2 } }, pause: { reasons: ['quota'], until: null } });
   await writeRun(root, 'broken', '{not json');
   const runs = await loadRuns(root);
   assert.deepEqual(runs.map(run => run.id), ['new', 'old']);
