@@ -156,6 +156,36 @@ function writeJsonAtomic(file, value, { writeFileSync = fs.writeFileSync, mkdirS
   return true;
 }
 
+/** Autopilot --once with no journal or action changes: skip the command journal line in main()'s journalAfterCommand. */
+let autopilotPollMeta = null;
+
+export function noteAutopilotStep(root, step, { once = false } = {}) {
+  const quiet = Boolean(
+    step && !step.error
+    && !(step.actions?.length)
+    && !(step.blocked?.length)
+    && !step.stepWroteJournal,
+  );
+  autopilotPollMeta = { root, once: Boolean(once), quiet };
+}
+
+function quietAutopilotPollFor(root) {
+  const meta = autopilotPollMeta;
+  if (!meta || meta.root !== root || !meta.once || !meta.quiet) return false;
+  return true;
+}
+
+export function clearAutopilotPollMeta() {
+  autopilotPollMeta = null;
+}
+
+/** When true, journalAfterCommand should not append or refresh generated files for this autopilot poll. */
+export function shouldSkipJournalForAutopilotPoll(root) {
+  if (!quietAutopilotPollFor(root)) return false;
+  clearAutopilotPollMeta();
+  return true;
+}
+
 /** Atomic UTF-8 write for generated project files (temp file in the same directory, then rename). */
 export function writeUtf8Atomic(file, text, { writeFile = fs.promises.writeFile, rename = fs.promises.rename, mkdir = fs.promises.mkdir } = {}) {
   const dir = path.dirname(file);
