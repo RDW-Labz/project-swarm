@@ -117,7 +117,7 @@ export function realDeps(env = process.env) {
       req.end();
     }),
     // The board's tailnet address, fetched the way the phone would: HTTPS to the tailnet name.
-    reach: async (url) => { try { const res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(8000) }); return { status: res.status, body: res.status === 200 ? await res.text() : '' }; } catch (error) { return { status: 0, body: '', error: String(error?.cause?.code ?? error?.message ?? error) }; } },
+    reach: async (url, { headers = {} } = {}) => { try { const res = await fetch(url, { redirect: 'manual', headers, signal: AbortSignal.timeout(8000) }); return { status: res.status, body: res.status === 200 ? await res.text() : '' }; } catch (error) { return { status: 0, body: '', error: String(error?.cause?.code ?? error?.message ?? error) }; } },
     resolve: async name => { try { return (await dns.lookup(name, { all: true })).map(a => a.address); } catch { return []; } },
     sleep: ms => new Promise(r => setTimeout(r, ms)),
     now: Date.now,
@@ -126,10 +126,10 @@ export function realDeps(env = process.env) {
 
 const out = (stdout, exitCode = 0) => ({ stdout: stdout.endsWith('\n') ? stdout : `${stdout}\n`, exitCode });
 const boardUrl = (state, withToken = true) => `https://${state.dns}:${state.httpsPort}/${withToken ? `?t=${state.token}` : ''}`;
-const localUrl = (state, pathname = '/api/board') => `http://127.0.0.1:${state.port}${pathname}?t=${state.token}`;
+const localUrl = (state, pathname = '/api/board') => `http://127.0.0.1:${state.port}${pathname}`;
 
 async function boardUp(deps, state) {
-  const res = await deps.get(localUrl(state), { host: `127.0.0.1:${state.port}`, headers: { 'Tailscale-User-Login': state.login } });
+  const res = await deps.get(localUrl(state), { host: `127.0.0.1:${state.port}`, headers: { 'Tailscale-User-Login': state.login, 'x-watch-token': state.token } });
   if (res.status !== 200) return false;
   try { const b = JSON.parse(res.body); return Array.isArray(b.projects); } catch { return false; }
 }
@@ -181,11 +181,11 @@ async function selfCheck(deps, state) {
   const publicIps = ips.filter(ip => !isTailnetAddress(ip));
   checks.push({ name: `${state.dns} resolves to tailnet addresses on this computer (${ips.join(', ') || 'no answer'})`, ok: ips.length > 0 && publicIps.length === 0, exposed: publicIps.length > 0 });
   if (publicIps.length) return checks;   // decided before any token is sent
-  const noLogin = await deps.get(localUrl(state), { host: `127.0.0.1:${state.port}` });
+  const noLogin = await deps.get(localUrl(state), { host: `127.0.0.1:${state.port}`, headers: { 'x-watch-token': state.token } });
   checks.push({ name: 'a request without your Tailscale login is refused, even with the token and a loopback Host (403)', ok: noLogin.status === 403 });
-  const good = await deps.reach(`${base}/api/board?t=${state.token}`);
+  const good = await deps.reach(`${base}/api/board`, { headers: { 'x-watch-token': state.token } });
   checks.push({ name: `the board answers over the tailnet at ${base}`, ok: good.status === 200 });
-  const bad = await deps.reach(`${base}/api/board?t=wrong`);
+  const bad = await deps.reach(`${base}/api/board`, { headers: { 'x-watch-token': 'wrong' } });
   checks.push({ name: 'a wrong token is refused (403)', ok: bad.status === 403 });
   return checks;
 }

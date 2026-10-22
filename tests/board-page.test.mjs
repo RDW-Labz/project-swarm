@@ -251,7 +251,7 @@ test('the HTTP board local=1 skips peer discovery after token verification', asy
     listPeers: async () => { calls += 1; throw new Error('peer discovery should be skipped'); },
     versionInfo: async () => ({ version: '1.155.0' }),
   });
-  const data = JSON.parse((await get(board.port, `/api/board?local=1&t=${board.token}`)).body);
+  const data = JSON.parse((await get(board.port, '/api/board?local=1', { headers: { 'x-watch-token': board.token } })).body);
   assert.equal(calls, 0);
   assert.equal(data.projects.every(p => p.machine === os.hostname()), true);
   assert.deepEqual(data.peers, []);
@@ -374,59 +374,59 @@ test('the board: every data route needs the token, only GET, wrong host refused;
     assert.equal((await get(port, route)).status, 403, `${route} without a token`);
     assert.equal((await get(port, `${route}${route.includes('?') ? '&' : '?'}t=wrong`)).status, 403, `${route} with a wrong token`);
   }
-  assert.equal((await get(port, `/api/board?t=${token}`, { method: 'POST' })).status, 405);
-  assert.equal((await get(port, `/api/board?t=${token}`, { host: 'evil.example:80' })).status, 421);
+  assert.equal((await get(port, '/api/board', { method: 'POST', headers: { 'x-watch-token': token } })).status, 405);
+  assert.equal((await get(port, '/api/board', { host: 'evil.example:80', headers: { 'x-watch-token': token } })).status, 421);
   const page = await get(port, `/?t=${token}`);
   assert.match(page.body, /Every project on this machine/);
   const projectPage = await get(port, `/project?id=${A.id}&t=${token}`);
   assert.equal(projectPage.status, 200);
   assert.match(projectPage.body, /assets\/project\.js/);
-  const data = JSON.parse((await get(port, `/api/board?scratch=1&t=${token}`)).body);
+  const data = JSON.parse((await get(port, '/api/board?scratch=1', { headers: { 'x-watch-token': token } })).body);
   assert.equal(data.projects.length, 2);
   assert.equal(data.machine.agents.total, 2);
-  assert.equal((await get(port, `/api/project?id=${A.id}&t=${token}`)).status, 200);
-  assert.equal((await get(port, `/api/project?id=nope&t=${token}`)).status, 404);
-  assert.equal((await get(port, `/api/project?id=${encodeURIComponent('../../etc')}&t=${token}`)).status, 404, 'a project is named by id, never by a path');
-  // The page builds its links with the token and the ids: a click on a run row goes to /open/run.
+  assert.equal((await get(port, `/api/project?id=${A.id}`, { headers: { 'x-watch-token': token } })).status, 200);
+  assert.equal((await get(port, '/api/project?id=nope', { headers: { 'x-watch-token': token } })).status, 404);
+  assert.equal((await get(port, `/api/project?id=${encodeURIComponent('../../etc')}`, { headers: { 'x-watch-token': token } })).status, 404, 'a project is named by id, never by a path');
+  // The page builds its links without the token and with the ids: a click on a run row goes to /open/run.
   const js = (await get(port, '/assets/board.js')).body;
   assert.match(js, /\/open\/run\?id=/);
   assert.match(js, /\/project\?id=/);
   assert.doesNotMatch(js, /innerHTML|eval\(/);
   // Opening a run starts that run's own Watch page, with its own token, and reuses it.
-  const open = await get(port, `/open/run?id=${A.id}&run=run-a1&t=${token}`);
+  const open = await get(port, `/open/run?id=${A.id}&run=run-a1`, { headers: { 'x-watch-token': token } });
   assert.equal(open.status, 302);
   const target = new URL(open.headers.location);
   assert.equal(target.hostname, '127.0.0.1');
   assert.notEqual(Number(target.port), port, 'its own server');
   assert.notEqual(target.searchParams.get('t'), token, 'its own token');
-  const snapshot = JSON.parse((await get(Number(target.port), `/api/snapshot?t=${target.searchParams.get('t')}`)).body);
+  const snapshot = JSON.parse((await get(Number(target.port), '/api/snapshot', { headers: { 'x-watch-token': target.searchParams.get('t') } })).body);
   assert.equal(snapshot.run.runId, 'run-a1');
   assert.equal(snapshot.run.jobs.length, 6, 'it is project A\'s run-a1, not B\'s');
   assert.equal((await get(Number(target.port), '/api/snapshot')).status, 403, 'the run page keeps its own token protection');
-  const again = await get(port, `/open/run?id=${A.id}&run=run-a1&t=${token}`);
+  const again = await get(port, `/open/run?id=${A.id}&run=run-a1`, { headers: { 'x-watch-token': token } });
   assert.equal(again.headers.location, open.headers.location, 'reused, not started twice');
   assert.equal(api.watcherCount(), 1);
-  const other = new URL((await get(port, `/open/run?id=${B.id}&run=run-a1&t=${token}`)).headers.location);
-  const otherSnap = JSON.parse((await get(Number(other.port), `/api/snapshot?t=${other.searchParams.get('t')}`)).body);
+  const other = new URL((await get(port, `/open/run?id=${B.id}&run=run-a1`, { headers: { 'x-watch-token': token } })).headers.location);
+  const otherSnap = JSON.parse((await get(Number(other.port), '/api/snapshot', { headers: { 'x-watch-token': other.searchParams.get('t') } })).body);
   assert.equal(otherSnap.run.jobs.length, 2, 'the same run id in project B opens B\'s run');
   assert.equal(api.watcherCount(), 2);
-  assert.equal((await get(port, `/open/run?id=${A.id}&run=nope&t=${token}`)).status, 404);
-  assert.equal((await get(port, `/open/run?id=${A.id}&run=${encodeURIComponent('../x')}&t=${token}`)).status, 404);
-  assert.equal((await get(port, `/open/run?id=unknown&run=run-a1&t=${token}`)).status, 404);
-  assert.equal((await get(port, `/open/run?id=${B.id}&run=run-old&t=${token}`)).status, 404, 'a run of another project is not reachable through this one');
+  assert.equal((await get(port, `/open/run?id=${A.id}&run=nope`, { headers: { 'x-watch-token': token } })).status, 404);
+  assert.equal((await get(port, `/open/run?id=${A.id}&run=${encodeURIComponent('../x')}`, { headers: { 'x-watch-token': token } })).status, 404);
+  assert.equal((await get(port, '/open/run?id=unknown&run=run-a1', { headers: { 'x-watch-token': token } })).status, 404);
+  assert.equal((await get(port, `/open/run?id=${B.id}&run=run-old`, { headers: { 'x-watch-token': token } })).status, 404, 'a run of another project is not reachable through this one');
 });
 
 test('the board: history search, filters and CSV over HTTP, and history survives a restart of the server', async t => {
   const ctx = await twoProjects(t);
   const first = await boardServer(t, ctx);
-  const all = JSON.parse((await get(first.port, `/api/history?scratch=1&t=${first.token}`)).body);
+  const all = JSON.parse((await get(first.port, '/api/history?scratch=1', { headers: { 'x-watch-token': first.token } })).body);
   assert.ok(all.total >= 6);
-  const onlyB = JSON.parse((await get(first.port, `/api/history?scratch=1&project=${ctx.B.id}&t=${first.token}`)).body);
+  const onlyB = JSON.parse((await get(first.port, `/api/history?scratch=1&project=${ctx.B.id}`, { headers: { 'x-watch-token': first.token } })).body);
   assert.ok(onlyB.events.length > 0 && onlyB.events.every(e => e.projectId === ctx.B.id), 'filtered by project');
-  const stages = JSON.parse((await get(first.port, `/api/history?scratch=1&kind=stage&t=${first.token}`)).body);
+  const stages = JSON.parse((await get(first.port, '/api/history?scratch=1&kind=stage', { headers: { 'x-watch-token': first.token } })).body);
   assert.ok(stages.events.every(e => e.kind === 'stage'));
-  assert.equal(JSON.parse((await get(first.port, `/api/history?scratch=1&q=run-old&t=${first.token}`)).body).events.every(e => /run-old/.test(`${e.title} ${e.run}`)), true);
-  const csv = await get(first.port, `/history.csv?scratch=1&kind=stage&t=${first.token}`);
+  assert.equal(JSON.parse((await get(first.port, '/api/history?scratch=1&q=run-old', { headers: { 'x-watch-token': first.token } })).body).events.every(e => /run-old/.test(`${e.title} ${e.run}`)), true);
+  const csv = await get(first.port, '/history.csv?scratch=1&kind=stage', { headers: { 'x-watch-token': first.token } });
   assert.match(csv.headers['content-type'], /text\/csv/);
   assert.match(csv.headers['content-disposition'], /attachment/);
   assert.match(csv.body, /^at,project,kind,title,ref,run,usd,url\n/);
@@ -434,7 +434,7 @@ test('the board: history search, filters and CSV over HTTP, and history survives
   // restart: a new server over the same files shows the same history
   await first.server.close(); await first.api.close();
   const second = await boardServer(t, ctx);
-  const again = JSON.parse((await get(second.port, `/api/history?scratch=1&t=${second.token}`)).body);
+  const again = JSON.parse((await get(second.port, '/api/history?scratch=1', { headers: { 'x-watch-token': second.token } })).body);
   assert.equal(again.total, all.total, 'nothing lost, nothing doubled by the restart');
 });
 
@@ -443,8 +443,8 @@ test('the board server never reads outside the registered projects: an id it doe
   const { port, token } = await boardServer(t, ctx);
   const outside = path.join(ctx.home, 'outside'); await fs.mkdir(path.join(outside, '.swarm/runs/r9'), { recursive: true });
   await fs.writeFile(path.join(outside, '.swarm/runs/r9/state.json'), JSON.stringify({ id: 'r9', status: 'running', jobs: [] }));
-  assert.equal((await get(port, `/open/run?id=${projectId(outside)}&run=r9&t=${token}`)).status, 404);
-  assert.equal((await get(port, `/api/project?id=${projectId(outside)}&t=${token}`)).status, 404);
+  assert.equal((await get(port, `/open/run?id=${projectId(outside)}&run=r9`, { headers: { 'x-watch-token': token } })).status, 404);
+  assert.equal((await get(port, `/api/project?id=${projectId(outside)}`, { headers: { 'x-watch-token': token } })).status, 404);
 });
 
 test('a swarm command in a folder lists it as a project (only when the file is chosen for a scratch folder); help and version do not; swarm projects add / remove', async t => {

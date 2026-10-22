@@ -110,7 +110,7 @@ test('back-pressure pauses deltas, drains with one fresh snapshot, and bounds st
 
 function openStream(port, token) {
   return new Promise((resolve, reject) => {
-    const req = http.get({ host: '127.0.0.1', port, path: `/events?t=${token}`, headers: { Host: `127.0.0.1:${port}` } }, (res) => {
+    const req = http.get({ host: '127.0.0.1', port, path: '/events', headers: { Host: `127.0.0.1:${port}`, 'x-watch-token': token } }, (res) => {
       res.setEncoding('utf8');
       resolve({ req, res });
     });

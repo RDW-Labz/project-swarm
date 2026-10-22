@@ -3,24 +3,23 @@
 // (with this page's token); that server finds the board, or starts one, and sends the browser there, so the Back button keeps working.
 (function () {
   'use strict';
-  var TOKEN = new URLSearchParams(location.search).get('t') || '';
-  var T = encodeURIComponent(TOKEN);
+  var TOKEN = self.BoardLib.watchToken();
   var box = document.getElementById('crumbs');
   if (!box) { return; }
 
   function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined) { n.textContent = text; } return n; }
   function link(href, cls, text) { var a = el('a', cls, text); a.href = href; return a; }
 
-  fetch('/api/nav?t=' + T, { headers: { 'x-watch-token': TOKEN } })
+  fetch('/api/nav', { headers: { 'x-watch-token': TOKEN } })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (nav) {
       if (!nav) { return; }
       box.textContent = '';
-      box.appendChild(link('/nav/board?t=' + T, 'back', '← All projects'));
-      box.appendChild(link('/nav/board?t=' + T, '', 'All projects'));
+      box.appendChild(link('/nav/board', 'back', '← All projects'));
+      box.appendChild(link('/nav/board', '', 'All projects'));
       if (nav.project) {
         box.appendChild(el('span', 'sep', '›'));
-        box.appendChild(link('/nav/project?t=' + T, '', nav.project.name));
+        box.appendChild(link('/nav/project', '', nav.project.name));
       }
       if (nav.run) {
         box.appendChild(el('span', 'sep', '›'));
