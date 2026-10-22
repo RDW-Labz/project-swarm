@@ -13,6 +13,7 @@ import { checkTicketTree } from '../tools/scope-integrity.mjs';
 import { readEvents } from '../tools/orchestrator-events.mjs';
 import { projectId } from '../tools/projects.mjs';
 import { makeBoardFixture } from './helpers/board-accuracy-fixture.mjs';
+import { offLedgerRuns } from '../tools/build-progress.mjs';
 
 const execFileP = promisify(execFile);
 const DAY = 86400000;
@@ -202,6 +203,56 @@ async function oracleFacts(fixture, now = NOW) {
   return { handEditsBlocked24h };
 }
 
+async function familyTicketIdsFromDisk(fixture) {
+  const roots = await familyRootsFromDisk(fixture.root, fixture.env);
+  const ledgers = await readLedgersFromDisk(roots);
+  const ids = new Set();
+  for (const ledger of ledgers) for (const ticket of ledger?.tickets ?? []) if (ticket?.id) ids.add(String(ticket.id));
+  return ids;
+}
+
+async function oracleUntrackedRuns(fixture, now = NOW) {
+  const roots = await familyRootsFromDisk(fixture.root, fixture.env);
+  const runs = await readRunsFromDisk(roots);
+  const ticketIds = await familyTicketIdsFromDisk(fixture);
+  const off = offLedgerRuns(
+    runs.map(record => ({ runId: record.id, state: record.state })),
+    null,
+    null,
+    now,
+    ticketIds,
+    fixture.projects[0].id,
+  );
+  return off.count;
+}
+
+async function oracleFactsCheckouts(fixture) {
+  const roots = await familyRootsFromDisk(fixture.root, fixture.env);
+  return roots.length;
+}
+
+const MONEY_KEY = /^(usd|cost|billed|listValue|flatRate|price|spend|budget)$/i;
+
+function assertCardHasNoMoney(card) {
+  const serialized = JSON.stringify(card);
+  assert.doesNotMatch(serialized, /\$\d/, 'card JSON must not contain dollar-shaped values');
+  const visit = (value, path = 'card') => {
+    if (value === null || typeof value !== 'object') {
+      if (typeof value === 'string' && /\$\d/.test(value)) assert.fail(`dollar value at ${path}: ${value}`);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) visit(value[index], `${path}[${index}]`);
+      return;
+    }
+    for (const [key, child] of Object.entries(value)) {
+      assert.ok(!MONEY_KEY.test(key), `money-shaped key "${key}" at ${path}`);
+      visit(child, `${path}.${key}`);
+    }
+  };
+  visit(card);
+}
+
 async function oracleHeadsUp(fixture, { slots = 8, finished = false } = {}) {
   if (finished) return null;
   const ledger = JSON.parse(await fs.readFile(path.join(fixture.root, '.swarm', 'project', 'tickets.json'), 'utf8'));
@@ -388,6 +439,82 @@ test('card.facts.handEditsBlocked24h counts recent guard blocked events only', a
   const facts = cardOf(snapshot, fixture).facts;
   assert.equal(facts.handEditsBlocked24h, (await oracleFacts(fixture, NOW)).handEditsBlocked24h);
   assert.equal(facts.handEditsBlocked24h, 2);
+});
+
+test('card.facts.untrackedRuns matches off-ledger run oracle across the family', async t => {
+  const recent = iso(NOW - 2 * DAY);
+  const stale = iso(NOW - 20 * DAY);
+  const fixture = await makeBoardFixture({
+    ledger: 'roadmap-ledger.json',
+    worktrees: [{ name: 'linked', runs: [
+      { id: 'run-smoke', status: 'complete', startedAt: recent, jobs: [{ id: 'smoke-check', status: 'complete' }] },
+      { id: 'run-lane-test', status: 'complete', startedAt: recent, jobs: [{ id: 'lane-test-1', status: 'complete' }] },
+      { id: 'run-lane-bench', status: 'complete', startedAt: recent, jobs: [{ id: 'lane-bench-a', status: 'complete' }] },
+      { id: 'run-probe', status: 'complete', startedAt: recent, manifest: 'probe-manifest.json', jobs: [] },
+      { id: 'run-doctor', status: 'complete', startedAt: recent, jobs: [{ id: 'doctor-run', status: 'complete' }] },
+      { id: 'run-non-int', status: 'complete', startedAt: recent, nonIntegrating: true, jobs: [{ id: 'T-off-ledger-1', status: 'complete' }] },
+      { id: 'run-stale', status: 'complete', startedAt: stale, jobs: [{ id: 'T-off-ledger-2', status: 'complete' }] },
+      { id: 'run-untracked-a', status: 'complete', startedAt: recent, jobs: [{ id: 'T-not-in-ledger-a', status: 'complete' }] },
+      { id: 'run-untracked-b', status: 'running', startedAt: recent, jobs: [{ id: 'T-not-in-ledger-b', status: 'running' }] },
+    ] }],
+    scratch: [{ runs: [{ id: 'scratch-untracked', status: 'complete', startedAt: recent, jobs: [{ id: 'scratch-job-off-ledger', status: 'complete' }] }] }],
+    runs: [{ id: 'main-untracked', status: 'complete', startedAt: recent, jobs: [{ id: 'main-off-ledger-job', status: 'complete' }] }],
+  });
+  t.after(fixture.cleanup);
+  const expected = await oracleUntrackedRuns(fixture, NOW);
+  assert.equal(expected, 4, 'two untracked on worktree, one on main, one on scratch');
+  const snapshot = await snapshotFor(fixture);
+  const facts = cardOf(snapshot, fixture).facts;
+  assert.equal(facts.untrackedRuns, await oracleUntrackedRuns(fixture, NOW));
+});
+
+test('card.facts.checkouts matches git worktrees plus scratch roots', async t => {
+  const fixture = await makeBoardFixture({
+    ledger: 'roadmap-ledger.json',
+    worktrees: [{ name: 'linked' }],
+    scratch: [{ runs: [] }, { runs: [] }],
+  });
+  t.after(fixture.cleanup);
+  const expected = await oracleFactsCheckouts(fixture);
+  assert.ok(expected >= 4, 'main + linked worktree + two scratch dirs');
+  const snapshot = await snapshotFor(fixture);
+  assert.equal(cardOf(snapshot, fixture).facts.checkouts, expected);
+});
+
+test('card ignores fixture merged PR list (progress milestones only)', async t => {
+  const openPrs = [{ state: 'OPEN', number: 42, headRefName: 'swarm/T-0001', mergedAt: null }];
+  const mergedPrs = [{ state: 'MERGED', number: 42, headRefName: 'swarm/T-0001', mergedAt: iso(NOW) }];
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json', prs: openPrs });
+  t.after(fixture.cleanup);
+  const snapshotOpts = prState => ({
+    projects: [fixture.projects[0]],
+    liveRuns: [],
+    now: NOW,
+    env: fixture.env,
+    summary,
+    prState,
+  });
+  const snapOpen = await boardSnapshot(snapshotOpts(async () => openPrs));
+  const snapMerged = await boardSnapshot(snapshotOpts(async () => mergedPrs));
+  const cardCore = card => ({
+    now: card.now,
+    next: card.next,
+    blocked: { waitingOnTickets: card.blocked.waitingOnTickets, items: card.blocked.items },
+  });
+  const cardA = cardOf(snapOpen, fixture);
+  const cardB = cardOf(snapMerged, fixture);
+  // Watch card is built without prState; merged PRs affect progress milestones, not card.now/next/blocked.
+  assert.deepEqual(cardCore(cardA), cardCore(cardB));
+  const pctA = snapOpen.projects[0].progress?.overall ?? snapOpen.projects[0].progress?.percent?.board?.pct;
+  const pctB = snapMerged.projects[0].progress?.overall ?? snapMerged.projects[0].progress?.percent?.board?.pct;
+  assert.equal(pctA, pctB);
+});
+
+test('card JSON omits money-shaped keys and dollar values', async t => {
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json', spend: { billedToday: 12.5, listToday: 3 } });
+  t.after(fixture.cleanup);
+  const snapshot = await snapshotFor(fixture);
+  assertCardHasNoMoney(cardOf(snapshot, fixture));
 });
 
 test('card.headsUp names same-file wave collisions', async t => {

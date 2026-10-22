@@ -541,13 +541,6 @@ function guardBlockedLast24h(roots, now) {
   return count;
 }
 
-function offLedgerCheckoutCount(runs, offLedger) {
-  const runIds = new Set((offLedger?.runs ?? []).map(run => run.runId));
-  const roots = new Set();
-  for (const run of runs ?? []) if (runIds.has(run.id)) roots.add(run.root);
-  return roots.size;
-}
-
 export function watchCardSlots({ held, familyProjectIds, projectId }) {
   const machineMax = held?.max ?? null;
   const inUse = held?.total ?? 0;
@@ -588,12 +581,16 @@ async function buildWatchCard({
   const readyList = ticketsReadyToRun(ledger?.tickets ?? []);
   const blocked = blockedDependencyCard(ledger);
   const eta = await cardEtaFromFamily({ roots, ledger, now });
+  const familyTicketIds = new Set();
+  for (const familyLedger of ledgers ?? []) {
+    for (const ticket of familyLedger?.tickets ?? []) if (ticket?.id) familyTicketIds.add(String(ticket.id));
+  }
   const offLedger = offLedgerRuns(
     runs.map(run => ({ runId: run.id, state: run.state })),
     ledger,
     null,
     now,
-    new Set((ledger?.tickets ?? []).map(ticket => ticket?.id).filter(Boolean)),
+    familyTicketIds,
     projectId,
   );
   const headsUp = watchCardHeadsUp({ ledger, scope, recentJobCounts, slots, finished: progressFinished });
@@ -619,14 +616,14 @@ async function buildWatchCard({
       handEditsBlocked24h: guardBlockedLast24h(roots, now),
       untrackedRuns: offLedger.count ?? 0,
       listHref: offLedger.countHref ?? `#${OFF_LEDGER_LIST_ANCHOR_ID}`,
-      checkouts: offLedgerCheckoutCount(runs, offLedger),
+      checkouts: (roots ?? []).length,
     },
     headsUp,
   };
 }
 
 // One project's lane on the board. `liveRuns` are the alive runs of THIS project only.
-export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null, worktree = false, env = process.env, familyRoots = null, extraRoots = [] } = {}) {
+export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null, worktree = false, env = process.env, familyRoots = null, extraRoots = [], prState = undefined } = {}) {
   const ownOnly = worktree || Boolean(await mainWorktreeRoot(project.root));
   const roots = familyRoots ?? await projectFamilyRoots(project.root, { ownOnly, env, extraRoots });
   const runs = await readProjectRunStates(project.root, { ownOnly, env, familyRoots: roots });
@@ -661,7 +658,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
   const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
   const overviewSpend = { usd: capUsedUsd ?? spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
-  const rawProgress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly }).catch(() => null);
+  const rawProgress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly, prState }).catch(() => null);
   const progress = rawProgress ? { ...finishedProgress(rawProgress), overall: boardPercent(rawProgress), _rawFinished: rawProgress.finished } : null;
   const progressFinished = progress?._rawFinished ?? false;
   if (progress) delete progress._rawFinished;
@@ -744,7 +741,7 @@ export function underfilledWaves(counts, slots) {
 }
 
 // The whole board: machine totals (sums of the project numbers) and one overview per registered project.
-export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, laneState = null, worktreeRoot = mainWorktreeRoot, deployStatus = null, env = process.env } = {}) {
+export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, laneState = null, worktreeRoot = mainWorktreeRoot, deployStatus = null, env = process.env, prState = undefined } = {}) {
   const overviews = [];
   const realRoot = async root => await fs.realpath(root).catch(() => path.resolve(root));
   const inputProjects = Array.isArray(projects) ? projects : [];
@@ -800,7 +797,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
       : live.filter(r => family.has(r.root));
     const activeMine = candidates.filter(record => activeRunState(record.state));
     const mine = activeMine.length ? activeMine : candidates;
-    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null, worktree: Boolean(parentIds[i] || linkedRows[i]), env, familyRoots: parentIds[i] || !linkedRows[i] ? [...family] : null, extraRoots: inputProjects.map(item => item.root) }));
+    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null, worktree: Boolean(parentIds[i] || linkedRows[i]), env, familyRoots: parentIds[i] || !linkedRows[i] ? [...family] : null, extraRoots: inputProjects.map(item => item.root), prState }));
     const familyIds = new Set([project.id]);
     for (const root of family) {
       const member = registered.get(root);
