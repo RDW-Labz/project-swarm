@@ -14,8 +14,13 @@ import { discoverRunningServers } from './server-discovery.mjs';
 export { safeEnvSubset, serverMode };
 export {
   discoverRunningServers,
+  listenPortsForPid,
   parseLsofFnOutput,
   parseLsofListenPorts,
+  parseReadlinkSocketInode,
+  parseProcNetTcpListenRow,
+  parseProcNetTcpListenInodes,
+  listenPortsMatchingProcInodes,
 } from './server-discovery.mjs';
 
 const execFileAsync = promisify(execFile);

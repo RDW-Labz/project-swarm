@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Discover running swarm board / remote-serve processes by command line (no registry record required).
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
+import fs from 'node:fs/promises';
 import path from 'node:path';
+
+const PROC_TCP_LISTEN_STATE = '0A';
+const IPV4_LOOPBACK_HEX = '0100007F';
+const IPV4_ANY_HEX = '00000000';
+const IPV6_ANY_HEX = '0000000000000000';
+const IPV6_LOOPBACK_HEX = '01000000000000000000000000000000';
 
 export function validServerPort(port) {
   return Number.isInteger(port) && port >= 1 && port <= 65535;
@@ -183,6 +190,64 @@ export function parseLsofListenPorts(text) {
   return [...new Set(ports)];
 }
 
+export function parseReadlinkSocketInode(target) {
+  const m = /^socket:\[(\d+)\]$/.exec(String(target).trim());
+  if (!m) return null;
+  const inode = Number(m[1]);
+  return Number.isInteger(inode) && inode > 0 ? inode : null;
+}
+
+export function isAcceptableProcListenLocalAddress(ipHex, ipv6) {
+  const ip = String(ipHex).trim().toUpperCase();
+  if (!ipv6) {
+    return ip === IPV4_LOOPBACK_HEX || ip === IPV4_ANY_HEX;
+  }
+  return ip === IPV6_ANY_HEX || ip === IPV6_LOOPBACK_HEX;
+}
+
+/** Parse /proc/net/tcp or /proc/net/tcp6; returns inode -> listen port for loopback or any-address sockets. */
+export function parseProcNetTcpListenInodes(text, { ipv6 = false } = {}) {
+  const byInode = new Map();
+  for (const line of String(text).split('\n')) {
+    const row = parseProcNetTcpListenRow(line, { ipv6 });
+    if (row) byInode.set(row.inode, row.port);
+  }
+  return byInode;
+}
+
+export function parseProcNetTcpListenRow(line, { ipv6 = false } = {}) {
+  const trimmed = String(line).trim();
+  if (!trimmed || trimmed.startsWith('sl')) return null;
+  const parts = trimmed.split(/\s+/);
+  if (parts.length < 10) return null;
+  const localAddr = parts[1];
+  const state = parts[3];
+  if (state !== PROC_TCP_LISTEN_STATE) return null;
+  const colon = localAddr.indexOf(':');
+  if (colon < 0) return null;
+  const ipHex = localAddr.slice(0, colon);
+  const portHex = localAddr.slice(colon + 1);
+  if (!isAcceptableProcListenLocalAddress(ipHex, ipv6)) return null;
+  const port = Number.parseInt(portHex, 16);
+  if (!validServerPort(port)) return null;
+  const inode = Number(parts[9]);
+  if (!Number.isInteger(inode) || inode <= 0) return null;
+  return { inode, port };
+}
+
+/** Match socket inodes from /proc/PID/fd against parsed /proc/net/tcp(+6) listen rows. */
+export function listenPortsMatchingProcInodes(socketInodes, tcpText, tcp6Text = '') {
+  const inodeSet = new Set(socketInodes);
+  const ports = [];
+  for (const [inode, port] of parseProcNetTcpListenInodes(tcpText).entries()) {
+    if (inodeSet.has(inode)) ports.push(port);
+  }
+  for (const [inode, port] of parseProcNetTcpListenInodes(tcp6Text, { ipv6: true }).entries()) {
+    if (inodeSet.has(inode)) ports.push(port);
+  }
+  return [...new Set(ports)];
+}
+
 async function fetchHealthPid(port, fetchImpl) {
   try {
     const res = await fetchImpl(`http://127.0.0.1:${port}/api/health`, {
@@ -230,13 +295,53 @@ async function readProcessCwd(pid, { execFileImpl, platform }) {
   }
 }
 
-async function readListenPorts(pid, { execFileImpl, platform, lsofAvailable = true }) {
+async function collectSocketInodesForPid(pid, { readdirImpl = fs.readdir, readlinkImpl = fs.readlink } = {}) {
+  const fdDir = `/proc/${pid}/fd`;
+  const names = await readdirImpl(fdDir);
+  const inodes = [];
+  for (const name of names) {
+    try {
+      const target = await readlinkImpl(path.join(fdDir, name));
+      const inode = parseReadlinkSocketInode(target);
+      if (inode !== null) inodes.push(inode);
+    } catch { /* fd vanished */ }
+  }
+  return inodes;
+}
+
+async function readListenPortsFromProcLinux(pid, {
+  readFileImpl = fs.readFile,
+  readdirImpl = fs.readdir,
+  readlinkImpl = fs.readlink,
+} = {}) {
+  try {
+    const socketInodes = await collectSocketInodesForPid(pid, { readdirImpl, readlinkImpl });
+    if (!socketInodes.length) return [];
+    let tcpText = '';
+    let tcp6Text = '';
+    try { tcpText = await readFileImpl('/proc/net/tcp', 'utf8'); } catch { /* optional */ }
+    try { tcp6Text = await readFileImpl('/proc/net/tcp6', 'utf8'); } catch { /* optional */ }
+    return listenPortsMatchingProcInodes(socketInodes, tcpText, tcp6Text);
+  } catch {
+    return [];
+  }
+}
+
+export async function listenPortsForPid(pid, {
+  execFileImpl,
+  platform = process.platform,
+  lsofAvailable = true,
+  readFileImpl = fs.readFile,
+  readdirImpl = fs.readdir,
+  readlinkImpl = fs.readlink,
+} = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return [];
   if (lsofAvailable) {
     try {
       const { stdout } = await execFileImpl('lsof', ['-nP', '-a', '-p', String(pid), '-iTCP', '-sTCP:LISTEN', '-Fn']);
       const ports = parseLsofListenPorts(stdout);
       if (ports.length) return ports;
-    } catch { /* try ss */ }
+    } catch { /* try ss or /proc */ }
   }
   try {
     const { stdout } = await execFileImpl('ss', ['-ltn', 'p']);
@@ -246,10 +351,17 @@ async function readListenPorts(pid, { execFileImpl, platform, lsofAvailable = tr
       const m = /127\.0\.0\.1:(\d+)/.exec(line);
       if (m && validServerPort(Number(m[1]))) ports.push(Number(m[1]));
     }
-    return [...new Set(ports)];
-  } catch {
-    return [];
+    const fromSs = [...new Set(ports)];
+    if (fromSs.length) return fromSs;
+  } catch { /* try /proc on Linux */ }
+  if (platform === 'linux') {
+    return await readListenPortsFromProcLinux(pid, { readFileImpl, readdirImpl, readlinkImpl });
   }
+  return [];
+}
+
+async function readListenPorts(pid, deps) {
+  return listenPortsForPid(pid, deps);
 }
 
 async function processHasControllingTty(pid, execFileImpl) {
@@ -269,6 +381,9 @@ export async function discoverRunningServers({
   selfPid = process.pid,
   fetchImpl = globalThis.fetch,
   lsofAvailable,
+  readFileImpl,
+  readdirImpl,
+  readlinkImpl,
 } = {}) {
   if (!execFileImpl || !installRoot) return [];
   const acceptedRunners = acceptedRunnerRealpaths(installRoot);
@@ -305,6 +420,9 @@ export async function discoverRunningServers({
       execFileImpl,
       platform,
       lsofAvailable: lsofAvailable !== false,
+      readFileImpl,
+      readdirImpl,
+      readlinkImpl,
     });
     const { port, version } = await pickPortForPid(row.pid, ports, fetchImpl);
 
