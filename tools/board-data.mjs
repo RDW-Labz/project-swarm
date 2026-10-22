@@ -382,15 +382,45 @@ export async function readProjectRunStates(root, { ownOnly = false, env = proces
   return out;
 }
 
-async function lastTicketFinishedAt(roots, runs, ledgers) {
+export function ticketDoneAtMs(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const at = Date.parse(value ?? '');
+  return Number.isFinite(at) ? at : NaN;
+}
+
+export async function lastTicketFinishedAt(roots, runs, ledgers, { env = process.env } = {}) {
+  const scanRoots = new Set();
+  const addRoot = async candidate => {
+    if (!candidate) return;
+    scanRoots.add(await fs.realpath(candidate).catch(() => path.resolve(candidate)));
+  };
+  for (const root of roots ?? []) await addRoot(root);
+  const anchor = roots?.[0];
+  if (anchor && !(await mainWorktreeRoot(anchor))) {
+    try {
+      for (const member of await worktreeFamily(anchor, { all: true, env })) await addRoot(member);
+    } catch { /* family metadata unreadable */ }
+    const scratch = env?.SWARM_SCRATCH_ROOT || env?.SWARM_SCRATCH_DIR;
+    if (scratch) {
+      const scratchRoot = await fs.realpath(scratch).catch(() => path.resolve(scratch));
+      try {
+        for (const name of await fs.readdir(scratchRoot)) {
+          const candidate = path.join(scratchRoot, name);
+          try {
+            if ((await fs.stat(candidate)).isDirectory()) await addRoot(candidate);
+          } catch { /* scratch entry can disappear */ }
+        }
+      } catch { /* absent scratch root */ }
+    }
+  }
   const doneIds = new Set();
   for (const ledger of ledgers) for (const ticket of ledger?.tickets ?? []) if (ticket?.status === 'done' && ticket.id) doneIds.add(String(ticket.id));
   let newest = 0;
   const add = (id, value) => {
-    const at = Date.parse(value ?? '');
+    const at = ticketDoneAtMs(value);
     if (id && Number.isFinite(at)) { doneIds.add(String(id)); newest = Math.max(newest, at); }
   };
-  for (const root of roots) {
+  for (const root of scanRoots) {
     try { for (const [id, at] of await doneTimes(root)) add(id, at); } catch { /* missing tickets.log */ }
   }
   for (const ledger of ledgers) {
@@ -721,7 +751,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const cost = costOf(runs, now);
   const agents = agentsOf(liveRunsForAgents, liveIds, now);
   const lastRun = runs.slice().sort((a, b) => (Date.parse(b.state?.startedAt ?? '') || 0) - (Date.parse(a.state?.startedAt ?? '') || 0))[0]?.state ?? null;
-  const ticketFinishedAt = await lastTicketFinishedAt(roots, runs, ledgers);
+  const ticketFinishedAt = await lastTicketFinishedAt(roots, runs, ledgers, { env });
   const ticketFinishedMs = Date.parse(ticketFinishedAt ?? '') || 0;
   const lastActivityMs = Math.max(
     0,
@@ -1024,7 +1054,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const handled = await handledForProject(project.root, { now, limit: 20 }).catch(() => null);
   const pinnedVersion = await pinnedVersionFor(project.root);
   const lastRun = runs.slice().sort((a, b) => (Date.parse(b.state?.startedAt ?? '') || 0) - (Date.parse(a.state?.startedAt ?? '') || 0))[0]?.state ?? null;
-  const ticketFinishedAt = await lastTicketFinishedAt(roots, runs, ledgers);
+  const ticketFinishedAt = await lastTicketFinishedAt(roots, runs, ledgers, { env });
   const progressFinished = progress?.finished ?? false;
   const recentJobCounts = runs.slice().sort((a, b) => (Date.parse(a.state?.startedAt ?? '') || 0) - (Date.parse(b.state?.startedAt ?? '') || 0)).slice(-6).map(r => (Array.isArray(r.state?.jobs) ? r.state.jobs.length : 0));
   let card = await buildWatchCard({

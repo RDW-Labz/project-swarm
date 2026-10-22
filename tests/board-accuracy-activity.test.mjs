@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { boardSnapshot, startOfLocalDay, projectActivityState, underfilledWaves } from '../tools/board-data.mjs';
+import { boardSnapshot, startOfLocalDay, projectActivityState, underfilledWaves, ticketDoneAtMs } from '../tools/board-data.mjs';
 import { createBoardApi } from '../tools/watch-cli.mjs';
 import { projectId } from '../tools/projects.mjs';
 import { approveLedger, logPath, readLedger } from '../tools/tickets.mjs';
@@ -115,7 +115,7 @@ async function oracleLastTicketFinishedAt(fixture) {
   }
   let newest = 0;
   const add = (id, value) => {
-    const at = Date.parse(value ?? '');
+    const at = ticketDoneAtMs(value);
     if (id && Number.isFinite(at)) {
       doneIds.add(String(id));
       newest = Math.max(newest, at);
@@ -490,6 +490,29 @@ test('liveCount includes a running linked-worktree run', async t => {
   const snapshot = await snapshotFor(fixture, { liveRuns });
   const expected = await oracleLiveActivity(fixture, { liveRuns });
   assert.equal(cardOf(snapshot, fixture).liveCount, expected.liveCount);
+});
+
+test('lastTicketFinishedAt uses the newest tickets.log done transition across linked worktree ledgers', async t => {
+  const now = Date.now();
+  const fixture = await makeBoardFixture({
+    ledger: 'roadmap-ledger.json',
+    worktrees: [{ name: 'roadmap-build', runs: [] }],
+  });
+  t.after(fixture.cleanup);
+  const mainLedger = JSON.parse(await fs.readFile(path.join(fixture.root, '.swarm', 'project', 'tickets.json'), 'utf8'));
+  const done = mainLedger.tickets.find(ticket => ticket.status === 'done');
+  assert.ok(done?.id);
+  const mainLogAt = iso(now - 5000);
+  const linkedLogAt = iso(now - 12);
+  await fs.mkdir(path.dirname(logPath(fixture.root)), { recursive: true });
+  await fs.writeFile(logPath(fixture.root), `${JSON.stringify({ event: 'transition', id: done.id, to: 'done', at: mainLogAt })}\n`);
+  await fs.mkdir(path.dirname(logPath(fixture.worktreeRoots[0])), { recursive: true });
+  await fs.writeFile(logPath(fixture.worktreeRoots[0]), `${JSON.stringify({ event: 'transition', id: done.id, to: 'done', at: linkedLogAt })}\n`);
+  const snapshot = await snapshotFor(fixture, { now: now + 1000 });
+  const expected = await oracleLastTicketFinishedAt(fixture);
+  assert.equal(expected, linkedLogAt);
+  assert.equal(cardOf(snapshot, fixture).lastTicketFinishedAt, expected);
+  assert.equal(cardOf(snapshot, fixture).card.now.lastTicketFinishedAt, expected);
 });
 
 test('lastTicketFinishedAt falls back to the newest finished job for a done ledger ticket', async t => {
