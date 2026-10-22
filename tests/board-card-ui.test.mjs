@@ -130,7 +130,6 @@ function makeElement(tag, id) {
 
 let savedGlobalNavigatorDescriptor;
 let stubNavigator;
-let navigatorHooksRegistered = false;
 
 function applyGlobalNavigatorStub() {
   if (!stubNavigator || savedGlobalNavigatorDescriptor === undefined) return;
@@ -150,12 +149,8 @@ function restoreGlobalNavigator() {
   }
 }
 
-function registerNavigatorHooks() {
-  if (navigatorHooksRegistered) return;
-  navigatorHooksRegistered = true;
-  test.before(applyGlobalNavigatorStub);
-  test.after(restoreGlobalNavigator);
-}
+test.before(applyGlobalNavigatorStub);
+test.after(restoreGlobalNavigator);
 
 async function installBoardDom() {
   const byId = new Map();
@@ -197,7 +192,6 @@ async function installBoardDom() {
     savedGlobalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   }
   applyGlobalNavigatorStub();
-  registerNavigatorHooks();
   win.fetch = async () => ({ ok: false });
   win.innerHeight = 800;
   const libSrc = await fs.readFile(path.join(assets, 'board-lib.js'), 'utf8');
