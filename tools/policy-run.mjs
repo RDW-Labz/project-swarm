@@ -210,9 +210,6 @@ export async function appendAutoDecision({ root, entry, deps = {} }) {
     reason: entry?.reason ?? null,
   };
   if (typeof entry?.amountUsd === 'number') journalLine.amountUsd = entry.amountUsd;
-  if (typeof entry?.file === 'string') journalLine.file = entry.file;
-  if (typeof entry?.sha256 === 'string') journalLine.sha256 = entry.sha256;
-  if (typeof entry?.reviewerRunId === 'string') journalLine.reviewerRunId = entry.reviewerRunId;
   const eventsLine = {
     at,
     kind: 'auto-decision',
@@ -224,9 +221,6 @@ export async function appendAutoDecision({ root, entry, deps = {} }) {
     reason: journalLine.reason,
   };
   if (typeof entry?.amountUsd === 'number') eventsLine.amountUsd = entry.amountUsd;
-  if (typeof entry?.file === 'string') eventsLine.file = entry.file;
-  if (typeof entry?.sha256 === 'string') eventsLine.sha256 = entry.sha256;
-  if (typeof entry?.reviewerRunId === 'string') eventsLine.reviewerRunId = entry.reviewerRunId;
   await appendJournal(root, journalLine, { now });
   await appendEvents(root, eventsLine);
 }
