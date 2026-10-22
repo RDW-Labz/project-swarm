@@ -110,7 +110,7 @@ test('validateManifest names missing, zero-job, and version problems separately'
   assert.throws(() => validateManifest(null), /Manifest is missing/);
   assert.throws(() => validateManifest({ version: 2, jobs: [{ id: 'a', agent: 'claude', model: 'sonnet', prompt: 'x', context: [], outputs: [] }] }), /Manifest requires version: 1/);
   assert.throws(() => validateManifest({ version: 1, jobs: [] }), /Manifest has zero jobs/);
-  assert.throws(() => validateManifest({ version: 1, jobs: Array.from({ length: 5001 }, (_, i) => ({ id: `T-${String(i).padStart(4, '0')}`, agent: 'claude', model: 'sonnet', prompt: 'x', context: [], outputs: [] })) }), /Manifest has more than 5000 jobs/);
+  assert.throws(() => validateManifest({ version: 1, jobs: Array.from({ length: 5001 }, (_, i) => ({ id: `T-${String(i).padStart(4, '0')}`, agent: 'claude', model: 'sonnet', prompt: 'x', context: [], outputs: [] })) }), /1–5000/);
 });
 
 test('resume skips a zero-job acceptance manifest with a note and does not count start failures', async (t) => {
