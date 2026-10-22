@@ -76,7 +76,7 @@ export const SCOPE_USAGE = [
   '       swarm tickets ID --files a,b [--take-from TICKET] [--deletes x,y] [--dependencies pkg,pkg@^1] [--context c,d] [--tests t] [--acceptance "one || two"] [--add-acceptance TEXT] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
   '       swarm tickets ID... --release [--note TEXT]     (clean release of held tickets: blocked, todo or review go back to ready with attempts, escalation and retry notes cleared)',
   '       swarm tickets --mark-deps [ID...] [--yes]     (one time, older ledgers: mark blocked tickets with no reason as dependency-blocked so they unlock)',
-  '       swarm change "reason" [FILE] [--yes]',
+  '       swarm change "reason" [FILE] [--yes] [--no-split] [--max-repairs N]',
   '       swarm go --scope [--max-jobs N] [go options]',
   ''].join('\n');
 
@@ -1456,6 +1456,10 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
     await writeFileSafe(root, `${SPLIT_DIR}/manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`);
     return out(`split manifest: ${manifest.jobs.length} job(s) written to ${SPLIT_DIR}/manifest.json\nNext: swarm run ${SPLIT_DIR}/manifest.json, then swarm scope split --ingest RUN${led ? ' --merge' : ''}`);
   }
+  return runSplitIngest(root, { scope, hash, text, file }, { flags }, deps);
+}
+
+async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps = {}) {
   const existing = await readLedger(root);
   if (existing && existing.scope?.hash !== hash) return out('the scope file changed since the ledger was made; record it with swarm change "reason" first', 1);
   if (existing && !flags.merge) return out('a ticket ledger already exists; use --merge to add tickets, or delete .swarm/project/tickets.json first', 1);
@@ -3053,7 +3057,36 @@ export async function runTicketsCommand(root, args) {
   return out([`${stats.total} tickets, ${stats.percentDone}% done, ${isApproved(ledger) ? 'approved' : 'not approved'}`, ...list.slice(0, 200).map(row), ...(list.length > 200 ? [`...and ${list.length - 200} more (use --stage or --status)`] : [])].join('\n'));
 }
 
-async function cmdChange(root, { rest, flags }) {
+function changeOrderManualSplitHint(reqIds) {
+  return `\nNew tickets are needed for ${reqIds.join(', ')}: swarm scope split, run it, then swarm scope split --ingest RUN --merge`;
+}
+
+async function autoSplitAfterChangeOrder(root, { scope, hash, text, ledger, needTicketIds, flags }, deps = {}) {
+  const only = new Set(needTicketIds);
+  const layout = await projectLayout(root, scope, await readProfile(root));
+  const manifest = buildSplitManifest(scope, { only, layout, existing: await changeContext(root, ledger.tickets) });
+  await writeFileSafe(root, `${SPLIT_DIR}/manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`);
+  let run;
+  try {
+    run = await (deps.runSplit ?? defaultRunSplit)(root, manifest);
+  } catch {
+    return { lines: [changeOrderManualSplitHint(needTicketIds).trim()], exitCode: 0 };
+  }
+  const runId = typeof run?.id === 'string' ? run.id : null;
+  if (!runId) return { lines: [changeOrderManualSplitHint(needTicketIds).trim()], exitCode: 0 };
+  const ingestFlags = {
+    ingest: runId,
+    merge: true,
+    wire: flags.wire,
+    'max-repairs': flags['max-repairs'],
+    'accept-waves': flags['accept-waves'],
+    'accept-new-path': flags['accept-new-path'],
+  };
+  const ingest = await runSplitIngest(root, { scope, hash, text, file: ledger.scope?.file ?? DEFAULT_SCOPE_FILE }, { flags: ingestFlags }, deps);
+  return { lines: ingest.stdout.split('\n').filter(Boolean), exitCode: 0 };
+}
+
+async function cmdChange(root, { rest, flags }, deps = {}) {
   const reason = rest[0];
   if (!reason) return bad('change needs a reason in quotes');
   const ledger = await readLedger(root);
@@ -3082,15 +3115,30 @@ async function cmdChange(root, { rest, flags }) {
   await writeFileSafe(root, '.swarm/project/scope.snapshot.md', cur.text);
   await appendLog(root, { event: 'change-order', id, reason, cancelled: impact.cancel.length, reopened: impact.reopen.length });
   await refreshPlan(root);
-  const need = impact.needTickets.length ? `\nNew tickets are needed for ${impact.needTickets.join(', ')}: swarm scope split, run it, then swarm scope split --ingest RUN --merge` : '';
-  return out(`${summary}\nrecorded ${id}.${need}`);
+  let tail = '';
+  if (impact.needTickets.length) {
+    if (flags['no-split'] === true) {
+      tail = changeOrderManualSplitHint(impact.needTickets);
+    } else {
+      const auto = await autoSplitAfterChangeOrder(root, {
+        scope: cur.scope,
+        hash: cur.hash,
+        text: cur.text,
+        ledger: next,
+        needTicketIds: impact.needTickets,
+        flags,
+      }, deps);
+      tail = auto.lines.length ? `\n${auto.lines.join('\n')}` : '';
+    }
+  }
+  return out(`${summary}\nrecorded ${id}.${tail}`);
 }
 
 export async function runScopeCommand(root, command, args, deps = {}) {
   try {
     const parsed = parseArgs(args);
     if (command === 'tickets') return await runTicketsCommand(root, args);
-    if (command === 'change') return await cmdChange(root, parsed);
+    if (command === 'change') return await cmdChange(root, parsed, deps);
     const [verb, ...more] = args;
     const sub = parseArgs(more);
     if (verb === 'new') return await cmdNew(root, sub, deps);
