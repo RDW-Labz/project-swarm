@@ -4,6 +4,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { diffSnapshots, createThrottle } from './watch-delta.mjs';
+import { stripMoney } from './watch-cli.mjs';
 import { versionInfo } from './server-version.mjs';
 import { screenshotPath } from './watch-gallery.mjs';
 
@@ -227,8 +228,13 @@ export function createWatchServer(opts) {
   const done = new Promise((resolve) => { resolveDone = resolve; });
   let lastActivity = now();
   let noStreamSince = now();
+  async function publicRunSnapshot() {
+    const snap = await getRunSnapshot();
+    return snap == null ? null : stripMoney(snap);
+  }
+
   const streamManager = createWatchStreamManager({
-    getRunSnapshot,
+    getRunSnapshot: publicRunSnapshot,
     now,
     onDrop: () => { streamEverClosed = true; },
     onClose: () => {
@@ -258,11 +264,11 @@ export function createWatchServer(opts) {
   }
 
   async function payload() {
-    const run = (await getRunSnapshot()) ?? null;
-    const plan = (await getPlanSnapshot()) ?? { present: false };
+    const run = await publicRunSnapshot();
+    const plan = stripMoney((await getPlanSnapshot()) ?? { present: false });
     const gallery = (await getGallery()) ?? { schema: 1, screens: [] };
     const ctx = await contextCommands(run, plan);
-    return { run, plan, gallery, commands: commandList, contextCommands: ctx };
+    return stripMoney({ run, plan, gallery, commands: commandList, contextCommands: ctx });
   }
 
   async function sendShot(res, method, id, kind) {
@@ -277,7 +283,7 @@ export function createWatchServer(opts) {
       return send(res, method, 200, { 'Content-Type': 'text/event-stream; charset=utf-8' }, '');
     }
     if (closed) return sendText(res, method, 503, 'shutting down');
-    const run = (await getRunSnapshot()) ?? null;
+    const run = await publicRunSnapshot();
     if (streamManager.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
     res.writeHead(200, { ...SECURITY, 'Content-Type': 'text/event-stream; charset=utf-8' });
     if (res.socket) {
@@ -352,7 +358,7 @@ export function createWatchServer(opts) {
       const q = Object.fromEntries(u.searchParams);
       if (pathname === '/project') return sendAsset(res, method, 'project.html');
       if (pathname === '/run') return sendAsset(res, method, 'run.html');
-      if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, { ...detail, openRun: !remote }) : sendText(res, method, 404, 'not found'); }
+      if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, stripMoney({ ...detail, openRun: !remote })) : sendText(res, method, 404, 'not found'); }
       // `openRun`: the "Watch" links start a run's own page on this computer, which the remote board never does (it links to the run inspector instead). `server`: the version this
       // process runs, the one now installed, and whether they differ (it was started before the last swarm update).
       if (pathname === '/api/board') {

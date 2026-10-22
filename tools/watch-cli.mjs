@@ -553,9 +553,9 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       if (!project) return null;
       const a = await runDetail(project, runId);
       if (!a) return null;
-      if (!compare) return a;
+      if (!compare) return stripMoney(a);
       const b = await runDetail(project, compare);
-      return b ? { run: a, compare: compareRuns(a, b) } : null;
+      return b ? stripMoney({ run: a, compare: compareRuns(a, b) }) : null;
     },
     async history(q = {}) {
       const page = await readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: Number(q.limit) || 100, offset: Number(q.offset) || 0, fold: true, exclude: showsScratch(q) ? undefined : await scratchIds() });

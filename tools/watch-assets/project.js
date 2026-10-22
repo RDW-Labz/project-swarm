@@ -151,7 +151,7 @@
     if (name && name.slice(-3) === '_ms') { return (value / 3600000).toFixed(1) + 'h'; }
     if (name && name.indexOf('rate') !== -1 && value >= 0 && value <= 1) { return Math.round(value * 100) + '%'; }
     if (name && name.slice(-4) === '_pct') { return value.toFixed(1) + '%'; }
-    if (name && name.indexOf('usd') !== -1) { return '$' + value.toFixed(2); }
+    if (name && name.indexOf('usd') !== -1) { return '—'; }
     return String(value);
   }
   function sparkline(weekly, label) {
