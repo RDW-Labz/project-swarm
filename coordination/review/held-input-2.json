@@ -1,0 +1,234 @@
+[
+ {
+  "id": "T-0012",
+  "title": "Mount swarm autopilot on the CLI for every project root",
+  "acceptance": [
+   "node tools/swarm.mjs autopilot --once runs start-ready against the project ledger"
+  ],
+  "files": [
+   "tools/swarm-cli-autopilot.mjs"
+  ],
+  "tests": [
+   "tests/swarm-autopilot-cli.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0011",
+   "T-0008",
+   "T-0009",
+   "T-0010"
+  ]
+ },
+ {
+  "id": "T-0017",
+  "title": "Mount integrated snapshot wiring on run CLI path",
+  "acceptance": [
+   "node tools/swarm.mjs run MANIFEST applies integrated snapshots for jobs with after dependencies"
+  ],
+  "files": [
+   "tools/swarm-cli-run.mjs"
+  ],
+  "tests": [
+   "tests/swarm-run-snapshot-cli.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0016",
+   "T-0014",
+   "T-0015"
+  ]
+ },
+ {
+  "id": "T-0022",
+  "title": "Extract integrate path from swarm.mjs into swarm-integrate module",
+  "acceptance": [
+   "swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change."
+  ],
+  "files": [
+   "tools/swarm-integrate.mjs"
+  ],
+  "tests": [
+   "tests/swarm-modular-split.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0027",
+  "title": "Rewire tools/swarm.mjs to import modular guard scope run integrate board spend lanes cli",
+  "acceptance": [
+   "swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change.",
+   "The full suite passes, and two queue items touching different modules can build in the same wave."
+  ],
+  "files": [
+   "tools/swarm.mjs"
+  ],
+  "tests": [
+   "tests/swarm-modular-split.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0019",
+   "T-0020",
+   "T-0021",
+   "T-0022",
+   "T-0023",
+   "T-0024",
+   "T-0025",
+   "T-0026"
+  ]
+ },
+ {
+  "id": "T-0040",
+  "title": "Make build tickets own their test files in ticket-manifest prompts",
+  "acceptance": [
+   "A build ticket writes or owns the test file that proves it, so there is no build \u2192 test \u2192 fix chain.",
+   "The critical path of a typical scope is shorter than before on the same input."
+  ],
+  "files": [
+   "tools/ticket-manifest.mjs"
+  ],
+  "tests": [
+   "tests/ticket-manifest-owns.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0052",
+  "title": "Invoke ticket replan from scope sync when a ticket blocks or fails twice",
+  "acceptance": [
+   "swarm scope sync logs a replan event with the ticket id and reason.",
+   "A replanned ticket returns to ready with smaller files or a different lane."
+  ],
+  "files": [
+   "tools/scope-commands.mjs"
+  ],
+  "tests": [
+   "tests/scope-sync-replan.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0051",
+   "T-0050",
+   "T-0202",
+   "T-0203",
+   "T-0205"
+  ]
+ },
+ {
+  "id": "T-0068",
+  "title": "Wire release train commands into swarm CLI entry",
+  "acceptance": [
+   "swarm release-train status reports batched runner merges and the next bump from the live CLI."
+  ],
+  "files": [
+   "tools/swarm.mjs"
+  ],
+  "tests": [
+   "tests/swarm-release-train-cli.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0067",
+   "T-0063",
+   "T-0064",
+   "T-0065",
+   "T-0066"
+  ]
+ },
+ {
+  "id": "T-0092",
+  "title": "Allow tested tickets on any lane after local verify passes",
+  "acceptance": [
+   "Tested tickets can then be built on any lane, including Cursor and Hermes."
+  ],
+  "files": [
+   "tools/verify-local-routing.mjs"
+  ],
+  "tests": [
+   "tests/verify-local.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0091"
+  ]
+ },
+ {
+  "id": "T-0097",
+  "title": "Raise or lower active worker limit based on CPU, RAM, and lane rate limits",
+  "acceptance": [
+   "The worker limit defaults from cores and free RAM, raises while CPU and RAM allow, and backs off on pressure or lane rate limits."
+  ],
+  "files": [
+   "tools/adaptive-worker-tune.mjs"
+  ],
+  "tests": [
+   "tests/adaptive-worker-limit.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0096"
+  ]
+ },
+ {
+  "id": "T-0136",
+  "title": "Mount Split quality panel on the project page",
+  "acceptance": [
+   "The project page at /project shows the Split quality panel with graded metrics."
+  ],
+  "files": [
+   "tools/watch-assets/project.js",
+   "tools/watch-assets/project.html"
+  ],
+  "tests": [
+   "tests/s4-r027-quality-route.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0109",
+   "T-0113",
+   "T-0121",
+   "T-0132"
+  ]
+ },
+ {
+  "id": "T-0152",
+  "title": "Apply project priority when granting machine-wide lane slots",
+  "acceptance": [
+   "A lower-priority project cannot take slots reserved for higher-priority active projects."
+  ],
+  "files": [
+   "tools/lanes.mjs"
+  ],
+  "tests": [
+   "tests/machine-priority.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0151"
+  ]
+ },
+ {
+  "id": "T-0162",
+  "title": "CI workflow template caches or mirrors Docker Hub images",
+  "acceptance": [
+   "CI caches or mirrors images so Docker Hub rate limits don't fail runs."
+  ],
+  "files": [
+   "templates/coordination/ci-docker-hub-mirror.yml",
+   "tools/ci-image-cache.mjs"
+  ],
+  "tests": [
+   "tests/test-env-clean.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0171",
+  "title": "Regression tests for failure regression stubs and lane pass routing",
+  "acceptance": [
+   "Each new failure cause becomes a regression test, and lane pass rates feed routing."
+  ],
+  "files": [
+   "tests/failure-regression.test.mjs"
+  ],
+  "tests": [],
+  "dependsOn": [
+   "T-0168",
+   "T-0169",
+   "T-0165",
+   "T-0166",
+   "T-0167"
+  ]
+ }
+]

@@ -1,0 +1,211 @@
+[
+ {
+  "id": "T-0011",
+  "title": "Each active project orchestrator can start autopilot for its root",
+  "acceptance": [
+   "Each project's orchestrator can start swarm autopilot, and it starts go --scope when ready tickets exist, nothing is running, and the cap has room."
+  ],
+  "files": [
+   "tools/projects-autopilot.mjs"
+  ],
+  "tests": [
+   "tests/autopilot-every-project.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0010"
+  ]
+ },
+ {
+  "id": "T-0016",
+  "title": "Ticket manifests declare after-integrated deps without wip branches",
+  "acceptance": [
+   "No orchestrator needs a local wip branch or a hand test run to pass state to a worker."
+  ],
+  "files": [
+   "tools/ticket-manifest.mjs"
+  ],
+  "tests": [
+   "tests/run-integrated-snapshot.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0015"
+  ]
+ },
+ {
+  "id": "T-0021",
+  "title": "Extract run pipeline from swarm.mjs into swarm-run module",
+  "acceptance": [
+   "swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change."
+  ],
+  "files": [
+   "tools/swarm-run.mjs"
+  ],
+  "tests": [
+   "tests/swarm-modular-split.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0026",
+  "title": "Extract argv dispatch from swarm.mjs into swarm-cli module",
+  "acceptance": [
+   "swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change."
+  ],
+  "files": [
+   "tools/swarm-cli.mjs"
+  ],
+  "tests": [
+   "tests/swarm-modular-split.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0039",
+  "title": "Apply lane byte sizing during split ingest and scope approve warnings",
+  "acceptance": [
+   "scope split --ingest routes an oversize ticket to an in-place lane or refuses with a split hint.",
+   "swarm scope approve warns when a ticket exceeds the active lane byte budget."
+  ],
+  "files": [
+   "tools/scope-commands.mjs"
+  ],
+  "tests": [
+   "tests/scope-split-lane-size.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0038",
+   "T-0037"
+  ]
+ },
+ {
+  "id": "T-0050",
+  "title": "Run wave simulation before scope split --ingest writes the ledger",
+  "acceptance": [
+   "scope split --ingest refuses when simulated critical path exceeds 25% of tickets.",
+   "scope split --ingest asks the owner when average wave fill is under half the slot count."
+  ],
+  "files": [
+   "tools/scope-commands.mjs"
+  ],
+  "tests": [
+   "tests/scope-ingest-waves.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0049",
+   "T-0048"
+  ]
+ },
+ {
+  "id": "T-0062",
+  "title": "Regression tests for delete-only and rename ticket sync",
+  "acceptance": [
+   "A delete-only ticket passes sync once its files are gone.",
+   "Rename and migration tickets have their own type with matching checks."
+  ],
+  "files": [
+   "tests/ticket-delete-rename-regression.test.mjs"
+  ],
+  "tests": [],
+  "dependsOn": [
+   "T-0055",
+   "T-0053",
+   "T-0054"
+  ]
+ },
+ {
+  "id": "T-0091",
+  "title": "Run ticket tests locally with verify agent none and zero model tokens",
+  "acceptance": [
+   "verify mode \"local\" runs the ticket's tests itself with no agent and no tokens."
+  ],
+  "files": [
+   "tools/verify-local-runner.mjs"
+  ],
+  "tests": [
+   "tests/verify-local.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0096",
+  "title": "Default machine worker limit from CPU cores and free RAM",
+  "acceptance": [
+   "The worker limit defaults from cores and free RAM, raises while CPU and RAM allow, and backs off on pressure or lane rate limits."
+  ],
+  "files": [
+   "tools/adaptive-worker-default.mjs"
+  ],
+  "tests": [
+   "tests/adaptive-worker-limit.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0124",
+  "title": "Add Open chat link on each orchestrator card to its Remote Control session",
+  "acceptance": [
+   "Each orchestrator card has an \"Open chat\" link to its Remote Control session."
+  ],
+  "files": [
+   "tools/watch-assets/orchestrator-chat-link.js"
+  ],
+  "tests": [],
+  "dependsOn": [
+   "T-0102"
+  ]
+ },
+ {
+  "id": "T-0150",
+  "title": "Wire deploy watch into swarm merge and ship flow",
+  "acceptance": [
+   "swarm deploy watch starts monitoring after a merge-triggered deploy from the project root."
+  ],
+  "files": [
+   "tools/swarm.mjs"
+  ],
+  "tests": [
+   "tests/swarm-deploy-watch.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0149",
+   "T-0146",
+   "T-0147",
+   "T-0148",
+   "T-0068",
+   "T-0080",
+   "T-0085",
+   "T-0095",
+   "T-0145"
+  ]
+ },
+ {
+  "id": "T-0161",
+  "title": "Local-only test database cleanup refuses non-localhost targets",
+  "acceptance": [
+   "A cleanup command exits with an error when the database URL host is not localhost."
+  ],
+  "files": [
+   "tools/test-db-cleanup.mjs"
+  ],
+  "tests": [
+   "tests/test-env-clean.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0169",
+  "title": "Feed lane pass rates into ticket routing decisions",
+  "acceptance": [
+   "Lane pass rates from field data adjust which lane is chosen for new tickets."
+  ],
+  "files": [
+   "tools/lane-pass-routing.mjs"
+  ],
+  "tests": [
+   "tests/failure-regression.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0168"
+  ]
+ }
+]

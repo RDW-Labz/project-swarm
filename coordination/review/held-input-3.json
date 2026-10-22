@@ -1,0 +1,302 @@
+[
+ {
+  "id": "T-0013",
+  "title": "Tests autopilot go --scope gating, pause during integrate, and orchestrator up",
+  "acceptance": [
+   "Each project's orchestrator can start swarm autopilot, and it starts go --scope when ready tickets exist, nothing is running, and the cap has room.",
+   "Autopilot pauses while the orchestrator integrates or runs e2e, and resumes after.",
+   "swarm orchestrator up (#206) keeps autopilot and the orchestrator running across restarts."
+  ],
+  "files": [
+   "tests/autopilot-every-project.test.mjs"
+  ],
+  "tests": [
+   "tests/autopilot-every-project.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0012",
+   "T-0008",
+   "T-0009",
+   "T-0010",
+   "T-0011"
+  ]
+ },
+ {
+  "id": "T-0018",
+  "title": "Tests integrated-tree snapshot handoff between dependent jobs",
+  "acceptance": [
+   "A job that depends on an earlier integrated run receives a snapshot of the integrated tree automatically.",
+   "No orchestrator needs a local wip branch or a hand test run to pass state to a worker."
+  ],
+  "files": [
+   "tests/run-integrated-snapshot.test.mjs"
+  ],
+  "tests": [
+   "tests/run-integrated-snapshot.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0017",
+   "T-0014",
+   "T-0015",
+   "T-0016"
+  ]
+ },
+ {
+  "id": "T-0023",
+  "title": "Extract board and watch commands into swarm-board module",
+  "acceptance": [
+   "swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change."
+  ],
+  "files": [
+   "tools/swarm-board.mjs"
+  ],
+  "tests": [
+   "tests/swarm-modular-split.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0028",
+  "title": "CLI entry tools/swarm.mjs dispatches through swarm-cli after modular split",
+  "acceptance": [
+   "node tools/swarm.mjs doctor exits 0 and lists lane probes after the modular split"
+  ],
+  "files": [
+   "tools/swarm-cli.mjs"
+  ],
+  "tests": [
+   "tests/swarm-cli-smoke.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0027",
+   "T-0019",
+   "T-0020",
+   "T-0021",
+   "T-0022",
+   "T-0023",
+   "T-0024",
+   "T-0025",
+   "T-0026"
+  ]
+ },
+ {
+  "id": "T-0042",
+  "title": "Wire build-owns-tests rules into scope split ingest",
+  "acceptance": [
+   "scope split --ingest accepts a build ticket that lists tests in its tests field without a separate test ticket.",
+   "The ingest report shows a shorter dependency chain than test-first splits."
+  ],
+  "files": [
+   "tools/scope-commands.mjs"
+  ],
+  "tests": [
+   "tests/scope-ingest-owns-tests.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0041",
+   "T-0039",
+   "T-0040"
+  ]
+ },
+ {
+  "id": "T-0053",
+  "title": "Validate delete-only tickets and migration ticket DDL rules",
+  "acceptance": [
+   "A delete-only ticket passes sync once its files are gone.",
+   "Rename and migration tickets have their own type with matching checks."
+  ],
+  "files": [
+   "tools/ticket-sync-checks.mjs"
+  ],
+  "tests": [
+   "tests/ticket-sync-checks.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0080",
+  "title": "Wire event waits and flake quarantine into integrate check runner",
+  "acceptance": [
+   "swarm integrate applies flake quarantine and surfaces quarantined checks in JSON status."
+  ],
+  "files": [
+   "tools/swarm.mjs"
+  ],
+  "tests": [
+   "tests/swarm-integrate-flake-cli.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0079",
+   "T-0075",
+   "T-0076",
+   "T-0077",
+   "T-0078",
+   "T-0068"
+  ]
+ },
+ {
+  "id": "T-0093",
+  "title": "Parse verify.mode local in project profile and manifest builder",
+  "acceptance": [
+   "verify mode \"local\" runs the ticket's tests itself with no agent and no tokens."
+  ],
+  "files": [
+   "tools/verify-local-profile.mjs"
+  ],
+  "tests": [
+   "tests/verify-local.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0091"
+  ]
+ },
+ {
+  "id": "T-0098",
+  "title": "Persist learned per-lane concurrency caps per machine",
+  "acceptance": [
+   "Learned per-lane caps are kept per machine."
+  ],
+  "files": [
+   "tools/lane-cap-store.mjs"
+  ],
+  "tests": [
+   "tests/adaptive-worker-limit.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0137",
+  "title": "Wire machine badges and version drift into the federated board overview",
+  "acceptance": [
+   "The board at / lists projects from multiple machines with machine and version on each card.",
+   "Version drift is visibly flagged on /."
+  ],
+  "files": [
+   "tools/watch-assets/board.js"
+  ],
+  "tests": [
+   "tests/s4-r028-federation-route.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0110",
+   "T-0113",
+   "T-0114",
+   "T-0122",
+   "T-0132",
+   "T-0133",
+   "T-0134",
+   "T-0135"
+  ]
+ },
+ {
+  "id": "T-0154",
+  "title": "Expose fair slot sharing status on swarm status and board data",
+  "acceptance": [
+   "swarm status reports each active project's priority share of machine slots."
+  ],
+  "files": [
+   "tools/swarm.mjs"
+  ],
+  "tests": [
+   "tests/swarm-fair-slots.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0153",
+   "T-0151",
+   "T-0152",
+   "T-0068",
+   "T-0080",
+   "T-0085",
+   "T-0095",
+   "T-0145",
+   "T-0150"
+  ]
+ },
+ {
+  "id": "T-0163",
+  "title": "Regression tests for e2e cleanup, localhost guard, and CI image cache",
+  "acceptance": [
+   "E2e runs clean up their own local test data, and a local-only cleanup tool refuses non-localhost databases.",
+   "CI caches or mirrors images so Docker Hub rate limits don't fail runs."
+  ],
+  "files": [
+   "tests/test-env-clean.test.mjs"
+  ],
+  "tests": [],
+  "dependsOn": [
+   "T-0160",
+   "T-0161",
+   "T-0162"
+  ]
+ },
+ {
+  "id": "T-0225",
+  "title": "Wire manager-commands into swarm.mjs main dispatcher",
+  "acceptance": [
+   "swarm managers without a subcommand prints usage and lists manager subcommands."
+  ],
+  "files": [
+   "tools/swarm.mjs"
+  ],
+  "tests": [
+   "tests/managers/swarm-dispatch.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0190",
+   "T-0198",
+   "T-0208",
+   "T-0216",
+   "T-0224",
+   "T-0174",
+   "T-0175",
+   "T-0176",
+   "T-0177",
+   "T-0178",
+   "T-0180",
+   "T-0183",
+   "T-0184",
+   "T-0189",
+   "T-0199",
+   "T-0200",
+   "T-0201",
+   "T-0202",
+   "T-0203",
+   "T-0204",
+   "T-0205",
+   "T-0206",
+   "T-0179",
+   "T-0186",
+   "T-0187",
+   "T-0191",
+   "T-0192",
+   "T-0193",
+   "T-0194",
+   "T-0195",
+   "T-0196",
+   "T-0181",
+   "T-0209",
+   "T-0210",
+   "T-0211",
+   "T-0212",
+   "T-0213",
+   "T-0214",
+   "T-0182",
+   "T-0217",
+   "T-0218",
+   "T-0219",
+   "T-0220",
+   "T-0221",
+   "T-0222",
+   "T-0068",
+   "T-0080",
+   "T-0085",
+   "T-0095",
+   "T-0145",
+   "T-0150",
+   "T-0154",
+   "T-0159",
+   "T-0164",
+   "T-0172"
+  ]
+ }
+]

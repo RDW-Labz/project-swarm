@@ -1,0 +1,237 @@
+[
+ {
+  "id": "T-0009",
+  "title": "Autopilot pauses during integrate or e2e and resumes afterward",
+  "acceptance": [
+   "Autopilot pauses while the orchestrator integrates or runs e2e, and resumes after."
+  ],
+  "files": [
+   "tools/autopilot-pause.mjs"
+  ],
+  "tests": [
+   "tests/autopilot-every-project.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0008"
+  ]
+ },
+ {
+  "id": "T-0015",
+  "title": "Apply integrated snapshot into dependent worker workspaces before run",
+  "acceptance": [
+   "A job that depends on an earlier integrated run receives a snapshot of the integrated tree automatically.",
+   "No orchestrator needs a local wip branch or a hand test run to pass state to a worker."
+  ],
+  "files": [
+   "tools/worker-integrated-snapshot.mjs"
+  ],
+  "tests": [
+   "tests/run-integrated-snapshot.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0014"
+  ]
+ },
+ {
+  "id": "T-0020",
+  "title": "Extract scope commands from swarm.mjs into swarm-scope module",
+  "acceptance": [
+   "swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change."
+  ],
+  "files": [
+   "tools/swarm-scope.mjs"
+  ],
+  "tests": [
+   "tests/swarm-modular-split.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0025",
+  "title": "Extract lane routing and doctor paths into swarm-lanes module",
+  "acceptance": [
+   "swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change."
+  ],
+  "files": [
+   "tools/swarm-lanes.mjs"
+  ],
+  "tests": [
+   "tests/swarm-modular-split.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0037",
+  "title": "Wire ticket path validation into scope split --ingest",
+  "acceptance": [
+   "scope split --ingest refuses a ticket whose files or context name a path missing from the repo.",
+   "The refusal message names the closest real path for each missing path."
+  ],
+  "files": [
+   "tools/scope-commands.mjs"
+  ],
+  "tests": [
+   "tests/scope-ingest-paths.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0036"
+  ]
+ },
+ {
+  "id": "T-0046",
+  "title": "Use precise sensitive tagging during split ingest instead of scope phrase match",
+  "acceptance": [
+   "scope split --ingest leaves sensitive false on a store-wrapper ticket that does not touch auth or customer data.",
+   "A ticket that writes a public API route is marked sensitive."
+  ],
+  "files": [
+   "tools/scope-commands.mjs"
+  ],
+  "tests": [
+   "tests/scope-ingest-sensitive.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0045",
+   "T-0044"
+  ]
+ },
+ {
+  "id": "T-0055",
+  "title": "Wire delete and rename ticket sync checks into scope sync integrated path",
+  "acceptance": [
+   "swarm scope sync --integrated marks a delete-only ticket done when declared files are absent.",
+   "A rename ticket is refused until the old path is gone and the new path exists."
+  ],
+  "files": [
+   "tools/scope-commands.mjs"
+  ],
+  "tests": [
+   "tests/scope-sync-delete.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0054",
+   "T-0052",
+   "T-0053"
+  ]
+ },
+ {
+  "id": "T-0090",
+  "title": "Wire risk-based review batching into scope sync review manifests",
+  "acceptance": [
+   "swarm scope sync --integrated requests batched Haiku reviews for small low-risk tickets."
+  ],
+  "files": [
+   "tools/scope-commands.mjs"
+  ],
+  "tests": [
+   "tests/scope-sync-review-batch-cli.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0089",
+   "T-0086",
+   "T-0087",
+   "T-0088",
+   "T-0037",
+   "T-0039",
+   "T-0042",
+   "T-0044",
+   "T-0046",
+   "T-0048",
+   "T-0050",
+   "T-0052",
+   "T-0055"
+  ]
+ },
+ {
+  "id": "T-0095",
+  "title": "Wire verify mode local into swarm run manifest dispatch",
+  "acceptance": [
+   "swarm run uses verify.mode local to execute tests with agent none before lane dispatch."
+  ],
+  "files": [
+   "tools/swarm.mjs"
+  ],
+  "tests": [
+   "tests/swarm-verify-local-cli.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0094",
+   "T-0091",
+   "T-0092",
+   "T-0093",
+   "T-0068",
+   "T-0080",
+   "T-0085"
+  ]
+ },
+ {
+  "id": "T-0100",
+  "title": "Wire adaptive worker tuning into lane scheduler and machineConcurrency",
+  "acceptance": [
+   "swarm run respects adaptive machineConcurrency from lanes.mjs under synthetic pressure."
+  ],
+  "files": [
+   "tools/lanes.mjs"
+  ],
+  "tests": [
+   "tests/swarm-adaptive-limit-cli.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0099",
+   "T-0096",
+   "T-0097",
+   "T-0098"
+  ]
+ },
+ {
+  "id": "T-0145",
+  "title": "Wire orchestrator handoff into swarm CLI and resume path",
+  "acceptance": [
+   "swarm orchestrator handoff runs from the project root and names the saved handoff checkpoint."
+  ],
+  "files": [
+   "tools/swarm.mjs"
+  ],
+  "tests": [
+   "tests/swarm-orchestrator-handoff.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0144",
+   "T-0141",
+   "T-0142",
+   "T-0143",
+   "T-0068",
+   "T-0080",
+   "T-0085",
+   "T-0095"
+  ]
+ },
+ {
+  "id": "T-0160",
+  "title": "E2e harness cleans up local test data after each run",
+  "acceptance": [
+   "E2e runs clean up their own local test data, and a local-only cleanup tool refuses non-localhost databases."
+  ],
+  "files": [
+   "tools/e2e-data-cleanup.mjs"
+  ],
+  "tests": [
+   "tests/test-env-clean.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0168",
+  "title": "Turn each new failure cause into a regression test stub",
+  "acceptance": [
+   "Each new failure cause becomes a regression test, and lane pass rates feed routing."
+  ],
+  "files": [
+   "tools/failure-regression.mjs"
+  ],
+  "tests": [
+   "tests/failure-regression.test.mjs"
+  ],
+  "dependsOn": []
+ }
+]

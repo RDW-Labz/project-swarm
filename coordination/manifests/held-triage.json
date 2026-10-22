@@ -1,0 +1,81 @@
+{
+ "version": 1,
+ "concurrency": 5,
+ "jobs": [
+  {
+   "id": "held0",
+   "agent": "cursor",
+   "prompt": "Read-only triage of held tickets. Input: coordination/review/held-input-0.json (tickets: T-0009, T-0015, T-0020, T-0025, T-0037, T-0046, T-0055, T-0090, T-0095, T-0100, T-0145, T-0160, T-0168). For EACH ticket decide from the CURRENT repo code and git log (git log --oneline --all, git log -S, grep) one verdict: 'delivered' (the acceptance lines are already met on main; cite a commit hash or PR number #N from git log and one file:line), 'release' (not built, nothing missing blocks it; a worker could do it now), or 'cancel' (obsolete: the code was restructured or superseded; say what replaced it). Be strict: only 'delivered' with real evidence. Write ONE file coordination/review/held-verdict-0.json: [{\"id\":\"T-xxxx\",\"verdict\":\"delivered|release|cancel\",\"evidence\":\"<=160 chars\"}]. Do not edit any other file.",
+   "context": [
+    "coordination/review/held-input-0.json",
+    "tools/swarm.mjs"
+   ],
+   "outputs": [
+    "coordination/review/held-verdict-0.json"
+   ],
+   "timeoutMs": 1800000,
+   "model": "composer-2.5",
+   "tier": "mid"
+  },
+  {
+   "id": "held1",
+   "agent": "cursor",
+   "prompt": "Read-only triage of held tickets. Input: coordination/review/held-input-1.json (tickets: T-0011, T-0016, T-0021, T-0026, T-0039, T-0050, T-0062, T-0091, T-0096, T-0124, T-0150, T-0161, T-0169). For EACH ticket decide from the CURRENT repo code and git log (git log --oneline --all, git log -S, grep) one verdict: 'delivered' (the acceptance lines are already met on main; cite a commit hash or PR number #N from git log and one file:line), 'release' (not built, nothing missing blocks it; a worker could do it now), or 'cancel' (obsolete: the code was restructured or superseded; say what replaced it). Be strict: only 'delivered' with real evidence. Write ONE file coordination/review/held-verdict-1.json: [{\"id\":\"T-xxxx\",\"verdict\":\"delivered|release|cancel\",\"evidence\":\"<=160 chars\"}]. Do not edit any other file.",
+   "context": [
+    "coordination/review/held-input-1.json",
+    "tools/swarm.mjs"
+   ],
+   "outputs": [
+    "coordination/review/held-verdict-1.json"
+   ],
+   "timeoutMs": 1800000,
+   "model": "composer-2.5",
+   "tier": "mid"
+  },
+  {
+   "id": "held2",
+   "agent": "cursor",
+   "prompt": "Read-only triage of held tickets. Input: coordination/review/held-input-2.json (tickets: T-0012, T-0017, T-0022, T-0027, T-0040, T-0052, T-0068, T-0092, T-0097, T-0136, T-0152, T-0162, T-0171). For EACH ticket decide from the CURRENT repo code and git log (git log --oneline --all, git log -S, grep) one verdict: 'delivered' (the acceptance lines are already met on main; cite a commit hash or PR number #N from git log and one file:line), 'release' (not built, nothing missing blocks it; a worker could do it now), or 'cancel' (obsolete: the code was restructured or superseded; say what replaced it). Be strict: only 'delivered' with real evidence. Write ONE file coordination/review/held-verdict-2.json: [{\"id\":\"T-xxxx\",\"verdict\":\"delivered|release|cancel\",\"evidence\":\"<=160 chars\"}]. Do not edit any other file.",
+   "context": [
+    "coordination/review/held-input-2.json",
+    "tools/swarm.mjs"
+   ],
+   "outputs": [
+    "coordination/review/held-verdict-2.json"
+   ],
+   "timeoutMs": 1800000,
+   "model": "composer-2.5",
+   "tier": "mid"
+  },
+  {
+   "id": "held3",
+   "agent": "cursor",
+   "prompt": "Read-only triage of held tickets. Input: coordination/review/held-input-3.json (tickets: T-0013, T-0018, T-0023, T-0028, T-0042, T-0053, T-0080, T-0093, T-0098, T-0137, T-0154, T-0163, T-0225). For EACH ticket decide from the CURRENT repo code and git log (git log --oneline --all, git log -S, grep) one verdict: 'delivered' (the acceptance lines are already met on main; cite a commit hash or PR number #N from git log and one file:line), 'release' (not built, nothing missing blocks it; a worker could do it now), or 'cancel' (obsolete: the code was restructured or superseded; say what replaced it). Be strict: only 'delivered' with real evidence. Write ONE file coordination/review/held-verdict-3.json: [{\"id\":\"T-xxxx\",\"verdict\":\"delivered|release|cancel\",\"evidence\":\"<=160 chars\"}]. Do not edit any other file.",
+   "context": [
+    "coordination/review/held-input-3.json",
+    "tools/swarm.mjs"
+   ],
+   "outputs": [
+    "coordination/review/held-verdict-3.json"
+   ],
+   "timeoutMs": 1800000,
+   "model": "composer-2.5",
+   "tier": "mid"
+  },
+  {
+   "id": "held4",
+   "agent": "cursor",
+   "prompt": "Read-only triage of held tickets. Input: coordination/review/held-input-4.json (tickets: T-0014, T-0019, T-0024, T-0029, T-0044, T-0054, T-0085, T-0094, T-0099, T-0141, T-0159, T-0164). For EACH ticket decide from the CURRENT repo code and git log (git log --oneline --all, git log -S, grep) one verdict: 'delivered' (the acceptance lines are already met on main; cite a commit hash or PR number #N from git log and one file:line), 'release' (not built, nothing missing blocks it; a worker could do it now), or 'cancel' (obsolete: the code was restructured or superseded; say what replaced it). Be strict: only 'delivered' with real evidence. Write ONE file coordination/review/held-verdict-4.json: [{\"id\":\"T-xxxx\",\"verdict\":\"delivered|release|cancel\",\"evidence\":\"<=160 chars\"}]. Do not edit any other file.",
+   "context": [
+    "coordination/review/held-input-4.json",
+    "tools/swarm.mjs"
+   ],
+   "outputs": [
+    "coordination/review/held-verdict-4.json"
+   ],
+   "timeoutMs": 1800000,
+   "model": "composer-2.5",
+   "tier": "mid"
+  }
+ ]
+}

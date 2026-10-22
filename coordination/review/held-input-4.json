@@ -1,0 +1,230 @@
+[
+ {
+  "id": "T-0014",
+  "title": "Capture integrated tree bytes after integrate for dependent jobs",
+  "acceptance": [
+   "A job that depends on an earlier integrated run receives a snapshot of the integrated tree automatically."
+  ],
+  "files": [
+   "tools/run-integrated-snapshot.mjs"
+  ],
+  "tests": [
+   "tests/run-integrated-snapshot.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0019",
+  "title": "Extract guard helpers from swarm.mjs into swarm-guard module",
+  "acceptance": [
+   "swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change."
+  ],
+  "files": [
+   "tools/swarm-guard.mjs"
+  ],
+  "tests": [
+   "tests/swarm-modular-split.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0024",
+  "title": "Extract spend and budgets commands into swarm-spend module",
+  "acceptance": [
+   "swarm.mjs is split into guard, scope, run, integrate, board, spend, lanes and cli modules with no behavior change."
+  ],
+  "files": [
+   "tools/swarm-spend.mjs"
+  ],
+  "tests": [
+   "tests/swarm-modular-split.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0029",
+  "title": "Tests modular swarm.mjs split and parallel module wave safety",
+  "acceptance": [
+   "The full suite passes, and two queue items touching different modules can build in the same wave."
+  ],
+  "files": [
+   "tests/swarm-modular-split.test.mjs"
+  ],
+  "tests": [
+   "tests/swarm-modular-split.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0028",
+   "T-0019",
+   "T-0020",
+   "T-0021",
+   "T-0022",
+   "T-0023",
+   "T-0024",
+   "T-0025",
+   "T-0026",
+   "T-0027"
+  ]
+ },
+ {
+  "id": "T-0044",
+  "title": "Reject or trim unprovable acceptance lines at split ingest",
+  "acceptance": [
+   "scope split --ingest refuses a build ticket whose acceptance names files it does not write or own.",
+   "Copied requirement acceptance lines skip route-level checks until the integration ticket exists."
+  ],
+  "files": [
+   "tools/scope-commands.mjs"
+  ],
+  "tests": [
+   "tests/scope-ingest-acceptance.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0043",
+   "T-0042"
+  ]
+ },
+ {
+  "id": "T-0054",
+  "title": "Add rename ticket type validation alongside migration checks",
+  "acceptance": [
+   "validateTicket accepts a rename ticket with exactly one new file and one deletes entry.",
+   "A migration ticket still requires DDL-only files under supabase/migrations."
+  ],
+  "files": [
+   "tools/tickets.mjs"
+  ],
+  "tests": [
+   "tests/ticket-rename-type.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0053"
+  ]
+ },
+ {
+  "id": "T-0085",
+  "title": "Wire honest base-check policy into swarm run base gate",
+  "acceptance": [
+   "swarm run with checkBase refuses a stale red cache and prints the failing check tail."
+  ],
+  "files": [
+   "tools/swarm.mjs"
+  ],
+  "tests": [
+   "tests/swarm-run-base-check-cli.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0084",
+   "T-0081",
+   "T-0082",
+   "T-0083",
+   "T-0068",
+   "T-0080"
+  ]
+ },
+ {
+  "id": "T-0094",
+  "title": "Tests for local verify execution and cross-lane routing after tests pass",
+  "acceptance": [
+   "verify mode \"local\" runs the ticket's tests itself with no agent and no tokens.",
+   "Tested tickets can then be built on any lane, including Cursor and Hermes."
+  ],
+  "files": [
+   "tests/verify-local.test.mjs"
+  ],
+  "tests": [
+   "tests/verify-local.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0092",
+   "T-0093",
+   "T-0091"
+  ]
+ },
+ {
+  "id": "T-0099",
+  "title": "Tests for adaptive worker limits and per-lane cap persistence",
+  "acceptance": [
+   "The worker limit defaults from cores and free RAM, raises while CPU and RAM allow, and backs off on pressure or lane rate limits.",
+   "Learned per-lane caps are kept per machine."
+  ],
+  "files": [
+   "tests/adaptive-worker-limit.test.mjs"
+  ],
+  "tests": [
+   "tests/adaptive-worker-limit.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0097",
+   "T-0098",
+   "T-0096"
+  ]
+ },
+ {
+  "id": "T-0141",
+  "title": "Measure orchestrator transcript size against a configurable handoff threshold",
+  "acceptance": [
+   "When an orchestrator's context passes a set size, it saves state to memory and a fresh session continues with no lost work."
+  ],
+  "files": [
+   "tools/orchestrator-context.mjs"
+  ],
+  "tests": [
+   "tests/orchestrator-handoff.test.mjs"
+  ],
+  "dependsOn": []
+ },
+ {
+  "id": "T-0159",
+  "title": "Register licence and attribution checks on swarm validate and integrate",
+  "acceptance": [
+   "swarm validate runs licence-product and attribution checks when data sources are declared."
+  ],
+  "files": [
+   "tools/swarm.mjs"
+  ],
+  "tests": [
+   "tests/swarm-licence-checks.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0158",
+   "T-0155",
+   "T-0156",
+   "T-0157",
+   "T-0068",
+   "T-0080",
+   "T-0085",
+   "T-0095",
+   "T-0145",
+   "T-0150",
+   "T-0154"
+  ]
+ },
+ {
+  "id": "T-0164",
+  "title": "Wire test cleanup and CI mirror helpers into swarm test commands",
+  "acceptance": [
+   "swarm test cleanup runs the local e2e and database cleanup helpers from the project root."
+  ],
+  "files": [
+   "tools/swarm.mjs"
+  ],
+  "tests": [
+   "tests/swarm-test-cleanup.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0163",
+   "T-0160",
+   "T-0161",
+   "T-0162",
+   "T-0068",
+   "T-0080",
+   "T-0085",
+   "T-0095",
+   "T-0145",
+   "T-0150",
+   "T-0154",
+   "T-0159"
+  ]
+ }
+]
