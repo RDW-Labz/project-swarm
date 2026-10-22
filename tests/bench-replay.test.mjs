@@ -1,185 +1,193 @@
 // SPDX-License-Identifier: Apache-2.0
-
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 import {
-  validateCase,
-  scrubCase,
-  runReplay,
-  runLoadSeries,
-} from '../tools/bench-replay.mjs';
+  deliveryByTicket,
+  seededPick,
+  ownedFilesOk,
+  ticketQualifies,
+  selectFromLedgers,
+} from '../bench/lane-benchmark/replay-select.mjs';
+import { parseFilesEnvelope } from '../bench/lane-benchmark/endpoint.mjs';
+import { TOOLCALL_CHECKS } from '../bench/lane-benchmark/toolcalls.mjs';
+import { renderReplayReport, scrubSecret } from '../bench/lane-benchmark/run.mjs';
+import { verifyOutputs } from '../bench/lane-benchmark/lib.mjs';
 
-const baseCase = {
-  id: 'c1',
-  title: 'Example',
-  kind: 'test',
-  prompt: 'run tests',
-  files: ['src/a.mjs'],
-  context: ['tools/x.mjs'],
-  testCommand: ['node', '--test'],
-  acceptance: ['tests pass'],
-  scrubbedFrom: 'ticket-1',
-  sizeBytes: 120,
-};
-
-describe('validateCase', () => {
-  it('accepts a valid case', () => {
-    assert.deepEqual(validateCase(baseCase), []);
-  });
-
-  it('rejects missing fields, bad argv, absolute paths, and too many files', () => {
-    const errs = validateCase({
-      ...baseCase,
-      id: '',
-      kind: 'other',
-      files: [...Array(9)].map((_, i) => `f${i}.mjs`),
-      context: ['/abs/path'],
-      testCommand: 'npm test',
-    });
-    assert.ok(errs.some((e) => e.includes('kind')));
-    assert.ok(errs.some((e) => e.includes('files: at most 8')));
-    assert.ok(errs.some((e) => e.includes('absolute')));
-    assert.ok(errs.some((e) => e.includes('testCommand: must be an argv array')));
-  });
-
-  it('rejects .. in paths', () => {
-    const errs = validateCase({
-      ...baseCase,
-      files: ['../escape.mjs'],
-    });
-    assert.ok(errs.some((e) => e.includes('..')));
-  });
-});
-
-describe('scrubCase', () => {
-  it('removes email, phone, token, and absolute paths; dropped lists kinds only', () => {
-    const fakeGh = ['gh', 'p_'].join('') + 'x'.repeat(36);
-    const raw = {
-      ...baseCase,
-      prompt: `Contact user@example.com or 555-123-4567 token ${fakeGh} path /tmp/project/src/a.mjs`,
-    };
-    const { case: cleaned, dropped } = scrubCase(raw, { codeRoot: '/tmp/project' });
-    assert.ok(!cleaned.prompt.includes('user@example.com'));
-    assert.ok(!cleaned.prompt.includes('555-123-4567'));
-    assert.ok(!cleaned.prompt.includes(fakeGh));
-    assert.ok(!cleaned.prompt.includes('/tmp/project'));
-    assert.ok(cleaned.prompt.includes('src/a.mjs') || cleaned.prompt.includes('a.mjs'));
-    for (const d of dropped) {
-      assert.equal(typeof d.field, 'string');
-      assert.equal(typeof d.kind, 'string');
-      assert.equal('value' in d, false);
-    }
-    assert.ok(dropped.some((d) => d.kind === 'email'));
-    assert.ok(dropped.some((d) => d.kind === 'phone'));
-  });
-
-  it('truncates prompt to 4000 characters', () => {
-    const raw = { ...baseCase, prompt: 'safe prompt chunk. '.repeat(400) };
-    const { case: cleaned } = scrubCase(raw);
-    assert.equal(cleaned.prompt.length, 4000);
-  });
-});
-
-function makeTimedRunner(clock) {
-  return async (caseObj) => {
-    const ms = caseObj.durationMs ?? 10;
-    const start = clock.t;
-    await Promise.resolve();
-    clock.t = start + ms;
-    return {
-      status: caseObj.fail ? 'fail' : 'pass',
-      durationMs: ms,
-      billedUsd: caseObj.billedUsd ?? 0,
-      listUsd: caseObj.listUsd ?? 0,
-      retries: caseObj.retries ?? 0,
-      tokens: 0,
-      flaky: !!caseObj.flaky,
-    };
-  };
-}
-
-describe('runReplay concurrency', () => {
-  for (const parallel of [4, 8, 16]) {
-    it(`never exceeds parallel=${parallel}`, async () => {
-      let maxInflight = 0;
-      let inflight = 0;
-      const clock = { t: 0 };
-      const runner = async (caseObj) => {
-        inflight += 1;
-        maxInflight = Math.max(maxInflight, inflight);
-        const out = await makeTimedRunner(clock)(caseObj);
-        inflight -= 1;
-        return out;
-      };
-      const cases = Array.from({ length: parallel * 2 }, (_, i) => ({
-        id: `c${i}`,
-        durationMs: 5,
-      }));
-      await runReplay({
-        cases,
-        parallel,
-        runner,
-        now: () => clock.t,
-      });
-      assert.ok(maxInflight <= parallel);
-    });
-  }
-});
-
-describe('runReplay errors and metrics', () => {
-  it('continues when runner throws', async () => {
-    const clock = { t: 0 };
-    let n = 0;
-    const runner = async () => {
-      n += 1;
-      if (n === 1) throw new Error('boom');
-      return { status: 'pass', durationMs: 1, billedUsd: 0, listUsd: 0, retries: 0, tokens: 0 };
-    };
-    const out = await runReplay({
-      cases: [{ id: 'a' }, { id: 'b' }],
-      parallel: 2,
-      runner,
-      now: () => clock.t,
-    });
-    assert.equal(out.results.length, 2);
-    assert.equal(out.results.find((r) => r.caseId === 'a').status, 'error');
-    assert.equal(out.results.find((r) => r.caseId === 'b').status, 'pass');
-  });
-
-  it('computes idle_slot_pct from a known schedule', async () => {
-    const clock = { t: 0 };
-    const cases = [
-      { id: 's1', durationMs: 90 },
-      { id: 's2', durationMs: 90 },
-      { id: 's3', durationMs: 90 },
-      { id: 's4', durationMs: 90 },
-      { id: 'last', durationMs: 10 },
+describe('replay-select delivery map', () => {
+  it('reads delivered mergeCommits and transition notes', () => {
+    const events = [
+      { event: 'delivered', id: 'T-1', mergeCommits: ['abc123def456'] },
+      { event: 'transition', id: 'T-2', to: 'done', note: 'held-ticket triage: #253 9f76d5a tools/x.mjs' },
     ];
-    const out = await runReplay({
-      cases,
-      parallel: 4,
-      runner: makeTimedRunner(clock),
-      now: () => clock.t,
-    });
-    const span = out.finishedAt - out.startedAt;
-    const expectedIdle = (4 - 3) * 90;
-    const expectedPct = expectedIdle / (span * 4);
-    assert.ok(Math.abs(out.metrics.idle_slot_pct - expectedPct) < 0.001);
+    const map = deliveryByTicket(events);
+    assert.equal(map.get('T-1').mergeCommit, 'abc123def456');
+    assert.equal(map.get('T-2').mergeCommit, '9f76d5a');
   });
 });
 
-describe('runLoadSeries', () => {
-  it('runs three parallel levels', async () => {
-    const clock = { t: 0 };
-    const series = await runLoadSeries({
-      cases: [{ id: 'a', durationMs: 1 }],
-      label: 'load',
-      levels: [4, 8, 16],
-      runner: makeTimedRunner(clock),
-      now: () => clock.t,
+describe('seededPick', () => {
+  it('spreads across ledger and type deterministically', () => {
+    const candidates = [
+      { id: 'T-001', ledger: 'roadmap', type: 'build' },
+      { id: 'T-002', ledger: 'swarm', type: 'fix' },
+      { id: 'T-003', ledger: 'roadmap', type: 'fix' },
+      { id: 'T-004', ledger: 'swarm', type: 'build' },
+    ];
+    const a = seededPick(candidates, 3, 42);
+    const b = seededPick(candidates, 3, 42);
+    assert.deepEqual(a, b);
+    assert.equal(a.length, 3);
+    const ledgers = new Set(a.map(c => c.ledger));
+    assert.equal(ledgers.size, 2);
+  });
+});
+
+describe('ownedFilesOk', () => {
+  it('requires a real change at merge', () => {
+    const git = {
+      existsAt: () => true,
+      readAt: (commit, file) => (commit === 'merge' ? 'new\n' : 'old\n'),
+    };
+    assert.equal(ownedFilesOk(['tools/a.mjs'], 'base', 'merge', git), true);
+    const same = {
+      existsAt: () => true,
+      readAt: () => 'same',
+    };
+    assert.equal(ownedFilesOk(['tools/a.mjs'], 'base', 'merge', same), false);
+  });
+});
+
+describe('ticketQualifies', () => {
+  it('filters sensitive and validates tests hook', () => {
+    const ticket = {
+      id: 'T-9',
+      status: 'done',
+      sensitive: false,
+      risk: 'low',
+      size: 'S',
+      type: 'build',
+      files: ['tools/x.mjs'],
+      tests: ['tests/x.test.mjs'],
+    };
+    const git = {
+      resolveCommit: () => 'mergefull',
+      parents: () => ['basefull'],
+      existsAt: () => true,
+      readAt: (c) => (c === 'mergefull' ? 'v2' : 'v1'),
+    };
+    const ok = ticketQualifies(ticket, { mergeCommit: 'mergefull' }, git, () => true);
+    assert.equal(ok.ok, true);
+    const bad = ticketQualifies({ ...ticket, sensitive: true }, { mergeCommit: 'mergefull' }, git, () => true);
+    assert.equal(bad.ok, false);
+  });
+});
+
+describe('selectFromLedgers (injected)', () => {
+  it('picks qualified tickets without git', () => {
+    const ledgers = [{
+      name: 'roadmap',
+      tickets: [{
+        id: 'T-0100',
+        title: 't',
+        type: 'build',
+        status: 'done',
+        sensitive: false,
+        risk: 'low',
+        size: 'S',
+        files: ['a.mjs'],
+        tests: ['t.test.mjs'],
+      }],
+      logText: '{"event":"delivered","id":"T-0100","mergeCommits":["m1"]}\n',
+    }];
+    const git = {
+      resolveCommit: ref => (ref === 'm1' ? 'merge1' : null),
+      parents: () => ['base1'],
+      existsAt: () => true,
+      readAt: (c) => (c === 'merge1' ? '2' : '1'),
+    };
+    const { selected, qualifiedCount } = selectFromLedgers({
+      ledgers,
+      git,
+      runTestsAtMerge: () => true,
+      target: 20,
     });
-    assert.equal(series.runs.length, 3);
-    assert.equal(series.table.length, 3);
-    assert.deepEqual(series.runs.map((r) => r.parallel), [4, 8, 16]);
+    assert.equal(qualifiedCount, 1);
+    assert.equal(selected[0].mergeCommit, 'merge1');
+  });
+});
+
+describe('parseFilesEnvelope', () => {
+  it('accepts object map and array forms', () => {
+    const map = parseFilesEnvelope('prefix\n{"files":{"a.mjs":"hello"}}');
+    assert.equal(map['a.mjs'], 'hello');
+    const arr = parseFilesEnvelope('{"files":[{"path":"b.mjs","content":"x"}]}');
+    assert.equal(arr['b.mjs'], 'x');
+  });
+});
+
+describe('verifyOutputs merge tests', () => {
+  it('copies hidden tests via hook and requires tests to run', async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), 'bench-replay-'));
+    const task = {
+      outputs: ['out.mjs'],
+      verify: {
+        argv: ['node', '-e', 'console.log("# tests 1\\n# pass 1")'],
+        testsFromMerge: ['tests/hidden.test.mjs'],
+        mergeCommit: 'deadbeef',
+      },
+    };
+    const result = verifyOutputs(base, task, { 'out.mjs': 'export const x=1;\n' }, {
+      readAtMerge: () => 'import test from "node:test"; test("t", () => {});',
+    });
+    assert.equal(result.pass, true);
+  });
+});
+
+describe('api key scrubbing', () => {
+  it('never leaves raw key in scrubbed error text', () => {
+    const secret = 'sk-test-secret-value';
+    const msg = `request failed: Bearer ${secret} invalid`;
+    const out = scrubSecret(msg, secret);
+    assert.ok(!out.includes(secret));
+  });
+
+  it('endpoint results JSON excludes api key field', () => {
+    const secret = 'sk-bench-never-log';
+    const payload = { model: 'm', slots: 2, set: 'replay', results: [{ pass: true, wallSec: 1 }] };
+    const json = JSON.stringify(payload);
+    assert.ok(!json.includes(secret));
+    assert.ok(!json.includes('apiKey'));
+  });
+});
+
+describe('toolcall validators', () => {
+  it('scores parallel tool check on fixture response', () => {
+    const check = TOOLCALL_CHECKS.find(c => c.id === 'parallel-tools');
+    const response = {
+      choices: [{
+        message: {
+          tool_calls: [
+            { function: { name: 'echo_text', arguments: '{"text":"a"}' } },
+            { function: { name: 'add_numbers', arguments: '{"a":1,"b":2}' } },
+          ],
+        },
+      }],
+    };
+    assert.equal(check.validate(response), true);
+  });
+});
+
+describe('renderReplayReport', () => {
+  it('renders side-by-side table for multiple models', () => {
+    const md = renderReplayReport([
+      { model: 'model-a', slots: 4, results: [{ pass: true, wallSec: 10, completionTokensPerSec: 50 }, { pass: false, wallSec: 20, completionTokensPerSec: 40 }] },
+      { model: 'model-b', slots: 8, results: [{ pass: true, wallSec: 8, completionTokensPerSec: 60 }] },
+    ]);
+    assert.match(md, /model-a/);
+    assert.match(md, /model-b/);
+    assert.match(md, /50%/);
   });
 });

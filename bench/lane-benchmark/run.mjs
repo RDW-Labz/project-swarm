@@ -4,24 +4,52 @@
 // node run.mjs lane --lane NAME --repo DIR --runner PATH --out results-NAME.json [--max-usd 0.5]
 // node run.mjs reverify --results a.json,b.json --repo DIR
 // node run.mjs report --results a.json,b.json [--review] --out lane-benchmark.md
+// node run.mjs endpoint --set replay --base-url URL --model NAME --key-env VAR --slots N --out results.json
+// node run.mjs toolcalls --base-url URL --model NAME --key-env VAR
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { TASKS } from './tasks.mjs';
 import { LANES, LANE_ORDER, buildBaseRepo, verifyOutputs, runLane, diffFor } from './lib.mjs';
+import { getReplayTasks } from './tasks-replay.mjs';
+import { chatCompletion, runEndpointLane } from './endpoint.mjs';
+import { runToolcallChecks, formatToolcallReport } from './toolcalls.mjs';
 
 const args = process.argv.slice(2);
 const command = args.shift();
 const flag = name => { const at = args.indexOf(`--${name}`); return at >= 0 ? args[at + 1] : undefined; };
 const log = message => process.stderr.write(`${message}\n`);
+const benchDir = path.dirname(fileURLToPath(import.meta.url));
+
+function activeTasks() {
+  const set = flag('set') ?? 'default';
+  if (set === 'replay') {
+    const tasks = getReplayTasks();
+    if (!tasks.length) fail('replay set empty: run node bench/lane-benchmark/replay-select.mjs first');
+    return tasks;
+  }
+  return TASKS;
+}
+
+function gitShow(repo, commit, file) {
+  const r = spawnSync('git', ['-C', repo, 'show', `${commit}:${file}`], { encoding: 'utf8' });
+  return r.status === 0 ? r.stdout : null;
+}
 
 async function prepare() {
-  const dest = path.resolve(flag('dest') ?? fail('--dest required')), src = path.resolve(flag('src') ?? fail('--src required'));
+  const src = path.resolve(flag('src') ?? '.');
+  const tasks = activeTasks();
+  if ((flag('set') ?? 'default') === 'replay') {
+    log(`replay set: ${tasks.length} tasks (per-task bases extracted at verify/run time)`);
+    return;
+  }
+  const dest = path.resolve(flag('dest') ?? fail('--dest required'));
   const info = buildBaseRepo(src, flag('ref') ?? 'main', dest);
   fs.writeFileSync(path.join(path.dirname(dest), `${path.basename(dest)}.base.json`), JSON.stringify({ head: info.head, sourceRef: info.sourceRef }));
   log(`base repo ${dest} at ${info.head} from ${info.sourceRef}`);
   if (args.includes('--validate')) {
-    for (const task of TASKS) {
+    for (const task of tasks) {
       const empty = verifyOutputs(dest, task, Object.fromEntries(task.outputs.map(file => [file, fs.existsSync(path.join(dest, file)) ? fs.readFileSync(path.join(dest, file), 'utf8') : ''])));
       const reference = task.outputs.every(file => file in info.originals) && task.verify.structural === undefined && !task.verify.mutants && task.outputs.length === 1
         ? verifyOutputs(dest, task, Object.fromEntries(task.outputs.map(file => [file, info.originals[file]]))) : null;
@@ -36,7 +64,8 @@ async function lane() {
   const repo = path.resolve(flag('repo') ?? fail('--repo required'));
   const baseFile = path.join(path.dirname(repo), `${path.basename(repo)}.base.json`);
   const baseInfo = fs.existsSync(baseFile) ? JSON.parse(fs.readFileSync(baseFile, 'utf8')) : null;
-  const result = runLane({ lane: name, repo, runner: path.resolve(flag('runner') ?? fail('--runner required')), maxUsd: Number(flag('max-usd') ?? 0.5), baseInfo, log });
+  const tasks = activeTasks();
+  const result = runLane({ lane: name, repo, runner: path.resolve(flag('runner') ?? fail('--runner required')), maxUsd: Number(flag('max-usd') ?? 0.5), baseInfo, log, tasks });
   fs.writeFileSync(flag('out') ?? `results-${name}.json`, JSON.stringify(result, null, 1));
   const passed = result.results.filter(item => item.pass).length;
   log(`${name}: ${passed}/${result.results.length} passed in ${(result.wallMs / 1000).toFixed(0)}s`);
@@ -67,7 +96,33 @@ async function review(data, repo) {
 }
 
 const median = values => { const sorted = values.filter(Number.isFinite).sort((a, b) => a - b); return sorted.length ? sorted[Math.floor((sorted.length - 1) / 2)] : null; };
+const p90 = values => { const sorted = values.filter(Number.isFinite).sort((a, b) => a - b); return sorted.length ? sorted[Math.ceil(sorted.length * 0.9) - 1] : null; };
 const usd = value => (value === null ? 'n/a' : value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`);
+
+export function renderReplayReport(entries) {
+  const tableFor = data => {
+    const results = data.results ?? [];
+    const passed = results.filter(r => r.pass).length;
+    const walls = results.map(r => r.wallSec ?? (r.durationMs ?? NaN) / 1000);
+    const tps = results.map(r => r.completionTokensPerSec).filter(Number.isFinite);
+    const label = data.model ?? data.lane ?? 'model';
+    return {
+      label,
+      row: `| ${label} | ${passed}/${results.length} | ${((passed / Math.max(1, results.length)) * 100).toFixed(0)}% | ${median(walls)?.toFixed(1) ?? 'n/a'} | ${p90(walls)?.toFixed(1) ?? 'n/a'} | ${median(tps)?.toFixed(1) ?? 'n/a'} | ${data.slots ?? 'n/a'} |`,
+    };
+  };
+  const tables = entries.map(tableFor);
+  return `# Replay benchmark
+
+| Model | Pass | Rate | Median s | p90 s | tok/s | Slots |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+${tables.map(t => t.row).join('\n')}
+`;
+}
+
+function isReplayResult(data) {
+  return data.set === 'replay' || data.lane === 'endpoint' || (data.results?.[0] && 'wallSec' in data.results[0] && !('agent' in data.results[0]));
+}
 
 export function renderReport(data, { reviewCost = null, meta = {} } = {}) {
   const lanes = LANE_ORDER.filter(name => data.some(item => item.lane === name));
@@ -137,6 +192,11 @@ async function reverify() {
 async function report() {
   const files = (flag('results') ?? fail('--results required')).split(',');
   const data = files.map(file => JSON.parse(fs.readFileSync(file, 'utf8')));
+  if (data.every(isReplayResult)) {
+    const labeled = data.map((item, i) => ({ ...item, model: item.model ?? path.basename(files[i], '.json') }));
+    fs.writeFileSync(flag('out') ?? 'replay-benchmark.md', renderReplayReport(labeled));
+    return;
+  }
   let reviewCost = null;
   if (args.includes('--review')) {
     reviewCost = await review(data, path.resolve(flag('repo') ?? fail('--repo required for --review')));
@@ -145,8 +205,61 @@ async function report() {
   fs.writeFileSync(flag('out') ?? 'lane-benchmark.md', renderReport(data, { reviewCost, meta: { base: data[0]?.sourceRef?.slice(0, 10) } }));
 }
 
+function loadApiKey() {
+  const keyEnv = flag('key-env') ?? fail('--key-env required');
+  const apiKey = process.env[keyEnv];
+  if (!apiKey) fail(`environment variable ${keyEnv} is not set`);
+  return { keyEnv, apiKey };
+}
+
+export function scrubSecret(text, secret) {
+  if (!secret || !text) return text;
+  return String(text).split(secret).join('[REDACTED]');
+}
+
+async function endpoint() {
+  const { apiKey } = loadApiKey();
+  const baseUrl = flag('base-url') ?? fail('--base-url required');
+  const model = flag('model') ?? fail('--model required');
+  const slots = Number(flag('slots') ?? 4);
+  const srcRepo = path.resolve(flag('src') ?? path.join(benchDir, '../..'));
+  const tasks = activeTasks();
+  const verify = (baseDir, task, outputs) => verifyOutputs(baseDir, task, outputs, { readAtMerge: (c, f) => gitShow(srcRepo, c, f) });
+  const result = await runEndpointLane({
+    tasks,
+    slots,
+    srcRepo,
+    verifyOutputs: verify,
+    readContextAtBase: (commit, file) => gitShow(srcRepo, commit, file),
+    api: prompt => chatCompletion({ baseUrl, model, apiKey, prompt }),
+    log,
+  });
+  const out = { ...result, model, baseUrl, wallMs: result.results.reduce((s, r) => s + (r.wallSec ?? 0) * 1000, 0) };
+  const outPath = flag('out') ?? 'results-endpoint.json';
+  const serialized = JSON.stringify(out, null, 1);
+  if (serialized.includes(apiKey)) fail('api key leaked into results');
+  fs.writeFileSync(outPath, serialized);
+  const passed = result.results.filter(r => r.pass).length;
+  log(`endpoint/${model}: ${passed}/${result.results.length} passed`);
+}
+
+async function toolcalls() {
+  const { apiKey } = loadApiKey();
+  const baseUrl = flag('base-url') ?? fail('--base-url required');
+  const model = flag('model') ?? fail('--model required');
+  const lines = await runToolcallChecks({ baseUrl, model, apiKey });
+  const reportText = formatToolcallReport(lines);
+  if (reportText.includes(apiKey)) fail('api key leaked into toolcalls output');
+  process.stdout.write(`${reportText}\n`);
+}
+
 function fail(message) { throw new Error(message); }
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  ({ prepare, lane, report, reverify })[command]?.().catch?.(error => { log(`error: ${error.message}`); process.exitCode = 1; }) ?? log('usage: run.mjs prepare|lane|report');
+  ({ prepare, lane, report, reverify, endpoint, toolcalls })[command]?.().catch?.(error => {
+    const keyEnv = flag('key-env');
+    const secret = keyEnv ? process.env[keyEnv] : '';
+    log(`error: ${scrubSecret(error.message, secret)}`);
+    process.exitCode = 1;
+  }) ?? log('usage: run.mjs prepare|lane|endpoint|toolcalls|report|reverify');
 }

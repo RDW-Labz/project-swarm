@@ -74,11 +74,15 @@ const regexFrom = pattern => (pattern.startsWith('(?i)') ? new RegExp(pattern.sl
 function runTests(dir, argv) {
   const env = { PATH: process.env.PATH, HOME: dir, LANG: 'C', TMPDIR: os.tmpdir() };
   const result = run(argv[0] === 'node' ? process.execPath : argv[0], argv.slice(1), { cwd: dir, env, timeout: 120000 });
-  return { ok: result.status === 0, tail: `${result.stdout ?? ''}${result.stderr ?? ''}`.trim().split('\n').slice(-6).join('\n').slice(0, 600) };
+  const combined = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  const tail = combined.trim().split('\n').slice(-6).join('\n').slice(0, 600);
+  const countMatch = combined.match(/# tests (\d+)/);
+  const ran = countMatch ? Number(countMatch[1]) > 0 : false;
+  return { ok: result.status === 0, ran, tail };
 }
 
 // Applies the outputs to a copy of the base repo and checks them the way the task says.
-export function verifyOutputs(baseDir, task, outputs) {
+export function verifyOutputs(baseDir, task, outputs, hooks = {}) {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'bench-verify-'));
   try {
     copyTree(baseDir, work);
@@ -88,6 +92,17 @@ export function verifyOutputs(baseDir, task, outputs) {
       fs.writeFileSync(path.join(work, file), outputs[file]);
     }
     const v = task.verify;
+    if (v.testsFromMerge?.length) {
+      const commit = v.mergeCommit ?? task.mergeCommit;
+      const read = hooks.readAtMerge;
+      if (!read || !commit) return { pass: false, detail: 'merge test reader missing', score: 0 };
+      for (const file of v.testsFromMerge) {
+        const content = read(commit, file);
+        if (content === null) return { pass: false, detail: `missing test at merge ${file}`, score: 0 };
+        fs.mkdirSync(path.dirname(path.join(work, file)), { recursive: true });
+        fs.writeFileSync(path.join(work, file), content);
+      }
+    }
     if (v.facts) {
       const text = outputs[v.facts.file];
       const missing = v.facts.patterns.filter(pattern => !regexFrom(pattern).test(text));
@@ -96,6 +111,7 @@ export function verifyOutputs(baseDir, task, outputs) {
     for (const [file, content] of Object.entries(v.hidden ?? {})) fs.writeFileSync(path.join(work, file), content);
     const tests = runTests(work, v.argv);
     if (!tests.ok) return { pass: false, detail: `tests failed: ${tests.tail.split('\n').slice(-2).join(' ').slice(0, 200)}`, score: 0 };
+    if (v.testsFromMerge?.length && !tests.ran) return { pass: false, detail: 'tests did not run', score: 0 };
     if (v.structural) {
       const original = fs.readFileSync(path.join(baseDir, v.structural.file), 'utf8');
       const result = outputs[v.structural.file];
@@ -128,15 +144,15 @@ function tokensOf(job) {
   return parts.length ? parts.reduce((a, b) => a + b, 0) : null;
 }
 
-// Runs one lane's ten jobs with the given runner and returns the results (nothing is merged).
-export function runLane({ lane, repo, runner, maxUsd = 0.5, baseInfo, model, bestOf = 1, log = () => {} }) {
+// Runs one lane's jobs with the given runner and returns the results (nothing is merged).
+export function runLane({ lane, repo, runner, maxUsd = 0.5, baseInfo, model, bestOf = 1, log = () => {}, tasks = TASKS }) {
   const base = LANES[lane];
   if (!base) throw new Error(`unknown lane ${lane}`);
   const spec = model ? { ...base, model } : base;
   if (!spec.model) throw new Error(`lane ${lane} needs a model`);
   const manifest = {
     version: 1, concurrency: spec.concurrency, budget: { maxUsd },
-    jobs: TASKS.map(task => ({
+    jobs: tasks.map(task => ({
       id: task.id, agent: spec.agent, model: spec.model, ...(spec.paid && spec.agent === 'anthropic' ? { sensitive: true } : {}), ...(spec.sensitive === false ? { sensitive: false } : {}),
       prompt: task.prompt, context: spec.agent === 'rented' ? [...task.context, RENTED_CONTRACT_FILE] : task.context, outputs: task.outputs, timeoutMs: 900000,
       // The rented lane takes only jobs with their exact files, a contract file and acceptance tests.
@@ -179,14 +195,20 @@ export function runLane({ lane, repo, runner, maxUsd = 0.5, baseInfo, model, bes
   try { state = JSON.parse(last); } catch { throw new Error(`run did not return a state: ${(ran.stdout || ran.stderr || '').slice(0, 400)}`); }
   if (!state.jobs) throw new Error(`run failed: ${JSON.stringify(state).slice(0, 400)}`);
   const results = state.jobs.map(job => {
-    const task = TASKS.find(item => item.id === job.id);
+    const task = tasks.find(item => item.id === job.id);
     const outputs = {};
     for (const file of task.outputs) {
       const at = path.join(repo, job.workspace, file);
       if (fs.existsSync(at)) outputs[file] = fs.readFileSync(at, 'utf8').slice(0, 120000);
     }
+    const readAtMerge = task.mergeCommit
+      ? (commit, file) => {
+        const r = run('git', ['-C', repo, 'show', `${commit}:${file}`]);
+        return r.status === 0 ? r.stdout : null;
+      }
+      : null;
     const verified = job.status === 'complete' || Object.keys(outputs).length === task.outputs.length
-      ? verifyOutputs(repo, task, outputs) : { pass: false, detail: `job ${job.status}: ${String(job.error ?? '').slice(0, 160)}`, score: 0 };
+      ? verifyOutputs(repo, task, outputs, readAtMerge ? { readAtMerge } : {}) : { pass: false, detail: `job ${job.status}: ${String(job.error ?? '').slice(0, 160)}`, score: 0 };
     return {
       taskId: task.id, type: task.type, lane, agent: spec.agent, model: spec.model, status: job.status, error: job.error ?? null,
       durationMs: job.durationMs ?? null, tokens: tokensOf(job), costUsd: typeof job.costUsd === 'number' ? job.costUsd : null,

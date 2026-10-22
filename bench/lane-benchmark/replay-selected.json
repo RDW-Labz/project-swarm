@@ -1,0 +1,203 @@
+{
+  "version": 1,
+  "qualifiedCount": 14,
+  "target": 20,
+  "selected": [
+    {
+      "id": "T-0036",
+      "title": "Add ticket-paths helper to validate files and suggest closest repo paths",
+      "type": "build",
+      "baseCommit": "b93b1a9693a22579c0c4fe284e7dad4e9028e08f",
+      "mergeCommit": "9f76d5a793a6a58fb7378c0879ccf99fd96b3d25",
+      "files": [
+        "tools/ticket-paths.mjs"
+      ],
+      "tests": [
+        "tests/ticket-paths.test.mjs"
+      ],
+      "ledger": "roadmap"
+    },
+    {
+      "id": "T-0037",
+      "title": "Wire ticket path validation into scope split --ingest",
+      "type": "build",
+      "baseCommit": "b93b1a9693a22579c0c4fe284e7dad4e9028e08f",
+      "mergeCommit": "9f76d5a793a6a58fb7378c0879ccf99fd96b3d25",
+      "files": [
+        "tools/scope-commands.mjs"
+      ],
+      "tests": [
+        "tests/scope-ingest-paths.test.mjs"
+      ],
+      "ledger": "roadmap+swarm"
+    },
+    {
+      "id": "T-0039",
+      "title": "Apply lane byte sizing during split ingest and scope approve warnings",
+      "type": "build",
+      "baseCommit": "944498cf1cd3974ec38135da1ceae0cdf1b1db8f",
+      "mergeCommit": "e28be0dde8be867d9d4a84c241e8530fb3553056",
+      "files": [
+        "tools/scope-commands.mjs"
+      ],
+      "tests": [
+        "tests/scope-split-lane-size.test.mjs"
+      ],
+      "ledger": "roadmap+swarm"
+    },
+    {
+      "id": "T-0040",
+      "title": "Make build tickets own their test files in ticket-manifest prompts",
+      "type": "build",
+      "baseCommit": "82a52078e36887adca54ba7e1611ee0f40592425",
+      "mergeCommit": "8e6f4029ce043fb26dd7d81f2c32a71e41e31903",
+      "files": [
+        "tools/ticket-manifest.mjs"
+      ],
+      "tests": [
+        "tests/ticket-manifest-owns.test.mjs"
+      ],
+      "ledger": "roadmap+swarm"
+    },
+    {
+      "id": "T-0041",
+      "title": "Keep test tickets after build modules in wiring order",
+      "type": "build",
+      "baseCommit": "82a52078e36887adca54ba7e1611ee0f40592425",
+      "mergeCommit": "8e6f4029ce043fb26dd7d81f2c32a71e41e31903",
+      "files": [
+        "tools/wiring.mjs"
+      ],
+      "tests": [
+        "tests/wiring-build-owns.test.mjs"
+      ],
+      "ledger": "roadmap"
+    },
+    {
+      "id": "T-0042",
+      "title": "Wire build-owns-tests rules into scope split ingest",
+      "type": "build",
+      "baseCommit": "82a52078e36887adca54ba7e1611ee0f40592425",
+      "mergeCommit": "8e6f4029ce043fb26dd7d81f2c32a71e41e31903",
+      "files": [
+        "tools/scope-commands.mjs"
+      ],
+      "tests": [
+        "tests/scope-ingest-owns-tests.test.mjs"
+      ],
+      "ledger": "roadmap+swarm"
+    },
+    {
+      "id": "T-0046",
+      "title": "Use precise sensitive tagging during split ingest instead of scope phrase match",
+      "type": "build",
+      "baseCommit": "e28be0dde8be867d9d4a84c241e8530fb3553056",
+      "mergeCommit": "a5deb8a959c6616fd92c61c3219af8dedc40ed44",
+      "files": [
+        "tools/scope-commands.mjs"
+      ],
+      "tests": [
+        "tests/scope-ingest-sensitive.test.mjs"
+      ],
+      "ledger": "roadmap+swarm"
+    },
+    {
+      "id": "T-0050",
+      "title": "Run wave simulation before scope split --ingest writes the ledger",
+      "type": "build",
+      "baseCommit": "9f76d5a793a6a58fb7378c0879ccf99fd96b3d25",
+      "mergeCommit": "944498cf1cd3974ec38135da1ceae0cdf1b1db8f",
+      "files": [
+        "tools/scope-commands.mjs"
+      ],
+      "tests": [
+        "tests/scope-ingest-waves.test.mjs"
+      ],
+      "ledger": "roadmap+swarm"
+    },
+    {
+      "id": "T-0051",
+      "title": "Re-split or reroute blocked tickets after two failures without a manifest",
+      "type": "build",
+      "baseCommit": "944498cf1cd3974ec38135da1ceae0cdf1b1db8f",
+      "mergeCommit": "e28be0dde8be867d9d4a84c241e8530fb3553056",
+      "files": [
+        "tools/ticket-replan.mjs"
+      ],
+      "tests": [
+        "tests/ticket-replan.test.mjs"
+      ],
+      "ledger": "roadmap"
+    },
+    {
+      "id": "T-0052",
+      "title": "Invoke ticket replan from scope sync when a ticket blocks or fails twice",
+      "type": "build",
+      "baseCommit": "944498cf1cd3974ec38135da1ceae0cdf1b1db8f",
+      "mergeCommit": "e28be0dde8be867d9d4a84c241e8530fb3553056",
+      "files": [
+        "tools/scope-commands.mjs"
+      ],
+      "tests": [
+        "tests/scope-sync-replan.test.mjs"
+      ],
+      "ledger": "roadmap+swarm"
+    },
+    {
+      "id": "T-0053",
+      "title": "Validate delete-only tickets and migration ticket DDL rules",
+      "type": "build",
+      "baseCommit": "944498cf1cd3974ec38135da1ceae0cdf1b1db8f",
+      "mergeCommit": "e28be0dde8be867d9d4a84c241e8530fb3553056",
+      "files": [
+        "tools/ticket-sync-checks.mjs"
+      ],
+      "tests": [
+        "tests/ticket-sync-checks.test.mjs"
+      ],
+      "ledger": "roadmap+swarm"
+    },
+    {
+      "id": "T-0054",
+      "title": "Add rename ticket type validation alongside migration checks",
+      "type": "build",
+      "baseCommit": "944498cf1cd3974ec38135da1ceae0cdf1b1db8f",
+      "mergeCommit": "e28be0dde8be867d9d4a84c241e8530fb3553056",
+      "files": [
+        "tools/tickets.mjs"
+      ],
+      "tests": [
+        "tests/ticket-rename-type.test.mjs"
+      ],
+      "ledger": "roadmap+swarm"
+    },
+    {
+      "id": "T-0055",
+      "title": "Wire delete and rename ticket sync checks into scope sync integrated path",
+      "type": "build",
+      "baseCommit": "e28be0dde8be867d9d4a84c241e8530fb3553056",
+      "mergeCommit": "a5deb8a959c6616fd92c61c3219af8dedc40ed44",
+      "files": [
+        "tools/scope-commands.mjs"
+      ],
+      "tests": [
+        "tests/scope-sync-delete.test.mjs"
+      ],
+      "ledger": "roadmap+swarm"
+    },
+    {
+      "id": "T-0057",
+      "title": "Show human ticket checklists on Swarm Watch plan tab without build progress",
+      "type": "build",
+      "baseCommit": "b93b1a9693a22579c0c4fe284e7dad4e9028e08f",
+      "mergeCommit": "9f76d5a793a6a58fb7378c0879ccf99fd96b3d25",
+      "files": [
+        "tools/watch-plan.mjs"
+      ],
+      "tests": [
+        "tests/watch-human-progress.test.mjs"
+      ],
+      "ledger": "roadmap"
+    }
+  ]
+}
