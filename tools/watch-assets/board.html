@@ -38,7 +38,8 @@
         <div class="stack">
           <section class="card" aria-label="Agents by lane"><h2>Agents now</h2><div class="bays" id="bays"></div></section>
           <section class="card" aria-label="Orchestrator"><h2>Orchestrator <span class="badge quiet" id="orchCount">0</span></h2><div class="orch-grid" id="orchBay"></div><p class="board-note" id="orchNote"></p></section>
-          <section class="card" aria-label="Projects"><h2>Projects</h2>
+          <section class="card projects-section" id="projectsSection" aria-label="Projects"><h2>Projects</h2>
+            <div class="projects-view-toolbar"><button type="button" class="btn" id="projViewToggle" aria-pressed="true">Table view</button></div>
             <p class="board-note" id="machinesNote"></p>
             <div class="tablewrap collapse"><table id="projTable"></table></div><div class="cards" id="projCards"></div>
             <p class="board-note">Open a project for its tickets, runs, and lessons. A run opens in the run inspector (graph, journal, compare).</p></section>

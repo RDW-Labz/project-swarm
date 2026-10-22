@@ -13,7 +13,8 @@ var store = {
   set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* kept for this visit only */ } }
 };
 
-var state = { data: null, lastOk: 0, tab: 'overview', scratch: store.get('swarm-scratch') === '1', seen: [], rendered: null, firstRender: true, readTimer: null };
+var PROJECTS_VIEW_KEY = 'swarm-board-projects-view';
+var state = { data: null, lastOk: 0, tab: 'overview', scratch: store.get('swarm-scratch') === '1', seen: [], rendered: null, firstRender: true, readTimer: null, projectsView: 'cards' };
 try { state.seen = JSON.parse(store.get('swarm-seen') || '[]'); if (!Array.isArray(state.seen)) { state.seen = []; } } catch (e) { state.seen = []; }
 
 function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined && text !== null) { n.textContent = text; } return n; }
@@ -542,6 +543,29 @@ function appendPinnedBadge(parent, p) {
   parent.appendChild(el('span', '', ' '));
   parent.appendChild(badge);
 }
+function readProjectsView() {
+  var v = store.get(PROJECTS_VIEW_KEY);
+  return v === 'table' ? 'table' : 'cards';
+}
+function applyProjectsView(view) {
+  var mode = view === 'table' ? 'table' : 'cards';
+  state.projectsView = mode;
+  store.set(PROJECTS_VIEW_KEY, mode);
+  var section = $('projectsSection');
+  if (section) { section.classList.toggle('projects-view-table', mode === 'table'); }
+  var btn = $('projViewToggle');
+  if (btn) {
+    var cardsOn = mode === 'cards';
+    btn.setAttribute('aria-pressed', cardsOn ? 'true' : 'false');
+    btn.textContent = cardsOn ? 'Table view' : 'Card view';
+  }
+}
+function toggleProjectsView() { applyProjectsView(state.projectsView === 'cards' ? 'table' : 'cards'); }
+function initProjectsView() {
+  applyProjectsView(readProjectsView());
+  var btn = $('projViewToggle');
+  if (btn && !btn.__projViewBound) { btn.__projViewBound = true; btn.addEventListener('click', toggleProjectsView); }
+}
 function renderProjects(projects) {
   var psig = L.signature({ projects: projects, machines: state.data && state.data.machines, peers: state.data && state.data.peers, drift: state.data && state.data.drift }, Math.floor(Date.now() / 60000));
   if (psig === state.projSig) { return; }
@@ -557,8 +581,8 @@ function renderProjects(projects) {
   });
   var table = $('projTable'); table.textContent = '';
   var cards = $('projCards'); cards.textContent = '';
-  if (!sorted.length) { var none = 'No projects yet. Run a swarm command inside a project, or swarm projects add PATH.'; $('projTable').appendChild(el('caption', 'empty', none)); cards.appendChild(el('div', 'empty', none)); cards.classList.add('show'); }
-  else { cards.classList.remove('show'); table.appendChild(th(['Project', 'Live runs', 'Jobs', 'Tickets', 'Lanes', 'Last activity'])); }
+  if (!sorted.length) { var none = 'No projects yet. Run a swarm command inside a project, or swarm projects add PATH.'; $('projTable').appendChild(el('caption', 'empty', none)); cards.appendChild(el('div', 'empty', none)); }
+  else { table.appendChild(th(['Project', 'Live runs', 'Jobs', 'Tickets', 'Lanes', 'Last activity'])); }
   var machines = state.data && Array.isArray(state.data.machines) ? state.data.machines : [];
   var machinesNote = $('machinesNote'); machinesNote.textContent = '';
   var machineText = machines.map(function (m) { return m.name + ' (v' + (m.version || '-') + (m.ok === false ? ', unreachable' : '') + ')'; }).join(' · ');
@@ -866,6 +890,7 @@ $('scratch').addEventListener('change', function () {
   poll(); loadHistory();
 });
 
+initProjectsView();
 if (__boardAutoBoot) {
   applyHash();
   poll();
@@ -874,5 +899,5 @@ if (__boardAutoBoot) {
 }
 
 if (typeof globalThis !== 'undefined') {
-  globalThis.__swarmBoardTestExports = { renderWatchProjectCard: renderWatchProjectCard, slotsSentence: slotsSentence, percentBoard: percentBoard };
+  globalThis.__swarmBoardTestExports = { renderWatchProjectCard: renderWatchProjectCard, slotsSentence: slotsSentence, percentBoard: percentBoard, applyProjectsView: applyProjectsView, readProjectsView: readProjectsView, PROJECTS_VIEW_KEY: PROJECTS_VIEW_KEY };
 }

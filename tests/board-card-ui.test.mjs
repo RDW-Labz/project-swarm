@@ -21,7 +21,7 @@ const BOARD_IDS = [
   'needsChip', 'count', 'scratch', 'scratchLabel', 'pauseMotion', 'helpBtn', 'tabs',
   'tab-overview', 'tab-cost', 'tab-agents', 'tab-events',
   'tab-overview-btn', 'tab-cost-btn', 'tab-agents-btn', 'tab-events-btn',
-  'kpis', 'totalsNote', 'bays', 'orchCount', 'orchBay', 'orchNote', 'projTable', 'projCards', 'machinesNote',
+  'kpis', 'totalsNote', 'bays', 'orchCount', 'orchBay', 'orchNote', 'projectsSection', 'projViewToggle', 'projTable', 'projCards', 'machinesNote',
   'needsCard', 'needs', 'needsBadge', 'markRead', 'fyi', 'fyiList', 'needsNote',
   'costKpis', 'orchTable', 'laneTable', 'laneNote', 'spendTable', 'agentsCount', 'agentsGrid', 'agentsSlots',
   'poolsTable', 'poolsNote', 'history', 'historyNote', 'q', 'fproject', 'fkind', 'ffrom', 'fto', 'csv', 'filters',
@@ -140,6 +140,8 @@ async function installBoardDom() {
   win.location = location;
   win.localStorage = storage;
   win.sessionStorage = storage;
+  globalThis.localStorage = storage;
+  globalThis.sessionStorage = storage;
   win.navigator = { clipboard: { writeText: async () => {} } };
   win.fetch = async () => ({ ok: false });
   win.innerHeight = 800;
@@ -309,4 +311,35 @@ test('board.js source avoids forbidden wording in card helpers', async () => {
   assert.doesNotMatch(src, /split red/i);
   assert.match(src, /hand-edits blocked by the guard/);
   assert.match(src, /untracked runs/);
+});
+
+test('project cards grid is default at all widths; table is optional', async () => {
+  const cssPath = path.join(assets, 'swarm-ui.css');
+  const css = await fs.readFile(cssPath, 'utf8');
+  const baseCardsRule = /\.cards\s*\{[^}]*display:\s*grid/i;
+  assert.match(css, baseCardsRule, '.cards uses display grid outside media queries');
+  const cssNoMedia = css.replace(/@media[\s\S]*?\{[\s\S]*?\}/g, '');
+  assert.doesNotMatch(cssNoMedia, /(?:^|[\n\r])\s*\.cards\s*\{[^}]*display:\s*none/i);
+  assert.match(css, /minmax\(340px/i);
+
+  const { applyProjectsView, readProjectsView, PROJECTS_VIEW_KEY } = await loadBoardModule();
+  const section = document.getElementById('projectsSection');
+  const toggle = document.getElementById('projViewToggle');
+  const storage = window.localStorage;
+  delete storage._d[PROJECTS_VIEW_KEY];
+
+  assert.equal(readProjectsView(), 'cards');
+  applyProjectsView(readProjectsView());
+  assert.equal(section.classList.contains('projects-view-table'), false);
+  assert.equal(toggle.getAttribute('aria-pressed'), 'true');
+
+  applyProjectsView('table');
+  assert.equal(section.classList.contains('projects-view-table'), true);
+  assert.equal(toggle.getAttribute('aria-pressed'), 'false');
+  assert.equal(storage.getItem(PROJECTS_VIEW_KEY), 'table');
+
+  applyProjectsView('cards');
+  assert.equal(section.classList.contains('projects-view-table'), false);
+  assert.equal(toggle.getAttribute('aria-pressed'), 'true');
+  assert.equal(storage.getItem(PROJECTS_VIEW_KEY), 'cards');
 });
