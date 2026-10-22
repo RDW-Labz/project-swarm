@@ -7,9 +7,9 @@ The owner runs orchestrators and worker lanes beyond Claude Code, including open
 Out of scope: building a marketplace or remote adapter registry, running adapters from untrusted URLs automatically, any change to spend caps or how caps are raised.
 
 ## Stages
-- S11: Open adapters
+- S1: Open adapters
 
-## S11 Open adapters
+## S1 Open adapters
 ### R-081 One adapter interface covers orchestrator and worker kinds.
 Acceptance:
 - A published TypeScript or JSON schema defines orchestrator and worker adapter kinds with required methods and event shapes.
