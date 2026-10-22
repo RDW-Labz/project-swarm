@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // After `swarm update`, restart board and remote-serve processes that still run an older version.
 import { spawn, execFile } from 'node:child_process';
-import { existsSync, readdirSync, realpathSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
@@ -9,8 +9,14 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
 import { boardFile, safeEnvSubset, serverMode } from './watch-cli.mjs';
+import { discoverRunningServers } from './server-discovery.mjs';
 
 export { safeEnvSubset, serverMode };
+export {
+  discoverRunningServers,
+  parseLsofFnOutput,
+  parseLsofListenPorts,
+} from './server-discovery.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -94,7 +100,10 @@ function parseRecord(text, kind) {
   try { data = JSON.parse(text); } catch { return { error: `could not parse ${kind} server record` }; }
   if (!data || typeof data !== 'object') return { error: `could not parse ${kind} server record` };
   if (!Number.isInteger(data.pid) || data.pid <= 0) return { error: `invalid pid in ${kind} server record` };
-  if (typeof data.version !== 'string' || !data.version) return { error: `missing version in ${kind} server record` };
+  if (data.version !== null && data.version !== undefined
+    && (typeof data.version !== 'string' || !data.version)) {
+    return { error: `missing version in ${kind} server record` };
+  }
   if (!Array.isArray(data.argv) || !data.argv.every(a => typeof a === 'string')) return { error: `invalid argv in ${kind} server record` };
   if (typeof data.cwd !== 'string' || !data.cwd) return { error: `missing cwd in ${kind} server record` };
   if (!Number.isInteger(data.port)) return { error: `missing port in ${kind} server record` };
@@ -668,18 +677,37 @@ async function withRestartLock(installRoot, fn, { sleep = ms => new Promise(r =>
   }
 }
 
-function spawnDetached(runner, argv, { cwd, env, spawnImpl = spawn }) {
+function restartLogPath(installRoot, kind, pid) {
+  return path.join(installRoot, 'state', 'logs', `${kind}-${pid}.log`);
+}
+
+function spawnDetached(runner, argv, { cwd, env, spawnImpl = spawn, installRoot, kind = 'board', logPid } = {}) {
   const restartArgv = argvWithoutOpen(argv);
   const childEnv = safeEnvSubset(env ?? {});
+  const logPath = installRoot ? restartLogPath(installRoot, kind, logPid ?? process.pid) : null;
+  let logFd = null;
+  if (logPath) {
+    try {
+      mkdirSync(path.dirname(logPath), { recursive: true, mode: 0o700 });
+      logFd = openSync(logPath, 'a', 0o600);
+    } catch { logFd = null; }
+  }
+  const stdio = logFd !== null ? ['ignore', logFd, logFd] : 'ignore';
   return new Promise(resolve => {
     const child = spawnImpl(process.execPath, [runner, ...restartArgv], {
       detached: true,
-      stdio: 'ignore',
+      stdio,
       cwd,
       env: { ...safeEnvSubset(process.env), ...childEnv },
     });
-    child.on?.('error', () => resolve({ pid: null, error: true }));
+    child.on?.('error', () => {
+      if (logFd !== null) { try { closeSync(logFd); } catch { /* closed */ } }
+      resolve({ pid: null, error: true });
+    });
     child.unref?.();
+    if (logFd !== null && child.pid) {
+      try { closeSync(logFd); } catch { /* parent must not keep fd open */ }
+    }
     resolve({ pid: child.pid ?? null, error: false });
   });
 }
@@ -709,10 +737,49 @@ export async function restartRegisteredServers({
 
   const locked = await withRestartLock(installRoot, async () => {
   const pathEnv = registryEnv(env, home);
-  const entries = [
-    await readKind(boardFile(pathEnv, home), 'board'),
-    await readKind(remoteServerFile(pathEnv, home), 'remote'),
+  const boardPath = boardFile(pathEnv, home);
+  const remotePath = remoteServerFile(pathEnv, home);
+  const registryEntries = [
+    await readKind(boardPath, 'board'),
+    await readKind(remotePath, 'remote'),
   ].filter(Boolean);
+
+  const workByPid = new Map();
+
+  for (const entry of registryEntries) {
+    if (entry.readError) {
+      emit(`${entry.kind} server record skipped: could not read ${entry.kind} server record`);
+      continue;
+    }
+    if (entry.error) {
+      emit(`${entry.kind} server record skipped: ${entry.error}`);
+      servers.push({ kind: entry.kind, pid: null, from: null, to: targetVersion, port: null, status: 'unparsable' });
+      continue;
+    }
+    workByPid.set(entry.record.pid, {
+      kind: entry.kind,
+      file: entry.file,
+      record: entry.record,
+      fromDiscovery: false,
+    });
+  }
+
+  const discovered = await discoverRunningServers({
+    execFileImpl,
+    installRoot,
+    platform: process.platform,
+    fetchImpl,
+  });
+  for (const disc of discovered) {
+    if (workByPid.has(disc.pid)) continue;
+    const file = disc.kind === 'remote' ? remotePath : boardPath;
+    workByPid.set(disc.pid, {
+      kind: disc.kind,
+      file,
+      record: disc,
+      fromDiscovery: true,
+    });
+  }
 
   let { runner } = await resolveRunnerForRestart(installRoot, targetVersion);
   if (!runner && process.env.SWARM_TEST_TMP) {
@@ -724,20 +791,18 @@ export async function restartRegisteredServers({
     ({ runner } = await resolveRunnerForRestart(installRoot, targetVersion));
   }
 
-  for (const entry of entries) {
-    if (entry.readError) {
-      emit(`${entry.kind} server record skipped: could not read ${entry.kind} server record`);
-      continue;
-    }
-    if (entry.error) {
-      emit(`${entry.kind} server record skipped: ${entry.error}`);
-      servers.push({ kind: entry.kind, pid: null, from: null, to: targetVersion, port: null, status: 'unparsable' });
-      continue;
-    }
-    const { record, file, kind } = entry;
-    const label = kind === 'board' ? 'board' : 'remote server';
+  const emitBoardUrl = async file => {
+    try {
+      const data = JSON.parse(await fs.readFile(file, 'utf8'));
+      if (typeof data.url === 'string' && data.url) emit(data.url);
+    } catch { /* no url */ }
+  };
 
-    if (!validServerPort(record.port)) {
+  for (const { kind, file, record, fromDiscovery } of workByPid.values()) {
+    const label = kind === 'board' ? 'board' : 'remote server';
+    const hadTerminal = record.mode === 'terminal' || record.modeFromTty === true;
+
+    if (!fromDiscovery && !validServerPort(record.port)) {
       const manual = runner ? manualCommand({ runner, argv: record.argv, cwd: record.cwd, env: record.env }) : null;
       emit(`${label} restart failed: invalid port ${record.port}${manual ? `; run by hand: ${manual}` : ''}`);
       servers.push({ kind, pid: record.pid, from: record.version, to: targetVersion, port: record.port, status: 'failed' });
@@ -751,23 +816,25 @@ export async function restartRegisteredServers({
       continue;
     }
     if (probe === 'dead') {
-      await removeRegistryRecordIfUnchanged(file, {
-        pid: record.pid,
-        startedAt: record.startedAt,
-        url: record.url,
-        version: record.version,
-      });
+      if (!fromDiscovery) {
+        await removeRegistryRecordIfUnchanged(file, {
+          pid: record.pid,
+          startedAt: record.startedAt,
+          url: record.url,
+          version: record.version,
+        });
+      }
       continue;
     }
 
     if (record.version === targetVersion) continue;
 
-    const from = record.version;
+    const from = record.version ?? null;
     const port = record.port;
 
-    if (record.mode === 'terminal' || !isAutoRestartable(record)) {
+    if (!fromDiscovery && (record.mode === 'terminal' || !isAutoRestartable(record))) {
       const argvText = record.argv.join(' ');
-      emit(`${label} running in a terminal (pid ${record.pid}) still serves ${from}: press Ctrl-C there and run swarm ${argvText}`);
+      emit(`${label} running in a terminal (pid ${record.pid}) still serves ${from ?? 'unknown'}: press Ctrl-C there and run swarm ${argvText}`);
       servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'terminal' });
       continue;
     }
@@ -786,30 +853,32 @@ export async function restartRegisteredServers({
       continue;
     }
 
-    const identity = strictPidCheck || !process.env.SWARM_TEST_TMP
-      ? await verifyRegistryPid(record, runner, { execFileImpl, installRoot })
-      : { ok: true };
-    if (!identity.ok) {
-      const remove = identity.removeRecord === true || identityMismatchRemovesRecord(identity.reason);
-      if (remove) {
-        const removed = await removeRegistryRecordIfUnchanged(file, {
-          pid: record.pid,
-          startedAt: record.startedAt,
-          url: record.url,
-          version: record.version,
-        });
-        if (removed) {
-          emit(`${label} stale server record (pid ${record.pid}): ${identity.reason}; record removed`);
-          servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'stale-record' });
+    if (!fromDiscovery) {
+      const identity = strictPidCheck || !process.env.SWARM_TEST_TMP
+        ? await verifyRegistryPid(record, runner, { execFileImpl, installRoot })
+        : { ok: true };
+      if (!identity.ok) {
+        const remove = identity.removeRecord === true || identityMismatchRemovesRecord(identity.reason);
+        if (remove) {
+          const removed = await removeRegistryRecordIfUnchanged(file, {
+            pid: record.pid,
+            startedAt: record.startedAt,
+            url: record.url,
+            version: record.version,
+          });
+          if (removed) {
+            emit(`${label} stale server record (pid ${record.pid}): ${identity.reason}; record removed`);
+            servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'stale-record' });
+          } else {
+            emit(`${label} server record (pid ${record.pid}): ${identity.reason}; record kept (changed concurrently)`);
+            servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified' });
+          }
         } else {
-          emit(`${label} server record (pid ${record.pid}): ${identity.reason}; record kept (changed concurrently)`);
+          emit(`${label} server record (pid ${record.pid}): ${identity.reason}; record kept`);
           servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified' });
         }
-      } else {
-        emit(`${label} server record (pid ${record.pid}): ${identity.reason}; record kept`);
-        servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified' });
+        continue;
       }
-      continue;
     }
 
     const sigtermOk = await (async () => {
@@ -824,7 +893,7 @@ export async function restartRegisteredServers({
       continue;
     }
 
-    if (!(await waitForPortFree(port, 15000, sleep))) {
+    if (validServerPort(port) && !(await waitForPortFree(port, 15000, sleep))) {
       const manual = manualCommand({ runner, argv: record.argv, cwd: record.cwd, env: record.env });
       emit(`${label} port ${port} still busy: could not restart; run by hand: ${manual}`);
       servers.push({ kind, pid: null, from, to: targetVersion, port, status: 'port-busy' });
@@ -834,14 +903,27 @@ export async function restartRegisteredServers({
     let started = false;
     let lastManual = manualCommand({ runner, argv: record.argv, cwd: record.cwd, env: record.env });
     for (let attempt = 0; attempt < 2 && !started; attempt += 1) {
-      const { pid: newPid, error: spawnError } = await spawnDetached(runner, record.argv, { cwd: record.cwd, env: record.env, spawnImpl });
+      const { pid: newPid, error: spawnError } = await spawnDetached(runner, record.argv, {
+        cwd: record.cwd,
+        env: record.env,
+        spawnImpl,
+        installRoot,
+        kind,
+        logPid: record.pid,
+      });
       if (spawnError || !newPid) continue;
       const confirm = kind === 'remote'
         ? await pollRemoteFile(file, targetVersion, { sleep, pidAliveImpl })
         : await pollBoardRecord(file, targetVersion, { sleep, fetchImpl, pidAliveImpl });
       if (confirm.ok) {
         const confirmedPort = confirm.port ?? port;
-        emit(`${label} restarted: ${from} to ${targetVersion} (port ${confirmedPort}, pid ${confirm.pid ?? newPid})`);
+        const fromLabel = from ?? 'unknown';
+        if (hadTerminal) {
+          emit(`${label} terminal session ended (pid ${record.pid}); restarted ${fromLabel} to ${targetVersion} (port ${confirmedPort}, pid ${confirm.pid ?? newPid})`);
+        } else {
+          emit(`${label} restarted: ${fromLabel} to ${targetVersion} (port ${confirmedPort}, pid ${confirm.pid ?? newPid})`);
+        }
+        if (kind === 'board') await emitBoardUrl(file);
         servers.push({ kind, pid: confirm.pid ?? newPid, from, to: targetVersion, port: confirmedPort, status: 'restarted' });
         started = true;
       } else if (newPid && pidAliveImpl(newPid)) {
