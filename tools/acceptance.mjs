@@ -374,3 +374,55 @@ export async function writeAcceptanceRecords(root, data, { ticket = null, runId 
   await fs.mkdir(path.join(resolvedRoot, path.dirname(RECORDS)), { recursive: true });
   await fs.writeFile(path.join(resolvedRoot, RECORDS), JSON.stringify(data, null, 2) + NL);
 }
+
+const skipReasonText = reason => String(reason ?? 'unknown').split('\n')[0].trim().slice(0, 400);
+
+/** Owner-visible note when the scope loop skips an acceptance review for one ticket. */
+export function acceptanceReviewSkipNote(reason) {
+  return `acceptance review skipped: ${skipReasonText(reason)}; run it by hand with swarm scope acceptance-review after the wave`;
+}
+
+/** Non-blocking warning recorded on the wave result. */
+export function acceptanceReviewSkipWarning(ticketId, reason) {
+  return `acceptance-review-skipped: ${ticketId}: ${skipReasonText(reason)}`;
+}
+
+/**
+ * Build and write an acceptance review manifest for one ticket at the project root.
+ * Throws when the ticket worktree cannot be resolved or context files are not visible there.
+ */
+export async function prepareAcceptanceReviewFile(projectRoot, {
+  runId,
+  ticket,
+  relativeFile,
+  ledger = null,
+  uncovered = null,
+} = {}) {
+  if (!projectRoot || !ticket?.id || !relativeFile) {
+    throw Object.assign(new Error('acceptance review manifest inputs are incomplete'), { code: 'acceptance-review-manifest' });
+  }
+  const resolvedRoot = await resolveAcceptanceRoot(projectRoot, ticket, { runId });
+  const resolvedLedger = ledger ?? await readLedger(projectRoot);
+  const lines = uncovered ?? acceptanceLines(ticket).map(line => line.n);
+  if (!lines.length) {
+    throw Object.assign(new Error(`no acceptance lines to review for ${ticket.id}`), { code: 'acceptance-review-manifest' });
+  }
+  const exists = candidate => {
+    if (typeof candidate !== 'string' || candidate.includes('..')) return false;
+    const absolute = path.resolve(resolvedRoot, candidate);
+    const base = path.resolve(resolvedRoot);
+    if (!absolute.startsWith(`${base}${path.sep}`) && absolute !== base) {
+      throw Object.assign(new Error(`context path escapes ticket worktree: ${candidate}`), { code: 'acceptance-review-manifest' });
+    }
+    return existsSync(absolute);
+  };
+  const manifest = reviewManifest(runId, [{ ticket, uncovered: lines }], {
+    tickets: resolvedLedger?.tickets ?? [ticket],
+    exists,
+    root: resolvedRoot,
+  });
+  const filePath = path.join(projectRoot, relativeFile);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, `${JSON.stringify(manifest, null, 2)}\n`);
+  return { manifest, root: resolvedRoot };
+}
